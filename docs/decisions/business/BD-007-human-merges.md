@@ -7,7 +7,7 @@
 The brief: "Merge Request is waiting to merge by developer." Developers will leave comments on MRs as they do for colleagues.
 
 ## Decision
-The platform never merges. When the MR is ready, a human reviews and merges. Every unresolved MR discussion thread opened by a mapped user generates an event; threads are **batched after a 2-minute debounce** into one return to Implementation with all comments as input, followed by a fast-path Code review, then back to Ready (Q5). An explicit `@agentic rework` (or closing the MR with a reason) restarts from Architecture on a fresh branch instead of patching (Q20). Trigger words (`@agentic hold`, `@agentic remember:`) are configurable.
+The platform never merges. When the MR is ready, a human reviews and merges. Every unresolved MR discussion thread opened by a mapped user generates an event; threads are **batched in a 2-minute window** into one return to Implementation with all comments as input (the window opens on the first unresolved comment and the handler re-reads every unresolved thread when it fires, so later comments are included; it does not extend with each new comment — clarified at WP-05), followed by a fast-path Code review, then back to Ready (Q5). An explicit `@agentic rework` (or closing the MR with a reason) restarts from Architecture on a fresh branch instead of patching (Q20). Trigger words (`@agentic hold`, `@agentic remember:`) are configurable.
 
 ## Rationale
 Keeps accountability with the team; turns the MR into the natural feedback channel instead of forcing humans into the platform UI.

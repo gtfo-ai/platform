@@ -49,7 +49,7 @@ Dependency rule: `domain ← application ← infrastructure/integrations ← app
 
 **Stage run.** Job → StageExecutor builds `RunSpec` (context pack, prompt layers, tools, policy, limits, schema) → Runner: `WorkspaceProvider.create/attach` → Agent SDK `query()` streaming-input mode with `spawnClaudeCodeProcess` → hooks/canUseTool on the platform → every message redacted and appended to `run_messages` + broadcast to SSE topic `run:<id>` → `result` → artifact validated and stored → `run.finished` → cost ledger + rollups → `task.stage.completed` → pipeline interpreter picks the next stage from the task's template snapshot (or returns/escalates per counters).
 
-**Human waits.** Question/approval created → ticket comment + Slack buttons + inbox; pg-boss timers for reminders/timeouts; answer from any channel (mapped user) → `question.answered` → pipeline resumes. MR comments batched (2-minute debounce) → return to Implementation. Merge → `mr.merged` → Merged gate → Retrospective → Librarian → proposals.
+**Human waits.** Question/approval created → ticket comment + Slack buttons + inbox; pg-boss timers for reminders/timeouts; answer from any channel (mapped user) → `question.answered` → pipeline resumes. MR comments batched (2-minute window, opened by the first comment; the handler re-reads every unresolved thread when it fires) → return to Implementation. Merge → `mr.merged` → Merged gate → Retrospective → Librarian → proposals.
 
 **Budgets.** Cost entries fold into `budget_windows`; thresholds emit notifications; exhaustion blocks new runs (never kills running ones); per-run `maxBudgetUsd` from effective config.
 

@@ -4,14 +4,15 @@
 
 ## Resume note
 
-- **Current WP:** WP-02 (`packages/domain`), in its worktree, on **review round 3 of 3**. Everything except
-  the command-policy shell parser is approved; if round 3 does not close the bypasses, WP-02 is BLOCKED and
-  I move on.
-- **Last done:** WP-00 (`8852b9e`), WP-01 (`dedc4b9`), WP-03 (`ca1ae06`) — all committed and pushed, CI green
-  on WP-00 and WP-01.
-- **Next step:** finish WP-02, squash-merge `worktree-agent-aeaa176d7c573bbf7` into `main`, re-verify, commit
-  (the technical/02 `run.created` doc amendment is held back, uncommitted, to go in that commit), push. Then
-  WP-04 (needs WP-02 and WP-03) or WP-05 (needs WP-03 only, so it is available even if WP-02 blocks).
+- **Current WPs:** three implementers running in parallel worktrees — **WP-04** (event store, critical path),
+  **WP-05** (pg-boss jobs port), **WP-02a** (the two command-policy `allow` routes).
+- **Last done:** WP-00 (`8852b9e`), WP-01 (`dedc4b9`), WP-03 (`ca1ae06`), WP-02 (`168d368`) — all pushed; CI
+  green on WP-00, WP-01, WP-03.
+- **Next step:** as each reports, verify in its worktree, review, fix-round, then squash-merge into `main`
+  one at a time and re-verify on `main` before committing. WP-04 and WP-05 overlap conceptually (the outbox
+  job may need WP-05's scheduler) — reconcile their DISCOVERED notes at merge time.
+- **5-WP checkpoint is due when WP-05 lands:** run all four verify targets, `gh run list --limit 5`, fix
+  CI forward, and write the M1 milestone note. Also fix the `commitlint`/`dco` CI gap recorded below.
 - **Merge recipe that worked for WP-03:** `git merge --squash <branch>`, `pnpm install`, run all four verify
   targets, `git add -A -- . ':!<files held back>'`, commit with the WP message, push. `.claude/worktrees/` is
   now in `.gitignore`.
@@ -44,11 +45,11 @@
 |---|---|---|---|---|---|---|
 | WP-00 | Repo scaffold | — | no | DONE | `8852b9e` | 3 review rounds; notes below |
 | WP-01 | `packages/contracts` | WP-00 | no | DONE | `dedc4b9` | APPROVE; 5 hardening fixes folded in |
-| WP-02 | `packages/domain` | WP-01 | no | DONE | next commit | 3 rounds spent; 2 command-policy defects carried to WP-02a |
-| WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | TODO | — | **must land before WP-12/WP-15** |
+| WP-02 | `packages/domain` | WP-01 | no | DONE | `168d368` | 3 rounds spent; 2 command-policy defects carried to WP-02a |
+| WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | IN_PROGRESS | — | worktree; **must land before WP-12/WP-15** |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
-| WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | TODO | — | |
-| WP-05 | Jobs port on pg-boss | WP-03 | no | TODO | — | |
+| WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | REVIEW | — | worktree; round 2 fixes green |
+| WP-05 | Jobs port on pg-boss | WP-03 | no | REVIEW | — | worktree; Q renumber 36→38 at merge |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | TODO | — | |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | TODO | — | |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
@@ -387,7 +388,140 @@ inputs plus 23,760 fuzzed combinations found **no segmentation hole**: every fuz
 shell semantics. No ReDoS (50KB input → 8ms). The defects above are missing *patterns* and one peel that
 grants trust, not a broken parser.
 
+### WP-05 — the `debounce` that was not a debounce
+
+The review found that the `Jobs` port's `debounce` mode runs its leading job **immediately** (`startAfter`
+is now) and its trailing job at the next grid boundary, which can be milliseconds later. technical/02:106
+requires the pipeline to debounce `mr.review.comment` for 2 minutes per MR **and then emit one**
+`task.stage.returned`; as first shipped, a burst would emit up to two stage-returns with the first instant —
+the task would bounce back to Implementation before the human finished commenting. **WP-15's MR batcher must
+not use a fixed-grid coalescing primitive for this.** The pattern it needs is a delayed wake-up plus
+re-validation on wake: schedule a timer 2 minutes out, and when it fires, re-read whether more comments have
+arrived and reschedule if so. TD-004's own "timers re-validate" line is the same idea.
+
+Second finding worth generalising: **the in-memory fake was kinder than pg-boss.** It bucketed the
+coalescing slot by `startAfter`, while pg-boss buckets by the database's `now()` (`plans.js:1748`) and
+overwrites the caller's `startAfter` with the next slot boundary on a debounce retry. The reviewer found
+this by reading pg-boss's source, not the docs. A shared contract suite only protects later WPs if the fake
+is *at least as strict* as the real adapter — every WP from here trusts the fake in the unit tier.
+
+**Flake economics, quantified.** The coalescing acceptance test races a 2-second grid boundary across three
+awaited round-trips: ~0.2% failure locally, **5-30% on a loaded 2-core runner**. Combined with the WP-02
+property-test timeout, the rule for this repo is now explicit: *an assertion that depends on wall-clock
+speed is a hardware assertion, not a correctness one.* Use the virtual clock in the contract tier, keep
+real-time assertions to "never early", and give anything that must sleep real headroom.
+
+**For WP-06:** `registerPartitionMaintenance` is exported and integration-proven but no `apps/*` composition
+root calls it — the daily partition cron WP-03 built will not run until WP-06 wires it. Also note
+`defineQueue` is create-if-absent, so changing a queue's policy in code is a silent no-op against a queue
+that already exists; a boot-time drift check would catch it.
+
+### WP-02a — what a hand-rolled command policy actually costs
+
+Recorded because the pattern repeated four times and the next person will be tempted to write one of these.
+
+Across WP-02 rounds 1-3 and WP-02a rounds 1-2, six independent adversarial passes found **fifteen** routes
+to `allow` in one file. Each pass found defects the previous pass's fixes had not anticipated, and two
+passes found that a *fix itself* had silently removed coverage (`curl * | sh` after the token-matcher
+rewrite) or reopened an earlier fix (quote-stripping reopened `find . "-exec"`). The parser was never the
+problem — 60,000+ fuzzed inputs found no segmentation hole and no ReDoS. The problems were always
+**pattern coverage** and **unearned trust**:
+
+- flags that hand an allow-listed verb an arbitrary command (`git fetch --upload-pack=`,
+  `git difftool --extcmd=`, `rg --pre`, `git log --ext-diff`), an arbitrary binary, an arbitrary output
+  path (`git diff --output=`, GNU `find -fprint`), or an unread remote source (`pip --index-url`);
+- prefix globs matching a *different binary* (`ls*` → `lsof`, `git diff*` → `git difftool`,
+  `git fetch*` → `git fetch-pack`);
+- peeling something off the front of a line and then trusting what remains (`PATH=… ls`);
+- quoting and escaping defeating a matcher that never strips quotes.
+
+**The two things that actually worked**, and that any successor to this code should keep: the fail-closed
+uncertainty rule (a line the scanner cannot follow can never read `allow`), and *differential* testing —
+running the old and new revision side by side over a large corpus and asserting that no verdict loosened.
+That second technique caught a regression no amount of new test cases would have: the implementer's own
+fuzz found that their `|&` fix had made `|& docker run alpine` a one-stage pipeline which a `length > 1`
+guard then dropped, loosening 185 verdicts.
+
+**But differential testing is only as good as the axes you vary, and this is the sharper lesson.** The
+implementer reported "0 loosened" across 4,921 hand-built inputs and 240,000 fuzzed ones. The reviewer's
+own 179,712-input sweep found **3,624 loosenings** — a family the implementer's generator could not reach
+because its quoting axis never varied the *wrapper token*: `"env" ls -la` and `e\nv ls` now peel for the
+allow-list because `stripEnvironmentPrefix` tests the dequoted `argv0Name`. Every one of the 3,624 returns
+exactly its unquoted twin's verdict, which was already `allow`, so it is an equivalence family and not a
+hole. The finding that matters is procedural: **a differential result is evidence about the corpus, not
+about the program**, and the person who built the corpus is the worst judge of what it omits. Two
+independent corpora disagreed by 3,624 cases here.
+
+**Empirical note on over-asking:** measured against 54,177 real commit subjects, the aggressive hazard floor
+made only 3 of them non-allow (0.006%). Over-asking is cheap; the instinct to soften a security floor for
+false positives was not supported by the data.
+
+### WP-04 / WP-05 reconciliation — one queue of record, decided
+
+Both WPs arrived with a loop. The decision, taken on the WP-04 reviewer's analysis and implemented in both:
+
+**`event_dispatch` plus the sweep is the single queue of record.** WP-05's `Jobs` port does **not** carry
+individual events; it replaces `OutboxWorker`'s internal `setTimeout` poll with a recurring job that calls
+`drain()`, while the NOTIFY subscription still wakes `drain()` for latency. The seam is `DrainScheduler`
+(`schedule(name, intervalMs, run)`, job name `events.outbox.sweep`) defined in
+`packages/application/src/events/outbox.ts`; WP-05 implements it over `Jobs`.
+
+**Why not make `dispatch(event)` a pg-boss job**, which was the tempting alternative: it duplicates
+durability across two queues that disagree after a crash, and pg-boss has no per-stream serialisation — so
+ordering would collapse onto `hasEarlierPending` refusing and rescheduling, i.e. a retry storm instead of
+deliberate head-of-line blocking.
+
+### WP-04 — the constraint nobody had named
+
+The dispatcher opened a **nested** transaction per handler while the outer dispatch transaction was open,
+each taking its own `pool.connect()`. With no `connectionTimeoutMillis`, exhaustion was not an error but a
+**permanent silent hang**: N concurrent dispatches with `poolMax <= N` never completed, `APP_DB_POOL_MAX=1`
+passed validation and hung on the very first event, and the existing integration test had been hand-tuned to
+`max: 8` for 4 dispatchers — exactly 2× — without anyone writing down why.
+
+The fix is worth copying: an implicit constraint became an **enforced invariant**. `EventBus` takes
+`maxConcurrentDispatches` (`APP_DISPATCH_MAX_CONCURRENCY`, default 1) with a FIFO slot semaphore;
+`requiredConnections = 2 × concurrency + 1`; `createEventing` throws `InsufficientPoolError` naming both
+variables and the arithmetic; `APP_DB_CONNECTION_TIMEOUT_MS` (default 10s, floor 100ms) makes exhaustion
+fail loudly, leaving the event queued for the sweep. A test pins the failure mode as a prompt error rather
+than a hang.
+
+**`MemoryEventing` models no pool** — the one place the fake is kinder than Postgres. A green property run
+says nothing about pool sizing. Later WPs must not read it as such.
+
+**Watch at WP-15:** `2 × concurrency + 1` is the right budget only while a handler opens at most one
+transaction. A handler that opens a second one silently invalidates it.
+
 ## Discovered work (not in plan)
+
+- **Orchestrator parallelism has a ceiling, and it is lower than it looks.** Running three implementers plus
+  reviews drove this 14-core host to load average ~143. Two consequences: WP-02's model tests, which measure
+  ~1.2s idle, measured 4.2-7.5s under load and *timed out locally* against the old 5s default — the same
+  defect CI had already caught; and WP-05's timing evidence had to be gathered deliberately under load to
+  mean anything. **Rule for the rest of this session: at most two or three concurrent agents, and never
+  judge a timing-sensitive suite while implementers are running.** The 30s property-test cap is sized for
+  exactly this, which is the argument for the cap rather than against it.
+
+- **OPEN-QUESTIONS numbering collides when WPs run in parallel.** WP-05's worktree branched from `ca1ae06`,
+  before WP-02 landed Q36 (RBAC map) and Q37 (command block-list), so it filed its working-day-calendar
+  question as **Q36** too. Renumbered to **Q38** at merge. *Convention from here on:* an implementer must
+  re-check the highest existing question number against `main` immediately before writing, and the
+  orchestrator renumbers at merge when parallel worktrees collide. The same hazard applies to migration
+  file numbers (`0001`-`0009` today) — two parallel WPs both adding `0010` would both pass in isolation and
+  collide on merge.
+- **pg-boss `persistQueueStats` is pinned off deliberately (WP-05).** `platform_app` has USAGE but not
+  CREATE on schema `pgboss` and owns nothing there. Enabled, stats collection works all day and then fails
+  at UTC midnight on the background error channel — a failure mode that would look random. Turning it on
+  requires a new migration granting CREATE; not done, and the constraint is asserted by an integration test.
+
+- **ci-fix (WP-02, run 34363371997): a property test that only fails on CI.**
+  `packages/domain/src/aggregates/task.model.test.ts:531` times out at Vitest's 5000ms default on GitHub's
+  2-core runner while passing locally — 795 tests passed, this one failed, every other job green. The gate
+  is only as good as its slowest runner, so the fix is an explicit generous timeout for property and
+  model-based tests (not a nudged number) plus an audit of the other property tests in `packages/domain`
+  for the same fragility. Folded into WP-02a's worktree rather than a fourth worktree, as a separate commit.
+  **Lesson for later WPs: a test that passes locally by a hair is not green.** Property tests need headroom
+  and a pinned `numRuns`, and CI is the authority, not this machine.
 
 - **CI: the `commitlint` and `dco` jobs never run.** Both are `pull_request`-only, but this session commits
   directly to `main` and never opens a PR, so both report `skipped` on every push (verified on run

@@ -5,7 +5,7 @@
 ## Architectural style
 
 - **Clean architecture** with four rings: `domain` (aggregates, value objects, domain events, state machines — no I/O), `application` (use cases, event handlers, policies, sagas — depends on domain and on ports), `infrastructure` (adapters: Postgres, workflow engine, SDK runner, integration providers, search), `interfaces` (HTTP API, SSE/WebSocket, webhooks, CLI).
-- **Everything is an event.** Every state change is recorded as an immutable domain event in an append-only log (BD-003) and dispatched to handlers. Handlers are registered with a **priority** (lower runs first) and are **idempotent** (keyed by event id). A handler may emit further events (chaining) and may *not* mutate state outside its own aggregate except through commands.
+- **Everything is an event.** Every state change is recorded as an immutable domain event in an append-only log (BD-003) and dispatched to handlers. Handlers are registered with a **priority** (lower runs first) and are **idempotent** (keyed by the event's `position`, its physical order in the log — see `handler_executions` in technical/03; `events.id` is the stable public identity used in APIs and `cause_event_id`, not the dispatch key). A handler may emit further events (chaining) and may *not* mutate state outside its own aggregate except through commands.
 - **Commands vs events.** Interfaces and handlers issue commands (`StartRun`, `AnswerQuestion`); aggregates validate and emit events (`run.started`, `question.answered`). Events are past tense, commands imperative.
 - **Transactional outbox.** Aggregate state and its events are written in one transaction; a dispatcher publishes from the outbox (at-least-once), so consumers must be idempotent (TD in 03/04).
 

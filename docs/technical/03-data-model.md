@@ -29,6 +29,14 @@
 - `run_context_pack(run_id, tier smallint, source_path, reason, score real, tokens int, validated bool, kb_commit_sha)` PK `(run_id, source_path)`.
 - `artifacts(id, task_id, type, version int, markdown text, data jsonb, schema_version, produced_by_run_id, created_at)` — `UNIQUE(task_id, type, version)`.
 - `questions(id, task_id, task_stage_id, run_id, text, options jsonb, blocking bool, status, asked_at, deadline_at, reminders_sent int, answer text, answered_by_user_id, answered_via, answered_at, escalated_at)` — idx `(status, deadline_at)`.
+> **`events.id` and `cause_event_id` (added at WP-04, migration `0010`).** This column list originally had
+> neither, while technical/02 requires an event id and a cause *by event id* — so a stored event could not
+> be parsed against its own published schema. `position` remains the physical order and the idempotency key
+> for `handler_executions` (see technical/02); `id` is the stable public identity that leaves the database
+> in APIs, SSE frames and `cause_event_id`. Note for operators: `0010` adds `id` with a **volatile** default,
+> so applying it rewrites every `events` partition under ACCESS EXCLUSIVE — trivial pre-deployment, not
+> trivial on a populated table.
+
 > **Stage nullability (clarified at WP-03).** `runs.task_stage_id` and `questions.task_stage_id` are
 > nullable: not every run or question belongs to a pipeline stage (discovery during onboarding,
 > ask-the-task, librarian and maintenance runs do not). The `stage` field on `RunRecord` and
@@ -42,7 +50,7 @@
 - `human_actions(id, task_id, user_id, action, params jsonb, created_at)` — append-only.
 
 ### Event log and jobs
-- `events(position bigint generated always as identity, stream_type, stream_id uuid, stream_seq int, type, payload jsonb, actor jsonb, cause_event_position bigint null, correlation_id uuid, occurred_at timestamptz, xact_id xid8 default pg_current_xact_id())` — **partitioned by range on `occurred_at` (monthly)**; PK `(occurred_at, position)`; `UNIQUE(stream_type, stream_id, stream_seq)`; idx `(type, occurred_at)`, `(correlation_id)`. Append-only. Consumers track per-stream `stream_seq` or fence on `pg_snapshot_xmin(pg_current_snapshot())` (research/07: global position is not gapless).
+- `events(position bigint generated always as identity, id uuid not null default uuidv7(), stream_type, stream_id uuid, stream_seq int, type, payload jsonb, actor jsonb, cause_event_id uuid null, cause_event_position bigint null, correlation_id uuid, occurred_at timestamptz, xact_id xid8 default pg_current_xact_id())` — **partitioned by range on `occurred_at` (monthly)**; PK `(occurred_at, position)`; `UNIQUE(stream_type, stream_id, stream_seq)`; idx `(type, occurred_at)`, `(correlation_id)`. Append-only. Consumers track per-stream `stream_seq` or fence on `pg_snapshot_xmin(pg_current_snapshot())` (research/07: global position is not gapless).
 - `handler_executions(event_position, handler, priority, status, attempts, error, started_at, finished_at)` PK `(event_position, handler)` — idempotency guard for the dispatcher.
 - `inbox(provider, delivery_id, integration_id, received_at, headers jsonb, payload jsonb, processed_at, error)` PK `(provider, delivery_id)` — webhook dedup and raw audit.
 - `pgboss.*` — pg-boss's own schema (jobs, timers, cron) in the same database (TD-004).
