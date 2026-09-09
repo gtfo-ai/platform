@@ -4,9 +4,14 @@
 
 ## Resume note
 
-> **Session 1 paused 2026-09-09 by the user.** Read this section, then "Standing rules earned by evidence"
+> **Session 2 started 2026-09-09.** Read this section, then "Standing rules earned by evidence"
 > and "WP-06a" below, then continue the loop in `14-orchestration-protocol.md`. Nothing is broken; `main` is
 > green and every finished WP is pushed.
+>
+> **In flight right now:** WP-06a review round 2 (branch `wp/06a` `887e72d`, all five verify targets
+> re-confirmed green in the orchestrator's own shell before the review was sent) and WP-07 (implementer in
+> an isolated worktree, branch `wp/07`). Environment re-confirmed: gh authenticated as `JanMikes`, Docker
+> 29.7.2, pnpm 12.3.4, Node 25.1.0.
 
 **Where things stand**
 
@@ -85,8 +90,19 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    the commit. Watch for a WP adding a *required* field to a shared type, or a runtime invariant that will
    not fail typecheck at all.
 7. **A guard with a hand-maintained scope drifts.** Ask git what it tracks; do not carry your own list.
+   Corollary earned at WP-06a round 2: *fixing a hand-maintained list by adding a second hand-maintained
+   list does not discharge this rule* — `check-ignored.mjs` closed its missing-root gap by adding
+   `IGNORABLE_ROOT_FILES`, an **allow-list that suppresses failures**, so its drift is silent and in the
+   dangerous direction.
 8. **Docs win over code.** When implementation proves a doc wrong, amend the doc first, then point at it.
    TD-004, technical/02, technical/03, technical/12, BD-007 and product/04 were all amended this way.
+9. **When two code paths can both satisfy an obligation, the fact that the obligation was met is itself a
+   shared quantity, and it needs an explicit arbiter.** This is the sixth layer of the WP-06a defect and the
+   same sentence as the other five. Two paths each correctly discharging "the client has been told" is not
+   two correct paths; it is an unsynchronised shared flag with no flag.
+10. **A test whose assertion is satisfied by every branch must also assert which branch ran**, or it certifies
+   the observable and not the code. `hub.test.ts:817` asserted `shutdown@-` last — true down either route —
+   and never asserted the `reset` that only one route writes.
 
 ## Blocker briefs needing a human
 
@@ -105,8 +121,8 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
-| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | REVIEW | branch `wp/06a` `887e72d` | green, round 2 review pending; **before WP-12/WP-15** |
-| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | TODO | — | |
+| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | REVIEW | branch `wp/06a` `887e72d` | all 5 targets re-verified green by the orchestrator (session 2); review round 2 running; **before WP-12/WP-15** |
+| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | IN_PROGRESS | branch `wp/07` (worktree) | started session 2, alongside the WP-06a review |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
@@ -948,6 +964,56 @@ file under a swallowing rule is caught by neither arm of `check-ignored.mjs`; `#
 topic outside `shutdown`, unlike `#byTopic`; and mutation H's `/events` e2e test kills by a 5s inject timeout
 rather than an assertion.
 
+### WP-06a — review round 2: the sixth layer, found exactly where the audit said to look
+
+**Verdict REQUEST_CHANGES**, one blocking finding. The reviewer derived the shared quantities from the code
+before reading the ten-entry audit and matched it **10/10** — then found two the audit had missed and one it
+stated wrongly, and the blocking defect was in the entry the audit was proudest of.
+
+**The blocking finding.** `hub.ts:465` claims "exactly one of the two paths reaches the wire" of the on-chain
+`shutdown` (`:807`) and the off-chain one in `abandon()` (`:540`). False: if the on-chain link is in flight —
+past its `#closed` check, awaiting drain — when the deadline fires, **both** write. Reproduced with `drainMs`
+20 and the transport slowed for the `shutdown` frame only: the wire was `["ping","reset","shutdown","shutdown"]`,
+and because `@fastify/sse`'s `send()` hands bytes to the stream synchronously, a real client sees
+**`shutdown, reset, shutdown`** — a `reset` *after* the frame that ends the stream, which is the exact
+"client reconnects into the same wall" failure this WP exists to prevent.
+
+**Why it matters beyond this file.** Five layers were "replay and live share a quantity". The sixth is "the
+on-chain and off-chain shutdown share *whether the client has been told*" — an obligation, not a buffer or a
+counter. The audit enumerated every shared *thing* and missed the shared *fact*. Rules 9 and 10 above are
+what this earned.
+
+**The other findings.** Audit entry 7 ("nothing closes mid-replay except `#dropStalled` and `abandon`") omits
+three closers — `write`'s `.catch` (`:442`), `SseHub.close` (`:777`), and `open()`'s same-id displacement
+(`:617`); all benign, but an audit is worth only its exhaustiveness and this one is trusted. `#byTopic`
+(`:563`) is missing entirely: `publish` iterates the `Set` while `#dropStalled → close → #onDropped` deletes
+the current element re-entrantly — safe by spec, unstated. `check-ignored.mjs` (rule 7 corollary above).
+`config.ts:130` has no refinement that `sseShutdownDrainMs < shutdownTimeoutMs`; both independently reach
+600 000, which makes the drain budget meaningless.
+
+**What the round confirmed as sound.** `abandon()` is genuinely off-chain on every path, both writes guarded
+by `isConnected`; no cross-connection starvation, because `#chain`, `#queued` and the deadline are
+per-connection and all `withDeadline` timers start in one synchronous `map`, so `preClose` is bounded by a
+single `shutdownDrainMs` (measured 25 ms at drainMs 20). **All the memory arithmetic recomputed correct**:
+255×64+512 = 16,832; ×660 = 11,109,120 B = 10.594 MiB; 512×660 = 330.0 KiB exactly; ratio 32.875 → "33×".
+Binary labels now match binary units. **Six mutations, every one killed by a named assertion and none by a
+timeout** — growth-gate→depth-cap and `sealOpeningBacklog`→0 each killed 4 (`expected 1 to be 400/520/800`);
+`withDeadline`→unbounded killed `expected 'shutdown never returned' to be 'drained 1'`; `abandon`→on-chain
+killed `expected ['ping@-'] to include 'reset@-'`; `#evictBuffers`→no-op killed 3 buffer-retention
+assertions; removing the publish-during-shutdown guard killed `expected 'steer@run:…' to be 'shutdown@-'`.
+No test was weakened and two were strengthened: `routes.test.ts:98` replaced a bare `await inflight` — killed
+only by vitest's 5 s timeout, the ledger's mutation H — with a raced deadline plus a named assertion.
+
+**`MAX_STALLED_TURNS = 500` is a disguised threshold, not a proof** ("250 × two turns" is a constant on
+elapsed turns; the impossibility argument needs "no timer or external release is outstanding"). It holds
+today only because no test `settle`s while a `setTimeout` is the only source of progress. Direction of
+failure is safe — false failure, never false pass — so it was filed as a note.
+
+**Round 3 (the last one this WP gets) is in flight**, briefed to reproduce the `shutdown, reset, shutdown`
+wire as a failing test *before* fixing it, and to **measure** the reviewer's proposed arbitration flag rather
+than apply it — the same discipline that at round 1 proved the reviewer's `#queued >= cap + replayOutstanding`
+algebraically identical to the broken gate it was meant to replace.
+
 ## Discovered work (not in plan)
 
 - **Orchestrator parallelism has a ceiling, and it is lower than it looks.** Running three implementers plus
@@ -1035,7 +1101,7 @@ rather than an assertion.
 - **Biome `noConsole`** is not enabled yet; turn it on for server code when pino lands (WP-06).
 - **Licence allow-list check** (`pnpm licenses`, TD-017) is not wired; it belongs with WP-23's
   `THIRD_PARTY_NOTICES.md`.
-- **Agent registry:** the roles in `.claude/agents/{implementer,reviewer,architect}.md` are not exposed as `subagent_type` values in this session's harness. Workaround used by the orchestrator: spawn a fresh `general-purpose` subagent whose first instruction is to read and obey its role file. Same isolation and protocol; no change needed to the role files.
+- **Agent registry:** in session 1 the roles in `.claude/agents/{implementer,reviewer,architect}.md` were not exposed as `subagent_type` values, and the orchestrator worked around it with `general-purpose` subagents. **In session 2 they are registered** (`implementer`, `reviewer`, `architect` appear as agent types with the tool sets their role files imply), so they are spawned directly — and still told, as their first instruction, to read and obey their role file, because the registration carries the tool list but not the protocol.
 
 ## Milestone notes
 
