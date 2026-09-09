@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RetroReport data",
+  "description": "Structured output of the stage that produces a RetroReport artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "what_went_well": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "returns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "$ref": "#/$defs/Slug"
+          },
+          "reason": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "avoidable_by_kb": {
+            "type": "boolean"
+          },
+          "existing_item": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PathPattern"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "readiness_criterion": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NonEmptyString"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "stage",
+          "reason",
+          "avoidable_by_kb"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "human_corrections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "cost_summary": {
+      "type": "object",
+      "properties": {
+        "total_usd": {
+          "$ref": "#/$defs/Usd"
+        },
+        "is_estimate": {
+          "type": "boolean"
+        },
+        "by_stage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "stage": {
+                "$ref": "#/$defs/Slug"
+              },
+              "usd": {
+                "$ref": "#/$defs/Usd"
+              }
+            },
+            "required": [
+              "stage",
+              "usd"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "total_usd",
+        "is_estimate",
+        "by_stage"
+      ],
+      "additionalProperties": false
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "business",
+              "technical",
+              "process"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "lesson",
+              "pitfall",
+              "rule",
+              "decision",
+              "skill-draft",
+              "doc-update"
+            ]
+          },
+          "target_path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "diff": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          },
+          "significance": {
+            "$ref": "#/$defs/UnitInterval"
+          }
+        },
+        "required": [
+          "kind",
+          "type",
+          "target_path",
+          "diff",
+          "evidence",
+          "significance"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "what_went_well",
+    "returns",
+    "human_corrections",
+    "cost_summary",
+    "proposals"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "UnitInterval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "Usd": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

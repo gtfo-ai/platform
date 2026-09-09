@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewVerdict data",
+  "description": "Structured output of the stage that produces a ReviewVerdict artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "request_changes"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ReviewFinding"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "suspicious_inputs_noted": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "protected_path_changes_confirmed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PathPattern"
+      }
+    }
+  },
+  "required": [
+    "verdict",
+    "findings",
+    "summary",
+    "protected_path_changes_confirmed"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "ReviewFinding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "category": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PathPattern"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explanation": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "suggestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "category",
+        "explanation"
+      ],
+      "additionalProperties": false
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "nit"
+      ]
+    }
+  }
+}

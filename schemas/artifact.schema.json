@@ -1,0 +1,1607 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Artifact",
+  "description": "A stage artifact with its envelope and type-specific data (technical/12).",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "RefinedSpec"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "user_value": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "in_scope": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "out_of_scope": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AcceptanceCriterion"
+              }
+            },
+            "non_functional": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "size": {
+              "$ref": "#/$defs/Size"
+            },
+            "drift": {
+              "type": "object",
+              "properties": {
+                "flag": {
+                  "type": "boolean"
+                },
+                "justification": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "flag",
+                "justification"
+              ],
+              "additionalProperties": false
+            },
+            "assumptions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArtifactQuestion"
+              }
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "proceed",
+                "ask",
+                "reject"
+              ]
+            },
+            "kb_citations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KbCitation"
+              }
+            }
+          },
+          "required": [
+            "goal",
+            "user_value",
+            "in_scope",
+            "out_of_scope",
+            "acceptance_criteria",
+            "non_functional",
+            "dependencies",
+            "size",
+            "drift",
+            "assumptions",
+            "questions",
+            "decision",
+            "kb_citations"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "RootCauseAnalysis"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "reproduction": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "reproduced",
+                    "evidence"
+                  ]
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "steps",
+                "evidence"
+              ],
+              "additionalProperties": false
+            },
+            "root_cause": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "confidence": {
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "affected_scope": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "fix_direction": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "regression_test_idea": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArtifactQuestion"
+              }
+            }
+          },
+          "required": [
+            "reproduction",
+            "root_cause",
+            "confidence",
+            "affected_scope",
+            "fix_direction",
+            "regression_test_idea",
+            "questions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "ImplementationPlan"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "approach": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "alternatives_considered": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "option": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "why_not": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "option",
+                  "why_not"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "affected_modules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "files_to_change": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "change": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "path",
+                  "change"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "data_changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "api_changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "validation_contract": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "criterion_id": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "check": {
+                    "$ref": "#/$defs/ValidationCheck"
+                  }
+                },
+                "required": [
+                  "criterion_id",
+                  "check"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "test_plan": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "rollout_notes": {
+              "type": "string"
+            },
+            "risks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "estimated_size": {
+              "$ref": "#/$defs/Size"
+            },
+            "split_proposal": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "$ref": "#/$defs/NonEmptyString"
+                      },
+                      "scope": {
+                        "$ref": "#/$defs/NonEmptyString"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "scope"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "decisions_to_record": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "protected_path_changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "path",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "approach",
+            "alternatives_considered",
+            "affected_modules",
+            "files_to_change",
+            "data_changes",
+            "api_changes",
+            "validation_contract",
+            "test_plan",
+            "rollout_notes",
+            "risks",
+            "estimated_size",
+            "decisions_to_record",
+            "protected_path_changes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "ImplementationNotes"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "deviations_from_plan": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "what": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "why": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "what",
+                  "why"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "tests_added": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "commands_run": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "exit_code": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command",
+                  "exit_code",
+                  "summary"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "known_gaps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "followup_tickets": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "mr": {
+              "$ref": "#/$defs/MergeRequestRef"
+            }
+          },
+          "required": [
+            "summary",
+            "deviations_from_plan",
+            "tests_added",
+            "commands_run",
+            "known_gaps",
+            "followup_tickets",
+            "mr"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "ReviewVerdict"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "approve",
+                "request_changes"
+              ]
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ReviewFinding"
+              }
+            },
+            "summary": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "suspicious_inputs_noted": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "protected_path_changes_confirmed": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PathPattern"
+              }
+            }
+          },
+          "required": [
+            "verdict",
+            "findings",
+            "summary",
+            "protected_path_changes_confirmed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "AcceptanceVerdict"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "approve",
+                "request_changes"
+              ]
+            },
+            "criteria": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "met",
+                      "not_met",
+                      "untestable"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "status",
+                  "evidence"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "scope_creep": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "ux_notes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            }
+          },
+          "required": [
+            "verdict",
+            "criteria",
+            "scope_creep",
+            "missing",
+            "ux_notes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "RetroReport"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "what_went_well": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "returns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "stage": {
+                    "$ref": "#/$defs/Slug"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "avoidable_by_kb": {
+                    "type": "boolean"
+                  },
+                  "existing_item": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/PathPattern"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "readiness_criterion": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/NonEmptyString"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "stage",
+                  "reason",
+                  "avoidable_by_kb"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "human_corrections": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "cost_summary": {
+              "type": "object",
+              "properties": {
+                "total_usd": {
+                  "$ref": "#/$defs/Usd"
+                },
+                "is_estimate": {
+                  "type": "boolean"
+                },
+                "by_stage": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "stage": {
+                        "$ref": "#/$defs/Slug"
+                      },
+                      "usd": {
+                        "$ref": "#/$defs/Usd"
+                      }
+                    },
+                    "required": [
+                      "stage",
+                      "usd"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "total_usd",
+                "is_estimate",
+                "by_stage"
+              ],
+              "additionalProperties": false
+            },
+            "proposals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "business",
+                      "technical",
+                      "process"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "lesson",
+                      "pitfall",
+                      "rule",
+                      "decision",
+                      "skill-draft",
+                      "doc-update"
+                    ]
+                  },
+                  "target_path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "diff": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/NonEmptyString"
+                    }
+                  },
+                  "significance": {
+                    "$ref": "#/$defs/UnitInterval"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "type",
+                  "target_path",
+                  "diff",
+                  "evidence",
+                  "significance"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "what_went_well",
+            "returns",
+            "human_corrections",
+            "cost_summary",
+            "proposals"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "ShadowReport"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "ticket": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "human_mr": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MergeRequestRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "agent_diff_stats": {
+              "type": "object",
+              "properties": {
+                "files_changed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "insertions": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "deletions": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "files_changed",
+                "insertions",
+                "deletions"
+              ],
+              "additionalProperties": false
+            },
+            "overlap": {
+              "type": "object",
+              "properties": {
+                "files_jaccard": {
+                  "$ref": "#/$defs/UnitInterval"
+                },
+                "size_ratio": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "files_jaccard",
+                "size_ratio"
+              ],
+              "additionalProperties": false
+            },
+            "agent_review_of_human_mr": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ReviewFinding"
+              }
+            },
+            "predicted_cost": {
+              "$ref": "#/$defs/Usd"
+            },
+            "notes": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticket",
+            "agent_diff_stats",
+            "overlap",
+            "agent_review_of_human_mr",
+            "predicted_cost",
+            "notes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "ReadinessReport"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "criteria": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "passed": {
+                    "type": "boolean"
+                  },
+                  "evidence": {
+                    "type": "string"
+                  },
+                  "unlocks": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "passed",
+                  "evidence",
+                  "unlocks"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "level",
+            "criteria"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "DiscoveryDraft"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "documents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "title": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "markdown": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "enum": [
+                      "high",
+                      "medium",
+                      "low"
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "title",
+                  "markdown",
+                  "confidence"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "commands": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "setup",
+                      "build",
+                      "test",
+                      "lint",
+                      "format",
+                      "typecheck",
+                      "run"
+                    ]
+                  },
+                  "command": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "verified": {
+                    "type": "boolean"
+                  },
+                  "evidence": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "purpose",
+                  "command",
+                  "verified"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "linked_documents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "path",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArtifactQuestion"
+              }
+            }
+          },
+          "required": [
+            "documents",
+            "commands",
+            "linked_documents",
+            "questions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "AcceptanceCriterion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "given": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "when": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "then": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationCheck"
+        }
+      },
+      "required": [
+        "id",
+        "given",
+        "when",
+        "then",
+        "validation"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "text": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "blocking"
+      ],
+      "additionalProperties": false
+    },
+    "Id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "IsoDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "KbCitation": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "commit_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "LanguageTag": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    },
+    "MergeRequestRef": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "iid": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head_sha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "iid",
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "ReviewFinding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "category": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PathPattern"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explanation": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "suggestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "category",
+        "explanation"
+      ],
+      "additionalProperties": false
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "nit"
+      ]
+    },
+    "Sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,64}$"
+    },
+    "Size": {
+      "type": "string",
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ]
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "UnitInterval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "Url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "Usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "ValidationCheck": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "test",
+            "manual"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "anon_03c948b9": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "anon_4682db72": {
+      "type": "string"
+    }
+  }
+}

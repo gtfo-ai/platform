@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiscoveryDraft data",
+  "description": "Structured output of the stage that produces a DiscoveryDraft artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "title": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "markdown": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "title",
+          "markdown",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "build",
+              "test",
+              "lint",
+              "format",
+              "typecheck",
+              "run"
+            ]
+          },
+          "command": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "purpose",
+          "command",
+          "verified"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "linked_documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "reason": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactQuestion"
+      }
+    }
+  },
+  "required": [
+    "documents",
+    "commands",
+    "linked_documents",
+    "questions"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ArtifactQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "text": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "blocking"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  }
+}

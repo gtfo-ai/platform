@@ -1,0 +1,751 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Transcript event",
+  "description": "Normalised, redacted run output as stored in run_messages and streamed over SSE (technical/04, technical/03).",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "system"
+        },
+        "subtype": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/JsonObject"
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "subtype",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "assistant"
+        },
+        "model": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "model",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "user"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "result"
+        },
+        "terminal_reason": {
+          "$ref": "#/$defs/RunTerminalReason"
+        },
+        "num_turns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "usage": {
+          "$ref": "#/$defs/TokenUsage"
+        },
+        "model_usage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ModelUsage"
+          }
+        },
+        "cost": {
+          "$ref": "#/$defs/RunCost"
+        },
+        "structured_output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "terminal_reason",
+        "num_turns",
+        "duration_ms",
+        "usage",
+        "model_usage",
+        "cost"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "stream_block"
+        },
+        "block_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "block": {
+          "$ref": "#/$defs/ContentBlock"
+        },
+        "first_delta_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "last_delta_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "block_index",
+        "block",
+        "first_delta_at",
+        "last_delta_at"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "hook"
+        },
+        "hook": {
+          "$ref": "#/$defs/HookName"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_use_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "hook"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "steer"
+        },
+        "message": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "author_user_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "message",
+        "author_user_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "parent_tool_use_id": {
+          "$ref": "#/$defs/anon_19cad1b6"
+        },
+        "redaction_count": {
+          "$ref": "#/$defs/anon_265a4e55"
+        },
+        "kind": {
+          "type": "string",
+          "const": "compaction"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "pre",
+            "post"
+          ]
+        },
+        "pre_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenCount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "post_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenCount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "seq",
+        "created_at",
+        "redaction_count",
+        "kind",
+        "phase"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "ContentBlock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "thinking"
+            },
+            "thinking": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "thinking"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            },
+            "tool_use_id": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "tool_name": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "input": {
+              "$ref": "#/$defs/JsonObject"
+            }
+          },
+          "required": [
+            "type",
+            "tool_use_id",
+            "tool_name",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            },
+            "tool_use_id": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "is_error": {
+              "type": "boolean"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_use_id",
+            "is_error",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HookName": {
+      "type": "string",
+      "enum": [
+        "PreToolUse",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "PreCompact",
+        "PostCompact",
+        "Stop",
+        "UserPromptSubmit",
+        "PostModelSwitch"
+      ]
+    },
+    "Id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "IsoDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "JsonObject": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ]
+    },
+    "ModelUsage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "cache_write_5m_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "cache_write_1h_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "cache_read_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "model": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "usd": {
+          "$ref": "#/$defs/Usd"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_write_5m_tokens",
+        "cache_write_1h_tokens",
+        "cache_read_tokens",
+        "model",
+        "usd"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "RunCost": {
+      "type": "object",
+      "properties": {
+        "usd": {
+          "$ref": "#/$defs/Usd"
+        },
+        "is_estimate": {
+          "type": "boolean"
+        },
+        "price_list_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "usd",
+        "is_estimate"
+      ],
+      "additionalProperties": false
+    },
+    "RunTerminalReason": {
+      "type": "string",
+      "enum": [
+        "success",
+        "error_max_turns",
+        "error_max_budget_usd",
+        "error_max_structured_output_retries",
+        "error_during_execution",
+        "permission_denied",
+        "cancelled",
+        "stalled",
+        "timed_out",
+        "crash"
+      ]
+    },
+    "Sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "TokenCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "TokenUsage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "cache_write_5m_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "cache_write_1h_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
+        "cache_read_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_write_5m_tokens",
+        "cache_write_1h_tokens",
+        "cache_read_tokens"
+      ],
+      "additionalProperties": false
+    },
+    "Usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "anon_19cad1b6": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "anon_265a4e55": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
+}

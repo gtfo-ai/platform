@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImplementationPlan data",
+  "description": "Structured output of the stage that produces a ImplementationPlan artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "approach": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "alternatives_considered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "option": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "why_not": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "required": [
+          "option",
+          "why_not"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "affected_modules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "files_to_change": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "change": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "required": [
+          "path",
+          "change"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "data_changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "api_changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "validation_contract": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion_id": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "check": {
+            "$ref": "#/$defs/ValidationCheck"
+          }
+        },
+        "required": [
+          "criterion_id",
+          "check"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "test_plan": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "rollout_notes": {
+      "type": "string"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "estimated_size": {
+      "$ref": "#/$defs/Size"
+    },
+    "split_proposal": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "$ref": "#/$defs/NonEmptyString"
+              },
+              "scope": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "required": [
+              "title",
+              "scope"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "decisions_to_record": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "protected_path_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "reason": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "approach",
+    "alternatives_considered",
+    "affected_modules",
+    "files_to_change",
+    "data_changes",
+    "api_changes",
+    "validation_contract",
+    "test_plan",
+    "rollout_notes",
+    "risks",
+    "estimated_size",
+    "decisions_to_record",
+    "protected_path_changes"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Size": {
+      "type": "string",
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ]
+    },
+    "ValidationCheck": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "test",
+            "manual"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

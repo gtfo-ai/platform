@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RefinedSpec data",
+  "description": "Structured output of the stage that produces a RefinedSpec artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "goal": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "user_value": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "in_scope": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AcceptanceCriterion"
+      }
+    },
+    "non_functional": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "size": {
+      "$ref": "#/$defs/Size"
+    },
+    "drift": {
+      "type": "object",
+      "properties": {
+        "flag": {
+          "type": "boolean"
+        },
+        "justification": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "flag",
+        "justification"
+      ],
+      "additionalProperties": false
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactQuestion"
+      }
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "proceed",
+        "ask",
+        "reject"
+      ]
+    },
+    "kb_citations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/KbCitation"
+      }
+    }
+  },
+  "required": [
+    "goal",
+    "user_value",
+    "in_scope",
+    "out_of_scope",
+    "acceptance_criteria",
+    "non_functional",
+    "dependencies",
+    "size",
+    "drift",
+    "assumptions",
+    "questions",
+    "decision",
+    "kb_citations"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "AcceptanceCriterion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "given": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "when": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "then": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationCheck"
+        }
+      },
+      "required": [
+        "id",
+        "given",
+        "when",
+        "then",
+        "validation"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "text": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "blocking"
+      ],
+      "additionalProperties": false
+    },
+    "KbCitation": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "commit_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Size": {
+      "type": "string",
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ]
+    },
+    "ValidationCheck": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "test",
+            "manual"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

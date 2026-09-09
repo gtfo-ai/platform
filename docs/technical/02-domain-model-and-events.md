@@ -59,7 +59,7 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 
 ## Event catalogue
 
-Naming: `<aggregate>.<past-tense>`; payload always includes `task_id` when task-scoped, `project_id`, and `actor`. Priorities: 0–99 platform core, 100–199 integrations, 200–299 notifications/UI, 300+ custom project handlers.
+Naming: `<aggregate>.<past-tense>`; payload always includes `task_id` when task-scoped and `project_id`. `actor` lives in the **event envelope**, not in each payload (implemented that way in WP-01, matching `events.actor` in technical/03); the `actor` column in the catalogue below therefore describes the envelope value for that event, not a payload field. Priorities: 0–99 platform core, 100–199 integrations, 200–299 notifications/UI, 300+ custom project handlers.
 
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|

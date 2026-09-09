@@ -30,6 +30,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run -s lint
+      # The published JSON Schemas are generated from packages/contracts and committed;
+      # this fails the build when they drift from the zod definitions.
+      - run: pnpm run -s schemas:check
 
   typecheck:
     name: typecheck

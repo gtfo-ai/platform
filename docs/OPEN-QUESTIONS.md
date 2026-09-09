@@ -4,6 +4,8 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 
 ## Open
 
+**Q35 `DiscoveryDraft` artifact schema.** `technical/12` lists the structured `data` of nine artifact types but not `DiscoveryDraft`, which `technical/02` and `technical/04` both name. WP-01 needed a schema to publish. — *Recommendation (implemented in `packages/contracts`):* model it on the outputs `product/06` § "Step 2 — Technical discovery" describes — `documents[{path, title, markdown, confidence}]` for the drafted `technical/*.md` pages, `commands[{purpose, command, verified, evidence}]` where `verified` means the agent actually ran it in the workspace, `linked_documents[{path, reason}]` for files that are linked rather than copied, and `questions[]` for what it could not answer. Confirm or amend when the Discovery prompt is written (WP-17/WP-21).
+
 **Q34 Founder veto on operating definitions.** `product/19-operating-definitions.md` contains 21 product-owner decisions made on your behalf (workpad template, command policy defaults, significance scores, Jira mapping, MR conventions, interview bank, statistics formulas, autonomy presets, risk classes, cost model, human-time rules, linter comment, bootstrap spec, take-over protocol, storage gauge, dogfood plan). — *Recommendation:* skim and veto by item number; silence = accepted.
 
 

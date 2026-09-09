@@ -16,10 +16,12 @@ Self-hosted, open-source platform that runs Claude Code agents through a real-li
 
 Workspace packages are published under the neutral scope `@platform/*` (BD-014). They are consumed straight from `src/` — there is no build step yet; the emit strategy is decided when the first runnable app lands (WP-06).
 
+`schemas/` holds the JSON Schemas generated from `packages/contracts` (`pnpm schemas`). It is generated output: edit the zod schema, regenerate, commit both.
+
 ## Commands
-- `pnpm install` (installs git hooks via `prepare`) · `pnpm dev` (server + web with the fake Claude runner — stub until WP-06/WP-20) · `pnpm test` (unit + contract, with coverage) · `pnpm test:integration` (Testcontainers/PGlite) · `pnpm test:e2e` (fake Claude) · `pnpm test:ui` · `pnpm lint` · `pnpm typecheck` · `pnpm schemas` (stub until WP-01) · `pnpm eval` (promptfoo, needs `llm-ci` key — lands with WP-17)
+- `pnpm install` (installs git hooks via `prepare`) · `pnpm dev` (server + web with the fake Claude runner — stub until WP-06/WP-20) · `pnpm test` (unit + contract, with coverage) · `pnpm test:integration` (Testcontainers/PGlite) · `pnpm test:e2e` (fake Claude) · `pnpm test:ui` · `pnpm lint` · `pnpm typecheck` · `pnpm schemas` (regenerates `schemas/` from `packages/contracts`) · `pnpm schemas:check` (fails when `schemas/` is stale; part of `verify` and of CI's lint job) · `pnpm eval` (promptfoo, needs `llm-ci` key — lands with WP-17)
 - Verification contract (technical/14) — each prints exactly one final `PASS: <target>` / `FAIL: <target>` line:
-  `pnpm run -s verify` (lint + typecheck + unit + contract) · `pnpm run -s verify:integration` · `pnpm run -s verify:e2e` · `pnpm run -s verify:ui`
+  `pnpm run -s verify` (lint + typecheck + schemas:check + unit + contract) · `pnpm run -s verify:integration` · `pnpm run -s verify:e2e` · `pnpm run -s verify:ui`
 - `pnpm secrets:scan` runs gitleaks over the working tree; the pre-commit hook scans the staged diff.
 - `docker compose up` for a full instance; `COMPOSE_PROFILES=local` for the local provider mode (lands with WP-22).
 
@@ -30,6 +32,10 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
 - Integration providers implement the type port + fake + contract test + setup guide; adding a provider never touches the pipeline or UI (BD-017).
 - Prompts live in `packages/prompts/<role>/` with `schema.json` and `evals/`; changing a prompt requires eval cases and bumps the prompt version.
 - Env naming: `APP_*` for platform settings, tool-native names for integration credentials, `_FILE` variants for secrets (TD-020).
+- The wire format is snake_case everywhere (config YAML, event payloads, artifact data, API DTOs, transcript rows), matching technical/02, /03, /08 and /12; exported identifiers stay camelCase.
+- Boundary schemas are **strict**: an unknown key is an error, never dropped. The exceptions are records with user-chosen keys (stage ids, template names, risk classes, status mapping) and opaque provider payloads.
+- The dependency rule is enforced by `lint/style/noRestrictedImports` in `biome.json`: the base rule denies every `@platform/*` import and every relative path that escapes a package, and each ring's override re-allows what it may use — `contracts` nothing; `domain`/`prompts` contracts; `application` adds `domain`; `infrastructure`/`integrations` add `application` and `prompts`; `apps/*` may import any `@platform/*`. A new package is denied until it gets its own override.
+- A plain Node script that needs to import TypeScript sources imports `scripts/ts-source-resolver.mjs` first (it maps the repo's `.js` specifiers to the `.ts` files on disk).
 
 ## Where to look
 - Pipeline behaviour: `docs/product/04-pipeline.md`, `docs/technical/02-domain-model-and-events.md`.

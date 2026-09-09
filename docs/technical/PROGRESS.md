@@ -17,13 +17,13 @@
 | OS | macOS (darwin 25.6.0), arm64 |
 | git | 2.50.1 · remote `git@github.com:gtfo-ai/platform.git` (ssh), branch `main`, clean |
 | gh | 2.86.0 · authenticated as `JanMikes`, scopes `repo, read:org, gist, admin:public_key` — push access OK |
-| Node | **25.1.0** on PATH (`/opt/homebrew/bin/node`); Node **24.3.0** available at `/opt/homebrew/opt/node@24/bin` |
+| Node | **25.1.0** on PATH (`/opt/homebrew/bin/node`); Node **24.3.0** at `/opt/homebrew/Cellar/node/24.3.0/bin` — note `/opt/homebrew/opt/node@24` is a **broken symlink** to Cellar/node/25.1.0, corrected at WP-01 |
 | pnpm | 12.3.4 (installed globally by the orchestrator during start-up) |
 | Docker | server 29.4.1, linux/aarch64 — running |
 | gitleaks | **not installed** on the host — must be provided by the repo (npm devDependency or Docker) in WP-00 |
 | lefthook | **not installed** on the host — must be an npm devDependency in WP-00 |
 
-**Decision (orchestrator, start-up):** `engines.node` is `>=24` (not `=24`) so the local Node 25 toolchain works; CI pins Node 24 via `.nvmrc`/setup-node. If a dependency breaks on Node 25 locally, prefix commands with `PATH=/opt/homebrew/opt/node@24/bin:$PATH`.
+**Decision (orchestrator, start-up):** `engines.node` is `>=24` (not `=24`) so the local Node 25 toolchain works; CI pins Node 24 via `.nvmrc`/setup-node. If a dependency breaks on Node 25 locally, prefix commands with `PATH=/opt/homebrew/Cellar/node/24.3.0/bin:$PATH` (verified to run `verify` green at WP-01).
 
 ## Blocker briefs needing a human
 
@@ -33,8 +33,8 @@
 
 | WP | Title | Depends | Parallel-safe | Status | Commit | Notes |
 |---|---|---|---|---|---|---|
-| WP-00 | Repo scaffold | — | no | DONE | see git log | 3 review rounds; notes below |
-| WP-01 | `packages/contracts` | WP-00 | no | TODO | — | |
+| WP-00 | Repo scaffold | — | no | DONE | `8852b9e` | 3 review rounds; notes below |
+| WP-01 | `packages/contracts` | WP-00 | no | DONE | next commit | APPROVE round 1; 5 hardening fixes folded in |
 | WP-02 | `packages/domain` | WP-01 | no | TODO | — | |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | TODO | — | |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | TODO | — | |
@@ -197,6 +197,57 @@ Round-2 evidence:
   clean tree → exit 0.
 - Pre-commit re-proven with the final `--require` config: planted secret → exit 1, clean → exit 0.
 - `pnpm secrets:scan` and `secrets:scan:ci` (full history) — no leaks. `actionlint` — 0 errors.
+
+### WP-01 — `packages/contracts` (APPROVE, round 1)
+
+Reviewer confirmed doc fidelity: all 49 events in technical/02's catalogue present with exact names and
+no inventions; technical/12's config example transcribed key-for-key and parsing; all nine artifact
+`data` shapes field-for-field; technical/08 and /04 sampled and matching. `z.strictObject` everywhere —
+no `z.object(`, `catchall`, `passthrough`, `any` or `unknown` in the package; every `z.record` is one of
+technical/12's user-keyed maps or an opaque provider payload.
+
+**Docs amended by the orchestrator to match the implementation** (the code was right, the docs were
+loose): technical/02 line 62 — `actor` lives in the event envelope, not in each payload (matches
+`events.actor` in technical/03); technical/12 — `features.shadow_mode` added to the `features:` block.
+
+**Event field renames to remember** (WP-01 chose these over the catalogue's one-line prose):
+`ticket.matched.type` → `issue_type`; `task.stage.returned.from`/`to` → `from_stage`/`to_stage`;
+`shadow.report.created.comparison` → `artifact`.
+
+**Deferred to later WPs** (reviewer non-blocking, recorded so they are not lost):
+- `schemas.ts` mutates `z.globalRegistry` at import and the barrel re-exports it, so every consumer
+  inherits ~60 reserved ids; zod 4.5.4's `registry.add` silently overwrites on a duplicate id, and
+  `packages/contracts/package.json` declares no `sideEffects`, so the SPA bundles it. Revisit at
+  **WP-06** when OpenAPI component naming lands: prefer an exported `registerSchemaIds()`.
+- API DTOs are partial — none yet for org stats/audit, project stats, bindings, discovery, kb
+  bootstrap/health, task events, shadow reports, or `Idempotency-Key`. The WPs that own those endpoints
+  add them.
+- `.agentic/pipeline.yml` gate stages accept neither `on` nor `command` — matches the doc's
+  `rebase_gate` example but is under-constrained; tighten at **WP-15** (pipeline interpreter).
+- `TranscriptEvent` keeps `tool_use_id`/`tool_name` inside content blocks while technical/03 indexes
+  them as columns — mapping work for **WP-07**.
+
+Q35 filed in `docs/OPEN-QUESTIONS.md` (technical/12 omits `DiscoveryDraft`'s `data`); recommendation
+grounded in product/06 step 2 and implemented.
+
+**Round 2 (hardening, APPROVE).** Five reviewer non-blockers folded in before commit: the `$defs`
+collision guard now keys on the canonical definition (the old guard could never fire, so two different
+anon defs could merge silently) and moved to an internal `json-schema-defs.ts`; the type-stripping
+resolver is scoped to the repo root and outside `node_modules`; the boundary lint denies unknown
+packages by default and closes the relative-escape holes; `verify` emits exactly one stdout line per
+target (child stdout → fd 2), restoring the protocol's contract; coverage reached 100/100/100/100 over
+285 tests. The implementer also found and fixed a real dangling-`$ref` bug that produced
+`#/$defs/#/$defs/__schemaN`. `schemas/` regenerates byte-identically.
+
+Residual, all verified unreachable today — fix if the area is touched again:
+- an `anon_<hash>` name colliding with a real named `$defs` entry silently clobbers it (one
+  `if (!ANONYMOUS_DEF.test(name) && defs[name])` restores the old guard's coverage);
+- `stabiliseDefs` rewrites `#/$defs/__schemaN` anywhere in the serialised document, including inside
+  `description`/`const`/`enum` strings;
+- the Biome `@platform/*` group misses **subpath** specifiers (`@platform/application/src/x.js` passes
+  lint; only the `.`-only `exports` maps stop it) and relative escapes to a package root outside `src/`
+  (`../../contracts/index.js`);
+- any future `verify` step whose stdout must be *captured* will silently land on stderr.
 
 ## Discovered work (not in plan)
 

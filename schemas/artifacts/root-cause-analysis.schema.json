@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RootCauseAnalysis data",
+  "description": "Structured output of the stage that produces a RootCauseAnalysis artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "reproduction": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "reproduced",
+            "evidence"
+          ]
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "steps",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "root_cause": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "affected_scope": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    },
+    "fix_direction": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "regression_test_idea": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactQuestion"
+      }
+    }
+  },
+  "required": [
+    "reproduction",
+    "root_cause",
+    "confidence",
+    "affected_scope",
+    "fix_direction",
+    "regression_test_idea",
+    "questions"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ArtifactQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "text": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "blocking"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

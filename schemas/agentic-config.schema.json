@@ -1,0 +1,555 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": ".agentic/config.yml",
+  "description": "Repository configuration; unknown keys are errors (technical/12).",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "knowledge_dir": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "communication_language": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "auto"
+            },
+            {
+              "$ref": "#/$defs/LanguageTag"
+            }
+          ]
+        },
+        "commit_convention": {
+          "type": "string",
+          "enum": [
+            "conventional",
+            "none"
+          ]
+        },
+        "default_branch": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "template_overrides": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Slug"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "stages": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/Slug"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "plan_approval": {
+                      "type": "string",
+                      "enum": [
+                        "never",
+                        "above_size",
+                        "always"
+                      ]
+                    },
+                    "size_threshold": {
+                      "$ref": "#/$defs/Size"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "custom_stages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CustomStage"
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "code_review_iterations": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "business_review_iterations": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "ci_fix_iterations": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "human_rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "question_timeout": {
+              "$ref": "#/$defs/Duration"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "stages": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/Slug"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "effort": {
+            "$ref": "#/$defs/Effort"
+          },
+          "max_turns": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "budget_usd": {
+            "$ref": "#/$defs/Usd"
+          },
+          "prompt": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "prompt_append": {
+            "$ref": "#/$defs/PathPattern"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "policies": {
+      "type": "object",
+      "properties": {
+        "autonomy": {
+          "$ref": "#/$defs/AutonomyLevel"
+        },
+        "probation_tasks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "knowledge_apply": {
+          "type": "object",
+          "properties": {
+            "auto_apply": {
+              "type": "boolean"
+            },
+            "discard_below": {
+              "$ref": "#/$defs/UnitInterval"
+            },
+            "proposal_above": {
+              "$ref": "#/$defs/UnitInterval"
+            }
+          },
+          "additionalProperties": false
+        },
+        "dependency_policy": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask",
+            "block"
+          ]
+        },
+        "drift_without_direction": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "label_unknown"
+          ]
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathPattern"
+          }
+        },
+        "risk_classes": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Slug"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "paths": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PathPattern"
+                }
+              },
+              "require": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/anon_745cd275"
+                }
+              }
+            },
+            "required": [
+              "paths",
+              "require"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "commands": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "ask": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "block": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "features": {
+      "type": "object",
+      "properties": {
+        "ticket_linter": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "issue_types": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "review_only": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "trigger": {
+              "type": "string",
+              "enum": [
+                "label",
+                "all",
+                "manual"
+              ]
+            },
+            "label": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "severity_floor": {
+              "$ref": "#/$defs/Severity"
+            }
+          },
+          "additionalProperties": false
+        },
+        "maintenance": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "schedule": {
+              "type": "string",
+              "enum": [
+                "daily",
+                "weekly",
+                "monthly"
+              ]
+            },
+            "budget_usd": {
+              "$ref": "#/$defs/Usd"
+            },
+            "chores": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "deps",
+                  "flaky",
+                  "docs",
+                  "lint",
+                  "kb"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "digest": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "at": {
+              "$ref": "#/$defs/TimeOfDay"
+            },
+            "quiet_hours": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "$ref": "#/$defs/TimeOfDay"
+                    },
+                    "to": {
+                      "$ref": "#/$defs/TimeOfDay"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "shadow_mode": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "budget_usd": {
+              "$ref": "#/$defs/Usd"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "status_mapping": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/Slug"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "AgentRole": {
+      "type": "string",
+      "enum": [
+        "triager",
+        "product_manager",
+        "investigator",
+        "architect",
+        "developer",
+        "reviewer",
+        "acceptance_tester",
+        "facilitator",
+        "librarian",
+        "discovery"
+      ]
+    },
+    "ArtifactType": {
+      "type": "string",
+      "enum": [
+        "RefinedSpec",
+        "RootCauseAnalysis",
+        "ImplementationPlan",
+        "ImplementationNotes",
+        "ReviewVerdict",
+        "AcceptanceVerdict",
+        "RetroReport",
+        "ShadowReport",
+        "ReadinessReport",
+        "DiscoveryDraft"
+      ]
+    },
+    "AutonomyLevel": {
+      "type": "string",
+      "enum": [
+        "observe",
+        "assist",
+        "supervised",
+        "autonomous"
+      ]
+    },
+    "CustomStage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Slug"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "gate"
+          ]
+        },
+        "after": {
+          "$ref": "#/$defs/Slug"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "prompt": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "command": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "produces": {
+          "$ref": "#/$defs/ArtifactType"
+        },
+        "pass_to": {
+          "$ref": "#/$defs/Slug"
+        },
+        "fail_to": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "after"
+      ],
+      "additionalProperties": false
+    },
+    "Duration": {
+      "type": "string",
+      "pattern": "^\\d+ (working )?(minutes?|hours?|days?)$"
+    },
+    "Effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "LanguageTag": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "nit"
+      ]
+    },
+    "Size": {
+      "type": "string",
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ]
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "TimeOfDay": {
+      "type": "string",
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+    },
+    "UnitInterval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "Usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "anon_745cd275": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "plan_approval",
+            "budget_approval"
+          ]
+        },
+        {
+          "type": "string",
+          "pattern": "^reviewer:@?[A-Za-z0-9._\\-/]+$"
+        }
+      ]
+    }
+  }
+}

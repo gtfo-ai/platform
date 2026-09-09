@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShadowReport data",
+  "description": "Structured output of the stage that produces a ShadowReport artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "ticket": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "human_mr": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MergeRequestRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "agent_diff_stats": {
+      "type": "object",
+      "properties": {
+        "files_changed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "insertions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "files_changed",
+        "insertions",
+        "deletions"
+      ],
+      "additionalProperties": false
+    },
+    "overlap": {
+      "type": "object",
+      "properties": {
+        "files_jaccard": {
+          "$ref": "#/$defs/UnitInterval"
+        },
+        "size_ratio": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "files_jaccard",
+        "size_ratio"
+      ],
+      "additionalProperties": false
+    },
+    "agent_review_of_human_mr": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ReviewFinding"
+      }
+    },
+    "predicted_cost": {
+      "$ref": "#/$defs/Usd"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ticket",
+    "agent_diff_stats",
+    "overlap",
+    "agent_review_of_human_mr",
+    "predicted_cost",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "MergeRequestRef": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "iid": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head_sha": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "iid",
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "ReviewFinding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "category": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PathPattern"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "explanation": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "suggestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "category",
+        "explanation"
+      ],
+      "additionalProperties": false
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "nit"
+      ]
+    },
+    "Sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,64}$"
+    },
+    "UnitInterval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "Url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "Usd": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

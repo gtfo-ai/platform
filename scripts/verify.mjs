@@ -7,15 +7,18 @@
  *   pnpm run -s verify:e2e          fake-Claude application e2e
  *   pnpm run -s verify:ui           web app suites
  *
- * Every target prints exactly one final line, `PASS: <target>` or `FAIL: <target>`,
- * and exits non-zero on failure.
+ * Every target prints exactly one line on **stdout**, `PASS: <target>` or `FAIL: <target>`,
+ * and exits non-zero on failure. The steps a target runs may print their own PASS/FAIL lines
+ * (`schemas:check` does), so each child's stdout is redirected to this process's stderr: the
+ * orchestrator reads one verdict per target from stdout, and everything else stays on stderr
+ * where it is still visible in a terminal and in CI logs.
  */
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 
 /** @type {Record<string, string[]>} target -> package.json scripts, in order */
 const TARGETS = {
-  verify: ['lint', 'typecheck', 'test'],
+  verify: ['lint', 'typecheck', 'schemas:check', 'test'],
   'verify:integration': ['test:integration'],
   'verify:e2e': ['test:e2e'],
   'verify:ui': ['test:ui'],
@@ -37,8 +40,10 @@ let failed = null;
 
 for (const step of steps) {
   process.stderr.write(`\n── ${target} › ${step} ──\n`);
+  // stdin inherited, child stdout redirected onto our fd 2, stderr inherited. Passing the fd
+  // (rather than piping) keeps the output streaming and keeps the child's TTY detection working.
   const result = spawnSync(pnpm, ['-s', 'run', step], {
-    stdio: 'inherit',
+    stdio: ['inherit', 2, 'inherit'],
     env: process.env,
   });
   if (result.error) {

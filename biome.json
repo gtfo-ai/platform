@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/coverage", "!pnpm-lock.yaml", "!docs"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/coverage",
+      "!pnpm-lock.yaml",
+      "!docs",
+      "!schemas"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -18,7 +26,29 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@platform/*"],
+                "message": "Dependency rule (technical/01): this package declares no allowance to import a workspace package. Give it an explicit override in biome.json before importing one."
+              },
+              {
+                "group": [
+                  "../../*/src/**",
+                  "../../../**",
+                  "**/packages/*/src/**",
+                  "**/apps/*/src/**"
+                ],
+                "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
+              }
+            ]
+          }
+        }
+      }
     }
   },
   "javascript": {
@@ -40,5 +70,164 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/contracts/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@platform/*"],
+                    "message": "packages/contracts is leaf-level: it may not import another workspace package (technical/01)."
+                  },
+                  {
+                    "group": [
+                      "../../*/src/**",
+                      "../../../**",
+                      "**/packages/*/src/**",
+                      "**/apps/*/src/**"
+                    ],
+                    "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/domain/**", "packages/prompts/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@platform/*", "!@platform/contracts"],
+                    "message": "This package may only import @platform/contracts (technical/01 dependency rule)."
+                  },
+                  {
+                    "group": [
+                      "../../*/src/**",
+                      "../../../**",
+                      "**/packages/*/src/**",
+                      "**/apps/*/src/**"
+                    ],
+                    "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/application/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@platform/*", "!@platform/contracts", "!@platform/domain"],
+                    "message": "application may only import domain and contracts; adapters belong behind a port (technical/01)."
+                  },
+                  {
+                    "group": [
+                      "../../*/src/**",
+                      "../../../**",
+                      "**/packages/*/src/**",
+                      "**/apps/*/src/**"
+                    ],
+                    "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/infrastructure/**", "packages/integrations/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@platform/*",
+                      "!@platform/contracts",
+                      "!@platform/domain",
+                      "!@platform/application",
+                      "!@platform/prompts"
+                    ],
+                    "message": "Adapters may import contracts, domain, application and prompts — never another adapter package (technical/01)."
+                  },
+                  {
+                    "group": [
+                      "../../*/src/**",
+                      "../../../**",
+                      "**/packages/*/src/**",
+                      "**/apps/*/src/**"
+                    ],
+                    "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "../../*/src/**",
+                      "../../../**",
+                      "**/packages/*/src/**",
+                      "**/apps/*/src/**"
+                    ],
+                    "message": "apps/* are composition roots: import workspace packages by their @platform/* name, never by a relative path (technical/01)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["scripts/**", "test/**", "*.ts", "*.mjs", "*.js"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }

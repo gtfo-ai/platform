@@ -12,5 +12,8 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     }
+  },
+  "dependencies": {
+    "zod": "4.5.4"
   }
 }

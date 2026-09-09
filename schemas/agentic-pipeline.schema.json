@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": ".agentic/pipeline.yml",
+  "description": "Optional full pipeline template definition (technical/12).",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "templates": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/Slug"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "stages": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Stage"
+            }
+          },
+          "custom": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/CustomStage"
+            }
+          }
+        },
+        "required": [
+          "stages"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "templates"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "AgentRole": {
+      "type": "string",
+      "enum": [
+        "triager",
+        "product_manager",
+        "investigator",
+        "architect",
+        "developer",
+        "reviewer",
+        "acceptance_tester",
+        "facilitator",
+        "librarian",
+        "discovery"
+      ]
+    },
+    "ArtifactType": {
+      "type": "string",
+      "enum": [
+        "RefinedSpec",
+        "RootCauseAnalysis",
+        "ImplementationPlan",
+        "ImplementationNotes",
+        "ReviewVerdict",
+        "AcceptanceVerdict",
+        "RetroReport",
+        "ShadowReport",
+        "ReadinessReport",
+        "DiscoveryDraft"
+      ]
+    },
+    "CustomStage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Slug"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "gate"
+          ]
+        },
+        "after": {
+          "$ref": "#/$defs/Slug"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "prompt": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "command": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "produces": {
+          "$ref": "#/$defs/ArtifactType"
+        },
+        "pass_to": {
+          "$ref": "#/$defs/Slug"
+        },
+        "fail_to": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "after"
+      ],
+      "additionalProperties": false
+    },
+    "DomainEventType": {
+      "type": "string",
+      "enum": [
+        "ticket.matched",
+        "ticket.comment.added",
+        "ticket.status.changed",
+        "task.created",
+        "task.queued",
+        "task.dequeued",
+        "task.stage.entered",
+        "task.stage.completed",
+        "task.stage.returned",
+        "task.question.asked",
+        "task.question.answered",
+        "task.question.expired",
+        "task.approval.requested",
+        "task.approval.decided",
+        "task.escalated",
+        "task.paused",
+        "task.resumed",
+        "task.taken_over",
+        "task.handed_back",
+        "task.cancelled",
+        "task.completed",
+        "run.started",
+        "run.finished",
+        "run.failed",
+        "run.steered",
+        "artifact.created",
+        "workspace.provisioned",
+        "workspace.destroyed",
+        "workspace.exported",
+        "mr.opened",
+        "mr.updated",
+        "mr.merged",
+        "mr.closed",
+        "mr.review.comment",
+        "ci.pipeline.finished",
+        "default_branch.moved",
+        "budget.threshold.reached",
+        "budget.exhausted",
+        "budget.reset",
+        "feedback.received",
+        "knowledge.proposal.created",
+        "knowledge.proposal.applied",
+        "knowledge.proposal.rejected",
+        "knowledge.index.rebuilt",
+        "readiness.evaluated",
+        "config.changed",
+        "integration.action.performed",
+        "integration.action.failed",
+        "shadow.report.created"
+      ]
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "Stage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Slug"
+            },
+            "kind": {
+              "type": "string",
+              "const": "system"
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Slug"
+            },
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "role": {
+              "$ref": "#/$defs/AgentRole"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "produces": {
+              "$ref": "#/$defs/ArtifactType"
+            },
+            "requires": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArtifactType"
+              }
+            },
+            "approve_to": {
+              "$ref": "#/$defs/Slug"
+            },
+            "return_to": {
+              "$ref": "#/$defs/Slug"
+            },
+            "next": {
+              "$ref": "#/$defs/Slug"
+            },
+            "prompt": {
+              "$ref": "#/$defs/PathPattern"
+            },
+            "prompt_append": {
+              "$ref": "#/$defs/PathPattern"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Slug"
+            },
+            "kind": {
+              "type": "string",
+              "const": "gate"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "on": {
+              "$ref": "#/$defs/DomainEventType"
+            },
+            "command": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "pass_to": {
+              "$ref": "#/$defs/Slug"
+            },
+            "fail_to": {
+              "$ref": "#/$defs/Slug"
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Slug"
+            },
+            "kind": {
+              "type": "string",
+              "const": "human"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "on": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "on": {
+                    "$ref": "#/$defs/DomainEventType"
+                  },
+                  "to": {
+                    "$ref": "#/$defs/Slug"
+                  }
+                },
+                "required": [
+                  "on",
+                  "to"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "on"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}
