@@ -39,9 +39,8 @@
 
 **Then continue the plan**
 
-- **WP-07** (integration ports + fakes + contract suites) is next in plan order and unblocks WP-08…WP-11,
-  which are four parallel-safe provider WPs.
-- **WP-12** (Claude SDK runner) depends on WP-04 and WP-05, both DONE, so it can run alongside WP-07.
+- **WP-07 is DONE** (session 2) and unblocks WP-08…WP-11, four parallel-safe provider WPs.
+- **WP-12** (Claude SDK runner) is IN_PROGRESS in an isolated worktree.
 - Cap concurrency at **two or three** agents — see the parallelism note below; three implementers plus
   reviews drove this 14-core host to load average 143 and made timing-sensitive tests lie.
 
@@ -111,6 +110,16 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 12. **A fake's kindest divergence needs a positive assertion, not a warning.** Documenting a divergence is
    necessary and not sufficient: the place a fake is most permissive is the place a later WP leans hardest.
    Hard-coding `mergeable: true` in the WP-07 git fake passed 39/39 unit and contract tests.
+13. **A redactor is only as good as the consumer that serialises what it missed, so review it against the
+   real serialiser.** WP-07's `redactErrorInPlace` was verified against `pino-std-serializers@7.1.0`'s
+   actual `lib/err.js` and leaked four ways: own enumerable fields (`err.js:29-38` copies every `for…in`
+   key), `AggregateError.errors[]` (`err.js:24-26`), and any `cause` chain past its own depth bound —
+   because pino's `messageWithCauses` walks the chain **unbounded**. *A bound the consumer does not share
+   is not a safety property.*
+14. **A guard enforced only by TypeScript is not enforced at a boundary.** WP-07's shadow guard was made
+   required in the type and probed live: a JavaScript caller omitting `mode`, or passing `'SHADOW'` for
+   `'shadow'`, got `status: ok` and a **real** provider call. A mutation that dies as `TS2578` proves the
+   compiler, not the code — mutation-check a runtime guard from JavaScript.
 
 ## Blocker briefs needing a human
 
@@ -130,7 +139,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
 | WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `9e0be0b` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
-| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | REVIEW | branch `worktree-agent-a9a3e50934a34e3ef` `0178ffc` | all 5 targets green in the orchestrator's shell (+199 tests); review round 1 running |
+| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `WP07SHA` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
@@ -1134,6 +1143,60 @@ parallel WPs collide on migration numbers.
 audit-before-throw are correct apart from the redaction gap; tiering and coverage correct; **all five doc
 amendments to technical/06 are doc-proven-wrong rather than doc-found-inconvenient**, and the audit
 row/event split matches technical/02:120.
+
+### WP-07 — review round 2: APPROVE, and four leaks built against the real serialiser
+
+**Verdict APPROVE**, three should-fix items, no blockers — all five fixed before the merge rather than
+filed, because the next four work packages are the ones that make them reachable.
+
+**Round 2's own work was good.** Major 1 was treated as a class rather than a line, and the site that
+mattered was not the one the review named: the **rethrow**. The error escapes the executor into
+`apps/server`'s `{ err }` handler, so redacting the audit row was never enough; `redactErrorInPlace` now
+scrubs message, stack and the whole `cause` chain in place while preserving error identity. Major 3 widened
+usefully — re-reading all 17 suite assertions found two that were adapter *obligations* no port stated
+(`cloneUrl` refusing a revoked credential, Slack's `channel_not_found` arriving as `200 {ok:false}`), now
+moved onto the ports so WP-09 and WP-10 learn them from the contract instead of from a red suite. And
+`Object.freeze` turns out not to seal `stack` at all — V8 exposes it as a prototype accessor.
+
+**But the reviewer constructed four working leaks**, each verified against the **real**
+`pino-std-serializers@7.1.0` the server uses rather than against the redactor's own tests: own enumerable
+fields are never walked (`err.js:29-38` copies every `for…in` key, so an axios-shaped
+`config.headers.Authorization` survives into `util.inspect`, `JSON.stringify` and the pino err object);
+`AggregateError.errors[]` is never walked (`err.js:24-26`); and a `cause` chain deeper than the redactor's
+`MAX_CAUSE_DEPTH = 8` returns `count=0` while pino's `messageWithCauses` walks it unbounded. **None is
+reachable from code shipped in WP-07** — all five fakes throw `IntegrationError`, whose own fields are
+`code`/`provider`/`action`/`retryable`, and pino skips a *cause's* own fields — which is precisely the
+argument for fixing it now: WP-08…WP-11 introduce real provider SDK errors, and an axios or undici error
+carries the credential as an own enumerable field.
+
+**The shadow guard still failed open at runtime.** Round 1 made `mode` required in TypeScript; the reviewer
+probed it live and a JavaScript caller omitting `mode` — or passing `'SHADOW'` for `'shadow'` — got
+`status: ok` and a real `perform()`. Round 1's mutation had died as `TS2578`, which proves the compiler and
+not the code. Rules 13 and 14 above are what these two earned.
+
+**"The redaction is on one branch and not the other" recurred a third time in one file** (`:443` rethrows
+`auditError` unscrubbed while `:449` scrubs it), so the fix round was asked not just to patch it but to name
+what would prevent a fourth — a choke point, a lint rule, or a type that cannot be thrown unredacted.
+
+**The reviewer's independent count of unredacted-text sites was 13, not the 7 examined.** They agreed the
+two deferred gaps are correctly deferred — there is no write path to `events.payload` yet, so "redaction at
+write" has no write to attach to — but made the better point that the obligation belongs on
+`IgnoredDelivery.detail` and `HealthProbe.detail` themselves, where WP-08 will meet it, not only in a
+backlog file nobody opens while coding.
+
+**Confirmed sound:** `describe.each` genuinely drives `failNext(429)` through all five fakes and asserts
+`core.calls === 2` for each (rule 11 discharged); every register citation names a test that exists; each
+fake's kindest divergence carries a positive assertion, mergeability included, with `null` distinguished
+from `false` for WP-26's rebase gate; suites are structurally reusable, the harness supplying ids, statuses,
+deliveries and even the ignore reason, with the first remaining friction being fresh-context-per-test
+against recorded cassettes; no third-party dependency added; biome overrides correct; ports strict-zod and
+snake_case; `secretFields` guarded at registration. The shadow-null-adapter removal was judged sound on the
+right grounds — a null adapter bypasses the executor and writes no `would_have` row, which product/12's
+ShadowReport needs.
+
+**Discovered work:** nothing connects `ProviderCreateInput.secrets` to `exactSecretRedactor`, so WP-15 can
+hand a provider a secret the redactor never learns — and `redaction_count`, the only signal that would show
+it, has no column yet.
 
 ## Discovered work (not in plan)
 

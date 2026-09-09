@@ -12,5 +12,11 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     }
+  },
+  "dependencies": {
+    "@platform/application": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/domain": "workspace:*",
+    "zod": "4.5.4"
   }
 }

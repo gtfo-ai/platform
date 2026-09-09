@@ -44,6 +44,7 @@
     "@platform/contracts": "workspace:*",
     "@platform/domain": "workspace:*",
     "@platform/infrastructure": "workspace:*",
+    "@platform/integrations": "workspace:*",
     "@platform/server": "workspace:*",
     "@testcontainers/postgresql": "12.1.0",
     "@types/node": "24.13.3",

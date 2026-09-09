@@ -19,7 +19,7 @@
 
 ## Fixtures and fakes (first-class code)
 - `FakeClaudeRunner`: replays `test/fixtures/claude/<scenario>.jsonl` (our normalised `RunEvent`s incl. a `result` with usage/cost/`structured_output`); scripted `ask_human`, tool policy prompts, budget stops, stalls; used by application tests, the UI dev server and the e2e job.
-- `Fake<Type>` providers: in-memory Jira/GitLab/Slack/Sentry/Loki with webhook emitters; exported from the integration packages; also power **shadow mode** (null adapter variant).
+- `Fake<Type>` providers: in-memory Jira/GitLab/Slack/Sentry/Loki with webhook emitters; exported from the integration packages, each with a divergence register in its docblock. They are test doubles only: **shadow mode** is a guard inside `IntegrationActionExecutor` (technical/06 § "Outbound: actions"), not a null adapter that replaces a provider, so nothing in the product path swaps an adapter for a fake.
 - Recording tools: `pnpm record:http --provider gitlab` (nock.back record with redaction hook), `pnpm record:claude --scenario feature-happy-path` (real SDK run → scrubbed fixture). Fixtures must contain only obviously fake secrets; a gitleaks rule scans `test/fixtures/**`.
 - Golden transcripts cover: sub-agents, compaction, denied tools, budget stop, structured output failure, steer, interrupt.
 

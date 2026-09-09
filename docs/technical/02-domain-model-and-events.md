@@ -109,7 +109,7 @@ Custom project stages (product/04) register handlers on `task.stage.completed` f
 - **ReviewCommentBatcher**: debounces `mr.review.comment` for 2 minutes per MR then emits one `task.stage.returned`.
 - **BudgetProjector**: folds cost entries into budget spent; emits threshold events.
 - **KnowledgeSaga**: retro → proposals → Librarian → apply policy → index rebuild.
-- **ShadowSaga**: like PipelineSaga with outbound actions replaced by a null adapter and a comparison step.
+- **ShadowSaga**: like PipelineSaga, plus a comparison step. Nothing is replaced: outbound actions go through the same `IntegrationActionExecutor` as a normal task, and its shadow guard refuses every *mutating* one — the task's `mode` is a required, zod-parsed field on a mutating request, and a shadow task's write is recorded `would_have` without reaching the provider (technical/06 § "Outbound: actions"). Reads are performed normally, because a shadow task needs its context.
 - **MaintenanceScheduler**: creates chore tasks on schedule within budget.
 
 ## Invariants (enforced in domain)

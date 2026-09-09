@@ -1,4 +1,5 @@
 import { Writable } from 'node:stream';
+import { exactSecretRedactor, redactErrorInPlace } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { asLoggerPort, createLogger, withLogContext } from './logging.js';
 
@@ -107,5 +108,90 @@ describe('asLoggerPort', () => {
       [40, 'w'],
       [50, 'e'],
     ]);
+  });
+});
+
+/**
+ * The scrub in `@platform/application` against the serialiser that actually consumes it.
+ *
+ * `app.ts` logs an unexpected error as `{ err }`, and pino hands that to `pino-std-serializers`,
+ * which emits the message and stack **with the whole cause chain appended**, an `AggregateError`'s
+ * `errors[]`, and a copy of every key `for…in` reaches. `redactErrorInPlace`'s docblock claims to
+ * cover exactly those routes; a claim about another package's behaviour is worth what the test
+ * that runs it is worth, so this composes the two rather than describing them.
+ *
+ * The secret here is not one of `REDACTED_PATHS`: this must fail if the *scrub* regresses, not
+ * pass because pino's own field list happened to catch it.
+ */
+describe('an integration error scrubbed by the application ring, through pino', () => {
+  const SECRET = 'fake-provider-token-0123456789';
+  const redactor = exactSecretRedactor([{ name: 'gitlab', value: SECRET }]);
+
+  /** The shape an axios or undici failure has: config, response and a cause, all carrying it. */
+  const providerFailure = () => {
+    const wire = new Error(`socket wrote token ${SECRET}`);
+    return Object.assign(new Error('request failed', { cause: wire }), {
+      config: { headers: { Authorization: `Bearer ${SECRET}` } },
+      response: { status: 401, body: { detail: [`token ${SECRET} was rejected`] } },
+      cache: new Map([['authorization', `Bearer ${SECRET}`]]),
+    });
+  };
+
+  it('writes no part of the injected secret to the log line', () => {
+    const { sink, log } = logger();
+    const error = providerFailure();
+
+    const redaction = redactErrorInPlace(redactor, error);
+    log.error({ err: error }, 'integration action failed');
+
+    // Three, not four: V8 formats `Error.stack` lazily on first read, so scrubbing `message`
+    // before anything has touched `stack` makes the stack format itself from the *redacted*
+    // message and contribute nothing. An error something already logged or inspected has its
+    // stack materialised with the secret in it, and then the scrub writes that one too. The leak
+    // is closed either way, which is why the count is a floor and the log line is the assertion.
+    expect(
+      redaction.count,
+      'cause message, request header, response body line',
+    ).toBeGreaterThanOrEqual(3);
+    const text = JSON.stringify(sink.lines()[0]);
+    expect(text, 'the line pino actually wrote').not.toContain(SECRET);
+    expect(text, 'and it is the scrub that removed it').toContain('[REDACTED:integration:gitlab]');
+  });
+
+  it('writes no part of an AggregateError’s children either', () => {
+    const { sink, log } = logger();
+    const error = new AggregateError(
+      [new Error(`first ${SECRET}`), new Error(`second ${SECRET}`)],
+      'batch failed',
+    );
+
+    redactErrorInPlace(redactor, error);
+    log.error({ err: error }, 'integration action failed');
+
+    const line = sink.lines()[0];
+    expect(JSON.stringify(line), 'the line pino actually wrote').not.toContain(SECRET);
+    expect(
+      JSON.stringify((line?.err as { aggregateErrors?: unknown })?.aggregateErrors),
+      'pino serialises the children, so the assertion is about them and not about the parent',
+    ).toContain('[REDACTED:integration:gitlab]');
+  });
+
+  /**
+   * The limitation `redactErrorInPlace` documents, priced here: a `Map` value is not walked, and
+   * the reason that is tolerable is that pino's JSON renders a `Map` as `{}`. If that ever stops
+   * being true, this test fails and the limitation has to be closed.
+   */
+  it('renders a Map — the one container the scrub does not walk — as an empty object', () => {
+    const { sink, log } = logger();
+    const error = providerFailure();
+
+    redactErrorInPlace(redactor, error);
+    log.error({ err: error }, 'integration action failed');
+
+    const err = sink.lines()[0]?.err as { cache?: unknown };
+    expect(err?.cache, 'pino JSON cannot see into a Map').toEqual({});
+    expect(error.cache.get('authorization'), 'while the value itself is untouched').toContain(
+      SECRET,
+    );
   });
 });
