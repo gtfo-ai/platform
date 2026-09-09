@@ -2,7 +2,7 @@
 
 An open-source, self-hosted platform that turns a ticket into a reviewed, mergeable merge request through a pipeline of role-specialised Claude Code agents, with a per-project knowledge base that improves with every task.
 
-**Status:** implementation just started. The product and technical definition is complete and lives in [`docs/`](docs/README.md); the code is a scaffold — nothing runs end-to-end yet. Follow [`docs/technical/PROGRESS.md`](docs/technical/PROGRESS.md) for what is built.
+**Status:** early implementation. The product and technical definition is complete and lives in [`docs/`](docs/README.md). The database, the event store, the job runtime and the HTTP server are built; there are no integrations, no agent runner and no UI yet, so no ticket has been through the pipeline. Follow [`docs/technical/PROGRESS.md`](docs/technical/PROGRESS.md) for what is built.
 
 ## Quick start (contributors)
 
@@ -12,9 +12,16 @@ pnpm install                          # also installs the git hooks
 pnpm run -s verify                    # lint + typecheck + unit + contract
 ```
 
-Node 24 or newer is required (`.nvmrc`). Other targets: `pnpm run -s verify:integration`, `pnpm run -s verify:e2e`, `pnpm run -s verify:ui`. Each prints one final `PASS:`/`FAIL:` line.
+Node 24 or newer is required (`.nvmrc`). Other targets: `pnpm run -s verify:integration`, `pnpm run -s verify:e2e`, `pnpm run -s verify:ui`. Each prints one final `PASS:`/`FAIL:` line. The integration and e2e targets start a PostgreSQL 18 container, so they need a running Docker daemon (or `TEST_DATABASE_URL` pointing at a PostgreSQL 18 server).
 
-Running an instance (`docker compose up`) arrives with the images in WP-22.
+To run the server itself against a local database, copy `.env.example` to `.env`, set `DATABASE_URL`, `APP_SECRET_KEY` and the `APP_BOOTSTRAP_ADMIN_*` pair, then:
+
+```bash
+pnpm db:migrate                       # forward-only SQL migrations, advisory-locked
+pnpm dev                              # apps/server on $PORT; apps/web arrives in WP-20
+```
+
+Running a whole instance (`docker compose up`) arrives with the images in WP-22.
 
 ## Layout
 

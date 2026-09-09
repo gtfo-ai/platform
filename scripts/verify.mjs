@@ -18,7 +18,7 @@ import process from 'node:process';
 
 /** @type {Record<string, string[]>} target -> package.json scripts, in order */
 const TARGETS = {
-  verify: ['lint', 'typecheck', 'schemas:check', 'test'],
+  verify: ['lint', 'typecheck', 'schemas:check', 'ignored:check', 'test'],
   'verify:integration': ['test:integration'],
   'verify:e2e': ['test:e2e'],
   'verify:ui': ['test:ui'],

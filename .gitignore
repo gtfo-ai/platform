@@ -26,9 +26,19 @@ test-results/
 playwright-report/
 *.lcov
 
-# Local data
-data/
-*.log
+# Local data and logs.
+#
+# Both patterns are anchored to the repository root on purpose. Git treats a
+# pattern with no leading slash as matching at *any* depth, so an unanchored
+# `data/` silently swallows `apps/server/src/data/`, and an unanchored `*.log`
+# swallows a recorded fixture. A source file that is invisible to `git status`
+# still typechecks and still passes every test locally, and the mistake only
+# surfaces as a build that cannot compile the tree it just pushed.
+# `scripts/check-ignored.mjs` (the `ignored:check` step of `pnpm run -s verify`)
+# fails the build if any source path is ignored again.
+/data/
+/logs/
+/*.log
 
 # Agent-local settings
 .claude/settings.local.json

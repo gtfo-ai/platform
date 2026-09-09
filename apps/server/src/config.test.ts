@@ -1,0 +1,148 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import {
+  loadServerConfig,
+  POOL_RESERVATIONS,
+  requiredPoolConnections,
+  SERVER_CONFIG_DEFAULTS,
+  type ServerConfig,
+  UndersizedPoolError,
+} from './config.js';
+
+/** The smallest environment that parses. Everything else in these tests is an override. */
+const MINIMAL = {
+  DATABASE_URL: 'postgres://app:app@db:5432/app',
+  APP_SECRET_KEY: 'x'.repeat(40),
+} as const;
+
+const load = (overrides: Record<string, string | undefined> = {}): ServerConfig =>
+  loadServerConfig({ ...MINIMAL, ...overrides });
+
+describe('loadServerConfig', () => {
+  it('applies the documented defaults', () => {
+    const config = load();
+    expect(config.role).toBe('all');
+    expect(config.port).toBe(SERVER_CONFIG_DEFAULTS.port);
+    expect(config.baseUrl).toBe(SERVER_CONFIG_DEFAULTS.baseUrl);
+    expect(config.logFormat).toBe('json');
+    expect(config.timezone).toBe('UTC');
+    expect(config.ssePingIntervalMs).toBe(20_000);
+    expect(config.sseRetryMs).toBe(1_000);
+    // Open registration is off unless an operator asks for it.
+    expect(config.allowSignUp).toBe(false);
+  });
+
+  it('refuses a missing secret rather than inventing one', () => {
+    expect(() => loadServerConfig({ DATABASE_URL: MINIMAL.DATABASE_URL })).toThrow(
+      /APP_SECRET_KEY.*at least 32 characters/s,
+    );
+  });
+
+  it('refuses a short secret', () => {
+    expect(() => load({ APP_SECRET_KEY: 'too-short' })).toThrow(/APP_SECRET_KEY/);
+  });
+
+  it('reads a secret from its _FILE variant, the Docker secrets convention', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wp06-config-'));
+    const file = join(directory, 'secret');
+    writeFileSync(file, `${'y'.repeat(40)}\n`);
+    const config = loadServerConfig({
+      DATABASE_URL: MINIMAL.DATABASE_URL,
+      APP_SECRET_KEY_FILE: file,
+    });
+    // The trailing newline an operator's editor adds is not part of the secret.
+    expect(config.secretKey).toBe('y'.repeat(40));
+  });
+
+  it('reports every offending variable in one error, not the first one', () => {
+    let message = '';
+    try {
+      load({ ROLE: 'wizard', PORT: 'eighty', LOG_FORMAT: 'yaml' });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('ROLE');
+    expect(message).toContain('PORT');
+    expect(message).toContain('LOG_FORMAT');
+  });
+
+  it('names the sub-loader’s variable when the database configuration is wrong', () => {
+    expect(() => load({ APP_DB_POOL_MAX: 'lots' })).toThrow(/APP_DB_POOL_MAX/);
+  });
+
+  it('reads a boolean the way an operator writes one, and rejects a typo', () => {
+    expect(load({ APP_ALLOW_SIGNUP: 'TRUE' }).allowSignUp).toBe(true);
+    expect(load({ APP_ALLOW_SIGNUP: 'on' }).allowSignUp).toBe(true);
+    expect(load({ APP_ALLOW_SIGNUP: 'no' }).allowSignUp).toBe(false);
+    // A typo in a security flag must not quietly read as "off".
+    expect(() => load({ APP_ALLOW_SIGNUP: 'ture' })).toThrow(/APP_ALLOW_SIGNUP/);
+  });
+
+  it('needs both halves of the metrics credential or neither', () => {
+    expect(() => load({ APP_METRICS_USERNAME: 'prom' })).toThrow(/APP_METRICS_PASSWORD/);
+    expect(() => load({ APP_METRICS_PASSWORD: 'fake' })).toThrow(/APP_METRICS_USERNAME/);
+    expect(load({ APP_METRICS_USERNAME: 'prom', APP_METRICS_PASSWORD: 'fake' })).toMatchObject({
+      metricsUsername: 'prom',
+      metricsPassword: 'fake',
+    });
+    expect(load().metricsUsername).toBeNull();
+  });
+
+  it('needs a password for the bootstrap administrator it is asked to create', () => {
+    expect(() => load({ APP_BOOTSTRAP_ADMIN_EMAIL: 'op@example.test' })).toThrow(
+      /APP_BOOTSTRAP_ADMIN_PASSWORD/,
+    );
+    expect(
+      load({
+        APP_BOOTSTRAP_ADMIN_EMAIL: 'op@example.test',
+        APP_BOOTSTRAP_ADMIN_PASSWORD: 'a-fake-password-1234',
+      }).bootstrapAdminEmail,
+    ).toBe('op@example.test');
+  });
+
+  it('rejects an APP_BASE_URL that is not a URL', () => {
+    expect(() => load({ APP_BASE_URL: 'localhost:8080' })).toThrow(/APP_BASE_URL/);
+  });
+});
+
+describe('pool sizing', () => {
+  it('adds the composition root’s own floor to the dispatcher’s', () => {
+    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });
+    // 2 × 2 + 1 for dispatch, plus pg-boss, HTTP and maintenance.
+    expect(requiredPoolConnections(config)).toBe(
+      5 + POOL_RESERVATIONS.jobs + POOL_RESERVATIONS.http + POOL_RESERVATIONS.maintenance,
+    );
+  });
+
+  it('asks for less when the role runs fewer workloads', () => {
+    const api = load({ ROLE: 'api' });
+    const worker = load({ ROLE: 'worker' });
+    expect(requiredPoolConnections(api)).toBe(
+      POOL_RESERVATIONS.http + POOL_RESERVATIONS.maintenance,
+    );
+    expect(requiredPoolConnections(worker)).toBeGreaterThan(requiredPoolConnections(api));
+  });
+
+  it('refuses a pool that only satisfies the dispatcher’s own floor', () => {
+    // `createEventing` would accept 2 × 1 + 1 = 3 and then stall the first time a request and a
+    // sweep both want a connection: it says in its own message that 3 is "the floor for the
+    // dispatcher alone". This is the composition root refusing that arrangement at boot.
+    let thrown: unknown;
+    try {
+      load({ APP_DISPATCH_MAX_CONCURRENCY: '1', APP_DB_POOL_MAX: '3' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(UndersizedPoolError);
+    expect((thrown as UndersizedPoolError).required).toBe(8);
+    expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
+  });
+
+  it('accepts the documented default pool for the default concurrency', () => {
+    // .env.example ships APP_DB_POOL_MAX=10 and APP_DISPATCH_MAX_CONCURRENCY=1; if this ever fails,
+    // the shipped defaults no longer start.
+    expect(() => load()).not.toThrow();
+  });
+});

@@ -108,7 +108,11 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Runs against `docker compose` from WP-22 onwards; placeholder until then.
+      # Starts whole `apps/server` instances against the same Testcontainers
+      # PostgreSQL 18 the integration tier uses. technical/10 describes this
+      # tier as running against `docker compose` (app + db); the compose file
+      # lands with WP-22, and the app container joins it then. The fake Claude
+      # runner joins with WP-12.
       - run: pnpm run -s verify:e2e
 
   secret-scan:

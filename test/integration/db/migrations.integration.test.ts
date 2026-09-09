@@ -12,6 +12,9 @@ import { createTestDatabase, withClient } from '../support/postgres.js';
 
 /** Every table technical/03 specifies, plus the migrator's own two. */
 const EXPECTED_TABLES = [
+  // WP-06: the two tables Better Auth needs that technical/03 does not name (TD-022,
+  // migration 0011). `users` and `sessions` existed already and gained columns.
+  'accounts',
   'approvals',
   'artifacts',
   'bindings',
@@ -58,6 +61,7 @@ const EXPECTED_TABLES = [
   'tasks',
   'user_identities',
   'users',
+  'verifications',
   'workspaces',
 ];
 
@@ -123,7 +127,7 @@ describe('migrate on an empty PostgreSQL 18', () => {
     expect(partitioned.every((row) => row.strategy === 'r')).toBe(true);
   });
 
-  it('records the storage policy of every restricted and partitioned table', async () => {
+  it('records the storage policy of every table that declares one', async () => {
     const policy = await withClient(database.connectionString, async (client) => {
       const { rows } = await client.query<{
         table_name: string;
@@ -144,6 +148,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
     ) => ({ table_name, app_access, partition_column, retention_scope, retention_days: null });
 
     expect(policy).toEqual([
+      // WP-06 (migration 0011): read_write is the default for an unregistered table, so these four
+      // change no privilege — they are here because "the registry lists every table" is only
+      // useful as an invariant if it is actually true.
+      row('accounts', 'read_write', null),
       row('config_audit', 'append_only', 'created_at'),
       row('cost_entries', 'append_only', 'created_at'),
       // Registered read_write on purpose: the dispatcher claims, defers and deletes its own queue
@@ -157,6 +165,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('integration_actions', 'append_only', 'created_at'),
       row('redaction_log', 'append_only', 'created_at'),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
+      row('sessions', 'read_write', null),
+      row('users', 'read_write', null),
+      row('verifications', 'read_write', null),
     ]);
   });
 

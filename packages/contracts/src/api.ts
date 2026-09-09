@@ -95,6 +95,29 @@ export const inviteUserRequestSchema = z.strictObject({
   role: userRoleSchema,
 });
 
+/** `GET /api/org/users` — the org's user list. */
+export const orgUsersResponseSchema = z.strictObject({ items: z.array(userSummarySchema) });
+
+/**
+ * One row of `config_audit` (technical/03): an append-only record of a human configuration
+ * change. `diff` is opaque to the API — secret values appear in it as the literal `"changed"`,
+ * which is the writer's job, not the reader's.
+ */
+export const auditEntrySchema = z.strictObject({
+  id: idSchema,
+  entity_type: nonEmptyStringSchema,
+  entity_id: idSchema.nullable(),
+  user_id: idSchema.nullable(),
+  diff: jsonObjectSchema,
+  created_at: isoDateTimeSchema,
+});
+
+export const orgAuditQuerySchema = paginationQuerySchema.extend({
+  entity_type: nonEmptyStringSchema.optional(),
+});
+
+export const orgAuditResponseSchema = page(auditEntrySchema);
+
 export const integrationSummarySchema = z.strictObject({
   id: idSchema,
   type: integrationTypeSchema,
@@ -403,7 +426,15 @@ export const sseFrameSchema = z.discriminatedUnion('frame', [
   }),
   z.strictObject({
     frame: z.literal('control'),
-    topic: sseTopicSchema,
+    /**
+     * The topic a control frame is about, or null when it is about the whole connection.
+     *
+     * `reset` is always topic-level — it says "your cursor for *this* topic is older than the
+     * buffer, refetch it". `ping` and `shutdown` are connection-level and carry no topic: a
+     * multiplexed stream has one socket, and announcing its end once per subscribed topic would
+     * say the same thing N times (technical/08 § "SSE contract").
+     */
+    topic: sseTopicSchema.nullish(),
     type: sseControlEventSchema,
     /** `reset` tells the client its `Last-Event-ID` is older than the buffer; refetch. */
     detail: z.string().nullish(),
@@ -413,6 +444,19 @@ export const sseFrameSchema = z.discriminatedUnion('frame', [
 export const eventsQuerySchema = z.strictObject({
   topics: z.string().min(1),
   partials: z.enum(['0', '1']).optional(),
+  /**
+   * Client-chosen id for this connection, so `POST /events/subscriptions` can address it. Absent
+   * means the server invents one and the connection's topic set is fixed for its lifetime — which
+   * is all a plain `EventSource` can do anyway.
+   */
+  connection_id: nonEmptyStringSchema.optional(),
+  /**
+   * Resume cursors, `<topic>:<seq>` comma-separated — the query-string form of `Last-Event-ID`.
+   * The header is the SSE standard and carries the id of the **last frame received**, which on a
+   * multiplexed stream is one topic's cursor; a client that tracks all of them sends the full set
+   * here, because the browser's `EventSource` cannot set a request header.
+   */
+  last_event_id: nonEmptyStringSchema.optional(),
 });
 
 export const updateSubscriptionsRequestSchema = z.strictObject({
@@ -451,6 +495,11 @@ export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type VersionResponse = z.infer<typeof versionResponseSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type UserSummary = z.infer<typeof userSummarySchema>;
+export type OrgUsersResponse = z.infer<typeof orgUsersResponseSchema>;
+export type AuditEntry = z.infer<typeof auditEntrySchema>;
+export type OrgAuditQuery = z.infer<typeof orgAuditQuerySchema>;
+export type OrgAuditResponse = z.infer<typeof orgAuditResponseSchema>;
+export type EventsQuery = z.infer<typeof eventsQuerySchema>;
 export type IntegrationSummary = z.infer<typeof integrationSummarySchema>;
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;

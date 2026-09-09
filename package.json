@@ -30,6 +30,7 @@
     "db:migrate": "node --import ./scripts/ts-source-resolver.mjs apps/server/src/migrate.ts",
     "schemas": "node scripts/schemas.mjs",
     "schemas:check": "node scripts/schemas.mjs --check",
+    "ignored:check": "node scripts/check-ignored.mjs",
     "secrets:scan": "node scripts/gitleaks.mjs dir .",
     "secrets:scan:ci": "node scripts/gitleaks.mjs git --log-opts=--all --require",
     "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all"
@@ -41,7 +42,9 @@
     "@commitlint/config-conventional": "21.2.2",
     "@platform/application": "workspace:*",
     "@platform/contracts": "workspace:*",
+    "@platform/domain": "workspace:*",
     "@platform/infrastructure": "workspace:*",
+    "@platform/server": "workspace:*",
     "@testcontainers/postgresql": "12.1.0",
     "@types/node": "24.13.3",
     "@types/pg": "8.23.1",

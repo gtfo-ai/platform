@@ -4,7 +4,16 @@
  */
 import type { ConfigSource, JsonObject } from '@platform/contracts';
 import { sql } from 'drizzle-orm';
-import { jsonb, pgTable, primaryKey, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  jsonb,
+  pgTable,
+  primaryKey,
+  smallint,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { bytea } from './columns.js';
 import {
   autonomyLevelEnum,
@@ -24,13 +33,23 @@ export const organizations = pgTable('organizations', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * `users`, `sessions`, `accounts` and `verifications` are Better Auth's tables (TD-022): 0003
+ * created the first two from technical/03 and 0011 gave them the columns Better Auth needs. The
+ * camelCase field names Better Auth uses are mapped onto these snake_case columns in
+ * `apps/server/src/auth/better-auth.ts`; nothing here writes them.
+ */
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(uuidv7),
   email: text('email').notNull(),
   name: text('name').notNull(),
   role: userRoleEnum('role').notNull().default('member'),
-  passwordHash: text('password_hash'),
+  emailVerified: boolean('email_verified').notNull().default(false),
+  image: text('image'),
   status: text('status').notNull().default('active'),
+  banned: boolean('banned'),
+  banReason: text('ban_reason'),
+  banExpires: timestamp('ban_expires', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -38,8 +57,40 @@ export const users = pgTable('users', {
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().default(uuidv7),
   userId: uuid('user_id').notNull(),
+  /** The opaque bearer value in the session cookie; the row is looked up by it. */
+  token: text('token').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  impersonatedBy: text('impersonated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const accounts = pgTable('accounts', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  accountId: text('account_id').notNull(),
+  providerId: text('provider_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
+  idToken: text('id_token'),
+  accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+  refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+  scope: text('scope'),
+  /** Argon2id hash for the `credential` provider (TD-022). Never selected into a response. */
+  password: text('password'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const verifications = pgTable('verifications', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const userIdentities = pgTable(
@@ -135,6 +186,8 @@ export const identityTables = {
   organizations,
   users,
   sessions,
+  accounts,
+  verifications,
   userIdentities,
   projects,
   projectMembers,

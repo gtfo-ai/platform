@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   answerQuestionRequestSchema,
   apiErrorSchema,
+  auditEntrySchema,
   createTaskRequestSchema,
   decideApprovalRequestSchema,
   effectiveConfigResponseSchema,
   eventsQuerySchema,
   listTasksQuerySchema,
+  orgAuditQuerySchema,
+  orgAuditResponseSchema,
+  orgUsersResponseSchema,
   paginationQuerySchema,
   putKbDocRequestSchema,
   runMessagesQuerySchema,
@@ -187,5 +191,65 @@ describe('SSE contract (TD-014)', () => {
   it('takes topics as one comma-separated query parameter', () => {
     expect(eventsQuerySchema.parse({ topics: `org,task:${uuid(1)}` })).toBeTruthy();
     expect(eventsQuerySchema.safeParse({ topics: '' }).success).toBe(false);
+  });
+
+  it('accepts a connection id and resume cursors on the events query', () => {
+    expect(
+      eventsQuerySchema.parse({
+        topics: 'org',
+        connection_id: 'c1',
+        last_event_id: `org:4,task:${uuid(1)}:9`,
+      }),
+    ).toBeTruthy();
+    expect(eventsQuerySchema.safeParse({ topics: 'org', connection_id: '' }).success).toBe(false);
+    expect(eventsQuerySchema.safeParse({ topics: 'org', cursor: 'x' }).success).toBe(false);
+  });
+
+  it('lets a connection-level control frame omit the topic and a topic-level one carry it', () => {
+    // ping and shutdown are about the socket; reset is about one topic's cursor (technical/08).
+    expect(sseFrameSchema.parse({ frame: 'control', type: 'shutdown' })).toEqual({
+      frame: 'control',
+      type: 'shutdown',
+    });
+    expect(
+      sseFrameSchema.parse({ frame: 'control', topic: 'org', type: 'reset', detail: 'gap' }),
+    ).toBeTruthy();
+    // A topic is still validated when present.
+    expect(
+      sseFrameSchema.safeParse({ frame: 'control', topic: 'nope', type: 'reset' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('org DTOs', () => {
+  it('lists users and rejects an unknown status', () => {
+    const user = {
+      id: uuid(1),
+      email: 'ada@example.test',
+      name: 'Ada',
+      role: 'maintainer' as const,
+      status: 'active' as const,
+    };
+    expect(orgUsersResponseSchema.parse({ items: [user] })).toBeTruthy();
+    expect(
+      orgUsersResponseSchema.safeParse({ items: [{ ...user, status: 'banned' }] }).success,
+    ).toBe(false);
+  });
+
+  it('pages the audit log and keeps the diff opaque', () => {
+    const entry = {
+      id: uuid(2),
+      entity_type: 'project',
+      entity_id: uuid(3),
+      user_id: null,
+      diff: { autonomy: 'changed' },
+      created_at: AT,
+    };
+    expect(orgAuditResponseSchema.parse({ items: [entry], next_cursor: null })).toBeTruthy();
+    expect(auditEntrySchema.safeParse({ ...entry, unexpected: 1 }).success).toBe(false);
+    expect(orgAuditQuerySchema.parse({ limit: 10, entity_type: 'project' })).toEqual({
+      limit: 10,
+      entity_type: 'project',
+    });
   });
 });

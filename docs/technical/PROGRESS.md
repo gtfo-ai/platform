@@ -4,12 +4,12 @@
 
 ## Resume note
 
-- **Current WP:** WP-04a (delete the `DrainScheduler` seam), in the main checkout. All worktrees are removed.
+- **Current WP:** WP-06 (Fastify server skeleton, TD-002), in the main checkout. All worktrees removed.
 - **Done and pushed:** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` · WP-02a `8abf247` ·
-  WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d`. CI green.
-- **Next step after WP-04a:** WP-06 (Fastify server skeleton, TD-002) — the last M1 dependency-free WP
-  before the runner chain. Read the "Notes WP-06 must honour" section below first; it must call
-  `registerPartitionMaintenance` or WP-03's daily partition cron never runs.
+  WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` · WP-04a `d729616`. CI green.
+- **Next after WP-06:** WP-07 (integration ports + fakes + contract suites) unblocks WP-08…WP-11, which are
+  the four parallel-safe provider WPs. WP-12 (Claude runner) needs WP-04 and WP-05, both done, so it can run
+  alongside WP-07. Cap concurrency at two or three.
 - **5-WP checkpoint: DONE.** All four verify targets green on `main`; `gh run list` green since the WP-02
   property-test flake was fixed by WP-02a; the `commitlint`/`dco` gates now actually execute on push
   (`6481b3d`); milestone note written below.
@@ -47,11 +47,12 @@
 | WP-01 | `packages/contracts` | WP-00 | no | DONE | `dedc4b9` | APPROVE; 5 hardening fixes folded in |
 | WP-02 | `packages/domain` | WP-01 | no | DONE | `168d368` | 3 rounds spent; 2 command-policy defects carried to WP-02a |
 | WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | DONE | `8abf247` | 2 rounds; includes the property-test ci-fix |
-| WP-04a | Delete the `DrainScheduler` seam; `OutboxWorker` owns its timer | WP-04, WP-05 | no | IN_PROGRESS | — | **before WP-06** |
+| WP-04a | Delete the `DrainScheduler` seam; `OutboxWorker` owns its timer | WP-04, WP-05 | no | DONE | `d729616` | TD-004 amended |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
-| WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | TODO | — | |
+| WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | next commit | 3 rounds; SSE write-chain defect carried to WP-06a |
+| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | TODO | — | **before WP-12/WP-15 publish to the hub** |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | TODO | — | |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
@@ -710,6 +711,22 @@ the first pass fails "re-arms its own timer" with `expected 2 to be greater than
 threshold is load-bearing rather than arbitrary. **A replacement test is only an improvement if a mutation
 shows it detects what the old one missed.**
 
+**4. The same defect, one layer down.** WP-06's first SSE fix exempted replay from being *rejected* by the
+slow-consumer cap — but replay frames still incremented the counter the live check reads. So a large replay
+poisoned the budget for live frames: three near-full topics plus one live publish arriving mid-drain
+delivered **1 of 765 frames** and closed the connection with no `reset`. Reachable at shipped defaults,
+because the SSE transport waits for a socket `drain` — a macrotask — exactly when a replay is large. The fix
+that works is a separate counter for live frames only.
+
+Worth generalising: when a fix carves out an exception ("replay is exempt from the cap"), check every place
+the *underlying quantity* is still shared. The exemption was correct at the rejection site and useless
+because the accounting was not exempted with it.
+
+**5. A guard with a hand-maintained scope drifts.** The new `ignored:check` guard listed source roots by
+hand, so it did not cover the repository's own root files or `.claude/` — 21 tracked files, including
+`vitest.config.ts`, were unguarded, and adding `*.config.ts` to `.gitignore` still passed. A guard against
+"files git cannot see" should ask git what it tracks, not carry its own list of where to look.
+
 ### Notes WP-06 must honour (from the architect)
 
 - Nothing calls `registerPartitionMaintenance` yet, so WP-03's daily partition cron never runs. Its returned
@@ -774,6 +791,69 @@ gained `run.created` and an envelope-`actor` clarification; technical/03 gained 
 `features.shadow_mode`; BD-007, product/04 and technical/01 had "2-minute debounce" corrected to a fixed
 window; and **TD-004 was amended** to drop `dispatch(event)` as a pg-boss workload and to retract its
 "transactional enqueue" claim, which the adapter cannot provide.
+
+### WP-06 — two findings worth remembering beyond this WP
+
+**1. `.gitignore` silently swallowed a source file.** `apps/server/src/data/identity-queries.ts` was matched by
+an unanchored `data/` rule meant for a local data directory at the repo root. Everything was green locally
+because the file existed on disk; the commit would have landed a tree that does not typecheck, and CI would
+have been the first thing to notice. **`git add -A` does not warn you about this** — the orchestrator's own
+merge would have shipped it. Rule: an ignore pattern for a repo-root directory must be anchored (`/data/`,
+not `data/`), and a WP that adds a new source directory should run `git check-ignore` over its own change set
+before reporting DONE. `*.log` is unanchored for the same reason and should be checked.
+
+**2. A whole test tier was proving less than it appeared to.** `@better-auth/core`'s `isTest()` sets
+`skipOriginCheck = true`, so **every e2e test runs with Better Auth's origin check disabled**. The e2e suite
+therefore says nothing about CSRF on `/api/auth/*`, while looking exactly like it does. The reviewer only
+found this by standing up an out-of-test instance against a real Postgres — where the defences turned out to
+be sound. Generalisation for later WPs: *a library that detects test mode changes what your tests cover*, and
+security behaviour in particular must be verified with `NODE_ENV=production` at least once, not inferred from
+a green suite.
+
+**3. Completeness is a different assertion from ordering.** The SSE hub's replay dropped **every** frame when
+a reconnect spanned two or more topics — 0 frames delivered at production defaults, the stream closed with no
+`reset`, so a client reconnects into the same wall forever. The existing tests asserted ordering and dedup on
+the live path and the cap on the live path, but nothing asserted that a replay delivers *all* missed frames.
+Two correct assertions did not add up to the one that mattered.
+
+### WP-06a — the SSE write chain, and a harness that cannot see it (carried out of WP-06)
+
+**Why a separate WP.** WP-06's three review rounds were spent, and the same precedent as WP-02a applies: the
+round-3 finding is a *newly discovered layer*, not a repeated failure to fix the same thing, and blocking a
+working server skeleton would stall WP-07 and WP-20. Nothing publishes to the hub yet, so the defect is
+latent — but **WP-12 and WP-15 make it live**, and it must land before them.
+
+**Defect 1 — the third layer of the cap bug.** Rounds 1-3 each fixed a real thing and each left the next
+layer: (a) the cap rejected replay frames; (b) the cap's *counter* was still shared, so a replay poisoned the
+live budget; (c) replay and live still share the **write chain** `#chain`, so no live frame drains until the
+replay has, and `#queuedLive` therefore counts "live frames that arrived during the replay" rather than
+consumer speed. Measured at shipped defaults with a paced producer writing at the socket's own rate: 255
+replay + 800 live → fine; 510 + 800 → fine; **765 replay + 520 live → CLOSED at frame 514, no `reset`,
+connection count 0**; 765 + 400 → fine. Only replay length decides. It dies iff replay exceeds
+`maxQueuedLiveFrames` — 3 topics × 256 buffer = 768 > 512 — which is an ordinary browser tab reconnecting on
+`org` plus a project plus a task. And because a browser `EventSource` carries one cursor, the other topics
+get neither replay nor `reset`. The reviewer's minimal fix: gate on `#queued >= cap + replayOutstanding`
+(outstanding only decreases, so a stalled reader still trips it) and write `reset` before `close()`.
+
+**Defect 2 — and this is the more important one. The test harness cannot observe the defect it certifies.**
+`settle()` returns after **one** turn without progress. A real socket write costs two macrotasks
+(write→false, `'drain'`, completion); make the fake cost two and the *passing* 766-frame test reports **2**.
+It fails loudly there only because that assertion is positive — the same detector next to
+`expect(closed).toBe(false)` passes silently. The completeness test also injects **one** live frame against a
+cap of 512, the minimum possible probe, which is precisely why it cannot see defect 1. **Fix the harness
+first, then the code**, or the fix cannot be validated. Three rounds of this bug were each hidden by test
+infrastructure that resolved too eagerly, and the implementer twice discovered their own helper could not
+observe what it claimed to.
+
+**The lesson, stated plainly because it has now cost three rounds:** when a defect keeps coming back one
+layer down, stop fixing the code and go audit the instrument. A green assertion is only as good as the
+harness's ability to reach the state being asserted about.
+
+Also in scope: the memory figures are decimal numbers with binary labels (660×256×64 = 10.31 MiB, not
+"10.8 MiB"; ×1000 = 10.07 GiB, not "10.5 GiB"); `SOURCE_ROOTS` lacks `'.'`, so a new *untracked* root-level
+file under a swallowing rule is caught by neither arm of `check-ignored.mjs`; `#buffers` is never pruned per
+topic outside `shutdown`, unlike `#byTopic`; and mutation H's `/events` e2e test kills by a 5s inject timeout
+rather than an assertion.
 
 ## Discovered work (not in plan)
 
