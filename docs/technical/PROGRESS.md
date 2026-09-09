@@ -129,7 +129,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
-| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `PLACEHOLDER` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
+| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `9e0be0b` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | REVIEW | branch `worktree-agent-a9a3e50934a34e3ef` `0178ffc` | all 5 targets green in the orchestrator's shell (+199 tests); review round 1 running |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
