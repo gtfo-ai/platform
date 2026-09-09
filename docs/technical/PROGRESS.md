@@ -46,7 +46,7 @@
 | WP-00 | Repo scaffold | — | no | DONE | `8852b9e` | 3 review rounds; notes below |
 | WP-01 | `packages/contracts` | WP-00 | no | DONE | `dedc4b9` | APPROVE; 5 hardening fixes folded in |
 | WP-02 | `packages/domain` | WP-01 | no | DONE | `168d368` | 3 rounds spent; 2 command-policy defects carried to WP-02a |
-| WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | IN_PROGRESS | — | worktree; **must land before WP-12/WP-15** |
+| WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | DONE | `8abf247` | 2 rounds; includes the property-test ci-fix |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | REVIEW | — | worktree; round 2 fixes green |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | REVIEW | — | worktree; Q renumber 36→38 at merge |
@@ -509,6 +509,68 @@ says nothing about pool sizing. Later WPs must not read it as such.
 
 **Watch at WP-15:** `2 × concurrency + 1` is the right budget only while a handler opens at most one
 transaction. A handler that opens a second one silently invalidates it.
+
+### WP-04 — two rounds of "the fix undermined its own invariant"
+
+Both rounds of WP-04 review found the same *shape* of defect: a guarantee stated in a comment, an env file
+and an error message, which the code did not actually provide.
+
+**Round 1** was the nested-transaction pool exhaustion (a permanent silent hang; see the note above).
+**Round 2** found the fix for it was itself unsound in two ways:
+
+- **The slot semaphore over-admits.** `#releaseSlot` decremented `#active` and *then* woke a waiter that
+  incremented it again on a later microtask, so a `dispatch()` already sitting in the microtask queue could
+  steal the freed slot. Measured: `maxConcurrentDispatches=1` ran **2 concurrent handlers**. That makes
+  `requiredConnections = 2 × concurrency + 1` not an upper bound (C+1 dispatches can need 2C+2) while
+  `.env.example` and `InsufficientPoolError` both told the operator to size at exactly 2C+1. Narrow in
+  practice — 46 real-Postgres probes never hit it, because the COMMIT round-trip pushes the release into a
+  fresh macrotask turn — and self-healing through timeout→requeue, but it falsified the invariant the whole
+  fix rested on. The fix is to *hand the slot over* rather than return it to the pool of free slots.
+- **There were still two drain loops**, the precise thing the WP-04/WP-05 reconciliation existed to prevent.
+  `#runWoken` still armed `setTimeout(pollIntervalMs)` even with a `DrainScheduler` supplied, so the worker
+  kept polling *and* the scheduler added a second recurring drain. Proved with a scheduler that never runs
+  and no broadcast: the event was dispatched anyway. Both the module comment and the test comment claimed
+  the timer had been handed over. The test passed only because `pollIntervalMs` was 1234ms — longer than
+  its own assertion window.
+
+**The generalisable lesson, and it is the third time this session:** a comment, an error message or an
+`.env.example` line asserting an invariant is not evidence the invariant holds, and a test that would pass
+whether or not the behaviour is present is not a test of it. Both defects were found by *constructing the
+adversarial interleaving* and by *removing the collaborator* (a scheduler that never runs), not by reading.
+
+**Recorded, structural:** the pool guard lives only in `createEventing`, so a hand-built `EventBus` — as in
+`broadcast.integration.test.ts` — is unchecked. `Broadcast.publish` also draws from the same pool and sits
+outside the `2C+1` accounting; unused by WP-04 today, but WP-05 and WP-06 share that pool, so the required
+count is a **floor to add to**, never a target.
+
+### WP-05 — a literal NUL byte turned a source file binary
+
+`packages/infrastructure/src/jobs/in-memory-jobs.ts` contained a literal NUL in a template string
+(`` `${queue}\0${key}` ``), so **git classified the file as binary**. The damage was silent and
+compounding: the entire fix commit's changes to that file — the core of the fake/pg-boss reconciliation —
+rendered in the diff as `Bin 15783 -> 16434 bytes`, so a reviewer could not see them; `grep -rn` skipped
+the file; and it could not be 3-way merged, which mattered because three worktrees were merging. Replaced
+with the `\0` escape; behaviour verified identical (the key is still a NUL-separated composite, and both
+the job-name and job-key patterns exclude NUL so the separator stays unambiguous). A repo-wide scan found
+no other NUL bytes. **Worth a lint rule if it ever recurs.**
+
+### WP-05 — the fake-versus-production divergence register
+
+Four divergences between the in-memory `Jobs` fake and pg-boss were found across three rounds, each by
+reading pg-boss's *source* rather than its documentation: the coalescing bucket (`startAfter` vs the
+database's `now()`), the trailing-job extra second in `getDebounceStartAfter`, the retry state (`created`
+vs `retry`, which have different index slots), and `retryBackoff` — forwarded by the adapter and silently
+ignored by the fake.
+
+Three of those made the fake **kinder than production**, which is the one direction that matters: every
+later WP's unit tier trusts the fake, so a fake that admits what pg-boss would block, or fires earlier than
+pg-boss would, launders a bug into the unit suite as a pass. The register now lives in the fake's header
+under the rule *"stricter than production, never kinder"*, cross-referenced from the retry and concurrency
+sites, and distinguishing entries that are genuinely stricter from those that are merely different.
+
+**The rule for every fake in this repo:** a fake may be stricter than the real adapter, never kinder, and
+each deliberate difference is written down where the fake is defined. `MemoryEventing` (WP-04) models no
+connection pool, which is why a green property run there says nothing about pool sizing.
 
 ## Discovered work (not in plan)
 
