@@ -49,7 +49,7 @@
 | WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | DONE | `8abf247` | 2 rounds; includes the property-test ci-fix |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | REVIEW | — | worktree; round 2 fixes green |
-| WP-05 | Jobs port on pg-boss | WP-03 | no | REVIEW | — | worktree; Q renumber 36→38 at merge |
+| WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | TODO | — | |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | TODO | — | |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
@@ -537,6 +537,13 @@ and an error message, which the code did not actually provide.
 `.env.example` line asserting an invariant is not evidence the invariant holds, and a test that would pass
 whether or not the behaviour is present is not a test of it. Both defects were found by *constructing the
 adversarial interleaving* and by *removing the collaborator* (a scheduler that never runs), not by reading.
+
+**The instrument matters as much as the test (WP-04 round 3).** The reviewer ran the semaphore
+over-admission experiment against a *real* Postgres with the pool at exactly the floor, and it passed on the
+fixed code **and on the deliberately reverted code alike** — with real I/O every caller is already parked by
+the time the release lands, so the race never fires. Only the in-memory microtask probe, fanning dispatches
+at depths 0-25, pins the defect. Whoever later finds that probe artificial and "promotes" it to an
+integration test will silently delete the only coverage of this bug. The probe's comment now says so.
 
 **Recorded, structural:** the pool guard lives only in `createEventing`, so a hand-built `EventBus` — as in
 `broadcast.integration.test.ts` — is unchecked. `Broadcast.publish` also draws from the same pool and sits
