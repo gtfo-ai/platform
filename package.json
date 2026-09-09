@@ -36,6 +36,7 @@
     "@biomejs/biome": "2.5.12",
     "@commitlint/cli": "21.2.2",
     "@commitlint/config-conventional": "21.2.2",
+    "@platform/application": "workspace:*",
     "@platform/contracts": "workspace:*",
     "@platform/infrastructure": "workspace:*",
     "@testcontainers/postgresql": "12.1.0",

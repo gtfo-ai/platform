@@ -584,7 +584,7 @@ connection pool, which is why a green property run there says nothing about pool
 
 - **OPEN-QUESTIONS numbering collides when WPs run in parallel.** WP-05's worktree branched from `ca1ae06`,
   before WP-02 landed Q36 (RBAC map) and Q37 (command block-list), so it filed its working-day-calendar
-  question as **Q36** too. Renumbered to **Q38** at merge. *Convention from here on:* an implementer must
+  question as **Q36** too. Renumbered to **Q38** at merge (done). *Convention from here on:* an implementer must
   re-check the highest existing question number against `main` immediately before writing, and the
   orchestrator renumbers at merge when parallel worktrees collide. The same hazard applies to migration
   file numbers (`0001`-`0009` today) — two parallel WPs both adding `0010` would both pass in isolation and
