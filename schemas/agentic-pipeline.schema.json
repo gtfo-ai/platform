@@ -139,6 +139,7 @@
         "task.handed_back",
         "task.cancelled",
         "task.completed",
+        "run.created",
         "run.started",
         "run.finished",
         "run.failed",

@@ -175,6 +175,17 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
   },
   'task.cancelled': { ...taskScoped, outcome: 'cancelled by maintainer', totals },
   'task.completed': { ...taskScoped, outcome: 'merged', totals },
+  'run.created': {
+    ...taskScoped,
+    run_id: RUN,
+    stage: 'implementation',
+    role: 'developer',
+    mode: 'normal',
+    attempt: 1,
+    model: 'claude-opus-5',
+    effort: 'high',
+    prompt_version: 'implementation@1.0',
+  },
   'run.started': {
     ...taskScoped,
     run_id: RUN,

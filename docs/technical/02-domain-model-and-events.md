@@ -61,6 +61,8 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 
 Naming: `<aggregate>.<past-tense>`; payload always includes `task_id` when task-scoped and `project_id`. `actor` lives in the **event envelope**, not in each payload (implemented that way in WP-01, matching `events.actor` in technical/03); the `actor` column in the catalogue below therefore describes the envelope value for that event, not a payload field. Priorities: 0–99 platform core, 100–199 integrations, 200–299 notifications/UI, 300+ custom project handlers.
 
+> **`run.created` (added at WP-02).** The catalogue originally started the Run's history at `run.started`, leaving the `created→starting` transition silent and the run's existence unreplayable — which contradicts this document's own rule that every state change is recorded as an immutable domain event. Question `expired→escalated` and question reminders remain deliberately event-free: the former is recorded by `task.escalated`, the latter changes no aggregate state worth replaying.
+
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|
 | `ticket.matched` | task-management adapter | ticket ref, rule, priority, type, epic, links | Intake (10) |
@@ -79,6 +81,7 @@ Naming: `<aggregate>.<past-tense>`; payload always includes `task_id` when task-
 | `task.paused` / `task.resumed` | Budget/Human | task, reason | UI, workpad |
 | `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110) |
 | `task.cancelled` / `task.completed` | Pipeline | task, outcome, totals | Ticket transition (110), Slack (210), stats (230) |
+| `run.created` | Runner | run, task, stage, role, mode, attempt, run key | UI (220) |
 | `run.started` | Runner | run, model, effort, prompt version, context pack | UI (220) |
 | `run.finished` / `run.failed` | Runner | run, status, usage, cost, exit reason | Cost ledger (10), stage executor (20), UI |
 | `run.steered` | Human | run, message, author | Runner (10) |

@@ -17,6 +17,7 @@ import * as z from 'zod';
 import { artifactRefSchema } from './artifacts.js';
 import {
   actorSchema,
+  agentRoleSchema,
   effortSchema,
   externalIdentitySchema,
   idSchema,
@@ -26,6 +27,7 @@ import {
   nonEmptyStringSchema,
   pathPatternSchema,
   runCostSchema,
+  runModeSchema,
   runStatusSchema,
   runTerminalReasonSchema,
   sequenceSchema,
@@ -264,6 +266,22 @@ export const taskCompletedEvent = defineEvent('task.completed', {
 });
 
 // ── Runs ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The run exists and the platform has committed to launching it (`created → starting`). Carries
+ * everything needed to rebuild the run row from the log alone, so no state change is silent.
+ */
+export const runCreatedEvent = defineEvent('run.created', {
+  ...taskScoped,
+  run_id: idSchema,
+  stage: stageIdSchema,
+  role: agentRoleSchema,
+  mode: runModeSchema,
+  attempt: z.int().positive(),
+  model: nonEmptyStringSchema,
+  effort: effortSchema,
+  prompt_version: nonEmptyStringSchema,
+});
 
 export const runStartedEvent = defineEvent('run.started', {
   ...taskScoped,
@@ -522,6 +540,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskHandedBackEvent,
   taskCancelledEvent,
   taskCompletedEvent,
+  runCreatedEvent,
   runStartedEvent,
   runFinishedEvent,
   runFailedEvent,

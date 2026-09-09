@@ -1625,6 +1625,109 @@
         },
         "type": {
           "type": "string",
+          "const": "run.created"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "run_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "stage": {
+              "$ref": "#/$defs/Slug"
+            },
+            "role": {
+              "$ref": "#/$defs/AgentRole"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "shadow",
+                "review_only",
+                "linter",
+                "discovery",
+                "retro",
+                "librarian"
+              ]
+            },
+            "attempt": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "model": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "effort": {
+              "$ref": "#/$defs/Effort"
+            },
+            "prompt_version": {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "run_id",
+            "stage",
+            "role",
+            "mode",
+            "attempt",
+            "model",
+            "effort",
+            "prompt_version"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
           "const": "run.started"
         },
         "payload": {
@@ -3938,6 +4041,21 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "AgentRole": {
+      "type": "string",
+      "enum": [
+        "triager",
+        "product_manager",
+        "investigator",
+        "architect",
+        "developer",
+        "reviewer",
+        "acceptance_tester",
+        "facilitator",
+        "librarian",
+        "discovery"
       ]
     },
     "AnswerChannel": {
