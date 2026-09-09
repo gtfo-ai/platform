@@ -47,8 +47,9 @@
 | WP-01 | `packages/contracts` | WP-00 | no | DONE | `dedc4b9` | APPROVE; 5 hardening fixes folded in |
 | WP-02 | `packages/domain` | WP-01 | no | DONE | `168d368` | 3 rounds spent; 2 command-policy defects carried to WP-02a |
 | WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | DONE | `8abf247` | 2 rounds; includes the property-test ci-fix |
+| WP-04a | Delete the `DrainScheduler` seam; `OutboxWorker` owns its timer | WP-04, WP-05 | no | TODO | — | **before WP-06** |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
-| WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | REVIEW | — | worktree; round 2 fixes green |
+| WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | TODO | — | |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | TODO | — | |
@@ -507,11 +508,29 @@ each makes a property fail. Anything added here should be mutation-checked the s
 
 Both WPs arrived with a loop. The decision, taken on the WP-04 reviewer's analysis and implemented in both:
 
-**`event_dispatch` plus the sweep is the single queue of record.** WP-05's `Jobs` port does **not** carry
-individual events; it replaces `OutboxWorker`'s internal `setTimeout` poll with a recurring job that calls
-`drain()`, while the NOTIFY subscription still wakes `drain()` for latency. The seam is `DrainScheduler`
-(`schedule(name, intervalMs, run)`, job name `events.outbox.sweep`) defined in
-`packages/application/src/events/outbox.ts`; WP-05 implements it over `Jobs`.
+**`event_dispatch` plus the sweep is the single queue of record** — that half was right and stands.
+
+**The other half was wrong, and the architect corrected it (2026-09-09).** I said WP-05's `Jobs` port should
+drive the sweep. It cannot: `Jobs` offers only `scheduleCron` with a 1-minute floor, while the sweep needs
+~1s, and no adapter was ever written. More importantly it *should* not. **The outbox sweep is a local timer
+in each process.** Each replica LISTENs on its own connection, so a missed NOTIFY is a *local* loss — a
+cluster-singleton job cannot be the fallback for a subscription it does not share. `OutboxWorker` owns its
+timer unconditionally; `DrainScheduler`, `OutboxWorkerOptions.scheduler`, the `withTimer` branch and
+`EventingOptions.scheduler` are all deleted (tracked as **WP-04a**). `drain()` stays public for tests and
+`ROLE=worker --once`.
+
+**N replicas polling one `event_dispatch` every second is correct, not wasteful.** The claim uses
+`FOR UPDATE SKIP LOCKED`, so concurrent sweeps never block; a loser reads fewer rows or reports `deferred`,
+and per-stream order is still enforced twice (the `row_number()` head plus `hasEarlierPending`). It is below
+pg-boss's own per-replica polling (2s default per `work()` subscription), and `drain()` exits when a batch
+dispatches nothing, so a replica losing every claim does not spin. The pg-boss route would have been
+*worse*: a 1-minute cron floor plus cron-monitor lag (≤45s) plus a 2s worker poll is a far poorer fallback
+than the 1s poll TD-014 names, and it writes a durable job row per sweep for durability `event_dispatch`
+already owns.
+
+Two costs recorded, not fixed: `readPendingDispatch` windows over the whole queue table, so a deep backlog
+costs O(pending) per replica per second; and N fixed 1s timers synchronise, so ±10% jitter is cheap
+insurance. Neither matters at current scale.
 
 **Why not make `dispatch(event)` a pg-boss job**, which was the tempting alternative: it duplicates
 durability across two queues that disagree after a crash, and pg-boss has no per-stream serialisation — so
@@ -664,6 +683,41 @@ worktree is not green on `main`*, and the merge must re-run all four verify targ
 written — not after. Watch particularly for a WP that adds a **required** field to a shared type or a new
 runtime invariant (WP-04's `2 × concurrency + 1` pool floor throws at *runtime*, so a stale hand-built
 config in another WP's test would not even fail typecheck).
+
+### WP-04a — delete the `DrainScheduler` seam (queued, before WP-06)
+
+Small cleanup, but it must land before WP-06 wires the composition root, because the dead seam actively
+misleads: `JOB_QUEUES.dispatch = 'dispatch'` invites WP-15 to enqueue events onto a pg-boss queue that must
+not exist. Scope: delete `DrainScheduler`, `OutboxWorkerOptions.scheduler`, `#runWoken`/`#scheduled`, the
+`withTimer` branch, `EventingOptions.scheduler` and `JOB_QUEUES.dispatch`; `OutboxWorker` owns its timer
+unconditionally; the canonical sweep name is `events.outbox.sweep`, one constant in `outbox.ts`, documented
+as a log/metric label rather than a queue name.
+
+**TD-004 amended** (docs win over code, so the record was corrected first): `dispatch(event)` is no longer a
+pg-boss workload; there is **no transactional enqueue** (the adapter binds one pool, so `enqueue` cannot join
+a handler's transaction — enqueue after commit and re-validate on fire); and `mr.comment.debounce` must use
+`stately` + `singletonKey` + `startAfter`, never `coalesce`.
+
+### Notes WP-06 must honour (from the architect)
+
+- Nothing calls `registerPartitionMaintenance` yet, so WP-03's daily partition cron never runs. Its returned
+  `JobWorker.stop()` must join graceful shutdown.
+- pg-boss shares the app pool via `asJobsDatabase`, so `InsufficientPoolError`'s `2C+1` is a **dispatcher
+  floor only** — size the pool above it for pg-boss workers and maintenance.
+- Pass pino as pg-boss's `onError`; `boss.start()` requires the `pgboss` schema already installed by
+  `migrate` (`migrate:false, createSchema:false`).
+- A handler that captures the bus and calls the public `dispatch()` self-deadlocks at C=1 — only chained
+  events inherit the slot. Put this in the handler docs.
+
+### Notes WP-15 must honour
+
+- **`enqueue` is not in the handler's transaction.** Enqueue after commit, re-validate on fire.
+- MR-comment batching: `stately` + `singletonKey: 'mr:<iid>'` + `startAfter: now + 2 min`, and the handler
+  re-reads every unresolved thread. Never `coalesce` — the pair with `startAfter` is rejected by the port,
+  and both coalescing modes are leading-edge.
+- Treat `coalesced` as a success result, and let the handler tolerate finding nothing to do: there is no
+  cancel, because timers re-validate.
+- `2 × concurrency + 1` holds only while a handler opens at most **one** transaction.
 
 ## Discovered work (not in plan)
 

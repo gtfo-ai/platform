@@ -32,6 +32,7 @@ pnpm run -s verify              # lint + typecheck + unit + contract
 pnpm run -s verify:integration  # Testcontainers / PGlite suites
 pnpm run -s verify:e2e          # fake-Claude application e2e
 pnpm run -s verify:ui           # web app suites
+pnpm run -s verify:commits      # DCO + commitlint over a commit range
 ```
 
 ## Commits
@@ -50,7 +51,9 @@ docs: record TD-026
 git commit -s -m "feat(domain): add run state machine"
 ```
 
-The `dco` job fails a pull request when any commit lacks a `Signed-off-by` trailer. Fix an existing branch with `git rebase --signoff <base>`.
+The `commitlint` and `dco` jobs check **every commit in the pushed range** — on a push to `main` as much as on a pull request — and fail when a message is not a conventional commit, or when a commit carries no `Signed-off-by` trailer whose e-mail is the commit author's. Merge commits are exempt from the sign-off (the commits they bring in are in the same range and are checked individually).
+
+Run the same two checks locally with `pnpm run -s verify:commits`; it takes `--from <rev> [--to <rev>]` and otherwise uses `@{upstream}..HEAD`. Fix an existing branch with `git rebase --signoff <base>`.
 
 ## Pull requests
 

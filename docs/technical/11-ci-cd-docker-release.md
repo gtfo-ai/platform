@@ -24,7 +24,7 @@ THIRD_PARTY_NOTICES.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
 | `secrets-scan.yml` | PR/push; weekly | gitleaks (full history); trufflehog verified-only |
 | `release.yml` | `push: main` | release-please release PR; on merge: tag → `image.yml` |
 | `mutation.yml` | weekly | Stryker on domain |
-| `dco.yml` | `pull_request` | DCO check |
+| `dco.yml` | `pull_request`, `push: main`, `merge_group` | DCO check. Implemented as the `dco` and `commitlint` jobs of `ci.yml`: both walk the commit range of the event (`before..after` on a push, `base..head` otherwise) and fail when the range cannot be determined, so a direct push to `main` is gated exactly like a pull request |
 All `uses:` pinned to SHAs; Renovate keeps them current. Required checks and merge queue configured as a ruleset on `main`.
 
 ## Images
