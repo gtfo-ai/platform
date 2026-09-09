@@ -14,14 +14,20 @@
  * `stop()` drains: the current sweep finishes and the bus waits for its in-flight dispatches, so
  * shutting down never leaves a handler half-run — it leaves the event queued for the next process.
  *
- * ## Where WP-05 plugs in
+ * ## The timer belongs to this process, and is always armed
  *
- * `event_dispatch` plus this sweep stay the single queue of record; pg-boss does not get a
- * `dispatch(event)` job of its own. Two queues would disagree after a crash, and pg-boss has no
- * per-stream serialisation, so ordering would fall back on `hasEarlierPending` refusing and
- * rescheduling — a retry storm where head-of-line blocking belongs. What WP-05 replaces is only the
- * *timer*: pass a `DrainScheduler` and the internal `setTimeout` poll gives way to a recurring
- * pg-boss job calling `drain()`, while the `NOTIFY` subscription keeps waking it for latency.
+ * `event_dispatch` plus this sweep are the single queue of record; there is no `dispatch(event)`
+ * pg-boss job (TD-004, amended at WP-04a). Two queues would disagree after a crash, and pg-boss has
+ * no per-stream serialisation, so ordering would fall back on `hasEarlierPending` refusing and
+ * rescheduling — a retry storm where head-of-line blocking belongs.
+ *
+ * Nor is the sweep cluster work an external scheduler could own. Every process LISTENs on its
+ * **own** connection, so a missed `NOTIFY` is a *local* loss, and a cluster-singleton job cannot be
+ * the fallback for a subscription it does not share — quite apart from pg-boss being unable to
+ * express ~1s repetition at all (5-field cron, 1-minute floor). So each worker arms its own
+ * `pollIntervalMs` timer unconditionally and the subscription only shortens the wait. N replicas
+ * polling one queue is cheap: the claim uses `FOR UPDATE SKIP LOCKED`, so concurrent sweeps never
+ * block, and `drain()` returns as soon as a batch dispatches nothing.
  */
 import { type Broadcast, EVENTS_APPENDED_TOPIC } from '../ports/broadcast.js';
 import type { EventStore } from '../ports/event-store.js';
@@ -29,27 +35,15 @@ import { type Logger, silentLogger } from '../ports/logger.js';
 import type { DispatchStatus, EventBus, StopOptions, StopReport } from './event-bus.js';
 
 /**
- * The seam WP-05's `Jobs` port implements: run `drain` on a recurring schedule.
+ * The canonical name of the sweep: a **log and metric label, not a queue name**.
  *
- * Deliberately smaller than a job queue — one recurring call, no payload, no retries of its own —
- * because the durability is already in `event_dispatch`. A scheduler that misses a run costs
- * latency, never an event.
+ * Nothing enqueues it and nothing may — the sweep is a timer inside each process (see the module
+ * comment). The constant exists so every log line and metric about the sweep spells it the same
+ * way, and so the name has one home rather than being retyped per call site. It is exported from
+ * the package index for that single home only: re-exporting it as a queue name, or handing it to
+ * `Jobs`, is the mistake this whole comment exists to prevent.
  */
-export interface DrainScheduler {
-  /**
-   * Registers `run` to be called about every `intervalMs`, and resolves to a handle that stops it.
-   * Implementations should coalesce overlapping runs (pg-boss `singleton`): a sweep already draining
-   * needs no second caller.
-   */
-  schedule(
-    name: string,
-    intervalMs: number,
-    run: () => Promise<void>,
-  ): Promise<{ stop(): Promise<void> }>;
-}
-
-/** Job name WP-05 registers the sweep under. */
-export const OUTBOX_SWEEP_JOB = 'events.outbox.sweep' as const;
+export const OUTBOX_SWEEP_LABEL = 'events.outbox.sweep' as const;
 
 export interface OutboxWorkerOptions {
   readonly bus: EventBus;
@@ -59,13 +53,12 @@ export interface OutboxWorkerOptions {
   readonly logger?: Logger;
   /** Events per sweep batch. */
   readonly batchSize?: number;
-  /** Longest a fully idle worker waits before sweeping again. */
-  readonly pollIntervalMs?: number;
   /**
-   * Runs the sweep on an external schedule instead of this worker's own timer (WP-05). The
-   * `NOTIFY` subscription still wakes `drain()` directly, so latency does not depend on it.
+   * Longest a fully idle worker waits before sweeping again. Always armed: this timer is the
+   * fallback for *this* process's own wake-up subscription, so nothing outside the process can
+   * stand in for it.
    */
-  readonly scheduler?: DrainScheduler;
+  readonly pollIntervalMs?: number;
 }
 
 export const DEFAULT_BATCH_SIZE = 32;
@@ -81,15 +74,6 @@ export interface SweepReport {
 
 const EMPTY_SWEEP: SweepReport = { scanned: 0, dispatched: 0, failed: 0, deferred: 0 };
 
-/** Runs cleanup that must never mask the failure it is cleaning up after. */
-const suppressed = async (work: () => Promise<unknown>): Promise<void> => {
-  try {
-    await work();
-  } catch {
-    // Deliberately dropped: the original error is the one worth reporting.
-  }
-};
-
 export class OutboxWorker {
   readonly #bus: EventBus;
   readonly #store: EventStore;
@@ -97,11 +81,9 @@ export class OutboxWorker {
   readonly #logger: Logger;
   readonly #batchSize: number;
   readonly #pollIntervalMs: number;
-  readonly #scheduler: DrainScheduler | undefined;
 
   #running = false;
   #loop: Promise<void> | undefined;
-  #scheduled: { stop(): Promise<void> } | undefined;
   #subscription: { close(): Promise<void> } | undefined;
   #wake: (() => void) | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
@@ -115,7 +97,6 @@ export class OutboxWorker {
     this.#logger = options.logger ?? silentLogger;
     this.#batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-    this.#scheduler = options.scheduler;
   }
 
   get running(): boolean {
@@ -134,35 +115,14 @@ export class OutboxWorker {
           this.#onWake();
         });
       }
-      if (this.#scheduler === undefined) {
-        this.#loop = this.#run();
-        return;
-      }
-      // An external scheduler owns the timer; a wake-up hint still drains directly, so the two
-      // paths race only into `drain`, which is safe to call concurrently — the queue claims decide.
-      this.#scheduled = await this.#scheduler.schedule(
-        OUTBOX_SWEEP_JOB,
-        this.#pollIntervalMs,
-        async () => {
-          await this.#drainGuarded();
-        },
-      );
-      this.#loop = this.#runWoken();
     } catch (error) {
-      // A subscription or a schedule that failed leaves the worker half-started: `running` true, a
-      // live subscription, no loop. Undo it and let the caller decide, rather than reporting a
-      // worker that is not sweeping as started.
-      //
-      // The unwind runs through `suppressed`, not `.catch()`: a `close()` that throws
-      // *synchronously* never reaches an attached `.catch`, so it would escape and replace the
-      // failure the caller actually needs to see.
+      // A subscription that failed would leave the worker half-started — `running` true with no
+      // loop behind it — so the caller would be told a worker that never sweeps had started. Undo
+      // the flag and let the caller decide. `subscribe` threw, so there is no handle to close.
       this.#running = false;
-      await suppressed(async () => this.#subscription?.close());
-      this.#subscription = undefined;
-      await suppressed(async () => this.#scheduled?.stop());
-      this.#scheduled = undefined;
       throw error;
     }
+    this.#loop = this.#run();
   }
 
   /**
@@ -179,8 +139,6 @@ export class OutboxWorker {
     }
     await this.#subscription?.close();
     this.#subscription = undefined;
-    await this.#scheduled?.stop();
-    this.#scheduled = undefined;
     await this.#loop;
     this.#loop = undefined;
     return this.#bus.stop(options);
@@ -240,24 +198,7 @@ export class OutboxWorker {
       if (!this.#running) {
         return;
       }
-      await this.#waitForWork({ withTimer: true });
-    }
-  }
-
-  /**
-   * With an external scheduler the loop reacts to wake-up hints and **nothing else**.
-   *
-   * Arming the poll timer here too would leave two recurring drains — the worker's and the
-   * scheduler's — which is precisely what handing the timer over is meant to avoid. `stop()` calls
-   * `#onWake`, so the loop still exits promptly.
-   */
-  async #runWoken(): Promise<void> {
-    while (this.#running) {
-      await this.#waitForWork({ withTimer: false });
-      if (!this.#running) {
-        return;
-      }
-      await this.#drainGuarded();
+      await this.#waitForWork();
     }
   }
 
@@ -265,26 +206,29 @@ export class OutboxWorker {
     try {
       const report = await this.drain();
       if (report.dispatched > 0 || report.failed > 0) {
-        this.#logger.debug({ ...report }, 'outbox sweep');
+        this.#logger.debug({ sweep: OUTBOX_SWEEP_LABEL, ...report }, 'outbox sweep');
       }
     } catch (error) {
       // A sweep that throws is a transport fault, not a handler fault — a pool that ran out, a
       // connection reset. Log it and keep the loop alive: the queue rows are still there, so the
       // next pass retries them and nothing is lost.
       this.#logger.error(
-        { error: error instanceof Error ? error.message : String(error) },
+        {
+          sweep: OUTBOX_SWEEP_LABEL,
+          error: error instanceof Error ? error.message : String(error),
+        },
         'outbox sweep failed',
       );
     }
   }
 
   /**
-   * Resolves on a wake-up hint, and — when this worker owns the timer — after the poll interval.
+   * Resolves on a wake-up hint, or after the poll interval — whichever comes first.
    *
-   * `withTimer: false` is the scheduler case: no timer is armed at all, so the worker really has
-   * handed its poll over instead of keeping a second one.
+   * The timer is armed on every pass, with or without a broadcast: it is what makes a missed
+   * `NOTIFY` cost latency rather than an event.
    */
-  async #waitForWork(options: { withTimer: boolean }): Promise<void> {
+  async #waitForWork(): Promise<void> {
     if (this.#pendingWake) {
       this.#pendingWake = false;
       return;
@@ -304,9 +248,6 @@ export class OutboxWorker {
         resolve();
       };
       this.#wake = finish;
-      if (!options.withTimer) {
-        return;
-      }
       this.#timer = setTimeout(finish, this.#pollIntervalMs);
       // `unref` keeps a poll interval from holding the process open at shutdown; it does not
       // exist in every runtime this code may be bundled for, hence the guard.

@@ -156,8 +156,8 @@ describe('defineQueue', () => {
   it('omits every option the caller did not set', async () => {
     const state = recorder();
     const runtime = createPgBossJobs({ pgBoss: state.boss });
-    await runtime.jobs.defineQueue({ name: 'dispatch' });
-    expect(lastCall(state, 'createQueue')).toEqual(['dispatch', {}]);
+    await runtime.jobs.defineQueue({ name: 'stage.execute' });
+    expect(lastCall(state, 'createQueue')).toEqual(['stage.execute', {}]);
   });
 
   it('validates both names before touching the database', async () => {
@@ -175,10 +175,10 @@ describe('enqueue', () => {
   it('sends a plain job', async () => {
     const state = recorder();
     const runtime = createPgBossJobs({ pgBoss: state.boss });
-    const result = await runtime.jobs.enqueue({ queue: 'dispatch', data: { event_id: 'e1' } });
+    const result = await runtime.jobs.enqueue({ queue: 'stage.execute', data: { task_id: 't1' } });
 
     expect(result).toEqual({ status: 'enqueued', jobId: 'job-1' });
-    expect(lastCall(state, 'send')).toEqual(['dispatch', { event_id: 'e1' }, {}]);
+    expect(lastCall(state, 'send')).toEqual(['stage.execute', { task_id: 't1' }, {}]);
   });
 
   it('passes a timer through as startAfter', async () => {
@@ -244,7 +244,7 @@ describe('enqueue', () => {
     const state = recorder();
     state.sendResult = null;
     const runtime = createPgBossJobs({ pgBoss: state.boss });
-    await expect(runtime.jobs.enqueue({ queue: 'dispatch' })).resolves.toEqual({
+    await expect(runtime.jobs.enqueue({ queue: 'stage.execute' })).resolves.toEqual({
       status: 'coalesced',
       jobId: null,
     });
@@ -330,25 +330,25 @@ describe('work', () => {
     const seen: unknown[] = [];
 
     const worker = await runtime.jobs.work({
-      queue: 'dispatch',
+      queue: 'stage.execute',
       handler: async (job) => {
         seen.push({ id: job.id, queue: job.queue, data: job.data });
       },
     });
 
     expect(lastCall(state, 'work')).toEqual([
-      'dispatch',
+      'stage.execute',
       { batchSize: 1, pollingIntervalSeconds: 5 },
     ]);
 
     const controller = new AbortController();
-    await state.workers.get('dispatch')?.([
-      { id: 'j1', name: 'dispatch', data: { a: 1 }, signal: controller.signal },
+    await state.workers.get('stage.execute')?.([
+      { id: 'j1', name: 'stage.execute', data: { a: 1 }, signal: controller.signal },
     ]);
-    expect(seen).toEqual([{ id: 'j1', queue: 'dispatch', data: { a: 1 } }]);
+    expect(seen).toEqual([{ id: 'j1', queue: 'stage.execute', data: { a: 1 } }]);
 
     await worker.stop();
-    expect(lastCall(state, 'offWork')).toEqual(['dispatch', { wait: true }]);
+    expect(lastCall(state, 'offWork')).toEqual(['stage.execute', { wait: true }]);
   });
 
   it('substitutes an empty payload for a job stored with none', async () => {
@@ -356,16 +356,16 @@ describe('work', () => {
     const runtime = createPgBossJobs({ pgBoss: state.boss });
     const seen: unknown[] = [];
     await runtime.jobs.work({
-      queue: 'dispatch',
+      queue: 'stage.execute',
       handler: async (job) => {
         seen.push(job.data);
       },
     });
 
-    await state.workers.get('dispatch')?.([
+    await state.workers.get('stage.execute')?.([
       {
         id: 'j1',
-        name: 'dispatch',
+        name: 'stage.execute',
         data: null as unknown as object,
         signal: new AbortController().signal,
       },
@@ -377,7 +377,7 @@ describe('work', () => {
     const state = recorder();
     const runtime = createPgBossJobs({ pgBoss: state.boss });
     await runtime.jobs.work({
-      queue: 'dispatch',
+      queue: 'stage.execute',
       concurrency: 4,
       pollingIntervalSeconds: 0.5,
       handler: async () => {},

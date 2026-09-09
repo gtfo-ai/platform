@@ -4,7 +4,6 @@
  */
 import {
   CONNECTIONS_PER_DISPATCH,
-  type DrainScheduler,
   EventBus,
   type Logger,
   OutboxWorker,
@@ -26,8 +25,6 @@ export interface EventingOptions {
   readonly connectionString: string;
   readonly config?: Partial<DispatchConfig>;
   readonly logger?: Logger;
-  /** Runs the sweep on WP-05's scheduler instead of the worker's own timer. */
-  readonly scheduler?: DrainScheduler;
 }
 
 export interface Eventing {
@@ -108,7 +105,6 @@ export const createEventing = (options: EventingOptions): Eventing => {
     broadcast,
     batchSize: config.batchSize,
     pollIntervalMs: config.pollIntervalMs,
-    ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 

@@ -1,10 +1,12 @@
 /**
  * The `Jobs` port — background work, durable timers, cron schedules and coalesced wake-ups.
  *
- * TD-004 chose pg-boss as the adapter and named the workloads: `dispatch(event)`, `stage.execute`
- * (singleton per task), `question.timeout` / `question.reminder` (timers whose `startAfter` is
- * computed on the working-day calendar), `mr.comment.debounce` (coalesced, 2 minutes),
- * `budget.window.reset` and `poll.<provider>` (cron), index rebuilds and maintenance schedules.
+ * TD-004 chose pg-boss as the adapter and named the workloads: `stage.execute` (singleton per
+ * task), `question.timeout` / `question.reminder` (timers whose `startAfter` is computed on the
+ * working-day calendar), `mr.comment.debounce` (coalesced, 2 minutes), `budget.window.reset` and
+ * `poll.<provider>` (cron), index rebuilds and maintenance schedules. Dispatching a domain event
+ * is **not** one of them: TD-004 was amended at WP-04a, and TD-005's `event_dispatch` table with
+ * its per-process sweep stays the only queue events travel on.
  * The decision also says pg-boss is replaceable — graphile-worker is the named alternative — which
  * is only true if the application ring never sees a pg-boss type. Hence this file: interfaces and
  * pure validation, no dependency on any queue library (technical/01 dependency rule).
@@ -300,10 +302,14 @@ export const coalescingSlotStart = (at: Date, windowSeconds: number): number =>
  * Queue names TD-004 enumerates. Later work packages own the handlers; the names live here so two
  * packages cannot spell the same queue differently. Not exhaustive — `poll.<provider>` is built
  * per provider by `pollQueueName`.
+ *
+ * There is deliberately **no `dispatch` queue**, and adding one is a mistake a test guards against.
+ * Domain events are dispatched from TD-005's `event_dispatch` table by a sweep each process runs on
+ * its own timer (`OUTBOX_SWEEP_LABEL`); enqueueing them here as well would split durability across
+ * two queues that disagree after a crash and would lose per-stream ordering, which pg-boss cannot
+ * express. WP-15 enqueues *stages*, never events.
  */
 export const JOB_QUEUES = {
-  /** Outbox dispatch of a domain event to its handlers (TD-005). */
-  dispatch: 'dispatch',
   /** One agent stage of one task; `stately` per `task:<id>`. */
   stageExecute: 'stage.execute',
   /** Question deadline; `startAfter` from the working-day calendar. */

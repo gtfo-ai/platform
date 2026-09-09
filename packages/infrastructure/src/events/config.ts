@@ -31,7 +31,9 @@ export const dispatchConfigSchema = z
     maxConcurrency: z.int().min(1).max(64),
     /**
      * Longest an idle worker waits before sweeping again. This is TD-014's polling fallback: with
-     * `NOTIFY` working it is never reached, and without it this is the worst-case latency.
+     * `NOTIFY` working it is never reached, and without it this is the worst-case latency. Every
+     * process arms this timer for itself — it backs up that process's own subscription, so it is
+     * never handed to a scheduler or a cron.
      */
     pollIntervalMs: z.int().min(10).max(600_000),
     /** First retry delay after a handler failure; doubled per attempt up to `maxRetryDelayMs`. */

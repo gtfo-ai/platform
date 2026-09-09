@@ -4,15 +4,15 @@
 
 ## Resume note
 
-- **Current WPs:** three implementers running in parallel worktrees — **WP-04** (event store, critical path),
-  **WP-05** (pg-boss jobs port), **WP-02a** (the two command-policy `allow` routes).
-- **Last done:** WP-00 (`8852b9e`), WP-01 (`dedc4b9`), WP-03 (`ca1ae06`), WP-02 (`168d368`) — all pushed; CI
-  green on WP-00, WP-01, WP-03.
-- **Next step:** as each reports, verify in its worktree, review, fix-round, then squash-merge into `main`
-  one at a time and re-verify on `main` before committing. WP-04 and WP-05 overlap conceptually (the outbox
-  job may need WP-05's scheduler) — reconcile their DISCOVERED notes at merge time.
-- **5-WP checkpoint is due when WP-05 lands:** run all four verify targets, `gh run list --limit 5`, fix
-  CI forward, and write the M1 milestone note. Also fix the `commitlint`/`dco` CI gap recorded below.
+- **Current WP:** WP-04a (delete the `DrainScheduler` seam), in the main checkout. All worktrees are removed.
+- **Done and pushed:** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` · WP-02a `8abf247` ·
+  WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d`. CI green.
+- **Next step after WP-04a:** WP-06 (Fastify server skeleton, TD-002) — the last M1 dependency-free WP
+  before the runner chain. Read the "Notes WP-06 must honour" section below first; it must call
+  `registerPartitionMaintenance` or WP-03's daily partition cron never runs.
+- **5-WP checkpoint: DONE.** All four verify targets green on `main`; `gh run list` green since the WP-02
+  property-test flake was fixed by WP-02a; the `commitlint`/`dco` gates now actually execute on push
+  (`6481b3d`); milestone note written below.
 - **Merge recipe that worked for WP-03:** `git merge --squash <branch>`, `pnpm install`, run all four verify
   targets, `git add -A -- . ':!<files held back>'`, commit with the WP message, push. `.claude/worktrees/` is
   now in `.gitignore`.
@@ -47,7 +47,7 @@
 | WP-01 | `packages/contracts` | WP-00 | no | DONE | `dedc4b9` | APPROVE; 5 hardening fixes folded in |
 | WP-02 | `packages/domain` | WP-01 | no | DONE | `168d368` | 3 rounds spent; 2 command-policy defects carried to WP-02a |
 | WP-02a | Command policy: close the two `allow` routes found at WP-02 round 3 | WP-02 | no | DONE | `8abf247` | 2 rounds; includes the property-test ci-fix |
-| WP-04a | Delete the `DrainScheduler` seam; `OutboxWorker` owns its timer | WP-04, WP-05 | no | TODO | — | **before WP-06** |
+| WP-04a | Delete the `DrainScheduler` seam; `OutboxWorker` owns its timer | WP-04, WP-05 | no | IN_PROGRESS | — | **before WP-06** |
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
@@ -698,6 +698,18 @@ pg-boss workload; there is **no transactional enqueue** (the adapter binds one p
 a handler's transaction — enqueue after commit and re-validate on fire); and `mr.comment.debounce` must use
 `stately` + `singletonKey` + `startAfter`, never `coalesce`.
 
+**WP-04a outcome.** Deleted cleanly; the reviewer confirmed `EventingOptions.scheduler` had no production
+caller, so no live behaviour was removed. `OutboxWorker` now arms its timer unconditionally on every pass,
+and `OUTBOX_SWEEP_JOB` became `OUTBOX_SWEEP_LABEL` — a log and metric field, not a queue name.
+
+The interesting part is the testing. The deleted scheduler tests **could not** have caught a conditionally
+armed timer, which is precisely how WP-04's round-2 defect survived its own test suite. The replacements
+can, and three independent mutations prove it: removing the `setTimeout` fails 4 tests; arming it only when
+there is no broadcast (the exact original defect) fails "polls even while subscribed"; and arming it only on
+the first pass fails "re-arms its own timer" with `expected 2 to be greater than or equal to 3` — so the ≥3
+threshold is load-bearing rather than arbitrary. **A replacement test is only an improvement if a mutation
+shows it detects what the old one missed.**
+
 ### Notes WP-06 must honour (from the architect)
 
 - Nothing calls `registerPartitionMaintenance` yet, so WP-03's daily partition cron never runs. Its returned
@@ -718,6 +730,50 @@ a handler's transaction — enqueue after commit and re-validate on fire); and `
 - Treat `coalesced` as a success result, and let the handler tolerate finding nothing to do: there is no
   cancel, because timers re-validate.
 - `2 × concurrency + 1` holds only while a handler opens at most **one** transaction.
+
+### Checkpoint 1 — after 8 commits (WP-00…WP-05 + WP-02a + ci-fix), 2026-09-09
+
+**What works end to end.** Nothing user-facing yet — M1's foundation is complete but not wired. Concretely:
+a pnpm monorepo with the clean-architecture rings and an import-boundary lint that enforces them; every
+platform boundary typed in zod and published as JSON Schema; the domain's aggregates, state machines,
+policies and permissions as pure functions; a PostgreSQL 18 schema of 45 tables with monthly partitions, a
+least-privilege runtime role and an advisory-locked migrator; an event store with a priority dispatcher,
+idempotent handlers, per-stream ordering and a transactional outbox; and a jobs runtime on pg-boss with a
+working-day calendar. Verification runs in four tiers, the integration tier against a real Postgres
+container in ~9s, and CI is green on every gate.
+
+**What is missing.** Everything above the ports: no HTTP server (WP-06), no integrations (WP-07…WP-11), no
+Claude runner (WP-12), no run shim or workspaces (WP-13, WP-14), no pipeline interpreter (WP-15), no UI
+(WP-20). Nothing in the repository can execute a shell command or call an LLM yet.
+
+**Quality signal.** Seven work packages took **eighteen review rounds** between them. The reviews were not
+ceremony: they found two privilege escalations in the database layer (both demonstrated by exploit, one
+letting a `CONNECT`-only role destroy a transcript partition, one letting the app role forge a duplicate
+event sequence number), fifteen routes to `allow` in the command policy, a dispatcher whose pool exhaustion
+was a **permanent silent hang**, a semaphore that admitted two handlers at a limit of one, two drain loops
+where the design called for one, a `debounce` that fired immediately, four places where a test fake was
+kinder than production, and a literal NUL byte that made a source file binary to git. **Not one of these was
+found by reading the diff.** Each needed an exploit, an adversarial corpus, a constructed interleaving, a
+removed collaborator, or a mutation of the fix itself.
+
+**Rules this checkpoint earned**, all recorded above with their evidence: a fake may be stricter than the
+real adapter, never kinder. A wall-clock assertion is a hardware assertion, not a correctness one. A
+comment, an error message or an `.env.example` line asserting an invariant is not evidence it holds. A
+differential result is evidence about the corpus, not the program. Green in a worktree is not green on
+`main`. And the instrument matters: WP-04's semaphore defect is invisible to a real-Postgres test and only
+appears under an in-memory microtask probe.
+
+**Process corrections made:** the protocol's `pnpm -s verify` is `pnpm run -s verify` on pnpm 12; three
+implementers plus reviews saturate a 14-core host and make timing tests lie, so concurrency is capped at
+two or three; `OPEN-QUESTIONS` numbers and migration filenames collide when worktrees run in parallel, and
+the orchestrator renumbers at merge.
+
+**Docs amended from implementation** (docs win, so each was corrected in the record first): technical/02
+gained `run.created` and an envelope-`actor` clarification; technical/03 gained the `feedback` table,
+`events.id`/`cause_event_id`, a corrected index and a stage-nullability note; technical/12 gained
+`features.shadow_mode`; BD-007, product/04 and technical/01 had "2-minute debounce" corrected to a fixed
+window; and **TD-004 was amended** to drop `dispatch(event)` as a pg-boss workload and to retract its
+"transactional enqueue" claim, which the adapter cannot provide.
 
 ## Discovered work (not in plan)
 
@@ -810,4 +866,4 @@ a handler's transaction — enqueue after commit and re-validate on fire); and `
 
 ## Milestone notes
 
-(none)
+See "Checkpoint 1" above.

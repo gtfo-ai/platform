@@ -14,7 +14,7 @@ import {
 
 describe('job names', () => {
   it.each([
-    'dispatch',
+    'example.queue',
     'stage.execute',
     'question.timeout',
     'mr.comment.debounce',
@@ -28,8 +28,8 @@ describe('job names', () => {
 
   it.each([
     '',
-    'Dispatch',
-    '1dispatch',
+    'Example.queue',
+    '1example',
     'stage..execute',
     'stage.',
     '.stage',
@@ -60,6 +60,15 @@ describe('job names', () => {
     expect(pollQueueName('gitlab')).toBe('poll.gitlab');
     expect(() => pollQueueName('GitLab')).toThrow(/poll queue name/);
   });
+
+  it('names no queue for domain-event dispatch', () => {
+    // TD-004 as amended at WP-04a: events travel on TD-005's `event_dispatch` table, swept by a
+    // timer inside each process. A queue here would invite WP-15 to enqueue events onto pg-boss as
+    // well, splitting durability across two queues that disagree after a crash.
+    expect(Object.keys(JOB_QUEUES)).not.toContain('dispatch');
+    expect(Object.values(JOB_QUEUES)).not.toContain('dispatch');
+    expect(Object.values(JOB_QUEUES).some((name) => name.startsWith('events.'))).toBe(false);
+  });
 });
 
 describe('job keys', () => {
@@ -74,24 +83,26 @@ describe('job keys', () => {
 
 describe('assertEnqueueRequest', () => {
   it('accepts a plain request', () => {
-    expect(() => assertEnqueueRequest({ queue: 'dispatch' })).not.toThrow();
+    expect(() => assertEnqueueRequest({ queue: 'example.queue' })).not.toThrow();
   });
 
   it('rejects an invalid queue, key or dead letter queue', () => {
-    expect(() => assertEnqueueRequest({ queue: 'Dispatch' })).toThrow(/queue name/);
-    expect(() => assertEnqueueRequest({ queue: 'dispatch', singletonKey: '' })).toThrow(
+    expect(() => assertEnqueueRequest({ queue: 'Example.queue' })).toThrow(/queue name/);
+    expect(() => assertEnqueueRequest({ queue: 'example.queue', singletonKey: '' })).toThrow(
       /singleton key/,
     );
-    expect(() => assertEnqueueRequest({ queue: 'dispatch', deadLetterQueue: 'Dead' })).toThrow(
+    expect(() => assertEnqueueRequest({ queue: 'example.queue', deadLetterQueue: 'Dead' })).toThrow(
       /dead letter queue/,
     );
   });
 
   it('rejects an invalid startAfter and a non-integer priority', () => {
     expect(() =>
-      assertEnqueueRequest({ queue: 'dispatch', startAfter: new Date('nonsense') }),
+      assertEnqueueRequest({ queue: 'example.queue', startAfter: new Date('nonsense') }),
     ).toThrow(/startAfter/);
-    expect(() => assertEnqueueRequest({ queue: 'dispatch', priority: 1.5 })).toThrow(/priority/);
+    expect(() => assertEnqueueRequest({ queue: 'example.queue', priority: 1.5 })).toThrow(
+      /priority/,
+    );
   });
 
   it.each([0, -1, 1.5, Number.NaN])(
@@ -99,7 +110,7 @@ describe('assertEnqueueRequest', () => {
     (windowSeconds) => {
       expect(() =>
         assertEnqueueRequest({
-          queue: 'dispatch',
+          queue: 'example.queue',
           coalesce: { key: 'mr:1', windowSeconds },
         }),
       ).toThrow(/windowSeconds/);
@@ -109,7 +120,7 @@ describe('assertEnqueueRequest', () => {
   it('rejects combining a singleton key with coalescing', () => {
     expect(() =>
       assertEnqueueRequest({
-        queue: 'dispatch',
+        queue: 'example.queue',
         singletonKey: 'task:1',
         coalesce: { key: 'task:1', windowSeconds: 60 },
       }),

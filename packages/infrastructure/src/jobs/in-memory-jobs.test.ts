@@ -45,24 +45,24 @@ describe('inspection', () => {
   it('reports every job with its state and deadline', async () => {
     const runtime = createInMemoryJobs();
     await runtime.start();
-    await runtime.jobs.defineQueue({ name: 'dispatch' });
+    await runtime.jobs.defineQueue({ name: 'stage.execute' });
 
     const startAfter = new Date(IN_MEMORY_JOBS_EPOCH.getTime() + 60_000);
-    await runtime.jobs.enqueue({ queue: 'dispatch', data: { event_id: 'e1' }, startAfter });
+    await runtime.jobs.enqueue({ queue: 'stage.execute', data: { task_id: 't1' }, startAfter });
 
     expect(runtime.snapshot()).toEqual([
       {
         id: 'job_00000001',
-        queue: 'dispatch',
+        queue: 'stage.execute',
         state: 'created',
         startAfter,
-        data: { event_id: 'e1' },
+        data: { task_id: 't1' },
       },
     ]);
 
     const ran: string[] = [];
     await runtime.jobs.work({
-      queue: 'dispatch',
+      queue: 'stage.execute',
       handler: async (job) => {
         ran.push(job.id);
       },
