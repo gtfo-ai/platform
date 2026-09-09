@@ -1,0 +1,11 @@
+Agentic platform
+Copyright 2026 The Agentic platform contributors
+
+This product includes software developed by the Agentic platform contributors.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party tools bundled into the container images (git, ripgrep, glab, gh,
+acli, jira, logcli, sentry-cli, the Claude Code CLI and others) keep their own
+licences; they are executed as separate processes, never linked. The full list
+ships as THIRD_PARTY_NOTICES.md with the images.

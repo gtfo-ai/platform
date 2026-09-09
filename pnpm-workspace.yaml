@@ -1,0 +1,12 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Post-install scripts are blocked by default. Only the packages listed here may
+# run them (pnpm 12 `allowBuilds`).
+#   @b12k/gitleaks  downloads the pinned gitleaks binary, so the pre-commit secret
+#                   scan works without a global install (BD-002)
+#   lefthook        installs its own binary for the git hooks
+allowBuilds:
+  '@b12k/gitleaks': true
+  lefthook: true

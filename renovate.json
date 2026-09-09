@@ -1,0 +1,49 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:best-practices", ":semanticCommits", "helpers:pinGitHubActionDigests"],
+  "timezone": "Europe/Prague",
+  "schedule": ["before 6am on monday"],
+  "dependencyDashboard": true,
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "schedule": ["at any time"]
+  },
+  "packageRules": [
+    {
+      "description": "Node runtime is pinned to the LTS line the product targets (TD-001)",
+      "matchDatasources": ["node-version", "docker"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "<25"
+    },
+    {
+      "description": "Group dev tooling so the scaffold moves in one PR",
+      "matchDepTypes": ["devDependencies"],
+      "matchPackageNames": [
+        "@biomejs/biome",
+        "lefthook",
+        "typescript",
+        "vitest",
+        "@vitest/**",
+        "@commitlint/**"
+      ],
+      "groupName": "dev tooling"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Pinned CLI versions in Dockerfiles: ARG <TOOL>_VERSION=x.y.z (TD-017)",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)docker/.*\\.Dockerfile$/", "/(^|/)Dockerfile$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+?)\\s+depName=(?<depName>[^\\s]+?)(?:\\s+versioning=(?<versioning>[^\\s]+?))?\\s*\\nARG\\s+[A-Z0-9_]+_VERSION=\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
+  ]
+}

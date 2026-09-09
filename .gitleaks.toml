@@ -1,0 +1,19 @@
+# Secret scanning configuration (BD-002). Used by the pre-commit hook,
+# `pnpm secrets:scan` and the CI secret-scan job.
+title = "platform"
+
+[extend]
+useDefault = true
+
+# Fixtures must contain only obviously fake values (technical/10, BD-002). This rule
+# fires on a credential-shaped string under test/fixtures that does not carry the
+# `FAKE` marker the convention prescribes (`xoxb-FAKE-…`), so a real credential
+# pasted into a fixture is caught even when the default rules miss it.
+[[rules]]
+id = "fixture-credential-without-fake-marker"
+description = "Credential-shaped string in a test fixture without the FAKE marker"
+regex = '''(?i)(api[_-]?key|secret|token|password|passwd|authorization)["'\s:=]+[a-z0-9/+_\-]{20,}'''
+path = '''(^|/)test/fixtures/'''
+[rules.allowlist]
+regexTarget = "line"
+regexes = ['''FAKE''']

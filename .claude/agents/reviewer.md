@@ -16,7 +16,7 @@ The orchestrator gives you the WP id and the git range (e.g. `HEAD~0` working tr
 3. **Security:** secrets handling, redaction at persistence, untrusted input treated as data, command/path policy, least privilege, webhook signature verification, SQL/command injection, unsafe deserialisation, dependency additions (licence, maintenance).
 4. **Architecture:** dependency rule, ports vs adapters, idempotent handlers, transactional outbox use, typed boundaries, no I/O in domain.
 5. **Quality:** error handling, logging, naming, duplication, obviously missing edge cases; ignore style the formatter enforces.
-6. **Run** `pnpm -s verify` yourself and the WP's test target; do not trust the report.
+6. **Run** `pnpm run -s verify` yourself and the WP's test target; do not trust the report.
 
 ## Output (≤ 400 words)
 ```

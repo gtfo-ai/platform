@@ -1,0 +1,27 @@
+# Git hooks (technical/11 hygiene). Installed by `pnpm install` via the root
+# `prepare` script. Local binaries are invoked directly rather than through
+# `pnpm exec`, which triggers an implicit install check on every hook run.
+#
+# The secret scan runs with --require, so it fails closed when neither the
+# gitleaks binary nor Docker is available: a scan that did not run is never
+# reported as a pass (BD-002). The only way past it is the explicit and noisy
+# GITLEAKS_SKIP=1, which CI ignores. Skip all hooks once with LEFTHOOK=0 or
+# `git commit --no-verify` — never to get past an actual secret finding.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: gitleaks
+      run: node scripts/gitleaks.mjs git --staged --require
+    - name: biome
+      glob: '*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,json,jsonc,css}'
+      run: ./node_modules/.bin/biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: ./node_modules/.bin/commitlint --edit {1}
+
+pre-push:
+  jobs:
+    - name: unit + contract
+      run: pnpm run -s test

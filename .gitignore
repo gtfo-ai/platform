@@ -1,4 +1,4 @@
-# Secrets and local config — never commit
+# Secrets and local config — never commit (BD-002)
 .env
 .env.*
 !.env.example
@@ -12,14 +12,23 @@
 .vscode/
 *.swp
 
-# Dependencies / build (populated in Round 2)
+# Dependencies / build output
 node_modules/
 dist/
 build/
-__pycache__/
-*.pyc
-.venv/
+.turbo/
+*.tsbuildinfo
+
+# Test and tooling output
+coverage/
+.vitest/
+test-results/
+playwright-report/
+*.lcov
 
 # Local data
 data/
 *.log
+
+# Agent-local settings
+.claude/settings.local.json
