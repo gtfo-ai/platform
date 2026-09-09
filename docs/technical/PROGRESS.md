@@ -4,52 +4,63 @@
 
 ## Resume note
 
-> **Session 2 started 2026-09-09.** Read this section, then "Standing rules earned by evidence"
-> and "WP-06a" below, then continue the loop in `14-orchestration-protocol.md`. Nothing is broken; `main` is
-> green and every finished WP is pushed.
->
-> **In flight right now:** WP-06a review round 2 (branch `wp/06a` `887e72d`, all five verify targets
-> re-confirmed green in the orchestrator's own shell before the review was sent) and WP-07 (implementer in
-> an isolated worktree, branch `wp/07`). Environment re-confirmed: gh authenticated as `JanMikes`, Docker
-> 29.7.2, pnpm 12.3.4, Node 25.1.0.
+> **Session 2, in progress (started 2026-09-09).** Read this section, then "Standing rules earned by
+> evidence", then continue the loop in `14-orchestration-protocol.md`. Nothing is broken; `main` is green on
+> all five targets and every finished WP is pushed.
 
 **Where things stand**
 
-- **`main` is at `d60d770`, green on all five verify targets, CI green.** Nine work packages are DONE and
-  pushed: WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` · WP-02a `8abf247` · WP-03 `ca1ae06` ·
-  WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` · WP-04a `d729616` · WP-06 `d60d770`.
-- **WP-06a is DONE and on `main`** (session 2). Three review rounds plus a follow-up; seven layers of one
-  defect; it no longer blocks WP-12 or WP-15.
+- **`main` is at `53ece09`**, green on `verify` (1685 tests, 93.54% statements / 88.68% branches),
+  `verify:integration` (114), `verify:e2e` (20), `verify:ui` (2), `verify:commits`. CI green.
+- **Twelve work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
+  WP-02a `8abf247` · WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` ·
+  WP-04a `d729616` · WP-06 `d60d770` · **WP-06a `9e0be0b`** · **WP-07 `b036c4c`**.
+- **Session 2 landed WP-06a and WP-07.** WP-06a took two more review rounds plus a follow-up and reached
+  **seven** layers of one defect; WP-07 took two review rounds plus a pre-merge fix round and earned
+  standing rules 11 to 14. Both are written up in their own sections below.
 
-**The immediate next step**
+**In flight right now — three implementers in isolated worktrees, no reviews pending**
 
-1. Re-run the final review of `wp/06a` (this is its review round 2; rounds are bounded at 3). The brief the
-   last reviewer was given: verify the fifth-layer fix (`Connection.abandon()` writing `reset` per topic then
-   `shutdown` **off-chain**); judge whether the new test "cannot pass for the wrong reason" is elegantly
-   branch-independent or blind to which branch ran; check the 500-turn `settle` bound is a proof of
-   impossibility rather than a disguised timing assertion; check the corrected memory arithmetic
-   (255×64 + 512 = 16,832 frames ≈ 10.59 MiB on one stalled stream, 33× the budget it replaces); and above
-   all **review the ten-entry shared-quantity audit in the module docblock as a document — is anything
-   missing?** Five layers of this defect were found by four readers, every one of them "replay and live
-   share a quantity".
-2. On APPROVE: `git merge --squash wp/06a` into `main`, re-run all five targets **on main**, commit, push,
-   delete the branch. On REQUEST_CHANGES: one more implementer round, then it is BLOCKED and recorded.
-3. **WP-06a must land before WP-12 or WP-15**, because nothing publishes to the SSE hub until then and the
-   defect is latent only until they do.
+| WP | What | Branch |
+|---|---|---|
+| WP-12 | Claude SDK runner (technical/04) | `worktree-agent-a80d5d7c411ac0f51` |
+| WP-08 | Jira Cloud provider | harness worktree, branch reported on completion |
+| WP-09 | GitLab provider | harness worktree, branch reported on completion |
+
+**When each reports:** merge `main` into its branch first (so the reviewer sees what will actually land —
+standing rule 6 has now caught two separate problems this way), run all five targets in your own shell, then
+spawn a fresh reviewer. WP-08 and WP-09 will collide on `pnpm-lock.yaml`, `.env.example` and the
+integrations `index.ts`; resolve as unions and re-run everything.
+
+**Two seams that need the orchestrator's attention at merge**
+
+1. **WP-12 ↔ WP-07 redaction.** WP-12 was told not to write a second redactor and to name where it expects
+   to reconcile with WP-07's `redactErrorInPlace` (`packages/application/src/integrations/action-executor.ts`).
+   Read that part of its report before merging; the WP-04/WP-05 merge is the precedent for what goes wrong.
+2. **WP-12 and BD-013's model ids.** WP-12 was told that model ids are an external fact rather than a
+   product decision, so "docs win" does not settle it: use current ids and report, so the orchestrator can
+   decide whether BD-013 needs amending. The current family is Claude 5 — `claude-opus-5`,
+   `claude-sonnet-5`, `claude-fable-5-1`, and `claude-haiku-4-5-20251001`.
 
 **Then continue the plan**
 
-- **WP-07 is DONE** (session 2) and unblocks WP-08…WP-11, four parallel-safe provider WPs.
-- **WP-12** (Claude SDK runner) is IN_PROGRESS in an isolated worktree.
-- Cap concurrency at **two or three** agents — see the parallelism note below; three implementers plus
-  reviews drove this 14-core host to load average 143 and made timing-sensitive tests lie.
+- **WP-10** (Slack) and **WP-11** (Sentry + Loki) are unblocked by WP-07 and parallel-safe with each other.
+- **WP-13** (run shim) needs WP-12. **WP-15** (pipeline interpreter) needs WP-04…WP-12 and is the
+  integration point where everything is first exercised together.
+- **WP-20** (web app) needs only WP-06 and is parallel-safe.
+- Cap concurrency at **two or three** agents; see the parallelism note under "Discovered work".
 
-**Merge recipe that works** (used for WP-02, WP-03, WP-04, WP-05): `git merge --squash <branch>` →
-`pnpm install` → run all five verify targets → resolve conflicts (expect `pnpm-lock.yaml`, both packages'
-`index.ts` and `package.json`, `.env.example`, and `docs/technical/PROGRESS.md`, which is orchestrator-owned
-so take your own side) → `git add -A` → commit with the WP message → push. **Green in a worktree is not
-green on `main`**: WP-04 added a *required* config field that WP-05's test literal did not have, and both
-were green in isolation.
+**Numbering, checked at 2026-09-09**: highest `docs/OPEN-QUESTIONS.md` entry is **Q39**; highest migration
+is **`0011_auth.sql`**. Parallel worktrees collide on both; the orchestrator renumbers at merge.
+
+**Merge recipe that works**: `git merge main` into the WP branch → verify → `git merge --squash <branch>` on
+`main` → `pnpm install` → run all five targets **on main** → resolve conflicts (`pnpm-lock.yaml`, both
+packages' `index.ts` and `package.json`, `.env.example`, and `docs/technical/PROGRESS.md`, which is
+orchestrator-owned so take your own side) → `git add -A` → commit → push → delete branch and worktree.
+**Green in a worktree is not green on `main`**, and this session proved it twice: once semantically at
+WP-04/WP-05, and once at WP-06a, where a guard that inspects the repository passed in every review worktree
+and failed on `main`, because review worktrees live outside the repository and `.claude/worktrees/<agent>`
+does not.
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
