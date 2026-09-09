@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 import {
   contentBlockSchema,
   type TranscriptEvent,
@@ -129,18 +130,22 @@ describe('TranscriptEvent', () => {
     );
   });
 
-  it('rejects an unknown key on any entry', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...FIXTURES),
-        fc.string({ minLength: 1, maxLength: 12 }),
-        (event, key) => {
-          fc.pre(!(key in event));
-          expect(transcriptEventSchema.safeParse({ ...event, [key]: 1 }).success).toBe(false);
-        },
-      ),
-    );
-  });
+  it(
+    'rejects an unknown key on any entry',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...FIXTURES),
+          fc.string({ minLength: 1, maxLength: 12 }),
+          (event, key) => {
+            fc.pre(!(key in event));
+            expect(transcriptEventSchema.safeParse({ ...event, [key]: 1 }).success).toBe(false);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
   it('keeps the sequence monotonic and non-negative', () => {
     expect(transcriptEventSchema.safeParse({ ...BY_KIND.system, seq: -1 }).success).toBe(false);

@@ -1,6 +1,7 @@
 import { taskStateSchema } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   compareQueuedTasks,
   countsAsActive,
@@ -73,17 +74,21 @@ describe('evaluateTaskAdmission', () => {
     );
   });
 
-  it('never admits past a limit, for any counts', () => {
-    fc.assert(
-      fc.property(fc.nat({ max: 20 }), fc.nat({ max: 20 }), (activeTasks, tasksInPipeline) => {
-        const decision = evaluateTaskAdmission({ activeTasks, tasksInPipeline });
-        if (decision.admitted) {
-          expect(activeTasks).toBeLessThan(DEFAULT_WIP_LIMITS.maxParallelTasks);
-          expect(tasksInPipeline).toBeLessThan(DEFAULT_WIP_LIMITS.maxTasksInPipeline);
-        }
-      }),
-    );
-  });
+  it(
+    'never admits past a limit, for any counts',
+    () => {
+      fc.assert(
+        fc.property(fc.nat({ max: 20 }), fc.nat({ max: 20 }), (activeTasks, tasksInPipeline) => {
+          const decision = evaluateTaskAdmission({ activeTasks, tasksInPipeline });
+          if (decision.admitted) {
+            expect(activeTasks).toBeLessThan(DEFAULT_WIP_LIMITS.maxParallelTasks);
+            expect(tasksInPipeline).toBeLessThan(DEFAULT_WIP_LIMITS.maxTasksInPipeline);
+          }
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('evaluateRunAdmission', () => {
@@ -119,22 +124,26 @@ describe('queue order (priority, then age)', () => {
     expect(orderQueue([twin, older])).toEqual([older, twin]);
   });
 
-  it('is a total order, so the queue is stable', () => {
-    const arbitrary = fc.record({
-      id: fc.integer({ min: 0, max: 999 }).map((n) => n.toString().padStart(3, '0')),
-      priorityRank: fc.integer({ min: 1, max: 3 }),
-      createdAt: fc.integer({ min: 0, max: 5 }).map((day) => `2026-09-0${day + 1}T00:00:00.000Z`),
-    });
-    fc.assert(
-      fc.property(fc.uniqueArray(arbitrary, { selector: (t) => t.id }), (tasks) => {
-        const ordered = orderQueue(tasks);
-        expect(ordered).toHaveLength(tasks.length);
-        for (let index = 1; index < ordered.length; index += 1) {
-          const previous = ordered[index - 1] as QueuedTask;
-          const current = ordered[index] as QueuedTask;
-          expect(compareQueuedTasks(previous, current)).toBeLessThan(0);
-        }
-      }),
-    );
-  });
+  it(
+    'is a total order, so the queue is stable',
+    () => {
+      const arbitrary = fc.record({
+        id: fc.integer({ min: 0, max: 999 }).map((n) => n.toString().padStart(3, '0')),
+        priorityRank: fc.integer({ min: 1, max: 3 }),
+        createdAt: fc.integer({ min: 0, max: 5 }).map((day) => `2026-09-0${day + 1}T00:00:00.000Z`),
+      });
+      fc.assert(
+        fc.property(fc.uniqueArray(arbitrary, { selector: (t) => t.id }), (tasks) => {
+          const ordered = orderQueue(tasks);
+          expect(ordered).toHaveLength(tasks.length);
+          for (let index = 1; index < ordered.length; index += 1) {
+            const previous = ordered[index - 1] as QueuedTask;
+            const current = ordered[index] as QueuedTask;
+            expect(compareQueuedTasks(previous, current)).toBeLessThan(0);
+          }
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

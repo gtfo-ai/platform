@@ -11,6 +11,7 @@ import {
   MS_PER_MINUTE,
   parseDuration,
 } from './clock.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 
 describe('fixedClock', () => {
   it('returns the same instant when it does not step', () => {
@@ -32,14 +33,18 @@ describe('fixedClock', () => {
 });
 
 describe('instant arithmetic', () => {
-  it('addMs and differenceMs are inverses', () => {
-    fc.assert(
-      fc.property(fc.integer({ min: -10_000_000, max: 10_000_000 }), (ms) => {
-        const start = '2026-09-09T09:00:00.000Z';
-        expect(differenceMs(start, addMs(start, ms))).toBe(ms);
-      }),
-    );
-  });
+  it(
+    'addMs and differenceMs are inverses',
+    () => {
+      fc.assert(
+        fc.property(fc.integer({ min: -10_000_000, max: 10_000_000 }), (ms) => {
+          const start = '2026-09-09T09:00:00.000Z';
+          expect(differenceMs(start, addMs(start, ms))).toBe(ms);
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
   it('isBefore orders instants', () => {
     expect(isBefore('2026-09-09T09:00:00.000Z', '2026-09-09T09:00:00.001Z')).toBe(true);

@@ -3,6 +3,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { autonomyRank } from '../policies/autonomy.js';
 import { DEFAULT_COMMAND_POLICY } from '../policies/command-policy.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   type ConfigLayer,
   commandVerdictFor,
@@ -162,20 +163,24 @@ describe('BD-027 — the organisation caps the autonomy dial', () => {
     expect(effective.cappedAutonomy).toBeNull();
   });
 
-  it('never ends above the organisation maximum, for any pair of levels', () => {
-    const level = fc.constantFrom<AutonomyLevel>('observe', 'assist', 'supervised', 'autonomous');
-    fc.assert(
-      fc.property(level, level, (org, repo) => {
-        const effective = mergeProjectConfig([
-          layer('org', { policies: { autonomy: org } }),
-          layer('repo', { policies: { autonomy: repo } }),
-        ]);
-        const applied = effective.values.policies?.autonomy as AutonomyLevel;
-        expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(org));
-        expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(repo));
-      }),
-    );
-  });
+  it(
+    'never ends above the organisation maximum, for any pair of levels',
+    () => {
+      const level = fc.constantFrom<AutonomyLevel>('observe', 'assist', 'supervised', 'autonomous');
+      fc.assert(
+        fc.property(level, level, (org, repo) => {
+          const effective = mergeProjectConfig([
+            layer('org', { policies: { autonomy: org } }),
+            layer('repo', { policies: { autonomy: repo } }),
+          ]);
+          const applied = effective.values.policies?.autonomy as AutonomyLevel;
+          expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(org));
+          expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(repo));
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('BD-025 — the command policy only narrows', () => {

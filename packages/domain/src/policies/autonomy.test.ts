@@ -1,6 +1,7 @@
 import { autonomyLevelSchema, sizeSchema } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   AUTONOMY_ORDER,
   AUTONOMY_PRESET_VERSION,
@@ -80,19 +81,23 @@ describe('readiness caps the suggestion (product/18, Q21)', () => {
     expect(suggestedAutonomyCap(5)).toBe('autonomous');
   });
 
-  it('caps a requested level without ever raising it', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...autonomyLevelSchema.options),
-        fc.constantFrom(...autonomyLevelSchema.options),
-        (requested, cap) => {
-          const applied = capAutonomy(requested, cap);
-          expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(requested));
-          expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(cap));
-        },
-      ),
-    );
-  });
+  it(
+    'caps a requested level without ever raising it',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...autonomyLevelSchema.options),
+          fc.constantFrom(...autonomyLevelSchema.options),
+          (requested, cap) => {
+            const applied = capAutonomy(requested, cap);
+            expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(requested));
+            expect(autonomyRank(applied)).toBeLessThanOrEqual(autonomyRank(cap));
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('overrides show the dial as Custom (BD-027)', () => {
@@ -160,23 +165,27 @@ describe('requiresPlanApproval (BD-006, BD-030)', () => {
     ).toBe(true);
   });
 
-  it('never asks for less than the preset does, for any size', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...sizeSchema.options),
-        fc.nat({ max: 20 }),
-        (size, tasksCompleted) => {
-          const assist = requiresPlanApproval({
-            preset: AUTONOMY_PRESETS.assist,
-            size,
-            tasksCompleted,
-            riskClassesRequiringApproval: [],
-          });
-          expect(assist).toBe(true);
-        },
-      ),
-    );
-  });
+  it(
+    'never asks for less than the preset does, for any size',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...sizeSchema.options),
+          fc.nat({ max: 20 }),
+          (size, tasksCompleted) => {
+            const assist = requiresPlanApproval({
+              preset: AUTONOMY_PRESETS.assist,
+              size,
+              tasksCompleted,
+              riskClassesRequiringApproval: [],
+            });
+            expect(assist).toBe(true);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('requiresBudgetApproval (product/18)', () => {

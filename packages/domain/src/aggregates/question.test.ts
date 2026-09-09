@@ -9,6 +9,7 @@ import {
 } from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   answerQuestion,
   canTransitionQuestion,
@@ -204,46 +205,50 @@ describe('reminders, expiry and escalation', () => {
 });
 
 describe('Question state machine — properties', () => {
-  it('reaches at most one terminal status, whatever the order of events', () => {
-    const step = fc.constantFrom('answer', 'expire', 'escalate', 'remind');
-    fc.assert(
-      fc.property(fc.array(step, { maxLength: 8 }), (steps) => {
-        const shared = world();
-        let question = open(shared);
-        let events = 0;
-        for (const action of steps) {
-          try {
-            if (action === 'answer') {
-              const decision = answerQuestion(
-                question,
-                { answer: 'a', userId: USER_ID, role: 'maintainer', channel: 'ui' },
-                context(shared),
-              );
-              question = decision.aggregate;
-              events += decision.events.length;
-            } else if (action === 'expire') {
-              const decision = expireQuestion(question, context(shared));
-              question = decision.aggregate;
-              events += decision.events.length;
-            } else if (action === 'escalate') {
-              question = markQuestionEscalated(question);
-            } else {
-              question = recordReminder(question);
+  it(
+    'reaches at most one terminal status, whatever the order of events',
+    () => {
+      const step = fc.constantFrom('answer', 'expire', 'escalate', 'remind');
+      fc.assert(
+        fc.property(fc.array(step, { maxLength: 8 }), (steps) => {
+          const shared = world();
+          let question = open(shared);
+          let events = 0;
+          for (const action of steps) {
+            try {
+              if (action === 'answer') {
+                const decision = answerQuestion(
+                  question,
+                  { answer: 'a', userId: USER_ID, role: 'maintainer', channel: 'ui' },
+                  context(shared),
+                );
+                question = decision.aggregate;
+                events += decision.events.length;
+              } else if (action === 'expire') {
+                const decision = expireQuestion(question, context(shared));
+                question = decision.aggregate;
+                events += decision.events.length;
+              } else if (action === 'escalate') {
+                question = markQuestionEscalated(question);
+              } else {
+                question = recordReminder(question);
+              }
+            } catch (error) {
+              // Every rejection is typed; nothing throws a bare Error.
+              expect(
+                error instanceof IllegalTransitionError || error instanceof InvariantViolationError,
+              ).toBe(true);
             }
-          } catch (error) {
-            // Every rejection is typed; nothing throws a bare Error.
-            expect(
-              error instanceof IllegalTransitionError || error instanceof InvariantViolationError,
-            ).toBe(true);
           }
-        }
-        expect(questionStatusSchema.options).toContain(question.status);
-        // `answered` and `expired` are mutually exclusive, so at most one event was emitted.
-        expect(events).toBeLessThanOrEqual(1);
-        if (question.status === 'escalated') {
-          expect(events).toBe(1);
-        }
-      }),
-    );
-  });
+          expect(questionStatusSchema.options).toContain(question.status);
+          // `answered` and `expired` are mutually exclusive, so at most one event was emitted.
+          expect(events).toBeLessThanOrEqual(1);
+          if (question.status === 'escalated') {
+            expect(events).toBe(1);
+          }
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

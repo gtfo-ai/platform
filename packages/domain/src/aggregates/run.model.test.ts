@@ -21,6 +21,7 @@ import {
 } from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
+import { MODEL_RUNS, PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   canTransitionRun,
   createRun,
@@ -300,12 +301,16 @@ const commandArbitraries: fc.Arbitrary<RunCommand>[] = [
 ].map((arbitrary) => arbitrary.map((command) => new Checked(command)));
 
 describe('Run state machine — model-based properties', () => {
-  it('keeps the aggregate in step with technical/02 for every command sequence', () => {
-    fc.assert(
-      fc.property(fc.commands(commandArbitraries, { size: '+1' }), (commands) => {
-        fc.modelRun(setup, commands);
-      }),
-      { numRuns: 300 },
-    );
-  });
+  it(
+    'keeps the aggregate in step with technical/02 for every command sequence',
+    () => {
+      fc.assert(
+        fc.property(fc.commands(commandArbitraries, { size: '+1' }), (commands) => {
+          fc.modelRun(setup, commands);
+        }),
+        { numRuns: MODEL_RUNS },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

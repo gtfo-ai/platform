@@ -2,6 +2,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { type Artifact, artifactDataSchemas, artifactSchema } from './artifacts.js';
 import { type ArtifactType, artifactTypeSchema } from './common.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 
 const uuid = (n: number) => `0199aa11-2b3c-7d4e-8f90-${String(n).padStart(12, '0')}`;
 const TASK = uuid(1);
@@ -219,22 +220,26 @@ describe('artifacts', () => {
     expect(artifactSchema.safeParse({ ...first, version: 2 }).success).toBe(true);
   });
 
-  it('rejects an unknown key in the envelope or in the data of any artifact', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...FIXTURES),
-        fc.string({ minLength: 1, maxLength: 12 }),
-        (artifact, key) => {
-          const data = artifact.data as Record<string, unknown>;
-          fc.pre(!(key in artifact) && !(key in data));
-          expect(artifactSchema.safeParse({ ...artifact, [key]: 1 }).success).toBe(false);
-          expect(
-            artifactSchema.safeParse({ ...artifact, data: { ...data, [key]: 1 } }).success,
-          ).toBe(false);
-        },
-      ),
-    );
-  });
+  it(
+    'rejects an unknown key in the envelope or in the data of any artifact',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...FIXTURES),
+          fc.string({ minLength: 1, maxLength: 12 }),
+          (artifact, key) => {
+            const data = artifact.data as Record<string, unknown>;
+            fc.pre(!(key in artifact) && !(key in data));
+            expect(artifactSchema.safeParse({ ...artifact, [key]: 1 }).success).toBe(false);
+            expect(
+              artifactSchema.safeParse({ ...artifact, data: { ...data, [key]: 1 } }).success,
+            ).toBe(false);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
   it('validates a data payload on its own, as the runner does for structured output', () => {
     for (const type of ARTIFACT_TYPES) {

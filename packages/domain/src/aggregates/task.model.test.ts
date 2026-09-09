@@ -22,6 +22,7 @@ import {
   type IterationLoop,
   resolveIterationLimits,
 } from '../policies/iteration-limits.js';
+import { MODEL_RUNS, PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   askQuestion,
   cancelTask,
@@ -528,51 +529,59 @@ const commandArbitraries: fc.Arbitrary<TaskCommand>[] = rawCommandArbitraries.ma
 );
 
 describe('Task state machine — model-based properties', () => {
-  it('keeps the aggregate in step with technical/02 for every command sequence', () => {
-    fc.assert(
-      fc.property(fc.commands(commandArbitraries, { size: '+1' }), (commands) => {
-        fc.modelRun(setup, commands);
-      }),
-      { numRuns: 300 },
-    );
-  });
+  it(
+    'keeps the aggregate in step with technical/02 for every command sequence',
+    () => {
+      fc.assert(
+        fc.property(fc.commands(commandArbitraries, { size: '+1' }), (commands) => {
+          fc.modelRun(setup, commands);
+        }),
+        { numRuns: MODEL_RUNS },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
-  it('escalates rather than exceeding a limit, for any number of returns', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...ITERATION_LOOPS),
-        fc.integer({ min: 1, max: 8 }),
-        (loop, attempts) => {
-          const { real } = setup();
-          let task = enterStage(real.task, { stage: 'code_review' }, context(real)).aggregate;
-          const events: DomainEvent[] = [];
-          for (let round = 0; round < attempts; round += 1) {
-            const decision = returnToStage(
-              task,
-              {
-                fromStage: 'code_review',
-                toStage: 'implementation',
-                loop,
-                reason: 'again',
-                escalationBrief: 'human needed',
-              },
-              context(real),
-            );
-            task = decision.aggregate;
-            events.push(...decision.events);
-            if (task.state === 'needs_human') {
-              break;
+  it(
+    'escalates rather than exceeding a limit, for any number of returns',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...ITERATION_LOOPS),
+          fc.integer({ min: 1, max: 8 }),
+          (loop, attempts) => {
+            const { real } = setup();
+            let task = enterStage(real.task, { stage: 'code_review' }, context(real)).aggregate;
+            const events: DomainEvent[] = [];
+            for (let round = 0; round < attempts; round += 1) {
+              const decision = returnToStage(
+                task,
+                {
+                  fromStage: 'code_review',
+                  toStage: 'implementation',
+                  loop,
+                  reason: 'again',
+                  escalationBrief: 'human needed',
+                },
+                context(real),
+              );
+              task = decision.aggregate;
+              events.push(...decision.events);
+              if (task.state === 'needs_human') {
+                break;
+              }
+              task = enterStage(task, { stage: 'code_review' }, context(real)).aggregate;
             }
-            task = enterStage(task, { stage: 'code_review' }, context(real)).aggregate;
-          }
-          const counter = task.iterationCounters[loop] ?? 0;
-          expect(counter).toBeLessThanOrEqual(LIMITS[loop]);
-          if (attempts > LIMITS[loop]) {
-            expect(task.state).toBe('needs_human');
-            expect(events.some((event) => event.type === 'task.escalated')).toBe(true);
-          }
-        },
-      ),
-    );
-  });
+            const counter = task.iterationCounters[loop] ?? 0;
+            expect(counter).toBeLessThanOrEqual(LIMITS[loop]);
+            if (attempts > LIMITS[loop]) {
+              expect(task.state).toBe('needs_human');
+              expect(events.some((event) => event.type === 'task.escalated')).toBe(true);
+            }
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

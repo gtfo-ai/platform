@@ -4,6 +4,7 @@ import { type Clock, fixedClock } from '../clock.js';
 import { PolicyViolationError } from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   type Budget,
   createBudget,
@@ -175,39 +176,51 @@ describe('resetWindow', () => {
 describe('budget properties', () => {
   const cost = fc.double({ min: 0, max: 40, noNaN: true, noDefaultInfinity: true });
 
-  it('never notifies a threshold twice, whatever the order of cost entries', () => {
-    fc.assert(
-      fc.property(fc.array(cost, { maxLength: 20 }), (amounts) => {
-        const { events } = spend(projectBudget(), amounts);
-        const pcts = events
-          .filter((event) => event.type === 'budget.threshold.reached')
-          .map((event) => (event.payload as { pct: number }).pct);
-        expect(new Set(pcts).size).toBe(pcts.length);
-        expect(
-          events.filter((event) => event.type === 'budget.exhausted').length,
-        ).toBeLessThanOrEqual(1);
-      }),
-    );
-  });
+  it(
+    'never notifies a threshold twice, whatever the order of cost entries',
+    () => {
+      fc.assert(
+        fc.property(fc.array(cost, { maxLength: 20 }), (amounts) => {
+          const { events } = spend(projectBudget(), amounts);
+          const pcts = events
+            .filter((event) => event.type === 'budget.threshold.reached')
+            .map((event) => (event.payload as { pct: number }).pct);
+          expect(new Set(pcts).size).toBe(pcts.length);
+          expect(
+            events.filter((event) => event.type === 'budget.exhausted').length,
+          ).toBeLessThanOrEqual(1);
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
-  it('keeps spend equal to the sum of the entries, rounded as the database stores it', () => {
-    fc.assert(
-      fc.property(fc.array(cost, { maxLength: 20 }), (amounts) => {
-        const { budget } = spend(projectBudget(), amounts);
-        const expected = amounts.reduce((total, usd) => roundUsd(total + usd), 0);
-        expect(budget.spentUsd).toBe(expected);
-        expect(budget.spentUsd).toBeGreaterThanOrEqual(0);
-      }),
-    );
-  });
+  it(
+    'keeps spend equal to the sum of the entries, rounded as the database stores it',
+    () => {
+      fc.assert(
+        fc.property(fc.array(cost, { maxLength: 20 }), (amounts) => {
+          const { budget } = spend(projectBudget(), amounts);
+          const expected = amounts.reduce((total, usd) => roundUsd(total + usd), 0);
+          expect(budget.spentUsd).toBe(expected);
+          expect(budget.spentUsd).toBeGreaterThanOrEqual(0);
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
-  it('emits `budget.exhausted` exactly when the limit is reached', () => {
-    fc.assert(
-      fc.property(fc.array(cost, { maxLength: 20 }), (amounts) => {
-        const { budget, events } = spend(projectBudget(), amounts);
-        const exhausted = events.some((event) => event.type === 'budget.exhausted');
-        expect(exhausted).toBe(isExhausted(budget));
-      }),
-    );
-  });
+  it(
+    'emits `budget.exhausted` exactly when the limit is reached',
+    () => {
+      fc.assert(
+        fc.property(fc.array(cost, { maxLength: 20 }), (amounts) => {
+          const { budget, events } = spend(projectBudget(), amounts);
+          const exhausted = events.some((event) => event.type === 'budget.exhausted');
+          expect(exhausted).toBe(isExhausted(budget));
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

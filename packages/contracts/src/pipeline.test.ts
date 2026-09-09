@@ -7,6 +7,7 @@ import {
   pipelineGraphIssues,
   stageSchema,
 } from './pipeline.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 
 /**
  * The `feature` template from docs/technical/12-configuration-and-schemas.md
@@ -221,17 +222,21 @@ describe('pipeline graph validation', () => {
     expect(issues.map((issue) => issue.code)).toEqual(['unknown_predecessor']);
   });
 
-  it('never reports an issue whose stage is not part of the template', () => {
-    const ids = new Set([
-      ...FEATURE_TEMPLATE.stages.map((stage) => stage.id),
-      ...(FEATURE_TEMPLATE.custom ?? []).map((stage) => stage.id),
-    ]);
-    fc.assert(
-      fc.property(fc.subarray(FEATURE_TEMPLATE.stages, { minLength: 1 }), (stages) => {
-        for (const issue of pipelineGraphIssues({ stages })) {
-          expect(ids.has(issue.stage)).toBe(true);
-        }
-      }),
-    );
-  });
+  it(
+    'never reports an issue whose stage is not part of the template',
+    () => {
+      const ids = new Set([
+        ...FEATURE_TEMPLATE.stages.map((stage) => stage.id),
+        ...(FEATURE_TEMPLATE.custom ?? []).map((stage) => stage.id),
+      ]);
+      fc.assert(
+        fc.property(fc.subarray(FEATURE_TEMPLATE.stages, { minLength: 1 }), (stages) => {
+          for (const issue of pipelineGraphIssues({ stages })) {
+            expect(ids.has(issue.stage)).toBe(true);
+          }
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

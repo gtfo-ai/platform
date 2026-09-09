@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   AGENT_ITERATION_LOOPS,
   DEFAULT_ITERATION_LIMITS,
@@ -107,17 +108,21 @@ describe('resetAgentIterations (a human decision resets the agent loop)', () => 
     expect([...AGENT_ITERATION_LOOPS]).not.toContain('human_rounds');
   });
 
-  it('is idempotent', () => {
-    fc.assert(
-      fc.property(
-        fc.dictionary(fc.constantFrom(...ITERATION_LOOPS), fc.nat({ max: 9 })),
-        (counters) => {
-          const once = resetAgentIterations(counters);
-          expect(resetAgentIterations(once)).toEqual(once);
-        },
-      ),
-    );
-  });
+  it(
+    'is idempotent',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.dictionary(fc.constantFrom(...ITERATION_LOOPS), fc.nat({ max: 9 })),
+          (counters) => {
+            const once = resetAgentIterations(counters);
+            expect(resetAgentIterations(once)).toEqual(once);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('convergence detection', () => {

@@ -10,6 +10,7 @@ import {
   HANDLER_PRIORITY_BANDS,
   handlerPrioritySchema,
 } from './events.js';
+import { PROPERTY_TEST_TIMEOUT_MS } from './testing/property.js';
 
 const uuid = (n: number) => `0199aa11-2b3c-7d4e-8f90-${String(n).padStart(12, '0')}`;
 const AT = '2026-09-09T10:15:30Z';
@@ -450,47 +451,59 @@ describe('event catalogue', () => {
 describe('event catalogue — property', () => {
   const knownKeys = (record: Record<string, unknown>) => new Set(Object.keys(record));
 
-  it('rejects an unknown key in the envelope of any event', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...FIXTURES),
-        fc.string({ minLength: 1, maxLength: 12 }),
-        (event, key) => {
-          fc.pre(!knownKeys(event as unknown as Record<string, unknown>).has(key));
-          const result = domainEventSchema.safeParse({ ...event, [key]: 'x' });
-          expect(result.success).toBe(false);
-          expect(result.error?.issues.some((issue) => issue.code === 'unrecognized_keys')).toBe(
-            true,
-          );
-        },
-      ),
-    );
-  });
+  it(
+    'rejects an unknown key in the envelope of any event',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...FIXTURES),
+          fc.string({ minLength: 1, maxLength: 12 }),
+          (event, key) => {
+            fc.pre(!knownKeys(event as unknown as Record<string, unknown>).has(key));
+            const result = domainEventSchema.safeParse({ ...event, [key]: 'x' });
+            expect(result.success).toBe(false);
+            expect(result.error?.issues.some((issue) => issue.code === 'unrecognized_keys')).toBe(
+              true,
+            );
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
-  it('rejects an unknown key in the payload of any event', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom(...FIXTURES),
-        fc.string({ minLength: 1, maxLength: 12 }),
-        (event, key) => {
-          fc.pre(!knownKeys(event.payload as Record<string, unknown>).has(key));
-          const mutated = { ...event, payload: { ...event.payload, [key]: 'x' } };
+  it(
+    'rejects an unknown key in the payload of any event',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...FIXTURES),
+          fc.string({ minLength: 1, maxLength: 12 }),
+          (event, key) => {
+            fc.pre(!knownKeys(event.payload as Record<string, unknown>).has(key));
+            const mutated = { ...event, payload: { ...event.payload, [key]: 'x' } };
+            expect(domainEventSchema.safeParse(mutated).success).toBe(false);
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'rejects any event whose required envelope field is missing',
+    () => {
+      const required = ['id', 'stream_type', 'stream_id', 'stream_seq', 'actor', 'occurred_at'];
+      fc.assert(
+        fc.property(fc.constantFrom(...FIXTURES), fc.constantFrom(...required), (event, field) => {
+          const mutated: Record<string, unknown> = { ...event };
+          delete mutated[field];
           expect(domainEventSchema.safeParse(mutated).success).toBe(false);
-        },
-      ),
-    );
-  });
-
-  it('rejects any event whose required envelope field is missing', () => {
-    const required = ['id', 'stream_type', 'stream_id', 'stream_seq', 'actor', 'occurred_at'];
-    fc.assert(
-      fc.property(fc.constantFrom(...FIXTURES), fc.constantFrom(...required), (event, field) => {
-        const mutated: Record<string, unknown> = { ...event };
-        delete mutated[field];
-        expect(domainEventSchema.safeParse(mutated).success).toBe(false);
-      }),
-    );
-  });
+        }),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('handler priorities (TD-005)', () => {

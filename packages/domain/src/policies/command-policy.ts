@@ -19,13 +19,34 @@
  *     *add* coverage. argv[0] is normalised first: leading `VAR=value` assignments and the
  *     wrappers `env`/`exec`/`xargs`/`nice`/shell keywords are peeled off and the binary is
  *     compared by basename, so `FOO=1 /usr/bin/sudo reboot` is a `sudo` command.
- *  3. **The allow- and ask-lists stay prefix-anchored globs.** Only the block-list is generous —
- *     being generous with `allow` is how a policy becomes decoration.
- *  4. **An unmatched command is `ask`, never `allow`** (product/19 §3: "everything else → ask"),
- *     and a redirection that writes to a path floors the verdict at `ask`.
+ *  3. **The allow- and ask-lists stay prefix-anchored globs, and peel far less.** Only the
+ *     block-list is generous — being generous with `allow` is how a policy becomes decoration.
+ *     `env`-style wrappers are peeled for them; a leading `VAR=value`, `sh -c`, `eval` and `xargs`
+ *     are not, because each of those decides what actually runs and the policy has not read it.
+ *  4. **An unmatched command is `ask`, never `allow`** (product/19 §3: "everything else → ask").
+ *     Two things floor an otherwise allowed line at `ask`: a redirection that writes to a path,
+ *     and an argument on `HAZARDOUS_ARGUMENTS` — the flag that hands an allow-listed verb an
+ *     arbitrary command, an arbitrary path to write, or an unread package source.
  *  5. **Parse uncertainty fails closed.** A hand-rolled shell scanner is never complete, so it
  *     says when it is out of its depth (`CommandEvaluation.uncertainty`) and an uncertain line can
  *     never be `allow`. See `UNCERTAINTY` for the exhaustive list of constructs that trip it.
+ *
+ * **Quoting is honoured in one place and ignored in the other, on purpose.** The scanner
+ * (`scan`, and so the redirection floor) honours it: `ls "> out"` is not a redirection, because
+ * quoting is exactly what stops the shell reading `>` as an operator. Token classification
+ * (`splitFlags`, and so the block-list and `HAZARDOUS_ARGUMENTS`) ignores it: `git fetch
+ * "--upload-pack=x"` *is* that flag, because quoting decides how a line is split into words and
+ * never what a program sees inside one word.
+ *
+ * The price is not paid by that rule but by `tokenise`, which splits on whitespace with no idea
+ * of quoting: `git commit -m "add --output-file"` is *one* word to bash and git never sees a flag
+ * at all, but `tokenise` makes `"add` and `--output-file"` two tokens and `unquoteToken` then
+ * takes the orphan quote off the second, leaving something that classifies as a flag. So the line
+ * floors at `ask`. Measured against 54 177 real commit subjects that costs three of them
+ * (0.006 %), and ` -n` never occurs at all, so the floor is left alone. **The correct fix is to
+ * make `tokenise` quote-aware**, which removes the false positive without weakening any bypass
+ * case; it is a behaviour change on the security path and is deliberately not made in this round
+ * (recorded in `docs/technical/PROGRESS.md`).
  *
  * Binary resolution ("the real binary, not the name") is I/O and is done by the caller, which
  * passes the resolved path as `resolvedBinary`; its *basename* is checked against the block-list's
@@ -73,7 +94,16 @@ export type UncertaintyReason = (typeof UNCERTAINTY)[keyof typeof UNCERTAINTY];
 export const DEFAULT_BLOCKED_COMMANDS: readonly string[] = [
   'rm -rf /*',
   'git push --force*',
+  // The spellings of the two `git push` bans that the document states in one form each. They are
+  // written out rather than left to Q37 because — unlike `rm -fr /` — each of them was reachable
+  // from the **allow**-list: `git push origin agentic/*` allows the agent to push its own branch,
+  // and `-f`, `-d` and `--delete` ride along on exactly that line (all three verified `allow`
+  // before this list grew). See `DECLINED_BLOCK_VARIANTS` for where the line is drawn.
+  'git push -f*',
   'git push origin :*',
+  'git push --delete*',
+  'git push -d*',
+  'git push origin +*',
   'git branch -D *',
   'git reset --hard origin/*',
   'docker *',
@@ -92,6 +122,13 @@ export const DEFAULT_BLOCKED_COMMANDS: readonly string[] = [
  * Where product/19 §3's block list is narrower than the hazard it names, and why the gap is left
  * rather than papered over. Inventing patterns here would put security rules in code that the
  * product document does not state — the fix belongs in the document (Q37).
+ *
+ * **The line WP-02a draws.** A missing spelling that only decides between `ask` and `block` stays
+ * the document's to fix: the command can never reach `allow`, so the code is not the thing keeping
+ * it out. A missing spelling that leaves a hazard reachable from the **allow**-list is closed here,
+ * because the allow-list is the one thing this module exists to defend. That is why `git push -f`,
+ * `git push … --delete` and `git push origin +…` moved onto the block list — the allow entry
+ * `git push origin agentic/*` was carrying all three — while the two entries below did not.
  */
 export const DECLINED_BLOCK_VARIANTS = [
   {
@@ -125,12 +162,23 @@ export const UNPATTERNABLE_BLOCK_ITEMS = [
 
 /** product/19 §3, read-only stages: exploration commands, nothing that writes. */
 export const DEFAULT_READ_ONLY_ALLOW: readonly string[] = [
-  'git log*',
-  'git diff*',
-  'git show*',
-  'git blame*',
-  'git status*',
-  'ls*',
+  // Two entries per verb — `git log` and `git log <args>` — never `git log*`. A trailing `*` with
+  // no space allows every command whose *name merely starts with* the verb, which is not what
+  // product/19 §3 lists and is a real hole: `git diff*` allowed `git difftool --extcmd=…`,
+  // `git fetch*` allowed `git fetch-pack --exec=…`, and `ls*` allowed `lsof`, `lsblk`, `lsattr`.
+  // All three were verified executing before the entries were scoped.
+  'git log',
+  'git log *',
+  'git diff',
+  'git diff *',
+  'git show',
+  'git show *',
+  'git blame',
+  'git blame *',
+  'git status',
+  'git status *',
+  'ls',
+  'ls *',
   'cat *',
   'grep *',
   'rg *',
@@ -143,8 +191,10 @@ export const DEFAULT_IMPLEMENTATION_ALLOW: readonly string[] = [
   'git add *',
   'git commit *',
   'git push origin agentic/*',
-  'git rebase*',
-  'git fetch*',
+  'git rebase',
+  'git rebase *',
+  'git fetch',
+  'git fetch *',
   'npm ci',
   'pnpm install --frozen-lockfile',
   'pip install -r *',
@@ -170,6 +220,124 @@ export const DEFAULT_IMPLEMENTATION_ASK: readonly string[] = [
   'find * -exec*',
   'find * -delete*',
   'find * -ok*',
+];
+
+export interface HazardousArgument {
+  /** Matched exactly like a block pattern: tokens (flag anywhere) or the whole line as a glob. */
+  readonly pattern: string;
+  /** What the argument hands the verb that the policy has not read. */
+  readonly hazard: string;
+}
+
+/**
+ * Arguments that turn an allow-listed verb into something else: the `find … -exec` hazard, gone
+ * looking for on the rest of the shipped verbs instead of waiting for it to be reported.
+ *
+ * **Why these are a floor rather than more `DEFAULT_IMPLEMENTATION_ASK` entries.** An ask entry
+ * only beats an allow entry by being the more literal pattern (`find * -exec*` has ten literal
+ * characters against `find *`'s five). That arithmetic is not a safety property: the allow entry
+ * `git push origin agentic/*` pins twenty-four characters, so an ask entry naming a flag —
+ * `git push* --receive-pack*` pins twenty-three — *loses* to it, and the hazard stays `allow`.
+ * These therefore floor the verdict at `ask` the way a redirection to a path does. They can only
+ * tighten: a `block` verdict is untouched, and nothing here can make an `ask` into an `allow`.
+ *
+ * Matching is the block-list's (tokens or whole line), so a flag is caught wherever it sits and an
+ * environment wrapper cannot hide it. The whole-line half over-matches slightly on quoted text
+ * (`git commit -m "add -native support"` reads as `-n`); over-asking is the safe direction.
+ *
+ * Verified against the real tools rather than assumed (git 2.50.1, throwaway repository): a
+ * `--upload-pack`/`--receive-pack`/`--exec` payload really is executed, and `git diff --output=`
+ * and `git log --output=` really do write a path no redirection rule can see.
+ */
+export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
+  // ── hands the verb an arbitrary command ──
+  {
+    pattern: 'git * --upload-pack*',
+    hazard:
+      'git runs the --upload-pack value as a shell command on the far end, and with a local path as the remote that far end is this machine',
+  },
+  {
+    pattern: 'git * --receive-pack*',
+    hazard: 'the push-side twin of --upload-pack, and equally a shell command',
+  },
+  {
+    pattern: 'git * --exec*',
+    hazard:
+      "--exec is git push's synonym for --receive-pack, and git fetch-pack's for --upload-pack; it is not scoped to a subcommand because the next verb to grow one would be missed",
+  },
+  {
+    pattern: 'git * --extcmd*',
+    hazard: 'git difftool and mergetool run --extcmd (-x) once per changed file',
+  },
+  {
+    pattern: 'git * --ext-diff*',
+    hazard:
+      "--ext-diff turns on the external diff driver the *repository's own* config names, and a repository is untrusted input (BD-022)",
+  },
+  {
+    pattern: 'git * --textconv*',
+    hazard: "--textconv runs the textconv filter the repository's config names (BD-022)",
+  },
+  {
+    pattern: 'git * ext::*',
+    hazard:
+      "git's ext:: transport runs its argument as a shell command; it is refused unless protocol.ext.allow is set, which is the workspace's configuration and not this module's to promise",
+  },
+  {
+    pattern: 'rg * --pre*',
+    hazard: 'ripgrep runs the --pre command over every file it searches',
+  },
+  {
+    pattern: 'rg * --hostname-bin*',
+    hazard: 'ripgrep runs the --hostname-bin command to label hyperlinks',
+  },
+  // ── writes a path that the `> file` rule never sees ──
+  {
+    pattern: 'git * --output*',
+    hazard: "git's diff family writes --output to any path, redirection-free",
+  },
+  {
+    pattern: 'find * -fprint*',
+    hazard: 'GNU find writes -fprint/-fprintf/-fprint0 to any path, redirection-free',
+  },
+  { pattern: 'find * -fls*', hazard: 'GNU find -fls writes a listing to any path' },
+  {
+    pattern: 'pip install* --target*',
+    hazard: 'installs into any directory, redirection-free',
+  },
+  { pattern: 'pip install* --root*', hazard: 'installs under any root, redirection-free' },
+  { pattern: 'pip install* --prefix*', hazard: 'installs under any prefix, redirection-free' },
+  { pattern: 'pip install* --log*', hazard: 'writes a log to any path, redirection-free' },
+  { pattern: 'pip install* --report*', hazard: 'writes a report to any path, redirection-free' },
+  // ── widens what the verb trusts ──
+  {
+    pattern: 'git push* *:*',
+    hazard:
+      'a refspec pushes to a destination ref of its own choosing, so `git push origin agentic/x:main` writes main under an allow entry that names only agentic/*; a remote spelled as a URL is caught by the same colon',
+  },
+  {
+    pattern: 'git commit* --no-verify*',
+    hazard:
+      'skips the pre-commit hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
+  },
+  { pattern: 'git commit* -n*', hazard: 'the short spelling of --no-verify' },
+  {
+    pattern: 'pip install* --index-url*',
+    hazard: 'installs from a package index nobody has read (BD-030)',
+  },
+  {
+    pattern: 'pip install* --extra-index-url*',
+    hazard: 'adds a package index nobody has read (BD-030)',
+  },
+  {
+    pattern: 'pip install* --find-links*',
+    hazard: 'adds a package source nobody has read (BD-030)',
+  },
+  {
+    pattern: 'pip install -r http*',
+    hazard:
+      'the allow entry `pip install -r *` is meant to be a lockfile install; a requirements file fetched over the network is not one',
+  },
 ];
 
 export const DEFAULT_COMMAND_POLICY: ResolvedCommandPolicy = {
@@ -275,11 +443,69 @@ const ARGV0_WRAPPERS: ReadonlySet<string> = new Set([
   ']]',
 ]);
 
+/**
+ * One token with the shell's quoting and escaping taken off, which is what the program on the
+ * other side of the fork actually receives.
+ *
+ * This is the root fix for round 2's first finding. Classification — is this token a flag, a
+ * wrapper, an assignment, argv[0]? — was done on the *written* token, so `"--upload-pack=…"` read
+ * as a positional and `-\-upload-pack=…` read as a word starting with `-\`. Neither is true of
+ * what `git` receives: quoting decides how the shell *splits* a line, never what a program sees
+ * inside one word. That gap reopened `find . "-exec"` and `git rebase '--exec='` as well.
+ *
+ * Unbalanced quotes are simply dropped: a line whose quoting does not close is already floored at
+ * `ask` by rule 5, so being generous here can only tighten.
+ */
+const unquoteToken = (token: string): string => {
+  if (!/["'\\]/.test(token)) {
+    return token;
+  }
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < token.length; index += 1) {
+    const char = token[index] as string;
+    if (quote === null && (char === '"' || char === "'")) {
+      quote = char;
+    } else if (quote !== null && char === quote) {
+      quote = null;
+    } else if (char === '\\' && quote !== "'") {
+      index += 1;
+      out += token[index] ?? '';
+    } else {
+      out += char;
+    }
+  }
+  return out;
+};
+
+/**
+ * The line as the shell would hand it on, one space per word and no quoting left.
+ *
+ * **This whole line** is offered to the **ask**-list alongside the line as written, and never to
+ * the allow-list: a pattern that only matches after the line is dequoted must be able to tighten
+ * a verdict and never to loosen one. `"ls" -la` is therefore `ask`, not `allow`.
+ *
+ * The asymmetry is not absolute, and the exception is deliberate. Dequoting a single *token* is
+ * how every classification works (`unquoteToken`, `argv0Name`), `stripEnvironmentPrefix` uses it
+ * to recognise a wrapper, and the peeled remainder does reach the allow-list — so `"env" ls -la`
+ * and `e\nv ls` are `allow`, exactly as `env ls -la` is. A differential sweep found 3 624 lines of
+ * this family, every one of them returning the verdict of its unquoted twin. That is the
+ * definition of the wrapper rule, not a way past it: what reaches the allow-list is still the
+ * *rest of the line as written*, and `env` is on `ENVIRONMENT_WRAPPERS` precisely because it execs
+ * what follows.
+ */
+export const dequoteCommand = (command: string): string =>
+  tokenise(command).map(unquoteToken).join(' ');
+
 /** `FOO=1 sudo …` — a leading assignment is environment, not the command. */
-const isAssignment = (token: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+const isAssignment = (token: string): boolean =>
+  /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteToken(token));
 
 const isWrapperToken = (token: string): boolean =>
-  ARGV0_WRAPPERS.has(basename(token)) || isAssignment(token);
+  ARGV0_WRAPPERS.has(argv0Name(token)) || isAssignment(token);
+
+/** The name a token would run under: quoting off, then the last path segment. */
+const argv0Name = (token: string): string => basename(unquoteToken(token));
 
 /** Shells that take a script as an argument. */
 const SHELL_NAMES: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash']);
@@ -313,19 +539,29 @@ const tokenise = (text: string): readonly string[] =>
 const MAX_WRAPPER_DEPTH = 8;
 
 /**
- * The command with leading `VAR=value` assignments and environment wrappers removed, when there
- * are any. Returns nothing when the line does not start with one, so the caller can tell "no
- * wrapper" from "a wrapper and this is what is left".
+ * The command with leading environment wrappers removed, when there are any. Returns nothing when
+ * the line does not start with one, so the caller can tell "no wrapper" from "a wrapper and this
+ * is what is left".
  *
  * Only the wrapper *names* are dropped, never their flags: `env -i ls` stays unmatched and so
  * falls through to `ask`, which is the safe direction.
+ *
+ * **A leading `VAR=value` is deliberately not peeled here** (it still is for the block list, in
+ * `argv0Candidates`, where peeling can only tighten). Peeling it for the allow-list handed an
+ * `allow` to a line nobody had read: `PATH=/w/bin ls -la` evaluated as a plain `ls` — verified by
+ * planting a fake `ls` — and `LD_PRELOAD=…`, `GIT_SSH_COMMAND=… git fetch`,
+ * `GIT_EXTERNAL_DIFF=… git diff`, `GIT_PAGER=… git log` and `RIPGREP_CONFIG_PATH=… rg` all took
+ * the same route. It also defeated BD-025's "resolved against the real binary", since the
+ * assignment is how the real binary gets swapped. This is the same reasoning that keeps `sh -c`,
+ * `eval` and `xargs` unpeeled for the allow-list; round 3 applied it to the wrapper half of the
+ * peel and not to the assignment half.
  */
 const stripEnvironmentPrefix = (text: string): readonly string[] => {
   const tokens = tokenise(text);
   let start = 0;
   while (start < tokens.length) {
     const token = tokens[start] as string;
-    if (isAssignment(token) || ENVIRONMENT_WRAPPERS.has(basename(token))) {
+    if (ENVIRONMENT_WRAPPERS.has(argv0Name(token))) {
       start += 1;
       continue;
     }
@@ -344,7 +580,7 @@ const stripEnvironmentPrefix = (text: string): readonly string[] => {
  */
 const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[])[] => {
   const withBasename = (list: readonly string[]): readonly string[] =>
-    list.length === 0 ? list : [basename(list[0] as string), ...list.slice(1)];
+    list.length === 0 ? list : [argv0Name(list[0] as string), ...list.slice(1)];
 
   const candidates: (readonly string[])[] = [withBasename(tokens)];
   const head = tokens[0];
@@ -361,14 +597,22 @@ const argv0Candidates = (tokens: readonly string[]): readonly (readonly string[]
 const isFlagToken = (token: string): boolean =>
   token.startsWith('-') && token.length > 1 && token !== '--';
 
-/** Splits tokens into flags and positionals; everything after a bare `--` is positional. */
+/**
+ * Splits tokens into flags and positionals; everything after a bare `--` is positional.
+ *
+ * Both the classification and the tokens it returns are **dequoted**, because that is what the
+ * program receives: `git fetch "--upload-pack=x"` passes a flag, not a file name, and no amount of
+ * quoting makes it stop being one. Written on the raw token, this classification was the single
+ * hole under every `HAZARDOUS_ARGUMENTS` entry and under `find * -exec*` before it.
+ */
 const splitFlags = (
   tokens: readonly string[],
 ): { readonly flags: readonly string[]; readonly positional: readonly string[] } => {
   const flags: string[] = [];
   const positional: string[] = [];
   let literal = false;
-  for (const token of tokens) {
+  for (const written of tokens) {
+    const token = unquoteToken(written);
     if (!literal && token === '--') {
       literal = true;
       continue;
@@ -423,6 +667,13 @@ export const matchesBlockPattern = (pattern: string, command: string): boolean =
 };
 
 /**
+ * The first `HAZARDOUS_ARGUMENTS` entry this piece of command line carries, if any. Its only
+ * effect is to floor the verdict at `ask` (see `evaluateCommand`).
+ */
+export const hazardousArgument = (command: string): HazardousArgument | undefined =>
+  HAZARDOUS_ARGUMENTS.find((entry) => matchesBlockPattern(entry.pattern, command));
+
+/**
  * Block patterns that ban a binary outright — `docker *`, `sudo *`, `kubectl *` — as opposed to
  * banning one invocation of it (`git push --force*` bans a push, not git). Only these are checked
  * against a resolved binary's basename, so resolving `ls` to `/usr/bin/docker` blocks while
@@ -446,8 +697,12 @@ const binaryBans = (block: readonly string[]): readonly string[] =>
  * subshell or a group body is a command list of its own.
  */
 const LIST_OPERATORS = ['&&', '||', ';', '&', '\n', '(', ')'] as const;
-/** The pipe, which separates the stages of a single pipeline. */
-const PIPE_OPERATORS = ['|'] as const;
+/**
+ * The pipe, which separates the stages of a single pipeline. `|&` — bash's "pipe stdout and
+ * stderr" — is listed first so the two-character form wins the longest-match test; without it the
+ * `&` half read as a background operator and `curl x |& sh` stopped being a pipeline at all.
+ */
+const PIPE_OPERATORS = ['|&', '|'] as const;
 
 interface ScanResult {
   readonly segments: readonly string[];
@@ -551,8 +806,11 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
         index = command.length;
         continue;
       }
-      current += command.slice(index, close + 2);
-      index = close + 2;
+      // `findClosingParen` starts on the first `(` of `$((`, counts both opens and so returns the
+      // *last* `)`. `close + 1` is therefore one past the expansion; `close + 2` swallowed the
+      // character after it, and `ls $((1))&sudo id` never split on the `&`.
+      current += command.slice(index, close + 1);
+      index = close + 1;
       continue;
     }
 
@@ -671,6 +929,15 @@ const scan = (command: string, operators: readonly string[]): ScanResult => {
       continue;
     }
 
+    // `|&` is one pipe operator, not a pipe followed by a background `&`. When this pass is not
+    // the one splitting pipelines it must still be consumed whole, or the `&` half splits the
+    // line and the pipeline — the thing `curl * | sh` matches — disappears.
+    if (rest.startsWith('|&') && !operators.includes('|&')) {
+      current += '|&';
+      index += 2;
+      continue;
+    }
+
     const operator = operators.find((candidate) => rest.startsWith(candidate));
     if (operator !== undefined) {
       push();
@@ -695,7 +962,7 @@ const wrappedScript = (segment: string): string | null => {
   if (head === undefined) {
     return null;
   }
-  const name = basename(head);
+  const name = argv0Name(head);
   const unquote = (text: string): string => (/^(['"]).*\1$/s.test(text) ? text.slice(1, -1) : text);
   if (name === 'eval') {
     return tokens.length > 1 ? unquote(tokens.slice(1).join(' ')) : null;
@@ -703,10 +970,23 @@ const wrappedScript = (segment: string): string | null => {
   if (!SHELL_NAMES.has(name)) {
     return null;
   }
-  const flagIndex = tokens.indexOf('-c');
+  // `"-c"` is still `-c` to the shell that receives it.
+  const flagIndex = tokens.findIndex((token) => unquoteToken(token) === '-c');
   const script = flagIndex === -1 ? undefined : tokens[flagIndex + 1];
   return script === undefined ? null : unquote(tokens.slice(flagIndex + 1).join(' '));
 };
+
+/**
+ * A pipeline stage rewritten as plain `sh` when the stage *is* a shell reading the pipe.
+ *
+ * product/19 §3 states the hazard once, as `curl * | sh`. The shell on the receiving end is the
+ * hazard, not the four letters: `| bash`, `| /bin/sh -s` and `| zsh` are the same command. This is
+ * the argv[0] basename normalisation of rule 2, applied to a pipeline stage instead of to a line,
+ * so the document's single spelling covers every spelling of the same thing.
+ */
+const canonicalShellStage = (stage: string): string =>
+  // A pipeline stage always carries at least one token: `scan` drops the empty ones.
+  SHELL_NAMES.has(argv0Name(tokenise(stage)[0] as string)) ? 'sh' : stage;
 
 interface Parsed {
   readonly fragments: readonly string[];
@@ -731,8 +1011,20 @@ const parseCommand = (command: string, depth = 0): Parsed => {
   for (const segment of outer.segments) {
     fragments.push(segment);
     const pipeline = scan(segment, PIPE_OPERATORS);
+    // Every stage is a command in its own right, pushed whether or not there are two of them: a
+    // segment that begins or ends with a pipe operator — `|& docker run alpine`, which the list
+    // pass now hands over whole — has exactly one stage and it is *not* the segment. Requiring
+    // two stages lost it, and with it the `docker *` match. Found by fuzzing this file against
+    // its own previous revision.
+    fragments.push(...pipeline.segments);
     if (pipeline.segments.length > 1) {
-      fragments.push(...pipeline.segments);
+      // The pipeline again with exactly one space around each `|`, and again with every shell
+      // stage spelled `sh`. Without the first, `curl http://x|sh` is not the pattern
+      // `curl * | sh`; without the second, `| bash` and `| /bin/sh` are not either. Both are
+      // spellings of the same pipeline, so both are offered to the matcher rather than the
+      // pattern being loosened.
+      fragments.push(pipeline.segments.join(' | '));
+      fragments.push(pipeline.segments.map(canonicalShellStage).join(' | '));
     }
     const script = depth < MAX_WRAPPER_DEPTH ? wrappedScript(segment) : null;
     if (script !== null && script !== segment) {
@@ -819,13 +1111,20 @@ const evaluateOne = (
   }
   // `env ls` is an `ls`: an environment wrapper is peeled off before the allow/ask lists see it.
   const forms = [text, ...stripEnvironmentPrefix(text)];
-  const mostSpecific = (patterns: readonly string[]): string | undefined =>
-    forms
+  // The ask-list also sees the line dequoted, so `find . "-exec" …` is the `find … -exec` the
+  // ask-list already names. The allow-list deliberately does not: a form that only matches after
+  // dequoting may tighten a verdict, never loosen one.
+  const askForms = [...new Set([...forms, ...forms.map(dequoteCommand)])];
+  const mostSpecific = (
+    patterns: readonly string[],
+    against: readonly string[],
+  ): string | undefined =>
+    against
       .map((form) => bestMatch(patterns, form, matchesCommandPattern))
       .filter((match): match is string => match !== undefined)
       .sort((a, b) => specificity(b) - specificity(a))[0];
-  const asked = mostSpecific(policy.ask);
-  const allowed = mostSpecific(policy.allow);
+  const asked = mostSpecific(policy.ask, askForms);
+  const allowed = mostSpecific(policy.allow, forms);
   if (allowed !== undefined && (asked === undefined || specificity(allowed) > specificity(asked))) {
     return { verdict: 'allow', matched: allowed, segment: text };
   }
@@ -836,6 +1135,16 @@ const evaluateOne = (
 };
 
 /**
+ * The verdict a command no list matches may fall back to.
+ *
+ * `allow` is absent on purpose: the fallback is also the floor that rules 4 and 5 lean on, so a
+ * caller passing `allow` would turn "everything else → ask" into "everything else → run" and
+ * disarm the uncertainty rule in the same move. The type makes that unspellable; `evaluateCommand`
+ * also refuses it at runtime, for a caller that arrives from JavaScript or through a cast.
+ */
+export type CommandFallback = Exclude<CommandVerdict, 'allow'>;
+
+/**
  * Evaluates a command against the three lists.
  *
  * @param fallback verdict for a command no list matches — `ask` by default (product/19 §3).
@@ -843,8 +1152,14 @@ const evaluateOne = (
 export const evaluateCommand = (
   request: CommandRequest,
   policy: ResolvedCommandPolicy = DEFAULT_COMMAND_POLICY,
-  fallback: CommandVerdict = 'ask',
+  fallback: CommandFallback = 'ask',
 ): CommandEvaluation => {
+  if ((fallback as CommandVerdict) === 'allow') {
+    throw new PolicyViolationError(
+      'command.policy',
+      'the fallback verdict may not be "allow": it is also the floor an unmatched or unparseable command lands on (product/19 §3, rules 4 and 5)',
+    );
+  }
   const parsed = parseCommand(request.command);
   const floor = (evaluation: Omit<CommandEvaluation, 'uncertainty'>): CommandEvaluation => ({
     ...evaluation,
@@ -899,6 +1214,22 @@ export const evaluateCommand = (
       segment: request.command,
       uncertainty: parsed.uncertainty,
     };
+  }
+
+  // Neither is an argument that turns the verb into something the policy has not read. Only an
+  // `allow` is floored, so this can tighten a verdict and never loosen one.
+  if (result.verdict === 'allow') {
+    for (const candidate of candidates) {
+      const hazard = hazardousArgument(candidate);
+      if (hazard !== undefined) {
+        return {
+          verdict: mostRestrictive('ask', fallback),
+          matched: hazard.pattern,
+          segment: candidate,
+          uncertainty: parsed.uncertainty,
+        };
+      }
+    }
   }
   return floor(result);
 };

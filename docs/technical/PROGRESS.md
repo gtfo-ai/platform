@@ -452,6 +452,24 @@ hole. The finding that matters is procedural: **a differential result is evidenc
 about the program**, and the person who built the corpus is the worst judge of what it omits. Two
 independent corpora disagreed by 3,624 cases here.
 
+**Two corrections that outlived the round** (both from the round-2 reviewer, both recorded in the module doc):
+
+- The `git commit -m "add --output-file"` over-ask is **not** the shell's doing, as the code comment claimed.
+  Bash hands git one word, `add --output-file`, and git never sees a flag. It is `tokenise` splitting on
+  whitespace with no quote awareness, after which `unquoteToken` strips the orphan quote and what remains
+  classifies as a flag. **The right fix is to make `tokenise` quote-aware** — confirmed to remove the false
+  positive without weakening any bypass case. Deliberately not done in WP-02a: it is a behaviour change on
+  the security path, and the measured false-positive rate is 0.006% (3 of 54,177 real commit subjects).
+  **Do it in the next WP that touches this file.**
+- Recorded, no action: `git show-ref`, `git diff-tree`, `git diff-index --quiet HEAD` and `git diff-files`
+  moved allow→ask as a side effect of scoping the git verbs — read-only and harmless; add explicit allow
+  entries if agents start hitting them. `MAX_WRAPPER_DEPTH = 8` means nine or more stacked `nice -n 5`
+  wrappers escape token block-matching and land on `ask` rather than `allow` — pre-existing and fail-safe.
+- Property-test timeouts now cover `packages/contracts` too (6 `fc.assert` calls that had none — the same
+  5s CI flake surface the ci-fix was written for, in the package the ci-fix had not audited). `contracts` is
+  the innermost ring and the dependency rule gives it no workspace import, so its `testing/property.ts` is a
+  deliberate copy, not an import.
+
 **Empirical note on over-asking:** measured against 54,177 real commit subjects, the aggressive hazard floor
 made only 3 of them non-allow (0.006%). Over-asking is cheap; the instinct to soften a security floor for
 false positives was not supported by the data.
