@@ -4,8 +4,6 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 
 ## Open
 
-**Q33 ⚠ TD-021 spawn mechanism.** The workspace design assumes the Agent SDK can spawn the CLI inside the run container through `spawnClaudeCodeProcess` (option C). If the WP-13 spike fails, the fallback is a runner process inside the container (option B), which moves policy hooks next to the untrusted shell and requires an HTTP MCP endpoint back to the platform. — *Recommendation:* run the spike first in M1; accept B only with proxy-injected credentials.
-
 **Q34 Founder veto on operating definitions.** `product/19-operating-definitions.md` contains 21 product-owner decisions made on your behalf (workpad template, command policy defaults, significance scores, Jira mapping, MR conventions, interview bank, statistics formulas, autonomy presets, risk classes, cost model, human-time rules, linter comment, bootstrap spec, take-over protocol, storage gauge, dogfood plan). — *Recommendation:* skim and veto by item number; silence = accepted.
 
 
@@ -63,3 +61,4 @@ All Round-2 decisions are recorded as TD-001…TD-024 in `decisions/technical/RE
 | Q25 | Significance thresholds | Score classes with discard 0.2 / proposal 0.6 | product/19 §4 |
 | Q31 | Shadow report | Defined | product/19 §13 |
 | Q32 | Risk classes | Defined | product/19 §14 |
+| Q33 | Spawn mechanism for the CLI inside run containers | In-container run shim over a Unix socket on a per-run control volume; launcher-relayed exec as fallback (founder: "spawn inside the container or via docker proxy — propose a solid solution") | TD-025 |

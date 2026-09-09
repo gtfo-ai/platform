@@ -9,7 +9,7 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [ ] `local` provider mode in Docker: Linux `claude` binary in the runtime image, OAuth token/credentials refresh with parallel runs; macOS hosts can only pass `CLAUDE_CODE_OAUTH_TOKEN` — WP-22 (BD-004).
 - [ ] Sentry hosted MCP with Internal Integration tokens (README mentions user tokens only) — WP-11.
 - [ ] Block Kit payload limits for question choices — WP-10.
-- [ ] `spawnClaudeCodeProcess` over dockerode attach: resume, stderr, exit codes, session-store compatibility — **WP-13 spike** (go/no-go for TD-021 option C).
+- [ ] Run shim conformance: SDK `query()` through the shim, session-store resume after runner restart, `volume-subpath` support on the target Docker Engine version — WP-13 (TD-025).
 - [ ] Docker embedded DNS behaviour on `internal: true` networks (residual DNS channel) — WP-13.
 - [ ] SDK `sandbox.credentials` masking when passed via the SDK; srt proxy chaining — later (defence in depth).
 - [ ] GitLab project access tokens on self-managed Free tier; revoke latency — WP-09.

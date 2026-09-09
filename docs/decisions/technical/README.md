@@ -28,3 +28,4 @@ Same template as business decisions (see `../README.md`). Index is filled during
 | [TD-022](TD-022-auth-sessions-rbac.md) | Auth: Better Auth + Argon2id; own RBAC; OIDC-ready schema | accepted |
 | [TD-023](TD-023-config-logging-metrics-otel.md) | Config (zod), logging (pino), metrics (Prometheus), optional OTel/Sentry, health | accepted |
 | [TD-024](TD-024-thin-http-clients.md) | Thin HTTP clients + official Slack Bolt; in-house webhook verification | accepted |
+| [TD-025](TD-025-run-shim-spawn-transport.md) | Spawning the CLI in the run container: in-container run shim over a Unix socket on a per-run control volume | accepted |

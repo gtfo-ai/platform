@@ -8,7 +8,7 @@
 Stage executor (application ring)
    │  builds RunSpec {role, prompt layers, context pack, tools, policy, limits, schema}
    ▼
-Runner service (infrastructure)  ── one process per run, inside the task's workspace sandbox (05)
+Runner service (infrastructure)  ── platform-side SDK host; the CLI itself runs inside the task's workspace container via the run shim (TD-025)
    │  Claude Agent SDK query() in streaming-input mode
    ├─ hooks: PreToolUse (policy, redaction, path guards), PostToolUse (output truncation, context),
    │         SubagentStart/Stop (nesting), PreCompact/PostCompact (boundary events), Stop
@@ -67,6 +67,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 - `includePartialMessages: true`; every `SDKMessage`/`StreamEvent` is appended to the transcript store with a monotonic sequence and published to the UI channel (08). Compaction boundaries and subagent nesting are first-class transcript entries.
 - **Steer:** the run's input is an async queue; a `run.steered` command pushes an `SDKUserMessage` (author recorded). **Pause/cancel:** `interrupt()`; cancel then ends the run with `cancelled`. **Tighten:** `applyFlagSettings` to reduce permissions after untrusted input if a policy requires (future).
 - Heartbeat: last output timestamp; `stalled` after `stallTimeoutMs` → interrupt, mark stalled, pipeline retries once with failure context (research/01 Symphony).
+- Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the SDK `stderr` callback and the run log; the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
 
 ## Budgets and limits
 
