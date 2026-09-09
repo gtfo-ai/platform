@@ -4,21 +4,49 @@
 
 ## Resume note
 
-- **Current WP:** WP-06 (Fastify server skeleton, TD-002), in the main checkout. All worktrees removed.
-- **Done and pushed:** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` · WP-02a `8abf247` ·
-  WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` · WP-04a `d729616`. CI green.
-- **Next after WP-06:** WP-07 (integration ports + fakes + contract suites) unblocks WP-08…WP-11, which are
-  the four parallel-safe provider WPs. WP-12 (Claude runner) needs WP-04 and WP-05, both done, so it can run
-  alongside WP-07. Cap concurrency at two or three.
-- **5-WP checkpoint: DONE.** All four verify targets green on `main`; `gh run list` green since the WP-02
-  property-test flake was fixed by WP-02a; the `commitlint`/`dco` gates now actually execute on push
-  (`6481b3d`); milestone note written below.
-- **Merge recipe that worked for WP-03:** `git merge --squash <branch>`, `pnpm install`, run all four verify
-  targets, `git add -A -- . ':!<files held back>'`, commit with the WP message, push. `.claude/worktrees/` is
-  now in `.gitignore`.
-- **Parallelism note:** the table's `Parallel-safe` column says "no" for WP-02 and WP-03, but the protocol's actual criterion is "different packages, no shared files", which they meet (`packages/domain` vs `packages/infrastructure`, and no dependency between them). Expect a `pnpm-lock.yaml` conflict at merge — resolve by taking one side and re-running `pnpm install`.
-- **Session started:** 2026-09-09.
-- **Ledger convention:** a WP's commit sha is written into the table by the *following* commit, since the sha is not known while the commit is being made.
+> **Session 1 paused 2026-09-09 by the user.** Read this section, then "Standing rules earned by evidence"
+> and "WP-06a" below, then continue the loop in `14-orchestration-protocol.md`. Nothing is broken; `main` is
+> green and every finished WP is pushed.
+
+**Where things stand**
+
+- **`main` is at `d60d770`, green on all five verify targets, CI green.** Nine work packages are DONE and
+  pushed: WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` · WP-02a `8abf247` · WP-03 `ca1ae06` ·
+  WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` · WP-04a `d729616` · WP-06 `d60d770`.
+- **WP-06a is finished but NOT on `main`.** It lives on branch **`wp/06a`** (commit `887e72d`, pushed).
+  It is green on all five targets and its round-1 review findings are fixed, but **its round-2 review was
+  still running when the session paused**, so it was deliberately kept off `main`.
+
+**The immediate next step**
+
+1. Re-run the final review of `wp/06a` (this is its review round 2; rounds are bounded at 3). The brief the
+   last reviewer was given: verify the fifth-layer fix (`Connection.abandon()` writing `reset` per topic then
+   `shutdown` **off-chain**); judge whether the new test "cannot pass for the wrong reason" is elegantly
+   branch-independent or blind to which branch ran; check the 500-turn `settle` bound is a proof of
+   impossibility rather than a disguised timing assertion; check the corrected memory arithmetic
+   (255×64 + 512 = 16,832 frames ≈ 10.59 MiB on one stalled stream, 33× the budget it replaces); and above
+   all **review the ten-entry shared-quantity audit in the module docblock as a document — is anything
+   missing?** Five layers of this defect were found by four readers, every one of them "replay and live
+   share a quantity".
+2. On APPROVE: `git merge --squash wp/06a` into `main`, re-run all five targets **on main**, commit, push,
+   delete the branch. On REQUEST_CHANGES: one more implementer round, then it is BLOCKED and recorded.
+3. **WP-06a must land before WP-12 or WP-15**, because nothing publishes to the SSE hub until then and the
+   defect is latent only until they do.
+
+**Then continue the plan**
+
+- **WP-07** (integration ports + fakes + contract suites) is next in plan order and unblocks WP-08…WP-11,
+  which are four parallel-safe provider WPs.
+- **WP-12** (Claude SDK runner) depends on WP-04 and WP-05, both DONE, so it can run alongside WP-07.
+- Cap concurrency at **two or three** agents — see the parallelism note below; three implementers plus
+  reviews drove this 14-core host to load average 143 and made timing-sensitive tests lie.
+
+**Merge recipe that works** (used for WP-02, WP-03, WP-04, WP-05): `git merge --squash <branch>` →
+`pnpm install` → run all five verify targets → resolve conflicts (expect `pnpm-lock.yaml`, both packages'
+`index.ts` and `package.json`, `.env.example`, and `docs/technical/PROGRESS.md`, which is orchestrator-owned
+so take your own side) → `git add -A` → commit with the WP message → push. **Green in a worktree is not
+green on `main`**: WP-04 added a *required* config field that WP-05's test literal did not have, and both
+were green in isolation.
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
@@ -34,6 +62,31 @@
 | lefthook | **not installed** on the host — must be an npm devDependency in WP-00 |
 
 **Decision (orchestrator, start-up):** `engines.node` is `>=24` (not `=24`) so the local Node 25 toolchain works; CI pins Node 24 via `.nvmrc`/setup-node. If a dependency breaks on Node 25 locally, prefix commands with `PATH=/opt/homebrew/Cellar/node/24.3.0/bin:$PATH` (verified to run `verify` green at WP-01).
+
+## Standing rules earned by evidence
+
+Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+1. **A fake may be stricter than the real adapter, never kinder.** Every later WP's unit tier trusts the
+   fake, so one that admits what production blocks, or fires earlier than production, launders a bug into a
+   pass. Four such divergences were found in the pg-boss fake alone, three in the dangerous direction. Write
+   every deliberate difference down where the fake is defined.
+2. **A wall-clock assertion is a hardware assertion, not a correctness one.** CI is a 2-core runner. Property
+   tests carry `PROPERTY_TEST_TIMEOUT_MS` (30s) and a pinned `MODEL_RUNS`.
+3. **An invariant asserted in a comment, an error message or `.env.example` is not evidence it holds** — and
+   a test that would pass whether or not the behaviour is present is not a test of it. **Mutation-check every
+   guard**: reverting it must fail its test, by a named assertion rather than a timeout.
+4. **When a defect keeps returning one layer down, stop fixing the code and audit the instrument.** Ask of
+   every fake: is it kinder than the real thing, and can it even *reach* the state my assertion is about? A
+   positive assertion fails loudly on a broken harness; a negative one passes silently on the same wreckage.
+5. **A differential result is evidence about the corpus, not the program**, and whoever built the corpus is
+   the worst judge of what it omits. Two independent corpora disagreed by 3,624 verdicts.
+6. **Green in a worktree is not green on `main`.** Re-run all five targets after every merge, before writing
+   the commit. Watch for a WP adding a *required* field to a shared type, or a runtime invariant that will
+   not fail typecheck at all.
+7. **A guard with a hand-maintained scope drifts.** Ask git what it tracks; do not carry your own list.
+8. **Docs win over code.** When implementation proves a doc wrong, amend the doc first, then point at it.
+   TD-004, technical/02, technical/03, technical/12, BD-007 and product/04 were all amended this way.
 
 ## Blocker briefs needing a human
 
@@ -51,8 +104,8 @@
 | WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | DONE | `ca1ae06` | 2 review rounds; 2 privilege escalations found and closed |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
-| WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | next commit | 3 rounds; SSE write-chain defect carried to WP-06a |
-| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | TODO | — | **before WP-12/WP-15 publish to the hub** |
+| WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
+| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | REVIEW | branch `wp/06a` `887e72d` | green, round 2 review pending; **before WP-12/WP-15** |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | TODO | — | |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
@@ -726,6 +779,46 @@ because the accounting was not exempted with it.
 hand, so it did not cover the repository's own root files or `.claude/` — 21 tracked files, including
 `vitest.config.ts`, were unguarded, and adding `*.config.ts` to `.gitignore` still passed. A guard against
 "files git cannot see" should ask git what it tracks, not carry its own list of where to look.
+
+**WP-06a outcome — the instrument was the bug.** Asked to fix the harness before the code, the implementer
+reported the finding that justifies the whole detour: with a realistic transport (two macrotasks per write,
+`'drain'` semantics) and the old `settle`, the *currently passing* 766-frame completeness test delivered
+**2 of 766 frames**, while `expect(closed).toBe(false)` two lines above passed on that same 2-frame stream.
+**No existing assertion could reach the defect.** Three review rounds had each been validated by
+instrumentation that could not observe what it certified.
+
+Two further things worth copying. First, the implementer **measured the fix the reviewer and I relayed
+instead of applying it**: `#queued >= cap + replayOutstanding` turns out to be arithmetically identical to
+the broken `#queuedLive >= cap`, and closed at the same frame 513. The fix that works gates on *growth* past
+`#openingBacklog` — the queue depth sealed at the end of `open()` — because a stream that opened at 765 and
+still holds 765 is keeping up, while one that has grown past its start by more than the cap is not. Second,
+told to hunt a fourth layer, they found **three**: `shutdown()` awaited the whole chain unbounded, so one
+stalled reader held `preClose` to the 30s process grace and starved every later step; `publish()` kept
+fanning out during shutdown, making the drain a moving target; and `#buffers` was unbounded.
+
+**Five layers, four readers, one shape.** The tally is worth keeping because it is the clearest example in
+this repo of a defect class rather than a defect: (1) the cap rejected replay frames; (2) the cap's counter
+was shared with replay; (3) replay and live shared the write chain; (4) three more found by the implementer's
+own audit — an unbounded shutdown drain, publishes continuing during shutdown, an unbounded buffer map; (5)
+the `shutdown` control frame *also* rides the shared chain, and `shutdownDrainMs` is a budget replay and
+control share, so a healthy slow client is cut off in silence during shutdown.
+
+Every one is "replay and live share a quantity". Four different readers each fixed the layer in front of them
+and each left the next, because each fix was correct. The instruction that finally worked was not "fix this
+bug" but **"enumerate every shared quantity between the replay path and anything else, and either fix it or
+write down why it is safe"** — a list, not a patch.
+
+Also recorded from this round: the reviewer's own implementation of the relayed fix confirmed it was
+algebraically identical to the broken gate (`#queued >= cap + replayOutstanding` ≡ `#queuedLive >= cap`,
+same frame 513), and the implementer's new suite fails **8** tests against the shipped `d60d770`, not the 3
+they claimed — the tests detect more of the shipped defect than their author realised.
+
+**The rule this earns, and it is the most transferable thing in the ledger:** when a defect keeps returning
+one layer down, stop fixing the code and audit the instrument. Ask of every fake: *is it kinder than the
+real thing, and can it even reach the state my assertion is about?* A green assertion is worth exactly as
+much as the harness's ability to produce the failing state — and a positive assertion (766 frames arrived)
+fails loudly on a broken harness while a negative one (`closed === false`) passes silently on the same
+wreckage.
 
 ### Notes WP-06 must honour (from the architect)
 
