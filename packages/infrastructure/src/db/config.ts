@@ -39,6 +39,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   url: 'DATABASE_URL',
   appRole: 'APP_DB_APP_ROLE',
   poolMax: 'APP_DB_POOL_MAX',
+  connectionTimeoutMs: 'APP_DB_CONNECTION_TIMEOUT_MS',
   partitionMonthsAhead: 'APP_DB_PARTITION_MONTHS_AHEAD',
   transcriptRetentionDays: 'APP_TRANSCRIPT_RETENTION_DAYS',
 };
@@ -51,8 +52,23 @@ export const databaseConfigSchema = z.strictObject({
    * for a deployment whose login role already carries exactly the right grants.
    */
   appRole: roleNameSchema.or(z.literal('')),
-  /** Upper bound on pooled connections. */
+  /**
+   * Upper bound on pooled connections.
+   *
+   * The dispatcher holds **two** at once per concurrent dispatch — one for the transaction that
+   * owns the event's queue row for the length of the dispatch, one for the handler running inside
+   * it — so this has to exceed twice `APP_DISPATCH_MAX_CONCURRENCY`. `createEventing` refuses a
+   * combination that cannot work rather than letting it deadlock on the pool.
+   */
   poolMax: z.int().min(1).max(1000),
+  /**
+   * How long a caller waits for a free pooled connection before failing.
+   *
+   * `pg` waits **for ever** by default, which turns pool exhaustion into a silent hang with no log
+   * line and no failing request. A bounded wait turns the same mistake into an error: the dispatch
+   * transaction rolls back, the event stays in `event_dispatch`, and the sweep retries it.
+   */
+  connectionTimeoutMs: z.int().min(100).max(600_000),
   /** How many months of partitions the migrator and the maintenance job keep ahead of today. */
   partitionMonthsAhead: z.int().min(0).max(120),
   /**
@@ -67,6 +83,7 @@ export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export const DATABASE_CONFIG_DEFAULTS = {
   appRole: 'platform_app',
   poolMax: 10,
+  connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;
 
@@ -83,6 +100,10 @@ export const loadDatabaseConfig = (env: EnvLike = process.env): DatabaseConfig =
     url: readEnvWithFile('DATABASE_URL', env) ?? '',
     appRole: env.APP_DB_APP_ROLE?.trim() ?? DATABASE_CONFIG_DEFAULTS.appRole,
     poolMax: numberFromEnv(env.APP_DB_POOL_MAX, DATABASE_CONFIG_DEFAULTS.poolMax),
+    connectionTimeoutMs: numberFromEnv(
+      env.APP_DB_CONNECTION_TIMEOUT_MS,
+      DATABASE_CONFIG_DEFAULTS.connectionTimeoutMs,
+    ),
     partitionMonthsAhead: numberFromEnv(
       env.APP_DB_PARTITION_MONTHS_AHEAD,
       DATABASE_CONFIG_DEFAULTS.partitionMonthsAhead,

@@ -36,6 +36,9 @@ const poolConfig = (connectionString: string): db.DatabaseConfig => ({
   url: connectionString,
   appRole: APP_ROLE,
   poolMax: 10,
+  // The deployed default, not a number invented here: pg waits for ever without it, so a pool
+  // exhausted by a stuck worker would hang this suite instead of failing it.
+  connectionTimeoutMs: db.DATABASE_CONFIG_DEFAULTS.connectionTimeoutMs,
   partitionMonthsAhead: 3,
   transcriptRetentionDays: null,
 });

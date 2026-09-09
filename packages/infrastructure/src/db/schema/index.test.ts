@@ -14,7 +14,8 @@ const tables = (Object.values(schema) as unknown[]).filter((value): value is PgT
 
 describe('Drizzle schema', () => {
   it('declares the tables technical/03 specifies', () => {
-    expect(tables.length).toBe(45);
+    // 45 from technical/03 (WP-03) plus `event_dispatch`, the dispatch queue TD-005 needs (WP-04).
+    expect(tables.length).toBe(46);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

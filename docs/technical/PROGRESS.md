@@ -474,6 +474,35 @@ independent corpora disagreed by 3,624 cases here.
 made only 3 of them non-allow (0.006%). Over-asking is cheap; the instinct to soften a security floor for
 false positives was not supported by the data.
 
+### WP-04 — implementation notes for whoever touches the dispatcher next
+
+**One transaction per (event, handler), not per event.** TD-005 records `attempts` and `error` per
+*handler*, which only means something if a failing handler can be retried without re-running the ones that
+succeeded. Each handler's effect, its `handler_executions` row and anything it emitted commit together or
+not at all — that is what turns at-least-once delivery into exactly-once effects. The dispatcher's own
+transaction holds the queue row for the length of the dispatch and either deletes it or defers it.
+
+**Migration 0010 exists for two reasons.** `events.id`/`cause_event_id`: technical/02 requires both and WP-01
+implemented them, so without the columns a stored event could not be parsed against its own catalogue
+schema. `event_dispatch`: an AFTER INSERT trigger on `events` keeps the enqueue inside the appending
+transaction — nothing can append without queueing — and makes the sweep O(pending). Anti-joining `events`
+against `handler_executions` on every poll would re-read the whole audit log, and no watermark over
+`events.position` is safe, because positions are handed out at insert time and commit out of order
+(research/07). The queue holds no audit value; what ran stays in `handler_executions`.
+
+**Ordering per stream is enforced twice**: the sweep's `row_number()` returns only the earliest queued event
+of each stream, and `hasEarlierPending` re-checks under the claim, so an event handed to `dispatch()` out of
+order is refused rather than run. **`stop()` is durable**: the stopping handler writes `stopped` rows for the
+remaining handlers in its own transaction with `on conflict do update` (not `do nothing`) — on a redelivery
+the policy handler is skipped as already succeeded, so only those rows keep the silenced handlers from
+running, and a row left `failed` by an earlier attempt must be overwritten.
+
+**The property tests are only as adversarial as their knobs.** They generate crash schedules on both sides of
+each commit, interleaved workers, a `chaoticWorkers` knob that hands the dispatcher events out of order, and
+a `selfGuarding` flag that turns the handlers' own idempotency off so `handler_executions` is the only thing
+left. Each guard was mutation-checked — disabling the ordering check, the handler claim or `markStopped`
+each makes a property fail. Anything added here should be mutation-checked the same way.
+
 ### WP-04 / WP-05 reconciliation — one queue of record, decided
 
 Both WPs arrived with a loop. The decision, taken on the WP-04 reviewer's analysis and implemented in both:
@@ -508,7 +537,42 @@ than a hang.
 says nothing about pool sizing. Later WPs must not read it as such.
 
 **Watch at WP-15:** `2 × concurrency + 1` is the right budget only while a handler opens at most one
-transaction. A handler that opens a second one silently invalidates it.
+transaction. A handler that opens a second one silently invalidates it. It is also a **floor for the
+dispatcher, not a budget for the process** — the same pool serves `Broadcast.publish`, the API and
+whatever WP-05/WP-06 add — so `InsufficientPoolError` and `.env.example` say "above", not "set to".
+
+**Round 2 found the invariant leaking twice, and both are worth remembering.**
+- *The semaphore over-admitted.* Releasing a slot decremented the counter and *then* woke a waiter,
+  which resumes a microtask later — so for that gap the counter was below the limit and a
+  `dispatch()` call already queued took the freed slot while the waiter took one too. Limit 1,
+  two handlers. Fix: hand the slot **over** — shift the waiter first and call it without
+  decrementing, and drop the increment after the await. There is then no instant at which the slot
+  is free. Reproducing it needed the probe to arrive *at* the release rather than before it (a fan
+  of dispatches at every microtask depth after each release); the first probe missed it because all
+  its callers were already parked in the wait queue.
+- *There were still two drain loops.* With a `DrainScheduler` the worker's `#runWoken` still armed
+  the poll timer, so the scheduler's recurring drain was a second one — exactly what the
+  reconciliation existed to prevent — and the test only passed because its poll interval was longer
+  than the assertion window. Fix: `#waitForWork({ withTimer })`, false in the scheduler branch. The
+  test now uses a 5 ms interval, so the timer coming back would fail it.
+
+Both are the same lesson: a guarantee that is only *usually* true reads exactly like one that holds,
+and a test whose timing hides the difference certifies it. Each guard here is mutation-checked —
+revert it and a test must go red.
+
+**The semaphore probe must stay at the unit tier**, and the module comment says so. The reviewer's
+equivalent experiment against a real PostgreSQL, pool at exactly the floor, **passes on the broken
+semaphore and the fixed one alike**: a COMMIT round-trip pushes the release into a later macrotask
+turn, so every caller is already parked and the gap never opens. The in-memory fake, where a commit
+resolves on a microtask, is the only instrument that reaches it. Anyone "promoting" that probe to an
+integration test deletes the only coverage `requiredConnections` has.
+
+**Two known limits, recorded rather than fixed:** `PostgresBroadcast.close()` does not await an
+in-flight `#connect`, so shutdown is deterministic only if the caller awaited `subscribe` first (the
+connection cannot leak — that guard is in — but the ordering is not pinned); and a handler that
+captures the bus and calls the public `dispatch()` self-deadlocks at concurrency 1, because only
+*chained* events inherit their parent's slot. The second belongs in the handler documentation at
+WP-06.
 
 ### WP-04 — two rounds of "the fix undermined its own invariant"
 
@@ -579,6 +643,28 @@ sites, and distinguishing entries that are genuinely stricter from those that ar
 each deliberate difference is written down where the fake is defined. `MemoryEventing` (WP-04) models no
 connection pool, which is why a green property run there says nothing about pool sizing.
 
+### Merging two parallel WPs — the real cost, measured
+
+WP-04 and WP-05 ran concurrently in isolated worktrees and neither could see the other. Merging the second
+one produced conflicts in six files and one genuine break that no amount of in-worktree verification could
+have caught:
+
+- **Mechanical conflicts, resolved as unions:** `packages/{application,infrastructure}/src/index.ts`
+  (both added exports), both `package.json` dependency blocks, `.env.example` (both added variable blocks),
+  and `pnpm-lock.yaml` (regenerated with `pnpm install`).
+- **A semantic break typecheck only found after the merge:** WP-04 added a *required* `connectionTimeoutMs`
+  to the database config type — the field that turns pool exhaustion from a silent permanent hang into an
+  error — and WP-05's pg-boss integration test builds that config literal without it. Both worktrees were
+  green in isolation; the combined tree was not.
+- **`docs/OPEN-QUESTIONS.md` numbering collided** exactly as predicted, since WP-05 branched before WP-02
+  landed Q36/Q37. Renumbered its calendar question to **Q38** at merge.
+
+**The rule this earns:** worktree parallelism is worth it for genuinely disjoint packages, but *green in a
+worktree is not green on `main`*, and the merge must re-run all four verify targets before the commit is
+written — not after. Watch particularly for a WP that adds a **required** field to a shared type or a new
+runtime invariant (WP-04's `2 × concurrency + 1` pool floor throws at *runtime*, so a stale hand-built
+config in another WP's test would not even fail typecheck).
+
 ## Discovered work (not in plan)
 
 - **Orchestrator parallelism has a ceiling, and it is lower than it looks.** Running three implementers plus
@@ -639,6 +725,30 @@ connection pool, which is why a green property run there says nothing about pool
   `CODE_OF_CONDUCT.md`, `THIRD_PARTY_NOTICES.md`, and the `actionlint`/`hadolint`/`zizmor` steps in
   the lint job (hadolint needs `docker/` from WP-22). Rulesets, required checks and the merge queue
   are GitHub-side configuration a human has to apply.
+- **WP-05 ↔ WP-04 reconciliation, decided by the orchestrator at WP-04 review round 1 and
+  implemented.** `event_dispatch` plus the sweep stay the **single queue of record**; pg-boss does
+  **not** get a `dispatch(event)` job. Two queues would disagree after a crash, and pg-boss has no
+  per-stream serialisation, so ordering would collapse onto `hasEarlierPending` refusing and
+  rescheduling — a retry storm where head-of-line blocking belongs. WP-05 replaces only the *timer*:
+  `OutboxWorker` takes a `DrainScheduler` (`schedule(name, intervalMs, run)`, job name
+  `OUTBOX_SWEEP_JOB = 'events.outbox.sweep'`, implementations should coalesce overlapping runs —
+  pg-boss `singleton`), and the `NOTIFY` subscription keeps waking `drain()` for latency. The seam is
+  defined in `packages/application/src/events/outbox.ts` because WP-05's `Jobs` port was not on
+  WP-04's base; WP-05 implements `DrainScheduler` over it. Scheduled concurrency must respect the
+  pool invariant below. `PARTITION_MAINTENANCE_JOB` (WP-03) is still WP-05's to schedule.
+- **Dispatch has no dead-letter state (WP-04).** An event whose handler keeps failing is retried with
+  exponential backoff for ever and blocks its stream. `handler_executions.status = 'failed'` and the
+  `event_dispatch` backlog are the only signals; WP-06 should surface them (`/metrics`, an ops view)
+  and WP-15 should decide what a permanently poisoned event does to its task.
+- **`events.id` and `cause_event_id` are not in technical/03** (added by WP-04's migration 0010; the
+  event catalogue in technical/02 has always required them). The data-model document should be
+  amended to match.
+- **The two `*.model.test.ts` property suites are close to the 5 s default timeout.** WP-02's
+  `task.model` and `run.model` `fc.commands` tests take ~3 s each in isolation and time out when the
+  machine is loaded (observed at WP-04 with several worktrees running at once: 9–10 s, red; the same
+  commit is green when the machine is idle). Nothing about them is wrong — the budget is. Either give
+  the `unit` project a `testTimeout` above the default or lower their `numRuns`; a suite that is red
+  only under load is a suite CI will call flaky.
 - **Biome `noConsole`** is not enabled yet; turn it on for server code when pino lands (WP-06).
 - **Licence allow-list check** (`pnpm licenses`, TD-017) is not wired; it belongs with WP-23's
   `THIRD_PARTY_NOTICES.md`.

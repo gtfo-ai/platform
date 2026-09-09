@@ -1,10 +1,13 @@
 /**
  * Adapters: Postgres, jobs, broadcast, Claude SDK runner, workspaces, search.
  *
- * The PostgreSQL persistence layer (WP-03) and the jobs runtime (WP-05) exist so far; later work
+ * WP-03 added the PostgreSQL persistence layer; WP-04 added the event store, the dispatch queue and
+ * the `Broadcast` adapter on `LISTEN`/`NOTIFY`; WP-05 added the jobs runtime on pg-boss. Later work
  * packages add the rest.
  */
+export * as broadcast from './broadcast/index.js';
 export * as db from './db/index.js';
+export * as eventing from './events/index.js';
 export * as jobs from './jobs/index.js';
 
 export const packageId = '@platform/infrastructure' as const;

@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@platform/contracts": "workspace:*",
+    "@platform/domain": "workspace:*",
     "zod": "4.5.4"
   }
 }

@@ -40,6 +40,7 @@ describe('loadDatabaseConfig', () => {
       url: 'postgres://app@db:5432/app',
       appRole: DATABASE_CONFIG_DEFAULTS.appRole,
       poolMax: DATABASE_CONFIG_DEFAULTS.poolMax,
+      connectionTimeoutMs: DATABASE_CONFIG_DEFAULTS.connectionTimeoutMs,
       partitionMonthsAhead: DATABASE_CONFIG_DEFAULTS.partitionMonthsAhead,
       transcriptRetentionDays: null,
     });
@@ -60,12 +61,21 @@ describe('loadDatabaseConfig', () => {
     const config = loadDatabaseConfig({
       ...minimalEnv,
       APP_DB_POOL_MAX: '25',
+      APP_DB_CONNECTION_TIMEOUT_MS: '2500',
       APP_DB_PARTITION_MONTHS_AHEAD: '6',
       APP_DB_APP_ROLE: 'reporting_ro',
     });
     expect(config.poolMax).toBe(25);
+    expect(config.connectionTimeoutMs).toBe(2500);
     expect(config.partitionMonthsAhead).toBe(6);
     expect(config.appRole).toBe('reporting_ro');
+  });
+
+  it('refuses a connection timeout that would restore the silent-hang behaviour', () => {
+    // 0 would mean "wait for ever" in pg, which is the failure mode the setting exists to remove.
+    expect(() => loadDatabaseConfig({ ...minimalEnv, APP_DB_CONNECTION_TIMEOUT_MS: '0' })).toThrow(
+      /APP_DB_CONNECTION_TIMEOUT_MS/,
+    );
   });
 
   it('accepts an empty APP_DB_APP_ROLE, which disables the SET ROLE switch', () => {

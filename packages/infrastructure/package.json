@@ -16,6 +16,7 @@
   "dependencies": {
     "@platform/application": "workspace:*",
     "@platform/contracts": "workspace:*",
+    "@platform/domain": "workspace:*",
     "cron-parser": "5.10.0",
     "drizzle-orm": "0.45.2",
     "pg": "8.23.0",

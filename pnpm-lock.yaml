@@ -179,6 +179,9 @@ importers:
       '@platform/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@platform/domain':
+        specifier: workspace:*
+        version: link:../domain
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -203,6 +206,9 @@ importers:
       '@platform/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@platform/domain':
+        specifier: workspace:*
+        version: link:../domain
       cron-parser:
         specifier: 5.10.0
         version: 5.10.0

@@ -23,6 +23,8 @@ const EXPECTED_TABLES = [
   'config_audit',
   'cost_entries',
   'cost_rollup_daily',
+  // WP-04: the dispatch queue TD-005's outbox needs (migration 0010).
+  'event_dispatch',
   'event_streams',
   'events',
   'handler_executions',
@@ -144,6 +146,11 @@ describe('migrate on an empty PostgreSQL 18', () => {
     expect(policy).toEqual([
       row('config_audit', 'append_only', 'created_at'),
       row('cost_entries', 'append_only', 'created_at'),
+      // Registered read_write on purpose: the dispatcher claims, defers and deletes its own queue
+      // rows. `handler_executions` is unregistered and therefore read_write too — technical/03
+      // does not list it among the append-only tables, because the dispatcher updates a row's
+      // status and attempt count in place as it works.
+      row('event_dispatch', 'read_write', null),
       row('event_streams', 'read_only', null),
       row('events', 'append_only', 'occurred_at'),
       row('human_actions', 'append_only', null),

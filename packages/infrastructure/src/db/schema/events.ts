@@ -20,6 +20,8 @@ export const events = pgTable(
   'events',
   {
     position: bigint('position', { mode: 'number' }).generatedAlwaysAsIdentity(),
+    /** Envelope id (technical/02); minted by the domain as uuidv7 (migration 0010). */
+    id: uuid('id').notNull().default(sql`uuidv7()`),
     streamType: text('stream_type').notNull(),
     streamId: uuid('stream_id').notNull(),
     streamSeq: integer('stream_seq').notNull(),
@@ -27,6 +29,8 @@ export const events = pgTable(
     payload: jsonb('payload').$type<JsonObject>().notNull(),
     actor: jsonb('actor').$type<Actor>().notNull(),
     causeEventPosition: bigint('cause_event_position', { mode: 'number' }),
+    /** Envelope id of the causing event; `cause_event_position` is the same link by position. */
+    causeEventId: uuid('cause_event_id'),
     correlationId: uuid('correlation_id'),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
     xactId: xid8('xact_id').notNull().default(sql`pg_current_xact_id()`),
@@ -67,6 +71,23 @@ export const handlerExecutions = pgTable(
   (table) => [primaryKey({ columns: [table.eventPosition, table.handler] })],
 );
 
+/**
+ * Undispatched events (TD-005, migration 0010). Written by the `events_enqueue_dispatch` trigger in
+ * the appending transaction; deleted when every handler of the event reached a terminal status. A
+ * work queue, not an audit record — what ran is in `handler_executions`.
+ */
+export const eventDispatch = pgTable('event_dispatch', {
+  eventPosition: bigint('event_position', { mode: 'number' }).primaryKey(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  streamType: text('stream_type').notNull(),
+  streamId: uuid('stream_id').notNull(),
+  streamSeq: integer('stream_seq').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  error: text('error'),
+  availableAt: timestamp('available_at', { withTimezone: true }).notNull().defaultNow(),
+  enqueuedAt: timestamp('enqueued_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Webhook dedup and raw audit. Headers and payload are untrusted data (BD-022). */
 export const inbox = pgTable(
   'inbox',
@@ -83,6 +104,7 @@ export const inbox = pgTable(
   (table) => [primaryKey({ columns: [table.provider, table.deliveryId] })],
 );
 
+export type EventDispatchRow = typeof eventDispatch.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type NewEventRow = typeof events.$inferInsert;
 export type HandlerExecution = typeof handlerExecutions.$inferSelect;

@@ -37,9 +37,13 @@ export const createDatabasePool = (config: DatabaseConfig): DatabaseHandle => {
   // startup GUC also survives `RESET ROLE`, so nothing inside a session can climb back up to the
   // login role. A connection pooler that rejects startup options (pgbouncer in transaction mode)
   // needs APP_DB_APP_ROLE unset and a login role that already has the right grants.
+  // `connectionTimeoutMillis` is not tuning: without it `pg` waits for ever for a free connection,
+  // so a pool too small for the work in flight hangs silently instead of failing. The dispatcher
+  // holds two connections per concurrent dispatch, which makes that mistake easy to make.
   const pool = new pg.Pool({
     connectionString: config.url,
     max: config.poolMax,
+    connectionTimeoutMillis: config.connectionTimeoutMs,
     ...(config.appRole === '' ? {} : { options: `-c role=${config.appRole}` }),
   });
 

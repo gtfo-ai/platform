@@ -321,6 +321,7 @@ describe('the runtime pool', () => {
       url: database.connectionString,
       appRole: 'platform_app',
       poolMax: 2,
+      connectionTimeoutMs: 5_000,
       partitionMonthsAhead: 3,
       transcriptRetentionDays: null,
     });
@@ -348,6 +349,7 @@ describe('the runtime pool', () => {
       url: database.connectionString,
       appRole: '',
       poolMax: 1,
+      connectionTimeoutMs: 5_000,
       partitionMonthsAhead: 3,
       transcriptRetentionDays: null,
     });
@@ -366,6 +368,7 @@ describe('the runtime pool', () => {
         url: database.connectionString,
         appRole: 'app"; drop database x; --',
         poolMax: 1,
+        connectionTimeoutMs: 5_000,
         partitionMonthsAhead: 3,
         transcriptRetentionDays: null,
       }),
