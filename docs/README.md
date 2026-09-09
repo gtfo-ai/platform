@@ -1,6 +1,6 @@
 # Agentic — Product Knowledge Base
 
-> **Status:** Round 1 — product/business definition. Technical design is Round 2 (see `technical/`).
+> **Status:** Round 1 (product) and Round 2 (technical design) complete as of 2026-08-28. Next: implementation by the orchestrator following `technical/13-implementation-plan.md`.
 > The platform name **"Agentic"** is a working title. Every document refers to it as *the platform* or `Agentic`; renaming is a search-and-replace of one word. Never hard-code the name into identifiers (package names, DB names, env prefixes) — see [BD-014](decisions/business/BD-014-rename-friendly-naming.md).
 
 This directory is the single source of truth for **what** we are building and **why**. It is written to be read by humans and by the Claude Code agents that will implement the platform. Everything here is a decision or a candidate decision; nothing is "just notes".
@@ -12,7 +12,7 @@ This directory is the single source of truth for **what** we are building and **
 | `product/` | Product definition: vision, users, pipeline, knowledge base, integrations, governance, UI, roadmap | Product owner + brainstorming sessions |
 | `decisions/business/` | Business decisions (`BD-nnn`), one per file, ADR style — immutable once accepted, superseded by a new one | Anyone; accepted by product owner |
 | `decisions/technical/` | Technical decisions (`TD-nnn`) — filled in Round 2 | Tech lead |
-| `research/` | Research reports that informed decisions: [01 competitors & lessons](research/01-competitive-landscape-and-lessons.md), [02 memory & knowledge](research/02-memory-and-knowledge-approaches.md), [03 integration tooling](research/03-integration-tooling.md), [04 Claude capabilities](research/04-claude-platform-capabilities.md). Reference only; may go stale | Research sessions |
+| `research/` | Research reports that informed decisions: 01 competitors & lessons, 02 memory & knowledge, 03 integration tooling, 04 Claude capabilities, 05 SDK orchestration details, 06 workflow engines & queues, 07 data & search, 08 UI stack, 09 testing/CI/Docker/release, 10 workspace isolation, 11 runtime/framework/auth/clients. Reference only; may go stale | Research sessions |
 | `technical/` | Round 2 working area: constraints, candidates, architecture | Tech lead |
 | `OPEN-QUESTIONS.md` | Questions that block or shape decisions, each with a recommended answer | Anyone |
 | `TODO.md` | Product-level backlog for the definition phase and pre-implementation | Anyone |
@@ -38,6 +38,9 @@ This directory is the single source of truth for **what** we are building and **
 16. [Metrics and success criteria](product/16-metrics-and-success-criteria.md)
 17. [Repository readiness](product/17-repository-readiness.md)
 18. [Adoption features and operating modes](product/18-adoption-and-operating-modes.md)
+19. [Operating definitions](product/19-operating-definitions.md) — templates, defaults and formulas decided by the product owner
+
+Then the technical design: [`technical/README.md`](technical/README.md) → `technical/01`…`13`, decisions `TD-001`…`TD-024`.
 
 ## Conventions
 

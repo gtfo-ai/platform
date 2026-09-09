@@ -4,15 +4,14 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 
 ## Open
 
-**Q13-b Purge window.** Default retention is "keep everything forever" (Q13). Should the UI warn when transcript storage exceeds a size (e.g. 50 GB)? — *Recommendation:* yes, a storage gauge on the org dashboard with a one-click purge-window setting.
+**Q33 ⚠ TD-021 spawn mechanism.** The workspace design assumes the Agent SDK can spawn the CLI inside the run container through `spawnClaudeCodeProcess` (option C). If the WP-13 spike fails, the fallback is a runner process inside the container (option B), which moves policy hooks next to the untrusted shell and requires an HTTP MCP endpoint back to the platform. — *Recommendation:* run the spike first in M1; accept B only with proxy-injected credentials.
+
+**Q34 Founder veto on operating definitions.** `product/19-operating-definitions.md` contains 21 product-owner decisions made on your behalf (workpad template, command policy defaults, significance scores, Jira mapping, MR conventions, interview bank, statistics formulas, autonomy presets, risk classes, cost model, human-time rules, linter comment, bootstrap spec, take-over protocol, storage gauge, dogfood plan). — *Recommendation:* skim and veto by item number; silence = accepted.
+
 
 **Q23 Model defaults.** BD-013 (Opus 5 for reasoning-heavy stages, Sonnet 5 for verification/summaries, Haiku for classification) has not been confirmed. — *Recommendation:* accept as defaults and revisit after the first 20 dogfood tasks with per-stage cost and return-rate data.
 
 **Q24 Readiness level thresholds.** product/17 proposes five levels with specific criteria. — *Recommendation:* accept provisionally; tune after dogfooding.
-
-**Q31 Shadow mode comparison.** What should the shadow report compare besides files touched, size, tests and review findings? — *Recommendation:* also a Reviewer pass over the *human* MR to show findings it would have raised, and an estimate of reviewer minutes saved; nothing is posted to GitLab.
-
-**Q32 Risk class defaults.** Which path patterns should ship as default risk classes? — *Recommendation:* `auth|login|session|token`, `payment|billing|invoice`, `migration|schema`, `infra|deploy|docker|helm|terraform`, `.agentic|.claude|CLAUDE.md|.github|.gitlab-ci`; the wizard proposes matches from the repository and the maintainer edits.
 
 **Q25 Significance thresholds (BD-018).** Concrete defaults for the discard and auto-apply thresholds. — *Recommendation:* discard = typo/formatting-only deltas; auto-apply band = reference items, link fixes, `last_confirmed` bumps; everything else (lessons, rules, decisions, business facts) = proposal.
 
@@ -23,9 +22,9 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 - A3 Teams accept a bot posting in Jira/Slack; some organisations require approval for bots — onboarding docs must cover it.
 - A4 The founder's projects have CI in GitLab; if not, the CI gate is skipped (product/04).
 
-## To be answered in Round 2 (technical)
+## Round 2 (technical) — answered
 
-- Language/runtime and SDK flavour (TypeScript vs Python), event bus, database, UI stack, workspace isolation model, search index engine, embedding provider default, secrets handling, auth/SSO library, Slack/GitLab/Jira client libraries, testing strategy, Docker image layering, GitHub Actions workflows, versioning/release process. See `technical/README.md`.
+All Round-2 decisions are recorded as TD-001…TD-024 in `decisions/technical/README.md`; remaining technical uncertainties are verification items in `TODO.md`.
 
 ## Decision log (answered 2026-08-28)
 
@@ -58,3 +57,9 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 | Q28 | Ticket readiness linter default | Opt-in per project, off by default | BD-028, product/18 |
 | Q29 | Business model | Everything Apache-2.0; hosting, support, registry | BD-029 |
 | Q30 | Configuration of adoption features | One wizard step "Operating mode and features", all optional, mirrored in settings | BD-028, product/06 |
+| Q13-b | Storage gauge | Yes; warning at 50 GB, purge by month partitions | product/19 §20 |
+| Q23 | Model defaults | Accepted provisionally; revisit after 20 dogfood tasks | BD-013 |
+| Q24 | Readiness thresholds | Accepted provisionally; detection rules defined | product/19 §5 |
+| Q25 | Significance thresholds | Score classes with discard 0.2 / proposal 0.6 | product/19 §4 |
+| Q31 | Shadow report | Defined | product/19 §13 |
+| Q32 | Risk classes | Defined | product/19 §14 |
