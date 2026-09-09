@@ -2,6 +2,9 @@
 
 > This is the work breakdown for a Claude Code orchestrator and its agent team. Product scope: product/14 (v0.1 = M1 loop, M2 trust, M3 show-the-value). Every work package (WP) lists inputs, outputs, acceptance criteria and dependencies. The orchestrator should run WPs as tickets through its own process: plan → implement → review (fresh context) → tests green → merge.
 
+## How the work is run
+See `14-orchestration-protocol.md` (orchestrator loop, fresh-context implementer and reviewer subagents, ledger `PROGRESS.md`, commit/push policy).
+
 ## Ground rules for the implementer
 1. Read `docs/README.md`, all `docs/product/*`, all decisions, then `docs/technical/*`. The docs are the spec; product questions go to `docs/OPEN-QUESTIONS.md`, not into code comments.
 2. Follow the code structure in technical/01; dependency rule `domain ← application ← infrastructure ← apps`.

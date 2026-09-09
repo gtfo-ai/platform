@@ -29,3 +29,4 @@ Self-hosted, open-source platform that runs Claude Code agents through a real-li
 - Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`.
 - Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`. Work plan: `docs/technical/13-implementation-plan.md`.
 - Open questions: `docs/OPEN-QUESTIONS.md`; verification backlog: `docs/TODO.md`.
+- Autonomous implementation: protocol `docs/technical/14-orchestration-protocol.md`, ledger `docs/technical/PROGRESS.md`, roles `.claude/agents/{implementer,reviewer,architect}.md`.
