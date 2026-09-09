@@ -139,7 +139,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
 | WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `9e0be0b` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
-| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `WP07SHA` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
+| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
