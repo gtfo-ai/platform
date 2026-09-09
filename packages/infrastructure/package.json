@@ -12,5 +12,15 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     }
+  },
+  "dependencies": {
+    "@platform/contracts": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "pg": "8.23.0",
+    "pg-boss": "12.30.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
   }
 }

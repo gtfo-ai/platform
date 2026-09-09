@@ -7,6 +7,17 @@ packages:
 #   @b12k/gitleaks  downloads the pinned gitleaks binary, so the pre-commit secret
 #                   scan works without a global install (BD-002)
 #   lefthook        installs its own binary for the git hooks
+#
+# The `false` entries are test-only transitive dependencies of
+# @testcontainers/postgresql (dockerode -> ssh2). They are denied rather than left
+# unlisted, because pnpm 12 fails the install on an unlisted build script: the
+# integration suite reaches the Docker daemon over the local socket, so the SSH
+# transport (ssh2), its optional native acceleration (cpu-features) and protobufjs'
+# postinstall code generation are all unnecessary. Denying them keeps `pnpm install`
+# deterministic and runs no third-party build script.
 allowBuilds:
   '@b12k/gitleaks': true
   lefthook: true
+  cpu-features: false
+  protobufjs: false
+  ssh2: false

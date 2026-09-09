@@ -18,8 +18,10 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
 
 `schemas/` holds the JSON Schemas generated from `packages/contracts` (`pnpm schemas`). It is generated output: edit the zod schema, regenerate, commit both.
 
+`packages/infrastructure/src/db/migrations/*.sql` is the authoritative database schema (TD-011): forward-only, applied under an advisory lock, never edited once applied — add a new numbered file. The Drizzle definitions beside them type the queries and are held to the SQL by an integration parity test.
+
 ## Commands
-- `pnpm install` (installs git hooks via `prepare`) · `pnpm dev` (server + web with the fake Claude runner — stub until WP-06/WP-20) · `pnpm test` (unit + contract, with coverage) · `pnpm test:integration` (Testcontainers/PGlite) · `pnpm test:e2e` (fake Claude) · `pnpm test:ui` · `pnpm lint` · `pnpm typecheck` · `pnpm schemas` (regenerates `schemas/` from `packages/contracts`) · `pnpm schemas:check` (fails when `schemas/` is stale; part of `verify` and of CI's lint job) · `pnpm eval` (promptfoo, needs `llm-ci` key — lands with WP-17)
+- `pnpm install` (installs git hooks via `prepare`) · `pnpm dev` (server + web with the fake Claude runner — stub until WP-06/WP-20) · `pnpm test` (unit + contract, with coverage) · `pnpm test:integration` (Testcontainers PostgreSQL 18; `TEST_DATABASE_URL` uses an external server instead) · `pnpm db:migrate` (applies the SQL migrations under an advisory lock; the image runs the same entrypoint as the `migrate` service) · `pnpm test:e2e` (fake Claude) · `pnpm test:ui` · `pnpm lint` · `pnpm typecheck` · `pnpm schemas` (regenerates `schemas/` from `packages/contracts`) · `pnpm schemas:check` (fails when `schemas/` is stale; part of `verify` and of CI's lint job) · `pnpm eval` (promptfoo, needs `llm-ci` key — lands with WP-17)
 - Verification contract (technical/14) — each prints exactly one final `PASS: <target>` / `FAIL: <target>` line:
   `pnpm run -s verify` (lint + typecheck + schemas:check + unit + contract) · `pnpm run -s verify:integration` · `pnpm run -s verify:e2e` · `pnpm run -s verify:ui`
 - `pnpm secrets:scan` runs gitleaks over the working tree; the pre-commit hook scans the staged diff.

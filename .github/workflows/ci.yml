@@ -92,8 +92,9 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Testcontainers reaches the runner's Docker daemon; the suite is a
-      # placeholder until WP-03 adds the migration and repository tests.
+      # Testcontainers reaches the runner's Docker daemon and starts one
+      # PostgreSQL 18 for the whole project (test/integration/support).
+      # TEST_DATABASE_URL would point the suite at an external server instead.
       - run: pnpm run -s verify:integration
 
   e2e:

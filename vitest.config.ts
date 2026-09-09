@@ -48,6 +48,9 @@ export default defineConfig({
           environment: 'node',
           include: ['**/*.integration.test.ts', 'test/integration/**/*.test.ts'],
           exclude: defaultExclude,
+          // One PostgreSQL 18 container serves the whole project; each file gets its own database
+          // inside it (test/integration/support/postgres.ts).
+          globalSetup: ['test/integration/support/global-setup.ts'],
           testTimeout: 120_000,
           hookTimeout: 120_000,
         },
@@ -77,7 +80,15 @@ export default defineConfig({
       reportsDirectory: './coverage',
       // Explicit include: only the rings exercised by the unit + contract tiers.
       include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts', 'apps/launcher/src/**/*.ts'],
-      exclude: ['**/*.test.ts', '**/*.d.ts'],
+      exclude: [
+        '**/*.test.ts',
+        '**/*.d.ts',
+        // Thin I/O shells with no branch of their own: a `pg` pool built from validated config, and
+        // the one-shot CLI that maps a report onto stdout. Both are exercised end to end by the
+        // `integration` tier, which runs a real PostgreSQL 18 and does not collect coverage.
+        'packages/infrastructure/src/db/client.ts',
+        'apps/server/src/migrate.ts',
+      ],
       thresholds: {
         lines: 80,
         branches: 80,

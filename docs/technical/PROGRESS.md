@@ -4,9 +4,10 @@
 
 ## Resume note
 
-- **Current WP:** WP-01 (`packages/contracts`) — not yet started.
-- **Last done:** WP-00 committed and pushed to `origin/main` after 3 review rounds (APPROVE).
-- **Next step:** delegate WP-01 to an implementer; deps (WP-00) are DONE. WP-03 depends only on WP-00 and is therefore runnable in parallel with WP-01 in a worktree.
+- **Current WP:** WP-02 and WP-03, both IN_PROGRESS in isolated worktrees, in parallel.
+- **Last done:** WP-00 (`8852b9e`) and WP-01 (`dedc4b9`) committed and pushed; WP-00's CI run on GitHub was green.
+- **Next step:** collect both reports, merge each worktree branch into `main` one at a time, re-run verify on `main` after each merge, review, commit, push. Then WP-04 (needs WP-02 **and** WP-03) or WP-05 (needs WP-03).
+- **Parallelism note:** the table's `Parallel-safe` column says "no" for WP-02 and WP-03, but the protocol's actual criterion is "different packages, no shared files", which they meet (`packages/domain` vs `packages/infrastructure`, and no dependency between them). Expect a `pnpm-lock.yaml` conflict at merge — resolve by taking one side and re-running `pnpm install`.
 - **Session started:** 2026-09-09.
 - **Ledger convention:** a WP's commit sha is written into the table by the *following* commit, since the sha is not known while the commit is being made.
 
@@ -34,9 +35,9 @@
 | WP | Title | Depends | Parallel-safe | Status | Commit | Notes |
 |---|---|---|---|---|---|---|
 | WP-00 | Repo scaffold | — | no | DONE | `8852b9e` | 3 review rounds; notes below |
-| WP-01 | `packages/contracts` | WP-00 | no | DONE | next commit | APPROVE round 1; 5 hardening fixes folded in |
-| WP-02 | `packages/domain` | WP-01 | no | TODO | — | |
-| WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | TODO | — | |
+| WP-01 | `packages/contracts` | WP-00 | no | DONE | `dedc4b9` | APPROVE; 5 hardening fixes folded in |
+| WP-02 | `packages/domain` | WP-01 | no | IN_PROGRESS | — | worktree, parallel with WP-03 |
+| WP-03 | Postgres schema + Drizzle + migrations (technical/03) | WP-00 | no | IN_PROGRESS | — | worktree, parallel with WP-02 |
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | TODO | — | |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | TODO | — | |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | TODO | — | |
@@ -248,6 +249,53 @@ Residual, all verified unreachable today — fix if the area is touched again:
   lint; only the `.`-only `exports` maps stop it) and relative escapes to a package root outside `src/`
   (`../../contracts/index.js`);
 - any future `verify` step whose stdout must be *captured* will silently land on stderr.
+
+### WP-02 / WP-03 — review round 1 findings (both REQUEST_CHANGES, 2026-09-09)
+
+Both reviewers reproduced their findings by exploit rather than by reading, which is the standard to hold.
+
+**WP-03 (Postgres) — two proven privilege escalations.** (a) Both SECURITY DEFINER functions were created
+with PostgreSQL's default `EXECUTE TO PUBLIC`; the `REVOKE ... FROM PUBLIC` lived only inside
+`platform_apply_grants`, which never runs when `APP_DB_APP_ROLE=''` — the pgbouncer configuration
+`.env.example` itself documents. A role holding only `CONNECT` dropped a `run_messages` partition.
+(b) `event_streams` was not registered in `platform_table_policy`, so `platform_app` held UPDATE/DELETE on
+the table that substitutes for technical/03's `UNIQUE(stream_type,stream_id,stream_seq)` — deleting a row
+and re-inserting produced two events at seq 1, i.e. WP-04 would have inherited a forgeable invariant.
+Also fixed this round: partition bounds cast in the caller's TimeZone (a non-UTC session aborts
+`platform_ensure_partitions` with "partition would overlap"); `platform_drop_expired_partitions` taking an
+unfloored retention window from the caller as a designed bypass of `REVOKE DELETE`; a missing concurrency
+test for the seq guard; and `migrator.ts` (240 lines, including the branch that opened finding (a))
+excluded from coverage.
+
+**WP-02 (domain) — three command-policy bypasses**, all returning `allow`: `&` missing from the list
+operators (`ls & sudo reboot`); backticks not treated as substitution (``ls `rm -rf /` ``); and
+prefix-anchored block globs that a moved flag escapes (`git push origin agentic/x --force`), which also
+left product/19 §3's "writing outside the workspace" with no pattern at all
+(`cat /etc/passwd > /root/.ssh/authorized_keys`). Separately, `resolvedBinary` never blocked anything
+because block patterns are command-line globs, so BD-025's "resolved against the real binary" was unmet —
+and the test that covered it passed a whole command line as the binary. The block-list property test also
+filtered out exactly the metacharacters that break segmentation.
+
+**Docs amended by the orchestrator** (code was right, or the doc had a real gap): technical/02 gains
+`run.created` (the `created→starting` transition was silent, contradicting the document's own rule that
+every state change is an event); technical/03 gains the `feedback` table (technical/02 and
+`contracts/records.ts` both define the aggregate, the data model had no table), a corrected
+`runs_active_idx` status list (`queued` is not in the `run_status` enum), and a note that `stage` on
+`RunRecord`/`QuestionRecord` must be **nullable** because not every run or question belongs to a pipeline
+stage (`task_stage_id` is nullable) — WP-01 typed it non-nullable; WP-04 corrects the contract.
+
+**Scheduled follow-ups (not done in these WPs):** `pipelineLimitsSchema` lacks two of BD-008's six loops
+(`refinement_question_rounds`, `architecture_revisions`) — enforced in domain, not configurable; WIP limits
+have no schema anywhere. Both belong in `packages/contracts` + technical/12.
+
+**WP-04 must honour (confirmed by exploit at WP-03 round 2):** the `events_enforce_stream_seq()` trigger
+is SECURITY DEFINER and its `on conflict do update … returning` takes the `event_streams` row lock itself,
+so per-stream appends serialise without the caller doing anything. WP-04 must **not** issue
+`SELECT … FOR UPDATE` on `event_streams` — the app role holds SELECT only, and row locks need UPDATE, so
+every lock mode returns 42501. A pessimistic aggregate load locks the aggregate's own read_write row
+(e.g. `tasks`). The exposed contract is: insert with `stream_seq = last + 1`; a mismatch raises 23505 and
+rolls the counter back with the transaction. Also: no past-month partitions are ever created, so WP-04
+must not accept caller-supplied past `occurred_at`.
 
 ## Discovered work (not in plan)
 
