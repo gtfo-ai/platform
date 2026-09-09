@@ -1,0 +1,25 @@
+# Secrets and local config — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.token
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Dependencies / build (populated in Round 2)
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+
+# Local data
+data/
+*.log
