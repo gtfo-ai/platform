@@ -17,7 +17,8 @@ Projects
     ├ Pipeline             – template editor (enable/disable/reorder/add stage), per-stage model/effort/prompt/limits, status mapping
     ├ Integrations         – per-type cards with health, test connection, project-level settings
     ├ Budgets & costs      – per project, forecast, per-stage breakdown
-    └ Settings             – WIP limits, policies (plan approval, KB auto-apply), Slack channel, timezone
+    ├ Shadow               – shadow-mode runs: comparison with the human MR, predicted cost, similarity
+    └ Settings             – autonomy dial, features (mirror of the wizard), WIP limits, policies, risk classes, budgets, Slack channel, quiet hours
 Agents (org)               – live view: who is working on what, model, tokens/min, elapsed; idle agents; queue
 Questions inbox (org)      – all pending questions/approvals across projects, answer inline
 Statistics (org)           – delivered tasks, cost, LOC, cycle time, return rates, intervention rate; per day/week/month; CSV export
@@ -35,14 +36,14 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 ### Task detail
 - Left: vertical **stage timeline** with status, duration, cost per stage, returns drawn as loops with reason.
 - Centre: **artifacts** tab (Refined Spec, Plan, RCA, Review Verdicts, Retro) rendered markdown with version history; **runs** tab; **questions** tab; **events** tab (raw).
-- Right: **Checks** panel — merge-readiness at a glance: acceptance criteria met, CI green, review threads open/resolved, business verdict, tamper check, budget, questions pending (research/01: Conductor); cost breakdown donut (per stage), budget bar, links (ticket, MR, Slack thread), actions.
+- Right: **Checks** panel — merge-readiness at a glance: acceptance criteria met, CI green, rebase status, review threads open/resolved, business verdict, tamper check, coverage delta, dependency status, risk classes and required reviewers, budget vs estimate, questions pending (research/01: Conductor); cost breakdown donut (per stage), budget bar, links (ticket, MR, Slack thread), actions.
 
 ### Run detail (the "click and watch" requirement)
 - Header: stage, role, model, effort, permission mode, tokens (in/out/cache), cost (live estimate → final), turns, elapsed.
 - **Transcript** (live via stream): assistant text (markdown), tool calls as collapsible cards (name, input, output, duration; diffs rendered as diffs; shell output as terminal), thinking blocks collapsed by default, sub-agent runs nested, compaction boundaries shown. Search within transcript. Follow-tail toggle.
 - **Prompt** tab: exact system prompt and user prompt, context pack (list of KB docs included, with token counts), skills/MCP loaded.
 - **Settings** tab: effective configuration snapshot with "changed from default" markers.
-- Actions: cancel, retry with different model/effort (creates a new run), give feedback (👍/👎 + text, scoped to stage or project).
+- Actions: cancel, retry with different model/effort (creates a new run), **steer** (send a message to the running agent; appears in the transcript, audited), **take over** (pause pipeline, get branch + resume command, export workspace), give feedback (👍/👎 + text, scoped to stage or project).
 
 ### Agents view
 - One row per running run: project, task, stage, role, model, elapsed, tokens/min, last tool call. Idle capacity and queue depth. This is the "who is working on what" requirement.
@@ -51,6 +52,9 @@ Settings (org)             – auth, Claude provider mode, default models, globa
 - Tree of the vault (`business/`, `technical/`, `decisions/`, `lessons/`, `rules/`, `research/`), markdown editor with preview, backlinks, "used by N runs in last 30 days" per document.
 - **Proposals** queue: diffs proposed by Retrospective/Feedback with provenance; approve (commits), edit-then-approve, reject with reason (which the Librarian learns from).
 - Completeness checklist (from onboarding) and stale-document warnings.
+
+### Ask the task
+- A thread on the task page (and mirrored in the ticket thread) where anyone with access can ask "why did you choose X?"; answered from the audit trail and artifacts with links to the exact run and prompt.
 
 ### Questions inbox
 - Card per pending question: project, task, stage, question text with context, suggested answer if the agent proposed one, answer box, "answer in Jira/Slack" links (all channels are equivalent; first answer wins, others get a note).

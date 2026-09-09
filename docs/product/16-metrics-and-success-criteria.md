@@ -26,6 +26,10 @@
 - Agent utilisation: parallel runs vs limit; queue wait time.
 - Integration health: event lag (webhook received → processed), failed outbound actions.
 - Question response time (asked → answered) — this is usually the real bottleneck; show it to the team.
+- Human minutes per merged MR and total cost of delivery (tokens + people).
+- Cost estimate accuracy by size; budget approvals requested/granted.
+- Shadow mode: similarity to the human MR, predicted cost per ticket. Review-only: findings accepted vs dismissed. Ticket linter: tickets edited within 48 h of the lint comment.
+- Rebase gate: conflicts auto-resolved vs escalated; concurrent-task overlaps.
 
 ## Success criteria for the definition phase (this round)
 

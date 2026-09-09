@@ -10,6 +10,10 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 
 **Q24 Readiness level thresholds.** product/17 proposes five levels with specific criteria. — *Recommendation:* accept provisionally; tune after dogfooding.
 
+**Q31 Shadow mode comparison.** What should the shadow report compare besides files touched, size, tests and review findings? — *Recommendation:* also a Reviewer pass over the *human* MR to show findings it would have raised, and an estimate of reviewer minutes saved; nothing is posted to GitLab.
+
+**Q32 Risk class defaults.** Which path patterns should ship as default risk classes? — *Recommendation:* `auth|login|session|token`, `payment|billing|invoice`, `migration|schema`, `infra|deploy|docker|helm|terraform`, `.agentic|.claude|CLAUDE.md|.github|.gitlab-ci`; the wizard proposes matches from the repository and the maintainer edits.
+
 **Q25 Significance thresholds (BD-018).** Concrete defaults for the discard and auto-apply thresholds. — *Recommendation:* discard = typo/formatting-only deltas; auto-apply band = reference items, link fixes, `last_confirmed` bumps; everything else (lessons, rules, decisions, business facts) = proposal.
 
 ## Assumptions to confirm (tagged `(assumption)` in docs)
@@ -49,3 +53,8 @@ Answered questions move to the **Decision log** at the bottom with the founder's
 | Q20 | Rework-as-reset | Yes, explicit trigger (`@agentic rework` or MR closed with reason) | BD-007, product/04 |
 | Q21 | Low readiness | Warn + stricter defaults; readiness is report-only, never auto-remediated | BD-026, product/17 |
 | Q22 | Clean-first-MR rate per ticket author | Show to everyone in the project | product/16 |
+| Q26 | Adoption features in MVP? | All of them, in three internal milestones | product/14, product/18 |
+| Q27 | Autonomy dial vs granular policies | Presets over granular; overrides show as Custom | BD-027 |
+| Q28 | Ticket readiness linter default | Opt-in per project, off by default | BD-028, product/18 |
+| Q29 | Business model | Everything Apache-2.0; hosting, support, registry | BD-029 |
+| Q30 | Configuration of adoption features | One wizard step "Operating mode and features", all optional, mirrored in settings | BD-028, product/06 |

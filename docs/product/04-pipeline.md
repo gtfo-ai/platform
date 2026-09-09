@@ -27,12 +27,12 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 
 ### S0 — Intake (system + optional cheap agent: *Triager*)
 - **Trigger:** task-management event (label added, status changed, epic membership, JQL match on poll) or manual "Start" in UI.
-- **Does:** checks project WIP limits (max parallel, max in pipeline — BD-010), creates the Task, classifies it (`feature | bug | chore | spike`) using the ticket type mapping first and, if ambiguous, a Haiku call; selects the pipeline template; posts the "picked up" comment; transitions the ticket status.
+- **Does:** checks project WIP limits (max parallel, max in pipeline — BD-010), skips tickets blocked by open tickets (issue links, BD-030), creates the Task, classifies it (`feature | bug | chore | spike`) using the ticket type mapping first and, if ambiguous, a Haiku call; selects the pipeline template; posts the "picked up" comment; transitions the ticket status.
 - **Outputs:** Task created, `task.intake.completed` event.
 - **Never:** reads the codebase deeply or spends more than cents.
 
 ### S1 — Refinement (*Product Manager*)
-- **Inputs:** ticket (title, description, comments, attachments text, linked issues), business knowledge base (product overview, glossary, business rules, roadmap), recent related tasks.
+- **Inputs:** ticket (title, description, comments, attachments text, linked issues), the parent epic description and short summaries of sibling tickets (BD-030), business knowledge base (product overview, glossary, business rules, roadmap), recent related tasks, and the **cost estimate** from project history by size (product/18) written into the workpad; above the project's approval threshold the task waits for budget approval.
 - **Does:** rewrites the ticket into a **Refined Specification**: goal, user value, in scope, out of scope, acceptance criteria (Given/When/Then), non-functional requirements, dependencies, size (S/M/L/XL), *business drift* assessment against the documented product direction (label only, never blocks — BD-005), and **open questions**.
 - **Gate:** *Definition of Ready.* If there are blocking questions → post them, set `Waiting for answers`, wait. Unanswered after 1 working day (configurable) → reminder, then `Needs human`. Non-blocking assumptions are stated explicitly and proceed.
 - **Returns:** can *reject* (duplicate, already done, not actionable, out of product scope) → `Needs human` with reason.
@@ -55,6 +55,7 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 - **Self-check before handoff:** a short built-in checklist (tests pass locally, no debug leftovers, no secrets, description complete).
 - **Scope-creep valve:** improvements discovered outside the scope are never implemented; the agent files a *separate* ticket (title, description, acceptance criteria, `related` link) via the platform tool and notes it in the workpad (research/01: Symphony).
 - **Test integrity (BD-024):** existing tests and CI/lint config are modified only when the plan says so and why; otherwise the CI gate/reviewer blocks.
+- **Dependency policy (BD-030):** adding a third-party dependency follows the project policy (`ask` by default → a question with license and maintenance status; `allow` for allow-listed packages; `block`).
 - **Returns:** to Architecture when the plan proves wrong (with evidence) — max once per task by default.
 
 ### S4 — CI gate (gate)
@@ -74,8 +75,11 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 - **Outputs:** **Acceptance Verdict** artifact per criterion; approve or return with concrete gaps.
 - **Returns:** Implementation (bounded, default 2).
 
+### S6b — Rebase gate (gate, BD-030)
+- Runs before Ready and again whenever the default branch moves while the MR waits: rebase (or merge, per project), resolve conflicts (bounded, default 2 attempts, by a short Implementation run), re-run CI. Escalates with a blocker brief when conflicts cannot be resolved. The board warns when two active tasks touch the same files.
+
 ### S7 — Ready for merge (human)
-- MR is marked ready, reviewers assigned per project config, ticket status → `In review`, Slack notification with summary and cost.
+- MR is marked ready; reviewers assigned from CODEOWNERS/project config; **risk classes** derived from touched paths (auth, payments, migrations, infra…) are labelled on the MR and can require a named reviewer, plan approval or a stricter checklist (BD-030); the Checks panel shows coverage delta and dependency status; ticket status → `In review`; Slack notification with summary and cost.
 - **Human MR comments** by mapped users create `mr.review.comment` events; unresolved threads are batched (2-minute debounce) into one return to Implementation, then a fast Code review, then back to Ready (BD-007). `@agentic hold` pauses; `@agentic rework` restarts from Architecture.
 - **While waiting, nothing runs.** The task sleeps and is woken only by events (comment, approval, CI result, merge) — never by a polling agent (research/01: Cursor subscriptions, Devin sleeping sessions).
 - **Human rejection = reset, not patching.** If a human requests a fundamentally different approach (explicit `@agentic rework` or MR closed with a reason), the task returns to Architecture with the human's reasoning; the old MR is closed, a fresh branch is created and the new plan must state what will be done differently (research/01: Symphony). Ordinary review comments follow the fast path above. A human decision resets the agent-to-agent iteration counter (Paperclip).
@@ -90,6 +94,10 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 - **Outputs:** knowledge update proposal (MR or direct commit per project policy — BD-012), ticket → `Done`, Slack summary.
 - Followed by the **Librarian** (see [05](05-knowledge-base-and-memory.md)) which merges proposals into the KB structure and keeps it tidy.
 
+## Steering and taking over (any stage)
+- A maintainer or member can **steer** a running agent from the run page (a user turn injected into the session, audited).
+- A human can **take over** a task: the pipeline pauses, the branch and a resume command are posted to the ticket and UI, the workspace is exported; the human can hand the task back to any stage. See product/18.
+
 ## Bug template (differences)
 
 `Intake → Refinement (bug-flavoured: expected vs actual, impact, repro steps) → Investigation → Architecture (fix plan, regression test) → Implementation → CI → Code review → Business review → Ready → Merged → Retro`.
@@ -102,7 +110,13 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 Small, mechanical tasks (dependency bump, config change, rename): `Intake → Refinement (light) → Implementation → CI → Code review → Ready → Merged → Retro (light)`. No Architecture, no Business review.
 
 ## Spike template
-Research/analysis tickets: `Intake → Refinement → Architecture (produces a document instead of a plan) → Human`. Output is a markdown report attached to the ticket and stored in the KB under `research/`. No MR.
+Research/analysis tickets: `Intake → Refinement → Architecture (produces a document instead of a plan) → Human`. Output is a markdown report attached to the ticket and stored in the KB under `research/`. No MR. Variant **epic split** (opt-in): the input is an epic and the output is a proposed ticket breakdown with acceptance criteria for the PM to accept.
+
+## Operating modes that reuse stages
+- **Review-only mode:** the Code review stage alone, on human MRs (product/18).
+- **Shadow mode:** the full pipeline on closed or parallel tickets with all outbound actions disabled and a comparison report instead of an MR (product/18).
+- **Ticket readiness linter:** a light Refinement pass on unlabelled tickets that posts one comment (product/18).
+- **Maintenance pipeline:** scheduled `chore` tasks within their own budget (product/18).
 
 ## Customisation model
 

@@ -40,4 +40,11 @@ Use these words exactly, in docs, UI and code. Add new terms here before using t
 | **Probation mode** | New-project state in which every plan requires approval for the first N tasks. |
 | **Mapped user** | A Jira/GitLab/Slack identity matched to a platform account by email; only mapped users can answer questions or approve. |
 | **Significance** | The Librarian's score for a proposed knowledge change, compared with the discard and auto-apply thresholds. |
+| **Autonomy dial** | Per-project preset (Observe / Assist / Supervised / Autonomous) that sets the granular policies; overrides show as Custom. |
+| **Shadow mode** | Running the pipeline without outbound actions to compare with human work and predict cost. |
+| **Review-only mode** | The Code review stage applied to human-authored MRs. |
+| **Ticket readiness linter** | Opt-in light refinement pass that comments on new, unlabelled tickets. |
+| **Steer / take over** | Sending a message to a running agent; pausing a task to continue it as a human with the same branch and session. |
+| **Risk class** | A label derived from touched paths (auth, payments, migrations…) that can require approval or specific reviewers. |
+| **Rebase gate** | Deterministic stage that rebases the task branch on the default branch, resolves conflicts within bounds and re-runs CI. |
 | **Provider mode** | How Claude is accessed: `api` (API key / cloud provider) or `local` (locally available Claude Code binary and operator-supplied credentials). |

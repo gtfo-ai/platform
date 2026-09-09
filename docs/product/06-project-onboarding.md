@@ -31,8 +31,13 @@ A conversational form driven by the **Product Manager** role, asking in the inte
 8. Communication: language for tickets/MRs, tone, what should be posted to Slack and when.
 Answers become `business/*.md` pages plus glossary entries; the agent shows the generated pages for edit and acceptance. Existing documents (README, docs folder, Confluence export, PDFs pasted as text) can be imported; the agent summarises them into the KB structure and links to the originals rather than duplicating.
 
-### Step 4 — Rules and policies
-Pre-filled from steps 2–3: initial `.agentic/rules/*.md` (e.g. "run `make test` before pushing"), pipeline policies (plan approval threshold, knowledge apply policy, WIP limits, budgets, status mapping), models per stage. Sensible defaults; all editable later.
+### Step 3b — History bootstrap (optional, budget-capped)
+Offer to mine the last N merged MRs (default 200) with their review comments and closed tickets for conventions, pitfalls and recurring reviewer requests. Results are KB proposals with provenance (MR links) in the proposal queue, never applied silently. Shows an estimated cost before running.
+
+### Step 4 — Operating mode and features
+One screen, all optional, all mirrored in settings later (BD-028): the **autonomy dial** (default Supervised, capped by readiness with a visible override), feature toggles with a one-sentence value statement, default and cost implication (shadow mode on N closed tickets, review-only on human MRs, ticket readiness linter, maintenance pipeline, digest/quiet hours, budget-approval threshold), **risk classes** proposed from the repository structure and reviewer routing from CODEOWNERS, budgets including a separate shadow/maintenance budget, and status mapping. Also pre-filled from steps 2–3: initial `.agentic/rules/*.md`, WIP limits, models per stage. Full feature list: [18 — Adoption features and operating modes](18-adoption-and-operating-modes.md).
+
+"Finish later" leaves a checklist on the project page; nothing is reachable only through the wizard.
 
 ### Step 5 — Commit
 One MR to the repository adding `.agentic/` with the accepted content (or a direct commit if the project allows), plus a one-line pointer in `CLAUDE.md` to the KB index (proposed). The platform builds the index.

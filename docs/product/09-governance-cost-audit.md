@@ -24,6 +24,9 @@ Decisions: [BD-011 cost accounting](../decisions/business/BD-011-cost-accounting
 - **Never kill a run mid-flight for an organisation/project budget** — that wastes the spend already made. Only per-run caps stop a run, and those are known upfront.
 - Budget changes are audited (who, when, from → to).
 - Forecast: the dashboard shows projected month-end spend from the trailing 7-day average.
+- **Estimate before spend:** each task gets a cost estimate at refinement (size × project history); an optional per-project threshold routes expensive tasks to budget approval by a maintainer before Implementation. Estimate accuracy is tracked.
+- **Separate budgets** for shadow mode and the maintenance pipeline so experiments never eat delivery budget.
+- **Human time accounting:** human minutes derived from events (review start → merge, question → answer, approvals) are shown next to token cost as *total cost of delivery*; per-user breakdown is off by default.
 
 ## Concurrency limits (WIP)
 
@@ -48,3 +51,4 @@ Retention: configurable per organisation; **default is to keep everything foreve
 - Destructive git operations (force push to protected branches, branch deletion outside `agentic/*`, history rewrite) are blocked by policy.
 - Outbound network from agent workspaces is allow-listed per project (package registries, the git host, configured integrations).
 - A **kill switch** per project and global ("stop all agents") is one click and one env var.
+- The **autonomy dial** (product/18, BD-027) is the single control that summarises how much the platform may do without a human; every level's effective policies are listed next to it.

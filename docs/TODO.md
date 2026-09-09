@@ -37,9 +37,20 @@
 - [ ] Security review of the threat model (prompt injection paths, token scopes, workspace escape) before MVP release.
 - [ ] Contributor guide and code of conduct for build-in-public.
 
+- [ ] Autonomy dial preset table with exact policy values per level (BD-027) and the readiness cap mapping.
+- [ ] Wizard step 4 content: value statements, defaults and cost implications per feature (BD-028).
+- [ ] Shadow mode comparison report specification (Q31).
+- [ ] Default risk classes and reviewer routing rules (Q32, BD-030).
+- [ ] Cost estimation model v1 (size × trailing history) and accuracy metric.
+- [ ] Human time accounting: event-to-minutes derivation rules and privacy note (per-user breakdown off by default).
+- [ ] Ticket readiness linter comment template (one comment, ≤ 10 lines, language auto).
+- [ ] History bootstrap: what is mined (MR review comments, commit messages, closed tickets), budget cap, proposal format.
+- [ ] Take-over protocol: pause semantics, resume command posting, workspace export format, hand-back to a stage.
+
 ## Later (parking lot; not for MVP)
 
-- [ ] Auto-merge policy for `chore` once trust metrics exist (BD-007).
+- [ ] Auto-merge policy for `chore` once trust metrics exist (BD-007) — fits Autonomous level later.
+- [ ] Shadow mode in parallel with live human tickets (v0.2).
 - [ ] Organisation-level shared knowledge across projects (product/05).
 - [ ] Cross-tenant control plane if hosting is ever offered (BD-009).
 - [ ] Managed Agents execution backend (research/04).

@@ -37,6 +37,7 @@ This directory is the single source of truth for **what** we are building and **
 15. [Risks, non-goals and principles](product/15-risks-non-goals-principles.md)
 16. [Metrics and success criteria](product/16-metrics-and-success-criteria.md)
 17. [Repository readiness](product/17-repository-readiness.md)
+18. [Adoption features and operating modes](product/18-adoption-and-operating-modes.md)
 
 ## Conventions
 
