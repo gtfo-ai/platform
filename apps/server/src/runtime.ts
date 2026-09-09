@@ -182,11 +182,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
     const auth = createAuth({ pool: database.pool, config });
     const hub = new SseHub({
       bufferSize: config.sseBufferSize,
-      maxQueuedLiveFrames: config.sseMaxQueuedLiveFrames,
+      maxQueuedFrames: config.sseMaxQueuedFrames,
       maxTopicsPerConnection: config.sseMaxTopics,
+      maxBufferedTopics: config.sseMaxBufferedTopics,
       retryMs: config.sseRetryMs,
       pingIntervalMs: config.ssePingIntervalMs,
       maxConnections: config.sseMaxConnections,
+      shutdownDrainMs: config.sseShutdownDrainMs,
       logger: loggerPort,
       onFrameSent: (kind) => {
         metrics.sseFramesSent.inc({ frame: kind });

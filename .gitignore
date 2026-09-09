@@ -40,6 +40,16 @@ playwright-report/
 /logs/
 /*.log
 
-# Agent-local settings
-.claude/settings.local.json
-.claude/worktrees/
+# Agent-local settings.
+#
+# Anchored with a leading slash to match the convention in `CLAUDE.md`, and written out rather
+# than relied upon: git already anchors a pattern that contains a separator anywhere but at its
+# end, so these two matched only at the root before the slash was added as well (verified with
+# `git check-ignore --no-index`). The slash makes the anchoring readable instead of a rule the
+# reader has to know, which is the whole point of the convention.
+#
+# `/.claude/worktrees/` holds linked git worktrees — whole separate checkouts of this repository.
+# `scripts/check-ignored.mjs` does not walk into them, and that is a property of the `.git` entry
+# they contain rather than of this pattern; see `isSeparateCheckout` there.
+/.claude/settings.local.json
+/.claude/worktrees/

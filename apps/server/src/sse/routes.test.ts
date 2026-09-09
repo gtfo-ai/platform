@@ -66,11 +66,13 @@ describe('authorisation wiring', () => {
 
     const hub = new SseHub({
       bufferSize: 4,
-      maxQueuedLiveFrames: 4,
+      maxQueuedFrames: 4,
       maxTopicsPerConnection: 8,
+      maxBufferedTopics: 32,
       retryMs: 1_000,
       pingIntervalMs: 20_000,
       maxConnections: 4,
+      shutdownDrainMs: 1_000,
     });
     const open = vi.spyOn(hub, 'open');
     const update = vi.spyOn(hub, 'updateSubscriptions');
@@ -96,25 +98,40 @@ describe('authorisation wiring', () => {
     await app.close();
   });
 
-  it('lets a member through to the hub', async () => {
+  it('lets a member through to the hub, and the hub owns the response until shutdown', async () => {
     const { app, hub, open } = await build('member');
-    // A successful `/events` never completes — it is a stream — so the request is left in flight
-    // and the assertion is that the hub was reached at all.
+    // A successful `/events` never completes — it is a stream — so the request is left in flight.
     const inflight = app
       .inject({ url: `/events?topics=${RUN}`, headers: { accept: 'text/event-stream' } })
       .then(
-        () => undefined,
-        () => undefined,
+        (response) => response.payload,
+        (error: unknown) => `injection failed: ${String(error)}`,
       );
     for (let i = 0; i < 200 && open.mock.calls.length === 0; i += 1) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     expect(open).toHaveBeenCalledTimes(1);
+
     // The stream holds the response open, so it is drained before the server is closed — the same
     // order `app.ts` puts in its `preClose` hook, which this bare instance does not have.
+    //
+    // This used to end at `await inflight`, with nothing after it. A mutation that stops the hub
+    // ending the response was therefore killed only by vitest's 5 s default timeout: the test hung
+    // rather than failing, which reads as an infrastructure problem and says nothing about what
+    // broke. The race gives it a deadline of its own and turns it into an assertion with a name.
     await hub.shutdown();
     await app.close();
-    await inflight;
+    const payload = await Promise.race([
+      inflight,
+      new Promise<'the /events response never ended'>((resolve) => {
+        const timer = setTimeout(() => {
+          resolve('the /events response never ended');
+        }, 2_000);
+        timer.unref?.();
+      }),
+    ]);
+    // Ended, and ended having said `shutdown` — which is the whole reason the response is held.
+    expect(payload).toContain('event: shutdown');
   });
 
   it('refuses an unauthorised topic added through the subscriptions endpoint', async () => {

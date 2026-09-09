@@ -102,6 +102,26 @@ describe('loadServerConfig', () => {
     ).toBe('op@example.test');
   });
 
+  it('refuses an SSE drain that does not fit inside the shutdown budget', () => {
+    // Both bounds accept up to 600 000 on their own, so nothing stopped the step from being given
+    // the whole budget its own container is bounded by — and then the dispatcher drain, pg-boss
+    // and the pool behind it get nothing at all.
+    expect(() =>
+      load({ APP_SSE_SHUTDOWN_DRAIN_MS: '30000', APP_SHUTDOWN_TIMEOUT_MS: '30000' }),
+    ).toThrow(/APP_SSE_SHUTDOWN_DRAIN_MS must be less than APP_SHUTDOWN_TIMEOUT_MS/);
+    expect(() =>
+      load({ APP_SSE_SHUTDOWN_DRAIN_MS: '60000', APP_SHUTDOWN_TIMEOUT_MS: '30000' }),
+    ).toThrow(/APP_SSE_SHUTDOWN_DRAIN_MS must be less than APP_SHUTDOWN_TIMEOUT_MS/);
+    expect(
+      load({ APP_SSE_SHUTDOWN_DRAIN_MS: '29999', APP_SHUTDOWN_TIMEOUT_MS: '30000' })
+        .sseShutdownDrainMs,
+    ).toBe(29_999);
+    // The shipped defaults have to satisfy their own rule.
+    expect(SERVER_CONFIG_DEFAULTS.sseShutdownDrainMs).toBeLessThan(
+      SERVER_CONFIG_DEFAULTS.shutdownTimeoutMs,
+    );
+  });
+
   it('rejects an APP_BASE_URL that is not a URL', () => {
     expect(() => load({ APP_BASE_URL: 'localhost:8080' })).toThrow(/APP_BASE_URL/);
   });

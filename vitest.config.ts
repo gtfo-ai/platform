@@ -25,6 +25,12 @@ export default defineConfig({
             'packages/*/src/**/*.test.ts',
             'apps/server/src/**/*.test.ts',
             'apps/launcher/src/**/*.test.ts',
+            // The verification scripts are part of the build's correctness, and one of them —
+            // `check-ignored.mjs` — is the only thing standing between an unanchored `.gitignore`
+            // pattern and a pushed tree that does not compile. It is tested against real
+            // repositories it builds in a temp directory, so it is I/O-bound in a way the rest of
+            // this tier is not, but it needs no container and no fixture data.
+            'scripts/**/*.test.ts',
           ],
           exclude: [
             ...defaultExclude,

@@ -40,11 +40,13 @@ const SOURCE_VARIABLE: Record<string, string> = {
   metricsUsername: 'APP_METRICS_USERNAME',
   metricsPassword: 'APP_METRICS_PASSWORD',
   sseBufferSize: 'APP_SSE_BUFFER_SIZE',
-  sseMaxQueuedLiveFrames: 'APP_SSE_MAX_QUEUED_FRAMES',
+  sseMaxQueuedFrames: 'APP_SSE_MAX_QUEUED_FRAMES',
   sseMaxTopics: 'APP_SSE_MAX_TOPICS',
+  sseMaxBufferedTopics: 'APP_SSE_MAX_BUFFERED_TOPICS',
   ssePingIntervalMs: 'APP_SSE_PING_INTERVAL_MS',
   sseRetryMs: 'APP_SSE_RETRY_MS',
   sseMaxConnections: 'APP_SSE_MAX_CONNECTIONS',
+  sseShutdownDrainMs: 'APP_SSE_SHUTDOWN_DRAIN_MS',
   shutdownTimeoutMs: 'APP_SHUTDOWN_TIMEOUT_MS',
   bodyLimitBytes: 'APP_HTTP_BODY_LIMIT_BYTES',
   trustProxy: 'APP_TRUST_PROXY',
@@ -63,7 +65,7 @@ export const argon2ConfigSchema = z.strictObject({
 
 export type Argon2Config = z.infer<typeof argon2ConfigSchema>;
 
-export const serverConfigSchema = z.strictObject({
+const serverConfigFields = z.strictObject({
   /** Which workloads this process runs (technical/01: one image, `ROLE` splits it). */
   role: z.enum(ROLES),
   port: z.int().min(0).max(65_535),
@@ -109,18 +111,23 @@ export const serverConfigSchema = z.strictObject({
   /** Frames kept per SSE topic for replay after a reconnect (TD-014's ring buffer). */
   sseBufferSize: z.int().min(1).max(10_000),
   /**
-   * Live frames that may be waiting to be written to one stream before that client is treated as
-   * a stalled reader and dropped. Separate from the buffer size on purpose — see `sse/hub.ts`.
+   * How far one stream's write queue may grow past the depth it opened at before that client is
+   * treated as a stalled reader and dropped. Separate from the buffer size on purpose, and
+   * measured as growth rather than depth — see `sse/hub.ts`.
    */
-  sseMaxQueuedLiveFrames: z.int().min(1).max(100_000),
+  sseMaxQueuedFrames: z.int().min(1).max(100_000),
   /** Topics one stream may carry; it bounds the largest replay a reconnect can ask for. */
   sseMaxTopics: z.int().min(1).max(1_000),
+  /** Topics whose replay buffer is retained, least-recently-published evicted first. */
+  sseMaxBufferedTopics: z.int().min(1).max(1_000_000),
   /** `: ping` comment interval; technical/08 says 20 s. */
   ssePingIntervalMs: z.int().min(1_000).max(600_000),
   /** The `retry:` field sent to the client; technical/08 says 1000 ms. */
   sseRetryMs: z.int().min(100).max(600_000),
   /** Hard cap on concurrent streams, so a client loop cannot exhaust the process's sockets. */
   sseMaxConnections: z.int().min(1).max(100_000),
+  /** How long shutdown waits for one stream's queue to reach the socket before abandoning it. */
+  sseShutdownDrainMs: z.int().min(10).max(600_000),
 
   shutdownTimeoutMs: z.int().min(100).max(600_000),
   bodyLimitBytes: z
@@ -136,6 +143,26 @@ export const serverConfigSchema = z.strictObject({
   jobs: jobs.jobsConfigSchema,
 });
 
+/**
+ * The SSE drain is one *step inside* the graceful shutdown, not a budget beside it.
+ *
+ * `preClose` waits up to `APP_SSE_SHUTDOWN_DRAIN_MS` for the slowest stream, and everything behind
+ * it — the dispatcher's own drain, pg-boss, the pool — has to finish inside what is left of
+ * `APP_SHUTDOWN_TIMEOUT_MS`. Both fields accept up to 600 000 independently, so they could be set
+ * equal (or the drain set longer) and the outer bound would stop being a bound at all: the SSE
+ * step alone would consume it and the process would be killed by whatever supervises it, mid-step,
+ * with the jobs half never drained. That is exactly the failure bounding the drain was added to
+ * prevent, one level up.
+ */
+export const serverConfigSchema = serverConfigFields.refine(
+  (config) => config.sseShutdownDrainMs < config.shutdownTimeoutMs,
+  {
+    message:
+      'must be less than APP_SHUTDOWN_TIMEOUT_MS: the SSE drain is one step inside the graceful shutdown, and the steps behind it (dispatch drain, jobs, the pool) need what is left of that budget',
+    path: ['sseShutdownDrainMs'],
+  },
+);
+
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
 
 export const SERVER_CONFIG_DEFAULTS = {
@@ -150,11 +177,13 @@ export const SERVER_CONFIG_DEFAULTS = {
   bootstrapAdminName: 'Administrator',
   sessionTtlDays: 7,
   sseBufferSize: 256,
-  sseMaxQueuedLiveFrames: 512,
+  sseMaxQueuedFrames: 512,
   sseMaxTopics: 64,
+  sseMaxBufferedTopics: 1_024,
   ssePingIntervalMs: 20_000,
   sseRetryMs: 1_000,
   sseMaxConnections: 1_000,
+  sseShutdownDrainMs: 5_000,
   shutdownTimeoutMs: 30_000,
   bodyLimitBytes: 1_048_576,
   trustProxy: false,
@@ -283,11 +312,15 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     metricsPassword: nullableString(readSecret('APP_METRICS_PASSWORD', env)),
 
     sseBufferSize: numberFromEnv(env.APP_SSE_BUFFER_SIZE, SERVER_CONFIG_DEFAULTS.sseBufferSize),
-    sseMaxQueuedLiveFrames: numberFromEnv(
+    sseMaxQueuedFrames: numberFromEnv(
       env.APP_SSE_MAX_QUEUED_FRAMES,
-      SERVER_CONFIG_DEFAULTS.sseMaxQueuedLiveFrames,
+      SERVER_CONFIG_DEFAULTS.sseMaxQueuedFrames,
     ),
     sseMaxTopics: numberFromEnv(env.APP_SSE_MAX_TOPICS, SERVER_CONFIG_DEFAULTS.sseMaxTopics),
+    sseMaxBufferedTopics: numberFromEnv(
+      env.APP_SSE_MAX_BUFFERED_TOPICS,
+      SERVER_CONFIG_DEFAULTS.sseMaxBufferedTopics,
+    ),
     ssePingIntervalMs: numberFromEnv(
       env.APP_SSE_PING_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.ssePingIntervalMs,
@@ -296,6 +329,10 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     sseMaxConnections: numberFromEnv(
       env.APP_SSE_MAX_CONNECTIONS,
       SERVER_CONFIG_DEFAULTS.sseMaxConnections,
+    ),
+    sseShutdownDrainMs: numberFromEnv(
+      env.APP_SSE_SHUTDOWN_DRAIN_MS,
+      SERVER_CONFIG_DEFAULTS.sseShutdownDrainMs,
     ),
 
     shutdownTimeoutMs: numberFromEnv(

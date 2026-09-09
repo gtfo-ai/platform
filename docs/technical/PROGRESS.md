@@ -18,9 +18,8 @@
 - **`main` is at `d60d770`, green on all five verify targets, CI green.** Nine work packages are DONE and
   pushed: WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` · WP-02a `8abf247` · WP-03 `ca1ae06` ·
   WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` · WP-04a `d729616` · WP-06 `d60d770`.
-- **WP-06a is finished but NOT on `main`.** It lives on branch **`wp/06a`** (commit `887e72d`, pushed).
-  It is green on all five targets and its round-1 review findings are fixed, but **its round-2 review was
-  still running when the session paused**, so it was deliberately kept off `main`.
+- **WP-06a is DONE and on `main`** (session 2). Three review rounds plus a follow-up; seven layers of one
+  defect; it no longer blocks WP-12 or WP-15.
 
 **The immediate next step**
 
@@ -96,13 +95,22 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    dangerous direction.
 8. **Docs win over code.** When implementation proves a doc wrong, amend the doc first, then point at it.
    TD-004, technical/02, technical/03, technical/12, BD-007 and product/04 were all amended this way.
-9. **When two code paths can both satisfy an obligation, the fact that the obligation was met is itself a
-   shared quantity, and it needs an explicit arbiter.** This is the sixth layer of the WP-06a defect and the
-   same sentence as the other five. Two paths each correctly discharging "the client has been told" is not
-   two correct paths; it is an unsynchronised shared flag with no flag.
+9. **An obligation two paths can each discharge needs an explicit arbiter — and the rule has two
+   directions.** *Over*-discharge is the sixth layer of the WP-06a defect: two paths each correctly writing
+   "the client has been told" is not two correct paths, it is an unsynchronised shared flag with no flag.
+   Its **dual is a distinct class that the first half would not catch**: an arbiter *consumed* by a path
+   that did not perform the obligation, so nobody discharges it — WP-06a's `retry:` was suppressed by the
+   `first` flag being spent on frames the `partials` filter had already dropped. State both directions.
 10. **A test whose assertion is satisfied by every branch must also assert which branch ran**, or it certifies
    the observable and not the code. `hub.test.ts:817` asserted `shutdown@-` last — true down either route —
    and never asserted the `reset` that only one route writes.
+11. **A register entry that justifies a kindness by pointing at a test elsewhere must name a test that
+   exists.** All five WP-07 fakes justified "no quota unless scripted" with "the scripted path is what the
+   executor's tests drive"; nothing anywhere composed a fake with the executor. A justification is a claim
+   about the suite, and claims about the suite are checkable.
+12. **A fake's kindest divergence needs a positive assertion, not a warning.** Documenting a divergence is
+   necessary and not sufficient: the place a fake is most permissive is the place a later WP leans hardest.
+   Hard-coding `mergeable: true` in the WP-07 git fake passed 39/39 unit and contract tests.
 
 ## Blocker briefs needing a human
 
@@ -121,8 +129,8 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-04 | Event store + priority dispatcher + outbox job (TD-005) | WP-02, WP-03 | no | DONE | `59817d6` | 3 rounds; every guard mutation-checked |
 | WP-05 | Jobs port on pg-boss | WP-03 | no | DONE | `3397924` | 3 rounds; Q38; fake divergence register |
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
-| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | REVIEW | branch `wp/06a` `887e72d` | all 5 targets re-verified green by the orchestrator (session 2); review round 2 running; **before WP-12/WP-15** |
-| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | IN_PROGRESS | branch `wp/07` (worktree) | started session 2, alongside the WP-06a review |
+| WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `PLACEHOLDER` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
+| WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | REVIEW | branch `worktree-agent-a9a3e50934a34e3ef` `0178ffc` | all 5 targets green in the orchestrator's shell (+199 tests); review round 1 running |
 | WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
@@ -1013,6 +1021,119 @@ failure is safe — false failure, never false pass — so it was filed as a not
 wire as a failing test *before* fixing it, and to **measure** the reviewer's proposed arbitration flag rather
 than apply it — the same discipline that at round 1 proved the reviewer's `#queued >= cap + replayOutstanding`
 algebraically identical to the broken gate it was meant to replace.
+
+### WP-06a — review round 3: APPROVE, and the seventh layer found anyway
+
+**Round 3 verdict APPROVE.** The reviewer re-derived all ten shared-state entries and all five obligations
+from the code before reading the audit, matched **10/10 and 5/5**, and then found the seventh layer:
+
+**`SseHub.shutdown()` (`hub.ts:939`) is not re-entrant.** Two concurrent calls snapshot the same connections
+twice and `write()` enqueues a second `shutdown`; the second link passes both `#closed` and `isConnected` and
+writes — measured wire `["ping@-","shutdown@-","shutdown@-"]`. The shape is the point: the on-chain link
+*sets* `#shutdownAnnounced` but never *reads* it, so round 2's arbiter does not arbitrate on-chain against
+on-chain, and the audit's claim that the two paths "partition the race exactly — no gap and no overlap" is
+false because **there are three paths, not two**. Filed as should-fix rather than blocking because the
+reviewer measured that it is unreachable through the composition root: Fastify's `preClose` fires exactly
+once for both concurrent and sequential `app.close()`, and `runtime.stop():229` has its own guard.
+
+**What round 3 confirmed.** Round 2's implementer was right to measure the proposed arbitration flag instead
+of applying it — the reviewer independently ran the mutation the implementer had *not* run (keep the
+`shutdown` dedupe but move the flag read past the `reset`s) and killed it with wire `shutdown,reset,reset`,
+so the "claim the flag before `abandon()`'s `reset`s" refinement is empirically load-bearing rather than
+rhetoric. All five constructed interleavings pass; a stalled plus a healthy connection drain in 22 ms at
+`drainMs` 20, i.e. one budget, not two. `MAX_STALLED_TURNS` is **gone** — `settle` now proves hopelessness
+structurally (every write parked on a gate only `close()` releases), with `MAX_DRAINING_TURNS = 50` bounding
+only the ungated case and the residual unprovable case written down at the constant.
+
+**Two audit omissions remain, both benign:** `#shuttingDown` itself, and `connection.topics`, which
+`updateSubscriptions` mutates while `#resetEveryTopic`/`SseHub.close` read it (probed during the drain:
+leaks nothing, `watchedTopics: []`).
+
+### WP-06a — the merge found what no worktree could: standing rule 6, exactly as written
+
+Squash-merging the APPROVED branch turned `main` **red**, and nothing in three review rounds could have
+caught it. WP-06a's whole contribution to `check-ignored.mjs` was to derive its scope from `git ls-files`
+instead of two hand-maintained lists. `.claude/` is a tracked top-level directory, so the derived walk
+descends into it — and on `main`, `.claude/worktrees/agent-<id>/` is a **separate git worktree**, a second
+checkout of this repository, correctly ignored by `.gitignore:45`. The guard reported every source file in
+it and failed `verify`.
+
+It was green in the review worktree for one reason only: that worktree lives outside the repository, so it
+contains no nested checkout. **A guard that inspects the repository is a guard whose result depends on where
+it is run from** — and the orchestrator's own parallelism is what put a checkout inside the repository.
+
+The fix must not be another list. The non-drifting rule is git's own: **a directory containing a `.git`
+entry is a separate repository or worktree, so do not descend into it.** A linked worktree has `.git` as a
+*file* (an 84-byte `gitdir:` pointer); a nested clone has it as a directory; handle both. `.gitignore:45` is
+also unanchored (`.claude/worktrees/`), which violates this repository's own convention — anchored to
+`/.claude/worktrees/` as well, though that is *not* the fix: anchoring changes which pattern matches, not
+whether the walk enters another checkout.
+
+Both this and the round-3 should-fix went out in one short follow-up round, with a test for each that must
+fail by a **named** assertion when the fix is reverted. The nested-checkout test builds a real linked
+worktree rather than a directory *named* `worktrees` — a test that asserts the walk skips a name tests
+nothing — and asserts in the same run that a genuinely swallowed source file still **fails**, so it cannot
+pass by the guard having been switched off (standing rule 4: a negative assertion passes silently on a
+broken harness, so pair it with a positive one).
+
+### WP-07 — review round 1: the fakes are the product, and rule 1 is decided here
+
+**Verdict REQUEST_CHANGES**, three majors. WP-07 is where standing rule 1 stops being advice: five fakes
+become the unit-tier ground truth for WP-08…WP-11, WP-15 and the whole pipeline, and the implementer
+declared **six groups of "kinder than production" divergences** openly. The reviewer's job was to price each
+one. Verdicts: task-management acceptable · **git must be made stricter** · communication acceptable ·
+errors acceptable · logs acceptable · application-ring doubles acceptable.
+
+**Major — a secret reaches the log.** `action-executor.ts:352`: the audit-**failure** branch logs
+`err: errorMessage(error)` unredacted, while `:232` redacts the same string for the audit row. The WP's own
+test at `action-executor.test.ts:180-201` proves an error message can carry an injected token. The redaction
+is present on the path that succeeds and absent on the path that fails — TD-012 and BD-002 both violated by
+the same omission. Treated as a *class* in the fix brief: every site where an error, a provider payload or a
+response body is logged, thrown or attached to an event rather than written to the audit row.
+
+**Major — the shadow guard fails open.** `action-executor.ts:86,274`: `mode` is optional and defaults to
+`'normal'`, so a call site that forgets `mode: task.mode` — WP-15 makes these calls — gets a **real** side
+effect where shadow mode was intended. In shadow mode no side effect may reach a provider; a safety guard
+whose default guesses "not shadow" is inverted. The file's own docblock already argues for making
+`shadowResult`/`describeResult` required; the argument applies harder to `mode`.
+
+**Major — the shared suite bakes in the wrong error code.** The git fake throws `invalid_request` for a
+duplicate open MR (`fake.ts:661`); its own register says `conflict` (`fake.ts:18`) and `common.ts:69` maps
+GitLab's real **409 → `conflict`**. `git-provider-contract-suite.ts:191` asserts the fake's code, so WP-09
+must either mis-map a real 409 or weaken the suite — both defeat a shared suite. Found only by reading
+`common.ts`: the register and the code disagreed and nothing failed.
+
+**The kindest divergence in the WP was untested.** Hard-coding `mergeable: true` at `git/fake.ts:365` passes
+**39/39** unit and contract tests. "Mergeability is whatever the seed says" is exactly the divergence WP-26's
+rebase gate will trust, including the `null` case.
+
+**And five registers justified a kindness by pointing at tests that do not exist.** All five fakes explain
+"no quota unless scripted" with "the scripted path is what the executor's tests drive" — the executor's
+tests use lambdas, and **nothing anywhere composes a fake with `IntegrationActionExecutor`**. The rate-limit
+path is therefore unexercised by default in every unit suite that will trust these fakes, while the register
+says the opposite.
+
+**Rules earned:**
+11. **A register entry that justifies a kindness by pointing at a test elsewhere must name a test that
+    exists.** A justification is a claim about the suite, and claims about the suite are checkable.
+12. **A fake's kindest divergence needs a positive assertion, not a warning.** Documenting a divergence is
+    necessary and not sufficient: the one place a fake is most permissive is the one place a later WP will
+    lean hardest, so it needs a test that fails when the divergence widens.
+
+**Also found:** the "shadow mode null adapter" named in WP-07's plan line and referred to by
+`integrations/index.ts` and `task-management/fake.ts:3` **is implemented nowhere** — shadow mode is a guard
+inside the executor instead. Two suite assertions are still fake-shaped and are the first thing WP-08 would
+have to change (`task-management-contract-suite.ts:269`, where real Jira yields `unsupported_event` rather
+than `malformed_payload`, and `git-provider-contract-suite.ts:275`), which is a direct BD-017 violation.
+`IntegrationActionEntry` carries five fields `integration_actions` has no columns for (`0007_cost.sql`,
+technical/03:70) — recorded in `docs/TODO.md` rather than fixed, because no adapter persists them yet and
+parallel WPs collide on migration numbers.
+
+**Confirmed sound:** the dependency rule holds and the biome overrides were extended rather than weakened;
+`parseProviderData` sits at the ring edge (BD-022); caps are strict; idempotency scope, replay and
+audit-before-throw are correct apart from the redaction gap; tiering and coverage correct; **all five doc
+amendments to technical/06 are doc-proven-wrong rather than doc-found-inconvenient**, and the audit
+row/event split matches technical/02:120.
 
 ## Discovered work (not in plan)
 
