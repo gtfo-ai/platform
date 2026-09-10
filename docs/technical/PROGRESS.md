@@ -381,7 +381,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-10 | Slack provider | WP-07 | yes | DONE | `fbf0928` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
-| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `WP13SHA` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
+| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
