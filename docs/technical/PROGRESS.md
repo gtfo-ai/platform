@@ -4,9 +4,19 @@
 
 ## Resume note
 
-> **Session 2, in progress (started 2026-09-09; the Claude Code process restarted once on 2026-09-10).**
-> Read this, then "Standing rules earned by evidence" — **fifty-seven rules, each with its evidence** —
+> **Session 2, in progress (started 2026-09-09; the Claude Code process restarted *twice* on 2026-09-10).**
+> Read this, then "Standing rules earned by evidence" — **sixty-four rules, each with its evidence** —
 > then continue the loop in `14-orchestration-protocol.md`.
+>
+> **After a restart, resume the in-flight agents with `SendMessage` — do not re-spawn them.** Their
+> transcripts survive and their worktrees are intact, so a resumed agent keeps its analysis; a fresh one
+> repeats the reading and loses the reasoning. Both restarts have now proved this. Check each worktree's
+> `git log` and `git status` first, to know what was committed versus left dirty.
+>
+> **And check the load average before resuming anything that runs tests.** The second restart came back at
+> load **196** — Spotlight reindexing after a boot, not a leaked process (verified: no orphan busy-loops,
+> every heavy PID was a system daemon two minutes old). Rule 64 says a census test times out at LA ≥ 110,
+> so resuming into that load manufactures exactly the flakes this ledger just spent a round removing.
 
 **Twenty work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
 WP-02a `8abf247` · WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` ·
