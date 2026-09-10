@@ -382,7 +382,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
-| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
+| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | IN_PROGRESS | worktree | started session 2; owes WP-13 the sub-path chown, uid 1000 and `docker stop`/`rm` on every path |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
@@ -1957,6 +1957,41 @@ was the orchestrator's *and* internally inconsistent rather than merely suboptim
 one-directional arbitration flag, and WP-12's whole-string NFKC fold (which would have mapped U+FF0F onto a
 path separator). *A fix arriving with authority is still a hypothesis* — including when the authority is the
 one writing the brief.
+
+### Checkpoint 2 — nineteen work packages, M1's spine complete but not yet joined
+
+**What works end to end.** Still nothing user-facing, but every component M1 needs now exists and is green:
+a Fastify server with auth, RBAC, OpenAPI and an SSE stream whose replay path survived seven layers of one
+defect; an event store with a priority dispatcher, outbox and per-stream ordering; jobs and timers on
+pg-boss with a working-day calendar; **five integration providers** — Jira, GitLab, Slack, Sentry, Loki —
+each behind a type port with a fake, a reusable contract suite and recorded fixtures whose provenance is
+enforced by a test; the **Claude SDK runner** with hooks, path guards, redaction and thirteen golden
+fixtures replayed through the real `query()`; the **run shim** that spawns the CLI and brokers credentials
+without holding any; and a **web foundation** with 245 ui tests, 33 Playwright specs and a bundle budget CI
+enforces.
+
+**What is missing, and it is the part that makes it a product.** WP-14 (launcher and workspaces) is in
+flight; **WP-15 (pipeline interpreter, stage executor, sagas) has not started**, and it is where all of the
+above is first exercised together — one feature and one bug ticket through the whole loop against fake
+Claude. Until WP-15 lands, this repository is a set of capable components that have never met.
+
+**Quality signal.** Nineteen work packages, roughly forty review rounds, and **fifty-one standing rules,
+every one with a reproduction**. The reviews were not ceremony. In this session alone they found: an SSE
+defect seven layers deep whose test harness could not observe it; a webhook verifier that accepted
+`HMAC-SHA256('')`; a shadow guard that failed open at runtime while the type said otherwise; a redactor that
+was the identity function on the only production path; a credential broker that answered after the child
+had exited; a path guard that let `conﬁg` overwrite `config` on APFS; a budget watchdog silent at
+`NaN > ceiling`; ticket text that became an `@channel` broadcast; and a token "revoked" at the wrong
+project while its holder was told it was gone. **Not one was found by reading the diff** — each needed an
+exploit, a census, a mutation, a constructed interleaving, or a measurement against the real thing.
+
+**The rules that keep recurring** are worth naming, because they are the ones later work packages should
+expect to be caught by: a guard that another guard is quietly covering for (rule 4, four instances); a claim
+in a docblock that no check enforces (rules 3, 44, 46, 48); a negative case every wrong implementation would
+also reject (rule 43, three instances); a prescribed fix that was itself wrong (rule 27, four instances,
+one of them the orchestrator's own and self-contradictory); and a measurement quoted without being
+reproduced (rule 39, four figures corrected after the fact, one of which I had promoted into a standing
+rule).
 
 ## Discovered work (not in plan)
 
