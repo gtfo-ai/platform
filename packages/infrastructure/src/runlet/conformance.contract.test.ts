@@ -277,11 +277,18 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     });
     await runner.next('spawn.ok');
 
-    // Stop reading once the bulk is unmistakably flowing. From here the shim writes until the
-    // socket refuses, pauses the child's stderr, and the queue it is holding is what
-    // `process.exit(0)` would throw away.
-    await waitFor('the bulk started arriving', () => payloadOf(runner, 'stderr').length >= 1 << 20);
+    // Stop reading *before* the bulk flows, not once it is "unmistakably flowing". The earlier
+    // form waited for 1 MiB and then paused, but one 20 ms poll tick of a unix socket carries far
+    // more than that: measured on this host, the count at pause landed at 8,192,000 / 8,323,072 /
+    // 8,388,608 bytes — straddling the `BULK_BYTES / 2` bound the assertion below draws, which is
+    // why that assertion failed 5 runs in 10. The bound was not wrong; it was drawn through the
+    // middle of the distribution it was measuring. Pausing here instead moves the landing point to
+    // the far side of it, so the assertion tests the shim rather than the scheduler.
+    // From here the shim writes until the socket refuses, pauses the child's stderr, and the queue
+    // it is holding is what `process.exit(0)` would throw away.
     runner.pause();
+    // A settle, not an assertion: the socket buffer fills after a few hundred KiB of a 16 MiB
+    // write, so this is orders of magnitude more than it needs. Nothing below is bounded by it.
     await new Promise((resolve) => setTimeout(resolve, 500));
     runner.send({ type: 'stdin' }, Buffer.from('go\n', 'utf8'));
     // Waiting for the line the shim logs on its way out — rather than for a duration — keeps both
@@ -306,9 +313,14 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // …and the socket really was saturated when the run ended, rather than the whole conversation
     // having fitted in the kernel's buffer — in which case `process.exit(0)` would lose nothing and
     // this test would prove nothing (standing rule 4). `exit` is the last frame the shim writes, so
-    // by now the count is final: **at least half of the bulk never crossed the socket**, which is
-    // two orders of magnitude more than any kernel socket buffer holds. The runner's stall is the
-    // only thing that explains it.
+    // by now the count is final: of the 16 MiB the child wrote, the runner holds **262,144 bytes**,
+    // measured identically in 5 runs of 5 — one 256 KiB socket buffer, and nothing beyond it. The
+    // bound below is 8 MiB, so the margin is 32x, and the *reason* the margin is that wide is the
+    // pause above happening before the bulk rather than 1 MiB into it. It is worth knowing that the
+    // number the runner ends up with is precisely the kernel buffer, because that is the quantity
+    // this assertion is distinguishing the run from: 16 MiB was written, one buffer's worth
+    // arrived, and the rest died with the child. The runner's stall is the only thing that
+    // explains it.
     expect(payloadOf(runner, 'stderr').length).toBeLessThan(BULK_BYTES / 2);
     expect(await shim.exited).toBe(0);
   }, 60_000);
@@ -322,7 +334,8 @@ describe('agentic-runlet conformance, against the real shim process', () => {
       clock: systemClock,
       onStderr: (chunk) => stderrChunks.push(chunk),
     });
-    const child = spawn(spawnOptions(['--scenario', 'signal-report']));
+    const pidFile = `${shim.dir}/signal-report.pid`;
+    const child = spawn(spawnOptions(['--scenario', 'signal-report', '--pid-file', pidFile]));
     const lines: string[] = [];
     child.stdout.on('data', (chunk: Buffer) => lines.push(chunk.toString('utf8')));
     child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n`);
@@ -335,7 +348,13 @@ describe('agentic-runlet conformance, against the real shim process', () => {
         }
       }, 20);
     });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // `kill()` returns `state.connection?.send(...) ?? false`, so a `false` here means *the control
+    // connection was not up yet* — not that the child died. A fixed sleep therefore asserted a
+    // hardware property: it failed on `main` at load average 150 with the child perfectly healthy.
+    // The pid file is the structural lower bound this file's docblock asks for, and it is strictly
+    // stronger than "connected": the child can only write it because the shim received the `spawn`
+    // frame, which it can only have received over the connection `kill()` is about to use.
+    await waitForFile(pidFile);
     expect(child.kill('SIGUSR1')).toBe(true);
     await sawSignal;
 
@@ -395,9 +414,13 @@ describe('agentic-runlet conformance, against the real shim process', () => {
         credential: async () => ({ username: 'agentic', password: 'glpat-FAKE-0000000000000000' }),
       }),
     });
-    const child = spawn(spawnOptions(['--scenario', 'signal-report']));
+    const pidFile = `${shim.dir}/credential-child.pid`;
+    const child = spawn(spawnOptions(['--scenario', 'signal-report', '--pid-file', pidFile]));
     child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n`);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Same lower bound as the signal test: this one needs the child *running* before it asks the
+    // credential socket a question, because the answer is scoped to a live child (WP-13's broker
+    // must not answer after child exit, and must not answer before there is one to answer for).
+    await waitForFile(pidFile);
 
     const ask = async (input: string): Promise<string> => {
       const helper = spawnProcess(
