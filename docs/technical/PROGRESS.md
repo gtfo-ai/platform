@@ -152,11 +152,19 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `ß → ss`; both only widen, so both fail closed. **The instrument is the transferable part:** a
    filesystem-differential test that creates the files and compares inodes cannot drift from the filesystem
    the way an argument about Unicode can. Sharpens rule 15.
-   **Sharpened again at round 3: do not reason about the classes, *enumerate* them.** Writing every code
-   point into one directory and grouping by inode turned up **1599 non-trivial equivalence classes** on this
-   volume and named the **18** the fix still missed (U+0345, final sigma U+03C2, U+03F9, U+1C80-87, U+1FBE,
-   U+A64A/B, U+A7CF/D3/D5 — all non-ASCII↔non-ASCII, so no ASCII protected path is exposed). Reasoning had
-   found four classes. A census finds what an argument cannot.
+   **Sharpened again at round 3: do not reason about the classes, *enumerate* them — and then accept that a
+   string fold can only ever approximate a filesystem's.** Writing every code point into one directory and
+   grouping by inode found **1906 equivalence classes** across the BMP and plane 1, and named the **43** the
+   fix still misses. Reasoning had found four. But the census also found the *cause*, which is worth more
+   than the list: `toLowerCase()` reads the case table of the running **Node/ICU** build, while the volume
+   compares with the case table baked into **the OS release**, and those version independently. Every miss is
+   a recently-encoded cased letter (U+A7CF/D3/D5; the contiguous plane-1 run U+16EBB–U+16ED3), so the gap
+   **re-opens on every Node or macOS Unicode bump, in whichever direction is ahead** — a hard-coded table of
+   the 43 would be stale by the next one. *State the guarantee over the classes that fold onto an **ASCII**
+   name*, which is what a protected-path list is written in (every example in technical/12 and the shipped
+   `FLAGGED_CONFIG_PATHS`) and which the census confirms holds without exception; treat anything wider as
+   best-effort and expect it to drift. All 43 misses are non-ASCII↔non-ASCII, so the ASCII guarantee is
+   provably complete on this volume.
 28. **A fold that may widen equality must never widen structure.** WP-12's fold is allowed to make more
    paths match a protected pattern — that direction is safe. It is *not* allowed to invent a path
    separator: NFKC maps U+FF0F, and also `℀` U+2100, `℁` U+2101, `℅` U+2105 and `℆` U+2106, into strings
