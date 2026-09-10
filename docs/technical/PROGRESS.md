@@ -161,8 +161,8 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
 | WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `9e0be0b` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
-| WP-08 | Jira Cloud provider | WP-07 | yes | IN_PROGRESS | worktree | started session 2 |
-| WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | IN_PROGRESS | worktree | started session 2 |
+| WP-08 | Jira Cloud provider | WP-07 | yes | REVIEW | branch `worktree-agent-ab6861f2b408b3ec4` `024c31a` | +157 tests; 0 invented fixtures; review pending |
+| WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | REVIEW | branch `worktree-agent-a7fc1df1c30938109` `e7cb0e1` | +251 tests; 30 mutations; review pending |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | TODO | — | |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | REVIEW | branch `worktree-agent-a80d5d7c411ac0f51` | round 1 REQUEST_CHANGES (2 majors, both fail-open); round 2 in flight |
@@ -1277,6 +1277,63 @@ adapter owes that access control, and WP-27's take-over export owes the redactio
 
 **Also worth keeping:** `fake-spawn`'s "no backpressure" kindness is genuinely inert inside WP-12, because the
 SDK owns stdout — but **WP-13 must not run its "large stdout" conformance test against this fake.**
+
+### WP-08 and WP-09 — two providers, and what "recorded" turned out to mean
+
+Both were implemented in parallel from published documentation, because there is no Jira or GitLab instance
+to call. Both were told to report **which fixtures are documented and which are invented, separately**, and
+both did — that instruction is the reason the two reports can be trusted at all.
+
+**WP-08 (Jira Cloud): 12 documented, 2 composed, 0 invented.** Every fixture carries a `source` block with a
+URL and a retrieval date, and the taxonomy lives in `test/fixtures/http/jira-cloud/SOURCES.md`; the two
+`composed` entries exist because Atlassian publishes the webhook envelope and the parts but no complete
+example. The published HMAC test vector was reproduced exactly. Two Atlassian documentation bugs were found
+and recorded (`getIssue`'s `fields.comment` array shape, and an `accoundId` typo). **The contract suite
+passed unchanged** — the first evidence that BD-017 actually holds. One mutation is worth keeping: raw probe
+detail → "redacts the health probe detail" **initially survived**, because the *executor's* redactor was
+masking the adapter's own; the test now composes `noSecretsRedactor()` so only the adapter's can fire. That
+is standing rule 4 in a new costume — a guard that appears to work because a *different* guard is covering
+for it.
+
+**WP-09 (GitLab): documented fixtures plus five explicitly labelled `kind:"inferred"`** (the 409 body for a
+duplicate MR — status documented, body not; a 404 for an unprotected branch; a 404 for a missing file; an
+empty pipeline list; a repeat-200 on a second resolve). Coverage type is flagged AMBIGUOUS in the fixture,
+because the docs only ever show `null`. `merge_status` maps to the port's three states with
+`unchecked|checking|cannot_be_merged_recheck` → **null**, never `false` — the distinction WP-26's rebase gate
+depends on — and blocking reasons never map to `false`. Thirty mutations, all killed by named assertions.
+Self-managed differences are handled as capability flags rather than version sniffing, with minting failures
+turned into a typed `unsupported_capability` that names Premium/Ultimate rather than surfacing a raw 404.
+
+**What WP-09 deliberately did not invent, and this is the right instinct:** `diff_stats` is `null`
+everywhere, because GitLab's REST API publishes only `changes_count` (a file count, and `"1000+"` above a
+thousand). Filling two of three fields with zeroes would have put invented numbers into `mr.opened` and into
+WP-39's coverage deltas. GraphQL's `diffStatsSummary` has them — recorded as discovered work.
+
+**Q40 collided, exactly as predicted.** WP-09 and WP-12 both took it. WP-09 saw the hazard coming and noted
+that a collision would conflict on the same hunk, "which is the loud failure" — the orchestrator renumbers at
+merge. WP-08 took none.
+
+**WP-09's finding for the pipeline:** `GitProviderPort` has **no protected-branch member**, so WP-15 would
+have to down-cast to `GitLabProvider` to reach the gate WP-09 provides. GitHub has the same concept. It
+belongs on the port, with a fake and a suite case, in a follow-up.
+
+### A hardware assertion survived seven layers of review, and WP-08 found it
+
+`apps/server/src/sse/hub.test.ts:1101` drives a real `shutdownDrainMs: 20` — twenty actual milliseconds — and
+asserts the **exact** 264-frame wire that drains inside it. How many frames drain in twenty real
+milliseconds is a property of the machine. This is **standing rule 2**, in the file that earned rules 9, 10,
+15 and 16, and it passed three WP-06a review rounds and a follow-up.
+
+It was found only because WP-08's 157 new tests loaded the runner enough to tip it over: red **3 runs in 8**
+with those files present, green **8 of 8** with them moved aside. The orchestrator could not reproduce it on
+`main` — 6 of 6 green in isolation, 5 of 5 green across the full unit and contract suite — which is the
+point worth recording: **`main` was not flaky, it was one work package away from being flaky**, and WP-08,
+WP-09 and WP-12 land roughly 560 tests between them.
+
+The fix is queued as a `ci-fix` with three mutations it must still fail (remove the per-topic `reset`, remove
+the off-chain `shutdown`, make the drain unbounded), and with the instruction to prefer **injecting the
+shutdown timer** over merely loosening the assertion, since the rest of that suite already runs on an
+injected clock. *A flake you cannot make fail is a flake you cannot prove you fixed.*
 
 ## Discovered work (not in plan)
 
