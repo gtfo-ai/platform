@@ -196,6 +196,12 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `vbscript:` and `file:`. The only thing preventing execution was **React 19.3 rewriting the attribute** —
    an accidental defence that nothing asserted, dependent on a framework version. A scope claim is a
    checkable claim (rules 17, 30, 33).
+46. **An encoder whose comment claims it makes hostile input inert is a claim a test must kill.** Two
+   `encodeURIComponent` deletions in WP-11's adapters survived **3000 of 3000** tests — one in Loki's
+   `/label/${name}/values`, one in Sentry's path `segment()` — while the LogQL escaper *beside* them died in
+   3 tests under its own mutation. Shipped behaviour was correct; the claim was simply unchecked, on the one
+   string standing between provider-controlled input and a URL carrying the `Authorization` header. Rule 44's
+   shape, applied to encoders: assert the path that goes on the wire.
 45. **A fixture named for the property under test guarantees the property is never tested.** WP-20's
    web-e2e fixture field is called `safeUrl`, so no tier ever fed a hostile scheme into the `href` path that
    had no guard. Name fixtures for what they *are*, not for what you hope they satisfy — and feed the
