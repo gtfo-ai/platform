@@ -1,4 +1,43 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { nestedCheckoutExcludes } from './scripts/nested-checkouts.js';
+
+const repositoryRoot = fileURLToPath(new URL('.', import.meta.url));
+
+/**
+ * Excluded by **every** project, and by coverage.
+ *
+ * It is one constant spread into every project rather than a list per project, because that is what
+ * makes "a new project inherits the scoping" true by construction instead of by review, and the
+ * spread at the end of it is the reason it exists.
+ *
+ * `nestedCheckoutExcludes` asks the filesystem which directories under this root belong to another
+ * checkout — a linked worktree, a nested clone, a submodule — and excludes each. Without it the
+ * leading `**` of the `integration` and `e2e-fake-claude` includes reaches into
+ * `.claude/worktrees/agent-<id>/`, where this repository's own agent worktrees live, and a
+ * verification run reports on code that is not in this checkout. Measured with one agent worktree
+ * nested here: `integration` collected 24 files of which 12 were the other checkout's, and
+ * `e2e-fake-claude` 4 of which 2 were; with the exclusion, 12 and 2. See
+ * `scripts/nested-checkouts.ts` for why the rule is "a directory holding a `.git` entry" rather
+ * than a `.claude/worktrees` constant.
+ *
+ * The anchored projects — `unit`, `contract`, `ui` — cannot reach `.claude/worktrees/`, and were
+ * measured not to: 142/20/16 files either way with a worktree present. They are covered anyway,
+ * because an anchor is only safe against *where the harness happens to put a checkout today*. A
+ * nested checkout planted under `packages/` and `apps/web/src/` **is** collected by them, measured
+ * as 143/21/17 against this checkout's 142/20/16. Being anchored is not the same as being scoped.
+ *
+ * Those five projects are the whole audit. There is no root-level `include`: with `projects` set
+ * the root config collects nothing of its own, and the only other glob list in this file is
+ * `coverage.include`, which is anchored and carries these exclusions too — `all: true` would
+ * otherwise pull another checkout's sources into the denominator of every threshold.
+ */
+const excludeEverywhere = [
+  '**/node_modules/**',
+  '**/dist/**',
+  '**/coverage/**',
+  ...nestedCheckoutExcludes(repositoryRoot),
+];
 
 /**
  * Test tiers per docs/technical/10-testing-strategy.md.
@@ -16,8 +55,6 @@ import { defineConfig } from 'vitest/config';
  * The tiers map onto the verification contract in
  * docs/technical/14-orchestration-protocol.md via `scripts/verify.mjs`.
  */
-const defaultExclude = ['**/node_modules/**', '**/dist/**', '**/coverage/**'];
-
 export default defineConfig({
   test: {
     projects: [
@@ -38,7 +75,7 @@ export default defineConfig({
             'scripts/**/*.test.ts',
           ],
           exclude: [
-            ...defaultExclude,
+            ...excludeEverywhere,
             '**/*.contract.test.ts',
             '**/*.integration.test.ts',
             '**/*.e2e.test.ts',
@@ -50,7 +87,7 @@ export default defineConfig({
           name: 'contract',
           environment: 'node',
           include: ['packages/*/src/**/*.contract.test.ts', 'test/contract/**/*.test.ts'],
-          exclude: defaultExclude,
+          exclude: excludeEverywhere,
         },
       },
       {
@@ -58,7 +95,7 @@ export default defineConfig({
           name: 'integration',
           environment: 'node',
           include: ['**/*.integration.test.ts', 'test/integration/**/*.test.ts'],
-          exclude: defaultExclude,
+          exclude: excludeEverywhere,
           // One PostgreSQL 18 container serves the whole project; each file gets its own database
           // inside it (test/integration/support/postgres.ts).
           globalSetup: ['test/integration/support/global-setup.ts'],
@@ -71,7 +108,7 @@ export default defineConfig({
           name: 'e2e-fake-claude',
           environment: 'node',
           include: ['**/*.e2e.test.ts', 'test/e2e/**/*.test.ts'],
-          exclude: defaultExclude,
+          exclude: excludeEverywhere,
           // The e2e tier runs whole `apps/server` instances against a real PostgreSQL 18, so it
           // needs the same container the integration tier uses. technical/10 describes this tier as
           // running against `docker compose` (app + db); the compose file lands with WP-22, and
@@ -87,7 +124,7 @@ export default defineConfig({
           name: 'ui',
           environment: 'happy-dom',
           include: ['apps/web/src/**/*.test.ts', 'apps/web/src/**/*.test.tsx'],
-          exclude: defaultExclude,
+          exclude: excludeEverywhere,
         },
       },
     ],
@@ -103,6 +140,7 @@ export default defineConfig({
         'apps/runlet/src/**/*.ts',
       ],
       exclude: [
+        ...excludeEverywhere,
         '**/*.test.ts',
         '**/*.d.ts',
         // Thin I/O shells with no branch of their own: a `pg` pool built from validated config, and
