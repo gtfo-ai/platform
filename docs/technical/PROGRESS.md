@@ -31,7 +31,7 @@ fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conf
 
 | WP | State | Branch |
 |---|---|---|
-| WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red) | `worktree-agent-a1a13bbc879e220cb` |
+| WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red; 1 blocking, 1 major, 3 minor) | `worktree-agent-a1a13bbc879e220cb` |
 | WP-15 pipeline interpreter | **implementation round 1**, started from `e6b2d12` | `wp/15` |
 
 **WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
@@ -2242,7 +2242,62 @@ to the next is a hypothesis about the next one's environment.** WP-13 measured o
 measured in a container; WP-14 could, and did. The hand-off was still right — it is what caused the
 measurement, and it cost less than the ledger error it exposed.
 
+### WP-14 round 3 — the guard against unresolvable citations could not read its own repository
+
+Round 2 answered rule 11 with a parser: every `` `file.test.ts` `` › `"name"` in a tracked source is
+resolved against the file it names. It shipped **red**, and for a reason worth keeping: its own examples
+cited the bare basename `fake.test.ts`, which six tracked files answer to, so the sweep reported four
+ambiguous citations — in the author's own file. That is standing rule 59, and round 2's report on top of it
+said "verify PASS (3405)" — a true test *count* read out of a failing run, now rule 61. Both example sites
+are real citations of real tests, resolved like any other; nothing was excluded from the sweep to make it
+green, because the author's own file is where the guard has to work.
+
+The deeper defect was recall. The parser was line-scoped and this repository wraps its prose at 100
+columns, so **both** citations in `workspace/provider.ts` — under a sentence claiming they were "resolved
+mechanically" — were invisible to it. The reviewer proved it by planting three citations and watching only
+the single-line fabrication get reported (standing rule 58: rule 44's shape *inside* the fix for rule 11,
+and rule 48's corollary — **plant the spelling the repository actually writes, not the one the grammar
+section shows**). Three changes, each mutation-checked:
+
+- a **logical line**: a line continues onto the next only when it stops part-way through a citation —
+  inside an unclosed `"name`, straight after the `›`, or after the comma of a list. A *complete* citation
+  does not continue, so quoted prose on the next line is still not swallowed (asserted from both sides).
+  Which decorations may continue one is the caller's choice, `'comment'` (`*`, `//`) or `'prose'` (none,
+  as Markdown wraps).
+- a **recall check**: `citationSites` finds every place a citation opens, by a second expression of that
+  shape, and every site must have produced a citation. It replaces `MINIMUM_CITATIONS = 10` against an
+  actual 21 — a floor one docblock cleared by itself. Measured now: 18 sites, 24 citations, 0 unread.
+  Planting a wrapped fabrication in `provider.ts` now reports it (`provider.ts:37 cites … — no such
+  test`); mutating the wrap logic to a no-op fails four tests including the recall check; mutating the
+  site regex to match nothing fails its calibration and the floor.
+- **Markdown in scope** (`.md` alongside `.ts`/`.tsx`/`.mjs`), because `CLAUDE.md`, `PROGRESS.md` and
+  `docs/technical/*` are where this class of claim also lives. Zero citations exist there today, so it is
+  a guard waiting rather than a guard working — demonstrated by planting a wrapped one in `docs/TODO.md`
+  and watching the sweep name it.
+
+Also round 3: `startRun`'s failed-start path revoked the run credential with `.catch(() => undefined)`,
+one line above a teardown that logs its own failure. A revoke that fails there leaves a **run-scoped git
+push token live for its whole TTL** (a day, TD-021's default) on a run that never started, with `endRun`
+unable to try again — it needs a handle that path never returns. It now warns like its neighbours, and the
+test asserts both halves: the warning, and that the caller still sees the failure that ended the start.
+
+**Assumptions recorded:** (1) the wrapped-citation grammar admits exactly the three "stops mid-citation"
+shapes above — a fourth (a name broken across a fenced block, say) is listed in the parser's docblock as a
+known gap rather than guessed at; (2) two citations of the *same* file on one line are one site to the
+recall check, also stated there; (3) markdown continuation ignores list and heading structure, which is
+sound while no Markdown citation exists and is the reason the limit is written down.
+
 ## Discovered work (not in plan)
+
+- **An unlabelled `ws-<run-id>` volume: the e2e half is fixed, the production half is a decision nobody
+  has taken (WP-14 round 3).** Standing rule 60 has the measurement. What is *done* here is the harness:
+  its cleanup now also sweeps `ws-<uuid>` by exact name, so a `verify:e2e` run leaves nothing. What is
+  **not** done, deliberately, is production — `purgeExpired` lists by `role=workspace` and
+  `retentionDecision` answers `keep`/`unlabelled` for ever, so the shape a sweep cannot see is the shape
+  reclamation refuses to touch. That is safe today (the provider labels the volume before any container
+  names it) and it is not free later. Whoever wants it reclaimed needs a decision — an `agentic`-owned
+  name prefix reserved by policy, or an orphan report an operator acts on — **not a widened filter**, which
+  would remove volumes that are not ours.
 
 - **`loki/index.test.ts`'s million-iteration divergence census is a timeout flake under a full parallel
   run.** It failed once inside `pnpm run -s verify` during the round-2 redaction fix and passed on the next
