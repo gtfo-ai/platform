@@ -203,12 +203,21 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    same way** — a runner dropping after the child exited left the shim listening for ever. One defect, two
    functions, one review round apart. The same sweep also found both concurrency caps had **no test at all**
    (deleting either left 113/113 green) while being claimed by the docblock *and* by Q44.
-50. **`process.exit()` discards buffered writes, and a flush window must bound *silence*, not the drain.**
-   Two defects found in WP-13's own sweep, both invisible to a passing suite: the entrypoint's
-   `process.exit(0)` delivered **8,192 of 16,777,216 bytes**; and the 16 MiB conformance test was flaky 2 in
-   10 because its flush window bounded how long the drain *ran* rather than how long it had been *quiet*,
-   losing exactly 65,536 bytes — one pipe buffer, `result` line included. A timer that starts once measures
-   the wrong thing; re-arm it on progress, and never let a process exit with bytes owed to a socket.
+50. **A flush window must bound *silence*, not the drain.** WP-13's 16 MiB conformance test was flaky 2 in
+   10 because its window bounded how long the drain *ran* rather than how long it had been *quiet*, losing
+   exactly 65,536 bytes — one pipe buffer, `result` line included. A timer that starts once measures the
+   wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
+   a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
+   disconnect.
+   ⚠️ **This rule originally carried a second claim, and it did not survive review.** WP-13 reported that the
+   entrypoint's `process.exit(0)` delivered **8,192 of 16,777,216 bytes**, and I recorded it here. The
+   round-2 reviewer could not reproduce it: restoring `process.exit(0)` leaves 142/142 green, and six runs
+   against the real entrypoint — slow reader, stalling runner — delivered every byte **either way**. The
+   8,192 figure is labelled in `research/12` as a **raw-socket** measurement, and nothing shows the shim
+   reaches that path. The fix is being pinned to a test or restated. **Fourth figure this session to need
+   correcting after the fact** (see rule 39), and the first where the orchestrator promoted an unverified
+   measurement into a standing rule — which is worse than recording it in a WP note, because a rule is what
+   later work packages are handed as settled.
 48. **A name-then-`=` guard cannot see the spread, `createElement` or `setAttribute` spelling of the same
    write.** WP-20's `no-html.test.ts` — itself created to enforce rule 44 — caught `href={u}`, `href = {u}`,
    a template literal and `location.href = u`, and **missed** `{...{ href: u }}`, `createElement('a', {href})`,
