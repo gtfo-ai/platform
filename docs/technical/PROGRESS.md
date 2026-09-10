@@ -173,7 +173,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 37. **A cap audit that lists the fields it capped is not a sweep of the fields it emits — enumerate the
    output type's members, not the call sites.** Three WP-11 rounds capped a breadcrumb's `message` and never
    looked at `category` and `level` sitting beside it in the same object, both `z.string().nullish()`.
-   Measured with 2 MB fields: **100,027,760 bytes** out at the shipped defaults
+   Measured with 2 MB fields: **100,027,762 bytes** out at the shipped defaults
    (`max_breadcrumbs = 25`, `max_breadcrumb_bytes = 1024`) — `message` correctly cut, the other two through
    at 2,000,000 each, no marker and nothing setting `truncated`. *The figure first recorded here, 200,106,301,
    was taken at doubled caps and did not reproduce; see rule 39.* Round 3's own audit
@@ -181,7 +181,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    enumerated the *type* instead of the call sites.
 39. **A measurement quoted as evidence must reproduce from the shipped defaults, and the test that ships
    with it must pin the number.** WP-11a's headline "200,106,401 bytes at the shipped defaults" was taken at
-   *doubled* caps; at the real defaults it is **100,027,760**. The figure had already been copied into two
+   *doubled* caps; at the real defaults it is **100,027,762** — a figure now *produced* by the shipped test rather than quoted. The figure had already been copied into two
    docblocks, a commit message, `docs/technical/06` and **this ledger's rule 37** before anyone re-ran it.
    The defect was entirely real and the number was not, which is the combination that survives review — a
    wrong number attached to a true finding is never the thing under scrutiny. This is the **second** figure
@@ -1792,9 +1792,10 @@ providers are leaves — and the finding is a 200 MB blow-up into a context pack
 row. Merging that to avoid an awkward status would be the wrong trade. WP-11 merges when WP-11a is done.
 
 **The blocking finding.** `sentry/mapping.ts:258-259` emits `category` and `level` raw, both
-`z.string().nullish()`. At the shipped defaults with 2 MB fields, `mapBreadcrumbs` produced **200,106,301
-bytes**: `message` cut to 2046, the other two straight through at 2,000,000 each, no marker, nothing setting
-`truncated`. It also falsifies `sentry/config.ts:73-77`, which claims "every field the adapter emits is
+`z.string().nullish()`. With 2 MB fields, `mapBreadcrumbs` produced **100,027,762 bytes** at the shipped
+defaults (`max_breadcrumbs = 25`, `max_breadcrumb_bytes = 1024`); the figure first written here, **200,106,301
+bytes**, was taken at doubled caps and did not reproduce (rule 39). Either way `message` was correctly cut
+and the other two went straight through at 2,000,000 each, with no marker and nothing setting `truncated`. It also falsifies `sentry/config.ts:73-77`, which claims "every field the adapter emits is
 bounded by a named cap… the sum of them" — an authoritative statement that is simply untrue, which docs-win
 makes worse rather than better.
 
