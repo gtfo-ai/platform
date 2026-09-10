@@ -21,8 +21,7 @@ fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conf
 
 | WP | State | Branch |
 |---|---|---|
-| WP-14 launcher + workspaces | **fix round 2** (review 1 = REQUEST_CHANGES: 1 blocking, 2 major) | `worktree-agent-a1a13bbc879e220cb` |
-| jira/gitlab redaction fix | **fix round 2** (review 1 = APPROVE with 2 should-fix) | `worktree-agent-a67ffe6229084eeae` |
+| WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red) | `worktree-agent-a1a13bbc879e220cb` |
 | WP-15 pipeline interpreter | **implementation round 1**, started from `e6b2d12` | `wp/15` |
 
 **WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
@@ -42,7 +41,17 @@ tail: WP-22 (Docker images) already owes two things measured here — `renderEgr
 rendered config will not start the real image as written; and `apps/runlet` must be bundled to a single
 file with `scripts/runlet-container-check.mjs` re-run against the real image.
 
-**No follow-ups are queued.** The **`ignored:check` versus `.DS_Store`** disagreement is fixed at `e83a881`:
+**One follow-up is queued, and it is three things in one branch** (all found by the redaction round 2
+reviewer, all on `main`, none blocking):
+1. **`slackDeliveryKey` is the third instance of the defect that round closed twice.** `slack/signature.ts`
+   copies unredacted body text into the stored dedup key while the same object literal's `normalise` *does*
+   redact. Executed, not asserted: a body whose `event_id` is a planted secret produced
+   `slack:event:<secret>`. Rule 49 — the reviewer ran the grep I should have briefed.
+2. **Two exclusivity claims the same commit falsified** — see rule 63.
+3. **Two census tests whose 5 s default sits inside the measured distribution** — see rule 64. Fix both
+   together, with the load stated.
+
+The **`ignored:check` versus `.DS_Store`** disagreement is fixed at `e83a881`:
 `scripts/os-artefacts.mjs` now holds `OS_ARTEFACT_NAMES` and both guards import it. The reasoning for
 keeping it a *name list* rather than a derivation is measured, not assumed — see the section below.
 
@@ -230,6 +239,29 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+64. **A wall-clock margin must be measured at the load the fleet actually runs at, or it is not a number.**
+   `loki/index.test.ts`'s million-iteration census against the 5 s default: **1.07 s** standalone (4.6x
+   margin), **1197/1287/1493 ms** inside a full parallel unit+contract run at load average 5–13,
+   **2488/3638/3339 ms** at LA ~36 (73% of the budget), and **timed out 3 of 3** at LA ≥ 110. One number,
+   four verdicts. `sentry/mapping.test.ts`'s `mapBreadcrumbs` census timed out in the same heavy run, so it
+   is a class and not a file. Rule 57's companion: rule 57 says place the bound by measuring where the value
+   lands; this says **state the load at which you measured it**, because the orchestrator's own parallelism
+   moves the distribution and this session has run three worktrees at LA 137.
+63. **"Only X does this" survives the change that falsifies it.** The redaction round fixed Jira's
+   provider-chosen keys and GitLab's header names — and left `loki/provider.ts` still claiming Loki is *the
+   only* provider in this repository whose object keys come from the provider, and `redaction.ts` still
+   claiming *"two sites owe it today"* when the same commit made three. An exclusivity claim is a statement
+   about every *other* file, so it cannot be maintained from inside the file that makes it: **when you close
+   one, grep for every other place that repeats it.** Rules 44 and 49 together, and the WP that exists to
+   fix false claims made two new ones on its way past.
+62. **A `FAIL` line naming a *file* is not a `FAIL` line naming a *test*.** The reviewer's own mutation
+   harness classified a **broken mutant** — a trailing comma inside parentheses, which does not parse — as
+   DEAD, because vitest prints a collection error as `` FAIL |unit| <file> [ <file> ] `` and a naive
+   `startswith(' FAIL')` counts that as a named kill. The predicate must require the `` > `` separator that
+   only a real test name carries. This is rule 21's instrument error in its **third** spelling
+   (`--reporter=basic` twice, now this one): *a mutation harness reports what it can parse, and what it
+   cannot parse it reports as whatever its default branch says* — which is why the canary is not optional
+   and why "all mutants died" is a claim about the harness before it is a claim about the tests.
 61. **A reported figure must be the target's *verdict*, not a count taken from its output — and the
    orchestrator's job is to produce that verdict itself.** WP-14 round 2 reported "verify PASS (3405)". The
    count was **correct**: the run really did execute 3405 tests. The run also **failed** — `1 failed | 3404
