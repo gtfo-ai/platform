@@ -170,6 +170,10 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    passes the whole suite.** Changing WP-10's NUL guard from `indexOf(0)` to `indexOf(0, 1)` — blind to a
    NUL at byte 0 — left **all 2353 tests green**. Manual canaries are evidence that expires when the session
    does. `scripts/check-ignored.test.ts` is the precedent: give every executable guard a real test.
+36. **A marker-bearing cap is not idempotent.** WP-11's `mapTags` output exceeds `maxBytes` by the length
+   of its own truncation marker, so `capText` re-cuts it and the two disagree — `tags.environment` reports
+   "976 more bytes" while `environment` reports "58". Applying a cap twice measures the already-truncated
+   text. Make it idempotent, or make it impossible to apply twice.
 35. **Making a dependency required proves it is *supplied*, not that it is *used*.** WP-11 made
    `ProviderCreateInput.redactor` required (rule 31). Merging Slack, which landed in parallel, produced
    exactly **four** typecheck errors — all of them *test* call sites constructing the input. Slack's
@@ -183,7 +187,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    fail when they differ.
 32. **"I checked and it is benign" is a claim that needs the same evidence as a fix.** WP-11 reported a
    surviving `BigInt` → `Number` mutation as harmless and narrowed its docblock instead of the code; the
-   orchestrator relayed that as good practice. The reviewer measured it: `Number` diverges for **128 of every
+   orchestrator relayed that as good practice. The reviewer measured it: `Number` diverges for **192 of every
    1e6** nanosecond values (`1780309799999999872` → `…59.999Z`, not `…00.000Z`), and that value **is** the
    emitted `timestamp` and the sort key. Narrowing a claim is honest only when the claim is what was wrong.
 30. **A lesson recorded only in prose does not prevent recurrence — when a defect is mechanically
@@ -1621,6 +1625,31 @@ Found by WP-10 while wiring the new NUL guard into CI's lint job: **`ignored:che
 in no CI job of its own.** That guard has already caught two live defects — `apps/server/src/data/` swallowed
 by an unanchored `data/` rule at WP-06, and the nested-worktree walk at WP-06a — so it is worth a gate rather
 than a local-only check. Fold it into the next `ci-fix` alongside the NUL guard.
+
+### CONFIRMED with exploits — gitlab and jira leak, and the follow-up brief is written
+
+WP-11's round-2 reviewer verified both claims by building each provider through its **real registration**
+with `noSecretsRedactor()` and planting the binding's own credential:
+
+- **gitlab** (`packages/integrations/src/providers/gitlab/provider.ts:223`): `getJobLog` returned
+  `"PRIVATE-TOKEN: glpat-PLANTED-…"` **verbatim**. It uses the injected redactor but composes **no**
+  `bindingSecretRedactor`, so the provider's own credential is not in the set being redacted. Reachable
+  through `gitlabProviderRegistration.create`.
+- **jira** (`packages/integrations/src/providers/jira-cloud/index.ts:826,839`): the redactor is applied to
+  `HealthProbe.detail` **only**. Ticket and comment text reach the caller unredacted, and
+  `action-executor.ts:491` redacts the **audit row**, not the returned value — so the executor does not
+  compensate.
+
+**The fix, after WP-11 merges** (it would conflict now): compose `input.redactor` with a
+`bindingSecretRedactor` over each provider's own secrets, exactly as Slack now does, and prove it with the
+test shape that found this — build through the real registration, disarm the caller's redactor with
+`noSecretsRedactor()` so only the adapter's own can fire, plant the credential in **every** emitted string,
+and assert both each field and the serialised whole, failure branches included.
+
+**Note for whoever does it:** WP-08's own review already caught the *test-level* version of this — a
+"redacts the health probe detail" mutation that survived because the executor's redactor masked the
+adapter's missing one — and fixed the test without noticing that production had the same hole. A test that
+composes `noSecretsRedactor()` is the instrument that distinguishes them, and it now exists.
 
 ### Rule 35's shape found twice more, on `main` — gitlab and jira take a redactor and barely use it
 
