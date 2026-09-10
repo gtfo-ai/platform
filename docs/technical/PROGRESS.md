@@ -196,6 +196,17 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `vbscript:` and `file:`. The only thing preventing execution was **React 19.3 rewriting the attribute** —
    an accidental defence that nothing asserted, dependent on a framework version. A scope claim is a
    checkable claim (rules 17, 30, 33).
+49. **When you fix a liveness test, grep for its siblings.** WP-13's `cred.get` guard tested `child === null`,
+   which is never true after `spawn`. Fixing it, the implementer found **`beginShutdown` testing liveness the
+   same way** — a runner dropping after the child exited left the shim listening for ever. One defect, two
+   functions, one review round apart. The same sweep also found both concurrency caps had **no test at all**
+   (deleting either left 113/113 green) while being claimed by the docblock *and* by Q44.
+50. **`process.exit()` discards buffered writes, and a flush window must bound *silence*, not the drain.**
+   Two defects found in WP-13's own sweep, both invisible to a passing suite: the entrypoint's
+   `process.exit(0)` delivered **8,192 of 16,777,216 bytes**; and the 16 MiB conformance test was flaky 2 in
+   10 because its flush window bounded how long the drain *ran* rather than how long it had been *quiet*,
+   losing exactly 65,536 bytes — one pipe buffer, `result` line included. A timer that starts once measures
+   the wrong thing; re-arm it on progress, and never let a process exit with bytes owed to a socket.
 48. **A name-then-`=` guard cannot see the spread, `createElement` or `setAttribute` spelling of the same
    write.** WP-20's `no-html.test.ts` — itself created to enforce rule 44 — caught `href={u}`, `href = {u}`,
    a template literal and `location.href = u`, and **missed** `{...{ href: u }}`, `createElement('a', {href})`,
