@@ -230,6 +230,44 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+61. **A reported figure must be the target's *verdict*, not a count taken from its output — and the
+   orchestrator's job is to produce that verdict itself.** WP-14 round 2 reported "verify PASS (3405)". The
+   count was **correct**: the run really did execute 3405 tests. The run also **failed** — `1 failed | 3404
+   passed`, `FAIL: verify`. A wrong number is easy to catch because it contradicts something; a right number
+   attached to a wrong verdict contradicts nothing, and it reads as *more* credible than a bare "PASS"
+   because it carries evidence. This is rule 39 one turn further: the measurement was real and the
+   conclusion was not.
+
+   **The orchestrator failure that let it through is the part worth keeping.** The protocol's standing
+   instruction is *verify independently in your own shell before every review and after every merge*. For the
+   redaction branch I did — six targets, in my own shell, before briefing the reviewer. For WP-14 I read a
+   confident report and spawned the review straight off it, and **a full review round was spent on a red
+   branch** discovering what one command would have told me in ninety seconds. The rule I keep re-learning is
+   not "distrust the report" — the report was written in good faith and its three substantive fixes were all
+   genuine. It is that **a verification step skipped once is not a step that runs 90% of the time; it is the
+   step that is missing exactly when a report is confident enough to make skipping it feel safe.**
+60. **A resource identified only by its name is invisible to a label sweep, and "keep when unlabelled" makes
+   that invisibility permanent.** Measured: one `verify:e2e` run leaves exactly one `ws-<uuid>` volume with
+   `labels=map[]`, matching neither the `com.agentic.run` label filter nor any name filter the cleanup uses
+   — Docker auto-creates it when a purged volume is re-mounted, so nothing ever labelled it. Production is
+   safe today only because the provider always creates the volume *with* labels before a container
+   references the name. The sharp half: `retentionDecision` classifies an unlabelled volume as
+   `keep`/`unlabelled` **for ever**, by design, so the one shape a sweep cannot see is also the one shape
+   reclamation refuses to touch. Fix the sweep, never the retention rule.
+59. **A guard that reads the repository's own sources has itself inside its scope, and that is where it
+   fails first.** WP-14 shipped a citation checker to convert rule 11 into a check — and its only four
+   failures on `main` were the example citations in *its own* docblock and *its own* test, which write the
+   bare basename `fake.test.ts`, ambiguous across six tracked files. The author's file is not exempt from
+   the sweep, and a guard whose examples cannot pass it has not been run against the tree yet.
+58. **A line-scoped parser has no recall over a wrapped line, and this repository wraps prose at 100
+   characters.** The two citations `provider.ts:36` advertises as *"resolved mechanically"* are precisely
+   the two the parser cannot see, because each quoted test name crosses a `` * ``-prefixed continuation.
+   Measured: of 21 citations found tree-wide, **zero** come from that file; planting a single-line
+   fabrication and a wrapped one took the sweep 21 → 23 and reported only the single-line one. Rule 44's
+   shape *inside the fix for rule 11* — a claim of enforcement the enforcing check does not cover — and
+   rule 48's corollary: **when you ship a syntactic guard, plant an instance in the shape the repository
+   actually writes, not the shape the grammar section shows.** A check with a recall hole is worse than the
+   prose it replaced, because it looks safe.
 57. **A margin that looks generous is a coin flip until you measure where the value lands.** WP-13's
    backpressure conformance test asserted the runner held `< BULK_BYTES / 2` — 8,388,608 of 16 MiB, which
    reads as a 2x safety margin. Measured, the count landed at **8,192,000 / 8,323,072 / 8,388,608**: the
