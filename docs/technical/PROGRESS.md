@@ -308,7 +308,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-10 | Slack provider | WP-07 | yes | DONE | `fbf0928` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` | 3 rounds spent; one blocking finding carved to **WP-11a**; rules 31, 32, 35, 36, 37, 38 |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
-| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | IN_PROGRESS | worktree | started session 2; large-stdout conformance must not run against WP-12's fake |
+| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | REVIEW | branch `worktree-agent-a3ffc71895d2210b1` `4365fad` | +134 tests; 29 mutations; **Q44, Q45**; review round 1 running |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
@@ -1793,6 +1793,44 @@ possible count so the real marker cannot overflow. Divergence 9 carries a positi
 `queryRange` and `series` both route through `capLabelSet`; the collision count is right and the marker leaks
 no key; all seven `Q43` edits are correct and `Q40`–`Q43` each appear once. **Nine of nine mutations died**,
 including two the reviewer invented.
+
+### WP-13 — the research report separates measured from inferred, and two mutations moved the code
+
+**Built and in review.** Frame protocol as an 8-byte prefix plus a JSON header, validated by a **strict** zod
+discriminated union at *both* edges and probed from JavaScript literals through `unknown` (rule 14), with
+`exit.code`/`exit.signal` and `cred.reply.credential` **required-and-nullable** so a missing field is never
+zero (rule 16), and a per-state accept-list on each side so a `spawn` reaching the runner or a `stdout`
+reaching the shim is refused *though it parses*.
+
+**`cred.get` is designed so the shim holds nothing**: it generates the `request_id` the runner sees, carries
+no allow-list and no credential, and only brokers between `spawn` and child exit, capped per run and per
+concurrency.
+
+**Kill-on-disconnect is proved by process state rather than by a spy** — the child ignores `SIGTERM`, so
+`teardownSignals` is `['SIGTERM']` at grace−1 and `['SIGTERM','SIGKILL']` after, and the process is then
+confirmed gone with `process.kill(pid, 0)`. Injected clock, no upper-bound timing anywhere (rules 2 and, from
+the pg-boss ci-fix, the reason an upper bound could not detect the defect it named).
+
+**Two mutation survivors changed the code rather than the story, and both are rule 4:**
+- `killGraceMs → 0` **survived** `processIsAlive` — the assertion could not see the difference, so the fix was
+  to assert `teardownSignals` instead.
+- Removing the *adapter's* `runletFrameSchema.parse` **survived, because the shim caught it** — one guard
+  covering for another, exactly the shape WP-08's health-probe mutation had. Fixed with a raw-server test,
+  *"never puts the bad frame on the wire"*, which isolates the adapter from its downstream guard.
+
+**The research report** (`docs/research/12-run-shim-verification.md`, Docker **29.7.2** / API 1.55) does what
+the provider WPs did for fixtures: it separates **measured** from **inferred**. Measured — `volume-subpath`
+isolation and its *loud* failure on a missing sub-path, embedded DNS resolving names but not the internet
+with no default route, SDK `query()` end to end through the shim in a hardened container
+(`--user 1000 --cap-drop ALL --read-only --network none --init`) driven from a second container, and a killed
+runner leaving no agent behind. Inferred — the `platform-runtime` bundle, `tini`, socket uid matching, the
+egress sidecar, Kubernetes, tmpfs volumes.
+
+**What it leaves for others, stated rather than faked:** WP-14's launcher must create and `chown`
+`<ctl>/<run-id>/` before start, because the daemon refuses a missing sub-path, and must run the runner as
+uid 1000 (the socket is `0600`, Q45); WP-22 must bundle `apps/runlet` to a single file and re-run
+`scripts/runlet-container-check.mjs` against the real image. Session-store resume after a runner restart is
+WP-15's half.
 
 ## Discovered work (not in plan)
 
