@@ -14,7 +14,8 @@
  * pipeline, the UI and the knowledge base depend on instead of on Jira, GitLab, Slack, Sentry or
  * Loki — together with the `IntegrationActionExecutor` that every outbound call goes through, and
  * the `SecretRedactor` port (TD-012) that its audit path defines. WP-12 added the `ClaudeRunner`
- * port and its collaborators (technical/04), which consume that same redactor.
+ * port and its collaborators (technical/04), which consume that same redactor. WP-14 added the
+ * `WorkspaceProvider` port (TD-021), which the pipeline asks for an isolated workspace per run.
  */
 
 // Event dispatch (TD-005)
@@ -44,6 +45,7 @@ export * from './ports/logger.js';
 export * from './ports/runner.js';
 export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
+export * from './ports/workspace.js';
 // Scheduling (WP-05)
 export * from './scheduling/working-calendar.js';
 export * from './scheduling/zoned-time.js';

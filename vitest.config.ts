@@ -148,6 +148,9 @@ export default defineConfig({
         // `integration` tier, which runs a real PostgreSQL 18 and does not collect coverage.
         'packages/infrastructure/src/db/client.ts',
         'apps/server/src/migrate.ts',
+        // The launcher's process entrypoint: environment in, signals mapped, `process.exit` out.
+        // Every decision it could get wrong is in `runtime.ts`, which the unit tier drives.
+        'apps/launcher/src/index.ts',
         // The run shim's entrypoint: `process.env` in, `process.exit` out, every decision it makes
         // delegated to `packages/infrastructure/src/runlet`. The contract tier starts this exact
         // file as a real process against a real socket

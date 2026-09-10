@@ -31,8 +31,9 @@ fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conf
 
 | WP | State | Branch |
 |---|---|---|
-| WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red) | `worktree-agent-a1a13bbc879e220cb` |
-| WP-15 pipeline interpreter | **implementation round 1**, started from `e6b2d12` | `wp/15` |
+| WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red; 1 blocking, 1 major, 3 minor) | `worktree-agent-a1a13bbc879e220cb` |
+| WP-15 pipeline interpreter | **implementation round 1**, resumed after the restart | `wp/15` |
+| slack redaction + census flakes | **implementation round 1** (the three queued follow-ups) | `fix/slack-redaction-and-census` |
 
 **WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
 credential without destroying the container `create` just started — a live run container nobody holds a
@@ -70,6 +71,10 @@ keeping it a *name list* rather than a derivation is measured, not assumed — s
 `index.ts` files as unions, `.env.example`, `docs/OPEN-QUESTIONS.md` by renumbering, and
 `docs/technical/PROGRESS.md`, which is orchestrator-owned so take your own side) → commit → push → delete
 branch and worktree. Green in a worktree is not green on `main`; this session proved it four times.
+
+**Orchestrator hygiene (rules 25 and 66).** Cap concurrency at **two** agents, **one** while any agent
+holds Docker or the e2e tier. Never generate synthetic load. See rule 66 for the two kernel panics that
+set this policy and for what was and was not established about them.
 
 **Orchestrator hygiene (rule 25).** Never use a busy-loop load generator without `trap 'kill 0' EXIT INT TERM`,
 and never `2>/dev/null` on a cleanup step: 48 orphaned spinners starved this machine at load average 137 for
@@ -249,6 +254,43 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+66. **The orchestrator's parallelism is a load on somebody's actual machine, and the machine gets a vote.**
+   The user reported **two kernel panics on 2026-09-10** — `watchdog timeout: no checkins from watchdogd in
+   92 seconds` — with reboots at **12:45 and 17:06**. The 17:06 one is the "restart" this ledger recorded as
+   a routine boot; it was not. Causation is **not** established and may be unrelated. What is established,
+   and is enough to change behaviour:
+
+   - This is a **14-core** machine, and **Docker Desktop's VM is allocated 12 of those cores.** Host-side
+     `vitest` across several worktrees therefore contends for ~2 cores against a VM holding 12.
+   - Load averages of **137–196** were driven by this session — 10–14x oversubscription — including
+     4 h 37 m at load 137 from the 48 spinners rule 25 records.
+   - `apfsd`, the APFS daemon, **exceeded its CPU resource limit 16:05:47–16:08:40**, during a `verify` on
+     `main` run while two agents were running Docker e2e suites.
+   - The Docker VM tripped a **disk-writes** diagnostic over 19:07–19:20, during the WP-14 e2e verification.
+   - It is **not** memory: 36 GB, 73% free, **zero swap in use**.
+
+   `watchdogd` is a high-priority userspace daemon the kernel panics on purpose when it cannot be scheduled,
+   so starvation under extreme oversubscription is a plausible mechanism — plausible, not proven.
+
+   **Standing policy from here, which costs throughput on purpose:** at most **two** agents, and **one** when
+   any agent is running Docker or the e2e tier; **never** generate synthetic load, for any measurement (rule
+   64's figures are to be cited from the round that took them, labelled, rather than re-measured); agents
+   iterate with targeted test files and run the six targets once at the end; merged worktrees are removed
+   immediately, because each is a full checkout that multiplies both the filesystem scan and the vitest
+   collection. **A green build on a machine you made unusable is not a good trade, and the person whose
+   laptop it is did not sign up for the experiment.**
+65. **An oracle that audits a parser must *over*-approximate it; where the two share a shape, they are one
+   guard.** WP-14 replaced a loose `MINIMUM_CITATIONS` floor with a per-site recall check — a second regex
+   (`CITATION_SITE`) that finds everything *looking like* a citation, so the parser can be held to reading
+   all of them. It is genuinely independent of the scanning (it caught the mutation modelling round 2's
+   bug), and it still shares **one** assumption with the parser it audits: both require the backticked file
+   token and the `›` on the same *physical* line. Measured: a fabrication wrapped **between** the file token
+   and the marker is read by neither, and the recall check reports nothing at all — suite still 12 passed,
+   sites still 18, failures `[]`. **A second expression of the same idea agrees with the first precisely
+   when both are wrong**, and the shape they share is the one that will fail next. Design the oracle to be
+   *deliberately sloppier* than the thing it checks, so an unreadable spelling becomes a loud *unread site*
+   rather than silence — and when you cannot, list the shared shape in the docblock's gap list, which this
+   one omits.
 64. **A wall-clock margin must be measured at the load the fleet actually runs at, or it is not a number.**
    `loki/index.test.ts`'s million-iteration census against the 5 s default: **1.07 s** standalone (4.6x
    margin), **1197/1287/1493 ms** inside a full parallel unit+contract run at load average 5–13,
@@ -545,7 +587,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
-| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | REVIEW | branch `worktree-agent-a1a13bbc879e220cb` `dfa9534` | +196 tests, e2e 2 → 53; **Q52, Q53** (renumber at merge); review round 1 running |
+| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | IN_PROGRESS | — | branch `wp/15` from `e6b2d12`; acceptance is the fake-Claude e2e, one feature + one bug ticket |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
@@ -2336,6 +2378,63 @@ can kill.
   redact where the real adapter does is *kinder* than production, which is standing rule 1's forbidden
   direction, and every later WP's unit tier trusts the fakes. Either give the fakes a redactor or record
   the divergence explicitly in each fake's register; today it is neither.
+
+### WP-14 round 3 — the guard against unresolvable citations could not read its own repository
+
+Round 2 answered rule 11 with a parser: every `` `file.test.ts` `` › `"name"` in a tracked source is
+resolved against the file it names. It shipped **red**, and for a reason worth keeping: its own examples
+cited the bare basename `fake.test.ts`, which six tracked files answer to, so the sweep reported four
+ambiguous citations — in the author's own file. That is standing rule 59, and round 2's report on top of it
+said "verify PASS (3405)" — a true test *count* read out of a failing run, now rule 61. Both example sites
+are real citations of real tests, resolved like any other; nothing was excluded from the sweep to make it
+green, because the author's own file is where the guard has to work.
+
+The deeper defect was recall. The parser was line-scoped and this repository wraps its prose at 100
+columns, so **both** citations in `workspace/provider.ts` — under a sentence claiming they were "resolved
+mechanically" — were invisible to it. The reviewer proved it by planting three citations and watching only
+the single-line fabrication get reported (standing rule 58: rule 44's shape *inside* the fix for rule 11,
+and rule 48's corollary — **plant the spelling the repository actually writes, not the one the grammar
+section shows**). Three changes, each mutation-checked:
+
+- a **logical line**: a line continues onto the next only when it stops part-way through a citation —
+  inside an unclosed `"name`, straight after the `›`, or after the comma of a list. A *complete* citation
+  does not continue, so quoted prose on the next line is still not swallowed (asserted from both sides).
+  Which decorations may continue one is the caller's choice, `'comment'` (`*`, `//`) or `'prose'` (none,
+  as Markdown wraps).
+- a **recall check**: `citationSites` finds every place a citation opens, by a second expression of that
+  shape, and every site must have produced a citation. It replaces `MINIMUM_CITATIONS = 10` against an
+  actual 21 — a floor one docblock cleared by itself. Measured now: 18 sites, 24 citations, 0 unread.
+  Planting a wrapped fabrication in `provider.ts` now reports it (`provider.ts:37 cites … — no such
+  test`); mutating the wrap logic to a no-op fails four tests including the recall check; mutating the
+  site regex to match nothing fails its calibration and the floor.
+- **Markdown in scope** (`.md` alongside `.ts`/`.tsx`/`.mjs`), because `CLAUDE.md`, `PROGRESS.md` and
+  `docs/technical/*` are where this class of claim also lives. Zero citations exist there today, so it is
+  a guard waiting rather than a guard working — demonstrated by planting a wrapped one in `docs/TODO.md`
+  and watching the sweep name it.
+
+Also round 3: `startRun`'s failed-start path revoked the run credential with `.catch(() => undefined)`,
+one line above a teardown that logs its own failure. A revoke that fails there leaves a **run-scoped git
+push token live for its whole TTL** (a day, TD-021's default) on a run that never started, with `endRun`
+unable to try again — it needs a handle that path never returns. It now warns like its neighbours, and the
+test asserts both halves: the warning, and that the caller still sees the failure that ended the start.
+
+**Assumptions recorded:** (1) the wrapped-citation grammar admits exactly the three "stops mid-citation"
+shapes above — a fourth (a name broken across a fenced block, say) is listed in the parser's docblock as a
+known gap rather than guessed at; (2) two citations of the *same* file on one line are one site to the
+recall check, also stated there; (3) markdown continuation ignores list and heading structure, which is
+sound while no Markdown citation exists and is the reason the limit is written down.
+
+## Discovered work (not in plan)
+
+- **An unlabelled `ws-<run-id>` volume: the e2e half is fixed, the production half is a decision nobody
+  has taken (WP-14 round 3).** Standing rule 60 has the measurement. What is *done* here is the harness:
+  its cleanup now also sweeps `ws-<uuid>` by exact name, so a `verify:e2e` run leaves nothing. What is
+  **not** done, deliberately, is production — `purgeExpired` lists by `role=workspace` and
+  `retentionDecision` answers `keep`/`unlabelled` for ever, so the shape a sweep cannot see is the shape
+  reclamation refuses to touch. That is safe today (the provider labels the volume before any container
+  names it) and it is not free later. Whoever wants it reclaimed needs a decision — an `agentic`-owned
+  name prefix reserved by policy, or an orphan report an operator acts on — **not a widened filter**, which
+  would remove volumes that are not ours.
 
 - **`loki/index.test.ts`'s million-iteration divergence census is a timeout flake under a full parallel
   run.** It failed once inside `pnpm run -s verify` during the round-2 redaction fix and passed on the next

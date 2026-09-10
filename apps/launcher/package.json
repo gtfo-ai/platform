@@ -4,13 +4,23 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Workspace provider service (dockerode).",
+  "description": "Launcher service: the WorkspaceProvider composition root (TD-021).",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "bin": {
+    "platform-launcher": "./src/index.ts"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     }
+  },
+  "dependencies": {
+    "@platform/application": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/infrastructure": "workspace:*",
+    "zod": "4.5.4",
+    "pino": "10.3.1"
   }
 }
