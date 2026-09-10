@@ -152,6 +152,17 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `ß → ss`; both only widen, so both fail closed. **The instrument is the transferable part:** a
    filesystem-differential test that creates the files and compares inodes cannot drift from the filesystem
    the way an argument about Unicode can. Sharpens rule 15.
+   **Sharpened again at round 3: do not reason about the classes, *enumerate* them.** Writing every code
+   point into one directory and grouping by inode turned up **1599 non-trivial equivalence classes** on this
+   volume and named the **18** the fix still missed (U+0345, final sigma U+03C2, U+03F9, U+1C80-87, U+1FBE,
+   U+A64A/B, U+A7CF/D3/D5 — all non-ASCII↔non-ASCII, so no ASCII protected path is exposed). Reasoning had
+   found four classes. A census finds what an argument cannot.
+28. **A fold that may widen equality must never widen structure.** WP-12's fold is allowed to make more
+   paths match a protected pattern — that direction is safe. It is *not* allowed to invent a path
+   separator: NFKC maps U+FF0F, and also `℀` U+2100, `℁` U+2101, `℅` U+2105 and `℆` U+2106, into strings
+   containing `/`, which would split a filename into two segments and make `src/*.ts` answer **allow** for
+   `src/a／b.ts`. Pin every separator the fold can create, and fold per segment rather than over the whole
+   string.
 16. **A guard against an untrusted producer must not read a field that producer can omit.** A missing number
    is not zero, and `NaN` compares false against every ceiling. Deleting `total_cost_usd` from WP-12's
    `result` line left the budget watchdog silent at `NaN > 0.01`, the run `completed`, and `NaN` flowing to
