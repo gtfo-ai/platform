@@ -19,7 +19,7 @@ pnpm run -s verify   # lint + typecheck + unit + contract
 |---|---|
 | `pre-commit` | gitleaks on the staged diff, Biome on staged files |
 | `commit-msg` | commitlint (conventional commits) |
-| `pre-push` | `pnpm test` (unit + contract) |
+| `pre-push` | `pnpm conflict:check` (merge debris in any tracked file), then `pnpm test` (unit + contract) |
 
 gitleaks comes from the `@b12k/gitleaks` devDependency — no global install needed. If it is missing, the hook falls back to the official image via Docker. If neither is available the scan **did not run**, so the hook fails closed and tells you how to fix it; `GITLEAKS_SKIP=1 git commit …` is the deliberate, loud opt-out and is ignored in CI. **Never** use `--no-verify` or `GITLEAKS_SKIP` to get past an actual secret finding.
 

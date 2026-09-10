@@ -30,8 +30,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Every static check `pnpm run -s verify` runs, as one command derived from the same table
-      # (scripts/verify-targets.ts): biome, the generated JSON Schemas, the .gitignore guard and
-      # the NUL-byte guard. Listing them here instead was a second copy of the list, and it had
+      # (scripts/verify-targets.ts): biome, the generated JSON Schemas, the .gitignore guard, the
+      # NUL-byte guard and the merge-conflict-marker guard. Listing them here instead was a second
+      # copy of the list, and it had
       # drifted — `ignored:check` was in `verify` and in no CI job at all, so a guard that had
       # already caught two live defects gated nothing on a push. `scripts/verify.test.ts` fails
       # when a target or group in that table is not run by this workflow.

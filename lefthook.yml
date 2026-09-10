@@ -21,7 +21,16 @@ commit-msg:
     - name: commitlint
       run: ./node_modules/.bin/commitlint --edit {1}
 
+# The merge-conflict guard runs here as well as in `verify`/CI because pre-push is the hook that
+# decides what reaches `origin`, and the defect it exists for (d1e7b69: markers in CLAUDE.md, on
+# `main` for an hour) came in through a merge commit made with `--no-verify` — which is sometimes
+# the right thing to do mid-merge, and skips pre-commit only. CI is the backstop, but this project
+# pushes straight to `main`, so CI's verdict arrives after the broken tree is public. It costs
+# ~0.15s over the 734 tracked files — measured by driving the hook itself — against the minutes
+# the test job below takes, and it runs first so the cheap verdict comes first.
 pre-push:
   jobs:
+    - name: merge-conflict markers
+      run: pnpm run -s conflict:check
     - name: unit + contract
       run: pnpm run -s test

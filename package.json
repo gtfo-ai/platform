@@ -36,6 +36,7 @@
     "schemas:check": "node scripts/schemas.mjs --check",
     "ignored:check": "node scripts/check-ignored.mjs",
     "nul:check": "node scripts/check-nul.mjs",
+    "conflict:check": "node scripts/check-conflict.mjs",
     "secrets:scan": "node scripts/gitleaks.mjs dir .",
     "secrets:scan:ci": "node scripts/gitleaks.mjs git --log-opts=--all --require",
     "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all",

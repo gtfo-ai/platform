@@ -30,7 +30,7 @@
  * cheapest-feedback-first: the static checks, then the compiler, then the suites.
  */
 export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
-  'verify:static': ['lint', 'schemas:check', 'ignored:check', 'nul:check'],
+  'verify:static': ['lint', 'schemas:check', 'ignored:check', 'nul:check', 'conflict:check'],
   'verify:types': ['typecheck'],
   // TD-013's bundle budget is an **acceptance criterion** of WP-20, not a nicety, so it is a step
   // of `verify` and therefore a CI job. It is a group of its own rather than a step of
