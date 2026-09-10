@@ -190,6 +190,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    and `issueUrl`; neither mutation could be made to fail, because the other guard caught it. It is rule 22's
    shape without the layering being deliberate — and the fix is not a comment but a single source: `issueUrl`
    now takes the already-bounded id.
+43. **A negative test whose payload every candidate implementation would reject proves nothing — an
+   allow-list needs a negative case that only *exact* matching refuses.** WP-13's credential allow-list had
+   `evil.example.com` as its only negative; mutating the check to `host.endsWith(allowed)` **survived all 134
+   runlet tests** and handed back `SECRET-for-evil.gitlab.example.com`. The negatives that discriminate are
+   `evil-gitlab.example.com` and `gitlab.example.com.evil.test`. **Third instance of this shape in one
+   session** — WP-08's health probe (a different guard was covering), WP-10's `providerCalls` (a counter that
+   never moved), and now this. When you write a negative case, ask which *wrong* implementations it would
+   also pass.
 42. **A boundary asserted from one side is half a test.** WP-11a's refusal documents assert one byte *past*
    the cap **and the same document exactly at it**. Without the second half, a guard that refuses everything
    passes — which is precisely how a fake that "refuses past `FAKE_MAX_LABEL_BYTES`" could have been written
