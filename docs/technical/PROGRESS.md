@@ -42,9 +42,9 @@ tail: WP-22 (Docker images) already owes two things measured here — `renderEgr
 rendered config will not start the real image as written; and `apps/runlet` must be bundled to a single
 file with `scripts/runlet-container-check.mjs` re-run against the real image.
 
-**One follow-up is still queued**: the **`ignored:check` versus `.DS_Store`** question, where two guards in
-this repository disagree about what an OS artefact is. (The gitlab/jira redaction follow-up is now the
-in-flight branch above.)
+**No follow-ups are queued.** The **`ignored:check` versus `.DS_Store`** disagreement is fixed at `e83a881`:
+`scripts/os-artefacts.mjs` now holds `OS_ARTEFACT_NAMES` and both guards import it. The reasoning for
+keeping it a *name list* rather than a derivation is measured, not assumed — see the section below.
 
 **Merge recipe**: `git merge main` into the WP branch → verify → `git merge --squash <branch>` on `main` →
 `pnpm install` → all five targets **on main** → resolve conflicts (`pnpm-lock.yaml` by regeneration, both
@@ -1893,6 +1893,22 @@ is not source (an attribute, an ignore rule authored for that purpose) is deriva
 constant in our script names it is drift. A defensible middle is to skip only names that are OS metadata by
 universal convention, name them in one place shared with the provenance walk, and **fail loudly on anything
 else** — the two guards should not carry two different answers to the same question.
+
+**Fixed at `e83a881`, and the interesting part is that measuring rejected the more elegant option.** The
+obvious improvement is to stop naming files and *derive* source-ness instead: treat a file as source when
+the repository already tracks its extension, which is exactly the trick `check-ignored.mjs` already uses for
+root-level files and which needs no list at all. Measured before adopting it (rule 27): this repository
+tracks **three** extension-less files — `LICENSE`, `NOTICE`, `test/fixtures/runlet/fake-claude-cli` — and
+**no `Dockerfile` at all**, so the first Dockerfile WP-22 adds would be invisible to the derivation. That
+trades a *loud* false positive for a *quiet* false negative of precisely the class the guard exists to catch
+(`data/` once hid `apps/server/src/data/` while every local check stayed green). The name list only ever
+*removes* failures for files git would not track anyway; a derivation would have removed failures for files
+git very much should track. **The elegant rule was the unsafe one, and only counting told me so.**
+
+While measuring it, a second thing surfaced: the guard was already inconsistent *with itself*. Four planted
+`.DS_Store` files produced three reports — the root-level one was silent, because `rootFileExtensions`
+filters out the empty extension while `walk()` applied no filter at all. The same filename was source in
+`apps/` and not source at the root, and nobody had noticed because only the noisy half ever fired.
 
 ### WP-11 — three rounds spent, and the round-3 finding carved out as WP-11a
 
