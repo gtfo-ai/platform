@@ -165,6 +165,11 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    trusting exit codes would have called every mutant **dead**. Plant a deliberate failure first and watch
    the harness report it — a mutation result is a measurement, and an uncalibrated instrument reads
    whatever you were hoping for.
+22. **A layered guard whose outer layer is complete is unreachable, and therefore untested by
+   construction.** WP-08's unrequested-marker refusal passes 82 unit and 175 contract tests because nothing
+   can drive it — the guard in front of it never lets the state occur. Give the inner layer a seam, or say
+   at the line that it is deliberately unreachable defence-in-depth and name the outer guard that makes it
+   so; an untestable branch that looks tested is standing rule 3 with better manners.
 
 ## Blocker briefs needing a human
 
