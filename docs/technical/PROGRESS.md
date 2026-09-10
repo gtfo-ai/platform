@@ -170,6 +170,13 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    passes the whole suite.** Changing WP-10's NUL guard from `indexOf(0)` to `indexOf(0, 1)` — blind to a
    NUL at byte 0 — left **all 2353 tests green**. Manual canaries are evidence that expires when the session
    does. `scripts/check-ignored.test.ts` is the precedent: give every executable guard a real test.
+35. **Making a dependency required proves it is *supplied*, not that it is *used*.** WP-11 made
+   `ProviderCreateInput.redactor` required (rule 31). Merging Slack, which landed in parallel, produced
+   exactly **four** typecheck errors — all of them *test* call sites constructing the input. Slack's
+   production `create()` compiled clean, because a required field is checked where the object is built, not
+   where it is read. Adding the field to four literals would have turned `verify` green and left Slack
+   redacting nothing: the defect rule 31 names, reintroduced by the act of fixing it. The type gets you the
+   argument; only a test that plants a secret and looks for it in the output gets you the behaviour.
 34. **Adding a step to `verify` is not adding it to CI.** The two lists are maintained separately and have
    drifted: `ignored:check` — a guard that has already caught two live defects — has run in **no CI job**
    since it was written. Rule 7's shape at the level of the pipeline: derive one list from the other, or
