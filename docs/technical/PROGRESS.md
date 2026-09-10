@@ -315,7 +315,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
-| WP-20 | Web app foundation (TD-013) | WP-06 | yes | IN_PROGRESS | worktree | started session 2; scoped as a foundation, screens declared complete-or-stub |
+| WP-20 | Web app foundation (TD-013) | WP-06 | yes | REVIEW | branch `worktree-agent-a9d83ca5712f03282` `eaa6f60` | ui 2 → 187 tests + 27 web-e2e; **Q44-Q48 → renumber to Q46-Q50 at merge**; review round 1 running |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evalua | WP-16, WP-17, WP-20 | no | TODO | — | |
 | WP-22 | Docker images (base, runtime, launcher, product), Compose (profiles `l | WP-14 | no | TODO | — | |
 | WP-23 | Docs | WP-22 | yes | TODO | — | |
@@ -1831,6 +1831,28 @@ egress sidecar, Kubernetes, tmpfs volumes.
 uid 1000 (the socket is `0600`, Q45); WP-22 must bundle `apps/runlet` to a single file and re-run
 `scripts/runlet-container-check.mjs` against the real image. Session-store resume after a runner restart is
 WP-15's half.
+
+### WP-20 — the browser's own `lastEventId` would have undone the `reset`
+
+The finding worth keeping from the web foundation, because it is the other half of the defect that cost
+WP-06a seven layers: **`EventSource.lastEventId` persists across control frames.** The client drops a topic's
+cursor when a `reset` arrives — that is the whole point of `reset`, the server saying it cannot prove what you
+missed — but reading the browser's buffer on the next reconnect **resurrects the dropped cursor** and asks
+again from a position the server already disclaimed. The client therefore derives its cursors from each
+frame's own `topic`/`seq` instead, and sends **all** of them on reconnect.
+
+The hub's docblock enumerates every quantity the *server* shares between replay and live. This is the same
+class one process further out: **a quantity the platform thinks it owns, which the browser is also keeping.**
+
+**Also worth copying:** untrusted text is never converted to HTML at all — no markdown-to-HTML, no sanitiser,
+**no sink** — with `no-html.test.ts` failing the build if one appears. That is rules 30 and 33 applied
+together: not "we escape carefully" written in a docblock, but a check that makes the unsafe construct
+impossible to add. Fenced code becomes `<pre><code>` text, links are `http(s)`-only through `new URL()`,
+images and raw HTML render literally, ANSI is stripped, and Trojan-source bidi becomes U+FFFD.
+
+**Question numbering collided a fourth time**: WP-13 and WP-20 both took Q44 and Q45 from parallel worktrees.
+WP-13 merges first and keeps them; WP-20's Q44-Q48 become **Q46-Q50**. Four collisions, four caught, none
+silent — the convention holds because every implementer reports which numbers it took.
 
 ## Discovered work (not in plan)
 
