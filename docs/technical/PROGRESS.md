@@ -32,7 +32,8 @@ fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conf
 | WP | State | Branch |
 |---|---|---|
 | WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red; 1 blocking, 1 major, 3 minor) | `worktree-agent-a1a13bbc879e220cb` |
-| WP-15 pipeline interpreter | **implementation round 1**, started from `e6b2d12` | `wp/15` |
+| WP-15 pipeline interpreter | **implementation round 1**, resumed after the restart | `wp/15` |
+| slack redaction + census flakes | **implementation round 1** (the three queued follow-ups) | `fix/slack-redaction-and-census` |
 
 **WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
 credential without destroying the container `create` just started — a live run container nobody holds a
@@ -249,6 +250,18 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+65. **An oracle that audits a parser must *over*-approximate it; where the two share a shape, they are one
+   guard.** WP-14 replaced a loose `MINIMUM_CITATIONS` floor with a per-site recall check — a second regex
+   (`CITATION_SITE`) that finds everything *looking like* a citation, so the parser can be held to reading
+   all of them. It is genuinely independent of the scanning (it caught the mutation modelling round 2's
+   bug), and it still shares **one** assumption with the parser it audits: both require the backticked file
+   token and the `›` on the same *physical* line. Measured: a fabrication wrapped **between** the file token
+   and the marker is read by neither, and the recall check reports nothing at all — suite still 12 passed,
+   sites still 18, failures `[]`. **A second expression of the same idea agrees with the first precisely
+   when both are wrong**, and the shape they share is the one that will fail next. Design the oracle to be
+   *deliberately sloppier* than the thing it checks, so an unreadable spelling becomes a loud *unread site*
+   rather than silence — and when you cannot, list the shared shape in the docblock's gap list, which this
+   one omits.
 64. **A wall-clock margin must be measured at the load the fleet actually runs at, or it is not a number.**
    `loki/index.test.ts`'s million-iteration census against the 5 s default: **1.07 s** standalone (4.6x
    margin), **1197/1287/1493 ms** inside a full parallel unit+contract run at load average 5–13,
@@ -545,7 +558,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
-| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | REVIEW | branch `worktree-agent-a1a13bbc879e220cb` `dfa9534` | +196 tests, e2e 2 → 53; **Q52, Q53** (renumber at merge); review round 1 running |
+| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | IN_PROGRESS | — | branch `wp/15` from `e6b2d12`; acceptance is the fake-Claude e2e, one feature + one bug ticket |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
