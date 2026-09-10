@@ -159,6 +159,12 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    on an unknown status inside `normalise`, so a status GitLab adds later turns every such delivery into a
    permanently failing job. Refusing an enum value you do not recognise is right when you are about to
    *act*; when you are being *told* something, it turns a vendor's new feature into a stuck queue.
+21. **A mutation harness must be canaried before it is believed, and `--reporter=basic` has now lied in
+   both directions.** In vitest 5 that flag does not exist: WP-12's harness read it as *"no test failed"*
+   and called every mutant **alive**; WP-09's produced a runner error with **exit code 1**, so a harness
+   trusting exit codes would have called every mutant **dead**. Plant a deliberate failure first and watch
+   the harness report it — a mutation result is a measurement, and an uncalibrated instrument reads
+   whatever you were hoping for.
 
 ## Blocker briefs needing a human
 
