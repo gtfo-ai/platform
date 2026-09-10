@@ -298,31 +298,50 @@ describe('pg-boss adapter on the platform schema', () => {
       await withClient(database.connectionString, async (client) => {
         // Every timestamp compared here is written by the database, so nothing depends on the host
         // clock agreeing with the container's — `created_on` defaults to the same `now()` that
-        // `start_after` does.
+        // `start_after` does. Ordered by `created_on` because "leading" means the job that was
+        // enqueued first, and which row that is must not be decided by the column under test.
         const { rows } = await client.query<{ delay_seconds: string; lead_seconds: string }>(
           `select
              extract(epoch from (start_after - created_on))::text as delay_seconds,
              extract(epoch from (start_after - min(start_after) over ()))::text as lead_seconds
-           from pgboss.job where name = $1 order by start_after`,
+           from pgboss.job where name = $1 order by created_on, start_after`,
           [queue],
         );
         expect(rows).toHaveLength(2);
 
-        // Structural, not timing-based: the row itself says the leading job was runnable the
-        // moment it was created. technical/02 needs a batch that waits two minutes and then emits
-        // ONE event — this cannot be it, which is why `JOB_QUEUES.mrCommentDebounce` documents the
-        // policy-plus-timer pattern instead.
+        // Structural, not timing-based, and exact: both columns come from the same `now()` in a
+        // single INSERT, so a throttle writes 0 here and a debounce writes the window. The row
+        // itself says the leading job was runnable the moment it was created. technical/02 needs a
+        // batch that waits two minutes and then emits ONE event — this cannot be it, which is why
+        // `JOB_QUEUES.mrCommentDebounce` documents the policy-plus-timer pattern instead.
         expect(Number(rows[0]?.delay_seconds)).toBe(0);
 
         // The trailing job is deferred, by pg-boss's `getDebounceStartAfter` margin: whatever is
-        // left of the slot plus one second, so never more than a window and a second.
+        // left of the slot plus one second, so never more than a window and a second. Also exact —
+        // the margin is a whole number of seconds pg-boss computes and the database adds to the
+        // same `now()` that stamps `created_on`.
         const trailingDelay = Number(rows[1]?.delay_seconds);
         expect(trailingDelay).toBeGreaterThan(0);
         expect(trailingDelay).toBeLessThanOrEqual(windowSeconds + 1);
+
         // And it really is behind the leading job, not merely deferred relative to its own row.
+        // Measured against the margin rather than against a constant: the leading job is runnable
+        // at its own creation instant, so the lead is that margin plus however long the second
+        // enqueue's round-trip took, and it can therefore only ever be *at least* the margin — on
+        // any hardware. Turn the throttle into a debounce and the leading job moves out with the
+        // trailing one, collapsing the lead to at most the difference between the two margins —
+        // and to exactly 0 once the trailing row is the earlier of the two, which is what the
+        // mutation measured (`expected 0 to be greater than or equal to 84`).
+        //
+        // What this replaces was `lead <= windowSeconds + 1`, and that was a hardware assertion in
+        // the sense of standing rule 2: a burst landing in the first second of a slot gets a margin
+        // of exactly 121 s, so the bound demanded that the second round-trip take no time at all.
+        // That is ~0.8% of runs on any machine, loaded or idle — CI run 34448377983 hit it with
+        // `121.003307 <= 121`. An upper bound on the lead was never part of the invariant anyway: a
+        // debounce makes the lead *smaller*, never larger. The one real upper bound, on how far the
+        // follower may be pushed out, is the assertion on `trailingDelay` above.
         const lead = Number(rows[1]?.lead_seconds);
-        expect(lead).toBeGreaterThan(0);
-        expect(lead).toBeLessThanOrEqual(windowSeconds + 1);
+        expect(lead).toBeGreaterThanOrEqual(trailingDelay);
       });
     } finally {
       await runtime.stop();

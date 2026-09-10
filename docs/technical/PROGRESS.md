@@ -1649,6 +1649,55 @@ were disarmed. Each provider's own review saw only its own adapter, and each was
 looked at. Some defects are only visible after a merge, which is an argument for the merge itself being a
 review surface rather than a formality.
 
+### ci-fix — the flaky assertion could not have detected the defect it named
+
+CI failed on a **docs-only** commit: `expected 121.003307 to be less than or equal to 121`, in
+`pg-boss-jobs.integration.test.ts` — "does not delay the leading coalesced job — it is a throttle, not a
+debounce". The orchestrator briefed it as a load problem, following the SSE precedent. **That was wrong, and
+measuring found the real cause.**
+
+Load was a red herring: 6 of 6 green at load average 39. The trigger is **slot phase**.
+`getDebounceStartAfter` (`pg-boss/dist/manager.js:1078`) returns whole seconds — rest of slot, plus one — so
+a burst landing in the first second of a 120-second slot gets exactly 121, and `lead ≤ 121` then required
+the second enqueue's round trip to take **zero** time. About **0.8 % of runs on any machine**, load or no
+load. Aligning a burst to a slot boundary made it **0 pass / 3 fail** with the identical assertion text CI
+produced; the same alignment after the fix is **3/3**.
+
+**And the assertion was pointing the wrong way.** The flaking line already *was* the leader-versus-follower
+comparison — but as an **upper** bound, and an upper bound cannot detect a debounce, because a debounce makes
+the lead **smaller**. So the assertion was simultaneously fragile on hardware and incapable of catching the
+defect in its own name. It is now a **lower** bound, `lead >= trailingDelay`: the leader is runnable at its
+own creation, so the lead is the database-recorded margin plus round trip and can never fall below the
+margin, on any hardware. Rows are ordered by `created_on` rather than by the column under test. The debounce
+mutation dies `expected 120 to be +0`.
+
+**Siblings found and left, with their evidence**, so the next reader does not have to re-derive them:
+`test/contract/support/jobs-contract-suite.ts:165` (`ranAt − startAfter ≤ 8000`, and it runs in the
+integration tier); `test/integration/events/outbox.integration.test.ts:155` (`elapsed < 10_000` against a
+500 ms timeout); `pg-boss-jobs.integration.test.ts:268` (a database `start_after` compared against host
+`Date.now() + 3_000_000`). Adjacent class — **sleep, then a negative assertion, vacuous when slow**:
+`broadcast.integration.test.ts:98`, `pg-boss-jobs.integration.test.ts:236`, and the two already filed at
+`sse.e2e.test.ts:158,225`.
+
+### `ignored:check` fails on a Finder artefact, and the fix must not become an allow-list
+
+Merging the pg-boss `ci-fix` turned `main` red — not from the change, but because macOS had left
+`.DS_Store` files in `.claude/`, `apps/`, `docs/` and the repository root during this session's
+filesystem work. `check-ignored.mjs` reported all three as *"`.gitignore` hides 3 source file(s)"*.
+
+They are not source, and the guard cannot tell. WP-08's fixture-provenance walk already faced the identical
+question and skips exactly `.DS_Store` and `Thumbs.db`, so the two guards disagree about what an OS artefact
+is. The orchestrator deleted the files to unblock the merge; **that is hygiene, not a fix, and they will
+come back the next time anyone opens a folder in Finder.**
+
+The fix needs care, because "add a skip list" is precisely the shape rule 7's corollary warns about — WP-06a
+closed a hand-maintained scope by adding `IGNORABLE_ROOT_FILES`, an allow-list that *suppresses failures*,
+and the reviewer rejected it. The distinction worth holding: skipping a file because **git itself** says it
+is not source (an attribute, an ignore rule authored for that purpose) is derivation; skipping it because a
+constant in our script names it is drift. A defensible middle is to skip only names that are OS metadata by
+universal convention, name them in one place shared with the provenance walk, and **fail loudly on anything
+else** — the two guards should not carry two different answers to the same question.
+
 ## Discovered work (not in plan)
 
 - **Orchestrator parallelism has a ceiling, and it is lower than it looks.** Running three implementers plus
