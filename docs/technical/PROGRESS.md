@@ -209,6 +209,15 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+52. **A defect in a file no check reads survives every gate — and the repository's own instructions are
+   such a file.** The WP-13 squash merge (`d1e7b69`) put **merge-conflict markers into `CLAUDE.md`** and
+   they sat on `main` for about an hour. `verify` does not read `CLAUDE.md`, no lint or typecheck covers
+   markdown, gitleaks does not care, and the worktree merge commit used `--no-verify`. They were found only
+   because a subagent happened to open the file for its own work — by luck, on the document every future
+   agent is handed as authoritative. *The orchestrator's own merges are the least reviewed changes in the
+   repository*: no implementer wrote them, no reviewer read them, and the conflict resolution is done under
+   time pressure between two other things. `conflict:check` now runs in `verify`, because rule 30 says
+   writing this down would not have been enough.
 51. **`process.exit()` abandons what a socket still owes — and the condition that exposes it is the one
    backpressure normally prevents.** This rule took three attempts to state correctly, which is the useful
    part. WP-13 first reported `process.exit(0)` delivering **8,192 of 16,777,216 bytes**; the round-2
