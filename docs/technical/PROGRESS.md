@@ -190,6 +190,16 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    and `issueUrl`; neither mutation could be made to fail, because the other guard caught it. It is rule 22's
    shape without the layering being deliberate — and the fix is not a comment but a single source: `issueUrl`
    now takes the already-bounded id.
+44. **A "this is the only place X happens" docblock must be enforced by the same check that enforces X, or
+   it is decoration.** WP-20's `untrusted-text.ts` claimed to be the only producer of an `href`; five other
+   sites put a DTO string straight into one, and `urlSchema = z.url()` **accepts** `javascript:`, `data:`,
+   `vbscript:` and `file:`. The only thing preventing execution was **React 19.3 rewriting the attribute** —
+   an accidental defence that nothing asserted, dependent on a framework version. A scope claim is a
+   checkable claim (rules 17, 30, 33).
+45. **A fixture named for the property under test guarantees the property is never tested.** WP-20's
+   web-e2e fixture field is called `safeUrl`, so no tier ever fed a hostile scheme into the `href` path that
+   had no guard. Name fixtures for what they *are*, not for what you hope they satisfy — and feed the
+   hostile value somewhere.
 43. **A negative test whose payload every candidate implementation would reject proves nothing — an
    allow-list needs a negative case that only *exact* matching refuses.** WP-13's credential allow-list had
    `evil.example.com` as its only negative; mutating the check to `host.endsWith(allowed)` **survived all 134
