@@ -209,6 +209,18 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+53. **A verification run must be scoped to the checkout it claims to verify.** `vitest.config.ts` gives the
+   integration and e2e projects `include: ['**/*.integration.test.ts']` and `['**/*.e2e.test.ts']`; those
+   leading `**` globs reach into `.claude/worktrees/`, where this repository's own agent worktrees live —
+   **separate checkouts of the same repository**. Measured on `main` with three worktrees present:
+   `e2e-fake-claude` collected **9 files, 7 of them another agent's**; `integration` collected **48, of which
+   36 were**. The run failed, and every failure was an in-progress `docker-workspace.e2e.test.ts` belonging
+   to WP-14. The error direction is a false *failure*, which is the safe one — but a green run on this
+   machine was not a statement about this checkout, and **CI never saw it because a clean checkout has no
+   nested worktrees**. This is `check-ignored.mjs`'s WP-06a defect exactly, in a different tool: *anything
+   that walks the tree must be told that a directory holding a `.git` entry belongs to someone else.*
+   The orchestrator's own parallelism is what puts those checkouts inside the repository, so it is the
+   orchestrator's tooling that keeps meeting this.
 52. **A defect in a file no check reads survives every gate — and the repository's own instructions are
    such a file.** The WP-13 squash merge (`d1e7b69`) put **merge-conflict markers into `CLAUDE.md`** and
    they sat on `main` for about an hour. `verify` does not read `CLAUDE.md`, no lint or typecheck covers
