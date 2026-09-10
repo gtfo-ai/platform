@@ -136,6 +136,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `allow` for `.ENV` against a `.env` rule, and the reviewer wrote `.ENV` on APFS and **overwrote `.env`**.
    Case-folding costs a false deny on a genuinely case-sensitive filesystem, which is the fail-closed
    direction, so take it.
+27. **Measure a prescribed fix before applying it — three times this session a reviewer's or orchestrator's
+   proposed patch was wrong, and each time the implementer who measured it caught something.** WP-06a: the
+   proposed `#queued >= cap + replayOutstanding` was *algebraically identical* to the broken gate and closed
+   at the same frame. WP-06a round 2: the proposed arbitration flag closed only one direction, and had to be
+   claimed before `abandon()`'s `reset`s rather than before its `shutdown`. WP-12 round 3: the prescribed
+   whole-string `NFKC` fold maps **U+FF0F to `/`**, which the volume does not — so `src/*.ts` would have
+   answered `allow` for `src/a／b.ts`, turning a fail-closed widening into a fail-**open** one. Per-segment
+   folding pins it. *A fix arriving with authority is still a hypothesis.*
 26. **`toLowerCase()` is lowercase *mapping*; a filesystem compares with full case *folding* — and the way
    to learn its equivalence classes is to ask it, not to reason about Unicode.** WP-12's round-1 fix folded
    with `normalize('NFC').toLowerCase()`; the reviewer wrote `conﬁg/app.yaml` (U+FB01) on APFS and it
