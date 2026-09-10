@@ -1,0 +1,159 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines?sha=1111111111111111111111111111111111111111&order_by=id&sort=desc&per_page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 900,
+          "iid": 12,
+          "project_id": 15513260,
+          "sha": "1111111111111111111111111111111111111111",
+          "ref": "agentic/task-1",
+          "status": "failed",
+          "source": "merge_request_event",
+          "name": "Pipeline for branch: agentic/task-1",
+          "created_at": "2026-06-01T07:10:00.000Z",
+          "updated_at": "2026-06-01T07:12:00.000Z",
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"List project pipelines\" example response, with the documented sha, order_by and sort attributes"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines?sha=ffffffffffffffffffffffffffffffffffffffff&order_by=id&sort=desc&per_page=1",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-09-10",
+        "kind": "inferred",
+        "note": "An empty array for a commit with no pipeline. The endpoint is documented to return a list; the empty case is not published."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/900",
+      "status": 200,
+      "body": {
+        "id": 900,
+        "iid": 12,
+        "project_id": 15513260,
+        "sha": "1111111111111111111111111111111111111111",
+        "ref": "agentic/task-1",
+        "status": "failed",
+        "source": "merge_request_event",
+        "coverage": "81.50",
+        "created_at": "2026-06-01T07:10:00.000Z",
+        "started_at": "2026-06-01T07:10:20.000Z",
+        "finished_at": "2026-06-01T07:12:00.000Z",
+        "duration": 100,
+        "queued_duration": 20,
+        "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900",
+        "detailed_status": {
+          "icon": "status_failed",
+          "text": "failed",
+          "label": "failed"
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/pipelines/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Retrieve a single pipeline\". AMBIGUITY: every published example shows \"coverage\": null and the docs never state the type of a present value, so this fixture uses the string form and the schema accepts a number or a numeric string."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/pipelines/900/jobs?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 9001,
+          "name": "lint",
+          "stage": "test",
+          "status": "success",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:10:00.000Z",
+          "started_at": "2026-06-01T07:10:20.000Z",
+          "finished_at": "2026-06-01T07:11:00.000Z",
+          "failure_reason": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9001",
+          "runner": null,
+          "artifacts": [],
+          "user": {
+            "id": 4242,
+            "username": "agentic-bot",
+            "name": "Agentic Bot",
+            "state": "active",
+            "web_url": "https://gitlab.example.test/agentic-bot",
+            "avatar_url": null
+          }
+        },
+        {
+          "id": 9002,
+          "name": "test:unit",
+          "stage": "test",
+          "status": "failed",
+          "allow_failure": false,
+          "coverage": null,
+          "created_at": "2026-06-01T07:10:00.000Z",
+          "started_at": "2026-06-01T07:11:00.000Z",
+          "finished_at": "2026-06-01T07:12:00.000Z",
+          "failure_reason": "script_failure",
+          "web_url": "https://gitlab.example.test/acme/api/-/jobs/9002",
+          "runner": null,
+          "artifacts": [],
+          "user": {
+            "id": 4242,
+            "username": "agentic-bot",
+            "name": "Agentic Bot",
+            "state": "active",
+            "web_url": "https://gitlab.example.test/agentic-bot",
+            "avatar_url": null
+          }
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"List pipeline jobs\" example response fields"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/jobs/9002/trace",
+      "status": 200,
+      "text": "$ pnpm test\nFAIL src/billing/totals.test.ts\n  expected 42, received 41\n  at totals (src/billing/totals.ts:18:7)\nERROR: Job failed: exit code 1\n",
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Retrieve a job log file\" - 200 \"serves the log file\""
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/jobs/999999/trace",
+      "status": 404,
+      "body": {
+        "message": "404 Not found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/jobs/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Retrieve a job log file\" - \"404: Job not found or no log file\""
+      }
+    }
+  ]
+}

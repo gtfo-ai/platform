@@ -108,6 +108,10 @@ runGitProviderContract({
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,
       missingJobLogRef: 'log:does-not-exist',
+      // The fake writes `rev-<n>`; this one is shaped like a handle it issues and was never
+      // issued. (The fake identifies a credential by its value, so the foreign *value* the suite
+      // sends is what it actually looks up — the shape is what the next provider needs.)
+      foreignRevokeId: 'rev-4242',
       emitMerged: () =>
         port.emitMergeRequestEvent({
           event: 'mr.merged',

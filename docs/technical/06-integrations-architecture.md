@@ -105,25 +105,79 @@ packages/integrations/src/
   <type>/fake.ts            # in-memory fake with a divergence register (a test double, not shadow mode)
   support/fake-support.ts   # signed fake webhook envelope, scripted failures, deterministic clock
   providers/jira-cloud/     # index.ts (registration), client.ts (thin REST), adf.ts, webhook.ts, setup-guide.md
-  providers/gitlab/ providers/slack/ providers/sentry/ providers/loki/
+  providers/gitlab/         # WP-09: config.ts, http.ts, client.ts, schemas.ts, mapping.ts,
+                            # codeowners.ts, credentials.ts, webhook-verify.ts,
+                            # webhook-payloads.ts, inbound.ts, provider.ts, index.ts, setup-guide.md
+  providers/slack/ providers/sentry/ providers/loki/
   registry.ts               # providers register {type, id, configSchema, secretFields, capabilities, agentTooling}
 test/contract/support/integrations/
   <type>-contract-suite.ts  # the reusable suite, parameterised over a harness factory
 test/contract/integrations/
   <type>.contract.test.ts   # runs the suite against the fake; provider WPs add a replay-mode runner
+test/fixtures/http/<provider>/
+  *.json                    # recorded interactions, each with its documentation URL and whether
+                            # the shape is `documented` or `inferred` (technical/10)
 ```
 
 The suites sit under `test/` for the same reason the `Jobs` contract suite does (technical/10 and
-WP-05): one exported suite, several runners — the fake on every `verify`, each real adapter in nock
+WP-05): one exported suite, several runners — the fake on every `verify`, each real adapter in
 replay mode — and a suite that lived inside a package would be counted as that package's coverage
 while asserting nothing about it.
 
 Adding GitHub = `providers/github/` implementing GitProvider + fixtures + setup guide + a runner for
 the existing suite (BD-017).
 
+> **A new obligation on a port lands in the shared suite, in the same change.** WP-09 added one —
+> an adapter may not report a revocation it cannot substantiate, so a credential handle it did not
+> mint is `not_found` — and for a review round it lived only in GitLab's own contract file, which
+> made it a promise one provider had made to itself: a GitHub adapter that silently `return`ed
+> would have passed the whole suite. BD-017's claim is that a new provider is trustworthy *without*
+> touching the pipeline, and the shared suite is the only thing that can make that true. Where the
+> obligation needs a provider-shaped input, the suite takes it from the harness context rather than
+> writing a literal (`foreignRevokeId` is GitLab's `<project>#<token_id>` and the fake's `rev-<n>`),
+> and it asserts the *specific* refusal, because a handle that is not a handle at all earns a
+> different one (`invalid_request`).
+
+> **What a provider module looks like, as built at WP-09** (`providers/gitlab/`): `config.ts` (the
+> binding's zod schema, strict), `http.ts` (the thin `fetch` client — status mapping, `Retry-After`,
+> a bounded pager), `client.ts` (the ~19 endpoints the port needs, each parsed with
+> `parseProviderData`), `schemas.ts` (the provider's response shapes, deliberately *non*-strict
+> because a vendor adds fields every release), `mapping.ts` (provider vocabulary → port
+> vocabulary), `webhook-verify.ts` + `webhook-payloads.ts` + `inbound.ts` (the inbound half),
+> `credentials.ts`, `provider.ts`, `index.ts`, `setup-guide.md`.
+>
+> Two constraints that turned out to be structural rather than stylistic:
+>
+>  - **`fetch` is injected, and the client never retries.** Backoff, the rate-limit budget and the
+>    shadow guard live in `IntegrationActionExecutor`, which owns the injected timer; a retry loop
+>    inside a provider would be a second one running on a wall clock. The injected transport is
+>    also what makes replay mode work without an HTTP interception library, and what lets a test
+>    assert that a shadow-mode call issued *zero* requests.
+>  - **The adapter carries a divergence register too, and its rule is the dual of the fake's:** a
+>    fake may be stricter than the real adapter and never kinder, so *the adapter must not be
+>    kinder than the provider*. Where replay cannot reproduce a real behaviour, or where the port's
+>    wording promises something the provider does not enforce, it is written down where the adapter
+>    is defined. WP-09 found four such places worth the reader's time: GitLab publishes no
+>    insertion/deletion counts for a merge request (`diff_stats` is `null`, not zeroes), an access
+>    token expires at midnight UTC on a *date* so a TTL in seconds is granted in whole days, a
+>    token has no branch scoping at all (Q40), and mergeability is computed asynchronously so
+>    `mergeable: null` is a state the port must keep distinct from `false`.
+
 ## Inbound: webhooks and polling
 
 - One HTTP endpoint per provider (`/webhooks/<provider>/<integrationId>`), verifies signature (`X-Hub-Signature`, `X-Gitlab-Token`, `Sentry-Hook-Signature`, Slack signing secret when not in Socket Mode), stores the raw payload (audit), computes a **dedup key** (Jira `X-Atlassian-Webhook-Identifier`; GitLab event + object id + `updated_at`; Sentry hook id), and enqueues normalisation as a job. Response is 2xx within milliseconds; all work is asynchronous.
+  - **GitLab has two schemes and the choice is not ours** (WP-09). GitLab 19.0 added
+    [Standard Webhooks](https://www.standardwebhooks.com/) — `webhook-id`, `webhook-timestamp` and
+    `webhook-signature` (`v1,<base64 HMAC-SHA256 over "{id}.{timestamp}.{body}">`, key = the
+    `whsec_` token base64-decoded) — beside the legacy plain `X-Gitlab-Token`, and documents the
+    migration rule: *verify the signature when `webhook-signature` is present and fall back to the
+    secret token otherwise*. The normaliser follows it exactly, which also closes a downgrade: a
+    signed delivery whose signature fails is **never** re-checked against the plain token, or an
+    attacker who has seen one `X-Gitlab-Token` could forge any body on an instance that has already
+    migrated. A signed delivery whose `webhook-timestamp` is outside the binding's tolerance
+    (default 5 minutes) is a replay and is rejected; that comparison takes an injected clock.
+    With neither token configured, `verify` is `false` — an endpoint that accepts unverified
+    deliveries because nothing was configured looks exactly like one that works.
 - **Polling fallback** per binding when no public URL (`APP_WEBHOOK_PUBLIC_URL` unset) or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
 - Actor identity: every normalised event carries `{provider, providerUserId, email?, displayName}` resolved to a platform user when possible; unresolved identities are stored as `unmapped` (BD-022).

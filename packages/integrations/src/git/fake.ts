@@ -41,6 +41,12 @@
  *  7. **Different — `mintCredential` returns a value shaped `fake_credential_<n>`.** It matches no
  *     provider's token format on purpose: a secret scanner must never find a plausible token in
  *     this repository (BD-002), and no test should be able to pattern-match a real one.
+ *  8. **Stricter — revoking a credential this fake never minted is `not_found`.** A real adapter
+ *     cannot tell "already revoked" from "never existed here" when the provider denies knowing a
+ *     handle it did not mint, so the port forbids it to report success (WP-09 review round 1); the
+ *     fake knows exactly what it minted, and refusing is the stricter of the two answers. A second
+ *     revocation of a credential it *did* mint stays a no-op, which is the idempotency the port
+ *     asks for. Asserted by `fake.test.ts` ("refuses to revoke a credential it never minted").
  */
 import {
   type CodeownersRules,
@@ -657,7 +663,10 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       core.enter('revoke_credential');
       const stored = credentials.get(credential.value);
       if (stored === undefined) {
-        return;
+        // Divergence 8: refuse rather than shrug. The port makes "may not report a revocation it
+        // cannot substantiate" an adapter obligation, and a fake that returns void here would let
+        // a teardown built against it ship code that never handles the refusal (rule 1).
+        throw notFound(PROVIDER, 'revoke_credential', 'credential this provider never minted');
       }
       stored.revoked = true;
     },

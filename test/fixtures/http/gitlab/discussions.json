@@ -1,0 +1,400 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "aa11bb22cc33dd44ee55ff6677889900aabbccdd",
+          "individual_note": false,
+          "notes": [
+            {
+              "id": 1126,
+              "type": "DiscussionNote",
+              "body": "This branch is unreachable.",
+              "attachment": null,
+              "author": {
+                "id": 77,
+                "username": "dana.reviewer",
+                "name": "Dana Reviewer",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/dana.reviewer",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-01T07:30:00.000Z",
+              "updated_at": "2026-06-01T07:30:00.000Z",
+              "system": false,
+              "noteable_id": 155016007,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 7,
+              "resolvable": true,
+              "resolved": false,
+              "resolved_by": null,
+              "resolved_at": null
+            }
+          ]
+        },
+        {
+          "id": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+          "individual_note": false,
+          "notes": [
+            {
+              "id": 1301,
+              "type": "DiffNote",
+              "body": "This branch is unreachable.",
+              "attachment": null,
+              "author": {
+                "id": 4242,
+                "username": "agentic-bot",
+                "name": "Agentic Bot",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/agentic-bot",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-01T07:30:00.000Z",
+              "updated_at": "2026-06-01T07:30:00.000Z",
+              "system": false,
+              "noteable_id": 155016007,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 7,
+              "resolvable": true,
+              "resolved": false,
+              "resolved_by": null,
+              "resolved_at": null,
+              "position": {
+                "base_sha": "2222222222222222222222222222222222222222",
+                "start_sha": "2222222222222222222222222222222222222222",
+                "head_sha": "1111111111111111111111111111111111111111",
+                "old_path": "src/parser.ts",
+                "new_path": "src/parser.ts",
+                "position_type": "text",
+                "old_line": null,
+                "new_line": 42
+              }
+            },
+            {
+              "id": 1302,
+              "type": "DiscussionNote",
+              "body": "Fixed in the next commit.",
+              "attachment": null,
+              "author": {
+                "id": 4242,
+                "username": "agentic-bot",
+                "name": "Agentic Bot",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/agentic-bot",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-01T07:30:00.000Z",
+              "updated_at": "2026-06-01T07:30:00.000Z",
+              "system": false,
+              "noteable_id": 155016007,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 7,
+              "resolvable": true,
+              "resolved": false,
+              "resolved_by": null,
+              "resolved_at": null
+            }
+          ]
+        },
+        {
+          "id": "bb22cc33dd44ee55ff6677889900aabbccddeeff",
+          "individual_note": true,
+          "notes": [
+            {
+              "id": 1200,
+              "type": null,
+              "body": "changed the description",
+              "attachment": null,
+              "author": {
+                "id": 4242,
+                "username": "agentic-bot",
+                "name": "Agentic Bot",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/agentic-bot",
+                "avatar_url": null
+              },
+              "created_at": "2026-06-01T07:30:00.000Z",
+              "updated_at": "2026-06-01T07:30:00.000Z",
+              "system": true,
+              "noteable_id": 155016007,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 7,
+              "resolvable": false,
+              "resolved": false,
+              "resolved_by": null,
+              "resolved_at": null
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"List all merge request discussion items\" example response"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions",
+      "status": 201,
+      "body": {
+        "id": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+        "individual_note": false,
+        "notes": [
+          {
+            "id": 1301,
+            "type": "DiffNote",
+            "body": "This branch is unreachable.",
+            "attachment": null,
+            "author": {
+              "id": 4242,
+              "username": "agentic-bot",
+              "name": "Agentic Bot",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/agentic-bot",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-01T07:30:00.000Z",
+            "updated_at": "2026-06-01T07:30:00.000Z",
+            "system": false,
+            "noteable_id": 155016007,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 7,
+            "resolvable": true,
+            "resolved": false,
+            "resolved_by": null,
+            "resolved_at": null,
+            "position": {
+              "base_sha": "2222222222222222222222222222222222222222",
+              "start_sha": "2222222222222222222222222222222222222222",
+              "head_sha": "1111111111111111111111111111111111111111",
+              "old_path": "src/parser.ts",
+              "new_path": "src/parser.ts",
+              "position_type": "text",
+              "old_line": null,
+              "new_line": 42
+            }
+          }
+        ]
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Create a merge request thread\" - \"returns 201 Created and the created discussion object\". The position block is the documented text-diff form."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions/d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0/notes",
+      "status": 201,
+      "body": {
+        "id": 1302,
+        "type": "DiscussionNote",
+        "body": "Fixed in the next commit.",
+        "attachment": null,
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "created_at": "2026-06-01T07:30:00.000Z",
+        "updated_at": "2026-06-01T07:30:00.000Z",
+        "system": false,
+        "noteable_id": 155016007,
+        "noteable_type": "MergeRequest",
+        "project_id": 15513260,
+        "noteable_iid": 7,
+        "resolvable": true,
+        "resolved": false,
+        "resolved_by": null,
+        "resolved_at": null
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Add note to a merge request thread\" - \"returns 201 Created and the created note object\", which is why the adapter re-reads the thread."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions/no-such-thread/notes",
+      "status": 404,
+      "body": {
+        "message": "404 Discussion Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions/d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+      "status": 200,
+      "body": {
+        "id": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+        "individual_note": false,
+        "notes": [
+          {
+            "id": 1301,
+            "type": "DiffNote",
+            "body": "This branch is unreachable.",
+            "attachment": null,
+            "author": {
+              "id": 4242,
+              "username": "agentic-bot",
+              "name": "Agentic Bot",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/agentic-bot",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-01T07:30:00.000Z",
+            "updated_at": "2026-06-01T07:30:00.000Z",
+            "system": false,
+            "noteable_id": 155016007,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 7,
+            "resolvable": true,
+            "resolved": false,
+            "resolved_by": null,
+            "resolved_at": null,
+            "position": {
+              "base_sha": "2222222222222222222222222222222222222222",
+              "start_sha": "2222222222222222222222222222222222222222",
+              "head_sha": "1111111111111111111111111111111111111111",
+              "old_path": "src/parser.ts",
+              "new_path": "src/parser.ts",
+              "position_type": "text",
+              "old_line": null,
+              "new_line": 42
+            }
+          },
+          {
+            "id": 1302,
+            "type": "DiscussionNote",
+            "body": "Fixed in the next commit.",
+            "attachment": null,
+            "author": {
+              "id": 4242,
+              "username": "agentic-bot",
+              "name": "Agentic Bot",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/agentic-bot",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-01T07:30:00.000Z",
+            "updated_at": "2026-06-01T07:30:00.000Z",
+            "system": false,
+            "noteable_id": 155016007,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 7,
+            "resolvable": true,
+            "resolved": false,
+            "resolved_by": null,
+            "resolved_at": null
+          }
+        ]
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Retrieve a merge request discussion item\""
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/7/discussions/d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+      "status": 200,
+      "body": {
+        "id": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+        "individual_note": false,
+        "notes": [
+          {
+            "id": 1301,
+            "type": "DiffNote",
+            "body": "This branch is unreachable.",
+            "attachment": null,
+            "author": {
+              "id": 4242,
+              "username": "agentic-bot",
+              "name": "Agentic Bot",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/agentic-bot",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-01T07:30:00.000Z",
+            "updated_at": "2026-06-01T07:30:00.000Z",
+            "system": false,
+            "noteable_id": 155016007,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 7,
+            "resolvable": true,
+            "resolved": true,
+            "resolved_by": null,
+            "resolved_at": null,
+            "position": {
+              "base_sha": "2222222222222222222222222222222222222222",
+              "start_sha": "2222222222222222222222222222222222222222",
+              "head_sha": "1111111111111111111111111111111111111111",
+              "old_path": "src/parser.ts",
+              "new_path": "src/parser.ts",
+              "position_type": "text",
+              "old_line": null,
+              "new_line": 42
+            }
+          },
+          {
+            "id": 1302,
+            "type": "DiscussionNote",
+            "body": "Fixed in the next commit.",
+            "attachment": null,
+            "author": {
+              "id": 4242,
+              "username": "agentic-bot",
+              "name": "Agentic Bot",
+              "state": "active",
+              "web_url": "https://gitlab.example.test/agentic-bot",
+              "avatar_url": null
+            },
+            "created_at": "2026-06-01T07:30:00.000Z",
+            "updated_at": "2026-06-01T07:30:00.000Z",
+            "system": false,
+            "noteable_id": 155016007,
+            "noteable_type": "MergeRequest",
+            "project_id": 15513260,
+            "noteable_iid": 7,
+            "resolvable": true,
+            "resolved": true,
+            "resolved_by": null,
+            "resolved_at": null
+          }
+        ]
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Resolve a merge request thread\" - \"returns 200 OK and the updated discussion object\". A SECOND resolve of an already resolved thread is not documented; the same 200 is assumed and this fixture repeats."
+      }
+    }
+  ]
+}

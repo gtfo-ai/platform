@@ -1,0 +1,171 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/version",
+      "status": 200,
+      "body": {
+        "version": "18.1.1-ee",
+        "revision": "ceb07b24cb0",
+        "enterprise": true
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/version/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi",
+      "status": 200,
+      "body": {
+        "id": 15513260,
+        "name": "api",
+        "path": "api",
+        "path_with_namespace": "acme/api",
+        "default_branch": "main",
+        "ssh_url_to_repo": "git@gitlab.example.test:acme/api.git",
+        "http_url_to_repo": "https://gitlab.example.test/acme/api.git",
+        "web_url": "https://gitlab.example.test/acme/api"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/projects/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fnope",
+      "status": 404,
+      "body": {
+        "message": "404 Project Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "status table: \"404 Not Found - A resource could not be accessed.\""
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/branches/main",
+      "status": 200,
+      "body": {
+        "name": "main",
+        "merged": false,
+        "protected": true,
+        "default": true,
+        "developers_can_push": false,
+        "developers_can_merge": false,
+        "can_push": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/tree/main",
+        "commit": {
+          "id": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+          "short_id": "a1b2c3d4",
+          "title": "Add the invoice totals",
+          "message": "Add the invoice totals\n",
+          "author_name": "Dana Reviewer",
+          "author_email": "dana.reviewer@example.test",
+          "authored_date": "2026-05-29T09:12:00.000Z",
+          "committer_name": "Dana Reviewer",
+          "committer_email": "dana.reviewer@example.test",
+          "committed_date": "2026-05-29T09:12:00.000Z",
+          "created_at": "2026-05-29T09:12:00.000Z",
+          "parent_ids": [],
+          "trailers": {},
+          "extended_trailers": {},
+          "web_url": "https://gitlab.example.test/acme/api/-/commit/a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/branches/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/branches/agentic%2Ftask-1",
+      "status": 200,
+      "body": {
+        "name": "agentic/task-1",
+        "merged": false,
+        "protected": false,
+        "default": false,
+        "developers_can_push": true,
+        "developers_can_merge": true,
+        "can_push": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/tree/agentic/task-1",
+        "commit": {
+          "id": "1111111111111111111111111111111111111111",
+          "short_id": "11111111",
+          "title": "Fix the totals",
+          "message": "Fix the totals\n",
+          "author_name": "Agentic Bot",
+          "author_email": "agentic-bot@example.test",
+          "authored_date": "2026-06-01T07:00:00.000Z",
+          "committer_name": "Agentic Bot",
+          "committer_email": "agentic-bot@example.test",
+          "committed_date": "2026-06-01T07:00:00.000Z",
+          "created_at": "2026-06-01T07:00:00.000Z",
+          "parent_ids": ["a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"],
+          "trailers": {},
+          "extended_trailers": {},
+          "web_url": "https://gitlab.example.test/acme/api/-/commit/1111111111111111111111111111111111111111"
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/branches/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/protected_branches/main",
+      "status": 200,
+      "body": {
+        "id": 101,
+        "name": "main",
+        "push_access_levels": [
+          {
+            "id": 1001,
+            "access_level": 0,
+            "access_level_description": "No one"
+          }
+        ],
+        "merge_access_levels": [
+          {
+            "id": 2001,
+            "access_level": 40,
+            "access_level_description": "Maintainers"
+          }
+        ],
+        "allow_force_push": false,
+        "code_owner_approval_required": true
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/protected_branches/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/protected_branches/agentic%2Ftask-1",
+      "status": 404,
+      "body": {
+        "message": "404 Not found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/protected_branches/",
+        "retrieved": "2026-09-10",
+        "kind": "inferred",
+        "note": "The documentation states the 200 response but not the status code for a branch with no protection rule; 404 is assumed, and the guard the pipeline uses reads branches/:branch.protected instead, which IS documented on a 200."
+      }
+    }
+  ]
+}

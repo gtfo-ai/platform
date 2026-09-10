@@ -1,0 +1,123 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests?state=merged&updated_after=2000-01-01T00%3A00%3A00.000Z&order_by=updated_at&sort=desc&per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 155016005,
+          "iid": 5,
+          "project_id": 15513260,
+          "title": "Add the invoice totals",
+          "description": "",
+          "state": "merged",
+          "imported": false,
+          "created_at": "2026-05-30T07:26:38.402Z",
+          "updated_at": "2026-06-01T03:38:31.354Z",
+          "merged_at": "2026-05-29T09:12:00.000Z",
+          "target_branch": "main",
+          "source_branch": "feature/totals",
+          "author": {
+            "id": 77,
+            "username": "dana.reviewer",
+            "name": "Dana Reviewer",
+            "state": "active",
+            "web_url": "https://gitlab.example.test/dana.reviewer",
+            "avatar_url": null
+          },
+          "assignees": [],
+          "reviewers": [],
+          "labels": ["backend"],
+          "draft": false,
+          "work_in_progress": false,
+          "merge_status": "can_be_merged",
+          "detailed_merge_status": "not_open",
+          "sha": "4444444444444444444444444444444444444444",
+          "merge_commit_sha": null,
+          "squash_commit_sha": null,
+          "user_notes_count": 1,
+          "changes_count": "3",
+          "has_conflicts": false,
+          "blocking_discussions_resolved": true,
+          "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/5",
+          "head_pipeline": {
+            "id": 900,
+            "project_id": 15513260,
+            "sha": "4444444444444444444444444444444444444444",
+            "ref": "refs/merge-requests/5/merge",
+            "status": "failed",
+            "source": "merge_request_event",
+            "coverage": null,
+            "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+          },
+          "diff_refs": {
+            "base_sha": "2222222222222222222222222222222222222222",
+            "head_sha": "4444444444444444444444444444444444444444",
+            "start_sha": "2222222222222222222222222222222222222222"
+          },
+          "user": {
+            "can_merge": true
+          }
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"List project merge requests\" with the documented state, updated_after, order_by and sort attributes"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/5/discussions?per_page=100&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "ee55ff6677889900aabbccddeeff001122334455",
+          "individual_note": false,
+          "notes": [
+            {
+              "id": 990,
+              "type": "DiscussionNote",
+              "body": "Looks good to me.",
+              "attachment": null,
+              "author": {
+                "id": 77,
+                "username": "dana.reviewer",
+                "name": "Dana Reviewer",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/dana.reviewer",
+                "avatar_url": null
+              },
+              "created_at": "2026-05-29T08:00:00.000Z",
+              "updated_at": "2026-05-29T08:00:00.000Z",
+              "system": false,
+              "noteable_id": 155016005,
+              "noteable_type": "MergeRequest",
+              "project_id": 15513260,
+              "noteable_iid": 5,
+              "resolvable": true,
+              "resolved": true,
+              "resolved_by": {
+                "id": 77,
+                "username": "dana.reviewer",
+                "name": "Dana Reviewer",
+                "state": "active",
+                "web_url": "https://gitlab.example.test/dana.reviewer",
+                "avatar_url": null
+              },
+              "resolved_at": "2026-05-29T08:30:00.000Z"
+            }
+          ]
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/discussions/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "GitLab publishes user_notes_count (a note count) and no thread count, so the adapter counts non-system threads from this endpoint."
+      }
+    }
+  ]
+}

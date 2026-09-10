@@ -24,6 +24,7 @@ export * from './errors/fake.js';
 export * from './git/fake.js';
 export * from './logs/fake.js';
 // Providers (BD-017): a type port implementation, its registration and its setup guide.
+export * from './providers/gitlab/index.js';
 export * from './providers/jira-cloud/index.js';
 export * from './providers/jira-cloud/registration.js';
 export * from './registry.js';

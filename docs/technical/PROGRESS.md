@@ -199,7 +199,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `9e0be0b` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
 | WP-08 | Jira Cloud provider | WP-07 | yes | DONE | `af206c7` | 2 review rounds + pre-merge fixes; rules 17, 18, 22; shared fixture-provenance suite lives here |
-| WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | REVIEW | branch `worktree-agent-a7fc1df1c30938109` `e7cb0e1` | +251 tests; 30 mutations; review pending |
+| WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `WP09SHA` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | TODO | — | |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | REVIEW | branch `worktree-agent-a80d5d7c411ac0f51` | round 1 REQUEST_CHANGES (2 majors, both fail-open); round 2 in flight |

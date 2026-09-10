@@ -239,11 +239,23 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   }): Promise<MintedCredential>;
 
   /**
-   * Revokes a credential minted earlier. Safe to call twice — the second call is a no-op.
+   * Revokes a credential minted earlier. Safe to call twice — the second call is a no-op, and an
+   * adapter that has already revoked the handle discharges that without asking the provider.
    *
-   * The adapter absorbs the provider's "already gone" answer (GitLab deletes a project access
-   * token with `DELETE`, and a second `DELETE` is a 404): a workspace teardown that runs twice
-   * must not fail the second time.
+   * Two obligations on the adapter, both learned the hard way at WP-09 review round 1:
+   *
+   *  - **A minted credential carries its own revocation address.** `mintCredential` is given a
+   *    project, which need not be the project the binding names, and `revokeCredential` is given
+   *    only the credential back — so `revokeId` has to say *where* the credential lives, not just
+   *    which one it is. Revoking against the binding's project sends the delete somewhere the
+   *    token is not.
+   *  - **An adapter may not report a revocation it cannot substantiate.** A provider's "no such
+   *    credential" is evidence of "already gone" only for a handle *this* adapter minted at that
+   *    address; for any other handle it is indistinguishable from "never existed here", and
+   *    absorbing it tells the caller a live credential is dead. Refuse (`not_found`) instead.
+   *
+   * @throws {IntegrationError} `not_found` when the provider denies knowing a credential this
+   * adapter did not mint. `invalid_request` when `revokeId` is not a handle this adapter wrote.
    */
   revokeCredential(credential: MintedCredential): Promise<void>;
 

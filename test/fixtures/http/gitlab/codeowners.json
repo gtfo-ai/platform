@@ -1,0 +1,44 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/files/CODEOWNERS/raw?ref=main",
+      "status": 200,
+      "text": "# Owners of this repository\n* @acme/platform-team\n\nREADME.md @doc-team @tech-lead\n/docs/**/*.md @markdown-docs  # match specific file types in any subdirectory\nLICENSE @legal jane.doe@example.test\n\n[Documentation] @docs-team\ndocs/\nCHANGELOG.md\n\n^[Optional review][2] @acme/security\nsrc/crypto/\n\n/config/ @@maintainer\n",
+      "source": {
+        "url": "https://docs.gitlab.com/user/project/codeowners/reference/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "Content assembled from the published syntax examples: default owner, multiple owners, an inline comment, an email owner, a section with default owners, an optional section with an approval count, and a role owner. Served by the documented raw-file endpoint (https://docs.gitlab.com/api/repository_files/)."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/files/docs%2FCODEOWNERS/raw?ref=main",
+      "status": 404,
+      "body": {
+        "message": "404 File Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/repository_files/",
+        "retrieved": "2026-09-10",
+        "kind": "inferred",
+        "note": "The repository-files page does not state the status code for a missing file; the REST status table 404 is assumed."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/files/.gitlab%2FCODEOWNERS/raw?ref=main",
+      "status": 404,
+      "body": {
+        "message": "404 File Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/repository_files/",
+        "retrieved": "2026-09-10",
+        "kind": "inferred",
+        "note": "As above."
+      }
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/access_tokens",
+      "status": 201,
+      "body": {
+        "id": 58,
+        "name": "agentic-push-2026-06-02",
+        "description": null,
+        "scopes": ["read_repository", "write_repository"],
+        "created_at": "2026-06-01T08:00:00.000Z",
+        "expires_at": "2026-06-02",
+        "access_level": 30,
+        "active": true,
+        "revoked": false,
+        "user_id": 166,
+        "token": "FAKE-project-access-token-DO-NOT-USE"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/project_access_tokens/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Create a project access token\" example response. The token value is deliberately shaped like nothing GitLab issues, so no secret scanner can mistake this fixture for a credential (BD-002)."
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/acme%2Fapi/access_tokens/58",
+      "status": 204,
+      "source": {
+        "url": "https://docs.gitlab.com/api/project_access_tokens/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Revoke a project access token\" - \"If successful, returns 204 No content.\""
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/acme%2Fapi/access_tokens/59",
+      "status": 404,
+      "body": {
+        "message": "404 Not found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/project_access_tokens/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"404: Not Found if the access token does not exist.\" Token 59 is a handle this provider never minted: the case where a 404 cannot tell \"already revoked\" from \"never existed here\", and the adapter refuses to report success (WP-09 review round 1). A second teardown of a token this provider did revoke sends no request at all, so it needs no fixture."
+      }
+    }
+  ]
+}

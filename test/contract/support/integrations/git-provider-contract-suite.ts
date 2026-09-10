@@ -14,6 +14,7 @@ import type {
   ExternalIdentity,
   GitProviderPort,
   InboundContext,
+  MintedCredential,
   WebhookDelivery,
 } from '@platform/application';
 import { mergeRequestSchema } from '@platform/application';
@@ -56,6 +57,18 @@ export interface GitProviderContractContext {
    * id, so a literal here would be a fake detail that WP-09 has to work around (BD-017).
    */
   readonly missingJobLogRef: string;
+  /**
+   * A revocation handle **shaped the way this provider writes one**, naming a credential this
+   * provider never minted: another process minted it, or it survived a restart, or it was
+   * fabricated.
+   *
+   * Provider-shaped on purpose, and the shape is what makes the case sharp. GitLab writes
+   * `<project>#<token_id>`, so `acme/api#59` is foreign but legible and earns `not_found`, while a
+   * random string is not a handle at all and earns `invalid_request` — a different refusal about a
+   * different mistake. A harness that supplies the second here fails the case, which is the point:
+   * the suite asserts the distinction rather than accepting either error.
+   */
+  readonly foreignRevokeId: string;
   /** Produces signed deliveries. */
   emitMerged(): WebhookDelivery;
   emitReviewComment(text: string): WebhookDelivery;
@@ -173,6 +186,31 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
           async () => port.cloneUrl(context.project, credential),
           'invalid_request',
         );
+      });
+
+      /**
+       * The port obligation WP-09 added, asserted where every provider meets it (BD-017).
+       *
+       * It lived in GitLab's own contract file for one review round, which made it a
+       * provider-local promise: a GitHub adapter that simply `return`s for a foreign handle
+       * passed this entire suite. A provider that reports success here has told the caller a live
+       * push credential is dead — the credential keeps working until the provider expires it, and
+       * nothing will ever look at it again.
+       *
+       * `not_found` exactly, never a resolve and never `invalid_request` (see `foreignRevokeId`).
+       */
+      it('refuses to report a revocation it cannot substantiate', async () => {
+        const foreign: MintedCredential = {
+          username: 'oauth2',
+          // Obviously fake, and foreign to every provider: no harness mints this (BD-002).
+          value: 'FAKE-credential-minted-by-another-process',
+          scope: 'push',
+          branchPatterns: ['agentic/*'],
+          // Far enough out that no provider can answer "expired" where it owes "not mine".
+          expiresAt: '2099-01-01T00:00:00.000Z',
+          revokeId: context.foreignRevokeId,
+        };
+        await expectIntegrationError(() => port.revokeCredential(foreign), 'not_found');
       });
     });
 

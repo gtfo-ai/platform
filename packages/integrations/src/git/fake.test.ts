@@ -68,6 +68,39 @@ describe('FakeGitProvider credentials', () => {
     ).toThrow(/not minted by this provider|was not minted/);
   });
 
+  /**
+   * Divergence 8, and the port obligation behind it: an adapter may not report a revocation it
+   * cannot substantiate. A fake that shrugged here would let a WP-14 teardown be written against
+   * a refusal it never sees (rule 1).
+   */
+  it('refuses to revoke a credential it never minted', async () => {
+    const port = build();
+    await expect(
+      port.revokeCredential({
+        username: 'oauth2',
+        value: 'fake_credential_from_elsewhere',
+        scope: 'push',
+        branchPatterns: ['agentic/*'],
+        expiresAt: '2030-01-01T00:00:00.000Z',
+        revokeId: 'rev-from-elsewhere',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('stays a no-op for a second revocation of a credential it did mint', async () => {
+    const port = build();
+    const credential = await port.mintCredential({
+      project: PROJECT,
+      scope: 'push',
+      ttlSeconds: 3600,
+    });
+    await port.revokeCredential(credential);
+    await expect(
+      port.revokeCredential(credential),
+      'the idempotency the port asks for survives divergence 8',
+    ).resolves.toBeUndefined();
+  });
+
   it('refuses a clone URL once the credential has expired (divergence 1)', async () => {
     const port = build();
     const credential = await port.mintCredential({

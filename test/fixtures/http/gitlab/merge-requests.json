@@ -1,0 +1,492 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests",
+      "status": 201,
+      "body": {
+        "id": 155016008,
+        "iid": 8,
+        "project_id": 15513260,
+        "title": "Draft: add the parser",
+        "description": "Requested by a human, linked to the task.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/task-2",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "unchecked",
+        "detailed_merge_status": "unchecked",
+        "sha": "3333333333333333333333333333333333333333",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/8",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "3333333333333333333333333333333333333333",
+          "ref": "refs/merge-requests/8/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "3333333333333333333333333333333333333333",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Create a merge request\" example response"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/merge_requests",
+      "status": 409,
+      "body": {
+        "message": ["Another open merge request already exists for this source branch: !8"]
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-09-10",
+        "kind": "inferred",
+        "note": "The status table documents \"409 Conflict - A conflicting resource already exists.\" The merge-requests page does not publish the body for a duplicate source branch, so the message string is illustrative; only the status is load-bearing and the adapter never reads the body."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/8",
+      "status": 200,
+      "body": {
+        "id": 155016008,
+        "iid": 8,
+        "project_id": 15513260,
+        "title": "Draft: add the parser",
+        "description": "Requested by a human, linked to the task.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/task-2",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "unchecked",
+        "detailed_merge_status": "unchecked",
+        "sha": "3333333333333333333333333333333333333333",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/8",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "3333333333333333333333333333333333333333",
+          "ref": "refs/merge-requests/8/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "3333333333333333333333333333333333333333",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/7",
+      "status": 200,
+      "body": {
+        "id": 155016007,
+        "iid": 7,
+        "project_id": 15513260,
+        "title": "Draft: fix the totals",
+        "description": "Requested by a human.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/task-1",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "1111111111111111111111111111111111111111",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/7",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "1111111111111111111111111111111111111111",
+          "ref": "refs/merge-requests/7/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": 81.5,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "1111111111111111111111111111111111111111",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Retrieve a merge request\" example response"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/7",
+      "status": 200,
+      "body": {
+        "id": 155016007,
+        "iid": 7,
+        "project_id": 15513260,
+        "title": "fix the totals",
+        "description": "Ready for merge.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/task-1",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": false,
+        "work_in_progress": false,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "1111111111111111111111111111111111111111",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/7",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "1111111111111111111111111111111111111111",
+          "ref": "refs/merge-requests/7/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": 81.5,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "1111111111111111111111111111111111111111",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"Update a merge request\" example response"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/11",
+      "status": 200,
+      "body": {
+        "id": 155016011,
+        "iid": 11,
+        "project_id": 15513260,
+        "title": "Draft: mergeable",
+        "description": "",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/mergeable",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": [],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "1111111111111111111111111111111111111111",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/11",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "1111111111111111111111111111111111111111",
+          "ref": "refs/merge-requests/11/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "1111111111111111111111111111111111111111",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "merge_status can_be_merged / detailed_merge_status mergeable"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/12",
+      "status": 200,
+      "body": {
+        "id": 155016012,
+        "iid": 12,
+        "project_id": 15513260,
+        "title": "Draft: conflicted",
+        "description": "",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/conflicted",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": [],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "cannot_be_merged",
+        "detailed_merge_status": "conflict",
+        "sha": "1111111111111111111111111111111111111111",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": true,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/12",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "1111111111111111111111111111111111111111",
+          "ref": "refs/merge-requests/12/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "1111111111111111111111111111111111111111",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "merge_status cannot_be_merged / detailed_merge_status conflict. The response table documents: \"has_conflicts - Dependent on the merge_status property. Returns false unless merge_status is cannot_be_merged.\""
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/13",
+      "status": 200,
+      "body": {
+        "id": 155016013,
+        "iid": 13,
+        "project_id": 15513260,
+        "title": "Draft: not computed yet",
+        "description": "",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/unknown",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": [],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "unchecked",
+        "detailed_merge_status": "unchecked",
+        "sha": "1111111111111111111111111111111111111111",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/13",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "1111111111111111111111111111111111111111",
+          "ref": "refs/merge-requests/13/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": null,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "1111111111111111111111111111111111111111",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "\"The mergeability (merge_status) of each merge request is checked asynchronously when a request is made to this endpoint. Poll this API endpoint to get the updated status.\" has_conflicts is false here by construction, which is exactly why the adapter reports null."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/4242",
+      "status": 404,
+      "body": {
+        "message": "404 Not found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-09-10",
+        "kind": "documented"
+      }
+    }
+  ]
+}
