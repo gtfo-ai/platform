@@ -170,6 +170,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    can drive it — the guard in front of it never lets the state occur. Give the inner layer a seam, or say
    at the line that it is deliberately unreachable defence-in-depth and name the outer guard that makes it
    so; an untestable branch that looks tested is standing rule 3 with better manners.
+23. **A new port obligation must land in the shared contract suite in the same change, or it is a
+   provider-local promise.** WP-09 taught the git fake and its own contract file that a foreign credential
+   handle must yield `not_found` — and left `git-provider-contract-suite.ts` untouched, so a future GitHub
+   adapter that silently `return`s for a foreign handle passes the entire shared suite. BD-017's whole claim
+   is that a new provider is trustworthy without touching the pipeline; only the suite can make that true.
+24. **A check that counts execution is not a check that counts assertion.** WP-09's unexercised-fixture
+   check survives an unreferenced interaction and a `.skip`ped test — but deleting all three `expect`s from
+   a test while keeping its calls passes 32/32. Mutate the assertions, not only the fixtures.
 
 ## Blocker briefs needing a human
 
@@ -1464,6 +1472,17 @@ missing protected-branch member is a follow-up, not a blocker.
 
 **Also found:** `gitlab-replay.ts`'s `unused()` is **never called**, so a fixture no test exercises goes
 unnoticed — rule 17's shape again, an unenforced check being worse than none.
+
+### Notes WP-26 must honour (from WP-09's review)
+
+**`mergeable: true` does not mean "no rebase needed".** WP-09's reviewer enumerated all 864
+`merge_status` × `detailed_merge_status` × flag combinations and found zero self-contradictory results — but
+two residuals by documented design: `can_be_merged` + `need_rebase` and `can_be_merged` + `commits_status`
+both map to `{mergeable: true, hasConflicts: false}`, and a `has_conflicts: true` arriving beside
+`can_be_merged` is discarded. **The port therefore cannot express "needs rebase" at all**, so WP-26's rebase
+gate must not infer it from `mergeable`. Either the port grows a rebase-state member (with fake and suite
+case — standing rule 23) or WP-26 reads `detailed_merge_status` through a provider-specific route and says
+so.
 
 ## Discovered work (not in plan)
 
