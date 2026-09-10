@@ -165,6 +165,16 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `FLAGGED_CONFIG_PATHS`) and which the census confirms holds without exception; treat anything wider as
    best-effort and expect it to drift. All 43 misses are non-ASCII↔non-ASCII, so the ASCII guarantee is
    provably complete on this volume.
+29. **A counter a suite uses to decide which branch ran must itself be proved live.** WP-10 added
+   `providerCalls()` to the shared suite precisely to fix a rule-10 failure — and mutating the harness to
+   `providerCalls: () => 0` left **2335 of 2335 tests green**, because the suite only asserted the counter
+   *had not moved*. Capture a baseline, assert it increased, and only then assert it did not increase again.
+   This is rule 10 one level up, and it bit the fix for rule 10.
+30. **A lesson recorded only in prose does not prevent recurrence — when a defect is mechanically
+   detectable, add the check.** The ledger's WP-05 entry on a literal NUL byte turning a source file binary
+   ends *"worth a lint rule if it ever recurs."* It recurred, in WP-10's `threads.ts`, five work packages
+   later: `Bin 0 -> 3808`, invisible in `git diff`, in `git log -p` and in review. Writing it down was not
+   enough; the check now runs in `verify`.
 28. **A fold that may widen equality must never widen structure.** WP-12's fold is allowed to make more
    paths match a protected pattern — that direction is safe. It is *not* allowed to invent a path
    separator: NFKC maps U+FF0F, and also `℀` U+2100, `℁` U+2101, `℅` U+2105 and `℆` U+2106, into strings
