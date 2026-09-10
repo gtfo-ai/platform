@@ -271,7 +271,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `27928b2` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
 | WP-10 | Slack provider | WP-07 | yes | REVIEW | branch `worktree-agent-a4db5aee16bb73391` | APPROVED round 2; pre-merge fixes running; rules 29, 30 earned here |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` `786ac46` | +218 tests; 29 mutations; review round 1 running |
-| WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `WP12SHA` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
+| WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | TODO | — | |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
