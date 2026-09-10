@@ -170,6 +170,19 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `providerCalls: () => 0` left **2335 of 2335 tests green**, because the suite only asserted the counter
    *had not moved*. Capture a baseline, assert it increased, and only then assert it did not increase again.
    This is rule 10 one level up, and it bit the fix for rule 10.
+31. **An optional security dependency is an absent one.** WP-11's providers take a `redactor` as an
+   optional option and `ProviderCreateInput` has no field for one, so in the **only production path**
+   `redact.apply` is the identity function — a scripted Loki response returned
+   `line = "Authorization: Bearer <token>"` verbatim, and the executor does not close it (`action-executor.ts:663`
+   returns the raw `result`; only the audit row is redacted). WP-07 had already made its own redactor
+   **required, never defaulted**, for exactly this reason; WP-11 reintroduced the defect one ring out. If a
+   guarantee needs an injected collaborator, the type must **require** it, and the composition root that
+   builds it in production must be the thing the tests drive.
+32. **"I checked and it is benign" is a claim that needs the same evidence as a fix.** WP-11 reported a
+   surviving `BigInt` → `Number` mutation as harmless and narrowed its docblock instead of the code; the
+   orchestrator relayed that as good practice. The reviewer measured it: `Number` diverges for **128 of every
+   1e6** nanosecond values (`1780309799999999872` → `…59.999Z`, not `…00.000Z`), and that value **is** the
+   emitted `timestamp` and the sort key. Narrowing a claim is honest only when the claim is what was wrong.
 30. **A lesson recorded only in prose does not prevent recurrence — when a defect is mechanically
    detectable, add the check.** The ledger's WP-05 entry on a literal NUL byte turning a source file binary
    ends *"worth a lint rule if it ever recurs."* It recurred, in WP-10's `threads.ts`, five work packages
