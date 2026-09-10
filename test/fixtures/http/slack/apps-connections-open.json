@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/apps.connections.open",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "url": "wss://wss-fake.slack.com/link/?ticket=0000-fake&app_id=A0FAKEAPP01"
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/apps.connections.open",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "The page's example success response — `{\"ok\": true, \"url\": \"wss://wss-somethiing.slack.com/link/?ticket=12348&app_id=5678\"}` — with the host, ticket and app id replaced by obviously fake ones (BD-002). The ticket is single-use and short-lived, so a real one would be a credential in the repository."
+      }
+    }
+  ]
+}

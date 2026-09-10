@@ -108,7 +108,11 @@ packages/integrations/src/
   providers/gitlab/         # WP-09: config.ts, http.ts, client.ts, schemas.ts, mapping.ts,
                             # codeowners.ts, credentials.ts, webhook-verify.ts,
                             # webhook-payloads.ts, inbound.ts, provider.ts, index.ts, setup-guide.md
-  providers/slack/ providers/sentry/ providers/loki/
+  providers/slack/          # WP-10: config.ts, http.ts, client.ts, schemas.ts, blocks.ts,
+                            # mrkdwn.ts, signature.ts, inbound.ts, threads.ts, socket.ts,
+                            # digest.ts, provider.ts, index.ts, app-manifest.json, manifest.ts,
+                            # setup-guide.md
+  providers/sentry/ providers/loki/
   registry.ts               # providers register {type, id, configSchema, secretFields, capabilities, agentTooling}
 test/contract/support/integrations/
   <type>-contract-suite.ts  # the reusable suite, parameterised over a harness factory
@@ -153,6 +157,15 @@ the existing suite (BD-017).
 >    inside a provider would be a second one running on a wall clock. The injected transport is
 >    also what makes replay mode work without an HTTP interception library, and what lets a test
 >    assert that a shadow-mode call issued *zero* requests.
+>  - **The client is handwritten for Slack too, and TD-024 says otherwise** (WP-10, Q42). TD-024
+>    names `@slack/bolt` with `@slack/web-api`; `WebClient` retries a call "up to 10 times, spaced
+>    out over about 30 minutes" and waits out a 429 itself, on a wall clock, which is precisely the
+>    second backoff loop the bullet above forbids — and it offers no transport seam, so "contract
+>    suite in replay" would need a live listener rather than an injected `fetch`. Slack is
+>    therefore a thin `fetch` client like the other four, with in-house `v0` signature verification
+>    (which is what TD-024's own title says for signatures) and a Socket Mode client whose
+>    WebSocket factory, timer and clock are injected. The decision record is left for a human to
+>    amend: Q42 states the conflict and the recommendation this implements.
 >  - **The adapter carries a divergence register too, and its rule is the dual of the fake's:** a
 >    fake may be stricter than the real adapter and never kinder, so *the adapter must not be
 >    kinder than the provider*. Where replay cannot reproduce a real behaviour, or where the port's
@@ -180,6 +193,21 @@ the existing suite (BD-017).
     deliveries because nothing was configured looks exactly like one that works.
 - **Polling fallback** per binding when no public URL (`APP_WEBHOOK_PUBLIC_URL` unset) or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
+  - **The signature is not optional in Socket Mode** (WP-10). A Socket Mode payload arrives with no
+    Slack signature on it, but the interactivity and events *HTTP* paths exist whether or not an
+    operator enables them, so the adapter wraps every envelope into a `WebhookDelivery` signed with
+    the binding's own signing secret and hands it to the same `inbound.verify`. That local
+    signature attests the **transport**, not Slack's key; what it buys is a single door, so a
+    caller that forgets which transport a delivery came from cannot skip verification. Its
+    fail-closed consequence is the useful one: a binding with no usable signing secret cannot open
+    a socket at all, because every delivery it produced would be refused downstream.
+  - **The identity is the Slack user id and nothing else.** A display name, a username and an email
+    inside a message body are typed by whoever sent it; `resolveUser` is given
+    `{provider: 'slack', external_id: 'U…'}` and no forgeable field. The *other* half of the
+    mapping — a platform user's email to a Slack account — is `resolveIdentity`, which calls
+    `users.lookupByEmail` at setup time and **refuses** a bot, an app user or a deactivated
+    account, because those cannot be a platform user and mapping one would make anything that can
+    post as that bot able to answer a question (BD-006, Q10).
 - Actor identity: every normalised event carries `{provider, providerUserId, email?, displayName}` resolved to a platform user when possible; unresolved identities are stored as `unmapped` (BD-022).
 
 ## Outbound: actions

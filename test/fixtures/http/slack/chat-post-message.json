@@ -1,0 +1,135 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": { "channel": "C0FAKECHAN1", "text": "Picked up *TASK-1*" },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "channel": "C0FAKECHAN1",
+        "ts": "1780000000.000100",
+        "message": {
+          "text": "Picked up *TASK-1*",
+          "username": "agentic",
+          "bot_id": "B0FAKEBOT01",
+          "type": "message",
+          "subtype": "bot_message",
+          "ts": "1780000000.000100"
+        }
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "The page's example success response, with the channel, ts, bot_id and text replaced by obviously fake ones (BD-002) and the `attachments` array removed — this adapter never sends attachments and never reads them back."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": {
+        "channel": "C0FAKECHAN1",
+        "thread_ts": "1780000000.000100",
+        "text": "Which currency should totals use?"
+      },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "channel": "C0FAKECHAN1",
+        "ts": "1780000001.000200",
+        "message": {
+          "text": "Which currency should totals use?",
+          "bot_id": "B0FAKEBOT01",
+          "type": "message",
+          "subtype": "bot_message",
+          "ts": "1780000001.000200",
+          "thread_ts": "1780000000.000100"
+        }
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "The same example response, adapted for a threaded reply: `thread_ts` is a documented *argument* of the method ('Provide another message's ts value to post this message in a thread') but the page's example response does not show it echoed in `message`. The adapter reads only `ok`, `channel` and `ts`."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": {
+        "channel": "C0FAKECHAN1",
+        "thread_ts": "1780000000.000100",
+        "text": "Approve the plan?"
+      },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "channel": "C0FAKECHAN1",
+        "ts": "1780000002.000300"
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "The example response reduced to the three members the adapter reads. `message` is documented as part of the response and is omitted here to record that nothing depends on it."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": {
+        "channel": "C0FAKECHAN1",
+        "thread_ts": "1780000000.000100",
+        "text": "Ready for merge"
+      },
+      "status": 200,
+      "body": { "ok": true, "channel": "C0FAKECHAN1", "ts": "1780000003.000400" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "As above: the example response reduced to `ok`, `channel` and `ts`."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": { "channel": "C0FAKECHAN1", "text": "Agentic digest: 1 item" },
+      "status": 200,
+      "body": { "ok": true, "channel": "C0FAKECHAN1", "ts": "1780000004.000500" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "As above: the example response reduced to `ok`, `channel` and `ts`. The digest is a root message, so it carries no thread_ts."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": { "channel": "C0FAKEMISS1" },
+      "status": 200,
+      "body": { "ok": false, "error": "channel_not_found" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "`channel_not_found` is listed among the method's error codes and the Web API's error envelope is `{ok: false, error}`; the page prints no example of the failure body, so the body is assembled from those two documented facts. The status is 200 — the whole reason the adapter maps the error string rather than the status."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "match": { "channel": "C0FAKEBLOCK" },
+      "status": 200,
+      "body": { "ok": false, "error": "invalid_blocks" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "`invalid_blocks` is listed among the method's error codes; the body is the documented error envelope. This is the answer the adapter's own Block Kit validation exists to make unreachable, and it is recorded so the mapping is exercised anyway."
+      }
+    }
+  ]
+}

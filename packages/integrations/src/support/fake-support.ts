@@ -57,8 +57,17 @@ export const buildFakeDelivery = (input: {
  *
  * `timingSafeEqual` throws on differing lengths, so the length check comes first — and it is not a
  * timing leak, because the length of a hex HMAC is public.
+ *
+ * **An empty secret is not a secret** (standing rule 18, added at WP-10). Without the first guard
+ * a fake built with `webhookSecret: ''` verifies `HMAC-SHA256('', body)` — the signature any
+ * attacker can compute — which is precisely the WP-08 defect the rule is named for, reproduced in
+ * the instrument every later work package trusts. The shared communication contract suite drives
+ * it: "refuses every delivery when the binding has no verification credential".
  */
 export const verifyFakeDelivery = (secret: string, delivery: WebhookDelivery): boolean => {
+  if (secret.trim() === '') {
+    return false;
+  }
   const provided = delivery.headers[FAKE_SIGNATURE_HEADER];
   if (provided === undefined) {
     return false;

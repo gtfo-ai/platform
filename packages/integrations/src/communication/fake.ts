@@ -34,6 +34,14 @@
  *     kind.
  *  6. **Different — message and thread ids are sequential strings**, where Slack's `thread_ts` is
  *     a timestamp that also orders messages. Code that sorts by `message_id` would pass here.
+ *  7. **Stricter — an empty webhook secret verifies nothing.** `verifyFakeDelivery` refuses before
+ *     it compares, so a fake built with `webhookSecret: ''` rejects both a forgery signed with the
+ *     empty key and an authentic delivery (standing rule 18, added at WP-10 with the shared suite
+ *     case "refuses every delivery when the binding has no verification credential").
+ *  8. **Fail open, like a real one — an event name this fake does not know is `unsupported_event`,
+ *     never an exception** (standing rule 20, added at WP-10). A body that is not JSON at all is
+ *     `malformed_payload` rather than a `SyntaxError` thrown out of `normalise`, which is what it
+ *     used to be.
  */
 import {
   type ApprovalPost,
@@ -128,6 +136,9 @@ const feedbackBody = z.strictObject({
 
 const deliveryBody = z.discriminatedUnion('event', [answerBody, approvalBody, feedbackBody]);
 
+/** The event names this fake acts on. Anything else is `unsupported_event`, never an exception. */
+const KNOWN_EVENTS: ReadonlySet<string> = new Set(['answer', 'approval', 'feedback']);
+
 export interface FakeCommunication extends CommunicationPort {
   readonly core: FakeCore;
   /** Every message posted, in order. */
@@ -153,6 +164,16 @@ export interface FakeCommunication extends CommunicationPort {
     readonly authorId: string;
     readonly text: string;
     readonly rating?: number;
+    readonly deliveryId?: string;
+  }): WebhookDelivery;
+  /**
+   * An authentic delivery this fake does not act on — the shape a provider ships next.
+   *
+   * It is *signed*, so a suite asserting "ignored, not thrown" is asserting about the normaliser
+   * rather than about the signature check.
+   */
+  emitUnknownEvent(input?: {
+    readonly event?: string;
     readonly deliveryId?: string;
   }): WebhookDelivery;
 }
@@ -256,7 +277,27 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
       delivery: WebhookDelivery,
       context: InboundContext,
     ): Promise<NormalisedDelivery<CommunicationInboundEvent>> => {
-      const parsed = deliveryBody.safeParse(JSON.parse(delivery.body) as unknown);
+      let raw: unknown;
+      try {
+        raw = JSON.parse(delivery.body) as unknown;
+      } catch {
+        // Divergence 8: a body that is not JSON is a drop with a reason, not a thrown SyntaxError.
+        return {
+          events: [],
+          ignored: [{ reason: 'malformed_payload', detail: 'body is not JSON' }],
+        };
+      }
+      const named = (raw as { event?: unknown } | null)?.event;
+      if (typeof named === 'string' && !KNOWN_EVENTS.has(named)) {
+        // Divergence 8: fail open on an inbound notification (standing rule 20).
+        return {
+          events: [],
+          ignored: [
+            { reason: 'unsupported_event', detail: `event ${JSON.stringify(named.slice(0, 32))}` },
+          ],
+        };
+      }
+      const parsed = deliveryBody.safeParse(raw);
       if (!parsed.success) {
         return {
           events: [],
@@ -477,5 +518,15 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
           rating: input.rating ?? null,
         },
       }),
+
+    emitUnknownEvent: (input = {}) => {
+      const event = input.event ?? 'reaction_added';
+      return buildFakeDelivery({
+        secret: core.webhookSecret,
+        event,
+        deliveryId: input.deliveryId ?? nextDeliveryId(),
+        payload: { event, author_id: 'U-SOMEBODY', emoji: 'thumbsup' },
+      });
+    },
   };
 };

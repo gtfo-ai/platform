@@ -1,0 +1,35 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/chat.update",
+      "match": { "channel": "C0FAKECHAN1", "ts": "1780000003.000400" },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "channel": "C0FAKECHAN1",
+        "ts": "1780000003.000400",
+        "text": "Merged"
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.update",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "The page's example success response, with the channel, ts and text replaced by obviously fake ones (BD-002) and the `message` object omitted — the adapter reads `ok`, `channel` and `ts`."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.update",
+      "match": { "channel": "C0FAKECHAN1", "ts": "1799999999.999999" },
+      "status": 200,
+      "body": { "ok": false, "error": "message_not_found" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.update",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "`message_not_found` — 'No message exists with the requested timestamp' — is documented on the method page; the body is the Web API's documented error envelope, of which the page prints no example."
+      }
+    }
+  ]
+}

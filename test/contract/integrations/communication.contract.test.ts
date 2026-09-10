@@ -25,9 +25,34 @@ runCommunicationContract({
         { providerUserId: 'U-MAPPED', email: 'dev@example.test', displayName: 'Dev One' },
       ],
     });
+    /**
+     * The same fake with **no** webhook secret — the binding an operator creates when they forget
+     * the credential. Standing rule 18: it must verify nothing at all, not even a signature
+     * computed with the empty key.
+     */
+    const unverifiablePort = createFakeCommunication({
+      integrationId: INTEGRATION_ID,
+      channels: ['#agentic'],
+      webhookSecret: '',
+    });
 
     return {
       port,
+      unverifiablePort,
+      emitUnknownEvent: () => port.emitUnknownEvent(),
+      signedWithNoCredential: () =>
+        unverifiablePort.emitAnswer({
+          taskId: TASK_ID,
+          questionId: QUESTION_ID,
+          authorId: 'U-MAPPED',
+          text: 'EUR',
+        }),
+      // The fake validates nothing (divergence 4), so this is deliberately the barest payload the
+      // port's `blocks` type allows: it records that the fake accepts what Slack would refuse.
+      providerBlocks: [{ type: 'actions' }],
+      // The fake's `core.calls` counts port *entries*, which both calls make; the messages it
+      // actually stored are the analogue of the replay transport's request log.
+      providerCalls: () => port.messages.length,
       channel: '#agentic',
       missingChannel: '#does-not-exist',
       taskId: TASK_ID,

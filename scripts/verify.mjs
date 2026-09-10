@@ -7,6 +7,10 @@
  *   pnpm run -s verify:e2e          fake-Claude application e2e
  *   pnpm run -s verify:ui           web app suites
  *
+ * `verify` is the concatenation of the three groups CI runs as its own jobs — `verify:static`,
+ * `verify:types`, `verify:tests` — which are targets here too and can be run on their own. That is
+ * so the workflow does not carry a second copy of the list; see `verify-targets.ts`.
+ *
  * Every target prints exactly one line on **stdout**, `PASS: <target>` or `FAIL: <target>`,
  * and exits non-zero on failure. The steps a target runs may print their own PASS/FAIL lines
  * (`schemas:check` does), so each child's stdout is redirected to this process's stderr: the
@@ -15,14 +19,10 @@
  */
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
-
-/** @type {Record<string, string[]>} target -> package.json scripts, in order */
-const TARGETS = {
-  verify: ['lint', 'typecheck', 'schemas:check', 'ignored:check', 'test'],
-  'verify:integration': ['test:integration'],
-  'verify:e2e': ['test:e2e'],
-  'verify:ui': ['test:ui'],
-};
+// The on-disk `.ts` specifier, not this repository's usual `.js` one: Node runs this file directly
+// and strips the types itself (verified on node:24-alpine, the version in .nvmrc), and its type
+// stripping resolves the path it is given rather than rewriting the extension (CLAUDE.md).
+import { TARGETS } from './verify-targets.ts';
 
 const target = process.argv[2];
 const steps = TARGETS[target];

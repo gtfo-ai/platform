@@ -63,6 +63,14 @@ export type ApprovalPost = z.infer<typeof approvalRecordSchema>;
  * question's options, Approve / Request changes for an approval. `blocks` is an **opaque provider
  * payload**, one of the documented exceptions to the strict-schema rule (CLAUDE.md), so it is
  * `unknown` here and validated by the provider that understands it.
+ *
+ * **A caller that supplies `blocks` owns the escaping of every string inside them.** `markdown` is
+ * escaped by the provider — the Slack adapter runs it through `toMrkdwn`, which neutralises
+ * `<!channel>`, `<!here>`, `<@U…>` and link syntax, because ticket and MR text is untrusted
+ * (BD-022). `blocks` cannot be: it is structure, and the adapter only shape-validates it against
+ * the vendor's limits, so any text placed in a block reaches the channel exactly as written and an
+ * `@channel` in a ticket title would broadcast. Build the structure, put escaped text in it, or
+ * pass `markdown` and let the provider render the blocks.
  */
 export interface MessageBody {
   readonly markdown: string;

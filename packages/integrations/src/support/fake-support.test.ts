@@ -48,6 +48,25 @@ describe('the fake webhook envelope', () => {
     );
   });
 
+  it('rejects everything when the secret is empty or whitespace (standing rule 18)', () => {
+    // The defect this guards is a *fake* that accepts `HMAC-SHA256('', body)`, which is a
+    // signature any attacker can compute. Asserted from both ends: the forgery is refused, and so
+    // is a genuinely authentic delivery, with the configured secret as the control.
+    expect(verifyFakeDelivery(FAKE_WEBHOOK_SECRET, delivery), 'control: authentic').toBe(true);
+    for (const empty of ['', '   ']) {
+      const forged = buildFakeDelivery({
+        secret: empty,
+        event: 'comment.added',
+        deliveryId: 'd-1',
+        payload: { event: 'comment.added', ticket_key: 'FAKE-1' },
+      });
+      expect(verifyFakeDelivery(empty, forged), `signed with ${JSON.stringify(empty)}`).toBe(false);
+      expect(verifyFakeDelivery(empty, delivery), 'an unconfigured fake verifies nothing').toBe(
+        false,
+      );
+    }
+  });
+
   it('rejects a signature of the wrong length without throwing', () => {
     expect(
       verifyFakeDelivery(FAKE_WEBHOOK_SECRET, {

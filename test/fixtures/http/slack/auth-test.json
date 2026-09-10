@@ -1,0 +1,24 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/auth.test",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "url": "https://agentic-fake.slack.com/",
+        "team": "Agentic Fake Workspace",
+        "user": "agentic",
+        "team_id": "T0FAKETEAM1",
+        "user_id": "U0FAKEBOT01",
+        "bot_id": "B0FAKEBOT01"
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/auth.test",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "The published example is the user-token response (ok, url, team, user, team_id, user_id) with values replaced by obviously fake ones (BD-002). `bot_id` is added because the same page states 'For bot tokens, the response includes an additional bot_id field', and this binding always authenticates with a bot token; the field is not in the printed example."
+      }
+    }
+  ]
+}

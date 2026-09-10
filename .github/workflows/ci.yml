@@ -29,10 +29,13 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run -s lint
-      # The published JSON Schemas are generated from packages/contracts and committed;
-      # this fails the build when they drift from the zod definitions.
-      - run: pnpm run -s schemas:check
+      # Every static check `pnpm run -s verify` runs, as one command derived from the same table
+      # (scripts/verify-targets.ts): biome, the generated JSON Schemas, the .gitignore guard and
+      # the NUL-byte guard. Listing them here instead was a second copy of the list, and it had
+      # drifted — `ignored:check` was in `verify` and in no CI job at all, so a guard that had
+      # already caught two live defects gated nothing on a push. `scripts/verify.test.ts` fails
+      # when a target or group in that table is not run by this workflow.
+      - run: pnpm run -s verify:static
 
   typecheck:
     name: typecheck
@@ -45,7 +48,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run -s typecheck
+      - run: pnpm run -s verify:types
 
   unit:
     name: unit + contract
@@ -58,7 +61,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run -s test
+      - run: pnpm run -s verify:tests
       - name: upload coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

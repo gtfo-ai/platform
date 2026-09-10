@@ -44,5 +44,7 @@ until all WPs are DONE or BLOCKED.
 
 `pnpm run -s verify` = lint + typecheck + unit + contract tests; `pnpm run -s verify:integration` = Testcontainers suites; `pnpm run -s verify:e2e` = fake-Claude compose e2e; `pnpm run -s verify:ui` = web tests. Each target prints a one-line PASS/FAIL summary at the end.
 
+`verify` is itself the concatenation of three sub-targets — `verify:static`, `verify:types`, `verify:tests` — which exist so that CI does not carry a second copy of the list: each is one workflow job's one command, so a step added to `verify` is a step CI runs. This was earned: `ignored:check` sat in `verify` and in **no** CI job from WP-06 until WP-10, because the two lists were maintained by hand. The table is `scripts/verify-targets.ts` and `scripts/verify.test.ts` fails when a target or group of it is not invoked by `.github/workflows/ci.yml`.
+
 ## Definition of done per WP
 Acceptance criteria from the plan met; tests per `10-testing-strategy.md`; `pnpm run -s verify` green; reviewer APPROVE; ledger updated; commit pushed; no new `[unverified]` claims in docs without a TODO entry; `.env.example` and `CLAUDE.md` updated when relevant.

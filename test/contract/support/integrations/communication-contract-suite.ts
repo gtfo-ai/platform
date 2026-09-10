@@ -9,6 +9,29 @@
  * on both sides: the mapped case asserts exactly one catalogue event, the unmapped case asserts
  * exactly one `ignored` entry with reason `unmapped_identity`. "No event was produced" alone would
  * also pass against a harness that delivered nothing at all.
+ *
+ * ## Two obligations WP-10 added here rather than in its own file (standing rule 23)
+ *
+ * A new port obligation that lives only in a provider's own contract file is a promise one
+ * provider made to itself: BD-017's claim is that a *new* provider is trustworthy without touching
+ * the pipeline, and only the shared suite can make that true. Both of these were found while
+ * writing the Slack adapter and both are properties of the **port**, so both are asserted for
+ * every communication provider:
+ *
+ *  1. **An unknown inbound event is ignored with a reason, never thrown** (standing rule 20). A
+ *     chat provider ships new event types continuously; a normaliser that throws turns the next
+ *     one into a permanently failing job. The harness supplies the delivery, because only it knows
+ *     what "authentic but unrecognised" looks like for its provider.
+ *  2. **A binding with no verification credential refuses every delivery** (standing rule 18). The
+ *     defect this is named for accepted `HMAC-SHA256('', body)` because an unset secret became an
+ *     empty string, so the case is asserted from both ends: a delivery signed *with* the empty
+ *     credential is refused, and so is a genuinely authentic one — with the configured port's
+ *     acceptance of that same delivery as the control, so a green refusal cannot come from a
+ *     harness that built a broken delivery.
+ *
+ * Both take provider-shaped inputs from the harness rather than writing a literal, for the reason
+ * technical/06 gives about `foreignRevokeId`: an assertion that hard-codes one provider's dialect
+ * is that provider's test wearing the suite's name.
  */
 import type {
   CommunicationPort,
@@ -33,6 +56,44 @@ export interface CommunicationContractContext {
   emitAnswer(authorId: string, text: string): WebhookDelivery;
   emitApproval(authorId: string, decision: 'approved' | 'rejected'): WebhookDelivery;
   emitFeedback(authorId: string, text: string): WebhookDelivery;
+  /**
+   * An authentic delivery of something this provider does not act on — a reaction, a presence
+   * change, whatever the provider ships next. It must be *verifiable*, or the case would prove the
+   * signature check rather than the normaliser.
+   */
+  emitUnknownEvent(): WebhookDelivery;
+  /**
+   * The same port, built with **no** verification credential at all.
+   *
+   * Not a second provider and not a mock: the same adapter, configured the way an operator
+   * configures it when they forget the secret.
+   */
+  readonly unverifiablePort: CommunicationPort;
+  /** A delivery signed with the empty credential — the signature an attacker can compute. */
+  signedWithNoCredential(): WebhookDelivery;
+  /**
+   * A `blocks` payload this provider accepts, for the message body the suite sends. The fake
+   * validates nothing and Slack validates everything, so the literal belongs to the harness.
+   */
+  readonly providerBlocks: unknown;
+  /**
+   * How many *provider-visible effects* this port has produced so far — messages the fake
+   * actually stored, requests the real adapter actually sent. Not the number of port methods
+   * entered: both of them enter `postTaskThread`, and only one of them may reach the provider.
+   *
+   * It exists for one assertion, and standing rule 10 is why: "opens one thread per task" compares
+   * two `thread_id`s, and that comparison is satisfied *by both branches* — a double that repeats
+   * its last recorded answer returns the same id for a second, real POST. Counting the calls is
+   * what says which branch ran. Found by mutation at WP-10: disabling the adapter's idempotency
+   * left the whole suite green.
+   *
+   * **It must move.** A counter only ever asserted not to have changed is satisfied by one that is
+   * frozen, and `providerCalls: () => 0` passed 2335 of 2335 tests in review round 1. The suite
+   * therefore takes a baseline, requires a rise across the first `postTaskThread`, and only then
+   * requires no rise across the second — so a frozen implementation of this method fails here
+   * rather than silently excusing the adapter it was added to police.
+   */
+  providerCalls(): number;
   readonly projectId: Id;
   readonly integrationId: Id;
   cleanup(): Promise<void>;
@@ -85,10 +146,29 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
 
     describe('threads and messages', () => {
       it('opens one thread per task, however often it is asked', async () => {
+        const before = context.providerCalls();
         const first = await openThread();
+        const after = context.providerCalls();
+        // The counter has to prove itself before it is allowed to decide anything. Asserting only
+        // that it *did not move* is standing rule 10 one level up: a counter that never moves at
+        // all — `providerCalls: () => 0` — satisfies it, and that mutation left 2335 of 2335 tests
+        // green when this case first shipped. A baseline and a rise are what make the second
+        // assertion below a measurement instead of a tautology.
+        expect(
+          after,
+          'the harness counter must move for a call that did reach the provider, or it cannot testify about one that did not',
+        ).toBeGreaterThan(before);
+
         const second = await openThread();
+
         expect(second.thread_id).toBe(first.thread_id);
         expect(second.channel).toBe(context.channel);
+        // Rule 10: the two ids above are equal whether the adapter remembered or asked again, so
+        // the assertion that decides it is the one counting what the second call sent.
+        expect(
+          context.providerCalls(),
+          'the second call must be answered from memory, not by opening a second thread',
+        ).toBe(after);
       });
 
       it('fails with not_found for a channel it does not have', async () => {
@@ -124,7 +204,7 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
             answered_via: null,
             answered_at: null,
           },
-          { markdown: 'Which currency should totals use?', blocks: [{ type: 'actions' }] },
+          { markdown: 'Which currency should totals use?', blocks: context.providerBlocks },
         );
         expect(question.thread_id).toBe(thread.thread_id);
 
@@ -239,6 +319,37 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
         );
         expect(result.events).toEqual([]);
         expect(result.ignored[0]?.reason).toBe('unmapped_identity');
+      });
+
+      it('ignores an event it does not understand instead of throwing (rule 20)', async () => {
+        const delivery = context.emitUnknownEvent();
+        expect(
+          port.inbound.verify(delivery),
+          'control: the unknown delivery is authentic, so this is about the normaliser',
+        ).toBe(true);
+
+        const result = await port.inbound.normalise(delivery, inboundContext(userId));
+        expect(result.events, 'an unrecognised notification produces no event').toEqual([]);
+        expect(result.ignored.length, 'and says why, once').toBe(1);
+        expect(['unsupported_event', 'malformed_payload']).toContain(result.ignored[0]?.reason);
+      });
+
+      it('refuses every delivery when the binding has no verification credential (rule 18)', () => {
+        const authentic = context.emitAnswer(context.mappedAuthor.providerUserId, 'EUR');
+        const forged = context.signedWithNoCredential();
+
+        expect(
+          port.inbound.verify(authentic),
+          'control: a configured binding accepts an authentic delivery',
+        ).toBe(true);
+        expect(
+          context.unverifiablePort.inbound.verify(forged),
+          'a signature computed with the unset credential must not verify',
+        ).toBe(false);
+        expect(
+          context.unverifiablePort.inbound.verify(authentic),
+          'and neither must a genuinely authentic one: an unconfigured binding verifies nothing',
+        ).toBe(false);
       });
 
       it('records feedback from an unmapped user with a null user id', async () => {

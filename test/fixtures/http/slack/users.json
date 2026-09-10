@@ -1,0 +1,155 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/users.lookupByEmail",
+      "match": { "email": "dev@example.test" },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "user": {
+          "id": "U0FAKEDEV01",
+          "team_id": "T0FAKETEAM1",
+          "name": "dev.one",
+          "deleted": false,
+          "real_name": "Dev One",
+          "tz": "Europe/Prague",
+          "profile": {
+            "real_name": "Dev One",
+            "display_name": "dev.one",
+            "email": "dev@example.test"
+          },
+          "is_admin": false,
+          "is_owner": false,
+          "is_restricted": false,
+          "is_bot": false,
+          "is_app_user": false
+        }
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.lookupByEmail",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "The page's example success response with every identifier, name and email replaced by obviously fake ones (BD-002), and the avatar/image members and locale fields removed — the adapter reads id, deleted, is_bot, is_app_user and profile."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/users.lookupByEmail",
+      "match": { "email": "stranger@example.test" },
+      "status": 200,
+      "body": { "ok": false, "error": "users_not_found" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.lookupByEmail",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "`users_not_found` is listed among the method's error codes; the body is the Web API's documented error envelope, of which the page prints no example. This is the one slug the adapter treats as an answer rather than a failure."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/users.lookupByEmail",
+      "match": { "email": "no-scope@example.test" },
+      "status": 200,
+      "body": {
+        "ok": false,
+        "error": "missing_scope",
+        "needed": "users:read.email",
+        "provided": "chat:write,users:read"
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.lookupByEmail",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "`missing_scope` — 'The token used is not granted the specific scope permissions required' — is listed among the method's error codes, and `users:read.email` is the scope the same page states the method requires. The `needed`/`provided` members are the shape Slack returns with this slug; the page prints no example, so they are recorded as adapted rather than documented. The adapter reads neither."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/users.info",
+      "match": { "user": "U0FAKEDEV01" },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "user": {
+          "id": "U0FAKEDEV01",
+          "team_id": "T0FAKETEAM1",
+          "name": "dev.one",
+          "deleted": false,
+          "real_name": "Dev One",
+          "profile": { "display_name": "dev.one", "email": "dev@example.test" },
+          "is_admin": false,
+          "is_bot": false
+        }
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.info",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "The page's example success response with identifiers and names replaced by obviously fake ones (BD-002) and the timezone, colour and avatar members removed."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/users.info",
+      "match": { "user": "U0FAKEBOT01" },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "user": {
+          "id": "U0FAKEBOT01",
+          "team_id": "T0FAKETEAM1",
+          "name": "agentic",
+          "deleted": false,
+          "real_name": "Agentic",
+          "profile": { "display_name": "Agentic" },
+          "is_bot": true,
+          "is_app_user": false
+        }
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.info",
+        "retrieved": "2026-09-10",
+        "kind": "composed",
+        "note": "Composed: the page's example user object with `is_bot` flipped to true and the profile email dropped. The documentation states the field exists and shows it as `false`; it publishes no example of a bot account. The fixture exists because identity mapping must refuse a bot, and a refusal with no shape to refuse is untested."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/users.info",
+      "match": { "user": "U0FAKEGONE1" },
+      "status": 200,
+      "body": {
+        "ok": true,
+        "user": {
+          "id": "U0FAKEGONE1",
+          "team_id": "T0FAKETEAM1",
+          "name": "former.colleague",
+          "deleted": true,
+          "real_name": "Former Colleague",
+          "profile": { "display_name": "former.colleague", "email": "gone@example.test" },
+          "is_bot": false
+        }
+      },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.info",
+        "retrieved": "2026-09-10",
+        "kind": "composed",
+        "note": "Composed for the same reason as the bot above: `deleted` is a documented member of the user object, shown as `false` in every published example. A deactivated account must not map to a platform user, and the refusal needs an account to refuse."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/users.info",
+      "match": { "user": "U0FAKESTRA1" },
+      "status": 200,
+      "body": { "ok": false, "error": "user_not_found" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/users.info",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "`user_not_found` — 'Value passed for user was invalid' — is documented on the method page; the body is the Web API's documented error envelope, of which the page prints no example."
+      }
+    }
+  ]
+}

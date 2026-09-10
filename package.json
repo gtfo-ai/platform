@@ -12,6 +12,9 @@
   "scripts": {
     "prepare": "lefthook install",
     "verify": "node scripts/verify.mjs verify",
+    "verify:static": "node scripts/verify.mjs verify:static",
+    "verify:types": "node scripts/verify.mjs verify:types",
+    "verify:tests": "node scripts/verify.mjs verify:tests",
     "verify:integration": "node scripts/verify.mjs verify:integration",
     "verify:e2e": "node scripts/verify.mjs verify:e2e",
     "verify:ui": "node scripts/verify.mjs verify:ui",
@@ -31,6 +34,7 @@
     "schemas": "node scripts/schemas.mjs",
     "schemas:check": "node scripts/schemas.mjs --check",
     "ignored:check": "node scripts/check-ignored.mjs",
+    "nul:check": "node scripts/check-nul.mjs",
     "secrets:scan": "node scripts/gitleaks.mjs dir .",
     "secrets:scan:ci": "node scripts/gitleaks.mjs git --log-opts=--all --require",
     "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all"

@@ -269,7 +269,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
 | WP-08 | Jira Cloud provider | WP-07 | yes | DONE | `af206c7` | 2 review rounds + pre-merge fixes; rules 17, 18, 22; shared fixture-provenance suite lives here |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `27928b2` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
-| WP-10 | Slack provider | WP-07 | yes | REVIEW | branch `worktree-agent-a4db5aee16bb73391` | APPROVED round 2; pre-merge fixes running; rules 29, 30 earned here |
+| WP-10 | Slack provider | WP-07 | yes | DONE | `WP10SHA` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` `786ac46` | +218 tests; 29 mutations; review round 1 running |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | TODO | — | |
