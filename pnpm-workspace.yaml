@@ -38,3 +38,11 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.267'
   - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.267'
   - '@anthropic-ai/claude-agent-sdk@0.3.267'
+  - '@tanstack/history@1.162.3'
+  - '@tanstack/react-router@1.170.34'
+  - '@tanstack/router-core@1.171.29'
+  - '@types/react-dom@19.3.0'
+  - '@types/react@19.3.0'
+  - react-dom@19.3.0
+  - react@19.3.0
+  - scheduler@0.28.0

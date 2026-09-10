@@ -32,6 +32,11 @@
 export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
   'verify:static': ['lint', 'schemas:check', 'ignored:check', 'nul:check'],
   'verify:types': ['typecheck'],
+  // TD-013's bundle budget is an **acceptance criterion** of WP-20, not a nicety, so it is a step
+  // of `verify` and therefore a CI job. It is a group of its own rather than a step of
+  // `verify:static` because it is the one check here that builds something: it runs
+  // `vite build` and measures the initial graph `dist/index.html` requests.
+  'verify:bundle': ['bundle:check'],
   'verify:tests': ['test'],
 };
 
@@ -47,4 +52,9 @@ export const TARGETS: Readonly<Record<string, readonly string[]>> = {
   'verify:integration': ['test:integration'],
   'verify:e2e': ['test:e2e'],
   'verify:ui': ['test:ui'],
+  // Playwright against a Vite preview server and a fake API/SSE backend (WP-20's acceptance
+  // criterion). Its own target rather than a step of `verify:ui`: it needs a browser binary, which
+  // CI installs in that job and a developer installs once with `pnpm exec playwright install
+  // chromium`. technical/10 lists it under the UI tier and names Playwright 1.63.
+  'verify:web-e2e': ['test:web-e2e'],
 };

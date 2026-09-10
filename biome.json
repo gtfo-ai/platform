@@ -63,6 +63,9 @@
     "formatter": { "enabled": true },
     "parser": { "allowComments": true }
   },
+  "css": {
+    "parser": { "tailwindDirectives": true }
+  },
   "assist": {
     "enabled": true,
     "actions": {

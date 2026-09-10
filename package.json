@@ -14,6 +14,7 @@
     "verify": "node scripts/verify.mjs verify",
     "verify:static": "node scripts/verify.mjs verify:static",
     "verify:types": "node scripts/verify.mjs verify:types",
+    "verify:bundle": "node scripts/verify.mjs verify:bundle",
     "verify:tests": "node scripts/verify.mjs verify:tests",
     "verify:integration": "node scripts/verify.mjs verify:integration",
     "verify:e2e": "node scripts/verify.mjs verify:e2e",
@@ -37,7 +38,10 @@
     "nul:check": "node scripts/check-nul.mjs",
     "secrets:scan": "node scripts/gitleaks.mjs dir .",
     "secrets:scan:ci": "node scripts/gitleaks.mjs git --log-opts=--all --require",
-    "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all"
+    "secrets:scan:history": "node scripts/gitleaks.mjs git --log-opts=--all",
+    "bundle:check": "node scripts/bundle-budget.mjs",
+    "test:web-e2e": "playwright test",
+    "verify:web-e2e": "node scripts/verify.mjs verify:web-e2e"
   },
   "devDependencies": {
     "@b12k/gitleaks": "8.30.1-v.36",
@@ -50,7 +54,12 @@
     "@platform/infrastructure": "workspace:*",
     "@platform/integrations": "workspace:*",
     "@platform/server": "workspace:*",
+    "@platform/web": "workspace:*",
+    "@playwright/test": "1.63.0",
     "@testcontainers/postgresql": "12.1.0",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
     "@types/node": "24.13.3",
     "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.0.0",

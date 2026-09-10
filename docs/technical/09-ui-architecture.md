@@ -38,6 +38,13 @@ apps/web/src/
 | Statistics | rollups by day/week/month | — | CSV export |
 | Wizard | project draft, discovery status, readiness | `project:*` | step save |
 
+## Failure containment
+A render that throws must cost one region, never the tab. Two boundaries, because they catch different failures:
+- **Route level** — `defaultErrorComponent` on the router. TanStack Router installs a catch boundary per match *only when that match has an error component*, so without this option the nearest boundary is the root's and a screen that throws replaces the header and the navigation too (measured at WP-20: the document held the router's built-in error component and nothing else). With it, the failure is contained inside `<main>` and the navigation stays usable.
+- **Application level** — one `ErrorBoundary` outside every provider, for what the router cannot see: a throw in a provider, in a provider's effect, or in the router's own render.
+
+The fallback names the area, shows the error's message **sanitised and bounded** (an error message can quote a provider's string, so BD-022 applies to it), and offers *Try again* plus *Reload the page*; a boundary also clears itself when the route changes, so navigating away is a recovery. The fallback is deliberately poor in dependencies: a fallback that throws is caught only by the next boundary out, and the application-level one has none.
+
 ## Accessibility, theming, i18n
 Base UI APG behaviours; `aria-live="polite"` for status changes; reduced-motion; light/dark/system via CSS variables and `color-scheme`; Shiki dual themes; keyboard shortcuts sheet (`g b`, `g q`, `/`, `?`, `j/k`, `f`); English-only strings with `Intl.*` formatting; Lingui later if needed.
 

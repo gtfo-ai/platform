@@ -1,0 +1,84 @@
+/*
+ * Theme tokens and the one Tailwind entry point (technical/09 § "Accessibility, theming, i18n").
+ *
+ * Light/dark/system through CSS variables and `color-scheme`. The selected theme is written to
+ * `<html data-theme>` by `ui/theme.tsx`; `system` writes the resolved value, so every rule below
+ * has exactly one selector to look at and nothing depends on a media query at render time.
+ *
+ * `@theme inline` maps Tailwind's colour utilities onto those variables rather than onto literals,
+ * which is what makes `bg-surface` mean something different under `[data-theme='dark']` without a
+ * second set of utilities.
+ */
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+  --app-canvas: oklch(0.985 0.002 250);
+  --app-surface: oklch(1 0 0);
+  --app-surface-muted: oklch(0.965 0.004 250);
+  --app-border: oklch(0.9 0.006 250);
+  --app-fg: oklch(0.22 0.01 250);
+  --app-fg-muted: oklch(0.5 0.012 250);
+  --app-accent: oklch(0.55 0.16 262);
+  --app-accent-fg: oklch(0.99 0 0);
+  --app-danger: oklch(0.55 0.19 27);
+  --app-warning: oklch(0.68 0.15 75);
+  --app-success: oklch(0.6 0.13 155);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --app-canvas: oklch(0.19 0.008 260);
+  --app-surface: oklch(0.23 0.009 260);
+  --app-surface-muted: oklch(0.27 0.01 260);
+  --app-border: oklch(0.33 0.012 260);
+  --app-fg: oklch(0.95 0.004 260);
+  --app-fg-muted: oklch(0.72 0.01 260);
+  --app-accent: oklch(0.72 0.14 262);
+  --app-accent-fg: oklch(0.18 0.01 260);
+  --app-danger: oklch(0.7 0.16 27);
+  --app-warning: oklch(0.78 0.14 75);
+  --app-success: oklch(0.74 0.13 155);
+}
+
+@theme inline {
+  --color-canvas: var(--app-canvas);
+  --color-surface: var(--app-surface);
+  --color-surface-muted: var(--app-surface-muted);
+  --color-line: var(--app-border);
+  --color-fg: var(--app-fg);
+  --color-fg-muted: var(--app-fg-muted);
+  --color-accent: var(--app-accent);
+  --color-accent-fg: var(--app-accent-fg);
+  --color-danger: var(--app-danger);
+  --color-warning: var(--app-warning);
+  --color-success: var(--app-success);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--app-canvas);
+  color: var(--app-fg);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* product/10: "reduced-motion" is a UX rule, not a preference we get to ignore. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

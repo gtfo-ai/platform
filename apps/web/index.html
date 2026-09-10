@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Agentic platform</title>
+  </head>
+  <body>
+    <!--
+      No inline theme bootstrap script on purpose: an inline <script> is the first thing a strict
+      Content-Security-Policy has to allow, and the theme is applied synchronously in main.tsx
+      before the first render instead (src/ui/theme.tsx).
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
