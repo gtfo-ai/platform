@@ -361,7 +361,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-08 | Jira Cloud provider | WP-07 | yes | DONE | `af206c7` | 2 review rounds + pre-merge fixes; rules 17, 18, 22; shared fixture-provenance suite lives here |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `27928b2` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
 | WP-10 | Slack provider | WP-07 | yes | DONE | `fbf0928` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
-| WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `WP11SHA` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
+| WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | REVIEW | branch `worktree-agent-a3ffc71895d2210b1` `4365fad` | +134 tests; 29 mutations; **Q44, Q45**; review round 1 running |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
