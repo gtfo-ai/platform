@@ -141,6 +141,20 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    whole-string `NFKC` fold maps **U+FF0F to `/`**, which the volume does not — so `src/*.ts` would have
    answered `allow` for `src/a／b.ts`, turning a fail-closed widening into a fail-**open** one. Per-segment
    folding pins it. *A fix arriving with authority is still a hypothesis.*
+
+   **Fourth and fifth instances, and the fifth changed the shape of the rule.** WP-20: my brief prescribed
+   `safeHref(...) ?? undefined` *and* forbade `href=` outside `untrusted.tsx` — two instructions that cannot
+   both be obeyed, since the first leaves `href=` in five files; the implementer measured the contradiction
+   and shipped an `ExternalLink` component instead. Then the redaction follow-up: I prescribed widening
+   `redactJson` to cover keys, and the implementer **declined, citing rule 41 back at me** — widening the
+   shared walk would take collision accounting away from the two sites that have it (Loki counts a colliding
+   label into its truncation marker; a shared walk has nowhere to report one) and would leave Loki's own pass
+   as a second, untestable guard. It redacted at the emitting site and narrowed the docblock's claim instead.
+   That is the first time a prescription was refused *by argument from the ledger* rather than by
+   measurement, which is the outcome the ledger exists for: **the standing rules are the implementer's
+   authority to say no to me, and an implementer that only ever complies is not using them.** A brief should
+   therefore state the *defect* and the *evidence*, and hold its prescribed patch loosely — I have now been
+   wrong about the patch five times and right about the defect every time.
 26. **`toLowerCase()` is lowercase *mapping*; a filesystem compares with full case *folding* — and the way
    to learn its equivalence classes is to ask it, not to reason about Unicode.** WP-12's round-1 fix folded
    with `normalize('NFC').toLowerCase()`; the reviewer wrote `conﬁg/app.yaml` (U+FB01) on APFS and it
