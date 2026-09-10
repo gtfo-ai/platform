@@ -32,8 +32,8 @@ fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conf
 | WP | State | Branch |
 |---|---|---|
 | WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red; 1 blocking, 1 major, 3 minor) | `worktree-agent-a1a13bbc879e220cb` |
-| WP-15 pipeline interpreter | **implementation round 1**, resumed after the restart | `wp/15` |
-| slack redaction + census flakes | **implementation round 1** (the three queued follow-ups) | `fix/slack-redaction-and-census` |
+| WP-15 pipeline interpreter | **fix round 2** (review 1 = REQUEST_CHANGES: two untested live branches, one fail-open) | `wp/15` |
+| slack redaction + census flakes | **verified green on all six, awaiting review** | `fix/slack-redaction-and-census` |
 
 **WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
 credential without destroying the container `create` just started — a live run container nobody holds a
@@ -254,6 +254,28 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+68. **A mechanism with two symmetric halves gets one test, and the tested half makes the untested half look
+   covered.** WP-15's convergence detector escalates a task when a stage returns the same findings twice.
+   The **CI** half has a named test — *stops after three identical failures instead of burning the loop*.
+   The **code-review** half has none: inserting `return false;` before `recentStageSignatures` disables the
+   escalation entirely and **all 3659 unit+contract tests stay green**. `recentStageSignatures`,
+   `isRepeatOfPreviousRound` and the `escalateTask` block are all zero-hit. Nobody would ship a detector
+   with no test at all; what actually happens is that one half gets written, the mechanism reads as tested,
+   and the second half is never noticed as missing — *especially* by the author, who has just proved the
+   idea works. **When a behaviour is parameterised over a set — stages, providers, event types — the test
+   must be parameterised over the same set, or the set is decoration.** Sharpest form of rule 37: enumerate
+   what you *branch on*, not what you remembered to cover.
+67. **The defect you fixed and the test that proves it are two deliverables, and finding the defect makes
+   the second one feel done.** WP-15 found a real product defect by running the loop — a convergence
+   signature in `task_stages.outcome` overwritten by the very transition it exists to stop — diagnosed it
+   correctly, fixed it correctly, and wrote it up. The escalation that the signature exists to trigger is
+   executed by **no test in any tier**, so the fix is held in place by nothing. The same round left the CI
+   gate's failure branch untested while it **fails open**: settling `CI_TERMINAL_FAIL` as `{passed: true}`
+   left 3659 tests green, and `ci_gate` is a builtin whose job polls `pipelineStatus` in production
+   regardless of its `on` event — so a bug there advances a task to code review **on red CI**. That is the
+   fourth fail-open guard this session (WP-07's shadow guard, WP-12's two, now this), and the pattern is
+   worth naming: *a guard is written on the happy path and reviewed on the happy path, so its refusal is the
+   part nobody executes.* Mutate every guard to succeed and see which tests notice.
 66. **The orchestrator's parallelism is a load on somebody's actual machine, and the machine gets a vote.**
    The user reported **two kernel panics on 2026-09-10** — `watchdog timeout: no checkins from watchdogd in
    92 seconds` — with reboots at **12:45 and 17:06**. The 17:06 one is the "restart" this ledger recorded as
