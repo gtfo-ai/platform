@@ -209,6 +209,26 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+57. **A margin that looks generous is a coin flip until you measure where the value lands.** WP-13's
+   backpressure conformance test asserted the runner held `< BULK_BYTES / 2` — 8,388,608 of 16 MiB, which
+   reads as a 2x safety margin. Measured, the count landed at **8,192,000 / 8,323,072 / 8,388,608**: the
+   bound was drawn *through the middle of the distribution it was measuring*, and the test failed **5 runs
+   in 10** on `main`. The cause was upstream of the bound — the test paused 1 MiB into the bulk, and one
+   20 ms poll tick of a unix socket carries about **7 MiB**, so "pause once it is unmistakably flowing"
+   arrived ~8 MiB late every time. Pausing *before* the bulk moved the landing point to **262,144 bytes**,
+   identical in 5 runs of 5. **A fraction of a total is not a margin; the distance from the measured
+   distribution is.** And the fix belonged at the thing that set the value, not at the number in the
+   assertion — raising the bound would have hidden a 7 MiB scheduling window instead of closing it.
+56. **A boolean from a transport-mediated API conflates "not ready" with "failed", and a test that reads it
+   as a health check will blame the wrong component.** `SpawnedProcess.kill()` returns
+   `state.connection?.send(...) ?? false`, so `false` means **the control connection was not up yet**. The
+   conformance test slept 300 ms and asserted `kill(...) === true`, which reads as "the child is alive" and
+   is not: it failed on `main` at load average 150 with the child perfectly healthy, and the failure
+   message (`expected false to be true`) points at the child rather than at the socket. The replacement is
+   a lower bound on something structural — the child's `--pid-file` appearing — and it is *stronger* than
+   "connected", because the child can only write that file after the shim received the `spawn` frame over
+   the very connection `kill()` is about to use. **Ask what the false branch of a boolean actually
+   enumerates before asserting on it.**
 55. **A deny-list of paths is a claim about the platform's symlink layout, not about the author's intent.**
    WP-14's `assertSafeBindSource` blocks `FORBIDDEN_BIND_ROOTS` = `/etc`, `/var/run`, `/run`. On this
    platform all three are **symlinks**, so they are refused by the *symlink* branch and the forbidden branch
