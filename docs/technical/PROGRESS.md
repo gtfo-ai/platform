@@ -175,6 +175,21 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    handle must yield `not_found` — and left `git-provider-contract-suite.ts` untouched, so a future GitHub
    adapter that silently `return`s for a foreign handle passes the entire shared suite. BD-017's whole claim
    is that a new provider is trustworthy without touching the pipeline; only the suite can make that true.
+25. **A load generator needs a cleanup that survives its own parent — and never silence the cleanup.**
+   The orchestrator reproduced the WP-06a flake with `for i in $(seq 1 24); do (while :; do :; done) & done`
+   and cleaned up with `kill $LOADPIDS 2>/dev/null`. In zsh an unquoted variable does **not** word-split, so
+   `kill` received one newline-joined argument and failed — and `2>/dev/null` hid it. Run twice, that leaked
+   **48 orphaned spinners** which were reparented to launchd and ran for 4 h 37 m at a combined ~1300 % CPU,
+   load average 137, starving the machine (a *different* Claude session on the same host diagnosed and killed
+   them). The recipe that works: `trap 'kill 0' EXIT INT TERM` at the top so the whole process group dies with
+   the script, a bounded generator (`timeout 60 …`) rather than `while :`, and **no `2>/dev/null` on a cleanup
+   step** — the one command whose failure you must not miss.
+   *Nothing was invalidated:* every verification after the leak ran at load ~137 and passed, and passing under
+   heavy load is a stronger result than passing idle; the reviewers' timing bounds inflate under load, so a
+   satisfied bound stays conservative. But two readings were wrong — `verify` durations climbing from 2.7 s to
+   16 s were attributed entirely to the growing suite when part of it was the leak, and the `ci-fix` commit
+   `f1cd8e4` says "0 out of 8 under the same load" when the post-fix pass in fact ran under **48** spinners
+   against the pre-fix pass's 24. Heavier, not equal; the conclusion holds, the sentence does not.
 24. **A check that counts execution is not a check that counts assertion.** WP-09's unexercised-fixture
    check survives an unreferenced interaction and a `.skip`ped test — but deleting all three `expect`s from
    a test while keeping its calls passes 32/32. Mutate the assertions, not only the fixtures.
