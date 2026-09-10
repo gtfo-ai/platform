@@ -136,6 +136,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `allow` for `.ENV` against a `.env` rule, and the reviewer wrote `.ENV` on APFS and **overwrote `.env`**.
    Case-folding costs a false deny on a genuinely case-sensitive filesystem, which is the fail-closed
    direction, so take it.
+26. **`toLowerCase()` is lowercase *mapping*; a filesystem compares with full case *folding* — and the way
+   to learn its equivalence classes is to ask it, not to reason about Unicode.** WP-12's round-1 fix folded
+   with `normalize('NFC').toLowerCase()`; the reviewer wrote `conﬁg/app.yaml` (U+FB01) on APFS and it
+   **overwrote `config/app.yaml`** — same inode — while the guard returned `allow`. Same for `ſecrets`
+   (U+017F), `ſrc`, and `aßets` (`straße` ≡ `strasse`, same inode). The fix is `NFKC` plus an explicit
+   `ß → ss`; both only widen, so both fail closed. **The instrument is the transferable part:** a
+   filesystem-differential test that creates the files and compares inodes cannot drift from the filesystem
+   the way an argument about Unicode can. Sharpens rule 15.
 16. **A guard against an untrusted producer must not read a field that producer can omit.** A missing number
    is not zero, and `NaN` compares false against every ceiling. Deleting `total_cost_usd` from WP-12's
    `result` line left the budget watchdog silent at `NaN > 0.01`, the run `completed`, and `NaN` flowing to
@@ -1498,6 +1506,22 @@ both map to `{mergeable: true, hasConflicts: false}`, and a `has_conflicts: true
 gate must not infer it from `mergeable`. Either the port grows a rebase-state member (with fake and suite
 case — standing rule 23) or WP-26 reads `detailed_merge_status` through a provider-specific route and says
 so.
+
+### Obligations WP-15 and WP-19 must honour (from WP-12's review)
+
+- **`cost_unreported` is a fault published as an overspend.** When the CLI reports no usable
+  `total_cost_usd`, WP-12 stops the run with terminal reason `error_max_budget_usd` and status
+  `budget_exceeded`, carrying the distinct name in `RunOutcome.error` and the `run_stopped` row's
+  `data.reason`. The reviewer judged this acceptable — `RunTerminalReason` is a closed contract plus a PG
+  enum, and BD-010's branch is the same — but **WP-15 must branch on `data.reason`, and WP-19 must not count
+  a `cost_unreported` run as spend.** A blind budget stop is not an overspend, and a cost ledger that adds
+  it up is wrong in the direction that matters.
+- **`managedSettings` has a precondition that can silently disable it.** Binary 2.1.267 @159286173:
+  `parentSettingsBehavior` is first-wins by default, so the parent is dropped and admin tiers become the only
+  policy source. On a host carrying any admin managed tier — MDM, `/Library/Application Support/ClaudeCode`,
+  `/etc/claude-code`, i.e. `local` provider mode on a managed laptop — **`allowManagedPermissionRulesOnly`
+  and `allowManagedHooksOnly` both vanish**, and with them the guarantee that project settings cannot shadow
+  `canUseTool`. WP-22 and WP-23 should make this an operator check.
 
 ## Discovered work (not in plan)
 
