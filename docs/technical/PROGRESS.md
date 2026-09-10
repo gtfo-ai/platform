@@ -4,40 +4,47 @@
 
 ## Resume note
 
-> **Session 2, in progress (started 2026-09-09; the Claude Code process restarted once on 2026-09-10 and
-> both in-flight agents were resumed from their transcripts rather than restarted).** Read this, then
-> "Standing rules earned by evidence" — **fifty rules, each with its evidence** — then continue the loop in
-> `14-orchestration-protocol.md`.
+> **Session 2, in progress (started 2026-09-09; the Claude Code process restarted once on 2026-09-10).**
+> Read this, then "Standing rules earned by evidence" — **fifty-seven rules, each with its evidence** —
+> then continue the loop in `14-orchestration-protocol.md`.
 
-**Seventeen work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
+**Twenty work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
 WP-02a `8abf247` · WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` ·
 WP-04a `d729616` · WP-06 `d60d770` · WP-06a `9e0be0b` · WP-07 `b036c4c` · ci-fix(sse) `f1cd8e4` ·
 WP-08 `af206c7` · WP-09 `27928b2` · WP-12 `951e343` · WP-10 `fbf0928` · ci-fix(pg-boss) `43a3f61` ·
-**WP-11 + WP-11a `d066708`**. `main` is green on all five targets: 3004 unit+contract tests, 94.68%
-statements / 87.42% branches, integration 114, e2e 20, ui 2.
+**WP-11 + WP-11a `d066708`** · **WP-20 `c744904`** · **WP-13 `d1e7b69`** (+ `3db7e45` conflict-marker
+fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conformance timing fixes).
+`main` is green on all five targets: **3179 unit+contract tests / 162 files, 94.5% statements,
+87.16% branches**.
 
-**In flight — two worktrees, both resumed after the restart**
+**In flight — three worktrees**
 
 | WP | State | Branch |
 |---|---|---|
-| WP-13 run shim | review round 2 of 3, resumed | `worktree-agent-a3ffc71895d2210b1` |
-| WP-20 web app | APPROVED at round 2; pre-merge fixes, resumed | `worktree-agent-a9d83ca5712f03282` |
+| WP-14 launcher + workspaces | **fix round 2** (review 1 = REQUEST_CHANGES: 1 blocking, 2 major) | `worktree-agent-a1a13bbc879e220cb` |
+| jira/gitlab redaction fix | **fix round 2** (review 1 = APPROVE with 2 should-fix) | `worktree-agent-a67ffe6229084eeae` |
+| WP-15 pipeline interpreter | **implementation round 1**, started from `e6b2d12` | `wp/15` |
 
-Both merge straight to `main` when they finish; neither touches the other's files. **WP-20's questions
-Q44–Q48 must be renumbered to Q46–Q50 at merge** — WP-13 took Q44 and Q45 and merges first if it is ready
-first; `main` currently carries Q40–Q43.
+**WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
+credential without destroying the container `create` just started — a live run container nobody holds a
+handle to, and nothing reaps orphans. Its major finding: `assertSafeBindSource`'s deny-list blocks three
+paths that are **symlinks on this platform**, so the forbidden branch never fires, while `$HOME` and the
+docker socket's realpath pass — the reviewer read `id_ed25519` out of a fully hardened workspace container.
+See rules 54 and 55.
 
-**Then M1 has two work packages left.** **WP-14** (launcher + `WorkspaceProvider`) needs WP-13 and owes the
-run shim two things WP-13's research recorded: create and `chown` `<ctl>/<run-id>/` before start, because
-the daemon refuses a missing sub-path, and run the runner as uid 1000 (the socket is `0600`, Q45). It also
-owes `docker stop`/`rm` on every path that ends a run — WP-13's teardown signals one pid, and a *detached*
-grandchild survives it. **WP-15** (pipeline interpreter) needs WP-04…WP-12 and is where the loop first runs
-end to end; its obligations are in "Notes WP-15 must honour" and "Obligations WP-15 and WP-19 must honour".
+**Q-number state**: `main` carries Q40–Q51. WP-14 took **Q52 and Q53**; the redaction branch's Q52 is being
+renumbered to **Q54** and adds **Q55**; WP-15 was told to start at **Q56**. Renumber at merge — the
+convention is manual on purpose, because the conflict is the signal.
 
-**Two follow-ups are queued and briefed in the sections below**: the confirmed **gitlab and jira redaction
-gaps** (both take a required redactor and barely use it — `getJobLog` returned a `PRIVATE-TOKEN` header
-verbatim), and the **`ignored:check` versus `.DS_Store`** question, where two guards in this repository
-disagree about what an OS artefact is.
+**After these three, M1 is complete** and M2 (WP-24–33) begins. WP-16…WP-19 and WP-21…WP-23 remain in M1's
+tail: WP-22 (Docker images) already owes two things measured here — `renderEgressConfig` writes
+`User nobody` while the sidecar runs uid 1000 with `cap_drop ALL`, so tinyproxy cannot setuid and the
+rendered config will not start the real image as written; and `apps/runlet` must be bundled to a single
+file with `scripts/runlet-container-check.mjs` re-run against the real image.
+
+**One follow-up is still queued**: the **`ignored:check` versus `.DS_Store`** question, where two guards in
+this repository disagree about what an OS artefact is. (The gitlab/jira redaction follow-up is now the
+in-flight branch above.)
 
 **Merge recipe**: `git merge main` into the WP branch → verify → `git merge --squash <branch>` on `main` →
 `pnpm install` → all five targets **on main** → resolve conflicts (`pnpm-lock.yaml` by regeneration, both
@@ -445,7 +452,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | REVIEW | branch `worktree-agent-a1a13bbc879e220cb` `dfa9534` | +196 tests, e2e 2 → 53; **Q52, Q53** (renumber at merge); review round 1 running |
-| WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
+| WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | IN_PROGRESS | — | branch `wp/15` from `e6b2d12`; acceptance is the fake-Claude e2e, one feature + one bug ticket |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
