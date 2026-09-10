@@ -173,10 +173,24 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 37. **A cap audit that lists the fields it capped is not a sweep of the fields it emits — enumerate the
    output type's members, not the call sites.** Three WP-11 rounds capped a breadcrumb's `message` and never
    looked at `category` and `level` sitting beside it in the same object, both `z.string().nullish()`.
-   Measured at the shipped defaults with 2 MB fields: **200,106,301 bytes** out, `message` cut to 2046 and
-   the other two through at 2,000,000 each, no marker and nothing setting `truncated`. Round 3's own audit
+   Measured with 2 MB fields: **100,027,760 bytes** out at the shipped defaults
+   (`max_breadcrumbs = 25`, `max_breadcrumb_bytes = 1024`) — `message` correctly cut, the other two through
+   at 2,000,000 each, no marker and nothing setting `truncated`. *The figure first recorded here, 200,106,301,
+   was taken at doubled caps and did not reproduce; see rule 39.* Round 3's own audit
    claim — "the one string routing around every cap was Sentry's health probe" — was false when a reviewer
    enumerated the *type* instead of the call sites.
+39. **A measurement quoted as evidence must reproduce from the shipped defaults, and the test that ships
+   with it must pin the number.** WP-11a's headline "200,106,401 bytes at the shipped defaults" was taken at
+   *doubled* caps; at the real defaults it is **100,027,760**. The figure had already been copied into two
+   docblocks, a commit message, `docs/technical/06` and **this ledger's rule 37** before anyone re-ran it.
+   The defect was entirely real and the number was not, which is the combination that survives review — a
+   wrong number attached to a true finding is never the thing under scrutiny. This is the **second** figure
+   this session to need correcting after the fact (rule 32's was 128, measured 192).
+40. **A hostile-document enumeration is only as wide as the values it dares send.** WP-11a's walk pushes a
+   hostile document through and fails on any over-long string — but a field whose bound is a **refusal**
+   rather than a cap gets fed a *safe* value, because a hostile one would throw. Deleting `identifier()`
+   from five Sentry fields left **758/758 green**. Fields bounded by refusal need their own document,
+   asserting the refusal.
 38. **`key in record` is not `Object.hasOwn(record, key)`.** It walks `Object.prototype`, so tags named
    `toString`, `constructor` or `__proto__` are silently dropped — and when the key was capped first, it
    compares the **raw** name against **capped** ones, so two names colliding after the cap keep the *last*
