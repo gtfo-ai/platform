@@ -26,8 +26,19 @@ export interface GitProviderContractContext {
   readonly port: GitProviderPort;
   readonly project: string;
   readonly missingProject: string;
-  /** Branch names the harness guarantees are free. */
-  readonly branches: { readonly source: string; readonly target: string };
+  /**
+   * Branch names this provider's fixtures arrange.
+   *
+   * `source`/`target` are free for a new merge request; `protected`/`unprotected` are the two
+   * answers `isBranchProtected` must give, and `missing` is a branch the provider does not have.
+   */
+  readonly branches: {
+    readonly source: string;
+    readonly target: string;
+    readonly protected: string;
+    readonly unprotected: string;
+    readonly missing: string;
+  };
   /** An existing merge request, and one that does not exist. */
   readonly mergeRequestIid: number;
   readonly missingMergeRequestIid: number;
@@ -145,6 +156,32 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
       it('fails with not_found for a project that does not exist', async () => {
         await expectIntegrationError(
           () => port.getDefaultBranchHead(context.missingProject),
+          'not_found',
+        );
+      });
+
+      /**
+       * The protection check the pipeline runs before it lets an agent push (WP-15).
+       *
+       * Both answers are asserted, from a branch the harness says is protected and one it says is
+       * not — a one-sided case would pass against an adapter that always answers `true`, and
+       * `true` is the answer that lets the pipeline start a run. The harness names the branches
+       * because a *provider* decides what its own fixtures protect (BD-017).
+       */
+      it('answers the protection of a protected and an unprotected branch', async () => {
+        expect(await port.isBranchProtected(context.project, context.branches.protected)).toBe(
+          true,
+        );
+        expect(await port.isBranchProtected(context.project, context.branches.unprotected)).toBe(
+          false,
+        );
+      });
+
+      it('fails rather than answering "unprotected" for a branch it cannot see', async () => {
+        // "Not protected" starts a run that may push to the default branch, so an adapter that
+        // cannot tell must refuse instead of guessing the permissive answer.
+        await expectIntegrationError(
+          () => port.isBranchProtected(context.project, context.branches.missing),
           'not_found',
         );
       });

@@ -441,32 +441,28 @@
           "$ref": "#/$defs/Slug"
         },
         "kind": {
-          "type": "string",
-          "enum": [
-            "agent",
-            "gate"
-          ]
+          "$ref": "#/$defs/anon_743525f7"
         },
         "after": {
           "$ref": "#/$defs/Slug"
         },
         "role": {
-          "$ref": "#/$defs/AgentRole"
+          "$ref": "#/$defs/anon_4e205306"
         },
         "prompt": {
-          "$ref": "#/$defs/PathPattern"
+          "$ref": "#/$defs/anon_e6c200cc"
         },
         "command": {
-          "$ref": "#/$defs/NonEmptyString"
+          "$ref": "#/$defs/anon_903202da"
         },
         "produces": {
-          "$ref": "#/$defs/ArtifactType"
+          "$ref": "#/$defs/anon_0d176875"
         },
         "pass_to": {
-          "$ref": "#/$defs/Slug"
+          "$ref": "#/$defs/anon_0a99e8c4"
         },
         "fail_to": {
-          "$ref": "#/$defs/Slug"
+          "$ref": "#/$defs/anon_0a99e8c4"
         }
       },
       "required": [
@@ -536,6 +532,22 @@
       "type": "number",
       "minimum": 0
     },
+    "anon_0a99e8c4": {
+      "$ref": "#/$defs/Slug"
+    },
+    "anon_0d176875": {
+      "$ref": "#/$defs/ArtifactType"
+    },
+    "anon_4e205306": {
+      "$ref": "#/$defs/AgentRole"
+    },
+    "anon_743525f7": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "gate"
+      ]
+    },
     "anon_745cd275": {
       "anyOf": [
         {
@@ -550,6 +562,12 @@
           "pattern": "^reviewer:@?[A-Za-z0-9._\\-/]+$"
         }
       ]
+    },
+    "anon_903202da": {
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_e6c200cc": {
+      "$ref": "#/$defs/PathPattern"
     }
   }
 }

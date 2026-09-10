@@ -11,6 +11,16 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [ ] Block Kit payload limits for question choices — WP-10.
 - [x] Run shim conformance: SDK `query()` through the shim, `volume-subpath` support on the target Docker Engine version — done at WP-13, measured on Docker 29.7.2, report in `research/12-run-shim-verification.md`. **Session-store resume after a runner restart is still open** and belongs to WP-15: the shim half is proved (a dropped control connection kills the CLI and the run container exits), the pipeline half — resuming the stage with a "you were interrupted" note — has no interpreter yet.
 - [x] Docker embedded DNS behaviour on `internal: true` networks (residual DNS channel) — done at WP-13: container names resolve through 127.0.0.11, external names SERVFAIL and there is no default route (Docker 29.7.2; `research/12`).
+- [ ] **Session-store resume after a runner restart** — carried into WP-15 from WP-13 and **still open**.
+      The interpreter exists now, and the shape of the answer is visible: a `stage.execute` job that fires
+      for a stage whose previous run ended `failed` could resume the session (`RunSpec.resumeSessionId`,
+      TD-007's mirror) instead of starting a fresh one. WP-15 does neither — a run that ends without a
+      verdict escalates, which is BD-008's "nothing retries silently" and is the safe half of the answer.
+      Whoever takes it decides whether a resumed run counts as the same attempt (it should, or the stage
+      attempt counter measures restarts rather than rounds).
+- [ ] **The pipeline is not wired into `apps/server`** — WP-15 built `createPipelineRuntime` and nothing
+      registers it, because a project's integration bindings have no loader (see PROGRESS discovered work).
+      Until that lands, the loop is exercised by `verify:e2e` and not by a running instance.
 - [ ] SDK `sandbox.credentials` masking when passed via the SDK; srt proxy chaining — later (defence in depth).
 - [ ] GitLab project access tokens on self-managed Free tier; revoke latency — WP-09.
 - [ ] Redistribution terms for the Claude Code binary and `acli` inside a public image; fallback install-at-build from official repos or at first start — WP-22 (TD-018).

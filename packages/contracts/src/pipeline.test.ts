@@ -1,6 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  BUILTIN_GATE_STAGE_IDS,
   customStageSchema,
   type PipelineTemplate,
   pipelineFileSchema,
@@ -140,6 +141,69 @@ describe('.agentic/pipeline.yml', () => {
     expect(customStageSchema.safeParse({ id: 'x', kind: 'human', after: 'ci_gate' }).success).toBe(
       false,
     );
+  });
+
+  describe('a gate has to say how it is resolved (WP-15)', () => {
+    it('accepts the two documented forms and refuses both at once', () => {
+      expect(
+        stageSchema.safeParse({ id: 'scan', kind: 'gate', on: 'ci.pipeline.finished' }).success,
+      ).toBe(true);
+      expect(
+        stageSchema.safeParse({ id: 'scan', kind: 'gate', command: 'trivy fs .' }).success,
+      ).toBe(true);
+      const both = stageSchema.safeParse({
+        id: 'scan',
+        kind: 'gate',
+        on: 'ci.pipeline.finished',
+        command: 'trivy fs .',
+      });
+      expect(both.success).toBe(false);
+      expect(both.error?.issues[0]?.message).toContain('both');
+    });
+
+    it('refuses a project gate that names neither, and says which ids are exempt', () => {
+      const result = stageSchema.safeParse({
+        id: 'security_scan',
+        kind: 'gate',
+        fail_to: 'implementation',
+      });
+      expect(result.success).toBe(false);
+      // Rule 10: the refusal has to be *this* one, not "some strict-object complaint".
+      expect(result.error?.issues[0]?.message).toContain('neither');
+      expect(result.error?.issues[0]?.message).toContain('rebase_gate');
+    });
+
+    it.each(BUILTIN_GATE_STAGE_IDS)(
+      'lets the built-in gate %s omit both, because the platform resolves it',
+      (id) => {
+        expect(stageSchema.safeParse({ id, kind: 'gate', pass_to: 'done' }).success).toBe(true);
+      },
+    );
+
+    it('refuses a custom gate with no command and a custom agent with no role or prompt', () => {
+      expect(
+        customStageSchema.safeParse({ id: 'scan', kind: 'gate', after: 'ci_gate' }).success,
+      ).toBe(false);
+      expect(
+        customStageSchema.safeParse({ id: 'docs', kind: 'agent', after: 'ci_gate' }).success,
+      ).toBe(false);
+      expect(
+        customStageSchema.safeParse({
+          id: 'docs',
+          kind: 'agent',
+          after: 'ci_gate',
+          prompt: 'prompts/docs.md',
+        }).success,
+      ).toBe(true);
+    });
+
+    it('does not exempt a custom stage that borrows a built-in gate id without a command', () => {
+      // `isBuiltinGateStageId` is about stages the *platform* evaluates. A project stage is spliced
+      // in by id alone, so naming it `rebase_gate` must not buy it the exemption.
+      expect(
+        customStageSchema.safeParse({ id: 'rebase_gate', kind: 'gate', after: 'ci_gate' }).success,
+      ).toBe(false);
+    });
   });
 });
 

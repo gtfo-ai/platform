@@ -125,6 +125,20 @@
     },
     {
       "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/branches/no%2Fsuch-branch",
+      "status": 404,
+      "body": {
+        "message": "404 Branch Not Found"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/rest/troubleshooting/",
+        "retrieved": "2026-09-10",
+        "kind": "documented",
+        "note": "status table: \"404 Not Found - A resource could not be accessed.\" The branches page documents the 200 body; the status code for a name that does not exist comes from the shared table, which is where every other 404 in this corpus comes from."
+      }
+    },
+    {
+      "method": "GET",
       "path": "/projects/acme%2Fapi/protected_branches/main",
       "status": 200,
       "body": {

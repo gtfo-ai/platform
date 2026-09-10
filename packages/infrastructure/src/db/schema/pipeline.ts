@@ -68,6 +68,10 @@ export const tasks = pgTable('tasks', {
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),
   workpadRef: jsonb('workpad_ref').$type<WorkpadRef>(),
+  /** `Task.stageAttempts` (WP-15, migration 0012). */
+  stageAttempts: jsonb('stage_attempts').$type<JsonObject>().notNull().default({}),
+  /** BD-008's limits, frozen at task start (WP-15, migration 0012). */
+  iterationLimits: jsonb('iteration_limits').$type<JsonObject>().notNull().default({}),
   iterationCounters: jsonb('iteration_counters')
     .$type<Record<string, number>>()
     .notNull()
@@ -92,6 +96,8 @@ export const taskStages = pgTable('task_stages', {
   exitedAt: timestamp('exited_at', { withTimezone: true }),
   outcome: text('outcome'),
   returnReason: text('return_reason'),
+  /** Convergence detection's stable key; nothing else writes it (WP-15, migration 0012). */
+  signature: text('signature'),
   causedByEventId: uuid('caused_by_event_id'),
 });
 
@@ -187,6 +193,8 @@ export const questions = pgTable('questions', {
   id: uuid('id').primaryKey().default(uuidv7),
   taskId: uuid('task_id').notNull(),
   taskStageId: uuid('task_stage_id'),
+  /** The stage the question was asked from; the pipeline resumes by stage id (migration 0012). */
+  stage: text('stage'),
   runId: uuid('run_id'),
   text: text('text').notNull(),
   options: jsonb('options').$type<string[]>(),
@@ -212,6 +220,9 @@ export const approvals = pgTable('approvals', {
   decidedByUserId: uuid('decided_by_user_id'),
   decidedAt: timestamp('decided_at', { withTimezone: true }),
   reason: text('reason'),
+  /** The stage attempt this approval decides; a later plan needs its own (migration 0012). */
+  stage: text('stage'),
+  attempt: integer('attempt'),
 });
 
 export const workspaces = pgTable('workspaces', {

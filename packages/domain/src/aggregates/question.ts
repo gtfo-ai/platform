@@ -21,7 +21,7 @@ import type {
 } from '@platform/contracts';
 import { isBefore } from '../clock.js';
 import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
-import { type CommandContext, type Decision, eventRecorder } from '../events.js';
+import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { assertCan } from '../permissions.js';
 
 export const QUESTION_TRANSITIONS = {
@@ -107,7 +107,7 @@ export const openQuestion = (input: OpenQuestionInput, context: CommandContext):
   answeredByUserId: null,
   answeredVia: null,
   answeredAt: null,
-  sequence: 0,
+  sequence: FIRST_STREAM_SEQ,
 });
 
 /** The wire shape (`questionRecordSchema`) the task's `task.question.asked` carries. */

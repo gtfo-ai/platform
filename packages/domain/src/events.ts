@@ -35,6 +35,18 @@ export interface CommandContext {
   readonly causeEventId?: Id | null;
 }
 
+/**
+ * The `stream_seq` an aggregate's **first** event carries.
+ *
+ * One, not zero, and it is a constraint rather than a convention: `events_stream_seq_positive`
+ * (migration 0005) is `check (stream_seq >= 1)` and the `events_stream_seq_guard` trigger expects
+ * `last + 1`, so a stream that opened at 0 would be refused by the database. Every aggregate here
+ * started at 0 until WP-15 appended one to a real store for the first time — the aggregates were
+ * unit-tested against themselves and the store against hand-built fixtures, and nothing had ever
+ * put the two together.
+ */
+export const FIRST_STREAM_SEQ = 1;
+
 /** The aggregate's position in the log: which stream, and the sequence number to use. */
 export interface EventStreamPosition {
   readonly streamType: StreamType;

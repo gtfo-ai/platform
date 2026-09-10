@@ -25,7 +25,7 @@ import type {
   TicketRef,
 } from '@platform/contracts';
 import { InvariantViolationError } from '../errors.js';
-import { type CommandContext, type Decision, eventRecorder } from '../events.js';
+import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import {
   evaluateIteration,
   type IterationCounters,
@@ -34,7 +34,11 @@ import {
   incrementIteration,
   resolveIterationLimits,
 } from '../policies/iteration-limits.js';
-import { assertTaskTransition, isTerminalTaskState } from './task-state-machine.js';
+import {
+  assertTaskTransition,
+  isRunnableTaskState,
+  isTerminalTaskState,
+} from './task-state-machine.js';
 
 export interface Task {
   readonly id: Id;
@@ -110,7 +114,7 @@ export const createTask = (input: CreateTaskInput, context: CommandContext): Tas
     stageAttempts: {},
     iterationCounters: {},
     limits: input.limits ?? resolveIterationLimits(),
-    sequence: 0,
+    sequence: FIRST_STREAM_SEQ,
   };
   const recorder = recorderFor(task, context);
   recorder.emit('task.created', {
@@ -226,10 +230,13 @@ export const completeStage = (
   input: CompleteStageInput,
   context: CommandContext,
 ): TaskDecision => {
-  if (task.state !== 'active') {
+  // Any state the pipeline is still moving through, not just `active`: the retrospective completes
+  // from `retro` and the merged gate from `merged` (product/04's task states are not one per
+  // stage). What a stage may not complete from is a stop a human owns.
+  if (!isRunnableTaskState(task.state)) {
     throw new InvariantViolationError(
       'task.stage.complete',
-      `a stage can only complete while the task is active, this one is "${task.state}"`,
+      `a stage can only complete while the task is running, this one is "${task.state}"`,
     );
   }
   if (task.currentStage !== input.stage) {
@@ -304,6 +311,50 @@ export const returnToStage = (
       sequence: recorder.sequence,
     },
     events: recorder.events,
+  };
+};
+
+export interface ResumeStageInput {
+  readonly stage: Slug;
+  /** The bounded loop this resumption spends a round of (BD-008). */
+  readonly loop: IterationLoop;
+  readonly reason: string;
+  readonly escalationBrief: string;
+}
+
+/**
+ * Re-enter the stage the task was waiting at, spending a round of a bounded loop.
+ *
+ * A question round is a loop like any other — BD-008 bounds "refinement question rounds" at 2 —
+ * but it is **not** a `returnToStage`: `waiting_answers → returned` is not a legal transition (the
+ * task never went backwards, it stood still), and emitting `task.stage.returned` from stage X to
+ * stage X would put a return in the log that never happened. So this is its own command, and it
+ * enforces the same invariant `returnToStage` does: when the loop is spent the counter stays where
+ * it is and the task escalates, so a counter can never pass its limit.
+ */
+export const resumeStage = (
+  task: Task,
+  input: ResumeStageInput,
+  context: CommandContext,
+): TaskDecision => {
+  const iteration = evaluateIteration(task.iterationCounters, input.loop, task.limits);
+  if (!iteration.allowed) {
+    return escalateTask(
+      task,
+      {
+        reason: `${input.loop} iteration limit of ${iteration.limit} reached: ${input.reason}`,
+        blockerBrief: input.escalationBrief,
+      },
+      context,
+    );
+  }
+  const decision = enterStage(task, { stage: input.stage, resumeReason: input.reason }, context);
+  return {
+    aggregate: {
+      ...decision.aggregate,
+      iterationCounters: incrementIteration(task.iterationCounters, input.loop),
+    },
+    events: decision.events,
   };
 };
 
@@ -436,6 +487,29 @@ export const handBackTask = (
     },
     events: recorder.events,
   };
+};
+
+/**
+ * A stage produced an artifact.
+ *
+ * No state change: the artifact belongs to the Artifact aggregate, but `events.stream_type` has no
+ * `artifact` member (technical/03) — an artifact's history *is* its task's — so `artifact.created`
+ * is emitted on the task's stream and therefore has to come through the task's own recorder, or
+ * its `stream_seq` would collide with the next event the task emits.
+ */
+export const recordArtifact = (
+  task: Task,
+  input: { readonly artifact: ArtifactRef; readonly producedByRunId: Id },
+  context: CommandContext,
+): TaskDecision => {
+  const recorder = recorderFor(task, context);
+  recorder.emit('artifact.created', {
+    project_id: task.projectId,
+    task_id: task.id,
+    artifact: input.artifact,
+    produced_by_run_id: input.producedByRunId,
+  });
+  return { aggregate: { ...task, sequence: recorder.sequence }, events: recorder.events };
 };
 
 // ── the tail of the pipeline ─────────────────────────────────────────────────

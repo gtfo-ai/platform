@@ -6,7 +6,7 @@ import {
   InvariantViolationError,
   PermissionDeniedError,
 } from '../errors.js';
-import type { CommandContext } from '../events.js';
+import { type CommandContext, FIRST_STREAM_SEQ } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import {
   ACTIVE_RUN_STATUSES,
@@ -121,14 +121,14 @@ describe('run lifecycle', () => {
   it('enters the log at `run.created`, when the platform commits to launching it', () => {
     const created = newRun();
     expect(created.status).toBe('created');
-    expect(created.sequence).toBe(0);
+    expect(created.sequence).toBe(FIRST_STREAM_SEQ);
 
     const shared = world();
     const { aggregate, events } = startRun(created, context(shared));
     expect(aggregate.status).toBe('starting');
     expect(events.map((event) => event.type)).toEqual(['run.created']);
     expect(events[0]?.stream_type).toBe('run');
-    expect(events[0]?.stream_seq).toBe(0);
+    expect(events[0]?.stream_seq).toBe(FIRST_STREAM_SEQ);
     expect(events[0]?.correlation_id).toBe(TASK_ID);
     // The whole identity of the run, so the row can be rebuilt from the log alone.
     expect(events[0]?.payload).toMatchObject({

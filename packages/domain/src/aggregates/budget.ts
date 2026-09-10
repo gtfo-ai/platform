@@ -12,7 +12,7 @@
  */
 import type { BudgetRecord, BudgetScope, BudgetWindow, Id, IsoDateTime } from '@platform/contracts';
 import { PolicyViolationError } from '../errors.js';
-import { type CommandContext, type Decision, eventRecorder } from '../events.js';
+import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 
 /** product/09: "Thresholds: notify at 50% and 80% (configurable), block at 100%." */
 export const DEFAULT_NOTIFY_PCT = [50, 80] as const;
@@ -81,7 +81,7 @@ export const createBudget = (input: CreateBudgetInput): Budget => {
     windowStart: input.windowStart ?? null,
     notifiedPct: [],
     exhaustedNotified: false,
-    sequence: 0,
+    sequence: FIRST_STREAM_SEQ,
   };
 };
 

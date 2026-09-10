@@ -96,7 +96,15 @@ export const gitlabReplayContext = (
     gitlab: port,
     project: GITLAB_PROJECT,
     missingProject: 'acme/nope',
-    branches: { source: 'agentic/task-2', target: 'main' },
+    branches: {
+      source: 'agentic/task-2',
+      target: 'main',
+      // `instance.json` records `branches/main` as `protected: true` and `branches/agentic/task-1`
+      // as `protected: false`, both from GitLab's documented branch object.
+      protected: 'main',
+      unprotected: 'agentic/task-1',
+      missing: 'no/such-branch',
+    },
     mergeRequestIid: MR_IID,
     missingMergeRequestIid: MISSING_MR_IID,
     mergeability: {

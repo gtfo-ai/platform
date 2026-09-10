@@ -2149,6 +2149,115 @@ uid 1000 (the socket is `0600`, Q45); WP-22 must bundle `apps/runlet` to a singl
 `scripts/runlet-container-check.mjs` against the real image. Session-store resume after a runner restart is
 WP-15's half.
 
+### WP-15 — the loop runs, and four defects only running it could find
+
+**The acceptance criterion is met**: `verify:e2e` walks one feature ticket and one bug ticket from
+`ticket.matched` to `task.completed` against a migrated PostgreSQL 18, with the real event store, the real
+priority dispatcher, the real `IntegrationActionExecutor` in front of fake providers, the real in-memory
+`Jobs` adapter and `FakeClaudeRunner`. Both templates end `done`, with no escalation.
+
+**Four defects the loop found, each invisible to every tier before it.** Every one is the same shape — two
+components tested against themselves and never against each other:
+
+1. **Every aggregate opened its stream at `stream_seq` 0**, and migration 0005's
+   `events_stream_seq_positive` is `check (stream_seq >= 1)`. The domain was tested against itself and the
+   event store against hand-built fixtures whose `streamSeq` the fixture chose; WP-15 is the first code that
+   appends an aggregate's events to a store. `FIRST_STREAM_SEQ` now names it, and the two model suites assert
+   contiguity *from* it.
+2. **`state === 'active'` as a guard strands a task at the retrospective.** product/04's task states are not
+   one per stage: `ready_for_merge`, `merged` and `retro` are states the pipeline moves through under its own
+   power. The guard appeared in three places (the stage executor's re-validation, the stage-completed handler,
+   the gate job) and in the *aggregate* (`completeStage`). `isRunnableTaskState` says what was meant: not
+   stopped by a human.
+3. **A convergence signature stored in `task_stages.outcome` is overwritten by the very transition it exists
+   to stop.** `outcome` is written by whichever path closes the row — the executor writes the verdict, the
+   transition writes `returned` — so three identical CI failures never converged. Migration 0012 gives it a
+   column nothing else writes.
+4. **A gate that answers "not yet" and re-enqueues itself with no delay is a spin**: five checks in
+   milliseconds, and the task parked for a human before the pipeline it was waiting for had started. The
+   re-check is a `startAfter` now (`GATE_RECHECK_MS`), and the test moves the clock to observe it.
+
+**Two more in the test harness rather than the product**, and both are the same class — a failure the harness
+could not see:
+
+- the `IntegrationActionExecutor` was given a virtual timer nothing advanced, so the first rate-limited call
+  *hung* the suite instead of failing it (`autoAdvance` now). A hang is the worst failure mode a suite has,
+  because it reports the timeout rather than the cause;
+- **a chained dispatch's failure is invisible in the sweep report.** `SweepReport.failed` counts the event the
+  sweep took off the queue; an event three links down the chain that fails leaves *its* row queued with a
+  backoff, and the sweep that follows reports `scanned: 0`. The e2e read that as "the pipeline settled" and
+  asserted the state it had stopped in. The harness now reads `event_dispatch.error` after every sweep and
+  reports the handler's error instead — which is how the missing seeded ticket was found in one run rather
+  than by bisecting handlers. The same shape as the job-failure wrapper beside it: **a test harness has to
+  surface the failure of every asynchronous thing it drives, or it reports the symptom.**
+
+**The obligations, discharged.** `cost_unreported` branches on the `run_stopped` row's `data.reason`, not on
+the status — and because the runner takes one sink for every run, the reason arrives through
+`RunStopReasons`, a decorator the composition root installs once. The MR batcher is `stately` +
+`singletonKey: 'mr:<iid>'` + `startAfter`, never `coalesce`, and re-reads every unresolved thread on wake;
+three tests drive its three endings. Enqueues happen **after commit** through a new
+`HandlerContext.afterCommit`, whose at-most-once caveat is demonstrated by a test that kills the process
+between the commit and the callback. `isBranchProtected` is on `GitProviderPort` with a fake, a shared-suite
+case and a GitLab fixture — no down-cast. The gate schema refuses a gate that names neither `on` nor
+`command` unless it is one of the three the platform evaluates itself.
+
+**What was cut, and why.**
+
+- **The `spike` template.** It ends at a human with no MR, so it exercises none of the loop; the WP row names
+  feature, bug and chore, and all three ship.
+- **The `librarian` stage** technical/12's example template carries. It is WP-18's pipeline, and a stage whose
+  executor does not exist would park every task one step short of `done`.
+- **The CI gate's error block.** product/04 S4 wants "the failing job's error block only" in the return; this
+  returns the failing **job names** from the event. Fetching the log is `getJobLog`, whose redaction
+  obligation is **Q55** — a run-scoped credential the binding redactor cannot know — and calling it before
+  that is decided would put a token in a return reason. The gate is honest about what it read.
+- **Probation mode** (BD-006: approval for the first 5 tasks). Plan approval is implemented as
+  `never | above_size | always` with an `L` threshold; probation needs a per-project completed-task count that
+  WP-30's autonomy dial owns.
+- **`command` gates.** A gate with a `command` needs a workspace; the evaluator returns `unsupported` and the
+  task escalates with a brief naming it, rather than passing a gate nothing ran.
+
+**Assumptions, each written where the code is.** A return is attributed to a bounded loop by the stage it
+comes *from* (`RETURN_LOOPS`), and a stage with no attribution escalates — filed as **Q56**, because it is a
+product decision about custom stages. `implementation → architecture` and `architecture → refinement` share
+`architecture_revisions` deliberately. A verdict is read from the artifact's structured `data` and never from
+prose; a type with no verdict field (`ImplementationPlan`, `ImplementationNotes`) treats "the artifact the
+template asked for validated" as the approval, which is a fact about the platform's validation rather than a
+field the model can omit. `rebase` joins BD-008's loops with product/04 S6b's two attempts.
+
+**For whoever wires this into `apps/server`.** `createPipelineRuntime` returns the handlers and starts the
+workers; nothing registers them yet, because a project's integration **bindings** (which GitLab, which Jira,
+with which credentials) have no loader — that is the missing piece between this and a running instance, and
+it is listed under discovered work.
+
+**Round 2 — the two branches the tests never executed were both guards.** Review round 1 returned
+REQUEST_CHANGES with two majors of one shape: an implementation that looks correct and that the reviewer had
+to **mutate** to show was unheld.
+
+- **The code-review convergence escalation** (product/04 S5, `saga.ts`) was executed by no test in any tier:
+  `return false;` before `recentStageSignatures` disabled it and all 3659 unit+contract tests stayed green
+  (the reviewer's measurement). It is one of the two behaviours migration 0012's `signature` column exists
+  for, and the one defect 3 above was fixed *for* — a lesson kept in prose while nothing held the code
+  (rules 30 and 10). It now has the CI half's shape: two reviews with identical structured findings escalate
+  with `the review reported the same findings as the previous round` at `code_review` counter **1** of 3, and
+  a second review with *different* findings carries on instead. Re-running the mutation kills
+  `stops when the re-review reports the same findings, instead of burning the loop` by name, and the message
+  is the distinction itself — `expected 'code_review iteration limit of 3 reac…'`, the loop merely running out.
+- **The CI gate's failure branch** (`gates.ts`) was untested everywhere **and fails open**: settling
+  `CI_TERMINAL_FAIL` as `{passed: true}` also left 3659 tests green, and no e2e drove it — the harness's
+  `ciStatus: 'failed'` had no consumer. `ci_gate` is a `BUILTIN_GATE_STAGE_ID`, so the stage job polls
+  `pipelineStatus` whatever the template's `on` says, and the bug therefore **advances a task to code review
+  on red CI**. Fourth fail-open guard this session (rule 14). `gates.test.ts` now calls the evaluator directly
+  over `failed`/`canceled`/`skipped`, asserting `passed: false` **and** the `detail` — the Q55 cut, so closing
+  Q55 breaks a test rather than nothing — and the e2e drives a red pipeline end to end. Under the mutation
+  that e2e dies with `expected 'ready_for_merge' to be 'needs_human'`: the fail-open, observed.
+
+The gate evaluator's whole **refusal** surface is executed rather than inspected as well (a `command` gate, a
+custom gate with and without an event, a task with no merge request, a merge request with no head sha, a
+project with no git binding). `isPlatformGate` was exported and imported nowhere, and is deleted. product/04
+S4 now carries one bullet saying what the platform does today and pointing at **Q55**, because the cut lived
+only in this ledger and docs win over code (rule 8).
+
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 
 The finding worth keeping from the web foundation, because it is the other half of the defect that cost
@@ -2352,6 +2461,24 @@ recall check, also stated there; (3) markdown continuation ignores list and head
 sound while no Markdown citation exists and is the reason the limit is written down.
 
 ## Discovered work (not in plan)
+
+- **Nothing loads a project's integration bindings, so the pipeline cannot be wired into
+  `apps/server` yet (WP-15).** `createPipelineRuntime` takes `PipelineIntegrations` — a git binding
+  and a task-management binding, each an adapter plus its `IntegrationRef` — and the platform has
+  no code that reads `integrations` / project bindings out of the database and builds them. Every
+  provider adapter, the executor and the pipeline are ready; the composition root has nothing to
+  hand them. It is a small use case (`bindingsFor(projectId)`) plus the secret resolution TD-020
+  describes, and it blocks the first *real* instance rather than any test.
+- **`ProviderCreateInput.secrets` is not connected to `exactSecretRedactor` (found at WP-15,
+  untouched).** A composition root can hand a provider a secret the redactor never learns. The
+  redaction fix on `main` closed the *walk*; this is the wiring. Q55 is the harder half of the same
+  question (a run-scoped credential cannot be in a binding-time redactor at all).
+- **The CI gate returns failing job **names**, not the log excerpt product/04 S4 asks for (WP-15).**
+  `getJobLog` is the call, and its redaction obligation is Q55's. When Q55 is decided, the gate
+  should fetch the failing job's log through the per-run redactor and put the error block in the
+  return reason — it is the difference between "test:unit failed" and a developer stage that knows
+  what to fix. Round 2 wrote the cut into **product/04 S4** itself and pinned the `detail` string in
+  `gates.test.ts`, so the change is a failing test rather than a silent improvement.
 
 - **An unlabelled `ws-<run-id>` volume: the e2e half is fixed, the production half is a decision nobody
   has taken (WP-14 round 3).** Standing rule 60 has the measurement. What is *done* here is the harness:

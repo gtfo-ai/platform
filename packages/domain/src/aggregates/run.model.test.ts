@@ -124,10 +124,12 @@ const assertInvariants = (model: RunModel, real: RunReal): void => {
     expect(real.run.terminalReason).not.toBeNull();
   }
 
+  // Contiguous from `FIRST_STREAM_SEQ`: the database's `stream_seq >= 1` check refuses a stream
+  // that opens at zero (migration 0005).
   expect(real.events.map((event) => event.stream_seq)).toEqual(
-    real.events.map((_, index) => index),
+    real.events.map((_, index) => index + 1),
   );
-  expect(real.run.sequence).toBe(real.events.length);
+  expect(real.run.sequence).toBe(real.events.length + 1);
   expect(new Set(real.events.map((event) => event.id)).size).toBe(real.events.length);
 };
 

@@ -60,7 +60,15 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
 
 ## Where to look
 - HTTP, auth and the SSE stream: `docs/technical/08-api-and-realtime.md`; the composition root is `apps/server/src/runtime.ts` and the wire contract of the stream is `apps/server/src/sse/hub.ts`.
-- Pipeline behaviour: `docs/product/04-pipeline.md`, `docs/technical/02-domain-model-and-events.md`.
+- Pipeline behaviour: `docs/product/04-pipeline.md`, `docs/technical/02-domain-model-and-events.md`. The
+  interpreter is `packages/domain/src/pipeline/` — the shipped templates as data, and a pure
+  `interpret(pipeline, signal) → decision` that reads them; the sagas, the stage executor and the
+  `PipelineStore` port are `packages/application/src/pipeline/`, and `createPipelineRuntime` is what a
+  composition root registers. A stage runs in a `stage.execute` job, never in an event handler: the shape is
+  transaction / no transaction / transaction, so no database connection is held while a run is, and the job
+  worker's concurrency is **additive** to the dispatcher's `2 × concurrency + 1` pool floor. Everything a
+  handler enqueues goes through `HandlerContext.afterCommit`, because `Jobs.enqueue` does not join the
+  handler's transaction — and every job re-validates on fire, since a timer cannot be cancelled (TD-004).
 - Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`. The run shim `agentic-runlet` (TD-025) is `packages/infrastructure/src/runlet/` — frame protocol in `@platform/contracts`, shim, runner-side `SpawnedProcess`, credential helper — with `apps/runlet` as its entrypoint and nothing else; `node scripts/runlet-container-check.mjs` is its Docker verification (not a `verify` target: it needs a daemon), written up in `docs/research/12-run-shim-verification.md`.
 - Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`; the SPA's composition root is `apps/web/src/app/app.tsx`, the client half of the SSE contract is `apps/web/src/realtime/client.ts`, and the untrusted-text rules are `apps/web/src/ui/untrusted-text.ts`. Work plan: `docs/technical/13-implementation-plan.md`.
 - Open questions: `docs/OPEN-QUESTIONS.md`; verification backlog: `docs/TODO.md`.

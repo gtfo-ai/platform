@@ -97,7 +97,15 @@ runGitProviderContract({
       port,
       project: PROJECT,
       missingProject: 'acme/nope',
-      branches: { source: 'agentic/task-2', target: 'main' },
+      branches: {
+        source: 'agentic/task-2',
+        target: 'main',
+        // The fake protects the default branch and nothing else; `agentic/task-1` exists because
+        // the merge request seeded above opened from it.
+        protected: 'main',
+        unprotected: 'agentic/task-1',
+        missing: 'no/such-branch',
+      },
       mergeRequestIid: existing.ref.iid,
       missingMergeRequestIid: 4242,
       mergeability: {
