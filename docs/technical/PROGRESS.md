@@ -196,6 +196,12 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `vbscript:` and `file:`. The only thing preventing execution was **React 19.3 rewriting the attribute** —
    an accidental defence that nothing asserted, dependent on a framework version. A scope claim is a
    checkable claim (rules 17, 30, 33).
+48. **A name-then-`=` guard cannot see the spread, `createElement` or `setAttribute` spelling of the same
+   write.** WP-20's `no-html.test.ts` — itself created to enforce rule 44 — caught `href={u}`, `href = {u}`,
+   a template literal and `location.href = u`, and **missed** `{...{ href: u }}`, `createElement('a', {href})`,
+   `el.setAttribute('href', u)` and `Object.assign`. A file containing two of those passed 16/16, while the
+   docblock claimed a property form "does not put an attribute on an element". A syntactic guard is a claim
+   about *syntax*; the DOM is reached by more spellings than one grep knows.
 47. **An accidental defence is measured, not assumed — and this one covered a quarter of what it appeared
    to.** WP-20's five unguarded `href` sites were said to be saved by React 19.3 rewriting the attribute.
    Round 2 measured all four schemes: React blocks `javascript:` and **not** `data:`, `vbscript:` or `file:`.
