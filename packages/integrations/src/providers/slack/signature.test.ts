@@ -9,7 +9,11 @@
  * a header — and the controls fail. Neither failure can hide behind the other.
  */
 import { createHmac } from 'node:crypto';
-import type { WebhookDelivery } from '@platform/application';
+import {
+  exactSecretRedactor,
+  noSecretsRedactor,
+  type WebhookDelivery,
+} from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -241,23 +245,29 @@ describe('constantTimeEquals', () => {
 describe('slackDeliveryKey', () => {
   it('keys an Events API delivery on its event_id, which survives a redelivery', () => {
     const body = JSON.stringify({ type: 'event_callback', event_id: 'Ev0FAKE0001' });
-    const first = slackDeliveryKey({ headers: {}, body });
-    const redelivered = slackDeliveryKey({ headers: { 'x-slack-retry-num': '2' }, body });
+    const first = slackDeliveryKey({ headers: {}, body }, noSecretsRedactor());
+    const redelivered = slackDeliveryKey(
+      { headers: { 'x-slack-retry-num': '2' }, body },
+      noSecretsRedactor(),
+    );
     expect(first).toBe('slack:event:Ev0FAKE0001');
     expect(redelivered, 'a retry of the same event keys the same').toBe(first);
   });
 
   it('keys an interaction on the click, not on the delivery', () => {
     const click = (actionTs: string): string =>
-      slackDeliveryKey({
-        headers: {},
-        body: JSON.stringify({
-          type: 'block_actions',
-          team: { id: 'T0FAKETEAM' },
-          user: { id: 'U0FAKEDEV1' },
-          actions: [{ action_id: 'agentic_answer', action_ts: actionTs }],
-        }),
-      });
+      slackDeliveryKey(
+        {
+          headers: {},
+          body: JSON.stringify({
+            type: 'block_actions',
+            team: { id: 'T0FAKETEAM' },
+            user: { id: 'U0FAKEDEV1' },
+            actions: [{ action_id: 'agentic_answer', action_ts: actionTs }],
+          }),
+        },
+        noSecretsRedactor(),
+      );
     expect(click('1780000000.000100')).toBe(
       'slack:action:T0FAKETEAM:U0FAKEDEV1:agentic_answer:1780000000.000100',
     );
@@ -270,12 +280,73 @@ describe('slackDeliveryKey', () => {
   });
 
   it('refuses a delivery with nothing to key on', () => {
-    expect(() => slackDeliveryKey({ headers: {}, body: 'not json' })).toThrow(/not JSON/);
-    expect(() => slackDeliveryKey({ headers: {}, body: '{"type":"event_callback"}' })).toThrow(
-      /nothing to key on/,
+    expect(() => slackDeliveryKey({ headers: {}, body: 'not json' }, noSecretsRedactor())).toThrow(
+      /not JSON/,
     );
-    expect(() => slackDeliveryKey({ headers: {}, body: '{"type":"url_verification"}' })).toThrow(
-      /nothing to key on/,
-    );
+    expect(() =>
+      slackDeliveryKey({ headers: {}, body: '{"type":"event_callback"}' }, noSecretsRedactor()),
+    ).toThrow(/nothing to key on/);
+    expect(() =>
+      slackDeliveryKey({ headers: {}, body: '{"type":"url_verification"}' }, noSecretsRedactor()),
+    ).toThrow(/nothing to key on/);
+  });
+
+  /**
+   * **The key is stored, so a secret in it outlives a log line.** Every part Slack keys on comes
+   * out of the delivery body, which is untrusted provider text (BD-022); the platform writes the
+   * key to `webhook_deliveries` and compares it on every later delivery. Before this parameter
+   * existed the function took no redactor at all while the same object literal's `normalise` did
+   * — the third instance of the defect the previous commit closed for Jira and GitLab (rule 49).
+   *
+   * The refusal **cuts** to 32 characters, and a cut applied to unredacted text leaves a fragment
+   * no exact-match redactor can find again, which is why redaction precedes the `slice`.
+   */
+  describe('is redacted, because a delivery body is provider text nothing else on this path redacts', () => {
+    const PLANTED = 'FAKE-PLANTED-slack-signing-secret-0123456789';
+    const PLACEHOLDER = '[REDACTED:integration:planted]';
+    const planted = (): ReturnType<typeof exactSecretRedactor> =>
+      exactSecretRedactor([{ name: 'planted', value: PLANTED }]);
+
+    it('redacts the event key it returns, which the platform stores and compares', () => {
+      expect(
+        slackDeliveryKey(
+          {
+            headers: {},
+            body: JSON.stringify({ type: 'event_callback', event_id: `Ev-${PLANTED}` }),
+          },
+          planted(),
+        ),
+      ).toBe(`slack:event:Ev-${PLACEHOLDER}`);
+    });
+
+    it('redacts the interaction key, whose five parts all come out of the body', () => {
+      expect(
+        slackDeliveryKey(
+          {
+            headers: {},
+            body: JSON.stringify({
+              type: 'block_actions',
+              team: { id: `T-${PLANTED}` },
+              user: { id: `U-${PLANTED}` },
+              actions: [{ action_id: `a-${PLANTED}`, action_ts: `1780000000.${PLANTED}` }],
+            }),
+          },
+          planted(),
+        ),
+      ).toBe(
+        `slack:action:T-${PLACEHOLDER}:U-${PLACEHOLDER}:a-${PLACEHOLDER}:1780000000.${PLACEHOLDER}`,
+      );
+    });
+
+    it('redacts before the 32-character cut, so the refusal carries no fragment', () => {
+      let caught: unknown;
+      try {
+        slackDeliveryKey({ headers: {}, body: JSON.stringify({ type: PLANTED }) }, planted());
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error).message).not.toContain(PLANTED.slice(0, 12));
+      expect((caught as Error).message).toContain(PLACEHOLDER.slice(0, 12));
+    });
   });
 });

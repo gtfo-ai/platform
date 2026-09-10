@@ -2242,7 +2242,100 @@ to the next is a hypothesis about the next one's environment.** WP-13 measured o
 measured in a container; WP-14 could, and did. The hand-off was still right — it is what caused the
 measurement, and it cost less than the ledger error it exposed.
 
+### Slack redaction + exclusivity claims + census timeouts (implementer notes, branch `fix/slack-redaction-and-census`)
+
+The three follow-ups the redaction round-2 reviewer found, in one branch. All three are closed.
+
+**Part 1 — `slackDeliveryKey` was the third instance, and the class now has a check.** Reproduced first,
+executed rather than asserted: `slackDeliveryKey({headers:{},body:'{"type":"event_callback","event_id":"Ev-FAKE-PLANTED-…"}'})`
+returned `slack:event:Ev-FAKE-PLANTED-…`. It now takes a **required** `SecretRedactor`, redacts the key it
+returns, and redacts **before** the refusal's 32-character cut. Both mutations die by *named* assertions
+(rule 3): the "supplied but not used" mutant — parameter kept required, body ignored, which is rule 35's
+exact shape and leaves typecheck and every call site green — fails three named tests.
+
+**The enumeration the last round did not do, in full.** Every path that turns provider text into a stored
+identifier:
+
+| path | what it copies | state |
+|---|---|---|
+| `jiraDeliveryKey` | `x-atlassian-webhook-identifier` header value | redacted (previous commit) |
+| `gitLabDeliveryKey` | `object_attributes.*`, `object_kind` into a cut refusal | redacted (previous commit) |
+| `slackDeliveryKey` | `event_id`, or `team.id`/`user.id`/`action_id`/`action_ts` | **was not — fixed here** |
+| `fakeDeliveryKey` (3 fakes) | the fake's id header | no redactor; the fakes accept none (below) |
+| loki, sentry | — | **no `inbound` member at all**, now asserted at runtime rather than read off a type |
+| `external_id` on every inbound identity | delivery body fields | covered: all three `normalise` paths `redactJson` the whole parsed document *before* mapping |
+| transport responses | provider documents and header names | covered at each adapter's choke point |
+
+`packages/integrations/src/providers/delivery-key-redaction.test.ts` is the mechanical check (rule 30). Its
+scope is **read off the disk** — every directory under `providers/` must have a recipe, so a sixth provider
+fails it the moment the directory exists — and it drives each real registration's `create` with
+`noSecretsRedactor()` as the caller's redactor, so only the adapter's own composed redactor can be what
+redacts. That derivation is the point: `emitted-secrets.test.ts` derives the *member* list from
+`Object.keys(port)` but its *provider* list is hand-written and covers Jira and GitLab only, which is
+precisely why Slack's key sat outside it.
+
+**Part 2 — three false exclusivity claims, not two.** `redaction.ts`'s "two sites owe it today" and
+`loki/provider.ts`'s "the only provider whose object keys come from the provider" were the two briefed; the
+sweep found the Loki claim **twice** in that file (docblock and the comment at `capLabelSet`), and a third,
+unrelated one: `slack/http.ts` documented `nullOnError` as "`users_not_found` is the only one the adapter
+uses" while `client.ts` passes `['user_not_found', 'users_not_found']` for `users.info`. All four corrected.
+
+*No mechanical check was added for this class, deliberately.* Nothing can decide by grep which object keys
+come from a provider, so a checker would either be a keyword sweep that fires on legitimate prose (the
+failure mode `conflict:check` was designed around) or a hand-maintained list — the thing rule 7 forbids.
+What is done instead is **stop repeating the roll in N files**: the list of sites that owe a key pass now
+lives only in technical/06 § "Redact at the transport" rule 4, and both docblocks point at it and state
+*why* they may not carry a count. An exclusivity claim maintained in one place can at least be reviewed;
+one maintained in three is rule 41's shape applied to prose.
+
+**Part 3 — one bound for one class, placed by measurement.** `{ timeout: 25_000 }` on both censuses, and
+the vitest option-object form was proved to be honoured (mutated to `{ timeout: 1 }` → "Test timed out in
+1ms") rather than assumed. Measured on this host (14 cores), load average quoted with every figure (rule 64):
+
+| condition | load | loki census | sentry census |
+|---|---|---|---|
+| file alone | 11 | 1,103 ms | — |
+| full unit+contract run | 17 / 26 / 29 | 2,824 / 1,754 / 1,634 ms | 1,731 / 1,404 / 1,332 ms |
+| saturated | 57 | **failed** at 5 s (10,983 ms to abort) | **failed** at 5 s (8,555 ms to abort) |
+| saturated, 120 s budget | 72 → 96 | **9,640 ms** | **7,531 ms** |
+
+**This lowers the failure threshold the reviewer reported.** Rule 64 records timeouts at load ≥ 110; both
+censuses in fact fail the 5 s default at load ~57, and the same work dilates **8.7x** between load 11 and
+load 96. The bound: worst completed sample 9.6 s at load 96 → ~13.8 s at the load 137 this session has
+actually run at → ×1.46 for the spread between two samples at one load (the reviewer's 2,488 vs 3,638 at
+load 36) ≈ 20 s, so 25 s clears the distribution rather than being a round multiple of the old number
+(rule 57). **Neither sample is reduced**: 192-per-million and 100,027,762 are quoted in `provider.ts`,
+`mapping.ts`, `config.ts`, technical/06 and rule 32, and a census that shrinks its denominator to run
+faster invalidates every citation of itself (rule 39). Both tests assert *counts* and never a duration, so
+the timeout is infrastructure and not a performance guard — which is the confusion that let a 5 s default
+read as a 4.5x margin.
+
+**Assumptions recorded:** (1) 25 s is one bound for both, because they are one class and a reviewer asked
+for them fixed together; (2) the fakes are out of scope for the delivery-key check, stated in its docblock
+rather than silently.
+
+**A load-generation footgun worth the ledger (sharpens rule 25).** The orchestrator retracted permission to
+generate load mid-task, after two kernel panics on this host; the measurements above were already taken and
+every generator was verified dead (`pgrep` clean, explicit per-PID kills, no `2>/dev/null`). But the first
+attempt failed in a new way: a script holding `trap 'kill 0' EXIT INT TERM` **cannot be killed from
+outside** — `kill -TERM` fires its own handler, which runs `kill 0`, which re-signals the script, and it
+spun at 100% CPU until `kill -KILL`. Worse, `kill 0` also killed the `tail` on the other end of the
+pipeline, so the tool call returned exit 144 with **no output**: three minutes of load generated and zero
+data collected. The recipe rule 25 prescribes is right for cleanup-on-exit and wrong for a process you may
+need to stop: put the trap in a wrapper that does nothing else, make each worker **self-bounding by wall
+clock** so an orphan expires without any signal, and write output to a **file** rather than a pipe a trap
+can kill.
+
 ## Discovered work (not in plan)
+
+- **`emitted-secrets.test.ts` covers Jira and GitLab only.** Its member enumeration is derived
+  (`Object.keys(port)`) but its provider list is not, and Slack's unredacted dedup key is exactly what that
+  gap hid. Slack, Sentry and Loki owe the same walk — every string they emit, planted, through the real
+  registration with the caller disarmed. Sizeable: the GitLab section alone is ~240 lines.
+- **The three fakes' `fakeDeliveryKey` takes no redactor, and the fakes accept none.** A fake that does not
+  redact where the real adapter does is *kinder* than production, which is standing rule 1's forbidden
+  direction, and every later WP's unit tier trusts the fakes. Either give the fakes a redactor or record
+  the divergence explicitly in each fake's register; today it is neither.
 
 - **`loki/index.test.ts`'s million-iteration divergence census is a timeout flake under a full parallel
   run.** It failed once inside `pnpm run -s verify` during the round-2 redaction fix and passed on the next

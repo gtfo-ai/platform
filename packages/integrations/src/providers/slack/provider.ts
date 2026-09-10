@@ -351,7 +351,9 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         { signingSecret, toleranceSeconds: config.signature_tolerance_seconds },
         clock,
       ),
-    deliveryKey: (delivery) => slackDeliveryKey(delivery),
+    // The same composed redactor `normalise` gets: the key is stored and compared, so a secret in
+    // it outlives a log line (standing rules 31 and 49).
+    deliveryKey: (delivery) => slackDeliveryKey(delivery, redactor),
     normalise: async (
       delivery: WebhookDelivery,
       context: InboundContext,

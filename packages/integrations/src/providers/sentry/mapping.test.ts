@@ -316,8 +316,33 @@ describe('mapBreadcrumbs', () => {
    * exactly what the pre-fix `category: crumb.category ?? null` did. Checked against the real
    * pre-fix `mapBreadcrumbs` (commit `c150214^`) on this input: the two outputs are byte-identical,
    * so this cannot drift from the defect the way a hand-written copy of it would.
+   *
+   * ## Why this one carries an explicit timeout (standing rules 57 and 64)
+   *
+   * Building 50 breadcrumbs of three 2,000,000-byte fields and serialising ~100 MB of JSON is real
+   * work — and it is the **same class** as `loki/index.test.ts`'s million-iteration census, not a
+   * second, separate problem: two tests whose cost is CPU-bound, measured against a 5 s default
+   * that moves with the machine while the work does not. They are fixed together because fixing
+   * one and noting the other leaves the class open.
+   *
+   * | condition | load average | this census |
+   * |---|---|---|
+   * | inside the full unit+contract run | 17 / 26 / 29 | 1,731 / 1,404 / 1,332 ms |
+   * | the same, with the machine saturated | 72 → 96 | **7,531 ms** |
+   *
+   * At load ~57 it **failed** against the 5 s default at 8,555 ms to abort, and the reviewer who
+   * found this saw it time out in the same heavy run in which the Loki census timed out 3 of 3 at
+   * load ≥ 110. The bound is the same 25 s, placed by the same arithmetic — worst completed sample
+   * 9.6 s (Loki, the slower of the pair) at load 96, ~13.8 s at the load 137 this session has
+   * actually run at, ×1.46 for the spread between two samples at one load — and for the same
+   * reason: this test asserts *byte counts*, never a duration, so the timeout is infrastructure
+   * rather than a performance guard. The hostile input is **not** shrunk to buy speed: 100,027,762
+   * is cited by `mapping.ts`, `config.ts`, technical/06 and the ledger, and this test is what
+   * produces it (rule 39).
    */
-  it('emitted 100,027,762 bytes of JSON at the shipped defaults, and emits 79,012 now', () => {
+  it('emitted 100,027,762 bytes of JSON at the shipped defaults, and emits 79,012 now', {
+    timeout: 25_000,
+  }, () => {
     const defaults = sentryConfigSchema.parse({ organization: 'acme-example' });
     const encoder = new TextEncoder();
     const enormous = 'X'.repeat(2_000_000);

@@ -87,14 +87,20 @@ export const exactSecretRedactor = (secrets: Iterable<InjectedSecret>): SecretRe
    * first entry and marking the set. Any later port whose keys come from the provider owes the
    * same, and the check is "who chooses the key", not "who wrote the schema".
    *
-   * **Two sites owe it today, and both discharge it where they emit:** Loki's label names, and
-   * Jira's `ErrorCollection.errors`, whose keys are field names Jira chose and which
-   * `jira-cloud/client.ts` interpolates into an `IntegrationError` message — a reviewer read a
-   * planted credential out of one, so `detailOf` now runs the line it composes through
-   * `redactText`. The pattern generalises: *the emitting site redacts the key, because only it
-   * knows what a collision costs there.* Widening this walk to rewrite keys would take that
-   * judgement away from both — Loki counts a collision into its truncation marker, and a shared
-   * walk has nowhere to report one.
+   * The pattern generalises: *the emitting site redacts the key, because only it knows what a
+   * collision costs there.* Widening this walk to rewrite keys would take that judgement away —
+   * Loki counts a collision into its truncation marker, and a shared walk has nowhere to report
+   * one.
+   *
+   * **Which sites owe it is not maintainable from here.** This docblock said "two sites owe it
+   * today" and named Loki's label names and Jira's `ErrorCollection.errors`; the *same commit that
+   * wrote the sentence* added a third — `gitlab/http.ts` redacts response header **names**, which
+   * are provider-chosen keys of exactly this class — and the sentence survived the change that
+   * falsified it (standing rule 63). A count of other files cannot be checked from inside one of
+   * them, and nothing mechanical can decide which object keys come from a provider, so the list
+   * lives in **`docs/technical/06-integrations-architecture.md` § "Redact at the transport"**,
+   * rule 4, which is where a reviewer of a *new* provider is already reading. This ring states the
+   * obligation; the doc holds the roll.
    */
   const redactValue = (input: JsonValue): RedactionOutcome<JsonValue> => {
     if (typeof input === 'string') {

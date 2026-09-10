@@ -99,11 +99,19 @@
  *     `redactJson` walks string **values** and leaves object keys alone by design, which
  *     `redaction.ts` states and justifies ("the platform never builds a key out of secret
  *     material, and rewriting keys could collide two fields into one"). That justification is
- *     about keys the *platform* writes. Loki is the only provider in this repository whose object
- *     keys come from the **provider** — a stream is `{"<label name>": "<value>"}` — so
- *     `{"<secret>": "v"}` survived the one pass in `http.ts` verbatim in `queryRange` and in
- *     `series` (review round 2; Sentry is immune because its tags are `[{key, value}]`, where the
- *     key is a value).
+ *     about keys the *platform* writes. A Loki stream is `{"<label name>": "<value>"}`, so a label
+ *     name is provider text in key position, and `{"<secret>": "v"}` survived the one pass in
+ *     `http.ts` verbatim in `queryRange` and in `series` (review round 2; Sentry is immune because
+ *     its tags are `[{key, value}]`, where the key is a value).
+ *
+ *     This entry used to add "Loki is the only provider in this repository whose object keys come
+ *     from the provider". It was true when it was written and false a work package later — Jira's
+ *     `ErrorCollection.errors` and GitLab's response header names are the same class — and it
+ *     survived the commit that falsified it, which is standing rule 63: an exclusivity claim is a
+ *     statement about every *other* file and cannot be maintained from inside the file that makes
+ *     it. The roll of sites that owe a key pass is
+ *     `docs/technical/06-integrations-architecture.md` § "Redact at the transport", rule 4. What
+ *     this file can say for itself is the sentence below, and it is checkable here.
  *
  *     The choice here was between recording the divergence and closing it. It is **closed**, and
  *     locally: `capLabelSet` — the only place this adapter emits a provider key — redacts the name
@@ -462,9 +470,11 @@ export const createLokiProvider = (options: LokiProviderOptions): LokiProvider =
     let redactions = 0;
     for (const [name, value] of kept) {
       // Divergence 9: `redactJson` walks string **values**, so the one pass in `http.ts` does not
-      // reach a label *name*. Loki is the only provider whose keys come from the provider, and the
-      // name is redacted here — before the cap, like every other string in this adapter — rather
-      // than by widening the shared helper for the one caller that needs it.
+      // reach a label *name*, which is provider text in key position. The name is redacted here —
+      // before the cap, like every other string in this adapter — rather than by widening the
+      // shared helper, because a collision is only costable where the emission happens. (The
+      // "only provider whose keys come from the provider" this comment used to claim was
+      // falsified by Jira and GitLab; see the divergence register at the top of this file.)
       const redactedName = redactor.redactText(name);
       redactions += redactedName.count;
       const cappedName = capBytes(redactedName.value, config.max_label_bytes, 'max_label_bytes');
