@@ -283,14 +283,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-10 | Slack provider | WP-07 | yes | DONE | `fbf0928` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` `786ac46` | +218 tests; 29 mutations; review round 1 running |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
-| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | TODO | — | |
+| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | IN_PROGRESS | worktree | started session 2; large-stdout conformance must not run against WP-12's fake |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
-| WP-20 | Web app foundation (TD-013) | WP-06 | yes | TODO | — | |
+| WP-20 | Web app foundation (TD-013) | WP-06 | yes | IN_PROGRESS | worktree | started session 2; scoped as a foundation, screens declared complete-or-stub |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evalua | WP-16, WP-17, WP-20 | no | TODO | — | |
 | WP-22 | Docker images (base, runtime, launcher, product), Compose (profiles `l | WP-14 | no | TODO | — | |
 | WP-23 | Docs | WP-22 | yes | TODO | — | |
