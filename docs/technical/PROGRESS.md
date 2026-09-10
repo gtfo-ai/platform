@@ -170,6 +170,17 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    passes the whole suite.** Changing WP-10's NUL guard from `indexOf(0)` to `indexOf(0, 1)` — blind to a
    NUL at byte 0 — left **all 2353 tests green**. Manual canaries are evidence that expires when the session
    does. `scripts/check-ignored.test.ts` is the precedent: give every executable guard a real test.
+37. **A cap audit that lists the fields it capped is not a sweep of the fields it emits — enumerate the
+   output type's members, not the call sites.** Three WP-11 rounds capped a breadcrumb's `message` and never
+   looked at `category` and `level` sitting beside it in the same object, both `z.string().nullish()`.
+   Measured at the shipped defaults with 2 MB fields: **200,106,301 bytes** out, `message` cut to 2046 and
+   the other two through at 2,000,000 each, no marker and nothing setting `truncated`. Round 3's own audit
+   claim — "the one string routing around every cap was Sentry's health probe" — was false when a reviewer
+   enumerated the *type* instead of the call sites.
+38. **`key in record` is not `Object.hasOwn(record, key)`.** It walks `Object.prototype`, so tags named
+   `toString`, `constructor` or `__proto__` are silently dropped — and when the key was capped first, it
+   compares the **raw** name against **capped** ones, so two names colliding after the cap keep the *last*
+   while the docblock (and Loki, citing it as precedent) says the first.
 36. **A marker-bearing cap is not idempotent.** WP-11's `mapTags` output exceeds `maxBytes` by the length
    of its own truncation marker, so `capText` re-cuts it and the two disagree — `tags.environment` reports
    "976 more bytes" while `environment` reports "58". Applying a cap twice measures the already-truncated
@@ -281,7 +292,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-08 | Jira Cloud provider | WP-07 | yes | DONE | `af206c7` | 2 review rounds + pre-merge fixes; rules 17, 18, 22; shared fixture-provenance suite lives here |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `27928b2` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
 | WP-10 | Slack provider | WP-07 | yes | DONE | `fbf0928` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
-| WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` `786ac46` | +218 tests; 29 mutations; review round 1 running |
+| WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` | 3 rounds spent; one blocking finding carved to **WP-11a**; rules 31, 32, 35, 36, 37, 38 |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | IN_PROGRESS | worktree | started session 2; large-stdout conformance must not run against WP-12's fake |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
@@ -1726,6 +1737,48 @@ is not source (an attribute, an ignore rule authored for that purpose) is deriva
 constant in our script names it is drift. A defensible middle is to skip only names that are OS metadata by
 universal convention, name them in one place shared with the provenance walk, and **fail loudly on anything
 else** — the two guards should not carry two different answers to the same question.
+
+### WP-11 — three rounds spent, and the round-3 finding carved out as WP-11a
+
+**Round 3 returned REQUEST_CHANGES**, so WP-11's bounded three review rounds are used. The protocol says a
+WP is then marked BLOCKED — but the ledger already has a better precedent for this exact situation, set by
+**WP-02a** and **WP-06a**: *the round-3 finding is a newly discovered instance, not a repeated failure to fix
+the same thing*, so it is carved into its own work package with its own rounds rather than parking the whole
+package.
+
+**The difference from WP-06a, and why WP-11 does not merge yet.** WP-06 was merged with its layer carved out
+because a working server skeleton was blocking WP-07 and WP-20. **Nothing is waiting on WP-11** — the five
+providers are leaves — and the finding is a 200 MB blow-up into a context pack and an `integration_actions`
+row. Merging that to avoid an awkward status would be the wrong trade. WP-11 merges when WP-11a is done.
+
+**The blocking finding.** `sentry/mapping.ts:258-259` emits `category` and `level` raw, both
+`z.string().nullish()`. At the shipped defaults with 2 MB fields, `mapBreadcrumbs` produced **200,106,301
+bytes**: `message` cut to 2046, the other two straight through at 2,000,000 each, no marker, nothing setting
+`truncated`. It also falsifies `sentry/config.ts:73-77`, which claims "every field the adapter emits is
+bounded by a named cap… the sum of them" — an authoritative statement that is simply untrue, which docs-win
+makes worse rather than better.
+
+**Why three rounds missed it, and this is rule 37**: every round audited the *call sites that cap things*
+rather than the *members of the type being emitted*. Round 3 even stated the sweep was complete — "the one
+string routing around every cap was Sentry's health probe" — and that claim was false. Enumerating
+`BreadcrumbOut`'s fields finds it in a minute; reading the capping code does not.
+
+**Also found:** `sentry/mapping.ts:300` uses `key in record`, which walks `Object.prototype` (so tags named
+`toString`, `constructor` or `__proto__` vanish) and compares the **raw** key against **capped** keys, so a
+post-cap collision keeps the **last** while its own docblock — and `loki/provider.ts:423`, citing it as
+precedent — says the first. Rule 38.
+
+**And a stale reference that is not WP-11's**: `slack/http.ts:5` and `test/fixtures/http/slack/SOURCES.md:112`
+cite **Q41** for "not using `@slack/web-api`"; that question is **Q42**. WP-10 went stale after its own
+renumber, and it is already on `main`.
+
+**What round 3 confirmed sound**, so WP-11a need not revisit it: the marker-inside-the-bound reasoning holds
+under a marker-shaped suffix, the exact bound, one byte over, a multi-byte straddle and double application —
+output is always ≤ `maxBytes` and a second pass is identical, with the reservation sized for the maximum
+possible count so the real marker cannot overflow. Divergence 9 carries a positive assertion on both methods;
+`queryRange` and `series` both route through `capLabelSet`; the collision count is right and the marker leaks
+no key; all seven `Q43` edits are correct and `Q40`–`Q43` each appear once. **Nine of nine mutations died**,
+including two the reviewer invented.
 
 ## Discovered work (not in plan)
 
