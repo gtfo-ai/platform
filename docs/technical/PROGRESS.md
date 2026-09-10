@@ -1330,7 +1330,28 @@ with those files present, green **8 of 8** with them moved aside. The orchestrat
 point worth recording: **`main` was not flaky, it was one work package away from being flaky**, and WP-08,
 WP-09 and WP-12 land roughly 560 tests between them.
 
-The fix is queued as a `ci-fix` with three mutations it must still fail (remove the per-topic `reset`, remove
+**Fixed and verified** (`ci-fix`, merged to `main`). The implementer reproduced it before touching anything —
+28 spinning processes on a 14-core box, then the file six times: **1 green, 5 red**, wire lengths 55/91/111/210/248
+against 268 — and then **injected the timer rather than loosening the assertion**. `withDeadline`'s `setTimeout`
+is the hub's only clock, so `vi.useFakeTimers` hands the test the moment the deadline fires; a new
+`stalledOnGate` helper drives the chain to the one place it cannot leave and only then advances 20 ms. The
+wire is still asserted **exactly and in order**, with a new pre-deadline assertion that the drain stopped
+partway, and `withinTurns` bounds the drain in event-loop turns rather than milliseconds. `hub.ts` untouched.
+
+The orchestrator verified it independently under 24 spinning processes: **6 of 6 red before the fix**
+(`expected [ …(59) ] to deeply equal [ …(268) ]` and four more like it), **0 of 8 red after**, same load. And
+a mutation of the orchestrator's own — making `#resetEveryTopic` return early — still kills three tests by
+name, including the repaired one (`expected [ …(265) ] to deeply equal [ …(268) ]`), so the fix did not pull
+the test's teeth.
+
+*The rule this earns: a flake you cannot make fail is a flake you cannot prove you fixed — and the honest
+verification of a flake fix is the same experiment run twice, once on each side of the change.*
+
+**Two siblings filed rather than fixed**, both in `test/e2e/server/sse.e2e.test.ts`: `:158` uses a 50 ms sleep
+as a sufficiency argument, and `:225` waits 100 ms and then makes a **negative** assertion, so it passes
+vacuously if the frame is merely late (standing rule 4). Neither is flaking today.
+
+The original fix brief carried three mutations it had to still fail (remove the per-topic `reset`, remove
 the off-chain `shutdown`, make the drain unbounded), and with the instruction to prefer **injecting the
 shutdown timer** over merely loosening the assertion, since the rest of that suite already runs on an
 injected clock. *A flake you cannot make fail is a flake you cannot prove you fixed.*

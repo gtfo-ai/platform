@@ -274,6 +274,64 @@ const settle = async (...clients: readonly Recorder[]): Promise<void> => {
   throw new Error(`the write chain never went quiet; last state ${snapshot()}`);
 };
 
+/**
+ * Waits until the write chain has reached the frame the fake transport's gate holds.
+ *
+ * This is the state `settle` throws on, and the difference is entirely in what the caller knows.
+ * `settle` cannot see a pending timer, so "every write in flight is parked" is for it an
+ * unexplained stall. A caller that has faked the clock *can* see it: nothing but its own
+ * `advanceTimersByTime` can produce another frame, so the same state is a proof that the drain has
+ * stopped exactly where the gate is — and where the gate is, is chosen by the test rather than by
+ * how much work fits inside a real interval.
+ *
+ * Only ever call it with the clock faked, or with no timer outstanding; otherwise it can return
+ * while a timer is still due to release the gate, and the count it pins is a measurement again.
+ *
+ * The bound is a number of turns of the event loop, not of milliseconds: the chain costs two turns
+ * per frame whatever the machine is doing, so the longest replay this file builds costs 765 × 2,
+ * and 20 000 — `settle`'s own bound — is an order of magnitude of headroom on it. Load makes a
+ * turn take longer; it does not make one take more turns.
+ */
+const stalledOnGate = async (client: Recorder): Promise<void> => {
+  for (let turn = 0; turn < 20_000; turn += 1) {
+    if (client.pending > 0 && client.parked === client.pending) {
+      return;
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(
+    `the write chain never reached the frame the fake transport's gate holds; ${client.wire().length} written, ${client.sent.length} drained, ${client.pending} in flight of which ${client.parked} parked`,
+  );
+};
+
+/**
+ * `work`, or `fallback` when it has not settled within `turns` turns of the event loop.
+ *
+ * A watchdog on a promise that may never resolve has to be measured in *something*, and the choice
+ * decides what a failure means. Milliseconds are right when what is being waited for is a real
+ * timer — `shutdown` above waits out a real `shutdownDrainMs`, so its watchdog is seconds. Once
+ * the deadline has fired, though, what is left is microtasks and `setImmediate` callbacks: load
+ * changes how long a turn takes and not how many are needed, so a turn count is a bound on the
+ * code and a millisecond count would be a bound on the machine.
+ *
+ * Without a watchdog at all, a drain that never returns fails by vitest's own timeout — which
+ * reads as a flake rather than as the defect it is (the ledger's mutation H).
+ */
+const withinTurns = async <T>(work: Promise<T>, turns: number, fallback: T): Promise<T> => {
+  let settled = false;
+  const finished = work.then((value) => {
+    settled = true;
+    return value;
+  });
+  const watchdog = async (): Promise<T> => {
+    for (let turn = 0; turn < turns && !settled; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    return fallback;
+  };
+  return Promise.race([finished, watchdog()]);
+};
+
 describe('cursor parsing', () => {
   it('splits on the last colon, because a topic contains one', () => {
     expect(parseCursor(`${RUN_TOPIC}:42`)).toEqual({ topic: RUN_TOPIC, seq: 42 });
@@ -1071,6 +1129,20 @@ describe('SseHub', () => {
       // Which branch runs is decided structurally rather than by the clock: one replay frame's
       // drain never arrives, so `flushed()` cannot resolve however long the deadline is. "Slower
       // than N milliseconds" would be an assertion about the machine; "never" is not.
+      //
+      // **Where the drain stopped is not decided by the clock either, and that is what this
+      // version fixes.** It used to run a real twenty-millisecond deadline and then assert the
+      // exact wire — 264 replayed frames and then the tail — on the reasoning that 264 frames were
+      // what reached the socket inside twenty milliseconds. How many frames fit in a real interval
+      // is a property of the machine: under CPU contention this same code delivered 55, 91, 111,
+      // 210 and 248 frames in five consecutive runs, every one of them correct behaviour and every
+      // one of them red, and CI is a two-core runner. So the deadline is injected instead of
+      // waited out — `setTimeout` is the hub's only use of the clock (`withDeadline`) and faking
+      // it hands this test the moment the deadline fires. The chain is driven first to the one
+      // place it can never leave on its own, the frame the gate holds, and the clock is moved only
+      // once nothing else can move. The prefix below is then pinned by the gate, and the gate is
+      // set by this test: 264 is a fact about `blockWrites`, not about the runner.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const production = hubWith({
         bufferSize: 256,
         maxTopicsPerConnection: 64,
@@ -1092,20 +1164,34 @@ describe('SseHub', () => {
         transport: client,
       });
 
-      await production.shutdown();
-      await settle(client);
-
-      // 255 frames of the first topic and nine of the second reached the socket; the tenth is
-      // where it stopped. Then, past the chain: one `reset` per topic — including the two the
-      // client never saw a frame of — and one `shutdown`, last.
-      expect(client.wire()).toEqual([
+      // 255 frames of the first topic and nine of the second reach the socket; the tenth is where
+      // the gate holds it, so this is where the drain stops — 264 frames of the 765 it was asked
+      // for, with the third topic not started.
+      const replayed = [
         ...Array.from({ length: 255 }, (_, i) => `steer@${RUN_TOPIC}:${i + 2}`),
         ...Array.from({ length: 9 }, (_, i) => `steer@${TASK_TOPIC}:${i + 2}`),
-        'reset@-',
-        'reset@-',
-        'reset@-',
-        'shutdown@-',
-      ]);
+      ];
+
+      const closing = production.shutdown();
+      await stalledOnGate(client);
+      expect(client.wire(), 'the drain stopped at the frame the gate holds').toEqual(replayed);
+
+      // Only now does the deadline expire, with the drain provably stuck partway through the
+      // batch — which is the state this test exists to describe, reached deliberately rather than
+      // hoped for.
+      vi.advanceTimersByTime(20);
+      const outcome = await withinTurns(
+        closing.then((count) => `drained ${count}`),
+        200,
+        'shutdown never returned',
+      );
+      expect(outcome, 'the drain is bounded, so shutdown returns').toBe('drained 1');
+      await settle(client);
+
+      // And then, past the chain: one `reset` per topic — including the two the client never saw a
+      // frame of — and one `shutdown`, last. Nothing more of the replay, because `close()` makes
+      // every link still queued behind the gate early-return.
+      expect(client.wire()).toEqual([...replayed, 'reset@-', 'reset@-', 'reset@-', 'shutdown@-']);
       expect(client.closed).toBe(true);
       expect(production.connectionCount).toBe(0);
     }, 60_000);
