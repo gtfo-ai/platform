@@ -186,6 +186,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    The defect was entirely real and the number was not, which is the combination that survives review — a
    wrong number attached to a true finding is never the thing under scrutiny. This is the **second** figure
    this session to need correcting after the fact (rule 32's was 128, measured 192).
+41. **A value bounded twice has two untestable guards.** WP-11a found `issue.id` capped in both `mapIssue`
+   and `issueUrl`; neither mutation could be made to fail, because the other guard caught it. It is rule 22's
+   shape without the layering being deliberate — and the fix is not a comment but a single source: `issueUrl`
+   now takes the already-bounded id.
+42. **A boundary asserted from one side is half a test.** WP-11a's refusal documents assert one byte *past*
+   the cap **and the same document exactly at it**. Without the second half, a guard that refuses everything
+   passes — which is precisely how a fake that "refuses past `FAKE_MAX_LABEL_BYTES`" could have been written
+   to refuse always, and why rule 10 (assert which branch ran) and this one keep meeting.
 40. **A hostile-document enumeration is only as wide as the values it dares send.** WP-11a's walk pushes a
    hostile document through and fails on any over-long string — but a field whose bound is a **refusal**
    rather than a cap gets fed a *safe* value, because a hostile one would throw. Deleting `identifier()`
@@ -1853,6 +1861,22 @@ images and raw HTML render literally, ANSI is stripped, and Trojan-source bidi b
 **Question numbering collided a fourth time**: WP-13 and WP-20 both took Q44 and Q45 from parallel worktrees.
 WP-13 merges first and keeps them; WP-20's Q44-Q48 become **Q46-Q50**. Four collisions, four caught, none
 silent — the convention holds because every implementer reports which numbers it took.
+
+### Mutation-harness hygiene: a restore script is scoped to the files you have already touched
+
+From WP-11a round 2, reported unprompted: the implementer's snapshot-and-restore script covered only the
+files it had modified **at the time it was written**, so a later mutation to `loki/provider.ts` — a file it
+had not yet touched — **survived the restore**. It was caught by `git status`, not by the script.
+
+This is the rule 21 family one level out: the harness that *reports* results was canaried, but the harness
+that *undoes* them was not. Widen the snapshot to every file a mutation may touch, and check `git status`
+after the run regardless of what the script claims. The same instruction now goes to every reviewer.
+
+Also recorded from that round, because it is the honest kind of self-report: their first placement of a
+shared-suite obligation landed in the **errors** suite, where `capabilities().labels` is `undefined` — so it
+**passed green and empty**, and only typecheck caught it. A contract-suite case placed in the wrong suite is
+a vacuous pass wearing a green tick (rule 4). That branch now asserts `unsupported_capability` instead of
+returning.
 
 ## Discovered work (not in plan)
 
