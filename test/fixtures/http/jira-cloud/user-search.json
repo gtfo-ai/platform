@@ -1,0 +1,25 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/user/search (findUsers)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented-adapted",
+    "note": "Atlassian's response example is an array of users and — this is the load-bearing part — carries no `emailAddress` at all, which is the GDPR default for a Cloud site. The adapter therefore cannot match on email and accepts a single result for a full address; a query with no match returns []."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": [
+      {
+        "self": "https://acme-example.atlassian.net/rest/api/3/user?accountId=557058:00000000-0000-4000-8000-00000000d0c1",
+        "accountId": "557058:00000000-0000-4000-8000-00000000d0c1",
+        "accountType": "atlassian",
+        "displayName": "Dev One",
+        "active": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "POST /rest/api/3/issue/{issueIdOrKey}/comment (addComment)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented",
+    "note": "The 201 response example: the created comment, echoed. The replay double substitutes the id and the body it was actually sent, which is what Jira does."
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "self": "https://acme-example.atlassian.net/rest/api/3/issue/10001/comment/10101",
+      "id": "10101",
+      "author": {
+        "self": "https://acme-example.atlassian.net/rest/api/3/user?accountId=557058:00000000-0000-4000-8000-0000000b0701",
+        "accountId": "557058:00000000-0000-4000-8000-0000000b0701",
+        "accountType": "app",
+        "displayName": "Agentic Platform",
+        "active": true
+      },
+      "body": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "replaced by the replay double with the body of the request"
+              }
+            ]
+          }
+        ]
+      },
+      "updateAuthor": {
+        "self": "https://acme-example.atlassian.net/rest/api/3/user?accountId=557058:00000000-0000-4000-8000-0000000b0701",
+        "accountId": "557058:00000000-0000-4000-8000-0000000b0701",
+        "accountType": "app",
+        "displayName": "Agentic Platform",
+        "active": true
+      },
+      "created": "2026-09-02T12:00:00.000+0000",
+      "updated": "2026-09-02T12:00:00.000+0000"
+    }
+  }
+}

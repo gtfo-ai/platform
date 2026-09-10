@@ -17,6 +17,8 @@
     "@platform/application": "workspace:*",
     "@platform/contracts": "workspace:*",
     "@platform/domain": "workspace:*",
+    "ky": "2.1.0",
+    "marklassian": "1.2.1",
     "zod": "4.5.4"
   }
 }

@@ -1,0 +1,25 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/myself (getCurrentUser)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented",
+    "note": "Atlassian response example with every value replaced by an obviously fake one and the avatar/group members the adapter never reads removed."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "self": "https://acme-example.atlassian.net/rest/api/3/user?accountId=557058:00000000-0000-4000-8000-0000000b0701",
+      "accountId": "557058:00000000-0000-4000-8000-0000000b0701",
+      "accountType": "app",
+      "displayName": "Agentic Platform",
+      "active": true,
+      "emailAddress": "agentic-bot@example.test",
+      "timeZone": "Etc/UTC"
+    }
+  }
+}

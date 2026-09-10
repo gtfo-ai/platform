@@ -1,0 +1,68 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/issue/{issueIdOrKey}/transitions (getTransitions)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented-adapted",
+    "note": "Shape from the Atlassian response example (transitions[].id/name/to/isAvailable, `to` being the target status). Content is the workflow of product/19 §6. On `isAvailable`, corrected at review round 2 after re-reading the OpenAPI document: the published getTransitions example has \"Close Issue\" with \"isAvailable\": true and \"QA Review\" with the member **omitted**, so the omission is documented and \"Send for review\" reproduces it — the resolver must read an absent flag as available. \"isAvailable\": false does **not** appear in that example; it is this repository's scenario for \"Park\", present because a resolver that ignored the flag would offer a transition the workflow refuses and no documented example makes that case reachable. The member is documented on IssueTransition (\"Whether the transition is available to be performed\", readOnly, in no required list)."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "expand": "transitions",
+      "transitions": [
+        {
+          "id": "11",
+          "name": "Start work",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/3",
+            "id": "3",
+            "name": "In Progress",
+            "statusCategory": {
+              "id": 4,
+              "key": "indeterminate",
+              "name": "In Progress"
+            }
+          },
+          "hasScreen": false,
+          "isAvailable": true
+        },
+        {
+          "id": "21",
+          "name": "Send for review",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10005",
+            "id": "10005",
+            "name": "In Review"
+          },
+          "hasScreen": false
+        },
+        {
+          "id": "31",
+          "name": "Park",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10007",
+            "id": "10007",
+            "name": "Waiting for input"
+          },
+          "hasScreen": true,
+          "isAvailable": false
+        },
+        {
+          "id": "41",
+          "name": "Back to backlog",
+          "to": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/status/10001",
+            "id": "10001",
+            "name": "Ready for agent"
+          },
+          "isAvailable": true
+        }
+      ]
+    }
+  }
+}

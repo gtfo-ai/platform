@@ -1,0 +1,20 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/search/jql (searchAndReconsileIssuesUsingJql)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented-adapted",
+    "note": "Envelope from the Atlassian response example ({isLast, issues[{expand, fields, id, key, self}]}); the replay double fills `issues` from its own state. `nextPageToken` is in the documented request/response vocabulary and is absent on a last page."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "isLast": true,
+      "issues": []
+    }
+  }
+}

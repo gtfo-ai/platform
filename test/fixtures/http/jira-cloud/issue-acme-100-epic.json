@@ -1,0 +1,40 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/issue/{issueIdOrKey} (getIssue), fields=summary,description",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented-adapted",
+    "note": "The parent issue as the adapter projects it. Same shape, two fields."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "id": "10100",
+      "key": "ACME-100",
+      "self": "https://acme-example.atlassian.net/rest/api/3/issue/10100",
+      "fields": {
+        "summary": "Billing",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Everything invoicing, from price list to export."
+                }
+              ]
+            }
+          ]
+        },
+        "updated": "2026-08-20T08:00:00.000+0000"
+      }
+    }
+  }
+}

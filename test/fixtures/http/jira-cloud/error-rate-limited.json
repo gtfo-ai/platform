@@ -1,0 +1,23 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/rate-limiting/",
+    "retrieved": "2026-09-10",
+    "evidence": "documented",
+    "note": "Jira Cloud returns 429 with Retry-After (seconds), X-RateLimit-* and RateLimit-Reason; the body is an ErrorCollection. Header names and semantics are quoted from the rate-limiting page."
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "retry-after": "2",
+      "x-ratelimit-limit": "10",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "2026-09-02T12:00:02.000Z",
+      "ratelimit-reason": "jira-burst-based"
+    },
+    "body": {
+      "errorMessages": ["Rate limit exceeded."],
+      "errors": {}
+    }
+  }
+}

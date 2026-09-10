@@ -189,14 +189,21 @@ export const healthProbeSchema = z.strictObject({
   ok: z.boolean(),
   checked_at: isoDateTimeSchema,
   /**
-   * One line, safe to render. Providers must not put a credential in it.
+   * One line, safe to render — **already redacted by the provider that produced it**.
    *
-   * **TODO (WP-08, first provider to fill this in):** "must not" is a comment, and a comment is
-   * not a guard — this is provider text (BD-022) on its way to a settings screen and to
-   * `integrations.health` in the database. A failing probe is exactly where an HTTP client quotes
-   * the request it made, credential included. Whoever writes the first real `testConnection` runs
-   * this through the `SecretRedactor` (TD-012) at the point it is persisted or rendered, the way
-   * `IntegrationActionExecutor` does for an action, and replaces this note with the call.
+   * "Must not put a credential in it" was a comment, and a comment is not a guard: this is
+   * provider text (BD-022) on its way to a settings screen and to `integrations.health` in the
+   * database, and a failing probe is exactly where an HTTP client quotes the request it made,
+   * credential included. So the obligation is on every `testConnection`: build a `SecretRedactor`
+   * from the binding's own secrets (TD-012) and run this string through it before returning,
+   * exactly as `IntegrationActionExecutor` does for an action.
+   *
+   * Discharged for the first provider at WP-08 —
+   * `packages/integrations/src/providers/jira-cloud/index.ts` builds `exactSecretRedactor` from
+   * its config and asserts the placeholder in
+   * `test/contract/integrations/jira-cloud.contract.test.ts` ("redacts the health probe detail
+   * instead of rendering it"). WP-09…WP-11 owe the same, and a provider that returns a raw
+   * message is a review finding rather than a type error.
    */
   detail: z.string().nullish(),
   token_expires_at: isoDateTimeSchema.nullish(),

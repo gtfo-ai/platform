@@ -1,0 +1,59 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "GET /rest/api/3/issue/{issueIdOrKey}/comment (getComments)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented-adapted",
+    "note": "Envelope (comments/startAt/maxResults/total) and comment shape from the Atlassian response example; one comment, obviously fake values. `expand=renderedBody` is not requested, so `body` is the ADF document."
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "comments": [
+        {
+          "self": "https://acme-example.atlassian.net/rest/api/3/issue/10001/comment/10100",
+          "id": "10100",
+          "author": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/user?accountId=557058:00000000-0000-4000-8000-00000000d0c1",
+            "accountId": "557058:00000000-0000-4000-8000-00000000d0c1",
+            "accountType": "atlassian",
+            "displayName": "Dev One",
+            "active": true
+          },
+          "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "I can reproduce this on the September export."
+                  }
+                ]
+              }
+            ]
+          },
+          "updateAuthor": {
+            "self": "https://acme-example.atlassian.net/rest/api/3/user?accountId=557058:00000000-0000-4000-8000-00000000d0c1",
+            "accountId": "557058:00000000-0000-4000-8000-00000000d0c1",
+            "accountType": "atlassian",
+            "displayName": "Dev One",
+            "active": true
+          },
+          "created": "2026-09-01T09:30:00.000+0000",
+          "updated": "2026-09-01T09:30:00.000+0000",
+          "jsdPublic": true
+        }
+      ],
+      "maxResults": 100,
+      "startAt": 0,
+      "total": 1
+    }
+  }
+}

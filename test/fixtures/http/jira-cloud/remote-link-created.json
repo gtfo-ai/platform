@@ -1,0 +1,20 @@
+{
+  "source": {
+    "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json",
+    "operation": "POST /rest/api/3/issue/{issueIdOrKey}/remotelink (createOrUpdateRemoteIssueLink)",
+    "spec_version": "1001.0.0-SNAPSHOT-a6463b4310f8edea4a3e (info.version)",
+    "retrieved": "2026-09-10",
+    "evidence": "documented",
+    "note": "The 201 response example ({id, self}). Atlassian documents the create-or-update rule this adapter relies on: \"If a globalId is provided and a remote issue link with that global ID is found it is updated … Otherwise, the remote issue link is created.\""
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "id": 10300,
+      "self": "https://acme-example.atlassian.net/rest/api/issue/ACME-1/remotelink/10300"
+    }
+  }
+}
