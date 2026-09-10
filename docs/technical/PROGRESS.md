@@ -131,6 +131,16 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    required in the type and probed live: a JavaScript caller omitting `mode`, or passing `'SHADOW'` for
    `'shadow'`, got `status: ok` and a **real** provider call. A mutation that dies as `TS2578` proves the
    compiler, not the code — mutation-check a runtime guard from JavaScript.
+15. **A guard that matches paths as strings inherits the filesystem's equivalence classes, not its own.**
+   Case and unicode normalisation decide whether a protected path is protected. WP-12's path guard returned
+   `allow` for `.ENV` against a `.env` rule, and the reviewer wrote `.ENV` on APFS and **overwrote `.env`**.
+   Case-folding costs a false deny on a genuinely case-sensitive filesystem, which is the fail-closed
+   direction, so take it.
+16. **A guard against an untrusted producer must not read a field that producer can omit.** A missing number
+   is not zero, and `NaN` compares false against every ceiling. Deleting `total_cost_usd` from WP-12's
+   `result` line left the budget watchdog silent at `NaN > 0.01`, the run `completed`, and `NaN` flowing to
+   the cost ledger. "The vendor enforces it" is a claim about a binary the platform ships and does not
+   control.
 
 ## Blocker briefs needing a human
 
@@ -151,11 +161,11 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-06 | Fastify server skeleton (TD-002) | WP-04 | no | DONE | `d60d770` | 3 rounds; SSE write-chain defect carried to WP-06a |
 | WP-06a | SSE: replay and live frames share the write chain; and the test harness cannot see it | WP-06 | no | DONE | `9e0be0b` | 3 review rounds + a follow-up; **seven** layers of one defect; unblocks WP-12/WP-15 |
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
-| WP-08 | Jira Cloud provider | WP-07 | yes | TODO | — | |
-| WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | TODO | — | |
+| WP-08 | Jira Cloud provider | WP-07 | yes | IN_PROGRESS | worktree | started session 2 |
+| WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | IN_PROGRESS | worktree | started session 2 |
 | WP-10 | Slack provider | WP-07 | yes | TODO | — | |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | TODO | — | |
-| WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | TODO | — | |
+| WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | REVIEW | branch `worktree-agent-a80d5d7c411ac0f51` | round 1 REQUEST_CHANGES (2 majors, both fail-open); round 2 in flight |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | TODO | — | |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
@@ -1208,6 +1218,65 @@ ShadowReport needs.
 **Discovered work:** nothing connects `ProviderCreateInput.secrets` to `exactSecretRedactor`, so WP-15 can
 hand a provider a secret the redactor never learns — and `redaction_count`, the only signal that would show
 it, has no column yet.
+
+### WP-12 — review round 1: two guards that fail open, and an SDK read that was right
+
+**Verdict REQUEST_CHANGES.** Both majors are demonstrated rather than argued, and both fail **open** — the
+direction where a green suite means nothing.
+
+**The budget watchdog is defeated by one missing field.** The reviewer replayed the `happy-path` fixture with
+`total_cost_usd` deleted from the `result` line — the SDK passes that field through **unvalidated** — and got
+`status=completed`, `terminalReason=success`, `cost.usd=NaN`, `maxBudgetUsd=0.01`, watchdog silent, because
+**`NaN > 0.01` is false**. The transcript's `result` row is replaced by a `transcript_normalisation_failed`
+row, so the only loud signal is a different row from the one the pipeline reads, and `NaN` flows on into
+WP-19's ledger. WP-12's own docblock states the principle it violates — *"'the vendor enforces it' is a claim
+about a binary the platform ships but does not control"* — and **WP-13's `agentic-runlet` is the untrusted
+producer of this stream**, so it is not a hypothetical about a well-behaved CLI.
+
+**The path guard inherits the filesystem's equivalence classes.** Matching is case-sensitive, so with
+`protectedPaths: ['infra/**', '.env']` it returns `allow` for `.ENV` and `INFRA/main.tf` and no flag for
+`.CLAUDE/settings.json`. The reviewer then **wrote `.ENV` on an APFS volume and overwrote `.env`**. Protected
+paths have **no container backstop** — the mount is writable — so this guard is BD-024's only enforcement and
+it fails open on `local` mode and on every macOS or Windows bind mount. Thirty-one other constructed inputs
+did *not* escape: `..` in several encodings, deep `..`, absolute, `/proc`, `/dev`, `..%2f`, backslash, `~`,
+`.`, empty and whitespace all deny, and `%2e%2e` and fullwidth dots stay inside as literal names.
+
+Rules 15 and 16 above are what these two earned.
+
+**A second silent shadow of `canUseTool`.** `settingSources: ['project']` loads the workspace's
+`.claude/settings.json`, whose permission-allow rules shadow the callback — the SDK says so in the same
+warning string the implementer had already acted on — and whose hooks run commands that never reach
+`evaluateCommand`, bypassing the command policy WP-02 and WP-02a spent three review rounds and fifteen closed
+`allow` routes building. BD-025 limits the blast radius to the project owner's own default-branch file, which
+is why it was should-fix rather than blocking, and the SDK offers the exact remedy
+(`managedSettings.allowManagedPermissionRulesOnly` / `allowManagedHooksOnly`).
+
+**Standing rule 11 fired again, in the second consecutive work package.** A fake's divergence register cited
+`claude-runner.sdk.test.ts`, which does not exist. The substance held — the real `query()` *is* driven
+through `fakeSpawnClaudeCodeProcess` in `claude-runner.test.ts` — so it was a stale name, but that is exactly
+the failure rule 11 names, and two WPs in a row is a pattern rather than a slip.
+
+**What the review confirmed as sound**, and it is most of the WP. The `allowedTools` reading is **correct and
+in the dangerous direction**: `sdk.d.ts:1443-1449` documents it as an auto-approve list, the shipped bundle
+emits `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` — *"bare `allowedTools` entries auto-approve the whole tool before
+the callback is consulted"* — and the reviewer found **no remaining path** that sets it, with a mutation
+re-adding it dying on a named test. All four SDK divergences check out against the declarations and the
+bundle, so all four amendments to technical/04 are earned. Redaction is on **both** branches everywhere —
+`append` is the single door and re-applies the envelope over the redacted copy — with none of the
+WP-07-style asymmetry. The clock is injected everywhere, with zero `setTimeout` or `useFakeTimers` in the new
+tests. Both SDK workarounds are correct and neither swallows an error. The fixtures are replayed through the
+**real** `query()`, so the SDK's own parser validates their shape. Eleven original mutations plus four the
+reviewer invented all die by named assertions, none by timeout. The redaction-port merge collapse is complete.
+
+**Q40 — the unredacted session mirror — is a genuine question, not a permissive fait accompli.**
+`SessionMirrorPort` has no adapter, no table, no migration and no composition-root wiring; `deps.sessionMirror`
+is optional and nothing supplies it, so today's exposure is zero. The reasoning is also right: redacting the
+mirror corrupts `resume`. But `session-mirror.ts:15-17` promises "same database, same access control, never
+rendered to a human" — an invariant asserted in a comment (rule 3) and unimplemented. **Whoever writes the
+adapter owes that access control, and WP-27's take-over export owes the redaction.**
+
+**Also worth keeping:** `fake-spawn`'s "no backpressure" kindness is genuinely inert inside WP-12, because the
+SDK owns stdout — but **WP-13 must not run its "large stdout" conformance test against this fake.**
 
 ## Discovered work (not in plan)
 
