@@ -12,7 +12,9 @@
  * property tests run against. WP-05 added the `Jobs` port (TD-004) and the working-day calendar.
  * WP-07 added the five integration **type ports** (BD-017, technical/06) — the interfaces the
  * pipeline, the UI and the knowledge base depend on instead of on Jira, GitLab, Slack, Sentry or
- * Loki — together with the `IntegrationActionExecutor` that every outbound call goes through.
+ * Loki — together with the `IntegrationActionExecutor` that every outbound call goes through, and
+ * the `SecretRedactor` port (TD-012) that its audit path defines. WP-12 added the `ClaudeRunner`
+ * port and its collaborators (technical/04), which consume that same redactor.
  */
 
 // Event dispatch (TD-005)
@@ -39,6 +41,7 @@ export * from './ports/integrations/observability-logs.js';
 export * from './ports/integrations/task-management.js';
 export * from './ports/jobs.js';
 export * from './ports/logger.js';
+export * from './ports/runner.js';
 export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
 // Scheduling (WP-05)

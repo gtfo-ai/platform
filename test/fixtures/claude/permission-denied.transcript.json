@@ -1,0 +1,132 @@
+{
+  "outcome": {
+    "runId": "11111111-1111-4111-8111-111111111111",
+    "status": "failed",
+    "terminalReason": "permission_denied",
+    "sessionId": "fake-session-0001",
+    "numTurns": 9,
+    "usage": {
+      "input_tokens": 12000,
+      "output_tokens": 900,
+      "cache_write_5m_tokens": 2000,
+      "cache_write_1h_tokens": 1000,
+      "cache_read_tokens": 8000
+    },
+    "modelUsage": [
+      {
+        "model": "claude-opus-5",
+        "input_tokens": 12000,
+        "output_tokens": 900,
+        "cache_write_5m_tokens": 2000,
+        "cache_write_1h_tokens": 1000,
+        "cache_read_tokens": 8000,
+        "usd": 0.42
+      }
+    ],
+    "cost": {
+      "usd": 1.5,
+      "is_estimate": false,
+      "price_list_id": null
+    },
+    "wallMs": 0,
+    "structuredOutput": null,
+    "error": "the tool call was denied",
+    "redactionCount": 0
+  },
+  "events": [
+    {
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "seq": 0,
+      "created_at": "2026-03-01T09:00:00.000Z",
+      "redaction_count": 0,
+      "kind": "system",
+      "subtype": "init",
+      "session_id": "fake-session-0001",
+      "model": "claude-opus-5",
+      "data": {
+        "cwd": "/workspace/task-22222222",
+        "tools": ["Bash", "Read", "Edit", "Write"],
+        "mcp_servers": [
+          {
+            "name": "platform",
+            "status": "connected"
+          }
+        ],
+        "skills": [],
+        "slash_commands": [],
+        "permission_mode": "default",
+        "api_key_source": "ANTHROPIC_API_KEY",
+        "claude_code_version": "2.1.267",
+        "output_style": "default",
+        "agents": []
+      }
+    },
+    {
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "seq": 1,
+      "created_at": "2026-03-01T09:00:00.000Z",
+      "parent_tool_use_id": null,
+      "redaction_count": 0,
+      "kind": "hook",
+      "hook": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_02",
+      "decision": "deny",
+      "reason": "canUseTool: publishing is a human decision",
+      "question_id": null
+    },
+    {
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "seq": 2,
+      "created_at": "2026-03-01T09:00:00.000Z",
+      "parent_tool_use_id": null,
+      "redaction_count": 0,
+      "kind": "assistant",
+      "model": "claude-opus-5",
+      "content": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "toolu_02",
+          "tool_name": "Bash",
+          "input": {
+            "command": "npm publish"
+          }
+        }
+      ]
+    },
+    {
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "seq": 3,
+      "created_at": "2026-03-01T09:00:00.000Z",
+      "redaction_count": 0,
+      "kind": "result",
+      "terminal_reason": "permission_denied",
+      "num_turns": 9,
+      "duration_ms": 41000,
+      "usage": {
+        "input_tokens": 12000,
+        "output_tokens": 900,
+        "cache_write_5m_tokens": 2000,
+        "cache_write_1h_tokens": 1000,
+        "cache_read_tokens": 8000
+      },
+      "model_usage": [
+        {
+          "input_tokens": 12000,
+          "output_tokens": 900,
+          "cache_write_5m_tokens": 2000,
+          "cache_write_1h_tokens": 1000,
+          "cache_read_tokens": 8000,
+          "model": "claude-opus-5",
+          "usd": 0.42
+        }
+      ],
+      "cost": {
+        "usd": 1.5,
+        "is_estimate": false,
+        "price_list_id": null
+      },
+      "structured_output": null
+    }
+  ]
+}

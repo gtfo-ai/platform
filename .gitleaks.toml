@@ -17,3 +17,23 @@ path = '''(^|/)test/fixtures/'''
 [rules.allowlist]
 regexTarget = "line"
 regexes = ['''FAKE''']
+
+# The other half of the same convention, added at WP-12. The rule above catches a fixture
+# credential that is *missing* the marker; this allows one that *carries* it, because the default
+# gitleaks rules (`gitlab-pat`, `jwt`, `github-pat`, …) fire on shape alone, and a redaction test
+# has to contain credential-shaped strings to be a test of anything at all.
+#
+# **It deliberately has no `paths`.** A global allowlist's `paths` is a *file* filter: gitleaks
+# skips the whole file before reading it, so scoping this to `test/fixtures/` would exempt every
+# credential in a fixture whether or not it carried the marker. Verified rather than assumed —
+# with `paths` set, `gitleaks dir test/fixtures` scanned **0 bytes** and reported nothing.
+#
+# What keeps it narrow instead is `regexTarget = "secret"`: the marker must appear inside the
+# **secret** — the capture group the rule calls the credential — and not merely in the wider text
+# the rule matched around it, which is what `"match"` means and is wider than this comment used to
+# claim. So a real token pasted next to the word FAKE is still reported. A credential carrying the
+# literal uppercase `FAKE` is not one anyone issued.
+[[allowlists]]
+description = "Obviously fake credentials, which must carry the FAKE marker (technical/10, BD-002)"
+regexTarget = "secret"
+regexes = ['''FAKE''']

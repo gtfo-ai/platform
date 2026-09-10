@@ -29,14 +29,62 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 | `userPrompt` = task context (ticket as delimited data, artifacts, return feedback, observability pre-fetch) + instructions to produce the artifact | layer 4 |
 | `contextPack` (tier 0–1 documents, written as files into the workspace under `.agentic-run/context/` and referenced by path in the prompt; tier 0 also inlined) | product/05 |
 | `settingSources: ['project']`, `cwd = workspace path`, `additionalDirectories = []` | research/04: loads project `CLAUDE.md`, rules, skills, hooks; never host config |
-| `allowedTools`, `disallowedTools`, `permissionMode: 'default'`, `permissionPrompts: 'default'` | tool policy per role (product/13 table) + command policy (BD-025) |
+| `tools` (the role's tool policy), `disallowedTools`, `permissionMode: 'default'`, `permissionPrompts: 'host'`, `strictMcpConfig: true`, `managedSettings` | tool policy per role (product/13 table) + command policy (BD-025) — **corrected at WP-12**, see the note below |
 | `agents` (subagents) — only for Implementation (`explorer`, `test-runner` read-only helpers) and Investigation (`log-digger`) | keeps verbose reads out of the main context (research/02) |
-| `mcpServers`: `platform` (in-process), plus per-stage provider tooling (e.g. `sentry` http with `Sentry-Bearer` header) | 06 |
+| `mcpServers`: `platform` (in-process), plus per-stage provider tooling (e.g. `sentry` http with `Sentry-Bearer` header); `strictMcpConfig: true` so the workspace's own `.mcp.json` cannot add one | 06, BD-025 |
 | `skills`: platform skills mounted into `.agentic-run/skills` and discovered via `additionalDirectories`? — **decision:** copy platform skills into the workspace `.claude/skills/_platform/` at provisioning so `settingSources: ['project']` discovers them; project skills stay untouched | research/04 (skills discovered from `.claude/skills` when `project` is loaded) |
 | `outputFormat: { type: 'json_schema', schema }` | artifact schema (12) |
 | `env` (explicit, never inherited): `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME=<task-id>`, telemetry/updater/auto-memory disables, provider credentials for the run only (`GITLAB_TOKEN` scoped, `LOKI_*`, `SENTRY_ACCESS_TOKEN`), `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` per provider mode | BD-025; research/05 (`env` replaces) |
 | `pathToClaudeCodeExecutable` in `local` mode | BD-004 |
 | `sessionStore`, `sessionStoreFlush: 'eager'` for live tailing | 03 |
+
+
+> **Four corrections from the installed SDK (WP-12, `@anthropic-ai/claude-agent-sdk@0.3.267`).** The
+> table above was written from research/04 and three of its option names do not mean what it assumed;
+> the fourth correction is a key the table never mentioned.
+>
+> 1. **`allowedTools` is an auto-approve list, not a tool restriction.** The declaration reads "tool
+>    names that are auto-allowed without prompting … To restrict which tools are available, use the
+>    `tools` option instead", and passing the role's tools as `allowedTools` makes the SDK log
+>    `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` and skip `canUseTool` entirely — which would delete BD-025's
+>    ask-list. The role's tool policy is therefore the **base set** (`tools`), and nothing is
+>    pre-approved: the `PreToolUse` hook and `canUseTool` decide every Bash call and every write.
+> 2. **`permissionPrompts` takes `'host' | 'none'`, not `'default'`.** `'host'` is the value that
+>    means "this process answers, through `canUseTool`", which is what the surrounding paragraph
+>    describes.
+> 3. **`strictMcpConfig: true` is set**, which the table did not mention. An MCP server is a process
+>    the CLI starts; BD-025 keeps the choice of what a run may reach with the platform, and without
+>    this flag the workspace's own `.mcp.json` adds servers the platform never approved.
+>    `settingSources: ['project']` still loads `CLAUDE.md`, rules and skills, which is what the row
+>    above wants it for.
+> 4. **`managedSettings: { allowManagedPermissionRulesOnly: true, allowManagedHooksOnly: true }` is
+>    set** (added at WP-12's review round 1 — the same hole as 3, through the other door).
+>    `settingSources: ['project']` also loads the workspace's `.claude/settings.json`, and two of
+>    that file's keys are policy the platform did not write: `permissions.allow` **silently shadows
+>    `canUseTool`** (the SDK's own warning: "Allow rules from settings files can also shadow the
+>    callback but are not visible here"), and `hooks` run commands that never reach
+>    `evaluateCommand`, so BD-025's three-list command policy does not see them. `managedSettings`
+>    is the SDK's policy tier for a spawning parent; it reaches the CLI as `--managed-settings`.
+>    BD-025's "config comes from the default branch" is the weaker mitigation this replaces: it says
+>    nobody edited those files *in this branch*, not that the platform wrote them.
+>    **It does not disable the platform's own hooks** — `Options.hooks` are registered over the
+>    control protocol as *session* hooks (`origin: "sdkHost"`) and the CLI collects those outside
+>    the `allowManagedHooksOnly` branch, which was verified by reading the shipped 0.3.267 binary
+>    before the flag was set.
+>
+>    **Precondition an operator must know about, because nothing reports it.**
+>    `parentSettingsBehavior` is `'first-wins'` by default (`sdk.d.ts:7671-7674`: "first-wins
+>    (default): parent is dropped — admin tiers are the only policy source"; `managedSettings`'
+>    own declaration at `sdk.d.ts:2052-2062` says that when an IT-controlled tier exists "these are
+>    **dropped by default**"). On a host carrying **any** admin managed-settings tier — MDM /
+>    managed plist, `/Library/Application Support/ClaudeCode`, `/etc/claude-code`, or a
+>    server-managed policy — both flags above are dropped, silently, and the workspace's
+>    `.claude/settings.json` regains its `permissions.allow` and its `hooks`. Only that admin tier
+>    can opt the platform's tier back in (`parentSettingsBehavior: 'merge'`); the platform cannot.
+>    A **managed laptop in `local` provider mode** (BD-004) is precisely this case. An operator on
+>    such a host should either have the admin tier set `parentSettingsBehavior: 'merge'`, or run in
+>    `platform` mode, where TD-021's container carries no host admin tier — and until one of the
+>    two holds, BD-025's default-branch rule is the only thing standing behind those two keys.
 
 ## Prompt assembly (deterministic, audited)
 
@@ -56,7 +104,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 | `PreToolUse(Edit|Write)` | path guard (workspace only; `.agentic/`, `.claude/`, `CLAUDE.md` writes flagged; secrets patterns in content denied). |
 | `PostToolUse(*)` | truncate outputs head/tail (default 10 k chars), redact secret-shaped strings, append `additionalContext` for CI logs (error block extraction). |
 | `SubagentStart/Stop` | nest in the transcript; enforce `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`. |
-| `PreCompact/PostCompact` | emit `compaction` markers to the transcript store; record `pre_tokens`. |
+| `PreCompact/PostCompact` | emit `compaction` markers to the transcript store. **`pre_tokens` does not come from the hook (WP-12):** `PreCompactHookInput` carries only `trigger` and `custom_instructions`, and `PostCompactHookInput` only `trigger` and `compact_summary`. The counts arrive on the `system`/`compact_boundary` **message** (`compact_metadata.pre_tokens` / `post_tokens`). So `PreCompact` writes `compaction{phase:'pre'}`, the boundary message writes `compaction{phase:'post'}` with the numbers, and `PostCompact` writes a `hook` entry — one marker per phase, no duplicate row. |
 | `Stop` | never `continue: true` (bounded loops live in the pipeline, not in the session). |
 | `UserPromptSubmit` | inject the steer message provenance (who steered) as context. |
 
@@ -73,11 +121,26 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 
 `maxBudgetUsd` and `maxTurns` from effective config; `error_max_budget_usd` → run `budget_exceeded`; pipeline policy: one retry with a "summarise progress and finish" instruction under a small extra budget, else escalate (BD-010). Wall-clock timeout kills the process tree (05).
 
+> **What the platform's own budget check is, and is not (WP-12).** The CLI is the only party that
+> can stop a turn while it is running; it is given `maxBudgetUsd` and ends the turn itself. The
+> platform's check reads `total_cost_usd` off the `result` **after the turn is over** — a relabel,
+> not a mid-turn stop. It exists because the producer of that stream is a binary the platform ships
+> and does not control, and from TD-025 on it is `agentic-runlet` rather than the CLI directly.
+>
+> Two readings, and the second one fails closed: a cost over the ceiling becomes `budget_exceeded`,
+> and a result with **no usable cost** — absent, `null`, a string, `NaN`, `Infinity`, negative — also
+> stops the run, because a budget guard that cannot see the cost has not verified the budget. It
+> reports `error_max_budget_usd` (the closed enum's nearest true statement: the budget stopped this
+> run) and names itself `cost_unreported` in `RunOutcome.error` and in the `run_stopped` transcript
+> row, so the pipeline branches as it does for any budget stop while a human reading the run sees
+> which of the two happened. `runs.usd_reported` is `0` in that case and is not a claim that the run
+> was free; the number that is a claim is the estimate the price table produces (BD-011).
+
 ## Result handling
 
 - `structured_output` validated again by the platform against the artifact schema (defence in depth); markdown artifact read from `.agentic-run/out/`; both stored as an Artifact version.
 - `terminal_reason`, `usage`, `modelUsage`, `total_cost_usd`, `num_turns` → `run.finished` → cost ledger (actual, or estimated in `local` mode via the price table).
-- On `error_max_structured_output_retries`: run `failed(schema)`; pipeline retries once with the validation errors appended; then escalate.
+- On `error_max_structured_output_retries`: run `failed(schema)`; pipeline retries once with the validation errors appended; then escalate. **The platform's own re-validation reports the same `terminal_reason` (WP-12)**: the pipeline branches on "the structured-output contract was not met", and it is met or not met regardless of which side noticed. The run's `error` text says which — the SDK's retries were exhausted, or the platform rejected the answer, with the failing paths (never the values).
 
 ## Resume and take-over
 

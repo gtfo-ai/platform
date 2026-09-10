@@ -3,7 +3,11 @@ import { defineConfig } from 'vitest/config';
 /**
  * Test tiers per docs/technical/10-testing-strategy.md.
  *
- *   unit             fast, no I/O — domain ring, policies, pure adapters
+ *   unit             fast, no container — domain ring, policies, pure adapters. Two files do real
+ *                    filesystem I/O in a temp directory on purpose, and say so at the top:
+ *                    `scripts/check-ignored.test.ts` and
+ *                    `packages/infrastructure/src/runner/path-guard.filesystem.test.ts`, whose
+ *                    whole point is which names the running volume treats as one file.
  *   contract         integration-type ports against fakes / recorded fixtures
  *   integration      Testcontainers + PGlite database suites
  *   e2e-fake-claude  one ticket through the pipeline with the fake Claude runner

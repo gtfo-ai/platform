@@ -21,3 +21,20 @@ allowBuilds:
   cpu-features: false
   protobufjs: false
   ssh2: false
+
+# Written by `pnpm add` at WP-12, and kept rather than deleted. pnpm 12 refuses a package younger
+# than its minimum release age unless the exact version is listed here; the Agent SDK ships several
+# releases a week, so the version the platform is built and tested against is always newer than that
+# window. Every entry is **version-pinned**, so bumping the SDK is a deliberate edit of this list and
+# not something a `pnpm update` can do quietly. The eight platform packages are the SDK's optional
+# per-architecture binaries (BD-004: the image carries the bundled Claude Code binary).
+minimumReleaseAgeExclude:
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.267'
+  - '@anthropic-ai/claude-agent-sdk@0.3.267'

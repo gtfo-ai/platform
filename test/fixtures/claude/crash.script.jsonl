@@ -1,0 +1,3 @@
+{"step":"emit","message":{"type":"system","subtype":"init","apiKeySource":"ANTHROPIC_API_KEY","claude_code_version":"2.1.267","cwd":"/workspace/task-22222222","tools":["Bash","Read","Edit","Write"],"mcp_servers":[{"name":"platform","status":"connected"}],"model":"claude-opus-5","permissionMode":"default","slash_commands":[],"output_style":"default","skills":[],"plugins":[],"uuid":"00000001-0000-4000-8000-000000000000","session_id":"fake-session-0001"}}
+{"step":"await_user"}
+{"step":"exit","code":1,"signal":null}
