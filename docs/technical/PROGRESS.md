@@ -196,6 +196,12 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `vbscript:` and `file:`. The only thing preventing execution was **React 19.3 rewriting the attribute** —
    an accidental defence that nothing asserted, dependent on a framework version. A scope claim is a
    checkable claim (rules 17, 30, 33).
+47. **An accidental defence is measured, not assumed — and this one covered a quarter of what it appeared
+   to.** WP-20's five unguarded `href` sites were said to be saved by React 19.3 rewriting the attribute.
+   Round 2 measured all four schemes: React blocks `javascript:` and **not** `data:`, `vbscript:` or `file:`.
+   So the exposure was four times what round 1 described, and the "defence" was one framework's handling of
+   one scheme. When a finding is downgraded because something else happens to catch it, measure what that
+   something else actually catches.
 46. **An encoder whose comment claims it makes hostile input inert is a claim a test must kill.** Two
    `encodeURIComponent` deletions in WP-11's adapters survived **3000 of 3000** tests — one in Loki's
    `/label/${name}/values`, one in Sentry's path `segment()` — while the LogQL escaper *beside* them died in
@@ -1902,6 +1908,20 @@ shared-suite obligation landed in the **errors** suite, where `capabilities().la
 **passed green and empty**, and only typecheck caught it. A contract-suite case placed in the wrong suite is
 a vacuous pass wearing a green tick (rule 4). That branch now asserts `unsupported_capability` instead of
 returning.
+
+### Rule 27 caught an orchestrator prescription that contradicted itself
+
+WP-20's round-2 brief told the implementer to wrap five sites in `safeHref(...) ?? undefined` **and** to
+extend `no-html.test.ts` to forbid `href=` outside `ui/untrusted.tsx`. Those two instructions are
+incompatible: the first leaves `href=` in five files, which the second then forbids. The implementer
+measured the prescription, found the contradiction, and used an `ExternalLink` component instead.
+
+**Fourth time this session a prescribed fix has been wrong** (rule 27), and the first where the prescription
+was the orchestrator's *and* internally inconsistent rather than merely suboptimal. The others: WP-06a's
+`#queued >= cap + replayOutstanding` (algebraically identical to the gate it replaced), WP-06a round 2's
+one-directional arbitration flag, and WP-12's whole-string NFKC fold (which would have mapped U+FF0F onto a
+path separator). *A fix arriving with authority is still a hypothesis* — including when the authority is the
+one writing the brief.
 
 ## Discovered work (not in plan)
 
