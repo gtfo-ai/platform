@@ -381,7 +381,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
-| WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `WP20SHA` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
+| WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `c744904` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evalua | WP-16, WP-17, WP-20 | no | TODO | — | |
 | WP-22 | Docker images (base, runtime, launcher, product), Compose (profiles `l | WP-14 | no | TODO | — | |
 | WP-23 | Docs | WP-22 | yes | TODO | — | |
