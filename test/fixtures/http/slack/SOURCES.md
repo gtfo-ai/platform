@@ -109,7 +109,7 @@ All retrieved **2026-09-10**.
   `manifest.test.ts`.
 - `https://docs.slack.dev/tools/node-slack-sdk/web-api/` — "The client will retry a failed API
   method call up to 10 times, spaced out over about 30 minutes" and the automatic 429 handling.
-  **No fixture file**: it is the evidence behind Q41, the decision not to use `@slack/web-api`.
+  **No fixture file**: it is the evidence behind Q42, the decision not to use `@slack/web-api`.
 
 ## What is deliberately **not** in a fixture
 

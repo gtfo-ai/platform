@@ -5,6 +5,7 @@
  * invisible in review and would have the field stored and rendered as ordinary configuration
  * (BD-002). The check turns it into a boot failure.
  */
+import { noSecretsRedactor } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import {
@@ -39,7 +40,13 @@ describe('createIntegrationRegistry', () => {
     expect(found.displayName).toBe('Fake tickets');
     expect(registry.has('fake-tickets')).toBe(true);
 
-    const port = found.create({ integrationId: INTEGRATION_ID, config: {}, secrets: {} });
+    const port = found.create({
+      integrationId: INTEGRATION_ID,
+      config: {},
+      secrets: {},
+      // Required since WP-11 (standing rule 31): a provider cannot be constructed without one.
+      redactor: noSecretsRedactor(),
+    });
     expect(port.ref.type).toBe('task_management');
   });
 

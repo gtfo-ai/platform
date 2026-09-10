@@ -67,6 +67,7 @@
  */
 import {
   type CommentRef,
+  composeSecretRedactors,
   type ExternalIdentity,
   exactSecretRedactor,
   type HealthProbe,
@@ -163,6 +164,15 @@ export interface JiraCloudOptions {
   readonly clock: Clock;
   /** Injected by the fixture-replay contract runner; the default is the global `fetch`. */
   readonly fetch?: JiraClientOptions['fetch'];
+  /**
+   * TD-012, **required** (standing rule 31, earned at WP-11).
+   *
+   * This adapter already builds a redactor from its own credentials, which is the half a caller
+   * cannot forget; this is the half a caller knows and the adapter cannot — a run-scoped token, a
+   * neighbouring binding's secret. `ProviderCreateInput.redactor` is where it comes from in
+   * production, and the two are composed rather than chosen between.
+   */
+  readonly redactor: SecretRedactor;
 }
 
 const jsonPayload = (fields: JsonObject): JsonObject => fields;
@@ -191,12 +201,15 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
    * provider work package to take rather than inventing a second one: a redactor assembled beside
    * a binding instead of from it is a redactor that does not know the token it is meant to hide.
    */
-  const redactor: SecretRedactor = exactSecretRedactor([
-    { name: 'jira_api_token', value: config.api_token },
-    ...(config.webhook_secret === null || config.webhook_secret === undefined
-      ? []
-      : [{ name: 'jira_webhook_secret', value: config.webhook_secret }]),
-  ]);
+  const redactor: SecretRedactor = composeSecretRedactors(
+    options.redactor,
+    exactSecretRedactor([
+      { name: 'jira_api_token', value: config.api_token },
+      ...(config.webhook_secret === null || config.webhook_secret === undefined
+        ? []
+        : [{ name: 'jira_webhook_secret', value: config.webhook_secret }]),
+    ]),
+  );
 
   const capabilities: TaskManagementCapabilities = {
     webhooks: typeof config.webhook_secret === 'string' && config.webhook_secret.length > 0,

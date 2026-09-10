@@ -82,6 +82,9 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
       integrationId: input.integrationId,
       config: gitlabConfigSchema.parse(input.config),
       secrets: input.secrets,
+      // Standing rule 31: required on `ProviderCreateInput`, and passed here rather than left to a
+      // default that redacts nothing.
+      redactor: input.redactor,
       clock: {
         now: () => new Date().toISOString() as `${string}T${string}`,
       },

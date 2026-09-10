@@ -62,13 +62,44 @@ export const expectCatalogueEvent = <TType extends DomainEventType>(
  * An agent tooling spec declares **names**, never values (BD-002, BD-025).
  *
  * `agentToolingSchema` is strict, so a provider that adds a `value` or `token` field fails the
- * parse; this also checks that every declared variable is an environment variable name and that at
- * least one secret is marked as such when a spec exists at all — a spec that marks nothing secret
- * is how a token ends up in a log line.
+ * parse; this also checks that every declared variable is an environment variable name with a
+ * description.
+ *
+ * ## The obligation WP-11 added, and why it is here rather than in one provider's file
+ *
+ * Standing rule 23: a new port obligation lands in the **shared** suite in the same change, or it
+ * is a provider-local promise. WP-11 found that a provider can honestly have nothing to mount —
+ * Sentry's hosted MCP server authenticates by OAuth, which a spec carrying only *names* cannot
+ * express, and the classic `sentry-cli` documents no issue commands at all — so a spec with no
+ * `cli` and no `mcp` had to become legal. The previous rule ("at least one variable, always") made
+ * that impossible, and would have pushed that adapter into declaring `SENTRY_AUTH_TOKEN` for a
+ * tool that is not there.
+ *
+ * Relaxing it alone would have been a weakening, so the two halves are asserted together:
+ *
+ *  - a spec that **mounts** something (a CLI or an MCP server) must declare at least one variable,
+ *    because a tool with no environment is a tool the runner cannot configure; and
+ *  - a spec that mounts **nothing** must declare **no secret variable at all** — a credential
+ *    injected into a run container for a tool that does not exist is a secret handed out for no
+ *    reason (BD-025). That is a *positive* assertion (rule 12), not a comment.
+ *
+ * Both halves run for every provider and every fake, so a GitHub or a Datadog adapter is held to
+ * them the moment it exists, without anything in the pipeline changing (BD-017).
  */
 export const expectAgentTooling = (tooling: AgentTooling): void => {
   const parsed = agentToolingSchema.parse(tooling);
-  expect(parsed.env.variables.length).toBeGreaterThan(0);
+  const mountsATool = (parsed.cli ?? null) !== null || (parsed.mcp ?? null) !== null;
+  if (mountsATool) {
+    expect(
+      parsed.env.variables.length,
+      'a spec that mounts a CLI or an MCP server must name the variables the runner injects',
+    ).toBeGreaterThan(0);
+  } else {
+    expect(
+      parsed.env.variables.filter((variable) => variable.secret).map((variable) => variable.name),
+      'a spec that mounts nothing must not ask the runner to inject a credential (BD-025)',
+    ).toEqual([]);
+  }
   for (const variable of parsed.env.variables) {
     expect(variable.name).toMatch(/^[A-Z][A-Z0-9_]*$/);
     expect(variable.description.length).toBeGreaterThan(0);

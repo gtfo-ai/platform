@@ -5,6 +5,7 @@
  * It lives beside the suites rather than inside a test file so that importing it does not register
  * somebody else's `describe` blocks.
  */
+import { exactSecretRedactor } from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import {
   createGitLabProvider,
@@ -80,6 +81,13 @@ export const gitlabReplayContext = (
     },
     fetchImpl: replay.fetchImpl,
     clock: fixedClock(CLOCK_AT),
+    // Required since WP-11 (standing rule 31): the binding's own credentials are what this suite
+    // is about, and the composition root is where they become a redactor.
+    redactor: exactSecretRedactor([
+      { name: 'gitlab_token', value: FAKE_BINDING_TOKEN },
+      { name: 'gitlab_webhook_secret_token', value: FAKE_SECRET_TOKEN },
+      { name: 'gitlab_webhook_signing_token', value: FAKE_SIGNING_TOKEN },
+    ]),
   });
 
   return {

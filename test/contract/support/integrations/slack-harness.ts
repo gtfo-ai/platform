@@ -4,11 +4,23 @@
  *
  * It lives beside the suites rather than inside a test file so that importing it does not register
  * somebody else's `describe` blocks.
+ *
+ * Like the Loki and Sentry harnesses, it builds the port the way production does —
+ * `createSlackRegistration(deps).create(binding)` — so the redactor the assertions rely on is the
+ * one the registration actually passes (standing rule 31). Until WP-11's merge this harness called
+ * `createSlackProvider` directly, and that is precisely the hole the rule names: a required field
+ * on `ProviderCreateInput` is checked where the object is *constructed*, so `create` could have
+ * forwarded nothing and every test here would still have been green.
  */
-import type { IntegrationTimer } from '@platform/application';
+import {
+  exactSecretRedactor,
+  type IntegrationTimer,
+  noSecretsRedactor,
+  type SecretRedactor,
+} from '@platform/application';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import {
-  createSlackProvider,
+  createSlackRegistration,
   questionBlocks,
   type SlackProvider,
   type SocketConnect,
@@ -47,8 +59,17 @@ export const SLACK_TASK_ID = '00000000-0000-4000-8000-0000000000ca';
 export const SLACK_QUESTION_ID = '00000000-0000-4000-8000-0000000000da';
 export const SLACK_APPROVAL_ID = '00000000-0000-4000-8000-0000000000ea';
 
+/** The obviously fake secret the redaction assertions plant in provider text (BD-002). */
+export const SLACK_PLANTED_SECRET = 'FAKE-injected-secret-value-0123456789';
+
+/** A redactor over the one planted secret — what a caller injects, TD-012 step 1. */
+export const slackPlantedRedactor = (): SecretRedactor =>
+  exactSecretRedactor([{ name: 'slack', value: SLACK_PLANTED_SECRET }]);
+
 export interface SlackReplayContext extends CommunicationContractContext {
   readonly replay: SlackReplay;
+  /** Every redaction event the adapter reported, in order. The text is never reported. */
+  readonly redactions: { action: string; count: number }[];
   /**
    * The same adapter under Slack's own port. `CommunicationContractContext.port` is the type port,
    * which is the point of the shared suite; the extras BD-017 lets a provider add — the thread
@@ -63,6 +84,12 @@ export const slackReplayContext = (
     /** Socket Mode: injected so a test drives envelopes without a network. */
     readonly connect?: SocketConnect;
     readonly timer?: IntegrationTimer;
+    /**
+     * What the *caller* injects. Defaults to the no-op written out in full: a test that does not
+     * care still says which redactor it means, and the adapter's own three credentials are
+     * composed on top of whatever this is (standing rule 31).
+     */
+    readonly redactor?: SecretRedactor;
   } = {},
 ): SlackReplayContext => {
   // Every fixture file on disk, not a list somebody has to remember to extend (rule 7).
@@ -76,32 +103,38 @@ export const slackReplayContext = (
     // dependency with nothing to guard.
     request_timeout_ms: 0,
   });
-  const port = createSlackProvider({
+  const redactions: { action: string; count: number }[] = [];
+  const registration = createSlackRegistration({
+    fetch: replay.fetchImpl,
+    clock: fixedClock(CLOCK_AT),
+    ids: sequentialIds(1),
+    onRedaction: (event) => {
+      redactions.push({ ...event });
+    },
+    ...(overrides.connect === undefined ? {} : { connect: overrides.connect }),
+    ...(overrides.timer === undefined ? {} : { timer: overrides.timer }),
+  });
+  const port = registration.create({
     integrationId: SLACK_INTEGRATION_ID,
+    // Unparsed on purpose: `create` runs `slackConfigSchema.parse`.
     config,
     secrets: {
       bot_token: FAKE_BOT_TOKEN,
       app_token: FAKE_APP_TOKEN,
       signing_secret: FAKE_SIGNING_SECRET,
     },
-    fetchImpl: replay.fetchImpl,
-    clock: fixedClock(CLOCK_AT),
-    ids: sequentialIds(1),
-    ...(overrides.connect === undefined ? {} : { connect: overrides.connect }),
-    ...(overrides.timer === undefined ? {} : { timer: overrides.timer }),
+    redactor: overrides.redactor ?? noSecretsRedactor(),
   });
 
   /**
    * The same adapter with **no** signing secret: the binding an operator creates when they forget
    * the credential. Standing rule 18 — it must verify nothing at all.
    */
-  const unverifiablePort = createSlackProvider({
+  const unverifiablePort = registration.create({
     integrationId: SLACK_INTEGRATION_ID,
     config,
     secrets: { bot_token: FAKE_BOT_TOKEN },
-    fetchImpl: replay.fetchImpl,
-    clock: fixedClock(CLOCK_AT),
-    ids: sequentialIds(1),
+    redactor: overrides.redactor ?? noSecretsRedactor(),
   });
 
   /**
@@ -116,6 +149,7 @@ export const slackReplayContext = (
 
   return {
     replay,
+    redactions,
     port,
     slack: port,
     unverifiablePort,

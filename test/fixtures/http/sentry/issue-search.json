@@ -1,0 +1,132 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme-example/api/issues/?limit=25&query=is:unresolved&statsPeriod=",
+      "status": 200,
+      "body": [
+        {
+          "annotations": [],
+          "assignedTo": null,
+          "count": "137",
+          "culprit": "total(src/billing/totals.ts)",
+          "firstSeen": "2026-05-28T21:19:55Z",
+          "hasSeen": false,
+          "id": "4242",
+          "isBookmarked": false,
+          "isPublic": false,
+          "isSubscribed": true,
+          "lastSeen": "2026-06-01T09:11:00Z",
+          "level": "error",
+          "logger": null,
+          "metadata": { "title": "TypeError: cannot read totals of undefined" },
+          "numComments": 0,
+          "permalink": "https://sentry.example.test/acme-example/api/issues/4242/",
+          "project": { "id": "2", "name": "API", "slug": "api" },
+          "shareId": null,
+          "shortId": "API-7B",
+          "status": "unresolved",
+          "statusDetails": {},
+          "subscriptionDetails": null,
+          "title": "TypeError: cannot read totals of undefined",
+          "type": "error",
+          "userCount": 12
+        },
+        {
+          "annotations": [],
+          "assignedTo": null,
+          "count": "3",
+          "culprit": "ledgerCall(src/ledger/client.ts)",
+          "firstSeen": "2026-04-02T08:00:00Z",
+          "hasSeen": true,
+          "id": "4111",
+          "isBookmarked": false,
+          "isPublic": false,
+          "isSubscribed": false,
+          "lastSeen": "2026-04-02T08:04:00Z",
+          "level": "warning",
+          "logger": null,
+          "metadata": { "title": "Timeout talking to the ledger" },
+          "numComments": 0,
+          "permalink": "https://sentry.example.test/acme-example/api/issues/4111/",
+          "project": { "id": "2", "name": "API", "slug": "api" },
+          "shareId": null,
+          "shortId": "API-3C",
+          "status": "unresolved",
+          "statusDetails": {},
+          "subscriptionDetails": null,
+          "title": "Timeout talking to the ledger",
+          "type": "error",
+          "userCount": 0
+        }
+      ],
+      "source": {
+        "url": "https://docs.sentry.io/api/events/list-a-projects-issues/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The list envelope (a bare JSON array) and every member come from the page's 200 example, including `\"count\": \"1\"` as a string and a `project` block without `platform`. Values are replaced with obviously fake ones and the long `stats` block is removed, because `statsPeriod=` switches it off and the adapter never reads it. The second issue is two months older than the first so that a `since` window has something to exclude."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme-example/api/issues/?limit=25&query=totals&statsPeriod=",
+      "status": 200,
+      "body": [
+        {
+          "annotations": [],
+          "assignedTo": null,
+          "count": "137",
+          "culprit": "total(src/billing/totals.ts)",
+          "firstSeen": "2026-05-28T21:19:55Z",
+          "hasSeen": false,
+          "id": "4242",
+          "isBookmarked": false,
+          "isPublic": false,
+          "isSubscribed": true,
+          "lastSeen": "2026-06-01T09:11:00Z",
+          "level": "error",
+          "logger": null,
+          "metadata": { "title": "TypeError: cannot read totals of undefined" },
+          "numComments": 0,
+          "permalink": "https://sentry.example.test/acme-example/api/issues/4242/",
+          "project": { "id": "2", "name": "API", "slug": "api" },
+          "shareId": null,
+          "shortId": "API-7B",
+          "status": "unresolved",
+          "statusDetails": {},
+          "subscriptionDetails": null,
+          "title": "TypeError: cannot read totals of undefined",
+          "type": "error",
+          "userCount": 12
+        }
+      ],
+      "source": {
+        "url": "https://docs.sentry.io/api/events/list-a-projects-issues/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The same documented list shape for a free-text query. Sentry's search grammar decides what matches; nothing here models it, and the adapter passes the caller's `query` through verbatim rather than building one (BD-022)."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme-example/api/issues/?limit=25&query=is:unresolved&statsPeriod=",
+      "variant": "rate-limited",
+      "status": 429,
+      "headers": {
+        "retry-after": "2",
+        "x-sentry-rate-limit-limit": "40",
+        "x-sentry-rate-limit-remaining": "0",
+        "x-sentry-rate-limit-reset": "1780309802",
+        "x-sentry-rate-limit-concurrentlimit": "25",
+        "x-sentry-rate-limit-concurrentremaining": "24"
+      },
+      "body": { "detail": "You are attempting to use this endpoint too frequently." },
+      "source": {
+        "url": "https://docs.sentry.io/api/ratelimits/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The status, the `Retry-After` header and the five `X-Sentry-Rate-Limit-*` header names are documented on this page (\"the server will respond with a 429 HTTP status code … comes with a Retry-After header\"; `-Reset` is \"measured in UTC seconds from epoch\"). The page publishes no numbers and no body, so the values are illustrative — `-Reset` is two seconds after the harness's fixed clock so that a test can prove which header was read."
+      }
+    }
+  ]
+}

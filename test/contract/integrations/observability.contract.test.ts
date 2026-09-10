@@ -8,7 +8,11 @@
  * asserts on it; it is there so that the fixtures the pipeline tests inherit exercise BD-022's
  * "external text is data" rule rather than a sanitised happy path.
  */
-import { createFakeObservabilityErrors, createFakeObservabilityLogs } from '@platform/integrations';
+import {
+  createFakeObservabilityErrors,
+  createFakeObservabilityLogs,
+  FAKE_MAX_LABEL_BYTES,
+} from '@platform/integrations';
 import {
   type ObservabilityErrorsContractContext,
   type ObservabilityLogsContractContext,
@@ -99,6 +103,9 @@ runObservabilityLogsContract({
       emptySelector: '{app="nothing"}',
       window: { from: WINDOW_FROM, to: WINDOW_TO },
       label: { name: 'app', value: 'api' },
+      // The fake's own constant, so the suite's refusal case lands one byte past *this* binding's
+      // cap rather than at some absurd size every implementation refuses (standing rule 43).
+      maxLabelNameBytes: FAKE_MAX_LABEL_BYTES,
       lineFilter: 'trace-abc',
       cleanup: async () => {},
     };

@@ -15,6 +15,8 @@
 import {
   createVirtualTimer,
   type IntegrationError,
+  type QuestionPost,
+  type ThreadRef,
   type WebhookDelivery,
 } from '@platform/application';
 import type { SocketHandlers } from '@platform/integrations';
@@ -26,6 +28,9 @@ import {
   BOT_USER,
   CHANNEL,
   DEACTIVATED_USER,
+  FAKE_APP_TOKEN,
+  FAKE_BOT_TOKEN,
+  FAKE_SIGNING_SECRET,
   INVALID_BLOCKS_CHANNEL,
   MAPPED_EMAIL,
   MAPPED_USER,
@@ -36,7 +41,13 @@ import {
   socketEnvelope,
   THREAD_TS,
 } from '../support/integrations/slack-fixtures.js';
-import { slackReplayContext } from '../support/integrations/slack-harness.js';
+import {
+  SLACK_PLANTED_SECRET,
+  SLACK_QUESTION_ID,
+  SLACK_TASK_ID,
+  slackPlantedRedactor,
+  slackReplayContext,
+} from '../support/integrations/slack-harness.js';
 import {
   closeFixtureAssertionWindow,
   loadSlackFixture,
@@ -477,5 +488,413 @@ describe('slack adapter, beyond the shared suite', () => {
       });
       expect(() => context.slack.socket({ onDelivery: async () => {} })).toThrow(/socket_mode/);
     });
+  });
+});
+
+/**
+ * **Slack in replay: every string it emits comes through the redactor** (standing rule 31).
+ *
+ * WP-11 made `ProviderCreateInput.redactor` required and Slack landed in parallel knowing nothing
+ * about it. The merge produced four typecheck errors, all of them in *test* call sites, because a
+ * required field is checked where the object is **constructed** and not where it is used: adding
+ * `redactor:` to four literals would have made `verify` green with Slack redacting nothing.
+ *
+ * So the deliverable is not the types, it is this file. The method is Sentry's: plant one obviously
+ * fake secret in **every** string the provider can emit, assert each field individually — "no
+ * secret anywhere" also passes for an adapter that emits nothing (standing rule 10) — and then
+ * assert the secret appears nowhere in the serialised result.
+ *
+ * The failure branch has its own cases throughout, because WP-07's review found redaction present
+ * on a success path and missing on the failure path three times in one file.
+ */
+describe('Slack in replay: every string it emits comes through the redactor', () => {
+  const secret = SLACK_PLANTED_SECRET;
+  const placeholder = '[REDACTED:integration:slack]';
+  /**
+   * A channel of this test's own.
+   *
+   * The replay serves the **most specific** matching interaction, so a scripted answer keyed on
+   * the recorded channel alone would lose to a recorded one that also matches the text — and the
+   * assertions below would then be made against the corpus rather than against what this test set
+   * up. A channel no fixture names removes the ambiguity.
+   */
+  const SCRIPT_CHANNEL = 'C0FAKESCRP1';
+
+  const thread = (): ThreadRef => ({
+    provider: 'slack',
+    channel: SCRIPT_CHANNEL,
+    thread_id: THREAD_TS,
+    url: null,
+  });
+
+  /** A `chat.postMessage` answer for a body the corpus does not record. */
+  const posted = (body: unknown): SlackInteraction => ({
+    method: 'POST',
+    path: '/chat.postMessage',
+    match: { channel: SCRIPT_CHANNEL },
+    status: 200,
+    body,
+    source: {
+      url: 'https://docs.slack.dev/reference/methods/chat.postMessage',
+      retrieved: '2026-09-10',
+      kind: 'documented-adapted',
+      note: "The page's example response, edited to carry the planted secret; scripted inside the test rather than recorded, because a corpus of documented shapes is not the place for adversarial ones.",
+    },
+  });
+
+  const okPost = (): SlackInteraction =>
+    posted({ ok: true, channel: SCRIPT_CHANNEL, ts: THREAD_TS, message: { text: 'posted' } });
+
+  const question = (options: readonly string[]): QuestionPost => ({
+    id: SLACK_QUESTION_ID,
+    task_id: SLACK_TASK_ID,
+    stage: 'refinement',
+    run_id: null,
+    text: 'Which currency should totals use?',
+    options: [...options],
+    blocking: true,
+    status: 'open',
+    asked_at: '2026-06-01T09:00:00.000Z',
+    deadline_at: null,
+    reminders_sent: 0,
+    answer: null,
+    answered_by_user_id: null,
+    answered_via: null,
+    answered_at: null,
+  });
+
+  it('sends no injected secret to Slack, in the fallback text or in any block', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script(okPost());
+    await context.port.postQuestion(
+      thread(),
+      // The options are a second document: they become button labels and button values.
+      question([`EUR ${secret}`, 'CZK']),
+      { markdown: `Which currency? token=${secret}` },
+    );
+
+    const sent = context.replay.requests.at(-1)?.body as {
+      text: string;
+      blocks: {
+        text?: { text: string };
+        elements?: { text?: { text: string }; value?: string }[];
+      }[];
+    };
+    // Field by field: the notification text, the section, the button label, the button value.
+    expect(sent.text, 'the fallback a phone shows').toBe(`Which currency? token=${placeholder}`);
+    expect(sent.blocks[0]?.text?.text, 'the section a human reads').toBe(
+      `Which currency? token=${placeholder}`,
+    );
+    const button = sent.blocks[1]?.elements?.[0];
+    expect(button?.text?.text, 'the button label').toBe(`EUR ${placeholder}`);
+    expect(button?.value, 'the button value, which comes back as the answer').toBe(
+      JSON.stringify({ q: SLACK_QUESTION_ID, o: `EUR ${placeholder}` }),
+    );
+    expect(JSON.stringify(sent), 'and nothing else on the wire carries it either').not.toContain(
+      secret,
+    );
+    expect(context.redactions).toContainEqual({ action: 'post_question', count: 2 });
+  });
+
+  /**
+   * The ordering half, pointed at an outbound path.
+   *
+   * `questionBlocks` caps a section at 3,000 characters, so a secret straddling that boundary is
+   * cut in two — and a redactor applied *after* the cap matches whole values, never prefixes, so
+   * the leading bytes of a token would reach the channel and nothing downstream could recover
+   * them. Redaction runs before the rendering, so the cut can only ever land inside a placeholder.
+   */
+  it('redacts before it renders, so a secret straddling a Block Kit limit leaves no fragment', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script(okPost());
+    // 2,990 + 36 characters: `truncate` keeps 2,999 of them, so the cut falls nine characters into
+    // the secret. `secret.slice(0, 9)` is exactly the fragment the wrong order leaves behind.
+    await context.port.postMessage(thread(), { markdown: `${'x'.repeat(2990)}${secret}` });
+
+    const sent = context.replay.requests.at(-1)?.body as {
+      text: string;
+      blocks: { text?: { text: string } }[];
+    };
+    const fragment = secret.slice(0, 9);
+    const section = sent.blocks[0]?.text?.text ?? '';
+    expect(section, 'the section carries no fragment of the secret').not.toContain(fragment);
+    expect(section, 'because the cut landed inside the placeholder').toBe(
+      `${'x'.repeat(2990)}[REDACTED…`,
+    );
+    // The fallback's own limit is 4,000, so the same text is not cut there — and the whole
+    // placeholder is what a phone shows.
+    expect(sent.text).toBe(`${'x'.repeat(2990)}${placeholder}`);
+    expect(sent.text).not.toContain(fragment);
+  });
+
+  it('emits no unredacted string from a posted message, field by field', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script(
+      posted({
+        ok: true,
+        channel: `C0FAKE-${secret}`,
+        ts: THREAD_TS,
+        message: { text: `posted ${secret}`, ts: THREAD_TS },
+      }),
+    );
+    const opened = await context.port.postTaskThread({
+      channel: SCRIPT_CHANNEL,
+      taskId: SLACK_TASK_ID,
+      body: { markdown: 'Picked up **TASK-1**' },
+    });
+
+    // Every field `threadRefSchema` publishes, and where each comes from.
+    expect(opened.provider).toBe('slack');
+    expect(opened.channel, 'Slack chose the channel it answered with').toBe(
+      `C0FAKE-${placeholder}`,
+    );
+    expect(opened.thread_id, 'the ts is bound by slackTsSchema; see the case below').toBe(
+      THREAD_TS,
+    );
+    expect(opened.url, 'divergence 2: no permalink without a second call').toBeNull();
+    expect(JSON.stringify(opened)).not.toContain(secret);
+
+    // The directory that remembers the thread holds the redacted channel too, so a later reply is
+    // addressed with what was emitted rather than with a second, raw copy.
+    expect(context.slack.threads.threadForTask(SLACK_TASK_ID)?.channel).toBe(
+      `C0FAKE-${placeholder}`,
+    );
+  });
+
+  it('refuses a message id that carries a secret rather than emitting one', async () => {
+    // `slackTsSchema` is `^\d{10}\.\d{6}$`, and redaction runs *before* the schema, so a `ts`
+    // carrying a secret arrives as a placeholder and fails the parse. Fail closed: an
+    // `invalid_response` naming the field, not a thread id with a credential in it.
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script(posted({ ok: true, channel: SCRIPT_CHANNEL, ts: `17800000.${secret}` }));
+    const error = (await context.port
+      .postTaskThread({ channel: SCRIPT_CHANNEL, taskId: SLACK_TASK_ID, body: { markdown: 'x' } })
+      .catch((caught: unknown) => caught)) as IntegrationError;
+    expect(error.code).toBe('invalid_response');
+    expect(String(error.message)).not.toContain(secret);
+  });
+
+  it('emits no unredacted string from an identity lookup, field by field', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script({
+      method: 'POST',
+      path: '/users.info',
+      match: { user: MAPPED_USER },
+      status: 200,
+      body: {
+        ok: true,
+        user: {
+          id: `U0FAKE-${secret}`,
+          team_id: 'T0FAKETEAM1',
+          name: `name-${secret}`,
+          real_name: `real-${secret}`,
+          profile: {
+            email: `${secret}@example.test`,
+            display_name: `display-${secret}`,
+            real_name: `real-${secret}`,
+          },
+        },
+      },
+      source: {
+        url: 'https://docs.slack.dev/reference/methods/users.info',
+        retrieved: '2026-09-10',
+        kind: 'documented-adapted',
+        note: "The page's example user object with the planted secret in every string; scripted inside the test rather than recorded.",
+      },
+    });
+    const identity = await context.port.resolveIdentity({ providerUserId: MAPPED_USER });
+
+    expect(identity?.provider).toBe('slack');
+    expect(identity?.external_id).toBe(`U0FAKE-${placeholder}`);
+    expect(identity?.email).toBe(`${placeholder}@example.test`);
+    expect(identity?.display_name).toBe(`display-${placeholder}`);
+    expect(identity?.verified, 'Slack answered the lookup').toBe(true);
+    expect(JSON.stringify(identity)).not.toContain(secret);
+  });
+
+  it('emits no unredacted string in the health probe detail', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script({
+      method: 'POST',
+      path: '/auth.test',
+      status: 200,
+      body: {
+        ok: true,
+        url: 'https://fake-workspace.slack.com/',
+        team: `acme ${secret}`,
+        user: 'agentic',
+        team_id: 'T0FAKETEAM1',
+        user_id: 'U0FAKEBOT01',
+        bot_id: `B0FAKE-${secret}`,
+      },
+      source: {
+        url: 'https://docs.slack.dev/reference/methods/auth.test',
+        retrieved: '2026-09-10',
+        kind: 'documented-adapted',
+        note: "The page's example response with the planted secret in the team name and the bot id; scripted inside the test rather than recorded.",
+      },
+    });
+    const probe = await context.port.testConnection();
+
+    expect(probe.ok).toBe(true);
+    expect(probe.detail).toBe(`Slack workspace acme ${placeholder} as bot B0FAKE-${placeholder}`);
+    expect(JSON.stringify(probe)).not.toContain(secret);
+  });
+
+  it('emits no unredacted string from a digest, on the wire or in what it returns', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script(posted({ ok: true, channel: `C0FAKE-${secret}`, ts: THREAD_TS }));
+    const ref = await context.port.postDigest(SCRIPT_CHANNEL, [
+      {
+        task_id: SLACK_TASK_ID,
+        title: `TASK-1 ${secret}`,
+        url: `https://tickets.example.test/${secret}`,
+        state: `blocked ${secret}`,
+        detail: `waiting on ${secret}`,
+      },
+    ]);
+
+    const sent = context.replay.requests.at(-1)?.body as { text: string; blocks: unknown };
+    const blocks = JSON.stringify(sent.blocks);
+    // Every field of a digest line is untrusted text from a ticket or a merge request.
+    expect(blocks).toContain(`TASK-1 ${placeholder}`);
+    expect(blocks).toContain(`https://tickets.example.test/${placeholder}`);
+    expect(blocks).toContain(`blocked ${placeholder}`);
+    expect(blocks).toContain(`waiting on ${placeholder}`);
+    expect(JSON.stringify(sent), 'nothing the digest sends carries it').not.toContain(secret);
+    expect(ref.channel, 'nor what it returns').toBe(`C0FAKE-${placeholder}`);
+    expect(JSON.stringify(ref)).not.toContain(secret);
+  });
+
+  /**
+   * The failure branch. Slack answers `200 {ok: false, error: "…"}` for most failures, and the
+   * adapter quotes that slug into an `IntegrationError` whose message becomes a log line and an
+   * `integration_actions` row.
+   */
+  it('emits no unredacted string when the call fails', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    context.replay.script(posted({ ok: false, error: `boom_${secret}` }));
+    const error = (await context.port
+      .postMessage(thread(), { markdown: `posting ${secret}` })
+      .catch((caught: unknown) => caught)) as IntegrationError;
+
+    expect(error.code, 'an unclassified slug is invalid_request and not retryable').toBe(
+      'invalid_request',
+    );
+    expect(error.message).toContain(placeholder);
+    expect(error.message, 'the failure branch reads the same redacted document').not.toContain(
+      secret,
+    );
+    expect(
+      JSON.stringify({ message: error.message, action: error.action, code: error.code }),
+    ).not.toContain(secret);
+  });
+
+  /**
+   * Inbound: the direction that writes to a table nobody can rewrite (BD-003).
+   *
+   * A thread reply becomes `feedback.received` and its text goes to `events.payload` — the first
+   * row on TD-012's list of writes that must be redacted first.
+   */
+  it('emits no unredacted string from a delivery it normalises', async () => {
+    const context = slackReplayContext({ redactor: slackPlantedRedactor() });
+    const delivery = context.emitFeedback(MAPPED_USER, `is my token ${secret} right?`);
+    const result = await context.port.inbound.normalise(delivery, {
+      projectId: context.projectId,
+      integrationId: context.integrationId,
+      resolveUser: () => null,
+    });
+
+    const { feedback } = (result.events[0] as { payload: { feedback: { text: string } } }).payload;
+    expect(feedback.text).toBe(`is my token ${placeholder} right?`);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+});
+
+/**
+ * The other half of rule 31, and the reason `composeSecretRedactors` exists.
+ *
+ * A composition root may legitimately pass `noSecretsRedactor()` — "this binding injected nothing"
+ * — and the adapter still knows three credentials nobody else has to remember to tell it. Each
+ * case below plants **one** of them on a path that credential can actually take, so a mutation
+ * that drops the wrapping fails by name rather than by a bulk "no secret anywhere".
+ */
+describe("the binding composes its own three credentials on top of the caller's redactor", () => {
+  it("redacts the bot token when the caller's redactor knows nothing about it", async () => {
+    // A Slack error body "echoes the request" (`http.ts`), and the request was authenticated with
+    // this token; an operator pasting it into the channel is the other route to the same string.
+    const context = slackReplayContext();
+    context.replay.script({
+      method: 'POST',
+      path: '/auth.test',
+      status: 200,
+      body: {
+        ok: true,
+        url: 'https://fake-workspace.slack.com/',
+        team: `acme ${FAKE_BOT_TOKEN}`,
+        team_id: 'T0FAKETEAM1',
+        user_id: 'U0FAKEBOT01',
+        bot_id: 'B0FAKEBOT01',
+      },
+      source: {
+        url: 'https://docs.slack.dev/reference/methods/auth.test',
+        retrieved: '2026-09-10',
+        kind: 'documented-adapted',
+        note: "The page's example response with the binding's own bot token in the team name; scripted inside the test rather than recorded.",
+      },
+    });
+    const probe = await context.port.testConnection();
+    expect(probe.detail).toBe(
+      'Slack workspace acme [REDACTED:integration:slack_bot_token] as bot B0FAKEBOT01',
+    );
+    expect(probe.detail).not.toContain(FAKE_BOT_TOKEN);
+  });
+
+  it("redacts the app-level token when the caller's redactor knows nothing about it", async () => {
+    // `apps.connections.open` answers a `wss://` URL that this adapter hands to the connector; a
+    // ticket that echoed the app token would put it in the string that opens the socket.
+    const opened: string[] = [];
+    const context = slackReplayContext({
+      timer: createVirtualTimer({ autoAdvance: true }),
+      connect: (url) => {
+        opened.push(url);
+        return { send: () => {}, close: () => {} };
+      },
+    });
+    context.replay.script({
+      method: 'POST',
+      path: '/apps.connections.open',
+      status: 200,
+      body: { ok: true, url: `wss://wss-fake.slack.com/link/?ticket=${FAKE_APP_TOKEN}` },
+      source: {
+        url: 'https://docs.slack.dev/reference/methods/apps.connections.open',
+        retrieved: '2026-09-10',
+        kind: 'documented-adapted',
+        note: "The page's example response with the binding's own app-level token in the ticket; scripted inside the test rather than recorded.",
+      },
+    });
+    const socket = context.slack.socket({ onDelivery: async () => {}, maxReconnects: 0 });
+    await socket.start();
+
+    expect(opened).toEqual([
+      'wss://wss-fake.slack.com/link/?ticket=[REDACTED:integration:slack_app_token]',
+    ]);
+    await socket.stop();
+  });
+
+  it("redacts the signing secret when the caller's redactor knows nothing about it", async () => {
+    // The credential an operator is most likely to paste into the channel while setting the app
+    // up — and a thread reply is written to `events.payload`, which is append-only (BD-003).
+    const context = slackReplayContext();
+    const delivery = context.emitFeedback(MAPPED_USER, `is ${FAKE_SIGNING_SECRET} the right one?`);
+    const result = await context.port.inbound.normalise(delivery, {
+      projectId: context.projectId,
+      integrationId: context.integrationId,
+      resolveUser: () => null,
+    });
+
+    const { feedback } = (result.events[0] as { payload: { feedback: { text: string } } }).payload;
+    expect(feedback.text).toBe('is [REDACTED:integration:slack_signing_secret] the right one?');
+    expect(JSON.stringify(result)).not.toContain(FAKE_SIGNING_SECRET);
   });
 });

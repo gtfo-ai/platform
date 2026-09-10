@@ -15,6 +15,18 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 4. Fill the token budget (default 12 k for tiers 0–1): tier 0 always (index, rules, repo map for code stages), then tier 1 by score until the budget is reached; write files into the workspace `.agentic-run/context/` and list them in the prompt with 2–3-line summaries.
 5. `kb_search` MCP tool exposes the same query for tier 2 (returns `path#heading` + snippet + score; never whole documents unless asked by path).
 
+> **A pack must render provider text as provider text — including the platform's own truncation
+> marker, which a provider can forge** (WP-11a review round 1, judged non-blocking; the item is in
+> `docs/TODO.md` and the mechanics are in `technical/06` § ObservabilityLogs). `agentic.truncation`
+> is a Sentry tag, a Loki stream label and a breadcrumb category — namespaces the *provider* writes
+> — so an application that tags its own events with it produces an answer claiming a cap fired when
+> none did. Every cap still holds (a real truncation overwrites the forged value), so what a forger
+> buys is a false "truncated" claim plus platform-looking text inside a prompt. **This is where it
+> closes**: whatever assembles a pack must not read a marker key as the platform's own voice, and
+> must not let integration text — a label, a tag, a log line, a ticket — occupy the pack's own
+> voice (BD-022). Closing it in the adapters instead would mean a second rule about provider-chosen
+> keys in the adapter ring, which already has one.
+
 ## Phase 2: hybrid search
 - Enable pgvector (`halfvec(1024)`, HNSW, cosine) on `kb_chunks`; embeddings by the `EmbeddingProvider` port (default local `Qwen3-Embedding-0.6B` int8 via transformers.js in the app process or a dedicated `indexer` role; alternatives Ollama, Voyage). Model id and dims stored on the index; changing the provider triggers a rebuild.
 - Hybrid = RRF over the tsvector rank and the vector rank in one SQL statement; optional reranker later. Adoption is gated by the per-project eval set (research/02: hybrid halves retrieval failures; measure first).

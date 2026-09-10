@@ -1,0 +1,141 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/query_range?query={app=\"api\", env=\"production\"}&start=1780304400000000000&end=1780308000000000000&limit=100&direction=backward",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": {
+          "resultType": "streams",
+          "result": [
+            {
+              "stream": { "app": "api", "env": "production", "level": "info" },
+              "values": [
+                ["1780305120000000000", "GET /invoices/43 200"],
+                ["1780305000000000000", "GET /invoices/42 200"]
+              ]
+            },
+            {
+              "stream": { "app": "api", "env": "production", "level": "error" },
+              "values": [
+                ["1780305060000000000", "ERROR trace_id=trace-abc cannot read totals of undefined"]
+              ]
+            }
+          ],
+          "stats": {
+            "ingester": {
+              "compressedBytes": 0,
+              "decompressedBytes": 0,
+              "decompressedLines": 0,
+              "headChunkBytes": 0,
+              "headChunkLines": 0,
+              "totalBatches": 0,
+              "totalChunksMatched": 0,
+              "totalDuplicates": 0,
+              "totalLinesSent": 0,
+              "totalReached": 0
+            },
+            "store": {
+              "compressedBytes": 0,
+              "decompressedBytes": 0,
+              "decompressedLines": 0,
+              "chunksDownloadTime": 0,
+              "totalChunksRef": 0,
+              "totalChunksDownloaded": 0,
+              "totalDuplicates": 0
+            },
+            "summary": {
+              "bytesProcessedPerSecond": 0,
+              "execTime": 0,
+              "linesProcessedPerSecond": 0,
+              "queueTime": 0,
+              "totalBytesProcessed": 0,
+              "totalLinesProcessed": 0
+            }
+          }
+        }
+      },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "Envelope, `resultType: \"streams\"`, the `[\"<nanosecond epoch>\", \"<line>\"]` value tuples and the whole `stats` block (`ingester`/`store`/`summary` with every member) are the page's query_range example verbatim. The label sets, the lines and the timestamps are replaced with obviously fake ones inside the harness's window, and a **second stream** is added so that the port's \"newest first across the whole result\" ordering has something to interleave — the page's example shows one stream, and nothing in it states an ordering across streams."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/query_range?query={app=\"api\", env=\"production\"}&start=1780304400000000000&end=1780308000000000000&limit=1&direction=backward",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": {
+          "resultType": "streams",
+          "result": [
+            {
+              "stream": { "app": "api", "env": "production", "level": "info" },
+              "values": [["1780305120000000000", "GET /invoices/43 200"]]
+            }
+          ]
+        }
+      },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The same documented envelope for `limit=1` — the page states \"limit: The max number of entries to return\" and defaults it to 100. `stats` is omitted here because the adapter never reads it and one copy of the documented block is enough evidence of its shape."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/query_range?query={app=\"api\", env=\"production\"} |= \"trace-abc\"&start=1780304400000000000&end=1780308000000000000&limit=100&direction=backward",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": {
+          "resultType": "streams",
+          "result": [
+            {
+              "stream": { "app": "api", "env": "production", "level": "error" },
+              "values": [
+                ["1780305060000000000", "ERROR trace_id=trace-abc cannot read totals of undefined"]
+              ]
+            }
+          ]
+        }
+      },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/query/log_queries/",
+        "retrieved": "2026-09-10",
+        "evidence": "composed",
+        "note": "The **query** is documented — `|=` is \"Log line contains string\" and the page's own example is `{job=\"mysql\"} |= \"error\"`. The *response* to this particular query is composed from the documented streams envelope: no page shows a filtered result, and Loki's own matching decides which lines survive."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/query_range?query={app=\"nothing\"}&start=1780304400000000000&end=1780308000000000000&limit=100&direction=backward",
+      "status": 200,
+      "body": { "status": "success", "data": { "resultType": "streams", "result": [] } },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "inferred",
+        "note": "The page publishes no example of a selector that matches nothing. An empty `result` array in the documented envelope is the reasoned guess, and it is the case that matters most: an empty answer is what an agent reads as \"the error stopped\", so the adapter must report `truncated: false` for it rather than leaving the flag ambiguous."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/query_range?query={app=\"api\", env=\"production\"}&start=1780304400000000000&end=1780308000000000000&limit=100&direction=backward",
+      "variant": "rate-limited",
+      "status": 429,
+      "headers": { "retry-after": "2" },
+      "text": "Too Many Requests\n",
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "inferred",
+        "note": "Grafana's HTTP API reference publishes **no status-code table** and no rate-limit headers, so both the 429 and the `Retry-After` are inferred: 429 is HTTP's rate-limit status, which Loki's query frontend and every reverse proxy in front of it use. The adapter maps it to `IntegrationRateLimitedError` and the executor waits on its injected timer; the body is plain text and is never read."
+      }
+    }
+  ]
+}

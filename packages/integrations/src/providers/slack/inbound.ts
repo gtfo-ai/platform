@@ -41,9 +41,10 @@ import type {
   InboundContext,
   NormalisedDelivery,
   NormalisedEvent,
+  SecretRedactor,
   WebhookDelivery,
 } from '@platform/application';
-import type { Actor, Id } from '@platform/contracts';
+import type { Actor, Id, JsonObject } from '@platform/contracts';
 import type { Clock, IdSource } from '@platform/domain';
 import * as z from 'zod';
 import {
@@ -74,6 +75,19 @@ export interface SlackInboundDeps {
   readonly ids: IdSource;
   readonly clock: Clock;
   readonly maxBodyBytes: number;
+  /**
+   * TD-012, **required** (standing rule 31), and this direction is the one that writes to an
+   * append-only table.
+   *
+   * A thread reply becomes `feedback.received` and a click becomes `task.question.answered`, both
+   * of which carry provider text straight into `events.payload` — the first row on TD-012's list of
+   * writes that must be redacted first. The classic case is an operator pasting `xoxb-…` into the
+   * channel while setting the app up: the platform would keep a live credential in a table it
+   * cannot rewrite (BD-003).
+   */
+  readonly redactor: SecretRedactor;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
+  readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
 
 const ignored = (
@@ -377,12 +391,27 @@ export const normaliseSlackDelivery = (
   if (Buffer.byteLength(delivery.body, 'utf8') > deps.maxBodyBytes) {
     return ignored('malformed_payload', `delivery exceeds ${deps.maxBodyBytes} bytes`);
   }
-  let body: unknown;
+  let parsed: unknown;
   try {
-    body = JSON.parse(delivery.body) as unknown;
+    parsed = JSON.parse(delivery.body) as unknown;
   } catch {
     return ignored('malformed_payload', 'delivery body is not JSON');
   }
+  /**
+   * One pass over the whole delivery, above every branch — the inbound twin of the transport's
+   * choke point, and for the same reason: every string below (an answer, a feedback body, the
+   * bounded provider text in an `ignored.detail`) is derived from this document, so there is no
+   * unredacted copy left for a later reader to pick up by mistake.
+   *
+   * It runs on the parsed document rather than on `delivery.body`, so a secret Slack escaped in the
+   * JSON is still matched; the byte cap above is deliberately on the raw bytes, because that cap is
+   * about how much this process is willing to parse.
+   */
+  const redacted = deps.redactor.redactJson({ body: parsed } as unknown as JsonObject);
+  if (redacted.count > 0) {
+    deps.onRedaction?.({ action: 'normalise_delivery', count: redacted.count });
+  }
+  const body = (redacted.value as { body: unknown }).body;
   const type = (body as { type?: unknown } | null)?.type;
 
   if (type === 'block_actions') {

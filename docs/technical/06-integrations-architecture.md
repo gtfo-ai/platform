@@ -78,6 +78,44 @@ agentTooling() -> {mcp?: McpServerSpec, cli?: CliSpec, skill: SkillRef, env: Env
 ```
 No inbound normaliser in v1: product/08 lists `error.issue.created` as optional and technical/02's catalogue has no such event, so a normaliser would have nothing legal to emit.
 
+> **Every string an errors adapter emits is bounded by a named cap** (WP-11 review round 1). Sentry
+> capped the stack trace, the message and the breadcrumb trail, and capped the tag *count* while
+> leaving a tag *value* unbounded — so a 2 MB `server_name` reached the port intact. `max_field_bytes`
+> now bounds every short provider string (tag names and values, a breadcrumb's `category` and
+> `level`, correlation ids, release, environment, assignee), a text field over it is truncated with
+> a marker, and an **identifier** over it (an id, a slug, a permalink) is `invalid_response` rather
+> than a plausible-looking cut. The event's size is therefore the sum of its caps.
+>
+> **And that sentence was false for three review rounds, which is the transferable part** (WP-11a,
+> standing rule 37). A breadcrumb's `category` and `level` went out raw — 100,027,762 bytes of JSON
+> at the shipped defaults (`max_breadcrumbs=25`, `max_breadcrumb_bytes=1024`) from 50 crumbs with
+> 2 MB fields, a figure `sentry/mapping.test.ts` now asserts rather than quotes — because every
+> round audited *the call sites that cap things*
+> instead of the *members of the emitted type*, and round 3 stated its sweep was complete. The rule
+> for any adapter: enumerate the type's members, state where each one's bound comes from, and make
+> the enumeration executable. `packages/integrations/src/providers/emitted-bounds.test.ts` drives
+> every method of both observability adapters from a hostile document, walks each answer to its
+> leaves — **object keys included**, since `tags` and `labels` are records whose keys are provider
+> text — and fails on any string past the largest configured cap and on any key not in its
+> inventory. **A member whose bound is a *refusal* needs a hostile document of its own**, which is
+> the second half of the rule and cost WP-11a its own review round: the walk feeds an identifier a
+> *safe* value, because a hostile one throws before anything is emitted, so deleting `identifier()`
+> from `ref.short_id`, `ref.url`, `project`, `event_id` or `issue_id` left all 758 tests green. An
+> enumeration is only as wide as the values it dares send. Two more members were found by that
+> enumeration and are now bounded: `HealthProbe.detail`
+> (the failure branch renders the binding's own `organization`, whose slug schema has no length) and
+> Loki's `LabelValues.name`. The cap runs **after** redaction, because a `[REDACTED:integration:…]`
+> placeholder is longer than the secret it replaces.
+
+> **The first provider cannot implement two of these methods** (WP-11). Sentry's published API
+> reference documents 21 endpoints for Events & Issues and **none of them creates or lists a
+> comment or a code link**; the only comment surface it publishes is the inbound
+> `Sentry-Hook-Resource: comment` webhook. The adapter therefore declares `comments: false` and
+> `linkMergeRequest: false` and refuses, rather than posting to an endpoint no vendor page names —
+> "tell the tracker the fix shipped" is discharged by the documented `resolve(issue, {inRelease})`
+> and by Sentry's own `Fixes <SHORT-ID>` commit-message convention. Whether the port should keep
+> the two methods at all is **Q43**.
+
 ### ObservabilityLogs
 ```
 queryRange(selector, from, to, limit, filter?) -> {streams[], line_count, truncated}
@@ -86,6 +124,58 @@ agentTooling() -> {cli: logcli spec, skill, env}
 capabilities() -> {labels, series, maxRangeMs, maxLines}
 ```
 The caps are enforced, not advisory: a range or a limit above `capabilities()` is `invalid_request`, and a result that hit the limit says `truncated: true`, because a truncated answer to "is this error still happening?" reads exactly like a complete one.
+
+> **Caps the port does not name, added by the adapter at WP-11.** `maxRangeMs` and `maxLines`
+> bound the *question*; neither bounds the *answer*. A single log line can be a 50 MB base64 blob,
+> and a thousand ordinary lines can still be tens of megabytes on their way into a context pack, so
+> the Loki binding also carries `max_line_bytes`, `max_label_bytes`, `max_labels`,
+> `max_label_values`, `max_series` and `max_total_bytes`. Each truncates with a visible marker
+> naming the cap that fired and each sets `truncated: true` where the answer has such a flag, so
+> the port's promise is kept along an axis it did not describe. **A cap counts what is emitted**:
+> `max_total_bytes` counts each line *and the label set copied onto it*, because counting the line
+> alone let a 2 MB label value across 20 lines answer with 42 MB and `truncated: false` (WP-11
+> review round 1). **A cap that bounds one item does not bound a list**: `series` returned every
+> label set Loki sent — 10 000 series of 5 kB of labels is 11 MB with no marker — until review
+> round 2 gave it `max_series` and put it under `max_total_bytes` too; its marker is a label set of
+> its own, because `series` returns a bare array with no `truncated` field to set. **A marker
+> counts inside its own cap**, which is what makes a cap idempotent: appending it outside meant
+> applying a cap twice measured the first marker and reported a dropped-byte count about platform
+> text, and two Sentry call sites disagreed by a factor of seventeen about the same value.
+> `maxRangeMs` binds `series` as well as `queryRange` — its window runs from `since` to now — and
+> that obligation lives in the shared contract suite rather than in one adapter. **Two members the
+> cap list did not name** were added at WP-11a by enumerating the emitted types instead of the call
+> sites: `HealthProbe.detail` is bounded by `max_line_bytes` after redaction, and
+> `LabelValues.name` — the caller's own argument echoed back — is *refused* past `max_label_bytes`
+> rather than cut, because it names the label being listed and is spliced into the request path.
+> That refusal is an obligation of the **shared** `ObservabilityLogs` contract suite as of WP-11a,
+> not a promise one adapter makes: it was refused by Loki, accepted by the fake and called by
+> nobody for a round, which is a fake kinder than the adapter (standing rules 1 and 23). **The
+> obligation has two halves, and only one of them can live in the suite.** The suite pins the
+> refusal's *position* — one byte past the binding's own cap, read out of that binding's config
+> rather than restated, because a comfortable distance is a negative case a too-wide guard passes
+> too. The *acceptance* at exactly the cap is asserted by each binding in its own tier —
+> `providers/emitted-bounds.test.ts` for the Loki adapter, `logs/fake.test.ts` for the fake —
+> because a name of the cap's length is one no harness has a recorded answer for and the Loki runner
+> replays fixtures. A provider author owes **both**: without the second, a binding that refuses
+> *every* label name passes the suite (standing rule 42, a boundary asserted from one side is half a
+> test). And the name is spliced into a path, so the *encoding* of it is pinned as well, per adapter,
+> by `providers/request-path.test.ts`. They are configuration rather than capability flags because
+> widening `ObservabilityLogsCapabilities` is a port change and belongs to whoever needs to read
+> them from the pipeline. The adapter also refuses to trust the server's own limit: a response
+> carrying more entries than the query asked for is cut and reported as truncated.
+
+> **A truncation marker is platform text in a provider-shaped field, and a provider can forge it**
+> (WP-11a review round 1, judged non-blocking and left for **WP-16**). `agentic.truncation` is a
+> tag on a Sentry event, a label on a Loki stream and a breadcrumb category — all namespaces the
+> provider also writes — so an application that tags its own events `agentic.truncation`, or a
+> label set that carries it, produces an answer that *claims* something was dropped when nothing
+> was. The direction matters: a **real** truncation overwrites the forged value (the platform
+> writes the marker last), so completeness cannot be faked and the caps still hold; what a forger
+> buys is a false "truncated" claim plus platform-looking text inside a prompt. **WP-16 owns it**,
+> because the harm is in the context pack: whatever assembles a pack must render provider text as
+> provider text and must not treat a marker key as the platform's own voice. Closing it in the
+> adapters would mean stripping the key from provider data first, which is a second rule about
+> provider-chosen keys in a place that has one already.
 
 ### Provider module layout
 
@@ -131,6 +221,19 @@ while asserting nothing about it.
 Adding GitHub = `providers/github/` implementing GitProvider + fixtures + setup guide + a runner for
 the existing suite (BD-017).
 
+> **A binding is created with a redactor, and the type requires one** (TD-012, WP-11 review round
+> 1). `ProviderCreateInput` is `{integrationId, config, secrets, redactor}`: every adapter takes a
+> `SecretRedactor` as a **required** option, never an optional one, because an optional security
+> dependency is an absent one — WP-11 shipped both observability adapters with an optional redactor
+> and a registration that passed none, so `redact.apply` was the identity function along the only
+> production path. Two halves make the guarantee whole: the caller injects what *it* knows (a
+> run-scoped token, a neighbouring binding's secret) and the adapter composes that with a redactor
+> built from its own **resolved** credentials, so a caller passing `noSecretsRedactor()` cannot
+> disarm the one secret the adapter is certain about. Platform services an adapter needs (the clock,
+> the transport, the redaction and unmapped-value sinks) are captured by a registration **factory**
+> — `createLokiRegistration(deps)`, as Jira's has been since WP-08 — which is also what lets the
+> contract suites drive `create()` itself rather than a constructor next to it.
+
 > **A new obligation on a port lands in the shared suite, in the same change.** WP-09 added one —
 > an adapter may not report a revocation it cannot substantiate, so a credential handle it did not
 > mint is `not_found` — and for a review round it lived only in GitLab's own contract file, which
@@ -149,6 +252,19 @@ the existing suite (BD-017).
 > because a vendor adds fields every release), `mapping.ts` (provider vocabulary → port
 > vocabulary), `webhook-verify.ts` + `webhook-payloads.ts` + `inbound.ts` (the inbound half),
 > `credentials.ts`, `provider.ts`, `index.ts`, `setup-guide.md`.
+>
+> **Two providers in one work package, kept apart** (WP-11): `providers/sentry/` and
+> `providers/loki/` implement *different* type ports and share no production code — not even the
+> thin HTTP client, because the two vendors differ in the base path, the auth header set (Loki may
+> be unauthenticated and adds a tenant header), the rate-limit signalling (Sentry publishes
+> `X-Sentry-Rate-Limit-*` on every response; Loki publishes nothing) and in whether a body is ever
+> text. A client parameterised over those four differences would be a module whose divergence
+> register described neither provider. What *is* shared is test support: one replay transport
+> (`test/contract/support/integrations/http-replay.ts`), which knows no vendor. Loki adds one file
+> the others have no analogue for — `logql.ts`, the query-language boundary: a stream selector is
+> **validated** because it is an expression the platform writes, and a caller's `filter` is
+> **escaped** because it is a literal that may have arrived from a ticket or an agent. LogQL
+> concatenated from untrusted text is injection with a query language instead of a shell (BD-022).
 >
 > Two constraints that turned out to be structural rather than stylistic:
 >
@@ -221,7 +337,21 @@ the existing suite (BD-017).
 
 ## Agent tooling exposure
 
-Providers declare what an agent may use inside a run: a CLI on PATH with an env spec (names of variables the runner injects from run-scoped credentials), a skill (recipes), and optionally an MCP server spec. The spec type has **no field for a value** — only names, and for an MCP server only header names — so a provider that wanted to ship a token would have to change the type, which is the review that should happen (BD-002, BD-025). The runner mounts only the tooling for the stage's tool policy (product/13 table). Mutating ticket/MR actions are exposed to agents only via the platform MCP (`add_ticket_comment`, `open_mr`, `update_mr_description`, `create_followup_ticket`, `ask_human`, `report_progress`, `kb_search`, `get_task_context`) which enforce policy and audit.
+Providers declare what an agent may use inside a run: a CLI on PATH with an env spec (names of variables the runner injects from run-scoped credentials), a skill (recipes), and optionally an MCP server spec. The spec type has **no field for a value** — only names, and for an MCP server only header names — so a provider that wanted to ship a token would have to change the type, which is the review that should happen (BD-002, BD-025). The runner mounts only the tooling for the stage's tool policy (product/13 table).
+
+> **A provider may legitimately mount nothing, and the type has to allow it** (settled at WP-11).
+> Sentry publishes three agent-facing surfaces and none of them has an environment contract the
+> platform can honour: the hosted MCP server authenticates by OAuth ("the first connection will
+> trigger an authentication flow"), which a run container cannot perform and which a spec carrying
+> only *names* cannot express; the classic `sentry-cli` documents its whole environment and has no
+> issue commands; the new interactive CLI's documentation is not on the vendor's documentation
+> site. WP-08 answered the same question the same way for Jira. So the honest spec is one that
+> mounts no CLI, no MCP server and no skill — and the contract suite was widened to accept it
+> **together with** a new obligation, because relaxing a rule alone is a weakening (standing rule
+> 23): *a spec that mounts nothing must declare no secret variable at all.* A credential injected
+> into a run container for a tool that is not there is a secret handed out for no reason (BD-025),
+> and that is now a positive assertion every provider and every fake is held to. The open question
+> about Sentry's missing comment and code-link endpoints is Q43. Mutating ticket/MR actions are exposed to agents only via the platform MCP (`add_ticket_comment`, `open_mr`, `update_mr_description`, `create_followup_ticket`, `ask_human`, `report_progress`, `kb_search`, `get_task_context`) which enforce policy and audit.
 
 ## Health and setup
 

@@ -15,6 +15,7 @@ import {
   exactSecretRedactor,
   type IntegrationActionExecutor,
   type MemoryIntegrationAuditLog,
+  noSecretsRedactor,
   type SecretRedactor,
   type TaskManagementPort,
   type VirtualTimer,
@@ -114,6 +115,9 @@ export const createJiraBinding = (options: JiraBindingOptions = {}): JiraBinding
       taskId: JIRA_TASK_ID,
     }),
     fetch: options.fetch ?? replay.fetch,
+    // Required since WP-11 (standing rule 31). The adapter composes it with the redactor it builds
+    // from its own configuration, so the no-op here states "this harness injected nothing else".
+    redactor: noSecretsRedactor(),
   });
 
   return {

@@ -163,6 +163,17 @@ export interface ObservabilityLogsContractContext {
   readonly window: { readonly from: string; readonly to: string };
   /** A label the seeded stream carries, and one of its values. */
   readonly label: { readonly name: string; readonly value: string };
+  /**
+   * The largest label **name** this binding accepts, in bytes — the suite sends exactly one byte
+   * past it.
+   *
+   * It is a harness field rather than a capability because widening
+   * `ObservabilityLogsCapabilities` is a port change (technical/06), and it must be the number the
+   * binding is really configured with: a harness that overstates it sends a value that a *wrong*,
+   * too-wide guard would also refuse, which is the negative case that proves nothing (standing
+   * rule 43). Read it out of the binding's own config rather than restating it.
+   */
+  readonly maxLabelNameBytes: number;
   /** A substring present in exactly one seeded line. */
   readonly lineFilter: string;
   cleanup(): Promise<void>;
@@ -281,12 +292,57 @@ export const runObservabilityLogsContract = (harness: ObservabilityLogsContractH
         const series = await port.series(context.selector, context.window.from);
         expect(series.length).toBeGreaterThan(0);
         expect(series[0]?.[context.label.name]).toBe(context.label.value);
+        // `series` builds a window from `since` to now, so `maxRangeMs` binds it exactly as it
+        // binds `queryRange` — the port publishes one cap, not one per method. WP-11 shipped a
+        // `series` that sent `start=0` for this argument, i.e. a 56-year scan, because the check
+        // lived in the other method (standing rule 23: the obligation belongs in this file).
+        await expectIntegrationError(
+          () => port.series(context.selector, '1970-01-01T00:00:00.000Z'),
+          'invalid_request',
+        );
       } else {
         await expectIntegrationError(
           () => port.series(context.selector, context.window.from),
           'unsupported_capability',
         );
       }
+    });
+
+    /**
+     * `LabelValues.name` is the caller's argument **echoed back**, which makes it the one emitted
+     * member of this port whose text does not come from the provider — and an agent's tool call is
+     * untrusted text too (BD-022). A binding that accepts any name emits any string, so the bound
+     * is a refusal rather than a cut: a truncated name would quietly answer about a *different*
+     * label (`loki/provider.ts`, `sentry/mapping.ts` on identifiers).
+     *
+     * It lives here because it was a provider-local promise for one review round: the Loki adapter
+     * refused, the fake accepted, and nothing called it (WP-11a review round 1; standing rules 1
+     * and 23).
+     *
+     * **One byte past `context.maxLabelNameBytes`, not an absurd value** (review round 2). This
+     * case used to send 128 KiB, which every wrong implementation refuses too: a Loki guard widened
+     * to `max_label_bytes + 64` stayed green here and everywhere else (standing rule 43). The
+     * *acceptance* half at exactly the cap cannot live in this file — a name of the cap's length is
+     * a label no harness has recorded an answer for, and the Loki runner replays fixtures — so each
+     * binding asserts it in its own tier: `providers/emitted-bounds.test.ts` for the adapter,
+     * `logs/fake.test.ts` for the fake. What the suite pins is the refusal's *position*.
+     */
+    it('refuses a label name one byte past the cap rather than echoing it back', async () => {
+      const tooLong = 'L'.repeat(context.maxLabelNameBytes + 1);
+      if (!port.capabilities().labels) {
+        // Unexercised today: both logs harnesses (the in-memory fake and the Loki replay) declare
+        // `labels`, so nothing reaches this branch — a binding without label discovery would, and
+        // that is what it is here for (standing rule 22: an unreachable branch says so at the
+        // line). Asserted rather than skipped: this test sat in the *errors* suite for one run of
+        // the author's own harness, where `capabilities().labels` is `undefined` — and passed,
+        // green and empty.
+        await expectIntegrationError(() => port.labels(tooLong), 'unsupported_capability');
+        return;
+      }
+      await expectIntegrationError(() => port.labels(tooLong), 'invalid_request');
+      // Which branch ran (standing rule 10): a name the binding accepts is still answered, so the
+      // refusal above is a bound rather than a method that refuses everything.
+      expect((await port.labels(context.label.name)).name).toBe(context.label.name);
     });
 
     it('declares agent tooling by name only', () => {

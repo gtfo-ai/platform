@@ -1,0 +1,42 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/organizations/acme-example/",
+      "status": 200,
+      "body": {
+        "avatar": { "avatarType": "letter_avatar", "avatarUuid": null },
+        "dateCreated": "2026-01-06T21:19:55.101Z",
+        "hasAuthProvider": false,
+        "id": "2",
+        "isEarlyAdopter": false,
+        "links": {
+          "organizationUrl": "https://acme-example.sentry.example.test",
+          "regionUrl": "https://sentry.example.test"
+        },
+        "name": "Acme Example",
+        "require2FA": false,
+        "slug": "acme-example",
+        "status": { "id": "active", "name": "active" }
+      },
+      "source": {
+        "url": "https://docs.sentry.io/api/organizations/retrieve-an-organization/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "Member list and shape from the page's 200 example; the slug, name, dates and the two `links` URLs are replaced with obviously fake values (BD-002), and the `features` array — which this adapter never reads — is removed."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/organizations/acme-nope/",
+      "status": 404,
+      "body": { "detail": "The requested resource does not exist" },
+      "source": {
+        "url": "https://docs.sentry.io/api/organizations/retrieve-an-organization/",
+        "retrieved": "2026-09-10",
+        "evidence": "inferred",
+        "note": "The page documents the 404 status but publishes no body for it. The `detail` string is illustrative, only the status is load-bearing, and the adapter never reads an error body (an error body echoes the request, and the request carried a token)."
+      }
+    }
+  ]
+}

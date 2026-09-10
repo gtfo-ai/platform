@@ -23,6 +23,7 @@ import type {
   GitProviderPort,
   ObservabilityErrorsPort,
   ObservabilityLogsPort,
+  SecretRedactor,
   TaskManagementPort,
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
@@ -47,6 +48,27 @@ export interface ProviderCreateInput {
    * fetches them from the secret store for the lifetime of the adapter (BD-002).
    */
   readonly secrets: Readonly<Record<string, string>>;
+  /**
+   * TD-012's redactor for every provider string this binding will emit — **required**, and the
+   * reason it is required is standing rule 31.
+   *
+   * WP-11 shipped both observability adapters with an *optional* `redactor` and no field here, so
+   * along the only production path `redact.apply` was the identity function and a scripted Loki
+   * response returned `Authorization: Bearer <token>` verbatim. `SecretRedactor`'s own docblock had
+   * already written the rule down for the executor — "deliberately required, with no default
+   * implementation … a redactor that defaults to *do nothing* is indistinguishable, at the call
+   * site, from one that works" — and the adapter ring reintroduced the defect one layer out.
+   *
+   * **What a caller must pass**, and what a fourth provider must accept: a `SecretRedactor` built
+   * from the secrets the platform injected into *this* binding (`exactSecretRedactor` over the
+   * resolved values, which is what `bindingSecretRedactor` does for the adapter's own credentials),
+   * or `noSecretsRedactor()` written out in full when the composition root really means "this
+   * binding injected nothing". Every adapter composes this with a redactor over its own resolved
+   * credentials (`composeSecretRedactors`), so a caller cannot disarm it by passing the no-op — but
+   * a caller that knows about a *run-scoped* or a neighbouring binding's secret can only tell the
+   * adapter about it through this field.
+   */
+  readonly redactor: SecretRedactor;
 }
 
 export interface ProviderRegistration<TType extends IntegrationType> {

@@ -66,6 +66,7 @@ describe('createJiraCloudRegistration', () => {
   it('builds a port from the binding’s config merged with its resolved secrets', () => {
     const registration = createJiraCloudRegistration(deps());
     const port = registration.create({
+      redactor: noSecretsRedactor(),
       integrationId: INTEGRATION_ID,
       config: CONFIG,
       secrets: SECRETS,
@@ -89,10 +90,16 @@ describe('createJiraCloudRegistration', () => {
   it('refuses a binding whose configuration is incomplete, at creation rather than at first call', () => {
     const registration = createJiraCloudRegistration(deps());
     expect(() =>
-      registration.create({ integrationId: INTEGRATION_ID, config: CONFIG, secrets: {} }),
+      registration.create({
+        integrationId: INTEGRATION_ID,
+        config: CONFIG,
+        secrets: {},
+        redactor: noSecretsRedactor(),
+      }),
     ).toThrow();
     expect(() =>
       registration.create({
+        redactor: noSecretsRedactor(),
         integrationId: INTEGRATION_ID,
         // An unknown key is an error, never dropped: a mis-spelled field must not look configured.
         config: { ...CONFIG, sight_url: 'https://typo.example.test' },
@@ -103,6 +110,7 @@ describe('createJiraCloudRegistration', () => {
 
   it('says it has no webhooks when no secret was resolved for it', () => {
     const port = createJiraCloudRegistration(deps()).create({
+      redactor: noSecretsRedactor(),
       integrationId: INTEGRATION_ID,
       config: CONFIG,
       secrets: { api_token: SECRETS.api_token },

@@ -27,6 +27,8 @@ export * from './logs/fake.js';
 export * from './providers/gitlab/index.js';
 export * from './providers/jira-cloud/index.js';
 export * from './providers/jira-cloud/registration.js';
+export * from './providers/loki/index.js';
+export * from './providers/sentry/index.js';
 export * from './providers/slack/index.js';
 export * from './registry.js';
 export * from './support/fake-support.js';

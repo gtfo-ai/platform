@@ -1,0 +1,22 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/series?match[]={app=\"api\", env=\"production\"}&start=1780304400000000000&end=1780309800000000000",
+      "status": 200,
+      "body": {
+        "status": "success",
+        "data": [
+          { "app": "api", "env": "production", "level": "info" },
+          { "app": "api", "env": "production", "level": "error" }
+        ]
+      },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The envelope and the shape of `data` — a list of flat label-set objects — are the page's `/loki/api/v1/series` example verbatim, as is the repeatable `match[]` parameter (\"Log stream selector argument; at least one required\"). The label sets are the harness's and match the two streams `query-range.json` returns."
+      }
+    }
+  ]
+}

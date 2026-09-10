@@ -2,7 +2,7 @@
  * The thin HTTP client under the Slack adapter.
  *
  * Three properties are load-bearing, each asserted by a test rather than promised here, and the
- * first one is why this module exists at all rather than `@slack/web-api` (Q41):
+ * first one is why this module exists at all rather than `@slack/web-api` (Q42):
  *
  *  1. **This client does not retry.** `WebClient` retries a failed call "up to 10 times, spaced
  *     out over about 30 minutes" by default and waits out a 429 itself
@@ -18,6 +18,12 @@
  *     status and Slack's own error slug, truncated. A transport failure keeps the original on
  *     `cause`, and what *that* carries is the injected `fetch`'s business — TD-012's
  *     `redactErrorInPlace` is the line that walks a cause chain (standing rule 13).
+ *  4. **Every document that crosses this transport is redacted here, once, before anything reads
+ *     it** (TD-012, and standing rule 31 for why the redactor is required rather than optional).
+ *     Both directions, because Slack is the one provider whose *request* is an emission: the text
+ *     and the Block Kit the platform posts are published to a channel full of humans. The response
+ *     pass is above the `ok` test, so the failure branch — which quotes Slack's `error` slug into
+ *     an error message — is covered by the same line as the success branch.
  *
  * ## Slack answers 200 for most failures
  *
@@ -40,7 +46,9 @@ import {
   IntegrationError,
   type IntegrationErrorCode,
   IntegrationRateLimitedError,
+  type SecretRedactor,
 } from '@platform/application';
+import type { JsonObject } from '@platform/contracts';
 
 export const SLACK_PROVIDER_ID = 'slack';
 
@@ -64,6 +72,13 @@ export interface SlackHttpOptions {
   readonly fetchImpl: SlackFetch;
   /** 0 disables the per-request timeout. */
   readonly timeoutMs: number;
+  /**
+   * TD-012, **required** (standing rule 31). See property 4: the two places redaction happens for
+   * everything that crosses this transport in either direction.
+   */
+  readonly redactor: SecretRedactor;
+  /** Where the redaction count for one call is reported. The redacted text is never reported. */
+  readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
 
 export interface SlackRequestSpec {
@@ -222,6 +237,22 @@ export interface SlackHttp {
 
 export const createSlackHttp = (options: SlackHttpOptions): SlackHttp => ({
   call: async (spec) => {
+    /**
+     * Property 4, outbound half. A Slack message is the one provider call the platform makes whose
+     * *request* is published to humans, so the request document is redacted here as well as the
+     * response — and at the transport rather than in the three port methods that build one, so
+     * there is no unredacted twin for a fourth to forget.
+     *
+     * The provider redacts the message body **before** it renders and caps it (`provider.ts`), so
+     * a secret straddling a Block Kit limit cannot survive as a cut fragment. This pass is what
+     * covers everything else a body carries, and it is idempotent: a value the first pass replaced
+     * is a placeholder by the time this one looks.
+     */
+    const outbound = options.redactor.redactJson({ body: spec.body } as unknown as JsonObject);
+    if (outbound.count > 0) {
+      options.onRedaction?.({ action: spec.action, count: outbound.count });
+    }
+    const requestBody = (outbound.value as { body: Readonly<Record<string, unknown>> }).body;
     const token = spec.token ?? options.token;
     const headers: Record<string, string> = {
       accept: 'application/json',
@@ -234,7 +265,7 @@ export const createSlackHttp = (options: SlackHttpOptions): SlackHttp => ({
     const init: SlackRequestInit = {
       method: 'POST',
       headers,
-      body: spec.encoding === 'json' ? JSON.stringify(spec.body) : encodeForm(spec.body),
+      body: spec.encoding === 'json' ? JSON.stringify(requestBody) : encodeForm(requestBody),
       ...(options.timeoutMs > 0 ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
     };
 
@@ -279,9 +310,26 @@ export const createSlackHttp = (options: SlackHttpOptions): SlackHttp => ({
       );
     }
 
-    const envelope = parsed as { ok?: unknown; error?: unknown };
+    /**
+     * Property 4, inbound half: one redaction pass over the whole document, before **any** branch
+     * reads it — which is why it sits above the `ok` test rather than beside the `return`.
+     *
+     * WP-07's review found redaction on a success path and missing on the failure path three times
+     * in one file, and this transport has exactly that shape: the failure branch quotes Slack's own
+     * `error` slug into an `IntegrationError` message that becomes a log line and an
+     * `integration_actions` row. Redacting the parsed document rather than the raw text is what
+     * makes the two branches share one guarantee — and it survives JSON escaping, where a pass over
+     * the response text would miss a secret Slack had escaped.
+     */
+    const inbound = options.redactor.redactJson({ body: parsed } as unknown as JsonObject);
+    if (inbound.count > 0) {
+      options.onRedaction?.({ action: spec.action, count: inbound.count });
+    }
+    const document = (inbound.value as { body: unknown }).body;
+
+    const envelope = document as { ok?: unknown; error?: unknown };
     if (envelope?.ok === true) {
-      return parsed;
+      return document;
     }
     // `ok` missing or not `true` — both are "this did not work", and a body with no `ok` at all is
     // not a Slack response. Neither may be read as success.

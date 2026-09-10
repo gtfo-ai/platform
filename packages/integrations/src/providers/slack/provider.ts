@@ -15,6 +15,27 @@
  * or its quiet hours are decided. WP-15 owns the first, WP-32 the second; this module owns the
  * capability, the Block Kit and the answer capture.
  *
+ * ## Where redaction happens, and why it is not a list of call sites
+ *
+ * TD-012 step 1, and standing rule 31 for why `redactor` is **required** rather than optional: a
+ * `create()` that forwards nothing type-checks, so the guarantee has to be asserted on strings the
+ * adapter emitted rather than on the shape of its options.
+ *
+ * There are three places, and each covers a direction rather than a field:
+ *
+ *  1. **Before rendering** (`redactInput`), for every document a port method is handed — a message
+ *     body, a question's options, a digest's lines. It is first because the rendering *caps* text
+ *     (3,000 characters a section, 75 a button label) and a redactor that ran after a cap leaves
+ *     the leading bytes of a token in the channel.
+ *  2. **At the transport** (`http.ts`), over the finished request document and over every response
+ *     document before any branch reads it — the success branch and the failure branch that quotes
+ *     Slack's own error slug.
+ *  3. **On an inbound delivery** (`inbound.ts`), before it is normalised, because a thread reply
+ *     becomes `feedback.received` and is written to `events.payload`, which is append-only.
+ *
+ * The redactor itself is the caller's composed with one over this binding's own three credentials,
+ * so a composition root that passes `noSecretsRedactor()` cannot disarm it.
+ *
  * ## Divergences from real Slack, stated rather than implied
  *
  * The fake's register has a dual for a real adapter: *the adapter must not be kinder than the
@@ -54,9 +75,11 @@
  */
 import {
   type ApprovalPost,
+  bindingSecretRedactor,
   type CommunicationCapabilities,
   type CommunicationInboundEvent,
   type CommunicationPort,
+  composeSecretRedactors,
   type DigestItem,
   type ExternalIdentity,
   type HealthProbe,
@@ -74,7 +97,7 @@ import {
   type ThreadRef,
   type WebhookDelivery,
 } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import type { Id, JsonObject } from '@platform/contracts';
 import type { Clock, IdSource } from '@platform/domain';
 import {
   approvalBlocks,
@@ -116,8 +139,17 @@ export interface SlackProviderOptions {
   readonly ids: IdSource;
   /** Where the thread ↔ task mapping lives. In memory by default (divergence 1). */
   readonly threads?: SlackThreadDirectory;
-  /** TD-012. Applied to the one provider string that leaves this ring: the probe's `detail`. */
-  readonly redactor?: SecretRedactor;
+  /**
+   * TD-012, applied to everything this adapter emits in either direction.
+   *
+   * **Required, never defaulted** (standing rule 31, earned at WP-11). While it was optional the
+   * registration did not pass one and `redact` was the identity function along the only production
+   * path, so every branch below it was decoration. What the adapter does with it is
+   * `composeSecretRedactors(input.redactor, bindingSecretRedactor([…this binding's own
+   * credentials…]))`, so a caller that passes `noSecretsRedactor()` still cannot disarm it.
+   */
+  readonly redactor: SecretRedactor;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
   readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
   /** Socket Mode: injected so a test drives envelopes without a network. */
   readonly connect?: SocketConnect;
@@ -174,11 +206,50 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
   const signingSecret = usableSigningSecret(options.secrets.signing_secret ?? null);
   const appToken = usableSigningSecret(options.secrets.app_token ?? null);
 
+  /**
+   * What the caller injected, plus **all three** of this binding's own credentials (standing rule
+   * 31, and the reason `composeSecretRedactors` exists: the caller can only tell the adapter about
+   * a run-scoped or a neighbouring binding's secret, and the adapter is the only thing that knows
+   * its own).
+   *
+   * All three, and each for a path that exists:
+   *
+   *  - **`bot_token`** authenticates every Web API call, so it is the value a Slack error body —
+   *    which "echoes the request" (`http.ts`) — can hand back, and the one an operator pastes into
+   *    the channel this binding reads when they are debugging a scope. Both routes end in a string
+   *    this ring emits.
+   *  - **`app_token`** authenticates `apps.connections.open`; the same echo argument applies, and a
+   *    Socket Mode failure is reported through the same error path as any other call.
+   *  - **`signing_secret`** never leaves the process, and it is included anyway: it is the
+   *    credential most likely to arrive back *inbound* (an operator pasting it into a thread while
+   *    setting the app up), and `feedback.received` writes a thread reply into `events.payload`,
+   *    which is append-only (BD-003) and cannot be fixed afterwards. Redacting a value the platform
+   *    holds is never wrong; deciding it "cannot reach a string we emit" is exactly the reasoning
+   *    rule 31 was written against.
+   *
+   * The values are the **effective** ones — what `create` actually sends and signs with — because a
+   * redactor that does not know the credential in flight has a hole where the audit log looks.
+   * `bindingSecretRedactor` skips anything under `MIN_SECRET_LENGTH`, so a blank or a stub cannot
+   * turn ordinary text into placeholders.
+   */
+  const redactor = composeSecretRedactors(
+    options.redactor,
+    bindingSecretRedactor([
+      { name: 'slack_bot_token', value: botToken },
+      appToken === null ? null : { name: 'slack_app_token', value: appToken },
+      signingSecret === null ? null : { name: 'slack_signing_secret', value: signingSecret },
+    ]),
+  );
+
   const http = createSlackHttp({
     baseUrl: config.base_url,
     token: botToken,
     fetchImpl: options.fetchImpl ?? ((url, init) => fetch(url, init as RequestInit)),
     timeoutMs: config.request_timeout_ms,
+    // The choke point: every document crossing the transport, in both directions, is redacted
+    // once before anything reads it.
+    redactor,
+    ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
   });
   const client: SlackClient = createSlackClient(http);
   const threads = options.threads ?? createMemoryThreadDirectory();
@@ -201,12 +272,34 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
   let botUserId: string | null = null;
 
   const redact = (action: string, text: string): string => {
-    if (options.redactor === undefined) {
-      return text;
+    const outcome = redactor.redactText(text);
+    if (outcome.count > 0) {
+      options.onRedaction?.({ action, count: outcome.count });
     }
-    const outcome = options.redactor.redactText(text);
-    options.onRedaction?.({ action, count: outcome.count });
     return outcome.value;
+  };
+
+  /**
+   * Everything a port method was handed, redacted in one pass **before** any of it is rendered.
+   *
+   * Two things make it this shape rather than a `redact.apply` per field. First, *order*: the
+   * rendering caps a section at 3,000 characters and a button label at 75, and redaction that ran
+   * after a cap would leave the leading bytes of a token in the channel — Sentry's rule at WP-11,
+   * "redaction strictly precedes every byte cap", pointed at an outbound path instead of an
+   * inbound one. Second, *coverage*: a message body, a question's options and a digest's lines are
+   * all documents with string leaves at arbitrary depth, and enumerating the leaves is how
+   * `environment` came to read an unredacted `tags` one work package ago.
+   *
+   * The transport redacts the finished request document as well; that pass is the net for anything
+   * added later, and it finds nothing to do when this one has run (a replaced value is a
+   * placeholder, so the count is 0 and no event is reported).
+   */
+  const redactInput = <TInput>(action: string, input: TInput): TInput => {
+    const outcome = redactor.redactJson({ input } as unknown as JsonObject);
+    if (outcome.count > 0) {
+      options.onRedaction?.({ action, count: outcome.count });
+    }
+    return (outcome.value as { input: TInput }).input;
   };
 
   /** The notification fallback: what a phone shows, and what a screen reader reads. */
@@ -217,19 +310,22 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
     channel: string;
     threadTs: string | null;
     body: MessageBody;
-    blocks: unknown;
+    /** Built from the **redacted** body, which is why it is a function and not a value. */
+    blocks(body: MessageBody): unknown;
     action: string;
   }): Promise<MessageRef> => {
-    // Caller-supplied `body.blocks` reach Slack unmodified: `assertBlockKit` checks shape and the
-    // vendor's limits, never content, so nothing here escapes text a caller put in a block. That is
-    // the deal the port states (`MessageBody`) — blocks are structure, and their text must already
-    // be escaped by whoever built them. `body.markdown`, the other route, is escaped by
-    // `toMrkdwn` in the block builders and by `fallback` in the notification text.
-    assertBlockKit(input.blocks, input.action);
+    const body = redactInput(input.action, input.body);
+    // Caller-supplied `body.blocks` reach Slack unmodified apart from redaction: `assertBlockKit`
+    // checks shape and the vendor's limits, never content, so nothing here escapes text a caller
+    // put in a block. That is the deal the port states (`MessageBody`) — blocks are structure, and
+    // their text must already be escaped by whoever built them. `body.markdown`, the other route,
+    // is escaped by `toMrkdwn` in the block builders and by `fallback` in the notification text.
+    const blocks = body.blocks ?? input.blocks(body);
+    assertBlockKit(blocks, input.action);
     const posted = await client.postMessage({
       channel: input.channel,
-      text: fallback(input.body.markdown),
-      blocks: input.blocks,
+      text: fallback(body.markdown),
+      blocks,
       threadTs: input.threadTs,
       action: input.action,
     });
@@ -267,6 +363,9 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         ids: options.ids,
         clock,
         maxBodyBytes: config.max_delivery_bytes,
+        // The same composed redactor: an answer and a feedback body are written to `events.payload`.
+        redactor,
+        ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
       }),
   };
 
@@ -283,6 +382,9 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
       return {
         ok: true,
         checked_at: clock.now(),
+        // A string this adapter renders itself. Its parts came through the transport, which has
+        // already redacted them, so this pass is defence in depth and normally counts 0 — kept and
+        // labelled rather than left to look like the guard that is doing the work (rule 22).
         detail: redact('test_connection', `Slack workspace ${workspace} as ${as}`),
         // A Slack bot token does not expire unless the app enables token rotation, and no endpoint
         // this adapter calls publishes the expiry; `null` is "unknown", not "never".
@@ -305,7 +407,7 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         channel: request.channel,
         threadTs: null,
         body: request.body,
-        blocks: request.body.blocks ?? taskThreadBlocks(request.body.markdown),
+        blocks: (body) => taskThreadBlocks(body.markdown),
         action: 'post_task_thread',
       });
       threads.rememberThread(request.taskId, {
@@ -321,16 +423,22 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
     },
 
     postQuestion: async (thread, question: QuestionPost, body) => {
+      // The options are a second document the port method was handed, and they are rendered into
+      // button labels (capped at 75 characters) and button values: redacted with the body, in one
+      // pass, before any of that happens. `send`'s own pass then finds nothing.
+      const asked = redactInput('post_question', {
+        body,
+        options: question.options ?? [],
+      });
       const posted = await send({
         channel: thread.channel,
         threadTs: thread.thread_id,
-        body,
-        blocks:
-          body.blocks ??
+        body: asked.body,
+        blocks: (redacted) =>
           questionBlocks({
             questionId: question.id,
-            markdown: body.markdown,
-            options: question.options ?? [],
+            markdown: redacted.markdown,
+            options: asked.options,
           }),
         action: 'post_question',
       });
@@ -344,7 +452,8 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         channel: thread.channel,
         threadTs: thread.thread_id,
         body,
-        blocks: body.blocks ?? approvalBlocks({ approvalId: approval.id, markdown: body.markdown }),
+        blocks: (redacted) =>
+          approvalBlocks({ approvalId: approval.id, markdown: redacted.markdown }),
         action: 'post_approval',
       }),
 
@@ -353,11 +462,12 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         channel: thread.channel,
         threadTs: thread.thread_id,
         body,
-        blocks: body.blocks ?? taskThreadBlocks(body.markdown),
+        blocks: (redacted) => taskThreadBlocks(redacted.markdown),
         action: 'post_message',
       }),
 
-    updateMessage: async (messageRef, body) => {
+    updateMessage: async (messageRef, rawBody) => {
+      const body = redactInput('update_message', rawBody);
       const blocks = body.blocks ?? taskThreadBlocks(body.markdown);
       assertBlockKit(blocks, 'update_message');
       const updated = await client.updateMessage({
@@ -370,7 +480,10 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
       return { ...messageRef, channel: updated.channel, message_id: updated.ts };
     },
 
-    postDigest: async (channel, items: readonly DigestItem[]) => {
+    postDigest: async (channel, rawItems: readonly DigestItem[]) => {
+      // A digest line's title, detail and URL come from tickets and merge requests, and its
+      // rendering caps each section: redacted first, like every other document this adapter sends.
+      const items = redactInput('post_digest', rawItems);
       const lines = items.map((item) => ({
         title: item.title,
         state: item.state,

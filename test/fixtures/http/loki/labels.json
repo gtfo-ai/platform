@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/labels?start=1780288200000000000&end=1780309800000000000",
+      "status": 200,
+      "body": { "status": "success", "data": ["app", "env", "level"] },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The envelope is the page's labels example verbatim (`{\"status\":\"success\",\"data\":[\"foo\",\"bar\",\"baz\"]}`); the three label names are the harness's. The window is six hours wide because the page states that `start` \"defaults to 6 hours ago\" — the port's `labels()` takes no time arguments, so the adapter sends that window explicitly from its injected clock rather than relying on a server default."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/label/app/values?start=1780288200000000000&end=1780309800000000000",
+      "status": 200,
+      "body": { "status": "success", "data": ["api", "worker"] },
+      "source": {
+        "url": "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "The envelope is the page's `/loki/api/v1/label/<name>/values` example verbatim (`[\"cat\",\"dog\",\"axolotl\"]`); the two values are the harness's."
+      }
+    }
+  ]
+}

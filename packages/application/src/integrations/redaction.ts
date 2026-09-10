@@ -79,6 +79,13 @@ export const exactSecretRedactor = (secrets: Iterable<InjectedSecret>): SecretRe
    * Object **keys** are left alone: the platform never builds a key out of secret material, and
    * rewriting keys could collide two fields into one. A provider that put a token in a key would
    * therefore leak it — recorded here rather than assumed away.
+   *
+   * That is a statement about the *platform's* keys, and one provider's keys are not the
+   * platform's: a Loki stream is `{"<label name>": "<value>"}`, so a label name is provider text
+   * in key position. Loki redacts its own keys where it emits them (`loki/provider.ts`,
+   * `capLabelSet`, divergence 9) and resolves the collision this docblock predicts by keeping the
+   * first entry and marking the set. Any later port whose keys come from the provider owes the
+   * same, and the check is "who chooses the key", not "who wrote the schema".
    */
   const redactValue = (input: JsonValue): RedactionOutcome<JsonValue> => {
     if (typeof input === 'string') {
@@ -123,3 +130,62 @@ export const exactSecretRedactor = (secrets: Iterable<InjectedSecret>): SecretRe
  * search for it finds every place that claims it.
  */
 export const noSecretsRedactor = (): SecretRedactor => exactSecretRedactor([]);
+
+/**
+ * Applies several redactors in order, summing their counts.
+ *
+ * It exists because of the shape rule 31 was earned in. An adapter is *handed* a redactor — that is
+ * the only way a secret the platform injected somewhere else (a run-scoped token, another
+ * binding's credential) can be known to it — and it also knows **its own** binding's credential,
+ * which nobody else has to remember to tell it. Requiring the injected one in the type discharges
+ * "an optional security dependency is an absent one"; composing its own on top is what stops a
+ * caller that passes {@link noSecretsRedactor} from silently disarming the adapter.
+ *
+ * Order is left to right and only matters for the placeholder name a value ends up carrying: once
+ * a redactor has replaced a value, the later ones see a placeholder rather than the secret, so a
+ * secret known to two of them is counted once.
+ */
+export const composeSecretRedactors = (
+  ...redactors: readonly SecretRedactor[]
+): SecretRedactor => ({
+  redactText: (text: string): RedactionOutcome<string> =>
+    redactors.reduce<RedactionOutcome<string>>(
+      (outcome, redactor) => {
+        const next = redactor.redactText(outcome.value);
+        return { value: next.value, count: outcome.count + next.count };
+      },
+      { value: text, count: 0 },
+    ),
+  redactJson: (value: JsonObject): RedactionOutcome<JsonObject> =>
+    redactors.reduce<RedactionOutcome<JsonObject>>(
+      (outcome, redactor) => {
+        const next = redactor.redactJson(outcome.value);
+        return { value: next.value, count: outcome.count + next.count };
+      },
+      { value, count: 0 },
+    ),
+});
+
+/**
+ * A redactor over the values a binding's own configuration carries, skipping the ones too short to
+ * redact safely.
+ *
+ * Every provider adapter builds one of these from the credentials it resolved — the *effective*
+ * ones, which include a value an operator put straight into `config` rather than into the secret
+ * store — and composes it with the redactor it was handed. A value shorter than
+ * {@link MIN_SECRET_LENGTH} is skipped rather than thrown on: `exactSecretRedactor` refuses it
+ * (redacting `abc` would erase ordinary text), and a binding whose password happens to be four
+ * characters must still be able to answer a query.
+ */
+export const bindingSecretRedactor = (
+  secrets: Iterable<InjectedSecret | null | undefined>,
+): SecretRedactor =>
+  exactSecretRedactor(
+    [...secrets].filter(
+      (secret): secret is InjectedSecret =>
+        secret !== null &&
+        secret !== undefined &&
+        secret.name.length > 0 &&
+        secret.value.length >= MIN_SECRET_LENGTH,
+    ),
+  );

@@ -3,7 +3,13 @@
  * adapter's whole error story rests on — it never retries, and it never builds an error carrying
  * the token.
  */
-import { IntegrationError, IntegrationRateLimitedError } from '@platform/application';
+import {
+  exactSecretRedactor,
+  IntegrationError,
+  IntegrationRateLimitedError,
+  noSecretsRedactor,
+  type SecretRedactor,
+} from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import {
   codeForSlackError,
@@ -17,6 +23,12 @@ import {
 /** Obviously fake, shaped like nothing Slack issues (BD-002). */
 const TOKEN = 'xoxb-FAKE-bot-token-DO-NOT-USE';
 
+/** The value the redaction cases plant in both directions. */
+const PLANTED = 'FAKE-injected-secret-value-0123456789';
+const PLACEHOLDER = '[REDACTED:integration:planted]';
+const plantedRedactor = (): SecretRedactor =>
+  exactSecretRedactor([{ name: 'planted', value: PLANTED }]);
+
 interface Call {
   readonly url: string;
   readonly init: SlackRequestInit;
@@ -24,19 +36,32 @@ interface Call {
 
 const httpWith = (
   responder: (call: Call) => Response,
-): { http: ReturnType<typeof createSlackHttp>; calls: Call[] } => {
+  redactor: SecretRedactor = noSecretsRedactor(),
+): {
+  http: ReturnType<typeof createSlackHttp>;
+  calls: Call[];
+  redactions: { action: string; count: number }[];
+} => {
   const calls: Call[] = [];
+  const redactions: { action: string; count: number }[] = [];
   const fetchImpl: SlackFetch = async (url, init) => {
     calls.push({ url, init });
     return responder({ url, init });
   };
   return {
     calls,
+    redactions,
     http: createSlackHttp({
       baseUrl: 'https://slack.example.test/api',
       token: TOKEN,
       fetchImpl,
       timeoutMs: 0,
+      // Required, never defaulted (standing rule 31): a test that does not care still says which
+      // redactor it means.
+      redactor,
+      onRedaction: (event) => {
+        redactions.push({ ...event });
+      },
     }),
   };
 };
@@ -188,6 +213,7 @@ describe('createSlackHttp', () => {
         throw boom;
       },
       timeoutMs: 0,
+      redactor: noSecretsRedactor(),
     });
     const error = await http.call({ ...post, body: {} }).catch((caught: unknown) => caught);
     expect((error as IntegrationError).code).toBe('unavailable');
@@ -207,6 +233,77 @@ describe('createSlackHttp', () => {
         code,
       });
     }
+  });
+});
+
+/**
+ * Property 4, from both sides and on both branches.
+ *
+ * The failure branch has its own case on purpose: WP-07's review found redaction present on a
+ * success path and missing on the failure path three times in one file, and this transport quotes
+ * Slack's own `error` slug into an `IntegrationError` message that becomes a log line and an
+ * `integration_actions` row.
+ */
+describe('createSlackHttp redacts every document that crosses it', () => {
+  it('redacts the request body before it is encoded, in both encodings', async () => {
+    const { http, calls, redactions } = httpWith(
+      () => json({ ok: true, channel: 'C1', ts: '1780000000.000100' }),
+      plantedRedactor(),
+    );
+    await http.call({ ...post, body: { channel: 'C1', text: `token=${PLANTED}` } });
+    await http.call({
+      method: 'users.lookupByEmail',
+      action: 'resolve_identity',
+      encoding: 'form',
+      body: { email: `${PLANTED}@example.test` },
+    });
+
+    expect(JSON.parse(calls[0]?.init.body ?? '{}')).toEqual({
+      channel: 'C1',
+      text: `token=${PLACEHOLDER}`,
+    });
+    expect(calls[0]?.init.body).not.toContain(PLANTED);
+    expect(calls[1]?.init.body).toBe(
+      `email=${encodeURIComponent(`${PLACEHOLDER}@example.test`)}`.replace(/%20/g, '+'),
+    );
+    expect(redactions.filter((event) => event.action === 'post_message')).toEqual([
+      { action: 'post_message', count: 1 },
+    ]);
+  });
+
+  it('redacts the response document before the success branch reads it', async () => {
+    const { http } = httpWith(
+      () => json({ ok: true, channel: `C-${PLANTED}`, ts: '1780000000.000100' }),
+      plantedRedactor(),
+    );
+    const body = (await http.call({ ...post, body: {} })) as { channel: string };
+    expect(body.channel).toBe(`C-${PLACEHOLDER}`);
+    expect(JSON.stringify(body)).not.toContain(PLANTED);
+  });
+
+  it("redacts the response document before the *failure* branch quotes Slack's slug", async () => {
+    const { http, redactions } = httpWith(
+      () => json({ ok: false, error: PLANTED }),
+      plantedRedactor(),
+    );
+    const error = (await http
+      .call({ ...post, body: {} })
+      .catch((caught: unknown) => caught)) as IntegrationError;
+    expect(error.code, 'an unknown slug is not retryable').toBe('invalid_request');
+    expect(error.message).toContain(PLACEHOLDER);
+    expect(error.message, 'the failure branch reads the same redacted document').not.toContain(
+      PLANTED,
+    );
+    expect(redactions).toEqual([{ action: 'post_message', count: 1 }]);
+  });
+
+  it('reports nothing when there was nothing to redact', async () => {
+    const { http, redactions } = httpWith(
+      () => json({ ok: true, channel: 'C1', ts: '1780000000.000100' }),
+      plantedRedactor(),
+    );
+    await http.call({ ...post, body: { channel: 'C1', text: 'hello' } });
+    expect(redactions, 'a count of 0 is not an event').toEqual([]);
   });
 });
 

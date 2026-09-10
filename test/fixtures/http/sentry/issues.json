@@ -1,0 +1,117 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/organizations/acme-example/issues/4242/",
+      "status": 200,
+      "body": {
+        "id": "4242",
+        "shareId": null,
+        "shortId": "API-7B",
+        "title": "TypeError: cannot read totals of undefined",
+        "culprit": "total(src/billing/totals.ts)",
+        "permalink": "https://sentry.example.test/acme-example/api/issues/4242/",
+        "logger": null,
+        "level": "error",
+        "status": "unresolved",
+        "statusDetails": {},
+        "substatus": "ongoing",
+        "isPublic": false,
+        "platform": "node",
+        "priority": "medium",
+        "project": { "id": "2", "name": "API", "slug": "api", "platform": "node" },
+        "type": "error",
+        "issueType": "error",
+        "issueCategory": "error",
+        "metadata": { "title": "TypeError: cannot read totals of undefined" },
+        "numComments": 0,
+        "assignedTo": null,
+        "isBookmarked": false,
+        "isSubscribed": true,
+        "hasSeen": false,
+        "annotations": [],
+        "count": "137",
+        "userCount": 12,
+        "firstSeen": "2026-05-28T21:19:55Z",
+        "lastSeen": "2026-06-01T09:11:00Z",
+        "seenBy": [],
+        "participants": [],
+        "firstRelease": {
+          "version": "2026.06.1",
+          "shortVersion": "2026.06.1",
+          "dateCreated": "2026-05-28T21:19:55.146Z",
+          "dateReleased": null,
+          "ref": null,
+          "url": null
+        },
+        "lastRelease": null
+      },
+      "source": {
+        "url": "https://docs.sentry.io/api/events/retrieve-an-issue/",
+        "retrieved": "2026-09-10",
+        "evidence": "documented-adapted",
+        "note": "Every member and its type come from the page's 200 example, including `\"count\": \"150\"` as a string beside a numeric `userCount`. The values are replaced with obviously fake ones (BD-002) and the members this adapter never reads — `activity`, `tags`, `stats`, `seerFixabilityScore` — are removed."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/organizations/acme-example/issues/4242/",
+      "variant": "resolved",
+      "status": 200,
+      "body": {
+        "id": "4242",
+        "shareId": null,
+        "shortId": "API-7B",
+        "title": "TypeError: cannot read totals of undefined",
+        "culprit": "total(src/billing/totals.ts)",
+        "permalink": "https://sentry.example.test/acme-example/api/issues/4242/",
+        "logger": null,
+        "level": "error",
+        "status": "resolved",
+        "statusDetails": { "inRelease": "2026.06.2" },
+        "substatus": null,
+        "isPublic": false,
+        "platform": "node",
+        "project": { "id": "2", "name": "API", "slug": "api", "platform": "node" },
+        "type": "error",
+        "metadata": { "title": "TypeError: cannot read totals of undefined" },
+        "numComments": 0,
+        "assignedTo": null,
+        "count": "137",
+        "userCount": 12,
+        "firstSeen": "2026-05-28T21:19:55Z",
+        "lastSeen": "2026-06-01T09:11:00Z"
+      },
+      "source": {
+        "url": "https://docs.sentry.io/api/events/retrieve-an-issue/",
+        "retrieved": "2026-09-10",
+        "evidence": "composed",
+        "note": "The same documented issue shape after a resolution: `status` becomes `resolved` and `statusDetails` carries the release. The *shape* is the page's; the transition is composed, because no published page shows an issue before and after a PUT. Served only once the harness activates the `resolved` variant, which it does when it sees the PUT go out."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/organizations/acme-example/issues/9999/",
+      "status": 404,
+      "body": { "detail": "The requested resource does not exist" },
+      "source": {
+        "url": "https://docs.sentry.io/api/events/retrieve-an-issue/",
+        "retrieved": "2026-09-10",
+        "evidence": "inferred",
+        "note": "The page documents 404 as an error status and publishes no body for it. Only the status is load-bearing; the adapter maps it to `not_found` and never reads the body."
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/organizations/acme-example/issues/4242/",
+      "status": 200,
+      "body": { "status": "resolved", "statusDetails": {} },
+      "source": {
+        "url": "https://docs.sentry.io/api/events/update-an-issue/",
+        "retrieved": "2026-09-10",
+        "evidence": "inferred",
+        "note": "The page documents the request parameters (`status`, `statusDetails`, `ignoreDuration`, `assignedTo`, …) and a 200, but publishes **no response example at all**. This body is a reasoned guess and is deliberately never read: the adapter re-reads the issue after the PUT, precisely because the response shape is undocumented."
+      }
+    }
+  ]
+}

@@ -5,7 +5,12 @@
  * producing exactly one event, because "no event was produced" also passes against a harness that
  * delivered nothing (standing rule 4).
  */
-import type { ExternalIdentity, InboundContext } from '@platform/application';
+import {
+  type ExternalIdentity,
+  exactSecretRedactor,
+  type InboundContext,
+  noSecretsRedactor,
+} from '@platform/application';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -44,6 +49,9 @@ beforeEach(() => {
     ids: sequentialIds(1),
     clock: fixedClock('2026-06-01T09:00:00.000Z'),
     maxBodyBytes: 262_144,
+    // Required, never defaulted (standing rule 31): a case that does not care still says which
+    // redactor it means. The cases that do care replace it.
+    redactor: noSecretsRedactor(),
   };
 });
 
@@ -457,5 +465,66 @@ describe('fail open on an inbound notification (standing rule 20)', () => {
   it('bounds the provider text it puts in a reason', async () => {
     const result = await deliver({ type: 'x'.repeat(500) });
     expect(result.ignored[0]?.detail.length).toBeLessThan(120);
+  });
+});
+
+/**
+ * TD-012 in the direction that writes to an append-only table.
+ *
+ * A thread reply becomes `feedback.received` and a click becomes `task.question.answered`; both
+ * payloads are written to `events.payload`, which cannot be rewritten afterwards (BD-003). The
+ * realistic source is an operator pasting a credential into the channel while setting the app up.
+ *
+ * The `ignored.detail` case is the failure branch, and it is here for the reason WP-07's review
+ * gave: redaction present on the success path and missing on the failure path was found three
+ * times in one file.
+ */
+describe('a delivery is redacted before any branch reads it (standing rule 31)', () => {
+  const PLANTED = 'FAKE-injected-secret-value-0123456789';
+  const PLACEHOLDER = '[REDACTED:integration:planted]';
+
+  beforeEach(() => {
+    deps = { ...deps, redactor: exactSecretRedactor([{ name: 'planted', value: PLANTED }]) };
+  });
+
+  it('redacts the text of a feedback reply', async () => {
+    const result = await deliver(threadReply(MAPPED, `is my token ${PLANTED} right?`));
+    const { feedback } = (result.events[0] as { payload: { feedback: { text: string } } }).payload;
+    expect(feedback.text).toBe(`is my token ${PLACEHOLDER} right?`);
+    expect(JSON.stringify(result), 'and nowhere else on the delivery either').not.toContain(
+      PLANTED,
+    );
+  });
+
+  it('redacts an answer, whether it arrives as a button value or as a reply', async () => {
+    deps.threads.rememberQuestion({ channel: CHANNEL, threadTs: THREAD_TS }, QUESTION_ID);
+    const clicked = await deliver(answerClick(MAPPED, `option ${PLANTED}`));
+    const clickedAnswer = clicked.events[0]?.payload as { answer: string } | undefined;
+    expect(clickedAnswer?.answer).toBe(`option ${PLACEHOLDER}`);
+    const replied = await deliver(threadReply(MAPPED, `use ${PLANTED}`));
+    const repliedAnswer = replied.events[0]?.payload as { answer: string } | undefined;
+    expect(repliedAnswer?.answer).toBe(`use ${PLACEHOLDER}`);
+    expect(JSON.stringify([clicked, replied])).not.toContain(PLANTED);
+  });
+
+  it('redacts the provider text it quotes into an ignored reason (the failure branch)', async () => {
+    const result = await deliver({ type: `unknown-${PLANTED}` });
+    expect(result.events).toEqual([]);
+    expect(result.ignored[0]?.detail).toContain(PLACEHOLDER);
+    expect(result.ignored[0]?.detail).not.toContain(PLANTED);
+  });
+
+  it('reports the count and never the text', async () => {
+    const reported: { action: string; count: number }[] = [];
+    deps = {
+      ...deps,
+      onRedaction: (event) => {
+        reported.push({ ...event });
+      },
+    };
+    await deliver(threadReply(MAPPED, `${PLANTED} and ${PLANTED}`));
+    expect(reported).toEqual([{ action: 'normalise_delivery', count: 2 }]);
+    await deliver(threadReply(MAPPED, 'nothing to see'));
+    expect(reported, 'a count of 0 is not an event').toHaveLength(1);
   });
 });

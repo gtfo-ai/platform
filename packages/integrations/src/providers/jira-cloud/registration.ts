@@ -50,13 +50,16 @@ export const createJiraCloudRegistration = (
   secretFields: [...JIRA_CLOUD_SECRET_FIELDS],
   setupGuidePath: 'packages/integrations/src/providers/jira-cloud/setup-guide.md',
   agentTooling: JIRA_CLOUD_AGENT_TOOLING,
-  create: ({ integrationId, config, secrets }) =>
+  create: ({ integrationId, config, secrets, redactor }) =>
     createJiraCloudTaskManagement({
       integrationId,
       config: jiraCloudConfigSchema.parse({
         ...(config as Record<string, unknown>),
         ...secrets,
       }),
+      // Standing rule 31: the field is required on `ProviderCreateInput`, and this is the
+      // registration honouring it rather than dropping it on the floor.
+      redactor,
       executor: deps.executor,
       clock: deps.clock,
       actionContext: deps.actionContext,

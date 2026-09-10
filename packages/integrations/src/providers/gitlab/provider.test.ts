@@ -9,6 +9,7 @@
 import {
   IntegrationError,
   IntegrationUnsupportedError,
+  noSecretsRedactor,
   type SecretRedactor,
 } from '@platform/application';
 import { fixedClock } from '@platform/domain';
@@ -81,7 +82,8 @@ const build = (
     secrets: { token: TOKEN },
     fetchImpl,
     clock: fixedClock(AT),
-    ...(options.redactor === undefined ? {} : { redactor: options.redactor }),
+    // Required (standing rule 31): a test that does not care still says which redactor it means.
+    redactor: options.redactor ?? noSecretsRedactor(),
     onRedaction: (event) => redactions.push(event),
   });
 
@@ -806,6 +808,7 @@ describe('construction', () => {
         config: gitlabConfigSchema.parse({ base_url: HOST }),
         secrets: {},
         clock: fixedClock(AT),
+        redactor: noSecretsRedactor(),
       }),
     ).toThrow(/GITLAB_TOKEN/);
   });

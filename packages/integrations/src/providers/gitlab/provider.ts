@@ -125,8 +125,12 @@ export interface GitLabProviderOptions {
    * TD-012. Applied to two provider strings that leave this ring: the health probe's `detail` and
    * the tail of a CI job log. `getJobLog`'s port docblock names WP-09 for exactly this — "a CI job
    * log is the text most likely to contain a token the platform itself injected".
+   *
+   * **Required, never defaulted** (standing rule 31, earned at WP-11): while it was optional the
+   * registration did not pass one, so `redact` was the identity function along the only production
+   * path and the job-log tail left this ring unredacted.
    */
-  readonly redactor?: SecretRedactor;
+  readonly redactor: SecretRedactor;
   /** Where a redaction count is reported. Optional so a unit test can assert on it. */
   readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
@@ -216,9 +220,6 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
   };
 
   const redact = (action: string, text: string): string => {
-    if (options.redactor === undefined) {
-      return text;
-    }
     const outcome = options.redactor.redactText(text);
     options.onRedaction?.({ action, count: outcome.count });
     return outcome.value;

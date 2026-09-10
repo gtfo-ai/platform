@@ -7,11 +7,19 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { AgentTooling, RateLimitPolicy } from '@platform/application';
-import type { ProviderRegistration } from '../../registry.js';
+import type {
+  AgentTooling,
+  IntegrationTimer,
+  Logger,
+  RateLimitPolicy,
+} from '@platform/application';
+import type { Clock, IdSource } from '@platform/domain';
+import type { ProviderCreateInput, ProviderRegistration } from '../../registry.js';
 import { slackConfigSchema, slackSecretFields } from './config.js';
-import { SLACK_PROVIDER_ID } from './http.js';
-import { createSlackProvider } from './provider.js';
+import { SLACK_PROVIDER_ID, type SlackFetch } from './http.js';
+import { createSlackProvider, type SlackProvider, type SlackProviderOptions } from './provider.js';
+import type { SocketConnect } from './socket.js';
+import type { SlackThreadDirectory } from './threads.js';
 
 /**
  * Slack exposes **nothing** to an agent, and that is a decision rather than an omission.
@@ -40,7 +48,57 @@ export const slackRateLimitPolicy: RateLimitPolicy = {
   maxConcurrent: 2,
 };
 
-export const slackProviderRegistration: ProviderRegistration<'communication'> = {
+/**
+ * What the composition root supplies once, when it registers the provider.
+ *
+ * The split follows Loki's and Sentry's registrations (WP-11): `ProviderCreateInput` carries what
+ * belongs to a *binding* — its configuration, its secrets and its redactor — while the clock, the
+ * transport, the id source, the thread directory, the socket connector, the timer and the
+ * observability sink are **platform services** captured here.
+ *
+ * That split is also what lets the contract suites drive the production path. Slack's registration
+ * was a bare object literal until WP-11's merge, so the harness had to call `createSlackProvider`
+ * directly — and a required `redactor` on `ProviderCreateInput` is checked where the object is
+ * *constructed*, not where it is used, so every Slack test could have kept passing while `create`
+ * forwarded nothing at all. Standing rule 31, second half: "the composition root that builds it in
+ * production must be the thing the tests drive".
+ */
+export interface SlackRegistrationDeps {
+  /** ISO-8601 now: signature replay detection and feedback timestamps both need it. */
+  readonly clock: Clock;
+  /** Defaults to `globalThis.fetch`; the contract suites pass a replay transport. */
+  readonly fetch?: SlackFetch;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
+  readonly onRedaction?: SlackProviderOptions['onRedaction'];
+  /**
+   * Mints the id of a `feedback` record. Defaults to a v4 uuid: `uuidv7()` lives in Postgres
+   * (technical/03) and this ring has no database; `idSchema` is `z.uuid()` and accepts either.
+   */
+  readonly ids?: IdSource;
+  /** Where the thread ↔ task mapping lives. In memory by default (divergence 1); WP-15's seam. */
+  readonly threads?: SlackThreadDirectory;
+  /** Socket Mode: injected so a test drives envelopes without a network. */
+  readonly connect?: SocketConnect;
+  /** Socket Mode: reconnect backoff runs on this, never on a wall clock. */
+  readonly timer?: IntegrationTimer;
+  readonly logger?: Logger;
+}
+
+/**
+ * Slack's registration, narrowed to the adapter's own port.
+ *
+ * `ProviderRegistration<'communication'>` promises a `CommunicationPort`, which is what the
+ * registry and the pipeline see (BD-017). A caller that registered this module by name knows it
+ * gets the two extras Slack adds — the thread directory and the Socket Mode connection — and
+ * narrowing the return type here is what lets it have them without a cast.
+ */
+export interface SlackProviderRegistration extends ProviderRegistration<'communication'> {
+  create(input: ProviderCreateInput): SlackProvider;
+}
+
+export const createSlackRegistration = (
+  deps: SlackRegistrationDeps,
+): SlackProviderRegistration => ({
   id: SLACK_PROVIDER_ID,
   type: 'communication',
   displayName: 'Slack (Socket Mode)',
@@ -53,12 +111,24 @@ export const slackProviderRegistration: ProviderRegistration<'communication'> = 
       integrationId: input.integrationId,
       config: slackConfigSchema.parse(input.config),
       secrets: input.secrets,
-      clock: { now: () => new Date().toISOString() as `${string}T${string}` },
-      // The id of a `feedback` record. `uuidv7()` lives in Postgres (technical/03) and this ring
-      // has no database, so a v4 is minted here; `idSchema` is `z.uuid()` and accepts it.
-      ids: { next: () => randomUUID() },
+      // Standing rule 31: required on `ProviderCreateInput`, and forwarded here rather than left to
+      // a default that redacts nothing. The adapter composes it with its own three credentials.
+      redactor: input.redactor,
+      clock: deps.clock,
+      ids: deps.ids ?? { next: () => randomUUID() },
+      ...(deps.fetch === undefined ? {} : { fetchImpl: deps.fetch }),
+      ...(deps.onRedaction === undefined ? {} : { onRedaction: deps.onRedaction }),
+      ...(deps.threads === undefined ? {} : { threads: deps.threads }),
+      ...(deps.connect === undefined ? {} : { connect: deps.connect }),
+      ...(deps.timer === undefined ? {} : { timer: deps.timer }),
+      ...(deps.logger === undefined ? {} : { logger: deps.logger }),
     }),
-};
+});
+
+/** The system-clock registration a composition root uses when it has nothing to inject. */
+export const slackProviderRegistration: SlackProviderRegistration = createSlackRegistration({
+  clock: { now: () => new Date().toISOString() as `${string}T${string}` },
+});
 
 export {
   ANSWER_ACTION_ID,
@@ -83,6 +153,7 @@ export {
   type SlackDigestOptions,
 } from './digest.js';
 export { codeForSlackError, SLACK_PROVIDER_ID, type SlackFetch } from './http.js';
+export type { SlackInboundDeps } from './inbound.js';
 export { normaliseSlackDelivery } from './inbound.js';
 export {
   readSlackManifest,

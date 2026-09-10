@@ -16,15 +16,39 @@
  *     everything and matched nothing would turn a broken recipe into an empty result, which reads
  *     as "no errors".
  *  2. **Stricter — a range wider than `maxRangeMs`, a limit above `maxLines`, or `from >= to` is
- *     `invalid_request`.** Loki would clamp or answer with what it has.
+ *     `invalid_request`.** Loki would clamp or answer with what it has. This holds for `series`
+ *     too: its window runs from `since` to now, and the shared suite asserts the refusal for both
+ *     the fake and the real adapter (standing rule 23 — an obligation the suite does not carry is
+ *     a provider-local promise).
  *  3. **Stricter — every line returned is validated against `logLineSchema`.**
- *  4. **Kinder, deliberately — no quota, no tenant checks, no partial responses.** Loki returns
- *     partial results with a warning when a query hits its own limits; here a query either
- *     succeeds or is refused. A 429 is reachable only by scripting one, which
- *     `test/contract/integrations/action-executor.contract.test.ts` ("logs — query_range") does,
- *     through `IntegrationActionExecutor`.
+ *  4. **Kinder, deliberately — no quota, no tenant checks, no partial responses, and none of the
+ *     adapter's volume caps.** Loki returns partial results with a warning when a query hits its
+ *     own limits; here a query either succeeds or is refused. A 429 is reachable only by scripting
+ *     one, which `test/contract/integrations/action-executor.contract.test.ts` ("logs —
+ *     query_range") does, through `IntegrationActionExecutor`. The byte and count caps a real
+ *     binding carries — `max_line_bytes`, `max_label_bytes`, `max_labels`, `max_label_values`,
+ *     `max_series`, `max_total_bytes` — are **binding configuration**, so this fake has none of
+ *     them and will happily return a 50 MB line or ten thousand series. They are asserted on the
+ *     adapter in `test/contract/integrations/loki.contract.test.ts` ("log volume is a
+ *     denial-of-service surface"), which is the only place they can be: a test that leans on this
+ *     fake for "the answer is bounded" is leaning on nothing. **One exception, divergence 6:** the
+ *     bound on a label *name* is not a cap on a provider's answer but a refusal of the caller's
+ *     argument, and a fake that accepts what the adapter refuses is kinder in the dangerous
+ *     direction.
  *  5. **Different — lines are stored in insertion order and returned in timestamp order**, with
  *     no de-duplication of identical timestamps, where Loki orders by (timestamp, stream).
+ *  6. **Stricter — `labels(name)` refuses a name past `FAKE_MAX_LABEL_BYTES`** (WP-11a review
+ *     round 1). This is the one volume cap divergence 4 does not get to wave away, and the reason
+ *     is that it is not a cap on a *provider's* answer: `LabelValues.name` is the **caller's own
+ *     argument echoed back**, so a port that accepts a 128 KiB name emits a 128 KiB string, and
+ *     the argument reaches this port from an agent's tool call, which is untrusted too (BD-022).
+ *     The Loki adapter refuses it past `max_label_bytes` for that reason; this fake accepted it,
+ *     the shared suite never called it with one, and that is standing rule 1 in the dangerous
+ *     direction — the fake being **kinder** than the adapter. The bound is a constant here where
+ *     the adapter's is configuration, which is the stricter-or-equal direction as long as it stays
+ *     at or below the port's own ceiling (Loki's `max_label_bytes` may be configured up to 65,536).
+ *     The obligation now lives in `observability-contract-suites.ts`, so a future logs provider
+ *     that echoes an unbounded name fails the shared suite rather than this file (standing rule 23).
  */
 import {
   type AgentTooling,
@@ -42,6 +66,15 @@ import type { Id } from '@platform/contracts';
 import { createFakeCore, type FakeCore, invalidRequest } from '../support/fake-support.js';
 
 const PROVIDER = 'fake-logs';
+
+/**
+ * Divergence 6. Loki's own default for `max_label_bytes`, fixed rather than configurable: a fake
+ * with a knob for every cap is a second implementation of the adapter, and what the suite needs is
+ * that the refusal *exists*.
+ */
+export const FAKE_MAX_LABEL_BYTES = 1024;
+
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length;
 
 export interface FakeLogStreamSeed {
   readonly labels: Readonly<Record<string, string>>;
@@ -209,6 +242,16 @@ export const createFakeObservabilityLogs = (options: FakeLogsOptions): FakeObser
       if (!capabilities.labels) {
         throw new IntegrationUnsupportedError(PROVIDER, 'label discovery');
       }
+      // Divergence 6: refused, not echoed. `LabelValues.name` is an emitted string whose text is
+      // the caller's argument, so this is the same rule `sentry/mapping.ts` applies to an
+      // identifier — a name past the bound is a request this port should not be answering.
+      if (name !== undefined && utf8Length(name) > FAKE_MAX_LABEL_BYTES) {
+        throw invalidRequest(
+          PROVIDER,
+          'labels',
+          `label name of ${utf8Length(name)} bytes exceeds the ${FAKE_MAX_LABEL_BYTES}-byte cap`,
+        );
+      }
       if (name === undefined) {
         const names = new Set<string>();
         for (const stream of streams) {
@@ -236,6 +279,18 @@ export const createFakeObservabilityLogs = (options: FakeLogsOptions): FakeObser
       const sinceMs = Date.parse(since);
       if (Number.isNaN(sinceMs)) {
         throw invalidRequest(PROVIDER, 'series', 'since must be an ISO-8601 instant');
+      }
+      // Divergence 2, second half (WP-11 review): `series` builds a window from `since` to now, so
+      // it is bounded by the same `maxRangeMs` a range query is. Loki answered `start=0` — a
+      // 56-year scan — for `since: 1970-01-01`, which is a cap the binding published and did not
+      // have.
+      const nowMs = Date.parse(core.clock.now());
+      if (nowMs - sinceMs > capabilities.maxRangeMs) {
+        throw invalidRequest(
+          PROVIDER,
+          'series',
+          `range of ${nowMs - sinceMs} ms exceeds the ${capabilities.maxRangeMs} ms cap`,
+        );
       }
       const matchers = parseSelector(selector);
       return streams

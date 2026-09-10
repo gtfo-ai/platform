@@ -7,7 +7,13 @@
  * accident.
  */
 import { describe, expect, it } from 'vitest';
-import { exactSecretRedactor, MIN_SECRET_LENGTH, noSecretsRedactor } from './redaction.js';
+import {
+  bindingSecretRedactor,
+  composeSecretRedactors,
+  exactSecretRedactor,
+  MIN_SECRET_LENGTH,
+  noSecretsRedactor,
+} from './redaction.js';
 
 const TOKEN = 'fake-gitlab-token-abcdefgh';
 const LONGER = `${TOKEN}-with-suffix`;
@@ -64,5 +70,51 @@ describe('exactSecretRedactor', () => {
     const redactor = noSecretsRedactor();
     const result = redactor.redactJson({ body: 'nothing secret here' });
     expect(result).toEqual({ value: { body: 'nothing secret here' }, count: 0 });
+  });
+});
+
+describe('composeSecretRedactors (rule 31: the adapter keeps its own guarantee)', () => {
+  const BINDING = 'fake-binding-token-0123456789';
+
+  it('applies every redactor and sums the counts', () => {
+    const redactor = composeSecretRedactors(
+      exactSecretRedactor([{ name: 'injected', value: TOKEN }]),
+      exactSecretRedactor([{ name: 'binding', value: BINDING }]),
+    );
+    const result = redactor.redactText(`a=${TOKEN} b=${BINDING} c=${TOKEN}`);
+    expect(result.value).toBe(
+      'a=[REDACTED:integration:injected] b=[REDACTED:integration:binding] c=[REDACTED:integration:injected]',
+    );
+    expect(result.count).toBe(3);
+  });
+
+  it('still removes the binding’s own secret when the caller hands it a no-op redactor', () => {
+    const redactor = composeSecretRedactors(
+      noSecretsRedactor(),
+      exactSecretRedactor([{ name: 'binding', value: BINDING }]),
+    );
+    const result = redactor.redactJson({ line: `authorization=Bearer ${BINDING}` });
+    expect(JSON.stringify(result.value)).not.toContain(BINDING);
+    expect(result.count).toBe(1);
+  });
+});
+
+describe('bindingSecretRedactor', () => {
+  it('redacts every value long enough to be a secret', () => {
+    const redactor = bindingSecretRedactor([
+      { name: 'loki_bearer_token', value: TOKEN },
+      { name: 'loki_password', value: LONGER },
+    ]);
+    expect(redactor.redactText(`${TOKEN}/${LONGER}`).count).toBe(2);
+  });
+
+  it('skips an absent or too-short value instead of refusing to build', () => {
+    const redactor = bindingSecretRedactor([
+      null,
+      undefined,
+      { name: 'loki_password', value: 'abc' },
+      { name: '', value: TOKEN },
+    ]);
+    expect(redactor.redactText(`abc ${TOKEN}`)).toEqual({ value: `abc ${TOKEN}`, count: 0 });
   });
 });
