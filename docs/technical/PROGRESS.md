@@ -1622,6 +1622,33 @@ in no CI job of its own.** That guard has already caught two live defects — `a
 by an unanchored `data/` rule at WP-06, and the nested-worktree walk at WP-06a — so it is worth a gate rather
 than a local-only check. Fold it into the next `ci-fix` alongside the NUL guard.
 
+### Rule 35's shape found twice more, on `main` — gitlab and jira take a redactor and barely use it
+
+Reported by the agent that reconciled Slack against WP-11's required-redactor change, which was the first to
+see all five providers side by side:
+
+> Still unused on `main`: **gitlab composes nothing** — `noSecretsRedactor()` disarms its job-log tail;
+> **jira applies its redactor to `HealthProbe.detail` only.**
+
+Both are already merged, so if the claim holds these are live defects of exactly the class rule 31 names,
+and rule 35 explains why nothing caught them: making `ProviderCreateInput.redactor` required proves each
+provider is *handed* a redactor, not that it *uses* one. The WP-11 round-2 reviewer has been asked to verify
+both precisely — what reaches an output unredacted, and whether it is reachable through the executor or only
+directly.
+
+**If confirmed, the fix is a follow-up after WP-11 merges** (it would conflict otherwise), and it should
+follow the pattern WP-11 settled on and Slack now implements: compose `input.redactor` with a
+`bindingSecretRedactor` over the provider's own secrets, redact **before** any cap so a cut cannot leave a
+fragment, redact at the transport over both request and response documents *above* the success test, and
+prove it with a test that plants a secret in **every** emitted string and asserts both each field and the
+serialised whole — failure branches included.
+
+**The general lesson is worth stating separately from the rules**, because it is about how this session
+found the defect at all: it took a reader with **all five providers in one tree** to notice that two of them
+were disarmed. Each provider's own review saw only its own adapter, and each was correct about what it
+looked at. Some defects are only visible after a merge, which is an argument for the merge itself being a
+review surface rather than a formality.
+
 ## Discovered work (not in plan)
 
 - **Orchestrator parallelism has a ceiling, and it is lower than it looks.** Running three implementers plus
