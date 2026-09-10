@@ -403,7 +403,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
-| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | IN_PROGRESS | worktree | started session 2; owes WP-13 the sub-path chown, uid 1000 and `docker stop`/`rm` on every path |
+| WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | REVIEW | branch `worktree-agent-a1a13bbc879e220cb` `dfa9534` | +196 tests, e2e 2 → 53; **Q52, Q53** (renumber at merge); review round 1 running |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
@@ -2013,6 +2013,24 @@ also reject (rule 43, three instances); a prescribed fix that was itself wrong (
 one of them the orchestrator's own and self-contradictory); and a measurement quoted without being
 reproduced (rule 39, four figures corrected after the fact, one of which I had promoted into a standing
 rule).
+
+### WP-14 corrected WP-13's teardown residual by measuring it
+
+WP-13 recorded, and this ledger repeated, that its teardown *"signals one pid, and a detached grandchild
+survives it"* — measured on the host, and carried forward as an obligation for WP-14 to close with
+`docker stop`/`rm`. WP-14 built the container e2e to prove exactly that, and reports the premise was wrong:
+**a detached grandchild cannot outlive its container's PID 1.** The container boundary already closes it;
+`--init` reaping and the PID namespace do the work that the host-side signal could not.
+
+If the WP-14 reviewer confirms this, two things need correcting rather than celebrating: **`research/12`'s
+bullet and `killChild`'s docblock now overstate the residual risk**, and this ledger's WP-13 section does
+too. A guarantee stated too narrowly is a smaller problem than one stated too broadly — but it is still a
+false statement in the document a later author will trust, and rule 39's discipline applies to *reassuring*
+claims exactly as it does to alarming ones.
+
+The general shape is worth naming: **an obligation handed from one work package to the next is a hypothesis
+about the next one's environment.** WP-13 measured on a host and could not have measured in a container;
+WP-14 could, and did. The hand-off was still right — it is what caused the measurement.
 
 ## Discovered work (not in plan)
 
