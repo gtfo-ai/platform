@@ -150,6 +150,15 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `HMAC-SHA256('', body)` — a signature any attacker can compute — because an unset secret produced an
    empty string rather than a refusal. Every configuration value whose empty or absent case silently
    produces a *permissive* result is this defect.
+19. **A minted credential must carry its own revocation address.** WP-09 minted against
+   `request.project` and revoked against `config.project`; the mismatched DELETE 404s, the idempotency that
+   "absorbs the 404 of a second revocation" swallows it, and the caller is told the token is revoked while
+   it lives until midnight UTC. *Idempotent error-absorption is indistinguishable from the wrong address* —
+   whenever a guard absorbs a not-found, ask which not-found it is absorbing.
+20. **Fail closed on a mutation; fail open on an inbound notification.** WP-09's `mapPipelineStatus` threw
+   on an unknown status inside `normalise`, so a status GitLab adds later turns every such delivery into a
+   permanently failing job. Refusing an enum value you do not recognise is right when you are about to
+   *act*; when you are being *told* something, it turns a vendor's new feature into a stuck queue.
 
 ## Blocker briefs needing a human
 
@@ -1404,6 +1413,46 @@ normalised at the adapter edge on every field read; dependencies are MIT and in 
 `throwHttpErrors: false` swallowing nothing; capabilities are honestly declared with typed refusals; a
 shadow-mode transition performing a *read* is acceptable, since a read is not a mutation under BD-003 and
 failing loudly beats a silent bad mapping; and **the contract suite is genuinely unmodified**.
+
+### WP-09 — review round 1: the token that was never revoked, and provenance labels that held
+
+**Verdict REQUEST_CHANGES**, one major. The contrast with WP-08 is the useful part: the same reviewer method
+— audit the provenance labels against the live vendor documentation first — found WP-08's labels
+**unenforced and one of them overclaiming**, and found **every one of WP-09's five audited labels correct**.
+MR `!11`/`!13` verified field-by-field against the live attribute table, the `access_tokens` 201/204/404
+responses verbatim, `protected_branches` 404 genuinely undocumented and honestly labelled `inferred`, the MR
+409 likewise, and `DETAILED_MERGE_STATUSES` matching all 24 live values. Labelling fixtures honestly is
+learnable; asserting the labels is a separate job, and WP-09's are as unasserted as WP-08's were.
+
+**Major — `revokeCredential` DELETEs from the wrong project, and the idempotency hides it.** Minting uses
+`request.project`, revocation uses `config.project`. Minted on `other/repo`, the only request sent was
+`DELETE /projects/acme%2Fapi/access_tokens/58`; on a real instance that 404s, `notFoundIsNull` absorbs it,
+`markRevoked` runs, and **the caller is told revocation succeeded while the push token lives to midnight
+UTC**. With the documented `project: null` binding it is worse: revoke always throws and **zero** DELETEs are
+ever sent. The idempotency built to absorb "already revoked" is precisely what makes "wrong address"
+invisible. Rule 19 above.
+
+**An unknown pipeline status kills the job for ever.** `mapPipelineStatus` throws inside `normalise`, so a
+hook carrying `status: "waiting_for_quantum_runner"` raises rather than returning
+`ignored('unsupported_event')` — and the port documents no `@throws` there. GitLab adds statuses. Rule 20
+above draws the line this WP got backwards in one direction and right in the other: `MR_ACTIONS` already
+ignores what it does not know.
+
+**A self-contradictory mergeability result, biased optimistic.** `merge_status: 'can_be_merged'` with
+`detailed_merge_status: 'conflict'` yields `{ mergeable: true, hasConflicts: true }` — wrong direction for a
+gate WP-26 will trust. And the reviewer's **invented** mutation survived all 251 tests: `hasConflicts ?? null`
+→ `?? false` on the `cannot_be_merged` branch, the one place the adapter's kindness is unpinned (rule 12).
+
+**Judgement calls the reviewer made that are worth recording.** The run-time-assembled fake `whsec_` token is
+**legitimate** — the plaintext `fake-gitlab-signing-key-do-not-use` sits visibly in the same expression, so
+nothing is hidden — but it *is* a general scanner bypass, so the rule is "run-time assembly only when the
+fake plaintext is a literal beside it". `diff_stats: null` is the right call, since `changes_count` is a
+capped string, **and WP-39 must treat `null` as unknown rather than zero**. The amendment to
+`docs/technical/10-testing-strategy.md` holds: `record:http` never existed as a script. `GitProviderPort`'s
+missing protected-branch member is a follow-up, not a blocker.
+
+**Also found:** `gitlab-replay.ts`'s `unused()` is **never called**, so a fixture no test exercises goes
+unnoticed — rule 17's shape again, an unenforced check being worse than none.
 
 ## Discovered work (not in plan)
 
