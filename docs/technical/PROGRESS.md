@@ -4,51 +4,53 @@
 
 ## Resume note
 
-> **Session 2, in progress (started 2026-09-09).** Read this, then "Standing rules earned by evidence"
-> (thirty-two rules, each with its evidence), then continue the loop in `14-orchestration-protocol.md`.
-> `main` is green on all five targets and every finished WP is pushed.
+> **Session 2, in progress (started 2026-09-09; the Claude Code process restarted once on 2026-09-10 and
+> both in-flight agents were resumed from their transcripts rather than restarted).** Read this, then
+> "Standing rules earned by evidence" — **fifty rules, each with its evidence** — then continue the loop in
+> `14-orchestration-protocol.md`.
 
-**Fourteen work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
+**Seventeen work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
 WP-02a `8abf247` · WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` ·
-WP-04a `d729616` · WP-06 `d60d770` · **WP-06a `9e0be0b`** · **WP-07 `b036c4c`** · ci-fix(sse) `f1cd8e4` ·
-**WP-08 `af206c7`** · **WP-09 `27928b2`**.
+WP-04a `d729616` · WP-06 `d60d770` · WP-06a `9e0be0b` · WP-07 `b036c4c` · ci-fix(sse) `f1cd8e4` ·
+WP-08 `af206c7` · WP-09 `27928b2` · WP-12 `951e343` · WP-10 `fbf0928` · ci-fix(pg-boss) `43a3f61` ·
+**WP-11 + WP-11a `d066708`**. `main` is green on all five targets: 3004 unit+contract tests, 94.68%
+statements / 87.42% branches, integration 114, e2e 20, ui 2.
 
-**In flight — three worktrees, none merged**
+**In flight — two worktrees, both resumed after the restart**
 
 | WP | State | Branch |
 |---|---|---|
-| WP-12 Claude SDK runner | APPROVED round 3; pre-merge fixes running | `worktree-agent-a80d5d7c411ac0f51` |
-| WP-10 Slack | review round 2 running (round 1 found a live mention-injection) | `worktree-agent-a4db5aee16bb73391` |
-| WP-11 Sentry + Loki | round 2 fixes running (3 blockers: redactor never wired, pre-redaction read, byte cap defeated) | `worktree-agent-ab12848be4b2009b2` |
+| WP-13 run shim | review round 2 of 3, resumed | `worktree-agent-a3ffc71895d2210b1` |
+| WP-20 web app | APPROVED at round 2; pre-merge fixes, resumed | `worktree-agent-a9d83ca5712f03282` |
 
-**Merge in this order, and the order matters**
+Both merge straight to `main` when they finish; neither touches the other's files. **WP-20's questions
+Q44–Q48 must be renumbered to Q46–Q50 at merge** — WP-13 took Q44 and Q45 and merges first if it is ready
+first; `main` currently carries Q40–Q43.
 
-1. **WP-12 first** — it is approved and touches nothing the others touch.
-2. **WP-10 second.**
-3. **WP-11 last**, because it makes the redactor **required** on `ProviderCreateInput` (rule 31). That is a
-   shared type: `jira-cloud` and `gitlab` are already on `main` and WP-11 carries their updates, but
-   **Slack's registration will also need to supply it**, and WP-10 cannot know that. WP-11's report states
-   exactly what a fourth provider must pass; apply it to Slack at the merge and re-run all five targets.
+**Then M1 has two work packages left.** **WP-14** (launcher + `WorkspaceProvider`) needs WP-13 and owes the
+run shim two things WP-13's research recorded: create and `chown` `<ctl>/<run-id>/` before start, because
+the daemon refuses a missing sub-path, and run the runner as uid 1000 (the socket is `0600`, Q45). It also
+owes `docker stop`/`rm` on every path that ends a run — WP-13's teardown signals one pid, and a *detached*
+grandchild survives it. **WP-15** (pipeline interpreter) needs WP-04…WP-12 and is where the loop first runs
+end to end; its obligations are in "Notes WP-15 must honour" and "Obligations WP-15 and WP-19 must honour".
 
-**OPEN-QUESTIONS numbering** — `main` has **Q40** (WP-09). WP-12 carries **Q41** (renumbered by the
-orchestrator when `main` was merged in; the collision conflicted on the same hunk, as designed). WP-10 took
-**Q42**. WP-11 took **Q41** and must be renumbered to **Q43** at merge. Highest migration is `0011_auth.sql`.
-
-**Then continue the plan.** WP-13 (run shim) needs WP-12. WP-15 (pipeline interpreter) needs WP-04…WP-12 and
-is where everything is first exercised together — its ledger obligations are in "Notes WP-15 must honour" and
-"Obligations WP-15 and WP-19 must honour". **WP-20** (web app) needs only WP-06 and is parallel-safe with
-everything above; it is the obvious next thing to start alongside WP-13.
+**Two follow-ups are queued and briefed in the sections below**: the confirmed **gitlab and jira redaction
+gaps** (both take a required redactor and barely use it — `getJobLog` returned a `PRIVATE-TOKEN` header
+verbatim), and the **`ignored:check` versus `.DS_Store`** question, where two guards in this repository
+disagree about what an OS artefact is.
 
 **Merge recipe**: `git merge main` into the WP branch → verify → `git merge --squash <branch>` on `main` →
 `pnpm install` → all five targets **on main** → resolve conflicts (`pnpm-lock.yaml` by regeneration, both
 `index.ts` files as unions, `.env.example`, `docs/OPEN-QUESTIONS.md` by renumbering, and
 `docs/technical/PROGRESS.md`, which is orchestrator-owned so take your own side) → commit → push → delete
-branch and worktree. Green in a worktree is not green on `main`: this session proved it three times.
+branch and worktree. Green in a worktree is not green on `main`; this session proved it four times.
 
-**Orchestrator hygiene learned the hard way (rule 25).** Never use a busy-loop load generator without
-`trap 'kill 0' EXIT INT TERM`, and never `2>/dev/null` on a cleanup step. Forty-eight orphaned spinners
-starved this machine at load average 137 for 4 h 37 m and stalled a reviewer for 4 h 50 m before another
-session on the host found and killed them.
+**Orchestrator hygiene (rule 25).** Never use a busy-loop load generator without `trap 'kill 0' EXIT INT TERM`,
+and never `2>/dev/null` on a cleanup step: 48 orphaned spinners starved this machine at load average 137 for
+4 h 37 m and stalled a reviewer for 4 h 50 m. **Resuming a background agent with `SendMessage` preserves its
+analysis** — both agents live at the restart were resumed rather than re-spawned, and their worktrees were
+intact because reviewers restore from a `tar` snapshot rather than `git checkout --`, which deleted an
+uncommitted edit for one agent this session.
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
