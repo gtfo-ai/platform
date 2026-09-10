@@ -53,6 +53,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { OS_ARTEFACT_NAMES } from './os-artefacts.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -177,7 +178,11 @@ const walk = (directory) => {
       if (!SKIP_DIRECTORIES.has(entry.name) && !isSeparateCheckout(full)) {
         found.push(...walk(full));
       }
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() && !OS_ARTEFACT_NAMES.has(entry.name)) {
+      // An OS artefact is not source, and reporting one as hidden source is a false positive that
+      // turns `main` red for a file nobody wrote. `OS_ARTEFACT_NAMES` is shared with the
+      // fixture-provenance walk so the two guards cannot answer this question differently again.
+      // Every other name still fails loudly; a tracked path is checked regardless of its name.
       found.push(relative(repositoryRoot, full).split(sep).join('/'));
     }
   }

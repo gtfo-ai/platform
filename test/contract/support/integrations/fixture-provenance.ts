@@ -112,6 +112,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { OS_ARTEFACT_NAMES } from '../../../../scripts/os-artefacts.mjs';
 
 /**
  * The taxonomy. The first four are WP-08's (`test/fixtures/http/jira-cloud/SOURCES.md`);
@@ -182,8 +183,12 @@ export interface FixtureDocument {
  * committed. Named rather than pattern-matched: everything else must be a fixture with provenance,
  * so an unexpected file fails loudly instead of being skipped (standing rule 7 — this list only
  * ever *adds* failures for files git would not track anyway).
+ *
+ * Now shared with `scripts/check-ignored.mjs`, which used to disagree with this file about what an
+ * OS artefact is and reported `.DS_Store` as hidden *source*. Its docblock carries the reasoning
+ * for why this stays a name list rather than becoming a derivation.
  */
-const OS_ARTEFACTS: ReadonlySet<string> = new Set(['.DS_Store', 'Thumbs.db']);
+const OS_ARTEFACTS: ReadonlySet<string> = OS_ARTEFACT_NAMES;
 
 /**
  * Every file under a provider directory, recursively, whatever its extension, `SOURCES.md` aside.

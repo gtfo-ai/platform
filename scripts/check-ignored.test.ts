@@ -37,6 +37,8 @@ import { afterAll, describe, expect, it } from 'vitest';
  * ignored subtree.
  */
 const GUARD = join(dirname(fileURLToPath(import.meta.url)), 'check-ignored.mjs');
+/** The guard imports this, so a fixture without it fails on an unresolved specifier. */
+const OS_ARTEFACTS_MODULE = join(dirname(fileURLToPath(import.meta.url)), 'os-artefacts.mjs');
 
 /**
  * The host's git configuration is not part of this fixture. A global `core.hooksPath`, a commit
@@ -124,6 +126,7 @@ describe('check-ignored.mjs', () => {
       write(join(root, 'agent', 'keep.md'), '# agent instructions\n');
       mkdirSync(join(root, 'scripts'), { recursive: true });
       copyFileSync(GUARD, join(root, 'scripts', 'check-ignored.mjs'));
+      copyFileSync(OS_ARTEFACTS_MODULE, join(root, 'scripts', 'os-artefacts.mjs'));
       git(root, 'init', '-q', '-b', 'main', '.');
       git(root, 'add', '-A');
       git(root, 'commit', '-q', '-m', 'fixture');
@@ -165,7 +168,10 @@ describe('check-ignored.mjs', () => {
         reportedPaths(clean.stderr),
         'the guard descended into another checkout and reported files that are not this repository’s',
       ).toEqual([]);
-      expect(clean.stdout.trim()).toBe('PASS: ignored:check (4 files, none ignored)');
+      // 5, not 4: the fixture copies both `check-ignored.mjs` and the `os-artefacts.mjs` it
+      // imports. The count is asserted exactly on purpose — it is what catches the guard
+      // silently walking one directory too many.
+      expect(clean.stdout.trim()).toBe('PASS: ignored:check (5 files, none ignored)');
       expect(clean.status).toBe(0);
 
       // Same fixture, same run: the guard is still live. One file under the unanchored `data/`
@@ -182,6 +188,52 @@ describe('check-ignored.mjs', () => {
       ).toEqual(['agent/worktrees/stray.ts', 'src/data/queries.ts']);
       expect(swallowed.stdout.trim()).toBe('FAIL: ignored:check');
       expect(swallowed.status).toBe(1);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+
+  it(
+    'does not report an operating-system artefact as hidden source, and still reports its neighbour',
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'ignored-check-os-')));
+      roots.push(root);
+
+      // An unanchored rule, the shape this guard exists for, with a real source file under it.
+      write(join(root, '.gitignore'), 'buried/\n');
+      write(join(root, 'src', 'app.ts'), 'export const app = 1;\n');
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      copyFileSync(GUARD, join(root, 'scripts', 'check-ignored.mjs'));
+      copyFileSync(OS_ARTEFACTS_MODULE, join(root, 'scripts', 'os-artefacts.mjs'));
+      git(root, 'init', '-q', '-b', 'main', '.');
+      git(root, 'add', '-A');
+      git(root, 'commit', '-q', '-m', 'fixture');
+
+      // Both files land in the same ignored directory, so the only thing that can separate them
+      // is the name — which is the whole claim. Without the neighbour this test would pass on a
+      // guard that had simply stopped walking (standing rule 4).
+      write(join(root, 'src', 'buried', '.DS_Store'), 'not source\n');
+      write(join(root, 'src', 'buried', 'real.ts'), 'export const real = 2;\n');
+
+      // The fixture is what it claims to be: both paths really are ignored. A guard that reported
+      // neither would otherwise look correct.
+      for (const path of ['src/buried/.DS_Store', 'src/buried/real.ts']) {
+        expect(
+          spawnSync('git', ['check-ignore', '--no-index', '-q', path], {
+            cwd: root,
+            env: GIT_ENV,
+            encoding: 'utf8',
+          }).status,
+          `${path} is not ignored by the fixture, so this test would prove nothing`,
+        ).toBe(0);
+      }
+
+      const result = runGuard(root);
+
+      // The artefact is silent; its neighbour is not. `.DS_Store` in `.claude/`, `apps/` and
+      // `docs/` once turned `main` red for three files nobody wrote.
+      expect(reportedPaths(result.stderr)).toEqual(['src/buried/real.ts']);
+      expect(result.stdout.trim()).toBe('FAIL: ignored:check');
+      expect(result.status).toBe(1);
     },
     FIXTURE_TIMEOUT_MS,
   );
