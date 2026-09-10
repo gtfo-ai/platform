@@ -209,6 +209,27 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+55. **A deny-list of paths is a claim about the platform's symlink layout, not about the author's intent.**
+   WP-14's `assertSafeBindSource` blocks `FORBIDDEN_BIND_ROOTS` = `/etc`, `/var/run`, `/run`. On this
+   platform all three are **symlinks**, so they are refused by the *symlink* branch and the forbidden branch
+   never fires at all — while the two paths that actually hand over the machine are each their own realpath
+   and pass. Measured: `$HOME` accepted, bound at `/repo`, and from inside the workspace container (uid 1000,
+   every hardening flag on) the reviewer read `id_ed25519` (432 B), `id_rsa` (3243 B) and
+   `.docker/config.json` (649 B); `~/.docker/run/docker.sock` accepted, daemon recorded
+   `bind /run/host-services/docker.proxy.sock → /repo`. Every flag in rule 47's list was on and none of them
+   mattered. **Test a deny-list against realpaths on the platform it runs on** — and prefer an allow-condition
+   with a positive marker (here: the directory must contain `pnpm-workspace.yaml`). Rule 15's shape, applied
+   to filesystem policy rather than to filename equality.
+54. **"Either it returns a handle or it leaves nothing behind" is a property of the composition root, not of
+   the adapter.** WP-14's `create` discharges that guarantee correctly and its docblock says so truthfully.
+   `startRun` then composes `create` with `attach` — and its `catch` revokes the credential and rethrows
+   **without destroying the container `create` just started**, reopening exactly the gap `create` closed.
+   Measured with the fake: `mirror → create`, `isRunning(runId) === true`, no `stop`, no `remove`, and no
+   handle ever reaching a caller who could destroy it; nothing reaps orphans, since `purgeExpired` removes
+   volumes only. The docblock's "no path out of this class leaves a container running" was true *of the
+   class* and false *of the program*. **When an adapter guarantees atomicity, review the caller that extends
+   its transaction** — the guarantee ends at the boundary the docblock is written on, and the next layer up
+   inherits the obligation without inheriting the sentence.
 53. **A verification run must be scoped to the checkout it claims to verify.** `vitest.config.ts` gives the
    integration and e2e projects `include: ['**/*.integration.test.ts']` and `['**/*.e2e.test.ts']`; those
    leading `**` globs reach into `.claude/worktrees/`, where this repository's own agent worktrees live —
@@ -2014,23 +2035,33 @@ one of them the orchestrator's own and self-contradictory); and a measurement qu
 reproduced (rule 39, four figures corrected after the fact, one of which I had promoted into a standing
 rule).
 
-### WP-14 corrected WP-13's teardown residual by measuring it
+### WP-14 measured WP-13's teardown residual — and the thing that was wrong was this ledger
 
-WP-13 recorded, and this ledger repeated, that its teardown *"signals one pid, and a detached grandchild
-survives it"* — measured on the host, and carried forward as an obligation for WP-14 to close with
-`docker stop`/`rm`. WP-14 built the container e2e to prove exactly that, and reports the premise was wrong:
-**a detached grandchild cannot outlive its container's PID 1.** The container boundary already closes it;
-`--init` reaping and the PID namespace do the work that the host-side signal could not.
+WP-13's teardown was carried forward as an obligation for WP-14 to close with `docker stop`/`rm`, on the
+premise that it *"signals one pid, and a detached grandchild survives it"*. WP-14 built the container e2e
+to prove exactly that, and measured the opposite: **a detached grandchild cannot outlive its container's
+PID 1.** The reviewer reproduced it independently in the VM's own process table (`--pid=host`): marker
+count 1 while running, 0 after `docker stop`, 0 when PID 1 exits. The correction holds.
 
-If the WP-14 reviewer confirms this, two things need correcting rather than celebrating: **`research/12`'s
-bullet and `killChild`'s docblock now overstate the residual risk**, and this ledger's WP-13 section does
-too. A guarantee stated too narrowly is a smaller problem than one stated too broadly — but it is still a
-false statement in the document a later author will trust, and rule 39's discipline applies to *reassuring*
-claims exactly as it does to alarming ones.
+**But the source documents were never wrong.** The reviewer checked: `shim.ts:413-417` and
+`research/12:184-190` already scope the survival to *the shim's own signal* and name the container as the
+closer. No correction is owed to WP-13, to `research/12`, or to `killChild`'s docblock — the three places I
+had queued for correction. The false statement was **this ledger's paraphrase of them**, and mine alone.
 
-The general shape is worth naming: **an obligation handed from one work package to the next is a hypothesis
-about the next one's environment.** WP-13 measured on a host and could not have measured in a container;
-WP-14 could, and did. The hand-off was still right — it is what caused the measurement.
+That is the finding worth keeping, because it is a failure mode of the orchestrator role specifically:
+**a summary is a lossy re-statement, and the loss is almost always the scope qualifier.** WP-13's claim was
+"survives *this signal*"; my ledger recorded "survives", full stop; and I then handed the broadened version
+to WP-14 as an obligation to discharge. The chain ran source → ledger → brief, with the qualifier dropped
+at the first hop and never recoverable downstream, because every reader after that point reads the ledger
+rather than the code. Rule 39 says a measurement must reproduce from shipped defaults; this is its
+companion — **a claim copied into the ledger must be re-read against its source, not against my memory of
+it.** The cost here was one work package's brief aimed at a non-problem; the benefit was that aiming a
+brief at it is what finally produced the measurement.
+
+The general shape still stands, with the qualifier restored: **an obligation handed from one work package
+to the next is a hypothesis about the next one's environment.** WP-13 measured on a host and could not have
+measured in a container; WP-14 could, and did. The hand-off was still right — it is what caused the
+measurement, and it cost less than the ledger error it exposed.
 
 ## Discovered work (not in plan)
 
