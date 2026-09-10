@@ -250,8 +250,8 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
 | WP-08 | Jira Cloud provider | WP-07 | yes | DONE | `af206c7` | 2 review rounds + pre-merge fixes; rules 17, 18, 22; shared fixture-provenance suite lives here |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `27928b2` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
-| WP-10 | Slack provider | WP-07 | yes | TODO | — | |
-| WP-11 | Sentry + Loki providers | WP-07 | yes | TODO | — | |
+| WP-10 | Slack provider | WP-07 | yes | REVIEW | branch `worktree-agent-a4db5aee16bb73391` `80171f5` | +160 tests; 3 additions to the shared suite; review round 1 running |
+| WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` `786ac46` | +218 tests; 29 mutations; review round 1 running |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | REVIEW | branch `worktree-agent-a80d5d7c411ac0f51` | round 1 REQUEST_CHANGES (2 majors, both fail-open); round 2 in flight |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | TODO | — | |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
@@ -1549,6 +1549,45 @@ so.
   `/etc/claude-code`, i.e. `local` provider mode on a managed laptop — **`allowManagedPermissionRulesOnly`
   and `allowManagedHooksOnly` both vanish**, and with them the guarantee that project settings cannot shadow
   `canUseTool`. WP-22 and WP-23 should make this an operator check.
+
+### OPEN-QUESTIONS numbering, third collision — the convention holds but the arithmetic is manual
+
+State at the time of writing: `main` has **Q40** (WP-09, branch-pattern scoping on a minted token). WP-12's
+branch carries **Q41** — the orchestrator renumbered it from Q40 when merging `main` in, and the conflict
+landed on the same hunk, exactly the loud failure WP-09's implementer predicted when taking the number.
+WP-10 took **Q42**, having seen Q41 already in use. WP-11 took **Q41** and flagged the collision risk itself.
+
+So WP-11's question must become **Q43** at merge. Three parallel work packages produced three collisions in
+one session, every one caught, none silently. **The convention works and is still manual**: the orchestrator
+renumbers at merge, and an implementer that says which number it took — as all three did — is what makes the
+renumbering cheap. A generated number would be worse; the conflict is the signal.
+
+### WP-10 and WP-11 — what the ledger bought
+
+Both were briefed with the six rules WP-07, WP-08 and WP-09 had paid for, and both applied them **before a
+reviewer had to**:
+
+- **WP-10 caught its own rule-10 failure.** Its `opens-a-second-task-thread` mutation *survived*, because
+  "same `thread_id`" was satisfied by both branches — so it added `providerCalls()` to the shared suite and
+  the mutation then died. That is exactly the defect rule 10 names, found by the author rather than by a
+  reviewer.
+- **WP-10 added three things to the shared contract suite** (rule 23) rather than to its own tests: unknown
+  event ignored-not-thrown, a no-credential binding verifies nothing, and `providerCalls()`. The
+  empty-credential case is rule 18, which WP-08 shipped as a live hole — closed here before it existed.
+- **WP-10 left one mutation alive and labelled it** (rule 22): the `v0=` prefix check is unreachable behind
+  the whole-string compare.
+- **WP-11 canaried its mutation harness three ways** — planted failure → DEAD-with-name, comment change →
+  ALIVE, syntax error → RUNNER-ERROR — and reports it *first misread an `afterAll` failure and was
+  recalibrated* (rule 21, earned twice before it).
+- **WP-11 left one mutation alive and corrected the claim instead of the code**: `BigInt` → `Number` on
+  nanoseconds produces identical millisecond output, so the docblock and test were overclaiming and were
+  narrowed (rule 3).
+- **WP-11 declared `agentTooling: null` for Sentry** rather than guessing a CLI contract — MCP is OAuth-only
+  and `sentry-cli` has no issue commands — the same call WP-08 made and the right one.
+
+Both also refused to invent: WP-11's `SOURCES.md` files list pages that produced **no** fixture, including
+`docs.sentry.io/api/events/` (21 endpoints) and `mcp.sentry.dev`, so a later reader can tell "checked and
+unused" from "never looked".
 
 ## Discovered work (not in plan)
 
