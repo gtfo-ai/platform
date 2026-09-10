@@ -12,7 +12,7 @@ Self-hosted, open-source platform that runs Claude Code agents through a real-li
 - Conventional commits with `Signed-off-by` (DCO). Small MRs.
 
 ## Layout
-`packages/{domain,application,contracts,infrastructure,integrations,prompts}`, `apps/{server,web,launcher}`, `scripts/`, `test/`, `docker/`, `schemas/`, `.github/workflows/`, `docs/`.
+`packages/{domain,application,contracts,infrastructure,integrations,prompts}`, `apps/{server,web,launcher,runlet}`, `scripts/`, `test/`, `docker/`, `schemas/`, `.github/workflows/`, `docs/`.
 
 Workspace packages are published under the neutral scope `@platform/*` (BD-014). They are consumed straight from `src/` — there is still no build step for the server rings. WP-06 made `apps/server` runnable without one: `pnpm dev` and `pnpm db:migrate` run the TypeScript sources through `scripts/ts-source-resolver.mjs`, which maps the repository's `.js` specifiers onto the `.ts` files on disk. A `tsc` emit is a packaging decision for WP-22 (the Docker image), not a prerequisite for running the server. **`apps/web` is the exception**: a browser needs a bundle, so WP-20 gave it Vite 8 (`apps/web/vite.config.ts`). Vite resolves the repository’s `.js` specifiers onto `.ts`/`.tsx` itself, so the convention is unchanged, and `dist/` is generated output that is not committed.
 
@@ -51,7 +51,12 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
 ## Where to look
 - HTTP, auth and the SSE stream: `docs/technical/08-api-and-realtime.md`; the composition root is `apps/server/src/runtime.ts` and the wire contract of the stream is `apps/server/src/sse/hub.ts`.
 - Pipeline behaviour: `docs/product/04-pipeline.md`, `docs/technical/02-domain-model-and-events.md`.
+<<<<<<< HEAD
+- Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`. The run shim `agentic-runlet` (TD-025) is `packages/infrastructure/src/runlet/` — frame protocol in `@platform/contracts`, shim, runner-side `SpawnedProcess`, credential helper — with `apps/runlet` as its entrypoint and nothing else; `node scripts/runlet-container-check.mjs` is its Docker verification (not a `verify` target: it needs a daemon), written up in `docs/research/12-run-shim-verification.md`.
+- Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`. Work plan: `docs/technical/13-implementation-plan.md`.
+=======
 - Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`.
 - Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`; the SPA’s composition root is `apps/web/src/app/app.tsx`, the client half of the SSE contract is `apps/web/src/realtime/client.ts`, and the untrusted-text rules are `apps/web/src/ui/untrusted-text.ts`. Work plan: `docs/technical/13-implementation-plan.md`.
+>>>>>>> main
 - Open questions: `docs/OPEN-QUESTIONS.md`; verification backlog: `docs/TODO.md`.
 - Autonomous implementation: protocol `docs/technical/14-orchestration-protocol.md`, ledger `docs/technical/PROGRESS.md`, roles `.claude/agents/{implementer,reviewer,architect}.md`.

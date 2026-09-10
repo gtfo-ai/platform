@@ -9,8 +9,8 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [ ] `local` provider mode in Docker: Linux `claude` binary in the runtime image, OAuth token/credentials refresh with parallel runs; macOS hosts can only pass `CLAUDE_CODE_OAUTH_TOKEN` — WP-22 (BD-004).
 - [ ] Sentry hosted MCP with Internal Integration tokens (README mentions user tokens only) — WP-11.
 - [ ] Block Kit payload limits for question choices — WP-10.
-- [ ] Run shim conformance: SDK `query()` through the shim, session-store resume after runner restart, `volume-subpath` support on the target Docker Engine version — WP-13 (TD-025).
-- [ ] Docker embedded DNS behaviour on `internal: true` networks (residual DNS channel) — WP-13.
+- [x] Run shim conformance: SDK `query()` through the shim, `volume-subpath` support on the target Docker Engine version — done at WP-13, measured on Docker 29.7.2, report in `research/12-run-shim-verification.md`. **Session-store resume after a runner restart is still open** and belongs to WP-15: the shim half is proved (a dropped control connection kills the CLI and the run container exits), the pipeline half — resuming the stage with a "you were interrupted" note — has no interpreter yet.
+- [x] Docker embedded DNS behaviour on `internal: true` networks (residual DNS channel) — done at WP-13: container names resolve through 127.0.0.11, external names SERVFAIL and there is no default route (Docker 29.7.2; `research/12`).
 - [ ] SDK `sandbox.credentials` masking when passed via the SDK; srt proxy chaining — later (defence in depth).
 - [ ] GitLab project access tokens on self-managed Free tier; revoke latency — WP-09.
 - [ ] Redistribution terms for the Claude Code binary and `acli` inside a public image; fallback install-at-build from official repos or at first start — WP-22 (TD-018).

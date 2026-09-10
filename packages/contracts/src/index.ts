@@ -23,6 +23,7 @@ export * from './config.js';
 export * from './events.js';
 export * from './pipeline.js';
 export * from './records.js';
+export * from './runlet.js';
 export * from './schemas.js';
 export * from './transcript.js';
 

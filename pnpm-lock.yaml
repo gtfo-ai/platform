@@ -190,6 +190,18 @@ importers:
 
   apps/launcher: {}
 
+  apps/runlet:
+    dependencies:
+      '@platform/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@platform/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@platform/infrastructure':
+        specifier: workspace:*
+        version: link:../../packages/infrastructure
+
   apps/server:
     dependencies:
       '@fastify/awilix':

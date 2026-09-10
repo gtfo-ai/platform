@@ -26,6 +26,10 @@ const PUBLIC_SURFACE = [
   // runtime
   'transcriptEventSchema',
   'transcriptKindSchema',
+  // run shim control frames (TD-025)
+  'runletFrameSchema',
+  'runletSignalSchema',
+  'RUNLET_PROTOCOL_VERSION',
   // api
   'apiErrorSchema',
   'sseFrameSchema',

@@ -29,6 +29,7 @@ export default defineConfig({
             'packages/*/src/**/*.test.ts',
             'apps/server/src/**/*.test.ts',
             'apps/launcher/src/**/*.test.ts',
+            'apps/runlet/src/**/*.test.ts',
             // The verification scripts are part of the build's correctness, and one of them —
             // `check-ignored.mjs` — is the only thing standing between an unanchored `.gitignore`
             // pattern and a pushed tree that does not compile. It is tested against real
@@ -95,7 +96,12 @@ export default defineConfig({
       reporter: ['text-summary', 'lcov'],
       reportsDirectory: './coverage',
       // Explicit include: only the rings exercised by the unit + contract tiers.
-      include: ['packages/*/src/**/*.ts', 'apps/server/src/**/*.ts', 'apps/launcher/src/**/*.ts'],
+      include: [
+        'packages/*/src/**/*.ts',
+        'apps/server/src/**/*.ts',
+        'apps/launcher/src/**/*.ts',
+        'apps/runlet/src/**/*.ts',
+      ],
       exclude: [
         '**/*.test.ts',
         '**/*.d.ts',
@@ -104,6 +110,12 @@ export default defineConfig({
         // `integration` tier, which runs a real PostgreSQL 18 and does not collect coverage.
         'packages/infrastructure/src/db/client.ts',
         'apps/server/src/migrate.ts',
+        // The run shim's entrypoint: `process.env` in, `process.exit` out, every decision it makes
+        // delegated to `packages/infrastructure/src/runlet`. The contract tier starts this exact
+        // file as a real process against a real socket
+        // (`packages/infrastructure/src/runlet/conformance.contract.test.ts`), which is the only
+        // way to exercise an entrypoint and collects no coverage from a subprocess.
+        'apps/runlet/src/index.ts',
       ],
       thresholds: {
         lines: 80,

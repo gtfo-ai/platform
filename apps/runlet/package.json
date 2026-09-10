@@ -1,0 +1,24 @@
+{
+  "name": "@platform/runlet",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "agentic-runlet: the in-container run shim (TD-025).",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "bin": {
+    "agentic-runlet": "./src/index.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@platform/application": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/infrastructure": "workspace:*"
+  }
+}

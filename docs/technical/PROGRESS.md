@@ -209,15 +209,22 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
-   ⚠️ **This rule originally carried a second claim, and it did not survive review.** WP-13 reported that the
-   entrypoint's `process.exit(0)` delivered **8,192 of 16,777,216 bytes**, and I recorded it here. The
-   round-2 reviewer could not reproduce it: restoring `process.exit(0)` leaves 142/142 green, and six runs
-   against the real entrypoint — slow reader, stalling runner — delivered every byte **either way**. The
-   8,192 figure is labelled in `research/12` as a **raw-socket** measurement, and nothing shows the shim
-   reaches that path. The fix is being pinned to a test or restated. **Fourth figure this session to need
-   correcting after the fact** (see rule 39), and the first where the orchestrator promoted an unverified
-   measurement into a standing rule — which is worse than recording it in a WP note, because a rule is what
-   later work packages are handed as settled.
+51. **`process.exit()` abandons what a socket still owes — and the condition that exposes it is the one
+   backpressure normally prevents.** This rule took three attempts to state correctly, which is the useful
+   part. WP-13 first reported `process.exit(0)` delivering **8,192 of 16,777,216 bytes**; the round-2
+   reviewer could not reproduce it at all (restoring `process.exit(0)` left 142/142 green, and six runs with
+   a slow reader and a stalling runner delivered **every byte either way**), and the orchestrator had already
+   promoted the unverified figure into a standing rule. The third attempt found **why both were right**:
+   the shim's backpressure normally keeps the userland queue *empty* at shutdown — the socket fills, the
+   child's stdout pauses, the child cannot finish, so the run cannot end — which is exactly why a slow reader
+   loses nothing. **The queue is non-empty only when the child *ends* while the socket is backed up**, which
+   `exit` permits because it does not wait for a pipe. Reproduced against the real entrypoint: shipped
+   delivers **64 of 64** tail bytes and the `exit` frame; `process.exit(0)` delivers **0 of 64 and no `exit`
+   frame at all** — a runner never told the run ended, which is worse than losing bytes. The test needs bulk
+   on **stderr** to saturate the socket and the tail on **stdout** so it is not queued behind it in the
+   child; restoring `process.exit(0)` fails it 3/3.
+   *A defect that a reviewer cannot reproduce is not thereby absent — it may be guarded by the very mechanism
+   that makes it rare.*
 48. **A name-then-`=` guard cannot see the spread, `createElement` or `setAttribute` spelling of the same
    write.** WP-20's `no-html.test.ts` — itself created to enforce rule 44 — caught `href={u}`, `href = {u}`,
    a template literal and `location.href = u`, and **missed** `{...{ href: u }}`, `createElement('a', {href})`,
@@ -374,7 +381,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-10 | Slack provider | WP-07 | yes | DONE | `fbf0928` | 2 review rounds + pre-merge; rules 29, 30, 33, 34; **Q42** |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | DONE | `d066708` | 3 rounds + **WP-11a** (3 more); rules 31, 32, 35–42, 46; **Q43** |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
-| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | REVIEW | branch `worktree-agent-a3ffc71895d2210b1` `4365fad` | +134 tests; 29 mutations; **Q44, Q45**; review round 1 running |
+| WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `WP13SHA` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | TODO | — | |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | TODO | — | |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
