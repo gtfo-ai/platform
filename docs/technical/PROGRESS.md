@@ -141,6 +141,15 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `result` line left the budget watchdog silent at `NaN > 0.01`, the run `completed`, and `NaN` flowing to
    the cost ledger. "The vendor enforces it" is a claim about a binary the platform ships and does not
    control.
+17. **A provenance label is a claim about the corpus, and an unasserted claim drifts.** WP-08's fixtures
+   carry a `source` block naming a vendor documentation URL and a retrieval date; the reviewer rewrote one
+   to `kind: documented` with `url: https://example.invalid` and **157 of 157 tests passed**. Fixture
+   provenance needs a test, or it is decoration — and the test must be honest about what it cannot check
+   (that the vendor's page still says the same thing).
+18. **An empty credential is not a credential.** WP-08's webhook verifier accepted
+   `HMAC-SHA256('', body)` — a signature any attacker can compute — because an unset secret produced an
+   empty string rather than a refusal. Every configuration value whose empty or absent case silently
+   produces a *permissive* result is this defect.
 
 ## Blocker briefs needing a human
 
@@ -1355,6 +1364,46 @@ The original fix brief carried three mutations it had to still fail (remove the 
 the off-chain `shutdown`, make the drain unbounded), and with the instruction to prefer **injecting the
 shutdown timer** over merely loosening the assertion, since the rest of that suite already runs on an
 injected clock. *A flake you cannot make fail is a flake you cannot prove you fixed.*
+
+### WP-08 — review round 1: an empty secret is a valid secret, and the marker was spoofed
+
+**Verdict REQUEST_CHANGES**, one blocking finding, and the review's method is worth copying: it audited the
+**provenance labels** against the live vendor documentation before it read a line of adapter code.
+
+**Blocking — a binding with no webhook secret accepts anything.** `createJiraInboundNormaliser({secret:''})`
+returns `verify === true` for `HMAC-SHA256('', body)`, which the attacker computes themselves. The only thing
+in front of it is `capabilities.webhooks &&` at `index.ts:815`, and **deleting that guard kills 0 of 157
+tests**, because the single negative test signs with the *real* secret. One guard covering for a missing one,
+with no test able to tell — standing rule 4 in the security-critical place, and a comment asserting an
+invariant that does not hold (rule 3). Rule 18 above is what it earned.
+
+**The workpad marker was spoofed.** `addComment(ticket, "…\n\n`[agentic:marker:agentic:workpad]`")` posts a
+comment **authored by the bot**, so the author check passes, and the next `upsertWorkpad` adopts and
+overwrites it (same `comment_id`, count 2→2). The author check is not wrong, it is insufficient: agent
+markdown is **derived from attacker-controlled ticket text** (BD-022), so "the bot wrote it" does not mean
+"the platform wrote it".
+
+**And the provenance labels were decoration.** Rewriting one fixture's label to `documented` with
+`url: https://example.invalid` passed **157/157**. Rule 17 above. The fix is a reusable provenance test —
+WP-09 has just labelled GitLab's fixtures the same way and WP-10 and WP-11 will follow.
+
+**What the audit found when it checked the labels for real**, and this is the reassuring half: `myself` ✓,
+`user-search` ✓ (no `emailAddress`, exactly as claimed), `remote-link-created` ✓ — it even reproduces the
+documentation's own `/rest/api/issue/` typo — and the `composed` webhook fixture is honestly composed. **Both
+claimed Atlassian documentation bugs are real** (`getIssue.fields.comment` is an array; `accoundId` appears
+twice on the webhooks page), and the HMAC vector is Atlassian's verbatim. One note overclaimed: a fixture
+said `isAvailable:false` "appears in Atlassian's own example", and it does not.
+
+**Also:** an `IntegrationError` is thrown *outside* the executor carrying unredacted provider text, which
+makes the WP's own `docs/TODO.md` claim that it "closed this by having no such path" false; and the author
+check's `accountId === null` case fails **open** and survives all 157 tests.
+
+**Confirmed sound:** the HMAC comparison is timing-safe and rejects duplicated headers, differing casing,
+truncated hex and an empty body; **no path reaches the network outside the executor**; timestamps are
+normalised at the adapter edge on every field read; dependencies are MIT and in the right package with
+`throwHttpErrors: false` swallowing nothing; capabilities are honestly declared with typed refusals; a
+shadow-mode transition performing a *read* is acceptable, since a read is not a mutation under BD-003 and
+failing loudly beats a silent bad mapping; and **the contract suite is genuinely unmodified**.
 
 ## Discovered work (not in plan)
 
