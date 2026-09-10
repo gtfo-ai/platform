@@ -72,6 +72,10 @@ keeping it a *name list* rather than a derivation is measured, not assumed — s
 `docs/technical/PROGRESS.md`, which is orchestrator-owned so take your own side) → commit → push → delete
 branch and worktree. Green in a worktree is not green on `main`; this session proved it four times.
 
+**Orchestrator hygiene (rules 25 and 66).** Cap concurrency at **two** agents, **one** while any agent
+holds Docker or the e2e tier. Never generate synthetic load. See rule 66 for the two kernel panics that
+set this policy and for what was and was not established about them.
+
 **Orchestrator hygiene (rule 25).** Never use a busy-loop load generator without `trap 'kill 0' EXIT INT TERM`,
 and never `2>/dev/null` on a cleanup step: 48 orphaned spinners starved this machine at load average 137 for
 4 h 37 m and stalled a reviewer for 4 h 50 m. **Resuming a background agent with `SendMessage` preserves its
@@ -250,6 +254,31 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+66. **The orchestrator's parallelism is a load on somebody's actual machine, and the machine gets a vote.**
+   The user reported **two kernel panics on 2026-09-10** — `watchdog timeout: no checkins from watchdogd in
+   92 seconds` — with reboots at **12:45 and 17:06**. The 17:06 one is the "restart" this ledger recorded as
+   a routine boot; it was not. Causation is **not** established and may be unrelated. What is established,
+   and is enough to change behaviour:
+
+   - This is a **14-core** machine, and **Docker Desktop's VM is allocated 12 of those cores.** Host-side
+     `vitest` across several worktrees therefore contends for ~2 cores against a VM holding 12.
+   - Load averages of **137–196** were driven by this session — 10–14x oversubscription — including
+     4 h 37 m at load 137 from the 48 spinners rule 25 records.
+   - `apfsd`, the APFS daemon, **exceeded its CPU resource limit 16:05:47–16:08:40**, during a `verify` on
+     `main` run while two agents were running Docker e2e suites.
+   - The Docker VM tripped a **disk-writes** diagnostic over 19:07–19:20, during the WP-14 e2e verification.
+   - It is **not** memory: 36 GB, 73% free, **zero swap in use**.
+
+   `watchdogd` is a high-priority userspace daemon the kernel panics on purpose when it cannot be scheduled,
+   so starvation under extreme oversubscription is a plausible mechanism — plausible, not proven.
+
+   **Standing policy from here, which costs throughput on purpose:** at most **two** agents, and **one** when
+   any agent is running Docker or the e2e tier; **never** generate synthetic load, for any measurement (rule
+   64's figures are to be cited from the round that took them, labelled, rather than re-measured); agents
+   iterate with targeted test files and run the six targets once at the end; merged worktrees are removed
+   immediately, because each is a full checkout that multiplies both the filesystem scan and the vitest
+   collection. **A green build on a machine you made unusable is not a good trade, and the person whose
+   laptop it is did not sign up for the experiment.**
 65. **An oracle that audits a parser must *over*-approximate it; where the two share a shape, they are one
    guard.** WP-14 replaced a loose `MINIMUM_CITATIONS` floor with a per-site recall check — a second regex
    (`CITATION_SITE`) that finds everything *looking like* a citation, so the parser can be held to reading
