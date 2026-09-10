@@ -72,9 +72,11 @@ import {
   IntegrationError,
   type NormalisedDelivery,
   type NormalisedEvent,
+  type SecretRedactor,
   type TaskManagementInboundEvent,
   type WebhookDelivery,
 } from '@platform/application';
+import type { JsonObject } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfToMarkdown } from './adf.js';
@@ -171,7 +173,19 @@ export const verifyJiraDelivery = (
 
 // ── 2. Identity of the delivery ──────────────────────────────────────────────
 
-export const jiraDeliveryKey = (delivery: WebhookDelivery): string => {
+/**
+ * The dedup key: `jira-cloud:<the delivery identifier header>`.
+ *
+ * **It is a header value, and a header value is provider text** (BD-022) that this function copies
+ * verbatim into a string the platform stores and compares. Nothing else in this adapter emits a
+ * header, and until review round 2 nothing redacted one either — which is how "the redactor covers
+ * everything the adapter emits" was true of every body and false of the one field taken off a
+ * header. The redactor is required rather than optional for the reason standing rule 31 names: an
+ * optional security dependency is an absent one.
+ *
+ * The refusal quotes only the constant header **name**, so it needs no pass of its own.
+ */
+export const jiraDeliveryKey = (delivery: WebhookDelivery, redactor: SecretRedactor): string => {
   const identifier = delivery.headers[DELIVERY_HEADER];
   if (typeof identifier !== 'string' || identifier.length === 0) {
     throw new IntegrationError(
@@ -181,7 +195,7 @@ export const jiraDeliveryKey = (delivery: WebhookDelivery): string => {
       { action: 'delivery_key' },
     );
   }
-  return `${PROVIDER_ID}:${identifier}`;
+  return redactor.redactText(`${PROVIDER_ID}:${identifier}`).value;
 };
 
 // ── 3. Meaning ───────────────────────────────────────────────────────────────
@@ -230,6 +244,19 @@ export interface JiraNormaliserOptions {
   /** Empty means "every project this webhook is registered for". */
   readonly projectKeys: readonly string[];
   readonly pickup: JiraPickupRule;
+  /**
+   * TD-012, **required** (standing rules 31 and 35), applied to the whole delivery **before any
+   * branch reads it**.
+   *
+   * A delivery is the one Jira document that does not cross `client.ts`, and it is the one whose
+   * text is appended to `events.payload` — append-only (BD-003), so an unredacted write cannot be
+   * corrected afterwards. `IgnoredDelivery.detail` carries the same obligation and states it in
+   * `common.ts`; the details built below quote `webhookEvent`, an issue key and a changelog field
+   * list, all of them provider text.
+   */
+  readonly redactor: SecretRedactor;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
+  readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
 
 const ignored = (
@@ -331,10 +358,20 @@ export const createJiraInboundNormaliser = (
     let parsedBody: unknown;
     try {
       parsedBody = JSON.parse(delivery.body);
-    } catch (error) {
-      return ignored('malformed_payload', `body is not JSON: ${(error as Error).message}`);
+    } catch {
+      // The message is a constant, and that is the fix rather than an omission: V8 quotes the
+      // offending input in a `SyntaxError` (`Unexpected token 'F', "FAKE-plant"… is not valid
+      // JSON`), so the old `body is not JSON: ${error.message}` put a **fragment** of the delivery
+      // into `inbox.error` — and a fragment is what no exact-match redactor can find afterwards.
+      return ignored('malformed_payload', 'body is not JSON');
     }
-    const envelope = jiraWebhookEnvelopeSchema.safeParse(parsedBody);
+    const redacted = options.redactor.redactJson({ body: parsedBody } as unknown as JsonObject);
+    if (redacted.count > 0) {
+      options.onRedaction?.({ action: 'normalise_delivery', count: redacted.count });
+    }
+    const envelope = jiraWebhookEnvelopeSchema.safeParse(
+      (redacted.value as { body: unknown }).body,
+    );
     if (!envelope.success) {
       const issue = envelope.error.issues[0];
       return ignored(
@@ -436,7 +473,7 @@ export const createJiraInboundNormaliser = (
 
   return {
     verify: (delivery) => verifyJiraDelivery(options, delivery),
-    deliveryKey: jiraDeliveryKey,
+    deliveryKey: (delivery) => jiraDeliveryKey(delivery, options.redactor),
     normalise,
   };
 };

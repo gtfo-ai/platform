@@ -30,8 +30,47 @@
  *
  * `client.test.ts` proves it by walking every escaping error the way pino does — own enumerable
  * properties, the `cause` chain, `AggregateError.errors` — and asserting the token appears nowhere.
+ *
+ * ## Where redaction happens, and why it is here
+ *
+ * TD-012, and standing rules 31 and 35: **every string this transport carries is redacted here,
+ * once, before anything reads it**, in both directions and above the `response.ok` test.
+ *
+ *  - The **request** body, because a workpad, a comment and a created ticket are published to
+ *    humans and stored on the provider — the platform's own emission, not Jira's.
+ *  - The **response** body, because everything the port emits is derived from it: a ticket's
+ *    description, every comment, an epic, a sibling, a transition's status names. Until this line
+ *    existed the adapter applied its redactor to `HealthProbe.detail` **only**, and a reviewer
+ *    building it through the real registration read a planted credential straight out of
+ *    `readTicket` — the executor does not compensate, because `action-executor.ts` redacts the
+ *    audit **row**, not the value it returns to the caller.
+ *  - Above `response.ok`, because the failure branch quotes Jira's own `errorMessages` into an
+ *    `IntegrationError` **and cuts them to 300 characters** (`detailOf`). A cut applied to
+ *    unredacted text leaves the leading bytes of a credential in the message, which is why the
+ *    order is redact-then-cut and not the reverse.
+ *
+ * **The exception, stated because a claim of totality has to survive being tested** (standing
+ * rules 3 and 44): `redactJson` walks a document's string **values** and leaves its **keys**
+ * alone, deliberately and for the reason `application/src/integrations/redaction.ts` records —
+ * rewriting a key can collide two fields into one, and the platform never builds a key out of
+ * secret material. Jira's keys are not the platform's, and this file turns a provider-chosen key
+ * into emitted text in exactly one place: `detailOf` interpolates every entry of a Jira
+ * `ErrorCollection.errors`, whose keys are field names Jira chose. A reviewer sent
+ * `{"errors": {"<the binding token>": "is not a valid field"}}` and read the token out of the
+ * `IntegrationError` message. So `detailOf` takes a **`redactText` of its own** and runs the line
+ * it composed — keys, values and separators — through it before the 300-character cut. That is the
+ * same rule Loki applies to a label name (`loki/provider.ts`, `capLabelSet`): *a key that the
+ * provider chose is redacted where it is emitted, by the code that emits it*. The check that
+ * enforces the claim is the check that enforces the redaction — `client.test.ts` replays the
+ * reviewer's body, and `providers/emitted-secrets.test.ts` walks record keys as strings of their
+ * own.
  */
-import { IntegrationError, IntegrationRateLimitedError } from '@platform/application';
+import {
+  IntegrationError,
+  IntegrationRateLimitedError,
+  type SecretRedactor,
+} from '@platform/application';
+import type { JsonObject } from '@platform/contracts';
 import ky, { type KyInstance } from 'ky';
 import { jiraErrorCollectionSchema, PROVIDER_ID } from './mapping.js';
 
@@ -49,8 +88,6 @@ export interface JiraRequest {
 
 export interface JiraClient {
   send(request: JiraRequest): Promise<unknown>;
-  /** The `Authorization` value this client sends, so a redactor can be built from it (TD-012). */
-  readonly authorizationHeader: string;
 }
 
 export interface JiraClientOptions {
@@ -69,6 +106,19 @@ export interface JiraClientOptions {
    * delay computed from `Date.now()` is asserting about the machine (standing rule 2).
    */
   readonly now?: () => number;
+  /**
+   * TD-012, **required and never defaulted** (standing rule 31). See the module docblock for the
+   * two passes and why they sit above the `response.ok` test.
+   *
+   * It is the *composed* redactor — the caller's plus this binding's own credentials — which
+   * `index.ts` builds and this client is constructed with. This interface used to publish an
+   * `authorizationHeader` field instead, "so a redactor can be built from it"; nothing ever read
+   * it, which is why the header is now one of the values `index.ts` puts *into* the redactor it
+   * passes down here (standing rule 44: a claim nothing discharges is decoration).
+   */
+  readonly redactor: SecretRedactor;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
+  readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
@@ -95,8 +145,21 @@ export const retryAfterMs = (header: string | null, now: number): number | null 
   return Number.isNaN(date) ? null : Math.max(0, date - now);
 };
 
-/** One line of provider text, truncated. Untrusted (BD-022) and redacted by the executor. */
-const detailOf = (status: number, body: unknown): string => {
+/**
+ * One line of provider text, truncated. Untrusted (BD-022).
+ *
+ * The body it reads has **already** been through this client's redactor (see the module docblock),
+ * which is the order that matters: the 300-character cut below would otherwise leave the leading
+ * bytes of a credential in an error message that becomes a log line and an `integration_actions`
+ * row. It said "redacted by the executor" until WP-11's follow-up; the executor redacts the audit
+ * row, not the error a caller sees.
+ *
+ * That earlier pass covers the `errors` **values** and not its **keys**, which are Jira's field
+ * names — so the line this function composes goes through `redactText` before the cut. `redactText`
+ * is exact-match and therefore idempotent: a value the transport already replaced is a placeholder
+ * by the time it gets here, so the second pass costs a scan and reports nothing.
+ */
+const detailOf = (status: number, body: unknown, redactText: (text: string) => string): string => {
   const parsed = jiraErrorCollectionSchema.safeParse(body);
   const messages = parsed.success
     ? [
@@ -106,7 +169,7 @@ const detailOf = (status: number, body: unknown): string => {
         ),
       ]
     : [];
-  const joined = messages.join('; ').replace(/\s+/g, ' ').trim();
+  const joined = redactText(messages.join('; ').replace(/\s+/g, ' ').trim());
   const detail = joined.length > 300 ? `${joined.slice(0, 300)}…` : joined;
   return detail.length === 0 ? `HTTP ${status}` : `HTTP ${status}: ${detail}`;
 };
@@ -116,8 +179,9 @@ const errorFor = (
   action: string,
   body: unknown,
   retryAfter: number | null,
+  redactText: (text: string) => string,
 ): IntegrationError => {
-  const message = detailOf(status, body);
+  const message = detailOf(status, body, redactText);
   if (status === 429) {
     return new IntegrationRateLimitedError(PROVIDER_ID, message, {
       action,
@@ -151,6 +215,25 @@ const errorFor = (
 
 export const createJiraClient = (options: JiraClientOptions): JiraClient => {
   const authorization = basicAuthHeader(options.email, options.apiToken);
+
+  /** One pass over a document of unknown shape; the count is reported, the text never is. */
+  const redact = (action: string, value: unknown): unknown => {
+    const outcome = options.redactor.redactJson({ body: value } as unknown as JsonObject);
+    if (outcome.count > 0) {
+      options.onRedaction?.({ action, count: outcome.count });
+    }
+    return (outcome.value as { body: unknown }).body;
+  };
+
+  /** The same, over a string this client *composed* — the one that carries Jira's field names. */
+  const redactLine = (action: string, text: string): string => {
+    const outcome = options.redactor.redactText(text);
+    if (outcome.count > 0) {
+      options.onRedaction?.({ action, count: outcome.count });
+    }
+    return outcome.value;
+  };
+
   const instance: KyInstance = ky.create({
     // ky 2 renamed `prefixUrl` to `baseUrl`, which resolves the relative input the web way:
     // a trailing slash here plus a relative path below yields `…/rest/api/3/issue/ACME-1`.
@@ -175,7 +258,11 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
       response = await instance(request.path, {
         method: request.method,
         searchParams,
-        ...(request.body === undefined ? {} : { json: request.body }),
+        // Outbound half: what the platform publishes to a Jira ticket, redacted at the transport
+        // rather than in the five port methods that build a body.
+        ...(request.body === undefined
+          ? {}
+          : { json: redact(request.action, request.body) as unknown }),
       });
     } catch (error) {
       // No `cause`: see the module docblock. The name is kept because "TimeoutError" and
@@ -189,12 +276,18 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
     }
 
     const text = await response.text();
-    let body: unknown;
+    let parsed: unknown;
     try {
-      body = text.length === 0 ? null : JSON.parse(text);
+      // A parse failure is swallowed rather than reported: a `SyntaxError` quotes the input it
+      // choked on, so the message is a fragment of the body and `null` is the safe answer.
+      parsed = text.length === 0 ? null : JSON.parse(text);
     } catch {
-      body = null;
+      parsed = null;
     }
+    // Inbound half, and **above** the `ok` test so that the failure branch — which quotes Jira's
+    // `errorMessages` into an error message and cuts them at 300 characters — is covered by the
+    // same line as the success branch (WP-07's review found exactly that asymmetry three times).
+    const body = redact(request.action, parsed);
 
     if (!response.ok) {
       throw errorFor(
@@ -202,10 +295,11 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
         request.action,
         body,
         retryAfterMs(response.headers.get('retry-after'), (options.now ?? Date.now)()),
+        (text) => redactLine(request.action, text),
       );
     }
     return body;
   };
 
-  return { send, authorizationHeader: authorization };
+  return { send };
 };

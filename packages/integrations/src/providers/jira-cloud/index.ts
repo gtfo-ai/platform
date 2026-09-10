@@ -66,10 +66,10 @@
  * defuses any marker in caller-supplied markdown before appending the platform's own.
  */
 import {
+  bindingSecretRedactor,
   type CommentRef,
   composeSecretRedactors,
   type ExternalIdentity,
-  exactSecretRedactor,
   type HealthProbe,
   type IntegrationActionExecutor,
   IntegrationError,
@@ -92,7 +92,12 @@ import type { Id, JsonObject, TaskMode } from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfMarkerId, adfToMarkdown, markdownToAdfDocument } from './adf.js';
-import { createJiraClient, type JiraClient, type JiraClientOptions } from './client.js';
+import {
+  basicAuthHeader,
+  createJiraClient,
+  type JiraClient,
+  type JiraClientOptions,
+} from './client.js';
 import { type JiraCloudConfig, jiraCloudConfigSchema } from './config.js';
 import {
   commentUrl,
@@ -141,6 +146,13 @@ const usersSchema = z.array(jiraUserSchema);
 const FIELDS_FOR_TICKET =
   'summary,description,issuetype,status,priority,labels,updated,created,assignee,reporter,parent,issuelinks';
 const FIELDS_FOR_MATCH = 'issuetype,status,priority,labels,updated,parent,issuelinks';
+/**
+ * How many comments one `readTicket` **asks** for — `maxResults`, Atlassian's word for a page size
+ * request, and **not a cap this adapter enforces**. Nothing below refuses, truncates or marks a
+ * larger page: `unbounded-emission.test.ts` scripts two hundred comments against this hundred and
+ * shows all two hundred emitted. The name has misled a docblock and an open question already, so
+ * it says what it is here (Q54, whose recommendation is that the *consumer* bounds this).
+ */
 const MAX_COMMENTS = 100;
 
 /** On whose behalf a call is made. `mode` is `tasks.mode` (technical/03) and is never defaulted. */
@@ -185,31 +197,59 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     type: 'task_management',
   };
   const siteUrl = config.site_url.replace(/\/+$/, '');
+
+  /**
+   * What the caller injected, plus **this binding's own credentials**.
+   *
+   * Built from the binding's own secrets, which is the path `docs/TODO.md` asks the first provider
+   * work package to take rather than inventing a second one: a redactor assembled beside a binding
+   * instead of from it is a redactor that does not know the token it is meant to hide. It is
+   * composed with `options.redactor` rather than chosen against it, because the two halves know
+   * different things — the caller knows a run-scoped or a neighbouring binding's secret, and only
+   * the adapter knows its own (standing rule 31).
+   *
+   * Three values, and each for a path that exists:
+   *
+   *  - **`api_token`** is what an operator pastes into a ticket comment while debugging, and what
+   *    a Jira error body can echo.
+   *  - **the `Authorization` header** — `Basic base64(email:api_token)` — because the base64 of a
+   *    credential *is* the credential and the token is **not a substring of it**, so redacting the
+   *    token alone would not touch it. `client.ts` used to publish this value as
+   *    `authorizationHeader` "so a redactor can be built from it"; nothing read it, and this is
+   *    that sentence discharged.
+   *  - **`webhook_secret`**, because it arrives *inbound* — it is the HMAC key an operator is most
+   *    likely to paste into a ticket while setting the webhook up — and an inbound delivery becomes
+   *    `events.payload`, which is append-only (BD-003) and cannot be fixed afterwards.
+   *
+   * `bindingSecretRedactor` rather than `exactSecretRedactor`: it skips a value below
+   * `MIN_SECRET_LENGTH` instead of throwing, so a binding whose token is a four-character stub
+   * still answers queries rather than failing at construction with a message about redaction.
+   */
+  const redactor: SecretRedactor = composeSecretRedactors(
+    options.redactor,
+    bindingSecretRedactor([
+      { name: 'jira_api_token', value: config.api_token },
+      {
+        name: 'jira_basic_auth',
+        value: basicAuthHeader(config.user_email, config.api_token).replace(/^Basic /, ''),
+      },
+      config.webhook_secret === null || config.webhook_secret === undefined
+        ? null
+        : { name: 'jira_webhook_secret', value: config.webhook_secret },
+    ]),
+  );
+
   const client: JiraClient = createJiraClient({
     siteUrl,
     email: config.user_email,
     apiToken: config.api_token,
     timeoutMs: config.request_timeout_ms,
     now: () => Date.parse(options.clock.now()),
+    // The choke point: every document crossing the transport, in both directions, is redacted
+    // once before anything reads it (`client.ts`, "Where redaction happens").
+    redactor,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
-
-  /**
-   * The redactor for text this adapter renders itself (the health probe).
-   *
-   * Built **from the binding's own secrets**, which is the path `docs/TODO.md` asks the first
-   * provider work package to take rather than inventing a second one: a redactor assembled beside
-   * a binding instead of from it is a redactor that does not know the token it is meant to hide.
-   */
-  const redactor: SecretRedactor = composeSecretRedactors(
-    options.redactor,
-    exactSecretRedactor([
-      { name: 'jira_api_token', value: config.api_token },
-      ...(config.webhook_secret === null || config.webhook_secret === undefined
-        ? []
-        : [{ name: 'jira_webhook_secret', value: config.webhook_secret }]),
-    ]),
-  );
 
   const capabilities: TaskManagementCapabilities = {
     webhooks: typeof config.webhook_secret === 'string' && config.webhook_secret.length > 0,
@@ -849,6 +889,10 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     siteUrl,
     projectKeys: config.project_keys,
     pickup,
+    // The inbound half. A delivery is not a response, so it never crosses `client.ts`: without
+    // this line a comment carrying this binding's own webhook secret would be written to
+    // `events.payload` verbatim (BD-003: append-only, so it cannot be fixed later).
+    redactor,
     // A binding with no webhook secret cannot verify anything, and `verifyJiraDelivery` says so
     // by rejecting every delivery when the secret is absent — not by hashing with an empty key,
     // which is a key the sender owns as well (see `webhook.ts`, "No secret means reject").

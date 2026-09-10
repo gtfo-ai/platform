@@ -8,7 +8,13 @@
  * below walks the whole error — message, own properties, and the `cause` chain — the way pino's
  * serialiser does.
  */
-import { IntegrationError, IntegrationRateLimitedError } from '@platform/application';
+import {
+  exactSecretRedactor,
+  IntegrationError,
+  IntegrationRateLimitedError,
+  noSecretsRedactor,
+  type SecretRedactor,
+} from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { createGitLabHttp, encodeProjectId, type GitLabFetch, parseRetryAfterMs } from './http.js';
 
@@ -23,6 +29,10 @@ interface Recorded {
 
 const httpWith = (
   responder: (recorded: Recorded) => Response | Promise<Response>,
+  redaction: {
+    readonly redactor?: SecretRedactor;
+    readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
+  } = {},
 ): { http: ReturnType<typeof createGitLabHttp>; calls: Recorded[] } => {
   const calls: Recorded[] = [];
   const fetchImpl: GitLabFetch = async (url, init) => {
@@ -43,6 +53,9 @@ const httpWith = (
       fetchImpl,
       timeoutMs: 0,
       maxPages: 3,
+      // Required (standing rule 31): a test that does not care still says which redactor it means.
+      redactor: redaction.redactor ?? noSecretsRedactor(),
+      ...(redaction.onRedaction === undefined ? {} : { onRedaction: redaction.onRedaction }),
     }),
   };
 };
@@ -317,5 +330,178 @@ describe('no credential ever reaches an error (BD-002, TD-012)', () => {
     } catch (error) {
       expect((error as Error).message).toBe('gitlab: GET /x answered 422');
     }
+  });
+});
+
+/**
+ * Property 4 of the module docblock, at the transport rather than at a call site.
+ *
+ * The redactor here knows only `PLANTED`, so nothing in these tests can be discharged by the
+ * `PRIVATE-TOKEN` handling that the block above asserts: what is proved is that the *document*
+ * crossing this transport went through the redactor it was given, in both directions and on both
+ * branches (standing rule 35 — being handed a redactor is not using one).
+ */
+describe('every document that crosses the transport is redacted (TD-012, property 4)', () => {
+  const PLANTED = 'FAKE-planted-binding-credential-0123456789';
+  const PLACEHOLDER = '[REDACTED:integration:planted]';
+  const planted = (): SecretRedactor => exactSecretRedactor([{ name: 'planted', value: PLANTED }]);
+
+  it('redacts the request document before it is serialised onto the wire', async () => {
+    const { http, calls } = httpWith(() => json(201, { iid: 1 }), { redactor: planted() });
+    await http.request({
+      method: 'POST',
+      path: '/projects/acme%2Fapi/merge_requests',
+      action: 'open_merge_request',
+      json: { title: 'fix', description: `see ${PLANTED} for the token` },
+    });
+    expect(calls[0]?.body, 'the request body is published to humans').not.toContain(PLANTED);
+    expect(calls[0]?.body).toContain(PLACEHOLDER);
+  });
+
+  /**
+   * The pass the *other* two cannot discharge, which is why the secret is escaped rather than
+   * merely present (standing rules 9 and 41: a value bounded twice has two untestable guards).
+   *
+   * `\u0046` is `F`. The raw response text therefore does **not** contain the credential, so the
+   * pre-parse text pass provably finds nothing; `JSON.parse` reconstitutes it, and only the pass
+   * over the parsed document can catch it. Deleting that pass leaves the other two green.
+   */
+  it('redacts the response document, including a secret the provider JSON-escaped', async () => {
+    const escaped = `\\u0046${PLANTED.slice(1)}`;
+    const raw = `{"title":"a","description":"token ${escaped}"}`;
+    expect(raw, 'the arbiter: the text pass cannot see this one').not.toContain(PLANTED);
+
+    const { http } = httpWith(
+      () => new Response(raw, { status: 200, headers: { 'content-type': 'application/json' } }),
+      { redactor: planted() },
+    );
+    const response = await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    expect(JSON.stringify(response?.body)).not.toContain(PLANTED);
+    expect(JSON.stringify(response?.body)).toContain(PLACEHOLDER);
+  });
+
+  /**
+   * The pass that has to come **before** `JSON.parse`, not after it.
+   *
+   * V8 quotes the offending input in a parse error — `Unexpected token 'F', "FAKE-plant"… is not
+   * valid JSON` — and that error is re-thrown on `cause`, which pino walks (standing rule 13). The
+   * quote is a **fragment**, so an exact-match redactor applied to the message afterwards would
+   * find nothing: this is the "redact before any cut" rule at the smallest scale there is.
+   */
+  it('redacts the response text before parsing it, so a parse error carries no fragment', async () => {
+    const { http } = httpWith(
+      () =>
+        new Response(`${PLANTED} is not JSON`, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      { redactor: planted() },
+    );
+    let caught: unknown;
+    try {
+      await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(IntegrationError);
+    const serialised = serialiseLikePino(caught);
+    expect(serialised, 'the whole error, cause chain included').not.toContain(PLANTED);
+    expect(
+      serialised,
+      'not even the first ten characters V8 quotes into a parse error',
+    ).not.toContain(PLANTED.slice(0, 10));
+  });
+
+  it('redacts a text response before the caller can cut a tail out of it', async () => {
+    const { http } = httpWith(
+      () => new Response(`$ glab repo push https://oauth2:${PLANTED}@gitlab.example.test\nfatal\n`),
+      { redactor: planted() },
+    );
+    const response = await http.requestText({
+      method: 'GET',
+      path: '/projects/acme%2Fapi/jobs/1/trace',
+      action: 'get_job_log',
+    });
+    expect(response?.body).not.toContain(PLANTED);
+    expect(response?.body).toContain(PLACEHOLDER);
+  });
+
+  /**
+   * The fourth pass. `GitLabResponse.headers` leaves this module, and a header is where a webhook
+   * secret really travels — `X-Gitlab-Token` *is* the secret token. The **name** is redacted too:
+   * a record key is emitted text, which is the lesson `emitted-bounds.test.ts` learned from a 2 MB
+   * tag name and the one `jira-cloud/client.ts` learned from an `errors` key.
+   */
+  it('redacts a response header value', async () => {
+    const { http } = httpWith(() => json(200, { ok: true }, { 'x-echo': `bearer ${PLANTED}` }), {
+      redactor: planted(),
+    });
+    const response = await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    expect(JSON.stringify(response?.headers)).not.toContain(PLANTED);
+    expect(response?.headers['x-echo']).toBe(`bearer ${PLACEHOLDER}`);
+  });
+
+  /**
+   * The name too — and the honest bound on what that buys, measured rather than assumed.
+   *
+   * `Headers` canonicalises a field name to **lower case** before this module ever sees it, so an
+   * exact-match redactor can only match a secret that is itself lower case. `LOWER` below is; the
+   * mixed-case `PLANTED` is not, and the second assertion pins that limitation instead of leaving
+   * a docblock to imply it is covered (standing rule 3).
+   */
+  it('redacts a header name, as far as case-folding lets it', async () => {
+    const LOWER = 'fake-planted-lowercase-credential-0123456789';
+    const { http } = httpWith(
+      () => json(200, { ok: true }, { [`x-${LOWER}`]: 'a', [`x-${PLANTED}`]: 'b' }),
+      { redactor: exactSecretRedactor([{ name: 'planted', value: LOWER }]) },
+    );
+    const response = await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    expect(Object.keys(response?.headers ?? {}), 'a name is emitted text too').toContain(
+      `x-${PLACEHOLDER}`,
+    );
+    expect(
+      Object.keys(response?.headers ?? {}),
+      'and the one it cannot match: `Headers` lower-cased the name out of exact-match range',
+    ).toContain(`x-${PLANTED.toLowerCase()}`);
+  });
+
+  it('keeps the first of two header names that redact to the same string', async () => {
+    // Two distinct names on the wire, one name after redaction, because both secrets share a
+    // placeholder. The answer must not depend on which the server happened to send second.
+    const FIRST = 'fake-planted-lowercase-credential-0123456789';
+    const SECOND = 'fake-planted-lowercase-credential-9876543210';
+    const { http } = httpWith(
+      () => json(200, { ok: true }, { [`x-${FIRST}`]: 'first', [`x-${SECOND}`]: 'second' }),
+      {
+        redactor: exactSecretRedactor([
+          { name: 'planted', value: FIRST },
+          { name: 'planted', value: SECOND },
+        ]),
+      },
+    );
+    const response = await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    expect(
+      Object.keys(response?.headers ?? {}).filter((name) => name === `x-${PLACEHOLDER}`),
+      'the two names collapsed into one',
+    ).toHaveLength(1);
+    expect(response?.headers[`x-${PLACEHOLDER}`], 'and the first value survived').toBe('first');
+  });
+
+  it('reports the count and never the text, and stays silent when there was nothing to do', async () => {
+    const events: { action: string; count: number }[] = [];
+    const { http } = httpWith(() => json(200, { a: PLANTED, b: PLANTED }), {
+      redactor: planted(),
+      onRedaction: (event) => events.push(event),
+    });
+    await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    expect(events).toEqual([{ action: 'get_merge_request', count: 2 }]);
+
+    const quiet: { action: string; count: number }[] = [];
+    const clean = httpWith(() => json(200, { a: 'ordinary' }), {
+      redactor: planted(),
+      onRedaction: (event) => quiet.push(event),
+    });
+    await clean.http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });
+    expect(quiet, 'a call that carried no secret is not an event').toEqual([]);
   });
 });

@@ -326,14 +326,20 @@ export interface IgnoredDelivery {
   /**
    * Why, in one line — provider text, and therefore untrusted (BD-022).
    *
-   * **TODO (WP-08, the work package that first persists a delivery):** the inbound half has no
-   * redaction step. Outbound has one door (`IntegrationActionExecutor` redacts the audit row, the
-   * log line and every error it throws); inbound has none yet, because nothing writes `inbox.error`
-   * or appends a normalised event until the webhook endpoint lands. TD-012 requires the redactor on
-   * every write to `events.payload` and to the inbox row, so the endpoint that writes this — and
-   * WP-15, which appends the normalised events — puts a `SecretRedactor` in front of the write and
-   * records its count, exactly as `buildEntry` does. Filed in `docs/TODO.md`; repeated here because
-   * this is where it will be read.
+   * **Half redacted, and the half that is not is named** (TD-012, `docs/TODO.md`). Every adapter
+   * that has an inbound half — Slack at WP-10, Jira and GitLab in WP-11's follow-up — now runs the
+   * parsed delivery through its **own** composed redactor before any branch reads it, so this
+   * `detail`, and every payload built beside it, is free of *that binding's* credentials.
+   *
+   * What remains is the platform's: an adapter can only redact what it holds, so a run-scoped
+   * token or a neighbouring binding's secret is still unredacted here, and nothing yet records the
+   * count on the inbox row. The endpoint that writes `inbox.error` — and **WP-15**, which appends
+   * the normalised events — therefore still puts a `SecretRedactor` in front of the write and
+   * records its count, exactly as `buildEntry` does.
+   *
+   * One ordering rule is worth carrying to whoever writes that: **redact before you cut**. A
+   * `detail` is bounded provider text, and an exact-match redactor cannot find a secret that a cap
+   * has already cut in half.
    */
   readonly detail: string;
 }

@@ -282,12 +282,26 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   /**
    * The **tail** of a job log: CI logs are large and untrusted (BD-022).
    *
-   * **TODO (WP-09, and WP-15 when a failing pipeline feeds a stage):** a CI job log is the text most
-   * likely to contain a token the platform itself injected — a masked variable is masked by *that*
-   * CI provider, not by ours, and a failing job prints the command it ran. The returned string is
-   * read to be handed to an agent and stored with the task, so TD-012's redactor belongs on that
-   * write, with its count recorded. The action's audit row is already redacted; this return value
-   * is not.
+   * **The returned string is redacted by the adapter, and the ordering is the obligation.** A CI job
+   * log is the text most likely to contain a token the platform itself injected — a masked variable
+   * is masked by *that* CI provider, not by ours, and a failing job prints the command it ran — and
+   * it is *read to be handed to an agent and stored with the task*, so redacting the audit row is
+   * not enough (the executor returns the raw result). An adapter therefore applies TD-012's
+   * redactor, composed with one over its own binding credentials, **before it takes the tail**: a
+   * cut applied first leaves the leading bytes of a token in the string, and an exact-match
+   * redactor can never find them again. GitLab does it at the transport (`gitlab/http.ts`,
+   * property 4) and `emitted-secrets.test.ts` plants the binding token in a trace to prove it.
+   *
+   * **Still open, and not dischargeable as this sentence used to promise it (Q55).** It read: a
+   * *run-scoped* credential is not known to the adapter, "so the caller passes it in
+   * `ProviderCreateInput.redactor`". The ordering forbids it for the credential that matters most
+   * — `create()` runs once when the binding is instantiated, `mintCredential()` runs later per
+   * run, and a redactor built at binding time is a closure over a fixed secret set, so a token
+   * minted afterwards is not in it. The adapter cannot hold it either, deliberately: `cloneUrl`
+   * and `mintCredential` must hand that value back **intact**. WP-15 therefore needs a run-scoped
+   * redactor and either a per-run adapter instance or a redactor resolved at call time; Q55 states
+   * both options and what each costs. Also still open: the count of what was removed is reported
+   * through the adapter's `onRedaction`, which nothing yet persists.
    */
   getJobLog(
     project: string,

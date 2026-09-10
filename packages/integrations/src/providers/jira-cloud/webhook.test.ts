@@ -7,7 +7,12 @@
  * reading of a sentence. Everything else here is a negative case, and every negative is paired
  * with the positive that proves the harness can produce an acceptable delivery.
  */
-import { IntegrationError, type WebhookDelivery } from '@platform/application';
+import {
+  exactSecretRedactor,
+  IntegrationError,
+  noSecretsRedactor,
+  type WebhookDelivery,
+} from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -195,7 +200,9 @@ describe('verifyJiraDelivery', () => {
 
 describe('jiraDeliveryKey', () => {
   it('is the identifier header, prefixed by the provider', () => {
-    expect(jiraDeliveryKey(fresh())).toBe('jira-cloud:00000000-0000-4000-8000-00000000d001');
+    expect(jiraDeliveryKey(fresh(), noSecretsRedactor())).toBe(
+      'jira-cloud:00000000-0000-4000-8000-00000000d001',
+    );
   });
 
   it('is stable for the same delivery and different for another', () => {
@@ -204,14 +211,32 @@ describe('jiraDeliveryKey', () => {
       headers: { ...first.headers, 'x-atlassian-webhook-identifier': 'other' },
       body: first.body,
     };
-    expect(jiraDeliveryKey(first)).toBe(jiraDeliveryKey(first));
-    expect(jiraDeliveryKey(first)).not.toBe(jiraDeliveryKey(second));
+    expect(jiraDeliveryKey(first, noSecretsRedactor())).toBe(
+      jiraDeliveryKey(first, noSecretsRedactor()),
+    );
+    expect(jiraDeliveryKey(first, noSecretsRedactor())).not.toBe(
+      jiraDeliveryKey(second, noSecretsRedactor()),
+    );
+  });
+
+  /**
+   * The key is a **header value** copied verbatim into a string the platform stores. Nothing else
+   * in this adapter emits a header, and until review round 2 nothing redacted one.
+   */
+  it('redacts the identifier header, which is provider text like any other', () => {
+    const PLANTED = 'FAKE-planted-binding-credential-0123456789';
+    expect(
+      jiraDeliveryKey(
+        { headers: { 'x-atlassian-webhook-identifier': `d-${PLANTED}` }, body: '{}' },
+        exactSecretRedactor([{ name: 'planted', value: PLANTED }]),
+      ),
+    ).toBe('jira-cloud:d-[REDACTED:integration:planted]');
   });
 
   it('throws invalid_request when there is nothing to key on', () => {
     let caught: unknown;
     try {
-      jiraDeliveryKey({ headers: {}, body: '{}' });
+      jiraDeliveryKey({ headers: {}, body: '{}' }, noSecretsRedactor());
     } catch (error) {
       caught = error;
     }

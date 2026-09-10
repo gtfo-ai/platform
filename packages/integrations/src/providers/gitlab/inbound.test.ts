@@ -10,10 +10,12 @@
  * halves: a normaliser that silently swallowed a hook it did not understand would make a missing
  * pipeline transition undebuggable, and "no events" alone is also what a broken harness produces.
  */
-import type {
-  GitProviderInboundEvent,
-  InboundContext,
-  NormalisedDelivery,
+import {
+  type GitProviderInboundEvent,
+  type InboundContext,
+  type NormalisedDelivery,
+  noSecretsRedactor,
+  type SecretRedactor,
 } from '@platform/application';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
@@ -54,9 +56,14 @@ const deps = (
     resolved: false,
   },
   project: string | null = PROJECT,
+  redactor: SecretRedactor = noSecretsRedactor(),
 ) => ({
   project,
   findThreadForNote: async () => thread,
+  // Required (standing rule 31): a test that does not care still says which redactor it means.
+  // The one that *does* care is `emitted-secrets.test.ts`, which drives this path through the real
+  // registration with the binding's own webhook token planted in the delivery.
+  redactor,
 });
 
 const normalise = async (

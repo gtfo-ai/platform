@@ -233,6 +233,40 @@ the existing suite (BD-017).
 > the transport, the redaction and unmapped-value sinks) are captured by a registration **factory**
 > — `createLokiRegistration(deps)`, as Jira's has been since WP-08 — which is also what lets the
 > contract suites drive `create()` itself rather than a constructor next to it.
+>
+> **And required is not used.** Making the field required proves an adapter is *handed* a redactor,
+> not that it applies one: the check happens where the object is built. Two shipped adapters proved
+> it — GitLab composed no redactor over its own credentials, so `getJobLog` returned
+> `PRIVATE-TOKEN: glpat-…` verbatim; Jira applied its redactor to `HealthProbe.detail` **only**, and
+> the executor does not compensate, because it redacts the audit *row* and returns the raw result.
+> Three rules came out of the fix, and they apply to a sixth provider as much as to these five:
+>
+>  1. **Redact at the transport, not at the call sites.** One pass over the request document and one
+>     over every response document, above the success test, is a guarantee; a redactor applied in
+>     each of six port methods is six chances to forget the seventh — and WP-07's review found
+>     redaction present on a success path and missing on the failure path three times in one file.
+>  2. **Redact before every cut.** A cap applied first leaves a fragment that no exact-match
+>     redactor can ever find again. That includes the cuts nobody thinks of as caps: Jira's
+>     300-character error detail, GitLab's 32-character `object_kind` quote, and `JSON.parse`'s own
+>     `SyntaxError`, which quotes the ten bytes it choked on into a message that travels on `cause`.
+>  3. **Redact the inbound delivery too.** It never crosses the transport, and it is the one
+>     document that ends up in `events.payload`, which is append-only (BD-003).
+>  4. **A document is not only its values.** `redactJson` walks string *values* and leaves object
+>     **keys** alone by design (`application/src/integrations/redaction.ts` records the collision
+>     hazard that decides it), so every site that turns a **provider-chosen key** into emitted text
+>     owes its own pass — Loki's label names, and Jira's `ErrorCollection.errors`, whose keys a
+>     reviewer used to read a planted credential out of an error message. **Headers are the same
+>     class**: a delivery's identifier header becomes a stored dedup key, and `X-Gitlab-Token` *is*
+>     a webhook secret. Redact where you emit; a key's collision is only knowable there.
+>  5. **Enumerate the members of the port, not the calls you remembered to make.** Round 1 of this
+>     fix walked eighteen GitLab answers and eleven Jira ones and was complete by its own list;
+>     five members had no scenario at all, and one of them was the header path above.
+>     `emitted-secrets.test.ts` now derives the list from `Object.keys(port)` (rules 7 and 37).
+>
+> The proof is `packages/integrations/src/providers/emitted-secrets.test.ts`: both adapters built
+> through their **real registration** with `noSecretsRedactor()` as the caller's redactor, the
+> binding's own credentials planted in every string the provider can return, and every emitted field
+> walked by path — failure branches included.
 
 > **A new obligation on a port lands in the shared suite, in the same change.** WP-09 added one —
 > an adapter may not report a revocation it cannot substantiate, so a credential handle it did not

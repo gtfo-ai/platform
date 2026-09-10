@@ -10,7 +10,12 @@
  * rule 3, mutation-checked rather than asserted in prose.
  */
 import { createHmac } from 'node:crypto';
-import { IntegrationError, type WebhookDelivery } from '@platform/application';
+import {
+  exactSecretRedactor,
+  IntegrationError,
+  noSecretsRedactor,
+  type WebhookDelivery,
+} from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
@@ -297,7 +302,7 @@ describe('decodeSigningToken', () => {
 
 describe('gitLabDeliveryKey', () => {
   const key = (body: unknown): string =>
-    gitLabDeliveryKey({ headers: {}, body: JSON.stringify(body) });
+    gitLabDeliveryKey({ headers: {}, body: JSON.stringify(body) }, noSecretsRedactor());
 
   it('keys a merge request on its id and updated_at, so a redelivery dedups', () => {
     const body = {
@@ -350,7 +355,9 @@ describe('gitLabDeliveryKey', () => {
     expect(() => key({ object_kind: 'merge_request', object_attributes: { id: 93 } })).toThrow(
       IntegrationError,
     );
-    expect(() => gitLabDeliveryKey({ headers: {}, body: 'not json' })).toThrow(IntegrationError);
+    expect(() => gitLabDeliveryKey({ headers: {}, body: 'not json' }, noSecretsRedactor())).toThrow(
+      IntegrationError,
+    );
   });
 
   it('reports invalid_request, which is the code the port names', () => {
@@ -360,5 +367,45 @@ describe('gitLabDeliveryKey', () => {
     } catch (error) {
       expect((error as IntegrationError).code).toBe('invalid_request');
     }
+  });
+
+  /**
+   * The key and the refusal are both provider text, and the refusal **cuts** — 32 characters of
+   * `object_kind`, which is where a fragment of a credential would survive a redactor that ran
+   * afterwards. A delivery is not a response, so nothing else on this path redacts anything.
+   */
+  describe('is redacted, because a delivery is provider text nothing else redacts', () => {
+    const PLANTED = 'FAKE-planted-binding-credential-0123456789';
+    const PLACEHOLDER = '[REDACTED:integration:planted]';
+    const planted = exactSecretRedactor([{ name: 'planted', value: PLANTED }]);
+
+    it('redacts the key it returns, which the platform stores and compares', () => {
+      expect(
+        gitLabDeliveryKey(
+          {
+            headers: {},
+            body: JSON.stringify({
+              object_kind: 'merge_request',
+              object_attributes: { id: 93, updated_at: `2026-06-01T07:59:00.000Z-${PLANTED}` },
+            }),
+          },
+          planted,
+        ),
+      ).toBe(`gitlab:merge_request:93:2026-06-01T07:59:00.000Z-${PLACEHOLDER}`);
+    });
+
+    it('redacts before the 32-character cut, so the refusal carries no fragment', () => {
+      let caught: unknown;
+      try {
+        gitLabDeliveryKey(
+          { headers: {}, body: JSON.stringify({ object_kind: `wiki_${PLANTED}` }) },
+          planted,
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error).message).not.toContain(PLANTED.slice(0, 12));
+      expect((caught as Error).message).toContain(PLACEHOLDER.slice(0, 12));
+    });
   });
 });

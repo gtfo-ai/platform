@@ -58,8 +58,10 @@
  *     here reaches a real quota.
  */
 import {
+  bindingSecretRedactor,
   type CodeownersRules,
   type CredentialScope,
+  composeSecretRedactors,
   type Discussion,
   type ExternalIdentity,
   type GitProviderCapabilities,
@@ -122,13 +124,20 @@ export interface GitLabProviderOptions {
   /** Injected: webhook replay detection needs "now", and a wall clock is a hardware assertion. */
   readonly clock: Clock;
   /**
-   * TD-012. Applied to two provider strings that leave this ring: the health probe's `detail` and
-   * the tail of a CI job log. `getJobLog`'s port docblock names WP-09 for exactly this — "a CI job
-   * log is the text most likely to contain a token the platform itself injected".
+   * TD-012, applied to everything this adapter emits in either direction.
    *
    * **Required, never defaulted** (standing rule 31, earned at WP-11): while it was optional the
    * registration did not pass one, so `redact` was the identity function along the only production
    * path and the job-log tail left this ring unredacted.
+   *
+   * **And required is not used** (standing rule 35, earned here): until this fix the docblock said
+   * "applied to two provider strings", and it was — but this adapter composed no
+   * `bindingSecretRedactor`, so its *own* `PRIVATE-TOKEN` was not in the set being redacted. Built
+   * through `gitlabProviderRegistration.create` with `noSecretsRedactor()`, `getJobLog` handed back
+   * `PRIVATE-TOKEN: glpat-PLANTED-…` verbatim. What the adapter does with this value is
+   * `composeSecretRedactors(input.redactor, bindingSecretRedactor([…this binding's own
+   * credentials…]))`, so a caller that passes `noSecretsRedactor()` still cannot disarm it, and
+   * `emitted-secrets.test.ts` plants the credential in every string the port can emit.
    */
   readonly redactor: SecretRedactor;
   /** Where a redaction count is reported. Optional so a unit test can assert on it. */
@@ -186,12 +195,59 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     throw invalidRequest('create', 'the binding has no API token; set GITLAB_TOKEN (TD-020)');
   }
 
+  /**
+   * What the caller injected, plus **this binding's own three credentials** (standing rules 31 and
+   * 35, and the reason `composeSecretRedactors` exists: the caller can only tell the adapter about
+   * a run-scoped or a neighbouring binding's secret, and the adapter is the only thing that knows
+   * its own).
+   *
+   * All three, and each for a path that exists:
+   *
+   *  - **`token`** goes out as `PRIVATE-TOKEN` on every request, and a GitLab error body "quotes
+   *    the request" (see `http.ts`); it is also the value an operator pastes into an MR comment
+   *    when debugging a scope, and the one a CI job prints when a script echoes the command it ran
+   *    — which is the path `getJobLog`'s port docblock names.
+   *  - **`webhook_secret_token`** arrives *inbound* as `X-Gitlab-Token`, and a delivery becomes
+   *    `mr.opened` in `events.payload`, which is append-only (BD-003) and cannot be fixed
+   *    afterwards.
+   *  - **`webhook_signing_token`** (`whsec_…`) is the same argument for the Standard Webhooks
+   *    scheme.
+   *
+   * **Not** here, and deliberately: the credentials this adapter *mints*. A minted project access
+   * token is a **run-scoped** secret, and `composeSecretRedactors`' own docblock puts those on the
+   * other side of the composition — the composition root knows which run holds which token and
+   * passes them in `input.redactor`, where they are also known to the run transcript's redactor.
+   * Keeping them here would mean an unbounded, mutable secret set inside a long-lived adapter, and
+   * a redactor whose contents depend on which calls happened to run first. **What the reviewer
+   * confirmed, and what it leaves open:** no path emits a minted token except `mintCredential`'s
+   * own return value and `cloneUrl` (both by design — the URL percent-encodes it), and the minted
+   * registry deliberately stores no token values (`credentials.ts`). But the caller cannot supply
+   * one in `input.redactor` either, because `create()` runs **before** any mint — so the port's
+   * deferred obligation is not dischargeable as written, and that is **Q55**, owned by WP-15.
+   *
+   * The values are the **effective** ones — what `create` actually sends and verifies with.
+   * `bindingSecretRedactor` skips anything under `MIN_SECRET_LENGTH`, so a blank or a stub cannot
+   * turn ordinary text into placeholders.
+   */
+  const redactor = composeSecretRedactors(
+    options.redactor,
+    bindingSecretRedactor([
+      { name: 'gitlab_token', value: token },
+      { name: 'gitlab_webhook_secret_token', value: options.secrets.webhook_secret_token ?? '' },
+      { name: 'gitlab_webhook_signing_token', value: options.secrets.webhook_signing_token ?? '' },
+    ]),
+  );
+
   const http = createGitLabHttp({
     baseUrl: config.base_url,
     token,
     fetchImpl: options.fetchImpl ?? ((url, init) => fetch(url, init as RequestInit)),
     timeoutMs: config.request_timeout_ms,
     maxPages: config.max_pages,
+    // The choke point: every document crossing the transport, in both directions, is redacted
+    // once before anything reads it (`http.ts`, property 4).
+    redactor,
+    ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
   });
   const client: GitLabClient = createGitLabClient(http);
   const credentials = createMintedCredentialRegistry();
@@ -219,9 +275,20 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     credentialMinting: config.mint_credentials,
   };
 
+  /**
+   * The last pass, over a string this adapter *composed* rather than received.
+   *
+   * The transport has already redacted everything that came off the wire, so this one normally
+   * finds nothing to do — and reports nothing when it does not, because an event with `count: 0`
+   * is noise, not evidence. It stays because a composed string can interleave provider text with
+   * platform text, and because `redactText` is idempotent: a value the first pass replaced is a
+   * placeholder by the time this one looks.
+   */
   const redact = (action: string, text: string): string => {
-    const outcome = options.redactor.redactText(text);
-    options.onRedaction?.({ action, count: outcome.count });
+    const outcome = redactor.redactText(text);
+    if (outcome.count > 0) {
+      options.onRedaction?.({ action, count: outcome.count });
+    }
     return outcome.value;
   };
 
@@ -347,13 +414,18 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         },
         clock,
       ),
-    deliveryKey: gitLabDeliveryKey,
+    deliveryKey: (delivery: WebhookDelivery) => gitLabDeliveryKey(delivery, redactor),
     normalise: async (
       delivery: WebhookDelivery,
       context: InboundContext,
     ): Promise<NormalisedDelivery<GitProviderInboundEvent>> =>
       normaliseGitLabDelivery(delivery, context, {
         project: config.project ?? null,
+        // The inbound half. A delivery is not a response, so it never crosses `http.ts`: without
+        // this line a merge-request description carrying the binding's own webhook token would be
+        // written to `events.payload` verbatim (BD-003: append-only, so it cannot be fixed later).
+        redactor,
+        ...(options.onRedaction === undefined ? {} : { onRedaction: options.onRedaction }),
         findThreadForNote: async (project, iid, noteId) => {
           const discussions = await client.listDiscussions(project, iid);
           for (const discussion of discussions) {
@@ -467,7 +539,13 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         throw new IntegrationError(
           'not_found',
           GITLAB_PROVIDER_ID,
-          `access token ${address.tokenId} is not present on ${address.project}, and this provider did not mint it — "already revoked" cannot be told from "never existed here", so the token may still be live; check the project's access tokens`,
+          // The project comes out of a `revokeId` this provider did **not** write, so it is
+          // caller text on its way into a message (BD-022) and gets the same last pass as
+          // `testConnection`'s detail. Nothing else on this path crosses `http.ts`.
+          redact(
+            'revoke_credential',
+            `access token ${address.tokenId} is not present on ${address.project}, and this provider did not mint it — "already revoked" cannot be told from "never existed here", so the token may still be live; check the project's access tokens`,
+          ),
           { action: 'revoke_credential' },
         );
       }

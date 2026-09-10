@@ -3,7 +3,13 @@
  * the one property that is not about HTTP at all — **no error that leaves this file carries the
  * credential**.
  */
-import { IntegrationError, IntegrationRateLimitedError } from '@platform/application';
+import {
+  exactSecretRedactor,
+  IntegrationError,
+  IntegrationRateLimitedError,
+  noSecretsRedactor,
+  type SecretRedactor,
+} from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { basicAuthHeader, createJiraClient, retryAfterMs } from './client.js';
 
@@ -19,6 +25,10 @@ interface Recorded {
 
 const clientWith = (
   respond: (recorded: Recorded) => Response | Promise<Response>,
+  redaction: {
+    readonly redactor?: SecretRedactor;
+    readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
+  } = {},
 ): { client: ReturnType<typeof createJiraClient>; calls: Recorded[] } => {
   const calls: Recorded[] = [];
   const client = createJiraClient({
@@ -26,6 +36,9 @@ const clientWith = (
     email: 'agentic-bot@example.test',
     apiToken: TOKEN,
     now: () => Date.parse('2026-09-02T12:05:00.000Z'),
+    // Required (standing rule 31): a test that does not care still says which redactor it means.
+    redactor: redaction.redactor ?? noSecretsRedactor(),
+    ...(redaction.onRedaction === undefined ? {} : { onRedaction: redaction.onRedaction }),
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input as string, init);
       const recorded: Recorded = {
@@ -237,5 +250,159 @@ describe('createJiraClient', () => {
         client.send({ method: 'GET', path: 'issue/ACME-1', action: 'read_ticket' }),
       ).rejects.toThrow('GET issue/ACME-1 did not complete');
     });
+  });
+});
+
+/**
+ * TD-012 at the transport, in both directions and on both branches.
+ *
+ * The redactor here knows only `PLANTED` — not the binding's own token — so nothing below can be
+ * satisfied by the "no error carries the credential" property the block above asserts. What is
+ * proved is that the *document* went through the redactor the client was given (standing rule 35).
+ */
+describe('every document that crosses the transport is redacted (TD-012)', () => {
+  const PLANTED = 'FAKE-planted-binding-credential-0123456789';
+  const PLACEHOLDER = '[REDACTED:integration:planted]';
+  const planted = (): SecretRedactor => exactSecretRedactor([{ name: 'planted', value: PLANTED }]);
+
+  it('redacts the request body, which Jira publishes to humans', async () => {
+    const { client, calls } = clientWith(() => new Response('{}', { status: 201 }), {
+      redactor: planted(),
+    });
+    await client.send({
+      method: 'POST',
+      path: 'issue/ACME-1/comment',
+      action: 'add_comment',
+      body: { body: { text: `the token is ${PLANTED}` } },
+    });
+    expect(calls[0]?.body, 'a comment is published to a ticket').not.toContain(PLANTED);
+    expect(calls[0]?.body).toContain(PLACEHOLDER);
+  });
+
+  it('redacts the response body before the caller maps it', async () => {
+    const { client } = clientWith(
+      () =>
+        new Response(JSON.stringify({ fields: { summary: `see ${PLANTED}` } }), { status: 200 }),
+      { redactor: planted() },
+    );
+    const body = await client.send({ method: 'GET', path: 'issue/ACME-1', action: 'read_ticket' });
+    expect(JSON.stringify(body)).not.toContain(PLANTED);
+    expect(JSON.stringify(body)).toContain(PLACEHOLDER);
+  });
+
+  /**
+   * The failure branch, which is the half WP-07's review found missing three times in one file —
+   * and here it is also the branch with a **cut** in it: `detailOf` keeps 300 characters, so a
+   * redactor running after it would have nothing but a fragment to match against.
+   */
+  it('redacts an error body before it is quoted and cut into the message', async () => {
+    const { client } = clientWith(
+      () =>
+        new Response(JSON.stringify({ errorMessages: [`Basic auth failed for ${PLANTED}`] }), {
+          status: 401,
+        }),
+      { redactor: planted() },
+    );
+    let caught: unknown;
+    try {
+      await client.send({ method: 'GET', path: 'myself', action: 'test_connection' });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(IntegrationError);
+    expect((caught as Error).message).not.toContain(PLANTED);
+    expect((caught as Error).message).toContain(PLACEHOLDER);
+  });
+
+  /**
+   * The reviewer's exploit, shipped as a test.
+   *
+   * `redactJson` walks string **values** and leaves object **keys** alone (`redaction.ts` says
+   * why), and `detailOf` interpolates every key of Jira's `ErrorCollection.errors` — which are
+   * field names Jira chose. Before `detailOf` took a `redactText` of its own this body produced
+   * `jira-cloud: HTTP 400: FAKE-planted-binding-credential-0123456789: is not a valid field`,
+   * which falsified the module docblock's claim that every string crossing the transport is
+   * redacted here (standing rules 3 and 44).
+   */
+  it('redacts a provider-chosen key, not only the value beside it', async () => {
+    const { client } = clientWith(
+      () =>
+        new Response(JSON.stringify({ errors: { [PLANTED]: 'is not a valid field' } }), {
+          status: 400,
+        }),
+      { redactor: planted() },
+    );
+    let caught: unknown;
+    try {
+      await client.send({ method: 'PUT', path: 'issue/ACME-1', body: {}, action: 'set_labels' });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(IntegrationError);
+    expect(
+      (caught as Error).message,
+      'an `errors` key is provider text on its way into an error message',
+    ).not.toContain(PLANTED);
+    expect((caught as Error).message).toBe(
+      `jira-cloud: HTTP 400: ${PLACEHOLDER}: is not a valid field`,
+    );
+  });
+
+  it('reports the count for a key it redacted, so the second pass is visible', async () => {
+    const events: { action: string; count: number }[] = [];
+    const { client } = clientWith(
+      () =>
+        new Response(JSON.stringify({ errors: { [PLANTED]: 'is not a valid field' } }), {
+          status: 400,
+        }),
+      { redactor: planted(), onRedaction: (event) => events.push(event) },
+    );
+    await client
+      .send({ method: 'PUT', path: 'issue/ACME-1', body: {}, action: 'set_labels' })
+      .catch(() => undefined);
+    expect(events, 'the document pass found nothing; the composed line found the key').toEqual([
+      { action: 'set_labels', count: 1 },
+    ]);
+  });
+
+  it('redacts a long error body before the 300-character cut, leaving no fragment', async () => {
+    const { client } = clientWith(
+      () =>
+        new Response(JSON.stringify({ errorMessages: [`${'x'.repeat(290)}${PLANTED} trailing`] }), {
+          status: 400,
+        }),
+      { redactor: planted() },
+    );
+    let caught: unknown;
+    try {
+      await client.send({ method: 'POST', path: 'issue', action: 'create_ticket' });
+    } catch (error) {
+      caught = error;
+    }
+    expect(
+      (caught as Error).message,
+      'the cut must not be able to leave a prefix of the credential',
+    ).not.toContain(PLANTED.slice(0, 12));
+  });
+
+  it('reports the count and never the text, and stays silent when there was nothing to do', async () => {
+    const events: { action: string; count: number }[] = [];
+    const { client } = clientWith(
+      () => new Response(JSON.stringify({ a: PLANTED, b: PLANTED }), { status: 200 }),
+      { redactor: planted(), onRedaction: (event) => events.push(event) },
+    );
+    await client.send({ method: 'GET', path: 'issue/ACME-1', action: 'read_ticket' });
+    expect(events).toEqual([{ action: 'read_ticket', count: 2 }]);
+
+    const quiet: { action: string; count: number }[] = [];
+    const clean = clientWith(
+      () => new Response(JSON.stringify({ a: 'ordinary' }), { status: 200 }),
+      {
+        redactor: planted(),
+        onRedaction: (event) => quiet.push(event),
+      },
+    );
+    await clean.client.send({ method: 'GET', path: 'issue/ACME-1', action: 'read_ticket' });
+    expect(quiet, 'a call that carried no secret is not an event').toEqual([]);
   });
 });

@@ -19,7 +19,7 @@
  *  4. `testConnection` redacts its `detail` before returning it — the obligation `HealthProbe`
  *     states.
  */
-import { IntegrationError, noSecretsRedactor } from '@platform/application';
+import { exactSecretRedactor, IntegrationError, noSecretsRedactor } from '@platform/application';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createJiraBinding,
@@ -343,7 +343,14 @@ describe('jira-cloud — reaching the provider', () => {
       // Not a fixture: no Atlassian document shows an error quoting a credential. It is the case
       // `HealthProbe.detail` exists for — "a failing probe is exactly where an HTTP client quotes
       // the request it made" — so it is asserted rather than assumed away.
+      //
+      // The executor is told **nothing** (standing rule 9: an obligation two paths can each
+      // discharge needs an arbiter). With both redactors knowing the token, the placeholder below
+      // would prove neither; disarmed, it can only have been written by the adapter's own — which
+      // is the layer that was missing until WP-11's follow-up, and the layer that matters, because
+      // `action-executor.ts` redacts the audit **row** and not the value the caller receives.
       const echoing = createJiraBinding({
+        executorRedactor: noSecretsRedactor(),
         fetch: async () =>
           new Response(
             JSON.stringify({
@@ -363,12 +370,41 @@ describe('jira-cloud — reaching the provider', () => {
       expect((caught as IntegrationError).code).toBe('unauthorised');
       expect(
         serialisedLikePino(caught),
-        'the executor scrubbed the provider text on the way out',
+        'the adapter scrubbed the provider text before it built the error',
       ).not.toContain(JIRA_REPLAY_TOKEN);
       expect((caught as Error).message).toContain('[REDACTED:integration:jira_api_token]');
 
       const [entry] = echoing.audit.entriesFor('read_ticket');
       expect(entry?.error).toContain('[REDACTED:integration:jira_api_token]');
+      expect(
+        entry?.redactionCount,
+        'the executor found nothing to do, because the adapter had already done it',
+      ).toBe(0);
+    });
+
+    /**
+     * The other half of the arbiter, and the reason the assertion above could be weakened to `0`
+     * without losing anything: the executor still scrubs what **only it** knows.
+     *
+     * A run-scoped credential is exactly that case — the adapter cannot know it (it is minted per
+     * workspace, not configured on the binding), so it reaches the executor unredacted and the
+     * count has to move. Standing rule 29: capture the layer that is supposed to fire, and assert
+     * it fired, rather than asserting that the text is clean and letting either layer take credit.
+     */
+    it('leaves the executor a secret of its own to scrub, and it does', async () => {
+      const runScoped = 'FAKE-run-scoped-credential-0123456789';
+      const echoing = createJiraBinding({
+        executorRedactor: exactSecretRedactor([{ name: 'run_token', value: runScoped }]),
+        fetch: async () =>
+          new Response(
+            JSON.stringify({ errorMessages: [`the workspace token ${runScoped} expired`] }),
+            { status: 401, headers: { 'content-type': 'application/json' } },
+          ),
+      });
+
+      await expect(echoing.port.readTicket(JIRA_TICKET)).rejects.toBeInstanceOf(IntegrationError);
+      const [entry] = echoing.audit.entriesFor('read_ticket');
+      expect(entry?.error).toContain('[REDACTED:integration:run_token]');
       expect(entry?.redactionCount).toBeGreaterThan(0);
     });
 

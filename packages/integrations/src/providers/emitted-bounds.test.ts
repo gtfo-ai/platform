@@ -64,8 +64,21 @@
  *  - **The numbers themselves.** Caps are configuration: an operator who sets `max_line_bytes` to
  *     a megabyte gets a megabyte. What is asserted is the *relation* — nothing emitted exceeds the
  *     largest cap configured — plus, in `sentry/mapping.test.ts`, the sum at the shipped defaults.
- *  - **Redaction.** A different property with its own tests (`*.contract.test.ts`); a bounded
- *     string can still be the wrong string.
+ *  - **Redaction.** A different property with its own tests — `emitted-secrets.test.ts` is this
+ *     file's dual: the same walk, over the Jira and GitLab adapters, failing on any string that
+ *     carries a **credential** rather than one past a cap. A bounded string can still be the wrong
+ *     string, and a redacted one can still be 27 MB.
+ *  - **The other two adapters.** Jira and GitLab are deliberately **not** driven here, and the
+ *     reason is not that a tracker is different in kind — it is that this file's assertion is
+ *     *relative to a named cap*, and neither adapter has one over the text it emits; adding them
+ *     would pass vacuously against GitLab's 1 MiB job-log tail, which bounds nothing they emit.
+ *     What one call of each hands over is measured in `unbounded-emission.test.ts` instead — the
+ *     same hostile document, asserting the byte total and the path list rather than a bound — and
+ *     filed as **Q54** with a recommendation (bound at the consumer, WP-16), because inventing a
+ *     cap on a ticket description silently changes what the agent reads. The two figures this
+ *     docblock used to carry were both wrong (standing rule 39): the `readTicket` one was quoted
+ *     "at the shipped `MAX_COMMENTS = 100`", which is `maxResults` and enforces nothing, and the
+ *     `getMergeRequest` one did not reproduce.
  */
 import {
   exactSecretRedactor,

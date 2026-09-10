@@ -86,6 +86,15 @@ export const exactSecretRedactor = (secrets: Iterable<InjectedSecret>): SecretRe
    * `capLabelSet`, divergence 9) and resolves the collision this docblock predicts by keeping the
    * first entry and marking the set. Any later port whose keys come from the provider owes the
    * same, and the check is "who chooses the key", not "who wrote the schema".
+   *
+   * **Two sites owe it today, and both discharge it where they emit:** Loki's label names, and
+   * Jira's `ErrorCollection.errors`, whose keys are field names Jira chose and which
+   * `jira-cloud/client.ts` interpolates into an `IntegrationError` message — a reviewer read a
+   * planted credential out of one, so `detailOf` now runs the line it composes through
+   * `redactText`. The pattern generalises: *the emitting site redacts the key, because only it
+   * knows what a collision costs there.* Widening this walk to rewrite keys would take that
+   * judgement away from both — Loki counts a collision into its truncation marker, and a shared
+   * walk has nowhere to report one.
    */
   const redactValue = (input: JsonValue): RedactionOutcome<JsonValue> => {
     if (typeof input === 'string') {

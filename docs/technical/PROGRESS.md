@@ -2130,6 +2130,48 @@ one of them the orchestrator's own and self-contradictory); and a measurement qu
 reproduced (rule 39, four figures corrected after the fact, one of which I had promoted into a standing
 rule).
 
+### gitlab/jira redaction follow-up — review round 2 (implementer notes)
+
+Round 1 was APPROVE with two should-fix findings, one major raised in the walk, and prose corrections.
+What round 2 did, and the decisions inside it:
+
+- **Keys.** `redactJson` walks string *values*; a reviewer read a planted credential out of
+  `{"errors": {"<token>": "…"}}` because `detailOf` interpolates Jira's field names. The fix keeps the shared
+  helper as it is and redacts **at the emitting site**, which is what Loki already does for a label name and
+  what `redaction.ts`'s docblock already prescribed. Widening `redactJson` was the reviewer's stated
+  preference and was **not** taken: it would take collision handling away from the two sites that have it —
+  Loki counts a colliding label into its truncation marker, and a shared walk has nowhere to report one — and
+  it would leave Loki's own pass as a second, untestable guard (rule 41). The claim in the docblock is
+  narrowed to say exactly this, and the reviewer's exploit body ships as a test that fails before it.
+- **Headers were the real gap, and the walk had not driven the members that touch one.** `jiraDeliveryKey`
+  copied the `x-atlassian-webhook-identifier` **header value** into a stored dedup key with no redactor on the
+  path at all, and `gitLabDeliveryKey` quoted `object_kind` cut to 32 characters. Both now take a required
+  `SecretRedactor`. GitLab's transport redacts response header names and values as a fourth pass; the honest
+  bound is asserted rather than implied — `Headers` lower-cases a field **name**, so an exact-match redactor
+  matches a secret in a name only when the secret is itself lower case.
+- **The enumeration is derived, not remembered.** `emitted-secrets.test.ts` builds its scenario list against
+  `Object.keys(port)` (with `inbound` expanded), so the five undriven members failed it until they were
+  driven. Rule 37 in the redaction register rather than the cap one.
+- **Rule 10, measured both ways.** The "serialised whole" assertion hard-coded `GITLAB_TOKEN.slice(0, 24)`.
+  With the Jira adapter mutated to forget its own api token and the per-path assertion isolated: the round-1
+  form left **all 11** Jira scenarios green; the parameterised form fails **8** of them.
+- **Rule 39.** The question's two figures (it was Q52 then) were unreproducible, and one was attached to
+  `MAX_COMMENTS = 100` as though it were a cap — it is `maxResults`, a request parameter. `providers/unbounded-emission.test.ts` now *produces*
+  both numbers (53,284,565 B / 8 paths for one `readTicket` with 200 comments returned to a request for 100;
+  1,180,284 B / 9 paths for one `getMergeRequest`) and the question cites the test.
+- **Renumbering.** The question is **Q54** (WP-14 took Q52 and Q53 on its own branch). Nothing cites the old
+  number any more: the only occurrences of `Q52` in the tree are these two notes, which are about the
+  renumbering itself. **Q55** is new: `create()` runs before any mint, so the port's deferred obligation —
+  "the caller passes it in `ProviderCreateInput.redactor`" — is unsatisfiable for a run-scoped token; WP-15
+  needs a
+  per-run adapter or a redactor resolved at call time. `git-provider.ts` now points there.
+- **The "3215 tests" figure** from round 1's report appears **nowhere in the tree** (`git grep` is empty), so
+  there was nothing to correct in a file; `verify` reports 3240 before this round's work. No total is pinned
+  in prose by this change.
+- Eight mutations, canary included, all dead by named assertions. One first-pass mutation reported ALIVE and
+  was a **broken mutant** (a trailing comma inside parentheses); the harness now reports INCONCLUSIVE for a
+  run that fails without naming a test, which is rule 21 with the failure mode it was written for.
+
 ### WP-14 measured WP-13's teardown residual — and the thing that was wrong was this ledger
 
 WP-13's teardown was carried forward as an obligation for WP-14 to close with `docker stop`/`rm`, on the
@@ -2159,6 +2201,15 @@ measured in a container; WP-14 could, and did. The hand-off was still right — 
 measurement, and it cost less than the ledger error it exposed.
 
 ## Discovered work (not in plan)
+
+- **`loki/index.test.ts`'s million-iteration divergence census is a timeout flake under a full parallel
+  run.** It failed once inside `pnpm run -s verify` during the round-2 redaction fix and passed on the next
+  three runs; standalone the whole file takes **1.67 s** across three runs, and the test is deterministic by
+  construction (a fixed `BigInt` base, no clock, no randomness), so it cannot fail by *value* — which leaves
+  the 5 s default timeout under 163 parallel files as the only candidate. Standing rule 2: it is a hardware
+  assertion wearing a correctness one. Whoever touches that file next should give the census an explicit
+  timeout (`PROPERTY_TEST_TIMEOUT_MS`'s neighbour) or shrink the sample and state the confidence, rather than
+  leave a red build that reproduces on nobody's machine. Not touched here: it is outside this fix.
 
 - **Orchestrator parallelism has a ceiling, and it is lower than it looks.** Running three implementers plus
   reviews drove this 14-core host to load average ~143. Two consequences: WP-02's model tests, which measure

@@ -2,7 +2,7 @@
  * The thin HTTP client under the GitLab adapter (TD-024: "small typed clients written in-repo on
  * `fetch`, covering only the endpoints the type contracts need").
  *
- * Three properties are load-bearing and each is asserted by a test rather than promised here.
+ * Four properties are load-bearing and each is asserted by a test rather than promised here.
  *
  *  1. **No error this module *builds* carries a credential.** The token travels in a
  *     `PRIVATE-TOKEN` header, and every `IntegrationError` constructed here holds the method, the
@@ -28,6 +28,46 @@
  *     transport that replays recorded fixtures. That is what "contract suite in replay" means
  *     here, and it needs no HTTP interception library — see
  *     `test/contract/support/integrations/gitlab-replay.ts`.
+ *  4. **Every document that crosses this transport is redacted here, once, before anything reads
+ *     it** (TD-012; standing rules 31 and 35 for why the redactor is required and why being
+ *     *handed* one is not the same as *using* it). Both directions, and four passes rather than
+ *     one, because each covers something the others cannot:
+ *
+ *      - the **request** document, because an MR description, a review reply and a discussion note
+ *        are published to humans and stored on the provider — the platform's own emission;
+ *      - the **response text**, before `JSON.parse`, because V8 quotes the offending input in a
+ *        parse error (`Unexpected token 'g', "glpat-PLANT"... is not valid JSON`) and that error
+ *        travels on `cause`, which pino walks (standing rule 13). It is a **fragment**, so
+ *        redacting the message afterwards would not match it — the cut has to come second;
+ *      - the **response document**, after parsing, because a secret JSON-escaped by the provider
+ *        is not a substring of the raw text, and because everything the adapter maps is derived
+ *        from it. This pass is what puts redaction strictly *before* every cap downstream:
+ *        `getJobLog`'s 1 MiB tail and `readCodeowners`'s byte bound both cut text that has already
+ *        been through it, so a cut can never leave a fragment of a credential behind;
+ *      - the **response headers**, name and value, because `GitLabResponse.headers` leaves this
+ *        module and a header is the one place a webhook secret genuinely travels (`X-Gitlab-Token`
+ *        *is* the secret token). Nothing emits them to a caller today — `paginate` reads
+ *        `x-next-page` and puts it back on the wire — so this pass is the cheap half of a promise
+ *        rather than a fix for a live leak, and it is the half that stays true when a later
+ *        `detail` quotes a header. Names are redacted as well as values, and a name that collides
+ *        with an earlier one after redaction keeps the **first** entry — the rule
+ *        `loki/provider.ts` settled for the same situation, stated here because a silent overwrite
+ *        would make which value survives depend on the order the server sent them in.
+ *        **What the name pass cannot do**, measured in `http.test.ts` rather than assumed:
+ *        `Headers` canonicalises a field name to lower case before this module sees it, so an
+ *        exact-match redactor matches a secret in a *name* only when the secret is itself lower
+ *        case. Values are untouched by that and are matched in full.
+ *
+ *     **Where each pass sits relative to the success test, corrected:** the *request* pass runs
+ *     before the call, so it covers every branch. The three response passes run in `request()` and
+ *     `requestText()`, which `send()` reaches **only on a 2xx** — the failure branch never gets
+ *     them. That is not a gap because of what the failure branch emits: every error built here
+ *     carries the method, the constant path and the status and **never a byte of the body**
+ *     (property 1), which is the stronger guarantee and the one the tests assert. The claim that
+ *     stood here until review round 2 — "all three sit above the success test" — was simply
+ *     false, and a false sentence about a security property is worse than no sentence
+ *     (standing rule 3). Jira's client is the one that genuinely redacts above its `ok` test,
+ *     because its failure branch *does* quote the body.
  *
  * Sources: <https://docs.gitlab.com/api/rest/> (namespaced paths, `PRIVATE-TOKEN`),
  * <https://docs.gitlab.com/api/rest/troubleshooting/#status-codes> (the status table),
@@ -38,7 +78,9 @@ import {
   IntegrationError,
   type IntegrationErrorCode,
   IntegrationRateLimitedError,
+  type SecretRedactor,
 } from '@platform/application';
+import type { JsonObject } from '@platform/contracts';
 
 export const GITLAB_PROVIDER_ID = 'gitlab';
 
@@ -63,6 +105,13 @@ export interface GitLabHttpOptions {
   /** 0 disables the per-request timeout. */
   readonly timeoutMs: number;
   readonly maxPages: number;
+  /**
+   * TD-012, **required and never defaulted** (standing rule 31). See property 4 for the four
+   * passes it performs and why each exists.
+   */
+  readonly redactor: SecretRedactor;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
+  readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
 
 export interface GitLabRequestSpec {
@@ -135,12 +184,32 @@ export const parseRetryAfterMs = (
   return Math.max(0, at - nowMs);
 };
 
-const headersToRecord = (headers: Headers): Record<string, string> => {
+/**
+ * Property 4's fourth pass. `redact` is the transport's own `redactText`; the count it reports is
+ * the caller's business, not this function's.
+ *
+ * A collision keeps the first entry: two header names that redact to the same string are two names
+ * that both carried the same credential, and dropping the earlier one would make the answer depend
+ * on the order the server sent them in.
+ */
+const headersToRecord = (
+  headers: Headers,
+  redact: (text: string) => { readonly value: string; readonly count: number },
+): { readonly record: Record<string, string>; readonly count: number } => {
   const record: Record<string, string> = {};
+  let count = 0;
   headers.forEach((value, key) => {
-    record[key.toLowerCase()] = value;
+    const name = redact(key.toLowerCase());
+    count += name.count;
+    if (!Object.hasOwn(record, name.value)) {
+      const redacted = redact(value);
+      count += redacted.count;
+      record[name.value] = redacted.value;
+    }
   });
-  return record;
+  // One pass, one event: the caller reports this sum, rather than an event per header, so the
+  // count on the wire stays "how many replacements this pass made" like the other three.
+  return { record, count };
 };
 
 const buildUrl = (baseUrl: string, spec: GitLabRequestSpec): string => {
@@ -165,6 +234,33 @@ export interface GitLabHttp {
 export const encodeProjectId = (project: string): string => encodeURIComponent(project);
 
 export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
+  /** Reports a count, never the text (TD-012). Silent at zero, so a call that carried no secret is not an event. */
+  const report = (action: string, count: number): void => {
+    if (count > 0) {
+      options.onRedaction?.({ action, count });
+    }
+  };
+
+  /** Property 4's fourth pass, with its single count reported. */
+  const redactedHeaders = (action: string, headers: Headers): Record<string, string> => {
+    const outcome = headersToRecord(headers, (text) => options.redactor.redactText(text));
+    report(action, outcome.count);
+    return outcome.record;
+  };
+
+  const redactText = (action: string, text: string): string => {
+    const outcome = options.redactor.redactText(text);
+    report(action, outcome.count);
+    return outcome.value;
+  };
+
+  /** Property 4 over a document of unknown shape: an array and a scalar are wrapped, as Slack does. */
+  const redactDocument = (action: string, value: unknown): unknown => {
+    const outcome = options.redactor.redactJson({ body: value } as unknown as JsonObject);
+    report(action, outcome.count);
+    return (outcome.value as { body: unknown }).body;
+  };
+
   const send = async (
     spec: GitLabRequestSpec,
     accept: string,
@@ -175,8 +271,11 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     };
     let body: string | undefined;
     if (spec.json !== undefined) {
+      // Property 4, outbound half: the document the platform *publishes* — an MR title and
+      // description, a review reply, a diff note — redacted at the transport rather than in the
+      // six port methods that build one, so there is no unredacted twin for a seventh to forget.
+      body = JSON.stringify(redactDocument(spec.action, spec.json));
       headers['content-type'] = 'application/json';
-      body = JSON.stringify(spec.json);
     }
     const init: GitLabRequestInit = {
       method: spec.method,
@@ -234,8 +333,11 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     }
     let parsed: unknown = null;
     if (result.text.trim() !== '') {
+      // Property 4, inbound half, first pass: **before** `JSON.parse`, because the parse error
+      // quotes the input and is re-thrown on `cause`.
+      const text = redactText(spec.action, result.text);
       try {
-        parsed = JSON.parse(result.text) as unknown;
+        parsed = JSON.parse(text) as unknown;
       } catch (error) {
         throw new IntegrationError(
           'invalid_response',
@@ -247,8 +349,9 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     }
     return {
       status: result.response.status,
-      body: parsed as TBody,
-      headers: headersToRecord(result.response.headers),
+      // Second pass: a secret the provider JSON-escaped is not a substring of the raw text.
+      body: redactDocument(spec.action, parsed) as TBody,
+      headers: redactedHeaders(spec.action, result.response.headers),
     };
   };
 
@@ -259,8 +362,12 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     }
     return {
       status: result.response.status,
-      body: result.text,
-      headers: headersToRecord(result.response.headers),
+      // Property 4 on the text endpoints — the job trace and the raw file. It is the *only* pass
+      // they get, and it runs here rather than at the caller so that it precedes the caller's cut:
+      // `getJobLog` keeps a 1 MiB tail and `readCodeowners` keeps `max_codeowners_bytes`, and a
+      // cut applied to unredacted text leaves the leading bytes of a credential behind.
+      body: redactText(spec.action, result.text),
+      headers: redactedHeaders(spec.action, result.response.headers),
     };
   };
 

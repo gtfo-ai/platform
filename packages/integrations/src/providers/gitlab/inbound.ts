@@ -22,9 +22,10 @@ import type {
   InboundContext,
   NormalisedDelivery,
   NormalisedEvent,
+  SecretRedactor,
   WebhookDelivery,
 } from '@platform/application';
-import type { Actor } from '@platform/contracts';
+import type { Actor, JsonObject } from '@platform/contracts';
 import { GITLAB_PROVIDER_ID } from './http.js';
 import {
   pipelineStatusOrNull,
@@ -56,6 +57,20 @@ export interface InboundDeps {
   ): Promise<{ readonly id: string; readonly resolved: boolean } | null>;
   /** `path_with_namespace` this binding serves, or `null` when it serves any. */
   readonly project: string | null;
+  /**
+   * TD-012, **required** (standing rules 31 and 35), applied to the whole delivery **before any
+   * branch reads it**.
+   *
+   * A delivery is the one document that does not cross `http.ts`, and it is the one whose text is
+   * appended to `events.payload` — which is append-only (BD-003), so an unredacted write cannot be
+   * corrected afterwards. `IgnoredDelivery.detail` carries the same obligation and states it in
+   * `common.ts`; note that `object_kind` below is **cut to 32 characters** for that detail, which
+   * is precisely why the pass has to precede the branches rather than sit on each of them: a cut
+   * applied first leaves a fragment of a credential that no later exact-match redactor can find.
+   */
+  readonly redactor: SecretRedactor;
+  /** Where a redaction count is reported. The redacted text is never reported (TD-012). */
+  readonly onRedaction?: (event: { readonly action: string; readonly count: number }) => void;
 }
 
 const ignored = (
@@ -308,12 +323,18 @@ export const normaliseGitLabDelivery = async (
   context: InboundContext,
   deps: InboundDeps,
 ): Promise<NormalisedDelivery<GitProviderInboundEvent>> => {
-  let body: unknown;
+  let parsedBody: unknown;
   try {
-    body = JSON.parse(delivery.body) as unknown;
+    parsedBody = JSON.parse(delivery.body) as unknown;
   } catch {
+    // The message is a constant: a `SyntaxError` from `JSON.parse` quotes the input it choked on.
     return ignored('malformed_payload', 'delivery body is not JSON');
   }
+  const redacted = deps.redactor.redactJson({ body: parsedBody } as unknown as JsonObject);
+  if (redacted.count > 0) {
+    deps.onRedaction?.({ action: 'normalise_delivery', count: redacted.count });
+  }
+  const body = (redacted.value as { body: unknown }).body;
   // An `object_kind` this provider does not handle is `unsupported_event`, not a malformed one:
   // GitLab sends wiki, release, deployment and member hooks from the same endpoint, and calling
   // them malformed would make a real defect indistinguishable from a subscription nobody wanted.

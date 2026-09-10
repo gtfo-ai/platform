@@ -34,7 +34,7 @@
  *    correctness one (standing rule 2), so the clock is injected.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { IntegrationError, type WebhookDelivery } from '@platform/application';
+import { IntegrationError, type SecretRedactor, type WebhookDelivery } from '@platform/application';
 import type { Clock } from '@platform/domain';
 import { GITLAB_PROVIDER_ID } from './http.js';
 
@@ -169,9 +169,17 @@ export const verifyGitLabDelivery = (
  *    status change, so the status has to be part of the key or "running" and "success" collapse;
  *  - `push` has no object id at all, so the new head and the ref are the change.
  *
+ * **Both things it produces are provider text** (BD-022), so both go through the redactor the
+ * binding was built with: the key itself, which is stored and compared, and — the reason the
+ * parameter is required rather than optional (standing rule 31) — the refusal, which quotes
+ * `object_kind` **cut to 32 characters**. A delivery whose `object_kind` is `wiki_<the binding's
+ * signing token>` put those 32 bytes into an error message before this parameter existed, and a
+ * cut applied to unredacted text is a fragment no exact-match redactor can find again, which is
+ * why the redaction happens before the `slice`.
+ *
  * @throws {IntegrationError} `invalid_request` when the delivery carries nothing to key on.
  */
-export const gitLabDeliveryKey = (delivery: WebhookDelivery): string => {
+export const gitLabDeliveryKey = (delivery: WebhookDelivery, redactor: SecretRedactor): string => {
   let body: unknown;
   try {
     body = JSON.parse(delivery.body) as unknown;
@@ -221,12 +229,13 @@ export const gitLabDeliveryKey = (delivery: WebhookDelivery): string => {
   })();
 
   if (key === null) {
+    const named = JSON.stringify(redactor.redactText(String(kind)).value.slice(0, 32));
     throw new IntegrationError(
       'invalid_request',
       GITLAB_PROVIDER_ID,
-      `delivery of kind ${JSON.stringify(String(kind).slice(0, 32))} carries nothing to key on`,
+      `delivery of kind ${named} carries nothing to key on`,
       { action: 'delivery_key' },
     );
   }
-  return `${GITLAB_PROVIDER_ID}:${key}`;
+  return redactor.redactText(`${GITLAB_PROVIDER_ID}:${key}`).value;
 };

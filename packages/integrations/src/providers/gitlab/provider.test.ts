@@ -785,7 +785,16 @@ describe('health and history', () => {
       { redactor },
     );
     expect((await port.testConnection()).detail).toContain('[REDACTED]');
-    expect(redactions).toEqual([{ action: 'test_connection', count: 1 }]);
+    // Three events, and the **last** is the one this test is named for. This stub redactor claims
+    // a count of 1 for *any* text, so each of `http.ts`'s passes reports what it touched: the
+    // pre-parse text pass (1), the header pass (2 — one `content-type`, name and value), and then
+    // the probe's own composed string (1). Losing the last one would mean the probe stopped
+    // redacting; losing the middle one would mean the header pass did.
+    expect(redactions).toEqual([
+      { action: 'test_connection', count: 1 },
+      { action: 'test_connection', count: 2 },
+      { action: 'test_connection', count: 1 },
+    ]);
   });
 
   it('refuses a nonsensical history window before making a request', async () => {
