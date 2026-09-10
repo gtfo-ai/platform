@@ -166,6 +166,14 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    **required, never defaulted**, for exactly this reason; WP-11 reintroduced the defect one ring out. If a
    guarantee needs an injected collaborator, the type must **require** it, and the composition root that
    builds it in production must be the thing the tests drive.
+33. **A guard shipped as a `scripts/*.mjs` verify step has no test tier of its own, so mutating the guard
+   passes the whole suite.** Changing WP-10's NUL guard from `indexOf(0)` to `indexOf(0, 1)` — blind to a
+   NUL at byte 0 — left **all 2353 tests green**. Manual canaries are evidence that expires when the session
+   does. `scripts/check-ignored.test.ts` is the precedent: give every executable guard a real test.
+34. **Adding a step to `verify` is not adding it to CI.** The two lists are maintained separately and have
+   drifted: `ignored:check` — a guard that has already caught two live defects — has run in **no CI job**
+   since it was written. Rule 7's shape at the level of the pipeline: derive one list from the other, or
+   fail when they differ.
 32. **"I checked and it is benign" is a claim that needs the same evidence as a fix.** WP-11 reported a
    surviving `BigInt` → `Number` mutation as harmless and narrowed its docblock instead of the code; the
    orchestrator relayed that as good practice. The reviewer measured it: `Number` diverges for **128 of every
@@ -261,7 +269,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-07 | Integration ports + fakes + contract test suites | WP-04 | no | DONE | `b036c4c` | 2 review rounds + a pre-merge fix round; rules 11-14 earned here; unblocks WP-08…WP-11 |
 | WP-08 | Jira Cloud provider | WP-07 | yes | DONE | `af206c7` | 2 review rounds + pre-merge fixes; rules 17, 18, 22; shared fixture-provenance suite lives here |
 | WP-09 | GitLab provider (gitlab.com + self-managed) | WP-07 | yes | DONE | `27928b2` | 2 review rounds + pre-merge fixes; rules 19, 20, 21, 23, 24; **Q40** is its open question |
-| WP-10 | Slack provider | WP-07 | yes | REVIEW | branch `worktree-agent-a4db5aee16bb73391` `80171f5` | +160 tests; 3 additions to the shared suite; review round 1 running |
+| WP-10 | Slack provider | WP-07 | yes | REVIEW | branch `worktree-agent-a4db5aee16bb73391` | APPROVED round 2; pre-merge fixes running; rules 29, 30 earned here |
 | WP-11 | Sentry + Loki providers | WP-07 | yes | REVIEW | branch `worktree-agent-ab12848be4b2009b2` `786ac46` | +218 tests; 29 mutations; review round 1 running |
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | REVIEW | branch `worktree-agent-a80d5d7c411ac0f51` | round 1 REQUEST_CHANGES (2 majors, both fail-open); round 2 in flight |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | TODO | — | |
