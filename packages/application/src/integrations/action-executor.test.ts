@@ -33,7 +33,7 @@ import {
   type MutatingActionRequest,
   redactErrorInPlace,
 } from './action-executor.js';
-import { exactSecretRedactor } from './redaction.js';
+import { exactSecretRedactor, secretPlaceholder } from './redaction.js';
 
 interface CapturedLog {
   readonly level: 'debug' | 'info' | 'warn' | 'error';
@@ -567,6 +567,251 @@ describe('IntegrationActionExecutor', () => {
       expect(retry.status).toBe('replayed');
       expect(performed).toBe(1);
       expect(auditLog.entries.map((entry) => entry.status)).toEqual(['replayed']);
+    });
+
+    /**
+     * **The idempotency record is persistent state, and its two halves get different answers.**
+     *
+     * The **value** is a column, so it is redacted like the audit row. That was the fourth
+     * instance of one class — a secret reaching stored state through a value that took no
+     * redactor — after Jira's, GitLab's and Slack's delivery keys, found by a reviewer measuring
+     * the executor itself: the row written on the success path was redacted and the
+     * `idempotencyStore.put` one line above it was not, so `post_digest` (Slack's digest job,
+     * whose `encode` is the identity) wrote the provider's `message_id` and `url` verbatim.
+     *
+     * The **key** is the primary key composed by `idempotencyStorageKey`, and redacting it was the
+     * wrong answer: redaction is many-to-one, so two keys differing only inside a secret became
+     * one slot and the second call was answered `replayed` carrying the first one's result. It is
+     * **refused** instead. The same refusal is what makes a forged `[REDACTED:integration:…]` —
+     * writable by anyone who can write a ticket comment (BD-022) — match nothing: no stored key is
+     * a redaction output any more. `idempotencyScopeFor` holds the argument; these are its tests.
+     *
+     * The caller's redactor is the only one in play here (there is no second layer to be confused
+     * with, unlike an adapter's `bindingSecretRedactor`), so a passing assertion can only be the
+     * executor's own work.
+     */
+    describe('what it stores, and what it refuses to key on (TD-012, BD-002)', () => {
+      /** As Slack's digest plan does: `encode` is the identity, so the whole result is stored. */
+      const storedResultPlan = {
+        key: 'marker:agentic:workpad',
+        encode: (result: { comment_id: string }) => ({ ...result }),
+        decode: (stored: unknown) => stored as { comment_id: string },
+      };
+
+      const leakingComment = (overrides: Record<string, unknown> = {}) =>
+        addComment({
+          perform: async () => {
+            performed += 1;
+            // Provider text that quotes back the credential the platform injected (TD-012).
+            return { comment_id: `c-1?token=${SECRET}` };
+          },
+          ...overrides,
+        });
+
+      it('keeps the injected secret out of the value it stores', async () => {
+        await executor.execute(leakingComment({ idempotency: storedResultPlan }));
+
+        const stored = await store.get({
+          integrationId: INTEGRATION.integrationId,
+          action: 'add_comment',
+          key: storedResultPlan.key,
+        });
+
+        expect(stored, 'the plant must have reached the store at all').toBeDefined();
+        expect(
+          JSON.stringify(stored),
+          'the stored result is persistent state and may not carry the secret',
+        ).not.toContain(SECRET);
+        expect(JSON.stringify(stored), 'and the redaction is the executor’s own').toContain(
+          '[REDACTED:integration:jira]',
+        );
+        expect(
+          auditLog.entries[0]?.redactionCount,
+          'the store scrub is counted onto the row, like every other scrub in this file',
+        ).toBe(2);
+      });
+
+      it('refuses an idempotency key that carries an injected secret, storing nothing', async () => {
+        const outcome = await outcomeOf(
+          executor.execute(
+            leakingComment({
+              idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` },
+            }),
+          ),
+        );
+
+        expect(outcome.rejected, 'a key made of secret material is not a usable identity').toBe(
+          true,
+        );
+        expect((outcome.error as IntegrationError).code).toBe('invalid_request');
+        expect(
+          String((outcome.error as Error).message),
+          'and the refusal does not echo the key it refused',
+        ).not.toContain(SECRET);
+        // Refused before the provider is touched, like `assertActionName`: nothing performed,
+        // nothing stored, and no row for an action with no provider-facing existence.
+        expect(performed).toBe(0);
+        expect(store.size).toBe(0);
+        expect(auditLog.entries).toEqual([]);
+      });
+
+      /**
+       * The refusal is **findable**, which the three assertions above do not cover.
+       *
+       * Measured on round 3's code with a capturing logger and an audit sink: `IntegrationError
+       * invalid_request`, 0 audit rows, 0 log lines, `performed 0`, `store 0`. BD-003 is unharmed
+       * — nothing provider-facing happened, so there is correctly no row — and the message
+       * correctly does not echo the key. Together that left an action that fails on every attempt
+       * with *nothing anywhere* to diagnose it by, which is rule 20's second half: fail closed,
+       * but say that you did. Every other data-dependent failure in this file writes a `failed`
+       * row an operator can find; this path has only the log line.
+       */
+      it('logs the refusal, because it writes no audit row to be found in', async () => {
+        const captured = capturingLogger();
+        executor = build({ logger: captured.logger });
+
+        const outcome = await outcomeOf(
+          executor.execute(
+            leakingComment({
+              idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` },
+            }),
+          ),
+        );
+
+        expect(outcome.rejected).toBe(true);
+        const warned = captured.records.filter((record) => record.level === 'warn');
+        expect(
+          warned.length,
+          'a refused action with no row and no echo has only this line to be found by',
+        ).toBe(1);
+        // Identifying, so an operator can go from the log line to the stuck action…
+        expect(warned[0]?.fields.integration_id).toBe(INTEGRATION.integrationId);
+        expect(warned[0]?.fields.action).toBe('add_comment');
+        // …and not identifying *the key*, which is the one thing that must not be written down.
+        expect(JSON.stringify(warned[0]), 'and it does not echo what it refused').not.toContain(
+          SECRET,
+        );
+        expect(auditLog.entries, 'still no row: nothing provider-facing happened').toEqual([]);
+      });
+
+      /**
+       * The branch the guard takes when there is no store — asserted, not assumed (rule 10).
+       *
+       * `idempotencyScopeFor` returns `null` before it looks at the key when
+       * `options.idempotencyStore` is absent, so a secret-bearing key runs straight through to
+       * `perform`. Nothing is stored, so there is no leak; what was missing is any test that says
+       * so, which is exactly the unasserted branch rule 10 names.
+       *
+       * The second half is the canary (rules 4, 42): the *same* request through an executor that
+       * **does** have a store is refused. Without it, a key that quietly stopped carrying the
+       * secret would make the first half green for the wrong reason.
+       */
+      it('skips the key guard when no store is configured, and performs the action', async () => {
+        const captured = capturingLogger();
+        const storeless = build({ idempotencyStore: undefined, logger: captured.logger });
+        const request = () =>
+          leakingComment({ idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` } });
+
+        const outcome = await storeless.execute(request());
+
+        expect(outcome.status, 'the store-less branch performs rather than refusing').toBe('ok');
+        expect(performed, 'and reaches the provider exactly once').toBe(1);
+        expect(
+          captured.records.filter((record) => record.level === 'warn'),
+          'the refusal branch did not run, so it did not log',
+        ).toEqual([]);
+        expect(store.size, 'and nothing was stored, which is why there is no leak').toBe(0);
+
+        // The canary: the key really is one the guard refuses, so the green above is the missing
+        // store and not a harmless key.
+        const withStore = await outcomeOf(executor.execute(request()));
+        expect(withStore.rejected, 'the same key is refused once there is a store').toBe(true);
+        expect(performed, 'and the refused one never reached the provider').toBe(1);
+      });
+
+      /**
+       * The second half of the same finding, and the reason the key is refused rather than
+       * redacted.
+       *
+       * All external text is untrusted (BD-022), so an actor who can write a ticket comment or an
+       * MR note can write the placeholder **verbatim**. While keys were redacted, that literal
+       * string was the storage key of a real call and the forger was answered `replayed` with the
+       * real call's result. Now the key it would have collided with never reaches the store, so
+       * the forged call performs its own action and is told its own answer.
+       *
+       * Asserted on the *result*, not just the status (rule 10): `replayed` and `ok` differ, but
+       * so does whose `comment_id` comes back, and that is the harm.
+       */
+      it('gives a forged placeholder nothing to match, because the key it would collide with is refused', async () => {
+        const real = await outcomeOf(
+          executor.execute(
+            leakingComment({
+              idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` },
+            }),
+          ),
+        );
+        const forged = await executor.execute(
+          addComment({
+            perform: async () => {
+              performed += 1;
+              return { comment_id: 'comment-FORGED' };
+            },
+            idempotency: {
+              ...storedResultPlan,
+              key: `marker:agentic:${secretPlaceholder('jira')}`,
+            },
+          }),
+        );
+
+        // The harm first, so removing the guard fails *this* assertion rather than the setup:
+        // with the key redacted instead of refused, the forger came back `replayed` carrying the
+        // real call's `comment_id`.
+        expect(forged.result, 'the forger is handed its own result, never somebody else’s').toEqual(
+          { comment_id: 'comment-FORGED' },
+        );
+        expect(forged.status, 'and performs its own action rather than replaying one').toBe('ok');
+        expect(performed).toBe(1);
+        // And the reason it cannot: the key it would have collided with never reached the store.
+        expect(real.rejected, 'the real call is the one that carries the secret').toBe(true);
+        expect(store.keys().length).toBe(1);
+      });
+
+      it('refuses to store a value a broken redactor reshaped, rather than storing the wrong one', async () => {
+        // `redactStoredJson` walks a bare `JsonValue` inside a one-key document, so a redactor
+        // that drops keys would hand `put` an `undefined` the plan's `decode` never saw. The
+        // contract violation is loud: silently storing `null` would replay a result that was
+        // never produced.
+        const dropping = build({
+          redactor: {
+            redactText: (text: string) => ({ value: text, count: 0 }),
+            redactJson: () => ({ value: {}, count: 0 }),
+          },
+        });
+
+        await expect(
+          dropping.execute(addComment({ idempotency: storedResultPlan })),
+        ).rejects.toThrow(/must preserve the shape/);
+        expect(store.size, 'and nothing was stored').toBe(0);
+      });
+
+      /**
+       * The other side of the boundary (rule 42): the refusal must not eat an ordinary key.
+       *
+       * Without this, a guard that refused *every* key would pass the three above — and the
+       * replay it would have broken is the whole point of the store, so the assertion is on the
+       * replay rather than on the absence of a throw.
+       */
+      it('leaves a key with no secret in it alone, and still replays on it', async () => {
+        const first = await executor.execute(leakingComment({ idempotency: storedResultPlan }));
+        const second = await executor.execute(leakingComment({ idempotency: storedResultPlan }));
+
+        expect(performed, 'the second call must not reach the provider').toBe(1);
+        expect(first.status).toBe('ok');
+        expect(second.status).toBe('replayed');
+        expect(store.keys()).toEqual([
+          `${INTEGRATION.integrationId}:add_comment:${encodeURIComponent(storedResultPlan.key)}`,
+        ]);
+      });
     });
   });
 

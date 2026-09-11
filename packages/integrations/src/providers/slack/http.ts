@@ -100,8 +100,14 @@ export interface SlackRequestSpec {
   readonly token?: string;
   /**
    * Slack error slugs that are an answer rather than a failure, mapped to `null`.
-   * `users_not_found` is the only one the adapter uses: "no such user" is what `resolveIdentity`
-   * returns `null` for, not something it throws about.
+   *
+   * "No such user" is what `resolveIdentity` returns `null` for rather than throwing about, and
+   * Slack spells it **two** ways: `client.ts` passes `users_not_found` for
+   * `users.lookupByEmail` and `['user_not_found', 'users_not_found']` for `users.info`. This
+   * docblock claimed `users_not_found` was "the only one the adapter uses" while the second call
+   * site said otherwise — the same standing rule 63 defect as the two the redaction round left
+   * behind, found by the sweep for them. The call sites are the truth; a count of them does not
+   * belong in the type they are passed to.
    */
   readonly nullOnError?: readonly string[];
 }

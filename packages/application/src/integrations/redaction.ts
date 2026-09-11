@@ -41,14 +41,45 @@ export const secretPlaceholder = (name: string): string => `[REDACTED:integratio
  * Longest value first: when one secret is a prefix of another (a token and the same token with a
  * suffix), replacing the longer one first is the only order that leaves no fragment behind.
  *
- * @throws {TypeError} when a secret is shorter than {@link MIN_SECRET_LENGTH} or unnamed.
+ * **A placeholder name is an identity, so two secrets may not share one.** Redaction is already a
+ * many-to-one map from values to placeholders; a duplicate name widens it past the point where a
+ * reader can recover anything — two *different* secrets both named `jira` render as the same
+ * `[REDACTED:integration:jira]`, so an audit row cannot say which credential leaked, and anything
+ * downstream that compares redacted strings sees two distinct inputs as one. Nothing enforced it
+ * before: the shipped bindings merely *happen* to name every secret distinctly (`gitlab_token` /
+ * `gitlab_webhook_secret_token` / `gitlab_webhook_signing_token`, `jira_api_token` /
+ * `jira_basic_auth` / `jira_webhook_secret`, `slack_bot_token` / `slack_app_token` /
+ * `slack_signing_secret`), and a property nothing checks is a property that holds until the next
+ * binding. That is rule 18's shape — a configuration whose duplicate case silently produces a
+ * *permissive* result — so it is refused here, at construction, which is the one place the whole
+ * set is visible.
+ *
+ * **Nothing survives the collision** (rule 38): the constructor throws rather than keeping the
+ * first or the last, because keeping either would leave the other value unredacted, which is
+ * strictly worse than failing to build. Rule 20 allows it: constructing a redactor is not an
+ * inbound notification, and a binding that cannot name its secrets apart is a deployment defect
+ * an operator must see.
+ *
+ * The guarantee is **per redactor**; {@link composeSecretRedactors} cannot extend it across two,
+ * and says there what that costs.
+ *
+ * @throws {TypeError} when a secret is unnamed, shares its name with another, or is shorter than
+ *   {@link MIN_SECRET_LENGTH}.
  */
 export const exactSecretRedactor = (secrets: Iterable<InjectedSecret>): SecretRedactor => {
+  const names = new Set<string>();
   const prepared = [...secrets]
     .map((secret) => {
       if (secret.name.length === 0) {
         throw new TypeError('an injected secret needs a name for its placeholder (TD-012)');
       }
+      if (names.has(secret.name)) {
+        throw new TypeError(
+          `two injected secrets are both named "${secret.name}"; a placeholder name is an ` +
+            'identity, and one shared by two values renders them as the same string (TD-012)',
+        );
+      }
+      names.add(secret.name);
       if (secret.value.length < MIN_SECRET_LENGTH) {
         throw new TypeError(
           `injected secret "${secret.name}" is shorter than ${MIN_SECRET_LENGTH} characters; ` +
@@ -87,14 +118,20 @@ export const exactSecretRedactor = (secrets: Iterable<InjectedSecret>): SecretRe
    * first entry and marking the set. Any later port whose keys come from the provider owes the
    * same, and the check is "who chooses the key", not "who wrote the schema".
    *
-   * **Two sites owe it today, and both discharge it where they emit:** Loki's label names, and
-   * Jira's `ErrorCollection.errors`, whose keys are field names Jira chose and which
-   * `jira-cloud/client.ts` interpolates into an `IntegrationError` message — a reviewer read a
-   * planted credential out of one, so `detailOf` now runs the line it composes through
-   * `redactText`. The pattern generalises: *the emitting site redacts the key, because only it
-   * knows what a collision costs there.* Widening this walk to rewrite keys would take that
-   * judgement away from both — Loki counts a collision into its truncation marker, and a shared
-   * walk has nowhere to report one.
+   * The pattern generalises: *the emitting site redacts the key, because only it knows what a
+   * collision costs there.* Widening this walk to rewrite keys would take that judgement away —
+   * Loki counts a collision into its truncation marker, and a shared walk has nowhere to report
+   * one.
+   *
+   * **Which sites owe it is not maintainable from here.** This docblock said "two sites owe it
+   * today" and named Loki's label names and Jira's `ErrorCollection.errors`; the *same commit that
+   * wrote the sentence* added a third — `gitlab/http.ts` redacts response header **names**, which
+   * are provider-chosen keys of exactly this class — and the sentence survived the change that
+   * falsified it (standing rule 63). A count of other files cannot be checked from inside one of
+   * them, and nothing mechanical can decide which object keys come from a provider, so the list
+   * lives in **`docs/technical/06-integrations-architecture.md` § "Redact at the transport"**,
+   * rule 4, which is where a reviewer of a *new* provider is already reading. This ring states the
+   * obligation; the doc holds the roll.
    */
   const redactValue = (input: JsonValue): RedactionOutcome<JsonValue> => {
     if (typeof input === 'string') {
@@ -153,6 +190,33 @@ export const noSecretsRedactor = (): SecretRedactor => exactSecretRedactor([]);
  * Order is left to right and only matters for the placeholder name a value ends up carrying: once
  * a redactor has replaced a value, the later ones see a placeholder rather than the secret, so a
  * secret known to two of them is counted once.
+ *
+ * **The name-uniqueness {@link exactSecretRedactor} enforces stops at its own set, and this
+ * function cannot extend it.** `SecretRedactor` is two methods and no inventory — that is what
+ * lets a pattern redactor (`infrastructure/src/redaction/pattern-redaction.ts`) and a test double
+ * satisfy it — so composing two redactors that each name a secret `jira_api_token` is accepted,
+ * and two different values then render identically. It is measured, not assumed: a named case in
+ * `redaction.test.ts` asserts exactly that, so the limit is visible rather than implied by the
+ * neighbouring refusal (rule 12).
+ *
+ * What it costs is bounded, and the bound is the reason this is documented rather than enforced.
+ * A shared name is a **fidelity** loss in an audit row or a log line — the same trade the row
+ * already makes — and an **identity** loss wherever something downstream compares a redacted
+ * string for equality.
+ *
+ * This docblock used to end "and it is no longer an identity loss **anywhere**", naming the
+ * executor's idempotency scope as the one such place. It was false when it was written, and rule
+ * 63 says why it could not have been checked from here: an exclusivity claim is a statement about
+ * every *other* file. There are at least **two** such places on disk and they answer differently,
+ * on purpose — `IntegrationActionExecutor`'s outbound idempotency scope **refuses** a key
+ * redaction would change, while every provider's inbound `InboundNormaliser.deliveryKey`
+ * **redacts** one on its way to `inbox(provider, delivery_id)`. Rule 20 points them apart
+ * (`idempotencyScopeFor` and the port's `deliveryKey` each carry the argument, and the port also
+ * states the residual redaction leaves behind). The maintained enumeration is the redacted-state
+ * census in `docs/technical/PROGRESS.md`, not a sentence in this file.
+ *
+ * A composition root that wants the stronger property gives each binding's secrets a name
+ * carrying the binding (`<provider>_<id>_…`) rather than hoping two adapters disagree.
  */
 export const composeSecretRedactors = (
   ...redactors: readonly SecretRedactor[]
@@ -185,6 +249,13 @@ export const composeSecretRedactors = (
  * {@link MIN_SECRET_LENGTH} is skipped rather than thrown on: `exactSecretRedactor` refuses it
  * (redacting `abc` would erase ordinary text), and a binding whose password happens to be four
  * characters must still be able to answer a query.
+ *
+ * A **duplicate name is not skipped** the same way — it reaches `exactSecretRedactor` and throws.
+ * The two cases look alike and are not: dropping a too-short value loses nothing (a four-character
+ * password is visible in the text either way), while dropping one of two differently-valued
+ * secrets sharing a name would leave that secret unredacted in every row this binding writes. A
+ * binding that cannot name its own credentials apart is a deployment defect, and failing to build
+ * is the direction that makes an operator fix it.
  */
 export const bindingSecretRedactor = (
   secrets: Iterable<InjectedSecret | null | undefined>,

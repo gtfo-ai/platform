@@ -66,6 +66,48 @@ describe('exactSecretRedactor', () => {
     expect(() => exactSecretRedactor([{ name: '', value: TOKEN }])).toThrow(/needs a name/);
   });
 
+  /**
+   * The property the executor's idempotency key used to depend on, now enforced where it is
+   * decidable (rules 18, 44, 68).
+   *
+   * Both halves, because a boundary asserted from one side is half a test (rule 42): the duplicate
+   * must be refused **and** two distinctly-named secrets must still both come through. Without the
+   * second assertion a redactor that refused every set would pass the first.
+   */
+  it('refuses two secrets that share a placeholder name', () => {
+    expect(() =>
+      exactSecretRedactor([
+        { name: 'jira', value: TOKEN },
+        { name: 'jira', value: LONGER },
+      ]),
+    ).toThrow(/both named "jira"/);
+  });
+
+  it('refuses a duplicate name even when the two values are identical', () => {
+    // Deliberate: the constructor refuses the *name*, not the collision it happens to cause, so
+    // there is one rule to state and one to mutate. A set listing one secret twice is a
+    // configuration defect whichever values it carries.
+    expect(() =>
+      exactSecretRedactor([
+        { name: 'jira', value: TOKEN },
+        { name: 'jira', value: TOKEN },
+      ]),
+    ).toThrow(/both named "jira"/);
+  });
+
+  it('keeps two distinctly named secrets apart, placeholder and count', () => {
+    const redactor = exactSecretRedactor([
+      { name: 'jira_api_token', value: TOKEN },
+      { name: 'jira_webhook_secret', value: LONGER },
+    ]);
+    const result = redactor.redactText(`a=${TOKEN} b=${LONGER}`);
+
+    expect(result.value).toBe(
+      'a=[REDACTED:integration:jira_api_token] b=[REDACTED:integration:jira_webhook_secret]',
+    );
+    expect(result.count).toBe(2);
+  });
+
   it('is a working redactor even with no secrets to remove', () => {
     const redactor = noSecretsRedactor();
     const result = redactor.redactJson({ body: 'nothing secret here' });
@@ -96,6 +138,34 @@ describe('composeSecretRedactors (rule 31: the adapter keeps its own guarantee)'
     const result = redactor.redactJson({ line: `authorization=Bearer ${BINDING}` });
     expect(JSON.stringify(result.value)).not.toContain(BINDING);
     expect(result.count).toBe(1);
+  });
+
+  /**
+   * The limit of the refusal above, asserted rather than implied (rule 12).
+   *
+   * `composeSecretRedactors` is the shape production actually builds —
+   * `composeSecretRedactors(options.redactor, bindingSecretRedactor([…]))` in all five adapters —
+   * and it cannot see either redactor's secret set, because `SecretRedactor` is two methods and no
+   * inventory. So the uniqueness `exactSecretRedactor` enforces stops at its own set, and a reader
+   * who saw only the refusal would assume it reaches further. It does not; this is what that
+   * looks like.
+   *
+   * What the gap costs is bounded, and the bound is why it is documented rather than closed: a
+   * shared name is a fidelity loss in a row or a log, and an identity loss only where something
+   * downstream compares a redacted string for equality. This used to say "never an identity loss,
+   * because the one place …" — an exclusivity claim made from inside one file (rule 63), and
+   * false. Two such places exist and answer differently on purpose: the executor's **outbound**
+   * idempotency scope refuses such a key, every provider's **inbound** `deliveryKey` redacts one,
+   * and rule 20 is the reason (`idempotencyScopeFor`, `InboundNormaliser.deliveryKey`).
+   */
+  it('cannot tell two composed redactors apart when they share a name', () => {
+    const redactor = composeSecretRedactors(
+      exactSecretRedactor([{ name: 'shared', value: TOKEN }]),
+      exactSecretRedactor([{ name: 'shared', value: BINDING }]),
+    );
+
+    expect(redactor.redactText(`k=${TOKEN}`).value).toBe('k=[REDACTED:integration:shared]');
+    expect(redactor.redactText(`k=${BINDING}`).value).toBe('k=[REDACTED:integration:shared]');
   });
 });
 

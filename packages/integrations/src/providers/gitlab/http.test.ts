@@ -9,6 +9,7 @@
  * serialiser does.
  */
 import {
+  composeSecretRedactors,
   exactSecretRedactor,
   IntegrationError,
   IntegrationRateLimitedError,
@@ -468,15 +469,22 @@ describe('every document that crosses the transport is redacted (TD-012, propert
   it('keeps the first of two header names that redact to the same string', async () => {
     // Two distinct names on the wire, one name after redaction, because both secrets share a
     // placeholder. The answer must not depend on which the server happened to send second.
+    //
+    // The collision is built through `composeSecretRedactors` because that is the only way left to
+    // build one: `exactSecretRedactor` refuses two secrets sharing a placeholder name outright,
+    // and compose cannot see across its arguments (`SecretRedactor` is two methods and no
+    // inventory). That gap is not hypothetical — `composeSecretRedactors(caller, binding)` is what
+    // every adapter here constructs, including this one — so this is the shape the accounting
+    // below actually has to survive.
     const FIRST = 'fake-planted-lowercase-credential-0123456789';
     const SECOND = 'fake-planted-lowercase-credential-9876543210';
     const { http } = httpWith(
       () => json(200, { ok: true }, { [`x-${FIRST}`]: 'first', [`x-${SECOND}`]: 'second' }),
       {
-        redactor: exactSecretRedactor([
-          { name: 'planted', value: FIRST },
-          { name: 'planted', value: SECOND },
-        ]),
+        redactor: composeSecretRedactors(
+          exactSecretRedactor([{ name: 'planted', value: FIRST }]),
+          exactSecretRedactor([{ name: 'planted', value: SECOND }]),
+        ),
       },
     );
     const response = await http.request({ method: 'GET', path: '/x', action: 'get_merge_request' });

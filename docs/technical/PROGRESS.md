@@ -2548,6 +2548,332 @@ to the next is a hypothesis about the next one's environment.** WP-13 measured o
 measured in a container; WP-14 could, and did. The hand-off was still right — it is what caused the
 measurement, and it cost less than the ledger error it exposed.
 
+### Slack redaction + exclusivity claims + census timeouts (implementer notes, branch `fix/slack-redaction-and-census`)
+
+The three follow-ups the redaction round-2 reviewer found, in one branch. All three are closed.
+
+**Part 1 — `slackDeliveryKey` was the third instance, and the class now has a check.** Reproduced first,
+executed rather than asserted: `slackDeliveryKey({headers:{},body:'{"type":"event_callback","event_id":"Ev-FAKE-PLANTED-…"}'})`
+returned `slack:event:Ev-FAKE-PLANTED-…`. It now takes a **required** `SecretRedactor`, redacts the key it
+returns, and redacts **before** the refusal's 32-character cut. Both mutations die by *named* assertions
+(rule 3): the "supplied but not used" mutant — parameter kept required, body ignored, which is rule 35's
+exact shape and leaves typecheck and every call site green — fails three named tests.
+
+**The enumeration the last round did not do, in full.** Every path that turns provider text into a stored
+identifier:
+
+| path | what it copies | state |
+|---|---|---|
+| `jiraDeliveryKey` | `x-atlassian-webhook-identifier` header value | redacted (previous commit) |
+| `gitLabDeliveryKey` | `object_attributes.*`, `object_kind` into a cut refusal | redacted (previous commit) |
+| `slackDeliveryKey` | `event_id`, or `team.id`/`user.id`/`action_id`/`action_ts` | **was not — fixed here** |
+| `fakeDeliveryKey` (3 fakes) | the fake's id header | no redactor; the fakes accept none (below) |
+| loki, sentry | — | **no `inbound` member at all**, now asserted at runtime rather than read off a type |
+| `external_id` on every inbound identity | delivery body fields | covered: all three `normalise` paths `redactJson` the whole parsed document *before* mapping |
+| transport responses | provider documents and header names | covered at each adapter's choke point |
+
+`packages/integrations/src/providers/delivery-key-redaction.test.ts` is the mechanical check (rule 30). Its
+scope is **read off the disk** — every directory under `providers/` must have a recipe, so a sixth provider
+fails it the moment the directory exists — and it drives each real registration's `create` with
+`noSecretsRedactor()` as the caller's redactor, so only the adapter's own composed redactor can be what
+redacts. That derivation is the point: `emitted-secrets.test.ts` derives the *member* list from
+`Object.keys(port)` but its *provider* list is hand-written and covers Jira and GitLab only, which is
+precisely why Slack's key sat outside it.
+
+**Part 2 — three false exclusivity claims, not two.** `redaction.ts`'s "two sites owe it today" and
+`loki/provider.ts`'s "the only provider whose object keys come from the provider" were the two briefed; the
+sweep found the Loki claim **twice** in that file (docblock and the comment at `capLabelSet`), and a third,
+unrelated one: `slack/http.ts` documented `nullOnError` as "`users_not_found` is the only one the adapter
+uses" while `client.ts` passes `['user_not_found', 'users_not_found']` for `users.info`. All four corrected.
+
+*No mechanical check was added for this class, deliberately.* Nothing can decide by grep which object keys
+come from a provider, so a checker would either be a keyword sweep that fires on legitimate prose (the
+failure mode `conflict:check` was designed around) or a hand-maintained list — the thing rule 7 forbids.
+What is done instead is **stop repeating the roll in N files**: the list of sites that owe a key pass now
+lives only in technical/06 § "Redact at the transport" rule 4, and both docblocks point at it and state
+*why* they may not carry a count. An exclusivity claim maintained in one place can at least be reviewed;
+one maintained in three is rule 41's shape applied to prose.
+
+**Part 3 — one bound for one class, placed by measurement.** `{ timeout: 25_000 }` on both censuses, and
+the vitest option-object form was proved to be honoured (mutated to `{ timeout: 1 }` → "Test timed out in
+1ms") rather than assumed. Measured on this host (14 cores), load average quoted with every figure (rule 64):
+
+| condition | load | loki census | sentry census |
+|---|---|---|---|
+| file alone | 11 | 1,103 ms | — |
+| full unit+contract run | 17 / 26 / 29 | 2,824 / 1,754 / 1,634 ms | 1,731 / 1,404 / 1,332 ms |
+| saturated | 57 | **failed** at 5 s (10,983 ms to abort) | **failed** at 5 s (8,555 ms to abort) |
+| saturated, 120 s budget | 72 → 96 | **9,640 ms** | **7,531 ms** |
+
+**This lowers the failure threshold the reviewer reported.** Rule 64 records timeouts at load ≥ 110; both
+censuses in fact fail the 5 s default at load ~57, and the same work dilates **8.7x** between load 11 and
+load 96. The bound: worst completed sample 9.6 s at load 96 → ~13.8 s at the load 137 this session has
+actually run at → ×1.46 for the spread between two samples at one load (the reviewer's 2,488 vs 3,638 at
+load 36) ≈ 20 s, so 25 s clears the distribution rather than being a round multiple of the old number
+(rule 57). **Neither sample is reduced**: 192-per-million and 100,027,762 are quoted in `provider.ts`,
+`mapping.ts`, `config.ts`, technical/06 and rule 32, and a census that shrinks its denominator to run
+faster invalidates every citation of itself (rule 39). Both tests assert *counts* and never a duration, so
+the timeout is infrastructure and not a performance guard — which is the confusion that let a 5 s default
+read as a 4.5x margin.
+
+**Assumptions recorded:** (1) 25 s is one bound for both, because they are one class and a reviewer asked
+for them fixed together; (2) the fakes are out of scope for the delivery-key check, stated in its docblock
+rather than silently.
+
+**A load-generation footgun worth the ledger (sharpens rule 25).** The orchestrator retracted permission to
+generate load mid-task, after two kernel panics on this host; the measurements above were already taken and
+every generator was verified dead (`pgrep` clean, explicit per-PID kills, no `2>/dev/null`). But the first
+attempt failed in a new way: a script holding `trap 'kill 0' EXIT INT TERM` **cannot be killed from
+outside** — `kill -TERM` fires its own handler, which runs `kill 0`, which re-signals the script, and it
+spun at 100% CPU until `kill -KILL`. Worse, `kill 0` also killed the `tail` on the other end of the
+pipeline, so the tool call returned exit 144 with **no output**: three minutes of load generated and zero
+data collected. The recipe rule 25 prescribes is right for cleanup-on-exit and wrong for a process you may
+need to stop: put the trap in a wrapper that does nothing else, make each worker **self-bounding by wall
+clock** so an orphan expires without any signal, and write output to a **file** rather than a pipe a trap
+can kill.
+
+### Same branch, review round 2 — the fourth instance was in the executor, and the class guard could not fail
+
+A fresh-context reviewer returned four findings on the branch above. All four are closed, and the sweep
+rule 49 asks for was run again, wider.
+
+**1 (major) — `IntegrationActionExecutor` was the fourth instance, and it is the one that stores.**
+`idempotencyStore.put(scope, request.idempotency.encode(result))` wrote provider text to persistent state
+while the audit row on the *same success path* was redacted. Reproduced before it was fixed, as a test:
+a `perform` returning `c-1?token=<planted>` through Slack's own plan shape (`encode` is the identity) put
+the planted value straight into the store. **The sweep then found the key too** — `marker:agentic:<planted>`
+reached `idempotencyStorageKey` verbatim, and technical/06's own example of a key ("marker ids for
+comments") is text read back out of a provider's comment, so the key is the more likely half. Both are now
+handled in the executor, the key **once where the scope is built** so `get` and `put` cannot disagree.
+**Superseded in round 3:** redacting the key was the wrong half of that fix, and the two named tests listed
+below for it (`keeps the injected secret out of the key it stores`, `still replays on a redacted key …`) no
+longer exist. The next section says why.
+Not at the call site (rule 41): one guard, four named tests, each proved by its own mutation —
+`keeps the injected secret out of the value it stores`, `keeps the injected secret out of the key it
+stores`, `still replays on a redacted key, so the guard cannot double-perform the action` (the mutant that
+redacts on the `put` path only), and `refuses to store a value a broken redactor reshaped, rather than
+storing the wrong one`. The cost is stated on `IdempotencyPlan` rather than hidden: a replay returns the
+**redacted** result, so an action that cannot tolerate that must not carry an idempotency key — the same
+shape as the existing "a result that cannot be JSON must not carry one".
+
+**2 (major) — the class guard died as a collection crash, not as an assertion.**
+`delivery-key-redaction.test.ts` read `CASES[provider]` at collection time behind an `as`, so the one
+scenario it exists for — a new provider directory with no case — produced `TypeError: Cannot read
+properties of undefined` and `Tests no tests`: a new provider **disabled** all twelve assertions instead of
+failing one (rules 3, 62, 68). The case is now read inside each test through `caseFor()`, and the reviewer's
+own experiment re-run: `mkdir providers/zz-newprovider` fails **three named tests** — `has a case here for
+every provider directory on disk`, `zz-newprovider > has a case in this file` and `zz-newprovider > agrees
+with its port about whether it has an inbound half` — while the other 16 still run. Whether the two
+delivery-fed assertions apply is still decided at collection time, but defensively (`?.`), so a missing
+case reaches the named failures rather than a crash; a provider with no inbound half reports them skipped.
+
+**3 (minor) — the exclusivity claim this branch added.** "the one string in the adapter ring that the
+platform stores" was falsified by finding 1 *in the same review round* (rule 63: an exclusivity claim is a
+statement about every other file). Narrowed to what the file can hold itself: the dedup key of every adapter
+under `providers/`, which is exactly what its own `PROVIDER_DIRECTORIES` reads off disk. The executor's
+docblock took the dual fix — "three things carry it out of this file" is now four, with the reason the count
+is checkable written next to it.
+
+**4 (minor) — a table that does not exist.** `webhook_deliveries` was cited in three places; technical/03
+calls it `inbox(provider, delivery_id, …)` and the key is half of that primary key (migration
+`0005_events.sql`). All three now name it, and say plainly that **no endpoint writes it yet** — the route is
+a later WP, which is why the check drives the registrations rather than a request.
+
+**The sweep (rule 49), and what it found.** Every place a provider-controlled string becomes stored or keyed
+state, on top of the delivery-key table above:
+
+| path | verdict |
+|---|---|
+| `IdempotencyStore.put` value, and the `key` in `IdempotencyScope` | **the finding.** The value is redacted here; the **key half was changed in round 3 to a refusal** — see the next section |
+| `IdempotencyPlan` call sites in production | one: `slack/digest.ts`. Covered by the executor, not by itself |
+| `singletonKey` — `task:<uuid>`, `mr:<iid>` | clean: a platform uuid and a `number`. `JOB_KEY_PATTERN` bounds the shape, not the origin |
+| job `data` payloads (`StageExecuteData`, `ReviewWindowData`) | clean: ids, a stage slug, an ISO instant |
+| `workpadMarker` → `agentic:task:<uuid>` | clean: platform-minted, and it is the marker id an idempotency key would use |
+| gate `detail` strings built from `job.name`, `status.status`, `mr.target_branch` | provider text, but downstream of the adapter's own redactor (`emitted-secrets.test.ts`) |
+| `integrations.health` ← `HealthProbe.detail` | the next instance waiting: the obligation is per-provider in `common.ts`, discharged for Jira only, and nothing writes the column yet. Filed below |
+| `tasks.ticket_key` (intake's unique key) | provider text in a column **by design** — it must round-trip to the provider, so redacting it would break the lookup it exists for. Out of the class |
+| `inbox`, `events.payload`, `integration_actions` | no writer outside the executor today |
+| **`artifacts.data`, `questions.text`, the MR fields on `tasks`** ← a run's `structuredOutput` | **the fifth instance, one ring over — filed below, not fixed here** |
+| `handler_executions.error`, `event_dispatch.error` ← a thrown handler's `${name}: ${message}` | no redactor on the dispatcher path; what the executor throws is pre-scrubbed, anything else is not. Filed below |
+| model output on the transcript path (`run_messages`) | clean: `claude-runner.ts`'s `append` redacts every entry before the write |
+
+The two new ones were found by a second sweep run wide on purpose (not by the reviewer, and not by the
+first census, which stopped at the adapter ring). Both were **verified by reading the sink**, not inferred
+from a name: `stage-executor.ts` `data = outcome.structuredOutput` → `store.artifacts.insert(… data …)` and
+`artifactQuestions(data)` → `store.questions.insert`, and `event-bus.ts`'s `describeError` →
+`recordFailure` → `insert into handler_executions … error = $4`.
+
+### Same branch, round 3 — a redacted key is not an identity, and the property nothing enforced
+
+The approving review of round 2 left two things, both about the **key** half of the idempotency fix. Both
+were reproduced before anything was changed, and the reproduction moved the fix.
+
+**Reproduced first (the reviewer's measurement, confirmed).** A redactor holding two *different* secret
+values both named `jira`: the second `execute` returned `status: 'replayed'` with the **first** request's
+`{"comment_id":"comment-A"}`, `store.keys().length === 1`, and the second `perform` never ran. With
+`jira_api_token` / `jira_webhook_secret` both survived: two keys, both `ok`. Separately, a **forged literal
+placeholder** — provider text containing `marker:agentic:[REDACTED:integration:jira]` verbatim, which any
+actor who can write a ticket comment can produce (BD-022) — came back `replayed` with the real stored
+result, one key.
+
+**The fix the measurement asked for is one guard, and it is not the one that was prescribed.** Rejecting a
+duplicate name in `exactSecretRedactor` is right and is done (below), but it closes only the set one
+constructor can see: **`composeSecretRedactors` has the identical hole and cannot be made to close it** —
+`SecretRedactor` is two methods and no inventory, which is what lets a pattern redactor and a test double
+satisfy it — and `composeSecretRedactors(options.redactor, bindingSecretRedactor([…]))` is the shape all
+five adapters actually build. Measured: two composed redactors both naming a secret `jira_api_token` render
+two different values identically. So a fix that stopped at the redactor would have left the production path
+carrying the defect while reading as fixed (rule 63's shape, before the fact).
+
+**What actually fails closed is refusing the key.** `idempotencyScopeFor` now throws `invalid_request` when
+`redactText(key).count > 0`: nothing performed, nothing stored, no audit row — the same shape as
+`assertActionName`. That is the *opposite* trade from the audit row one function away, deliberately: BD-003
+obliges the row to be written, so it takes the fidelity loss; a key has no such obligation, and a lookup
+that collides returns the **wrong answer** rather than a less precise one. It also settles the forgery
+without knowing anything about the placeholder's format: no stored key is a redaction output any more, so a
+forged one can collide with nothing but a literal copy of itself, and what remains is the property every
+idempotency scheme has — whoever controls the key controls the slot, bounded by `(integration, action)`.
+
+**Reachability, measured before the decision was made, because "is it in the threat model" is a question
+about code that exists.** The repository ships **exactly one** `IdempotencyPlan`: `slack/digest.ts`'s
+`slack:digest:<channel>:<day>`, whose parts are binding configuration and the clock in the schedule's zone.
+Neither half was reachable through it or through anything else on disk; `grep` for `decode:` outside tests
+returns that one line. The guard is for the plan technical/06 describes and nobody has written yet — "marker
+ids for comments", text read back out of a provider's comment body — which is the first key an outsider
+gets to influence. The decision and the attacker's requirements are written **in the code**
+(`idempotencyScopeFor`'s docblock, `IdempotencyPlan`, the `IdempotencyStore` port, this file's CLAUDE.md
+bullet), not only here.
+
+**The other half, where it is decidable.** `exactSecretRedactor` refuses two secrets that share a
+placeholder name, at construction, and **nothing survives** the collision (rule 38) — keeping either would
+leave the other value unredacted, which is worse than failing to build, and rule 20 allows the refusal
+because constructing a redactor is not an inbound notification. It was rule 18's shape exactly: a
+configuration whose duplicate case silently produced a *permissive* result, held up only by the shipped
+bindings happening to name every secret distinctly. `bindingSecretRedactor` does **not** skip a duplicate
+the way it skips a too-short value, and says why at the line: dropping a four-character password loses
+nothing, dropping one of two differently-valued secrets leaves that secret in every row the binding writes.
+
+**Five mutations, each killed by a named test** (rules 3, 62):
+
+| mutation | named test that died |
+|---|---|
+| delete the duplicate-name `throw` | `refuses two secrets that share a placeholder name`, `refuses a duplicate name even when the two values are identical` |
+| `names.has(name)` → always true | `keeps two distinctly named secrets apart, placeholder and count` (+ 9 others) |
+| delete the `key.count > 0` `throw` (i.e. restore round 2) | `refuses an idempotency key that carries an injected secret, storing nothing`, and `gives a forged placeholder nothing to match, because the key it would collide with is refused` — which fails on `the forger is handed its own result, never somebody else's`, the harm, not on its setup |
+| `key.count > 0` → `>= 0` (refuse everything) | `leaves a key with no secret in it alone, and still replays on it` (+ 7 others) — rule 42's other side |
+| drop `extraRedactions` from the `ok` row | `keeps the injected secret out of the value it stores`, on `the store scrub is counted onto the row` |
+
+**The nit, closed both ways.** Of the two discarded `RedactionOutcome.count`s, one is now counted and the
+other says at the line why it cannot be. `redactStoredJson`'s count reaches the row through
+`buildEntry`'s `extraRedactions` — the store write is the one scrub that happens outside the row reporting
+it, and a scrub nobody counts is indistinguishable from one that found nothing. The key's count is
+structurally always zero now: a non-zero count there is a **refusal**, not a redaction, so there is no
+number for a row to carry.
+
+**Rule candidate for whoever maintains the list.** *A many-to-one transform applied to an identity is a
+defect, whatever the transform is for.* Redaction, case folding, unicode normalisation and truncation all
+have a legitimate reason to collapse two inputs into one, and all of them are wrong on a key: the losing
+call is not told it lost, it is handed the winner's answer. The question to ask of any scrub is not "does
+this hide the secret" but "is anything downstream comparing the output for equality".
+*Amended in round 4*: **not always a defect — sometimes the least bad of two**. Where rule 20 forbids
+refusing (an inbound notification), the collapse is kept deliberately; what the rule then demands is that
+the site says **which value survives** (rule 38) and that the injective option is measured and filed rather
+than left unmentioned. See the next section.
+
+### Same branch, round 4 — the two keys reconciled, and a false "anywhere" withdrawn
+
+Round 3 shipped the right guard with the wrong sentence around it. `redaction.ts` claimed a shared
+placeholder name "is no longer an identity loss **anywhere**: the one place a redacted string was used as a
+key …", repeated in `redaction.test.ts`, and `CLAUDE.md` carried the refusal and the redaction adjacently
+with nothing saying why they differ. Measured false: `jira-cloud/webhook.ts`, `gitlab/webhook-verify.ts` and
+`slack/signature.ts` each return `redactor.redactText(…).value` as the **delivery key**, destined for
+`inbox(provider, delivery_id)`'s primary key (`0005_events.sql`), and `delivery-key-redaction.test.ts`
+asserts that key *contains* the placeholder. Rule 63 inside the commit that exists to fix rule 63, and rule
+44: a scope claim is a checkable claim.
+
+**The reconciliation: the two answers are genuinely different, and rule 20 is the whole reason.** The
+outbound idempotency key is about to drive a **mutation**, so refusing costs exactly one action, loudly,
+before anything reaches the provider — fail closed. An inbound delivery is a **notification the platform has
+already been told about**, so refusing one *drops* it and the event never reaches the pipeline — the
+stuck-queue failure rule 20 was written from. Fail open. Written where the code is: `idempotencyScopeFor`
+(outbound), `InboundNormaliser.deliveryKey` (inbound — the one definition all three adapters implement), a
+pointer at each of the three adapter functions, the `delivery-key-redaction.test.ts` docblock, and the
+`CLAUDE.md` bullet. The false "anywhere" is gone from `redaction.ts`, `redaction.test.ts` and `CLAUDE.md`,
+replaced by a claim that names two sites as examples and points at this file's census as the maintained
+enumeration — rule 63 says the claim cannot be maintained from inside either file.
+
+**The residual the inbound answer keeps, said out loud (rule 38).** Redaction there is still many-to-one:
+two deliveries differing *only* inside the same injected credential collapse onto one `delivery_id`, and the
+**first** survives — the later, genuinely different one is taken for a redelivery and dropped without a
+trace. That is a narrower version of the harm refusing would cause, not an absence of it. No instance is
+demonstrated: GitLab's key parts are refnames and object ids (no `[`, no `:`), Jira's is one header value,
+Slack's are ids and timestamps.
+
+**The third option, measured and left.** A one-way digest is injective in practice *and* stores no secret,
+which is what an inbound identity actually wants. It is **available** — `deliveryKey` is synchronous,
+`node:crypto` is already imported by all three adapters, `delivery_id` is `text`, and the blast radius is 12
+call sites with 2 literal-key assertions. It is **not cheap** where the property lives: an *unkeyed* digest
+does not store "no secret" when `MIN_SECRET_LENGTH` is 8 and the surrounding template is public, and the
+only key an inbound adapter holds today is the binding's own webhook secret, which is `string | null` on
+GitLab (`webhook-verify.ts` — `secretToken`, `signingToken`), so the property would hold on some bindings
+and silently weaken on others: rule 18's shape. A key that would not weaken (`APP_SECRET_KEY`,
+`apps/server/src/config.ts`) is not plumbed to a provider registration at all. And nothing writes `inbox`
+yet, so the operability half — an opaque `delivery_id` in a table technical/03 calls "dedup **and raw
+audit**" — has no consumer to weigh it against. Filed under Discovered work rather than done here.
+
+**Two minors, each closed by a named test proved with a mutation (rules 3, 10, 62):**
+
+| change | mutation | named test that died |
+|---|---|---|
+| `logger.warn(logFieldsOf(request), …)` at the refusal | delete the `logger.warn` | `logs the refusal, because it writes no audit row to be found in` |
+| assert the store-less branch | drop `!options.idempotencyStore` from the guard | `skips the key guard when no store is configured, and performs the action` |
+
+The log line is **operability, not audit**: BD-003 is unharmed because nothing provider-facing happened, and
+the measurement was `invalid_request`, 0 audit rows, 0 log lines, `performed 0`, `store 0` — a refusal with
+no row *and* no echo of the key is a stuck action with nothing anywhere to diagnose it by, which is rule
+20's second half. It logs the request's identity (`logFieldsOf`) and never the key. The store-less test
+carries its own canary (rules 4, 42): the same request through an executor that *does* have a store is
+refused, so the green half is the absent store and not a harmless key.
+
+
+## Discovered work (not in plan)
+
+- **A one-way digest for the inbound delivery key.** Round 4 reconciled the redact-vs-refuse split and
+  filed the option that has neither cost: hash the key instead of redacting it, so distinctness survives and
+  no secret is stored. Needs a digest key an `InboundNormaliser` does not hold today (the binding's webhook
+  secret is `string | null` on GitLab; `APP_SECRET_KEY` is not plumbed to a registration), a replacement for
+  `delivery-key-redaction.test.ts`'s instrument (a digest makes its present assertion vacuous), and a
+  decision on an opaque `delivery_id` in a table technical/03 calls "dedup and raw audit". The reasoning and
+  the measurement are on `InboundNormaliser.deliveryKey`.
+- **`emitted-secrets.test.ts` covers Jira and GitLab only.** Its member enumeration is derived
+  (`Object.keys(port)`) but its provider list is not, and Slack's unredacted dedup key is exactly what that
+  gap hid. Slack, Sentry and Loki owe the same walk — every string they emit, planted, through the real
+  registration with the caller disarmed. Sizeable: the GitLab section alone is ~240 lines.
+- **A run's `structuredOutput` reaches `artifacts.data` unredacted — TD-012 names artifacts explicitly.**
+  `claude-runner.ts` keeps the raw `SDKResultMessage` (`result = message`) and returns
+  `structuredOutput: validated.data` off it, while the transcript copy of the *same message* is redacted in
+  `append` and every sibling on the same outcome object (`error`, stderr) is redacted too. `stage-executor.ts`
+  then writes it to `artifacts.data`, turns it into `questions.text`, and `saga.ts` copies the MR url, branch
+  and head sha out of the artifact onto the `tasks` row. Model output is untrusted (BD-022) and TD-012 lists
+  "artifacts" among the writes redaction must precede. It is the same class as the four closed on this branch
+  and belongs to WP-12/WP-15, not here. The design question to answer first is the one `IdempotencyPlan` now
+  states: an artifact field that is redacted is an artifact field the pipeline may branch on — a head sha or
+  a URL — so "redact the artifact" is not obviously the right shape, and the redactor to use is the run's.
+- **`handler_executions.error` and `event_dispatch.error` take a handler's raw message.**
+  `event-bus.ts`'s `describeError` writes `${error.name}: ${error.message}` to both columns with no redactor.
+  Everything `IntegrationActionExecutor` throws is already scrubbed (that is the point of its single `catch`),
+  so the integration path is covered; a handler that throws provider text it obtained any other way is not.
+  TD-012's enumeration does not name these two columns, which is itself worth deciding.
+- **`HealthProbe.detail` has the same shape as the dedup key and no mechanical check.** It is provider text
+  bound for `integrations.health`, the obligation is stated on `healthProbeSchema` and discharged by Jira's
+  contract test alone; `delivery-key-redaction.test.ts` is the template — every provider directory, real
+  registration, caller disarmed, credential planted. Nothing writes the column yet, so it is a gap and not
+  a leak.
+- **The three fakes' `fakeDeliveryKey` takes no redactor, and the fakes accept none.** A fake that does not
+  redact where the real adapter does is *kinder* than production, which is standing rule 1's forbidden
+  direction, and every later WP's unit tier trusts the fakes. Either give the fakes a redactor or record
+  the divergence explicitly in each fake's register; today it is neither.
+
 ### WP-14 round 3 — the guard against unresolvable citations could not read its own repository
 
 Round 2 answered rule 11 with a parser: every `` `file.test.ts` `` › `"name"` in a tracked source is

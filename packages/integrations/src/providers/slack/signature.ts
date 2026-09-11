@@ -48,7 +48,7 @@
  *     hardware assertion, not a correctness one (standing rule 2).
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { IntegrationError, type WebhookDelivery } from '@platform/application';
+import { IntegrationError, type SecretRedactor, type WebhookDelivery } from '@platform/application';
 import type { Clock } from '@platform/domain';
 import { SLACK_PROVIDER_ID } from './http.js';
 
@@ -164,9 +164,34 @@ export const slackSignatureHeaders = (input: {
  * A Socket Mode `envelope_id` is deliberately not used: it identifies the delivery, so two
  * envelopes of one event would key differently and both would be processed.
  *
+ * ## Both things it produces are provider text, and one of them is *stored*
+ *
+ * Every part of the key above is copied out of the delivery body — `event_id`, `team.id`,
+ * `user.id`, `action_id`, `action_ts` — and the body is untrusted provider text (BD-022) that the
+ * platform stores as `inbox.delivery_id` (technical/03; half of that table's primary key) and
+ * compares on every later delivery. A secret reaching
+ * persistent state is worse than one reaching a log line, and the object literal this function is
+ * wired into (`provider.ts`) hands `normalise` a redactor for exactly that reason while this
+ * function had none: `{"type":"event_callback","event_id":"Ev-<the binding's signing secret>"}`
+ * produced `slack:event:Ev-<the secret>`, executed rather than argued.
+ *
+ * That was the **third** instance of one defect — Jira's `X-Atlassian-Webhook-Identifier` and
+ * GitLab's `object_kind` were the first two, closed one commit earlier — which is standing rule 49
+ * (when you fix something, grep for its siblings) and why `delivery-key-redaction.test.ts` now
+ * derives the set of providers that owe this from the registrations rather than from memory.
+ *
+ * The redactor is **required rather than optional** for the reason standing rule 31 names: an
+ * optional security dependency is an absent one. And it runs **before** the refusal's 32-character
+ * cut, because a cut applied to unredacted text leaves a fragment no exact-match redactor can ever
+ * find again — a delivery whose `type` is `<the signing secret>` is the case that proves it.
+ *
+ * Redacted rather than refused, where `IntegrationActionExecutor`'s outbound idempotency key is
+ * refused: rule 20 points the two apart, and `InboundNormaliser.deliveryKey` carries the trade,
+ * the residual this answer keeps and the one-way digest that would have neither cost.
+ *
  * @throws {IntegrationError} `invalid_request` when the delivery carries nothing to key on.
  */
-export const slackDeliveryKey = (delivery: WebhookDelivery): string => {
+export const slackDeliveryKey = (delivery: WebhookDelivery, redactor: SecretRedactor): string => {
   let body: unknown;
   try {
     body = JSON.parse(delivery.body) as unknown;
@@ -203,12 +228,14 @@ export const slackDeliveryKey = (delivery: WebhookDelivery): string => {
   })();
 
   if (key === null) {
+    // Redact, *then* cut: the other order leaves the leading bytes of a credential in the message.
+    const named = JSON.stringify(redactor.redactText(String(record.type)).value.slice(0, 32));
     throw new IntegrationError(
       'invalid_request',
       SLACK_PROVIDER_ID,
-      `delivery of type ${JSON.stringify(String(record.type).slice(0, 32))} carries nothing to key on`,
+      `delivery of type ${named} carries nothing to key on`,
       { action: 'delivery_key' },
     );
   }
-  return `${SLACK_PROVIDER_ID}:${key}`;
+  return redactor.redactText(`${SLACK_PROVIDER_ID}:${key}`).value;
 };

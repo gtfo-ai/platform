@@ -40,7 +40,9 @@ export type IntegrationActionStatus = 'ok' | 'failed' | 'would_have' | 'replayed
  * `payload`, `result` and `error` arrive **already redacted** (TD-012: redaction happens in the
  * single persistence path, before the write, because an append-only row cannot be fixed later).
  * `redactionCount` is what the redactor reported, so a row that should have hidden something and
- * did not is visible as a zero.
+ * did not is visible as a zero. It also carries the replacements this action made in state that
+ * has no row of its own — the idempotency record's value — because a scrub nobody counts is
+ * indistinguishable from one that found nothing.
  */
 export interface IntegrationActionEntry {
   readonly integrationId: Id;
@@ -156,6 +158,25 @@ export const idempotencyStorageKey = (scope: IdempotencyScope): string =>
  *
  * `undefined` means "never seen"; a stored `null` is a legitimate remembered result, which is why
  * the miss is `undefined` rather than `null`.
+ *
+ * **Both halves arrive safe to store, by two different mechanisms.** Both are persistent state and
+ * both are made of provider text — an `encode` is frequently the identity over a provider's
+ * result, and technical/06's own example of a key is a marker id read back out of a provider's
+ * comment — so `IntegrationActionExecutor` handles them once, before any adapter of this port sees
+ * them, and an adapter may write what it is handed:
+ *
+ *  - the **value** arrives **redacted**. The consequence a caller must know about is stated on
+ *    `IdempotencyPlan`: a replay returns the redacted result.
+ *  - the **key** arrives **unredacted and proved free of injected secrets** — a key that carried
+ *    one is refused before any `get` or `put` happens. Redacting a key would collapse two calls
+ *    that differ only inside a secret into one slot, so the second is answered `replayed` with the
+ *    first one's result; and it would let text containing the literal placeholder (all external
+ *    text is untrusted, BD-022) match a redacted key it never equalled. An identity cannot be
+ *    passed through a many-to-one transform, so the executor refuses instead.
+ *
+ * The value half was the executor's fourth instance of "a secret reaches stored state through a
+ * value that took no redactor" (rule 49); the key half is why the answer is not simply "redact
+ * everything".
  */
 export interface IdempotencyStore {
   get(scope: IdempotencyScope): Promise<JsonValue | undefined>;

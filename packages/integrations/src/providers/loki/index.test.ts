@@ -156,8 +156,47 @@ describe('nanosecond arithmetic', () => {
     ).toBe('2026-06-01T10:30:00.000Z');
   });
 
-  /** The size of the hole, measured rather than asserted from a docblock. */
-  it('diverges from the Number implementation for 192 of a million consecutive instants', () => {
+  /**
+   * The size of the hole, measured rather than asserted from a docblock.
+   *
+   * ## Why this one carries an explicit timeout (standing rules 57 and 64)
+   *
+   * A million `BigInt` conversions is about 1.1 s of CPU, and against vitest's **5 s default** that
+   * reads as a 4.5x margin. It is not a margin, because the number moves with the machine's load
+   * and the value it has to clear does not. Measured, one figure and four verdicts:
+   *
+   * | condition | load average | this census |
+   * |---|---|---|
+   * | file alone | 11 | 1,103 ms |
+   * | inside the full unit+contract run | 17 / 26 / 29 | 2,824 / 1,754 / 1,634 ms |
+   * | the same, with the machine saturated | 72 → 96 | **9,640 ms** |
+   *
+   * The last row is 8.7x the first for identical work. Below it, at load ~57, the run **failed**
+   * against the 5 s default at 10,983 ms to abort — and the reviewer who found this measured
+   * 1,197 / 1,287 / 1,493 ms at load 5–13, 2,488 / 3,638 / 3,339 ms at load ~36 (73% of the old
+   * budget) and a timeout **3 runs of 3** at load ≥ 110. The orchestrator runs three worktrees at
+   * once and this session has seen load 137 and 196, so the saturated row is the fleet's condition
+   * and not an exotic one.
+   *
+   * **The bound is 25 s because that is where the measured distribution is, not because it is
+   * round.** The worst *completed* sample is 9.6 s at load 96; the load this session has actually
+   * reached is 137, which at the same dilation is ~13.8 s; two samples at one load differ by up to
+   * 1.46x (the reviewer's 2,488 vs 3,638 at load 36), so 13.8 × 1.46 ≈ 20 s is the worst case the
+   * data supports, and 25 s clears it. Rule 57 is that a bound must be placed by measuring where
+   * the value lands; rule 64 is that the load it was measured at is part of the number.
+   *
+   * **A generous bound costs nothing here, and saying why matters more than the figure.** This test
+   * asserts a *count* — 192 — and nothing about time; the timeout is infrastructure, not a
+   * performance guard, and treating it as one is how a 5 s default came to be read as a margin. A
+   * regression in the arithmetic fails the assertion in 1.1 s either way. **The sample is not
+   * reduced** for the same reason `sentry/mapping.test.ts` keeps its 100,027,762: "192 of a million
+   * consecutive instants" is quoted in `provider.ts`, in technical/06 and in the ledger's rule 32,
+   * and a census that changes its denominator to run faster silently invalidates every citation of
+   * it (rule 39).
+   */
+  it('diverges from the Number implementation for 192 of a million consecutive instants', {
+    timeout: 25_000,
+  }, () => {
     let diverged = 0;
     const base = 1780309799000000000n;
     for (let offset = 0; offset < 1_000_000; offset += 1) {
