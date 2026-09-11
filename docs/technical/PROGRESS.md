@@ -958,11 +958,27 @@ in the vault's docblock saying what the corpus cannot show, which is the standin
 plan row mentions the corpus. Whoever takes entry 15 needs this first: a precision mechanism measured
 on an instrument that cannot falsify it is a mechanism nobody can review.
 
-### 1b. `verify:e2e` failed once on `main` at `be05a9b`, unreproduced (TODO)
-One `FAIL: verify:e2e` in the orchestrator's shell at load ~20 falling, then **four consecutive passes**
-(1 + 3 captured to files) at load 6–8, and **CI green on the same commit** (`34604222753`). The failing
-test's identity was **lost to `| tail`** — see rule 75. Recorded rather than dismissed: a flake nobody can
-name is still a flake, and the next sighting should be able to cite this one.
+### 1b. **The workpad e2e flake — now identified** (TODO, owner: WP-15a's harness)
+```
+FAIL test/e2e/pipeline/pipeline.e2e.test.ts >
+  a feature ticket, end to end > keeps one workpad comment on the ticket and moves the ticket status
+AssertionError: expected '**ACME-1** — active (rebase_gate)' to be '**ACME-1** — ready_for_merge (…)'
+```
+Seen twice in the orchestrator's shell: once on `main` at `be05a9b` (identity lost to `| tail`, rule 75)
+and once on `wp/16` at `307bb49`, where the full log was captured. **Not WP-16's** — it touches retrieval,
+not the pipeline, and the first sighting predates it; two immediate re-runs at load 6–8 passed.
+
+The workpad renders while the task is still `active (rebase_gate)` instead of `ready_for_merge`. This is
+the **same test** WP-15a fixed once: *"the workpad test settled on a task state and read a consequence the
+integrations-band handler commits later"*, closed with a `waitFor` in the harness, and a reviewer then
+measured that the `waitFor` bounds the right thing — delaying the workpad handler (priority 120) by 250 ms
+left it green, so the flake was the **status** handler at priority 110 and the `waitFor` waits on its
+consequence. **That measurement stands and the flake survived it**, so the remaining window is elsewhere:
+either a second consequence nothing waits on, or the wait is on the wrong band. Rule 50 is the frame — *a
+window must bound silence, not the drain* — and rule 4: the instrument gets audited before the product.
+
+**Done looks like**: the mutation that reintroduces the race fails a named test, and the identity above is
+reproduced deliberately rather than waited for.
 
 ### 2. The slack/census follow-up branch — **three review rounds, merging** (branch exists)
 `fix/slack-redaction-and-census`, worktree `.claude/worktrees/slack-fix`, head `20b1e97` with `main` merged
