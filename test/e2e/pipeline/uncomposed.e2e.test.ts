@@ -70,8 +70,11 @@ describe('an instance started without a pipeline composition', () => {
     expect(missing).toBeDefined();
     expect(missing).toContain('Q52');
     expect(missing).toContain('IntegrationAuditLog');
-    // The second decision, and the one that keeps the event: the sweep is not started at all.
-    expect(logged.find((line) => line.includes('the outbox sweep is not started'))).toBeDefined();
+    // The second decision, and the one that keeps the event: the sweep is not started at all, and
+    // the warning **names what is missing** rather than saying "not ready" (TD-005's amendment).
+    const refused = logged.find((line) => line.includes('the outbox sweep is not started'));
+    expect(refused).toBeDefined();
+    expect(refused).toContain('ticket.matched');
 
     let seededProjectId = '' as Id;
     const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });

@@ -16,6 +16,7 @@ import {
   deriveSecretKey,
   isSealedUnder,
   openSecret,
+  rewrapSecret,
   SEALED_ENVELOPE_LAYOUT,
   SECRET_ENVELOPE_VERSION,
   SecretEnvelopeError,
@@ -105,46 +106,90 @@ describe('a sealed secret', () => {
   });
 
   /**
-   * The nonces, pinned by a census rather than by reading the code.
+   * The nonces — and the second version of this test, because the first one admitted a counter.
    *
-   * Replacing either `randomBytes(IV_BYTES)` with `Buffer.alloc(IV_BYTES)` left **all 19** tests in
-   * this file green before this existed — the ciphertexts still differed, because the data key is
-   * random too, so "is different every time" said nothing about the IVs. The wrap IV is the sharp
-   * one: it sits under a single process-wide KEK, so a constant there is GCM nonce reuse across
-   * every row in the table, and AES-GCM loses **authenticity** as well as confidentiality under it.
-   * The third random value, the data key itself, is covered by the body: with a fixed DEK and a
-   * fixed body IV two seals of one plaintext produce identical bodies.
+   * Round 2 pinned *distinctness* over 64 seals. Standing rule 43 asks which **wrong**
+   * implementations a negative also passes, and the answer was a bad one: a per-process counter
+   * (`iv.writeUInt32BE(n)`) produced 64 distinct values and passed all 13 tests. Distinctness within
+   * one process is not what the docblock claims — it claims no two rows share a nonce under one
+   * KEK, and two replicas each counting from 1 collide on every row.
+   *
+   * **What a unit test can and cannot do here, stated rather than implied** (standing rule 44). It
+   * cannot establish unpredictability: entropy is a property of the generator, and the guarantee
+   * comes from `node:crypto`'s `randomBytes`, which is a CSPRNG seeded by the OS. What it *can* do
+   * is reject a **structured** generator, and that is what kills every counter shape: a counter
+   * leaves most byte positions constant for ever, wherever in the 12 bytes it is placed. So the
+   * census below asserts that **every byte position varies**, which no counter satisfies and which
+   * `randomBytes` satisfies with a false-failure probability under 12 × 256 × 256^-255.
+   *
+   * The third random value, the data key, is covered by the body: with a fixed DEK and a fixed body
+   * IV, two seals of one plaintext produce identical bodies.
    */
-  it('gives every seal its own nonces, so no two rows share one under the process key', () => {
+  it('gives every seal an unstructured nonce, so no counter or constant can pass for one', () => {
     const key = deriveSecretKey(KEY);
-    const census = 64;
-    const wrapIvs = new Set<string>();
-    const bodyIvs = new Set<string>();
-    const bodies = new Set<string>();
-    const field = (sealed: Buffer, name: 'wrapIv' | 'bodyIv'): string =>
-      sealed
-        .subarray(
-          SEALED_ENVELOPE_LAYOUT[name].offset,
-          SEALED_ENVELOPE_LAYOUT[name].offset + SEALED_ENVELOPE_LAYOUT[name].bytes,
-        )
-        .toString('hex');
-
-    for (let index = 0; index < census; index += 1) {
+    const census = 256;
+    const seals = Array.from({ length: census }, () =>
       // One plaintext and one row id throughout: everything that differs below is a nonce.
-      const sealed = sealSecret(key, 'glpat-FAKE-not-a-real-token', ROW);
-      wrapIvs.add(field(sealed, 'wrapIv'));
-      bodyIvs.add(field(sealed, 'bodyIv'));
-      const bodyStart =
-        SEALED_ENVELOPE_LAYOUT.bodyTag.offset + SEALED_ENVELOPE_LAYOUT.bodyTag.bytes;
-      bodies.add(sealed.subarray(bodyStart).toString('hex'));
+      sealSecret(key, 'glpat-FAKE-not-a-real-token', ROW),
+    );
+
+    const field = (sealed: Buffer, name: 'wrapIv' | 'bodyIv'): Buffer =>
+      sealed.subarray(
+        SEALED_ENVELOPE_LAYOUT[name].offset,
+        SEALED_ENVELOPE_LAYOUT[name].offset + SEALED_ENVELOPE_LAYOUT[name].bytes,
+      );
+
+    for (const name of ['wrapIv', 'bodyIv'] as const) {
+      const values = seals.map((sealed) => field(sealed, name));
+      // Distinctness: no nonce is reused inside this process.
+      expect(new Set(values.map((value) => value.toString('hex'))).size).toBe(census);
+      // Structure: a counter — at any offset, of any width — pins the positions it does not reach.
+      const constantPositions = [...Array(SEALED_ENVELOPE_LAYOUT[name].bytes).keys()].filter(
+        (position) => new Set(values.map((value) => value[position])).size === 1,
+      );
+      expect({ nonce: name, constantPositions }).toEqual({ nonce: name, constantPositions: [] });
     }
 
-    expect(wrapIvs.size).toBe(census);
-    expect(bodyIvs.size).toBe(census);
-    expect(bodies.size).toBe(census);
-    // And none of them is the all-zero buffer a `Buffer.alloc` would produce.
-    expect(wrapIvs.has('00'.repeat(SEALED_ENVELOPE_LAYOUT.wrapIv.bytes))).toBe(false);
-    expect(bodyIvs.has('00'.repeat(SEALED_ENVELOPE_LAYOUT.bodyIv.bytes))).toBe(false);
+    // And the bodies differ, which is the data key's own randomness: same plaintext, same row.
+    const bodyStart = SEALED_ENVELOPE_LAYOUT.bodyTag.offset + SEALED_ENVELOPE_LAYOUT.bodyTag.bytes;
+    expect(new Set(seals.map((sealed) => sealed.subarray(bodyStart).toString('hex'))).size).toBe(
+      census,
+    );
+  });
+
+  /**
+   * The procedure the module docblock promises, as a test rather than a paragraph (rule 30).
+   *
+   * Until round 3 this threw: the body's AAD was the wrapped data key, so a rewrapped row no longer
+   * authenticated and "rotating rewraps 32 bytes per row" was a documented procedure that did not
+   * work. The assertion that matters is the last one — the **body bytes are untouched**, which is
+   * the whole claim: the credential never exists in plaintext in a process that is rotating keys.
+   */
+  it('rotates the platform key by rewrapping the data key, without touching the credential', () => {
+    const oldKey = deriveSecretKey(KEY);
+    const newKey = deriveSecretKey(OTHER_KEY);
+    const sealed = sealSecret(oldKey, 'glpat-FAKE-not-a-real-token', ROW);
+
+    const rotated = rewrapSecret(oldKey, newKey, sealed, ROW);
+
+    expect(openSecret(newKey, rotated, ROW)).toBe('glpat-FAKE-not-a-real-token');
+    // The old key no longer opens it, which is what makes the rotation a rotation.
+    expect(() => openSecret(oldKey, rotated, ROW)).toThrow(SecretEnvelopeError);
+    // Still bound to its row.
+    expect(() => openSecret(newKey, rotated, OTHER_ROW)).toThrow(SecretEnvelopeError);
+    // The body — IV, tag and ciphertext — is copied through byte for byte.
+    const from = SEALED_ENVELOPE_LAYOUT.bodyIv.offset;
+    expect(rotated.subarray(from).equals(sealed.subarray(from))).toBe(true);
+  });
+
+  it('refuses to rotate a row that does not authenticate under the key it is leaving', () => {
+    const oldKey = deriveSecretKey(KEY);
+    const newKey = deriveSecretKey(OTHER_KEY);
+    const sealed = sealSecret(oldKey, 'glpat-FAKE-not-a-real-token', ROW);
+    expect(() => rewrapSecret(newKey, oldKey, sealed, ROW)).toThrow(
+      /does not authenticate for this row under the key it is being rotated from/,
+    );
+    expect(() => rewrapSecret(oldKey, newKey, sealed, OTHER_ROW)).toThrow(SecretEnvelopeError);
   });
 
   it('refuses a row shorter than the header instead of reading past the end', () => {

@@ -20,6 +20,7 @@
 
 // Event dispatch (TD-005)
 export * from './errors.js';
+export * from './events/consumption.js';
 export * from './events/event-bus.js';
 export * from './events/handler.js';
 export * from './events/outbox.js';

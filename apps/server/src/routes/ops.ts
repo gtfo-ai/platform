@@ -11,8 +11,15 @@
  *   view of the event loop and heap.
  * - **`/readyz` is readiness.** "This process can serve traffic now." It checks the database, that
  *   the schema is the one this build knows about, and — where the process runs workers — that the
- *   job runtime started. It answers 503 the moment shutdown begins, which is what takes the
- *   instance out of a load balancer *before* connections are closed (TD-002's shutdown order).
+ *   job runtime started **and that the event bus has a handler to dispatch to**. It answers 503 the
+ *   moment shutdown begins, which is what takes the instance out of a load balancer *before*
+ *   connections are closed (TD-002's shutdown order).
+ *
+ *   The fourth check is TD-023's amendment at WP-15a, and it has a consequence worth knowing here:
+ *   `ROLE=all` and `ROLE=worker` are **503 for ever** until something composes a pipeline, which is
+ *   the state `main.ts` is in today. That is intended — a process that would never advance a ticket
+ *   must not report ready — but `ROLE=all` also serves the API and the SPA, so nothing may gate on
+ *   this probe to decide whether *those* are usable. `/healthz` is the liveness probe.
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { healthResponseSchema, versionResponseSchema } from '@platform/contracts';
@@ -110,7 +117,7 @@ export const registerOpsRoutes = async (
       schema: {
         summary: 'Readiness probe',
         description:
-          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started. 503 as soon as shutdown begins.',
+          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to. 503 as soon as shutdown begins.',
         tags: ['ops'],
         response: { 200: healthResponseSchema, 503: healthResponseSchema },
       },

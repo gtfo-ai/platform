@@ -7,7 +7,7 @@
 - **Clean architecture** with four rings: `domain` (aggregates, value objects, domain events, state machines — no I/O), `application` (use cases, event handlers, policies, sagas — depends on domain and on ports), `infrastructure` (adapters: Postgres, workflow engine, SDK runner, integration providers, search), `interfaces` (HTTP API, SSE/WebSocket, webhooks, CLI).
 - **Everything is an event.** Every state change is recorded as an immutable domain event in an append-only log (BD-003) and dispatched to handlers. Handlers are registered with a **priority** (lower runs first) and are **idempotent** (keyed by the event's `position`, its physical order in the log — see `handler_executions` in technical/03; `events.id` is the stable public identity used in APIs and `cause_event_id`, not the dispatch key). A handler may emit further events (chaining) and may *not* mutate state outside its own aggregate except through commands.
 - **Commands vs events.** Interfaces and handlers issue commands (`StartRun`, `AnswerQuestion`); aggregates validate and emit events (`run.started`, `question.answered`). Events are past tense, commands imperative.
-- **Transactional outbox.** Aggregate state and its events are written in one transaction; a dispatcher publishes from the outbox (at-least-once), so consumers must be idempotent (TD in 03/04).
+- **Transactional outbox.** Aggregate state and its events are written in one transaction; a dispatcher publishes from the outbox (at-least-once), so consumers must be idempotent (TD in 03/04). The queue holds **one row per event for the whole deployment**, so completing a dispatch discharges every handler in it: a process may only sweep if it registers a handler for every type the catalogue below marks as consumed (TD-005's WP-15a amendment).
 
 ## Aggregates and entities
 
@@ -62,6 +62,14 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 Naming: `<aggregate>.<past-tense>`; payload always includes `task_id` when task-scoped and `project_id`. `actor` lives in the **event envelope**, not in each payload (implemented that way in WP-01, matching `events.actor` in technical/03); the `actor` column in the catalogue below therefore describes the envelope value for that event, not a payload field. Priorities: 0–99 platform core, 100–199 integrations, 200–299 notifications/UI, 300+ custom project handlers.
 
 > **`run.created` (added at WP-02).** The catalogue originally started the Run's history at `run.started`, leaving the `created→starting` transition silent and the run's existence unreplayable — which contradicts this document's own rule that every state change is recorded as an immutable domain event. Question `expired→escalated` and question reminders remain deliberately event-free: the former is recorded by `task.escalated`, the latter changes no aggregate state worth replaying.
+
+**The "Core consumers" column is normative, not illustrative** (TD-005's WP-15a amendment). An entry
+naming any consumer declares the event **consumed**: a process that sweeps the outbox must register a
+handler for it, or it destroys a work item belonging to another process in the deployment. An entry of
+**`—` declares the event unconsumed** — nothing is expected to handle it, and a sweeper needs no handler
+for it. `packages/application/src/events/consumption.ts` is that column as code, its keys held to
+`DOMAIN_EVENT_TYPES` so a new event type cannot be added without answering the question; where the
+declaration and this column differ, the entry names the work package that closes the gap.
 
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|

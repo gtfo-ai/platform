@@ -34,6 +34,7 @@
  * scope — inherit the dispatcher's slot. Emit, never dispatch.
  */
 import type { Logger } from '@platform/application';
+import { sweepReadiness } from '@platform/application';
 import {
   db as dbAdapters,
   eventing as eventingAdapters,
@@ -207,29 +208,31 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       }
 
       /**
-       * **A dispatcher with no handlers is a queue with a shredder on the end**, so it is not
-       * started (standing rule 20, inbound half).
+       * **A process that sweeps must be a complete consumer** (TD-005's WP-15a amendment).
        *
        * `EventBus.dispatch` treats "no handler matched" as a completed dispatch: it calls
        * `dispatchQueue.complete(position)`, which **deletes** the `event_dispatch` row, and writes
-       * the `$dispatch` marker into `handler_executions` — which makes a later re-dispatch a
-       * deliberate no-op. So an instance with nothing registered does not ignore a `ticket.matched`,
-       * it **consumes** it, unreplayably, and the ticket is lost to a process that was never able to
-       * act on it. Being told something you cannot handle yet is not licence to forget it.
+       * the `$dispatch` marker that makes a later re-dispatch a deliberate no-op. That is correct at
+       * the dispatch site and unchanged — leaving the event queued would make `hasEarlierPending`
+       * block every later event of the same stream. What is not correct is this process *sweeping*
+       * when it cannot handle what it takes: the queue holds one row per event for the **whole
+       * deployment**, so completing a dispatch discharges every handler in it, and a partial
+       * consumer destroys another process's work item exactly as an empty one does.
        *
-       * Not draining leaves the row in `event_dispatch` with `attempts = 0` for an instance that
-       * *can* handle it — the outbox **is** the queue, and the cost of the choice is stated rather
-       * than hidden: the queue grows, `countPendingDispatch` is already the Prometheus gauge that
-       * shows it, and `/readyz` is `down` for the same reason (`readiness.ts`).
+       * Round 2 asked that question with `registry.size === 0`, which is standing rule 56: the false
+       * branch of a whole-registry predicate does not enumerate what a per-type question needs. The
+       * arbiter is now `sweepReadiness`, over the types `EVENT_CONSUMPTION` declares consumed — and
+       * it is the **same** call `/readyz` makes below, because two readings of one condition drift
+       * (rule 41).
        *
-       * The condition is **"the bus has no handlers"** and not "the pipeline is absent", because
-       * that is the actual invariant: a later work package that registers a projection without a
-       * pipeline should sweep, and one that registers nothing should not.
+       * The cost of not sweeping is stated rather than hidden: the queue grows,
+       * `event_dispatch_pending` is the gauge that shows it, and `/readyz` is `down`.
        */
-      if (eventing.bus.registry.size === 0) {
+      const sweep = sweepReadiness(eventing.bus.registry);
+      if (!sweep.ready) {
         logger.warn(
-          { pending_dispatch_grows: true },
-          'no event handler is registered: the outbox sweep is not started, so events stay queued rather than being consumed by a process that cannot act on them',
+          { missing_handlers: sweep.missing },
+          'this process cannot handle every event the platform declares consumed, so the outbox sweep is not started: sweeping would complete those events for the whole deployment',
         );
       } else {
         await eventing.worker.start();
@@ -273,10 +276,12 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       readiness: createReadinessCheck({
         database: database.db,
         jobsStarted: capabilities.worker ? () => jobsStarted : null,
-        // A worker whose bus has no handlers will never advance anything, and an operator's health
-        // check must not call that ready (WP-15a review). `null` for `ROLE=api`, which legitimately
-        // runs no dispatcher at all.
-        dispatchReady: capabilities.worker ? () => eventing.bus.registry.size > 0 : null,
+        // The same predicate the sweep gate uses, deliberately (rule 41): a process that refused to
+        // start the sweep must not report ready to do the work it refused. `null` for `ROLE=api`,
+        // which legitimately runs no dispatcher at all.
+        dispatchReady: capabilities.worker
+          ? () => sweepReadiness(eventing.bus.registry).ready
+          : null,
       }),
       isShuttingDown: () => shuttingDown,
     });

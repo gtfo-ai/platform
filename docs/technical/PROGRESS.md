@@ -2518,9 +2518,10 @@ left all 19 envelope tests green — the ciphertexts still differed, because the
 "is different every time" said nothing about the IVs. The wrap IV is the sharp one: it sits under one
 process-wide KEK, so a constant there is GCM nonce reuse across **every row in the table**, and AES-GCM
 loses *authenticity* as well as confidentiality under it. A 64-seal census over the exported field offsets
-now pins all three random values, and each of the two mutations kills `envelope.test.ts` › *"gives every
-seal its own nonces, so no two rows share one under the process key"* and nothing else. Rule 33's shape
-away from `scripts/`: the place a mutation survives is the place the next change breaks.
+now pins all three random values, and each of the two mutations kills the one test written for it and
+nothing else. Rule 33's shape away from `scripts/`: the place a mutation survives is the place the next
+change breaks. *(Round 3 replaced that census — it admitted a counter — and renamed the test; the name
+this paragraph originally cited no longer exists, which is why it is described rather than cited.)*
 
 **3. The uncomposed production state was worse than "nothing runs", and that is now the part of this work
 package I would keep if I kept one thing.** `main.ts` and `scripts/dev.mjs` call `startRuntime()` with no
@@ -2532,11 +2533,20 @@ report:
   row and a `$dispatch` marker goes into `handler_executions`, which makes a later re-dispatch a
   deliberate no-op. The event was consumed and unreplayable by a process that was never able to act on
   it. Rule 20's inbound half: *being told something you cannot handle is not licence to forget it.* The
-  outbox sweep is no longer started when the bus has **no handlers** — that condition and not "the
-  pipeline is absent", because the invariant is about handlers and a later projection should still sweep.
-  The event stays queued with `attempts = 0` for an instance that can act on it. The cost is stated
-  rather than hidden: the queue grows, `event_dispatch_pending` is the gauge that shows it, and `/readyz`
-  is down for the same reason.
+  outbox sweep is no longer started when the bus has **no handlers**. The event stays queued with
+  `attempts = 0` for an instance that can act on it. The cost is stated rather than hidden: the queue
+  grows, `event_dispatch_pending` is the gauge that shows it, and `/readyz` is down for the same reason.
+
+  > **Round 3 corrected this, and the correction is the interesting part.** The clause that used to
+  > follow — "that condition and not *the pipeline is absent*, because a later projection should still
+  > sweep" — was **wrong**, and it was wrong in the direction the fix was meant to close. Measured at
+  > the bus by the round-2 reviewer: a registry holding **one handler for an unrelated type** dispatches
+  > a non-matching event to `status: 'dispatched'`, because `handlersFor(type)` returns `[]` and the
+  > code completes. So the projection-only instance this sentence blessed would eat a `ticket.matched`
+  > exactly as an empty one did, *and* `/readyz` would read `ok`, taking the second signal with it. It
+  > is rule 9's **over-discharge** direction: two paths each correctly saying "nothing to do here".
+  > The architect ruled that *a process that sweeps must be a complete consumer*, and the sentence is
+  > gone rather than qualified — see round 3's notes.
 - **`/readyz` was green.** Database, migrations and queue were all `ok`. TD-023's three checks did not
   cover the state the build is in, so there is a fourth, `dispatch`, and it is **required** on
   `ReadinessOptions` rather than optional — six existing call sites had to state it, which is the point
@@ -2575,6 +2585,71 @@ the ticket — but the status mapping is a handler in TD-005's *integrations* ba
 core transition. One transaction's effect asserted against another's timing: it failed 1 run in 3. The
 harness grew `waitFor`, which waits on the consequence instead of on the state, and the docblock says why
 the two are different. Three consecutive runs of the file are green.
+
+### WP-15a — review round 3: the arbiter moved from the dispatch site to composition
+
+Round 2's fix was right about the harm and wrong about the predicate, and the reviewer's measurement is
+the whole finding: a registry holding **one handler for an unrelated type** dispatches a non-matching
+event to `status: 'dispatched'` — `handlersFor(type)` returns `[]` and the code completes. So
+`registry.size === 0` closed the empty case and left the *partial* case open, and my docblock had
+blessed exactly that ("a later projection should still sweep"). Rule 9's **over-discharge** direction,
+and rule 56: the false branch of a whole-registry predicate does not enumerate a per-type question.
+
+**The architect ruled, and the dispatch site does not change.** Completing an unmatched event is
+correct: leaving it queued makes `hasEarlierPending` block every later event of the same stream, so one
+never-handled type would permanently halt each aggregate that emits it, and the queue could not tell
+`knowledge.index.rebuilt` (catalogue consumer `—`) from a missing pipeline. Completing is safe because
+`events` is append-only and the application holds no `DELETE` on it: only the **work item** dies, and a
+handler added later is served by a backfill from the log. What changes is **who may sweep**:
+`event_dispatch` has one row per event for the whole deployment, so a partial consumer destroys another
+process's work item exactly as an empty one does. `packages/application/src/events/consumption.ts`
+declares each catalogue type `handled` or `unconsumed`, and `sweepReadiness` is **one predicate called
+by both gates** — the outbox-worker start and `/readyz`'s `dispatch` check (rule 41).
+
+**Where I deviated from the ruling, with the measurement, because the ruling invited it.** The ruling
+says the table is sourced from technical/02's "Core consumers" column. Read literally that column marks
+**49 of 50** types consumed — it describes the finished product's consumers, including the Slack band,
+the UI band and the cost ledger. Measured, a composed `apps/server` registers handlers for **21**. A
+table transcribed from the column would stop the outbox worker in *every* build that exists, including
+the one whose e2e walks a ticket to `task.completed` — this work package's own acceptance criterion. So
+the table records **what this build consumes**, and every `unconsumed` row names the work package that
+flips it. Every property the ruling protects survives: a sweeper must be complete for everything
+declared consumed, a missing handler fails a named test, and a new event type cannot be added without
+answering the question. What it does not do is declare consumers that do not exist.
+
+**The entry worth reading is `run.finished`/`run.failed`**: technical/02 gives them a cost ledger at
+priority 10, WP-19 builds it, and nothing registers it — so a `run.finished` swept today is a cost
+entry that will never be written. Declared rather than silent, and it is why the backlog carries the
+backfill tool as something WP-19 needs *before* it ships.
+
+**The guarantee, mutation-checked.** Adding a 51st member to the catalogue union without touching the
+table kills `packages/application/src/events/consumption.test.ts` › "answers for every catalogue event type, and for no type that is not one", naming `task.mutant_added`. Repointing one pipeline handler from `default_branch.moved` to an
+unconsumed type makes `sweepReadiness` answer `{ready: false, missing: ['default_branch.moved']}`. The
+refusal is parameterised over the declared set, so each `handled` type has its own case.
+
+**Also in this round, from round 2's four smaller items.**
+
+- **The nonce census admitted a counter** (rule 43). A per-process `writeUInt32BE` counter produced 64
+  distinct values and passed all 13 tests; distinctness *within one process* is not what the docblock
+  claims, and two replicas each counting from 1 collide on every row. A unit test cannot establish
+  unpredictability — that is a property of `randomBytes`, and the docblock now says so — but it can
+  reject a **structured** generator: 256 seals, and **every byte position must vary**. Three counter
+  shapes die, including a hybrid of 4 random bytes and an 8-byte counter, and the failure names the
+  constant positions.
+- **"Rotating rewraps 32 bytes per row" was false**, and the measurement that mattered came first:
+  replacing the body's AAD with a constant left **all 13 tests green, including the splice case**, so
+  the body↔key binding the docblock credited with refusing a splice was refusing nothing — the per-row
+  **random data key** is what refuses it. That made the fix cheap: both layers now take
+  `version ‖ secrets.id`, which is stable across a rewrap, and `rewrapSecret` is a **function with a
+  test** rather than a sentence (rule 30). The test asserts the body bytes are copied through
+  identically, which is the actual claim: the credential never materialises in a rotating process.
+- **TD-023 is amended** with the fourth readiness check, and it carries the consequence that was
+  written down nowhere: `ROLE=all`/`worker` are 503 until a pipeline is composed, `ROLE=all` also
+  serves the API and the SPA, so **WP-22 must not gate `depends_on` on `/readyz`** and no reverse
+  proxy may use it as an upstream health check. `routes/ops.ts` and the OpenAPI description point at it.
+- **`toContain('ready_for_merge')` was satisfied by the workpad checklist**, which names every stage of
+  the template from the first render — so it would have passed on a task that never reached the state
+  (rule 10). It asserts the header line now, which is the only part that reports where the task is.
 
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 

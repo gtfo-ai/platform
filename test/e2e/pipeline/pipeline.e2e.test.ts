@@ -125,8 +125,13 @@ describe('a feature ticket, end to end', () => {
     const ticket = pipeline.tickets.peek('ACME-1');
     // BD-023: one sticky comment, however many times the task moved.
     expect(ticket?.comments).toHaveLength(1);
-    expect(ticket?.comments[0]?.body).toContain('ACME-1');
-    expect(ticket?.comments[0]?.body).toContain('ready_for_merge');
+    // The **first line**, not `toContain`. The render's checklist names every stage of the template
+    // from the first pass, so `toContain('ready_for_merge')` was satisfied by the checklist and
+    // would have passed on a task that never reached the state (standing rule 10). The header is
+    // the only part of the body that reports where the task actually is.
+    expect(ticket?.comments[0]?.body.split('\n')[0]).toBe(
+      '**ACME-1** — ready_for_merge (ready_for_merge)',
+    );
     // The last mapped state the task passed through.
     expect(ticket?.status).toBe('In Review');
   });
