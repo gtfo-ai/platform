@@ -4,12 +4,12 @@
 
 ## Resume note
 
-> **Session 4, in progress — 2026-09-11.** Read this, then the **"Open findings backlog"**, then "Standing
-> rules earned by evidence" — **seventy-nine rules**, each with its evidence, each paid for with a review
+> **Session 4, in progress — 2026-09-11/12.** Read this, then the **"Open findings backlog"**, then
+> "Standing rules earned by evidence" — **seventy-nine rules**, each with its evidence, each paid for with a review
 > round. Then continue the loop in `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Twenty-seven work packages are DONE and pushed.** `main` is at **`8ae121c`** (WP-15d), green on all six
-targets in the orchestrator's own shell and **green on GitHub** (`34641716949`, every job). No worktrees, no
+**Twenty-eight work packages are DONE and pushed.** `main` is at **`38ea686`** (WP-15c), green on all six
+targets in the orchestrator's own shell and **green on GitHub** (`34651811392`, every job). No worktrees, no
 open branches, clean tree.
 
 **What the platform can do.** A feature ticket and a bug ticket reach `task.completed` through an
@@ -19,19 +19,23 @@ that `startRuntime()` composes with no caller able to supply one — and, since 
 made while a database transaction is open**, refused mechanically rather than by review habit. Retrieval
 over a knowledge vault and a code map exists, budgeted and measured.
 
-**What it still cannot do, unchanged and still the headline.** *Production does not start a ticket.* There
-is **no webhook ingress** (`apps/server/src/routes/` has none), so nothing emits `ticket.matched` outside a
-test; and **no prompt uses the retrieval layer** — `basicStageRunPlanner` still passes `contextPack: []`.
-**WP-15c** and **WP-17** are those two sentences, and "M1 complete" is not the sentence to write until both
-land.
+**Production starts a ticket now.** That sentence could not be written from WP-15a until WP-15c, and it is
+held by a named test rather than by a claim: `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded
+and drives it to task.completed"*. A signed provider delivery to a running `apps/server` instance appends
+`ticket.matched` and the task reaches `task.completed`, with **no seeded row**.
 
-**Next, in order:** (1) **WP-15c** — webhook ingress and the `inbox`; it changes the headline, and WP-15d
-just added a criterion to its row (backlog **20**: a matched ticket with no task row must be **re-emitted**,
-which the `inbox` dedup on the same row does not do, because dedup is about a *delivery* and recovery is
-about a *task*). (2) **WP-17**, which unblocks WP-18 and WP-21 and owns the **prompt-delimiter contract**
-for untrusted pack text (BD-022) — and whose live-model half is **externally blocked**, see below. (3)
-WP-18, WP-19, WP-21, WP-22, WP-23. (4) M2 (WP-24–33). Backlog entries 8–21 hold everything else, each with
-the measurement that earned it.
+**What it still cannot do, and it is now one sentence rather than two.** *No prompt uses the retrieval
+layer* — `basicStageRunPlanner` still passes `contextPack: []`, nothing composes a production
+`PlatformToolPort`, and there is no delimiter contract for untrusted pack text. **WP-17** is that sentence.
+"M1 complete" is not the thing to write until it lands, and the honest statement in between is that the loop
+runs end to end on a ticket a human filed, with an empty context pack.
+
+**Next, in order:** (1) **WP-17** — role prompts, artifact schemas, eval sets; it unblocks WP-18 and WP-21
+and owns the **prompt-delimiter contract** for untrusted pack text (BD-022), which must land **in or before**
+the change that first passes a non-empty `contextPack` (backlog 11, 12). Its live-model half is externally
+blocked; see below. (2) WP-18 (which also registers `KnowledgeIndexer`, now unblocked because WP-15c's
+ingress exists), WP-19, WP-21, WP-22, WP-23. (3) M2 (WP-24–33). Backlog entries 8–22 hold everything else,
+each with the measurement that earned it.
 
 **WP-17's eval half has no credential, checked at session start rather than discovered at implementation
 time.** `gh secret list` is empty, the repository has **no environments at all** — so no `llm-ci`, which
@@ -42,7 +46,7 @@ what a human must provide, not a work package that quietly stubs its own accepta
 of WP-17 (the delimiter contract, the real `contextPack`, a production `PlatformToolPort`) does not depend on
 it and should proceed.
 
-**What WP-15d cost, because it is the pattern to expect.** It closed backlog **17** and opened **18**, **19**,
+**What a work package costs here, because it is the pattern to expect.** WP-15d closed backlog **17** and opened **18**, **19**,
 **20** and **21** — one of which (18, whole-row `tasks.save` lost updates, `cost_actual` **2.40** where 2.80
 was owed) is a silent data-corruption class that the move *created* and that only an assertion summing seven
 runs could see. Rule **79** is that lesson. A fix that moves a writer changes the premise of every other
@@ -124,6 +128,18 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    Fourth spelling of rule 21 (`--reporter=basic` twice, rule 62's collection error, now this): *a mutation
    result is a measurement, and an uncalibrated instrument reads whatever you were hoping for* — this one
    reads whatever makes you look thorough.
+
+   **Refined at WP-15c, and the refinement is what makes the rule usable rather than frightening: it is the
+   *out-of-band* write that reverts, and the Edit tool's own writes persist.** WP-15c's implementer reported
+   two files it could not repair at all — `apps/server/src/config.ts` and
+   `packages/application/src/pipeline/runtime.ts`, four mechanisms tried, writes accepted and restored to
+   HEAD within about three seconds, one file's mode reset `644` → `600` — and left a stale pool-arithmetic
+   claim behind it. The orchestrator then fixed `runtime.ts` **with the Edit tool, first attempt, and it
+   held**. So the workaround is not "wait for the lock to lift": it is *use the harness's own editor for the
+   repair and a copy for the mutation*. The cost of not knowing this was a shipped docblock that contradicted
+   the constant three lines away — and the reviewer found **two more** stale restatements after the merge,
+   which is backlog **22**. A file that appears unwritable is a claim about the *tool you used*, not about
+   the file.
 
 76. **A flake's *rate* can be the only random thing about it — the defect underneath may be fully
    deterministic, and then "it passes four times in five" is the most misleading evidence you have.**
@@ -1461,6 +1477,142 @@ nobody can explain later.
 not intend and cannot see in its own output — twice in one work package, in two files, where a space
 was meant. The check existed; its *scope* was the hole.
 
+### 22. **The pool floor is one computed constant and seven hand-written restatements of it — two of them stale on `main` at `38ea686`** (TODO, small — the class behind three repairs in one day)
+**What is wrong.** `requiredPoolConnections` computes the floor from `POOL_RESERVATIONS`
+(`apps/server/src/config.ts:236-305`) and **seven** other places state the same arithmetic by hand,
+in three media — a runtime string, six comments, and one *second default value* for the same knob in
+another ring. None of them is read by the compiler or by a test as a claim. Three were repaired
+during WP-15c (`runtime.ts` by the orchestrator, `config.ts` and `.env.example` by the implementer in
+the pre-merge round) and **two others were not**, including one in the file everybody named as the
+place the value lives.
+
+**Evidence.** The reviewer named the class, verbatim:
+
+> `apps/server/src/pipeline.ts` composing `pipeline.intake.reconcile` rather than
+> `createPipelineRuntime` was a choice made under the file lock. It is defensible beside
+> `registerPartitionMaintenance`, but it is why the pool term now has to be maintained across three
+> files (`runtime.ts`, `config.ts`, `.env.example`) — which is exactly what finding 2 is a symptom
+> of. A single derived constant would remove the class.
+
+and the symptom it refers to, from the same review:
+
+> Stale pool arithmetic, two places. `apps/server/src/config.ts:230` still reads *"the shape is
+> `2N + 9` … (17 against 20 at N=4)"* and *"WP-15b's arithmetic reached 11 too"* three lines below
+> its own corrected sum of **12**. `.env.example:176` still reads *"the pipeline's **three** job
+> workers (+3: stage.execute, mr.comment.debounce, pipeline.outbound)"* and repeats *"(17 rather
+> than 20 at N=4)"*. Measured at `pipeline: 4`: `2×4+1+2+4+2+1 = 18`, shape `2N + 10`. The numbers
+> `config.test.ts` asserts (12, `APP_DB_POOL_MAX=14`) are right; only the prose is wrong — rule 63's
+> own class, and the remainder of the locked-file incident.
+
+**The two sites still wrong at `38ea686`, read off the tree while filing** (rule 66: read, not run):
+- `apps/server/src/config.test.ts:134` — *"the pipeline's three job workers, HTTP and maintenance"*,
+  inside the very test whose assertion is the number the review pointed at as correct. The assertion
+  is symbolic (`POOL_RESERVATIONS.pipeline`, `:138`) and is therefore right; only its comment is
+  wrong. Three repairs and the fourth site is in the source of truth.
+- `packages/infrastructure/src/db/config.ts:85-93` — the docblock on the shipped default says *"that
+  floor rose to **11** for `ROLE=all`"* and *"13 keeps the two connections of slack the previous
+  default carried over its floor of 8"*. The floor is **12**, so the value it ships (`poolMax: 13`,
+  `:94`) carries **one** connection of slack, not the two its own sentence claims. This is the class
+  in a **value** rather than in prose, and it has a second half: **the two shipped defaults for the
+  same knob differ** — 13 in code, `APP_DB_POOL_MAX=14` in `.env.example:192` — and **nothing holds
+  the second**. `apps/server/src/config.test.ts:180-184` › *"accepts the documented default pool for
+  the default concurrency"* comments *".env.example ships APP_DB_POOL_MAX=14"* but calls `load()`,
+  which goes through `db.loadDatabaseConfig` (`config.ts:373`) and therefore exercises the **code**
+  default 13. No test in the repository parses `.env.example` (`git grep` over `*.ts`/`*.mjs`: four
+  files mention it, none reads it).
+
+**The seven sites, with their medium** — because "a single derived constant" means a different thing
+at each, and that is the first thing a future implementer needs:
+1. `apps/server/src/config.ts:226-234` — docblock: the sum (**12**), the shape (**`2N + 10`**) and
+   the history (`3N + 8`, `2N + 9`). Its own opening asks a reader not to *"reassemble it from four
+   docblocks"*. Comment: checkable, never derivable.
+2. `apps/server/src/config.ts:244-266` — `POOL_RESERVATIONS.pipeline`'s docblock, naming the four
+   workers and why the fourth is counted unconditionally. Comment.
+3. `apps/server/src/config.ts:314` — `UndersizedPoolError`'s **message**: *"the pipeline's four job
+   workers"*. A runtime string that already interpolates `${required}`. **The one site that is
+   genuinely derivable**: the word "four" sits beside a `POOL_RESERVATIONS.pipeline` it could read.
+4. `.env.example:175-191` — comment, read by an operator **before the program exists**, so it can be
+   checked but never computed at read time.
+5. `packages/application/src/pipeline/runtime.ts:9-43` — docblock, and the site that **cannot** be
+   derived even in principle: `biome.json`'s application override allows only `@platform/domain` and
+   `@platform/contracts`, so no file in that ring may read `POOL_RESERVATIONS`. Its docblock now says
+   exactly that and cites rule 63 — which is the right answer for that site, and is itself one more
+   sentence to keep true.
+6. `packages/infrastructure/src/db/config.ts:85-94` — docblock **and value**, same ring problem:
+   `infrastructure` may import `application` and `prompts`, not `apps/*`.
+7. `apps/server/src/config.test.ts:134` — comment.
+
+**What it costs to leave.** Not a production defect at `38ea686`: the program computes 12, the test
+asserts 12, and both shipped defaults (13 and 14) are above it, so every documented configuration
+starts. What it costs is **a reader who believes a number** — an operator sizes a pool from
+`.env.example`, an implementer changing a worker count reads whichever docblock is nearest, and two
+of the seven currently say something false. It is standing rule **63**'s third instance in one day
+(WP-15d's four places, then `runtime.ts`, then `config.ts` + `.env.example`); each of the first three
+was caught by a reviewer going to look, and these two were not caught at all.
+
+**What would make it urgent.** `APP_DISPATCH_MAX_CONCURRENCY=2` puts the floor at **14**, at which
+the **code** default 13 refuses to boot while the **documented** default 14 starts — so an operator
+who raised concurrency by one without copying `.env.example` meets `UndersizedPoolError` where the
+documentation says they would not. It fails **closed**, with a message naming the fix, which is why
+this is hygiene and not an incident.
+
+**What done looks like — three mechanisms, one per medium, because only one site can be "derived".**
+- **Derive the one that can be.** `UndersizedPoolError`'s message interpolates
+  `POOL_RESERVATIONS.pipeline` instead of spelling *"four"*. One line, and it becomes incapable of
+  going stale.
+- **Stop restating in the ones that cannot be.** This is the bulk of it and it is rule 63's own
+  remedy: a prose site that *repeats* the arithmetic can go stale, a prose site that *points at* the
+  one place that states it cannot. `config.ts:226-234` is already that place; sites 2, 5, 6 and 7
+  keep their local reason and drop the numbers. That also reaches the two stale sites without
+  anybody having to notice they are stale.
+- **Check the two numbers that must exist outside the sources.** `.env.example`'s
+  `APP_DB_POOL_MAX=14` and `db/config.ts`'s `poolMax: 13` are values, not prose, and the honest
+  criterion is that **each is asserted to be ≥ `requiredPoolConnections` at the shipped defaults,
+  and their relationship is stated once** — one of them is the documented default and the other is
+  what a process gets without a `.env`, and today nothing says which is intended. A test that parses
+  `APP_DB_POOL_MAX` out of `.env.example` closes the half no test covers. Assert at **two** values
+  of N, not one: `3N + 8`, `2N + 9` and `2N + 10` agree or nearly agree at N=1 (11, 11, 12) and
+  separate at N=4 (20, 17, 18), which is exactly how a stale shape survives a one-point check.
+
+**Explicitly *not* recommended: a general prose-arithmetic guard.** A `scripts/citations.ts`-style
+parser over every arithmetic claim is the obvious-looking answer and should not be taken on this
+evidence: citations.ts earned its parser from a false citation that *read as evidence*, it found two
+defects in itself at WP-14 round 3, and backlog entry **3** is still open on the oracle sharing a
+shape with the parser it audits. Seven sites in five files do not justify a second parser. The
+trigger that would change that: the same claim going stale **again** after the sites are
+deduplicated — deduplication failing is what would make a parser the next move rather than the first.
+
+**The composition choice is not the cause, and this entry says so to keep it from being reopened.**
+The review flagged `pipeline.intake.reconcile` being composed by `apps/server/src/pipeline.ts` rather
+than by `createPipelineRuntime` as *"why the pool term now has to be maintained across three files"*.
+Read against the tree that is an aggravator, not the cause: `POOL_RESERVATIONS` lives in `apps/server`
+and always has, and it is the **dependency rule** — not the composition — that stops `runtime.ts`
+(and `db/config.ts`) stating the process's term. Moving the worker into `createPipelineRuntime` would
+let `runtime.ts` say *"one per worker I start"* completely and would remove **one** of the seven
+sites, leaving six. Worth re-deciding on its own merits — it sits beside `registerPartitionMaintenance`
+and is defensible there, and WP-15c's notes ask for it to be re-decided deliberately — but not worth
+doing *for this*.
+
+**Not an open question.** No product decision is involved: three small edits, one test, and the media
+are a fact of the tree rather than a choice. Filing it in `OPEN-QUESTIONS.md` would ask the founder
+where a comment should live.
+
+**Needs measurement**: none. Every claim here — the seven sites, the two stale ones, the two
+divergent defaults, the ring boundaries and the absence of a test that reads `.env.example` — is read
+off the tree at `38ea686`. Nothing in it needs a test run.
+
+**Depends on.** Nothing. **Owner: none today** — no plan row mentions the pool arithmetic, and
+WP-15c, which added the fourth worker, is merged. Two known future changes touch it and each should
+honour this rather than add an eighth site: entry **19**, whose "what done looks like" ends *"Worth
+one line beside the floor's arithmetic saying that the port takes a transaction so that the 'holds'
+claim is also true of borrows (rule 63)"* — that line is an eighth prose site unless it lands after
+the deduplication; and **WP-22**, which owns `.env.example` and the compose file and is the first
+work package to ship a default an operator actually runs. Related: entry **19** is the *same
+arithmetic and a different defect* — what the number **counts** (a transient borrow that is not
+reserved), not how many places restate it, so neither entry covers the other; and WP-15e's acceptance
+criterion already carries rule 63's *"with the count stated in the change rather than left to a
+reader to recount"*.
+
 ### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
 **What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
 `createEventing` throw **`EventBus is not a constructor`** — `packages/infrastructure/src/events/index.ts:82`
@@ -1547,7 +1699,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
 | WP-15b | **Postgres `IntegrationAuditLog` + `IdempotencyStore` + migration 0013** | WP-15a | no | DONE | `31abfc6` | 1 review round. `startRuntime()` composes a real audit log with **no caller able to supply one** (the field is gone from `PipelineComposition`); the composed-log→no-op mutation fails the e2e with `expected 0 to be greater than 0`, so the dependency is **used**, not merely supplied (rule 35). `redaction_count` asserted in **both** directions (rule 42); counters `not null` with the **default dropped**, so an omitted one errors rather than recording a zero (rule 18). **FK on `integration_actions` dropped** — a log of external facts must not be gated on internal referential state; deferral cannot help because the audit transaction commits **before** the saga's. Zero readers today, so technical/03 carries the `LEFT JOIN` sentence the first one will need. Pool floor recomputed: only the audit connection is concurrency-proportional (both job workers call providers *outside* their transactions), poolMax 10 → 13, and the test asserts the **shape** (+6 for N 1→3) so a flat reservation fails. Round 1 found the idempotency invariant asserted by **nothing** on Postgres while the fake *was* held to it — rule 1 inverted. |
 | WP-15d | **Move the provider calls out of the handlers' transactions** — the shape under both of WP-15b's symptoms | WP-15b | no | DONE | `8ae121c` | 1 review round (APPROVE) + a pre-merge round for three false claims. **Backlog 17, closed.** The three sites now *decide* in the handler and *call* from a `pipeline.outbound` job enqueued through `afterCommit`; the refusal is a runtime fact — `events/open-transaction.ts` marks the handler path in `EventBus` and the job path in `createPipelineRuntime`, and `integrations.ts` refuses **both** to resolve a project's bindings and to make the call while a scope is open, so the next handler to try it fails a named test rather than a production pool. Deleting any one of the three refusals kills **exactly one** named test with the other two green — re-derived by the reviewer on copies, calibrated 3/3 unmutated (rules 21, 41). Door completeness checked over the **set**: all 7 direct `.port.*` calls in the repository sit inside the guarded `read`/`mutate` (rule 68). **The hypothesis is now a measurement**, at the shipped defaults and without generating load (rules 39, 64): N=10 concurrent intakes at 250 ms per git read delayed an unrelated event by **5 464 ms** before and **63 ms** after (load 4.1/6.0), and a read held open indefinitely stopped every other project's dispatch entirely before (20 s budget exhausted) and does not now — at `APP_DISPATCH_MAX_CONCURRENCY=1` the single dispatch slot was sitting inside `pipeline.intake` waiting on HTTP. Residual stated: the outbound worker is serial, so provider *throughput* is unchanged; what moved is that it no longer happens inside the dispatcher. `auditPerDispatch` is **0** — the receipt. The floor was **recomputed, not reverted**: `2×1+1+2+3+2+1 = 11`, the same number WP-15b reached by a different route (`2N+9` against `3N+8` — they agree at N=1 and diverge above it, 17 against 20 at N=4), so `APP_DB_POOL_MAX` stays **13** with two of slack; my instruction to revert it to 10 was refused with the arithmetic, correctly (rule 27, seventh instance). Moving the writes out **created** a lost update and found the class: backlog **18**. |
-| WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
+| WP-15c | **Webhook ingress + the `inbox`, and the inbound redaction door** | WP-15b, WP-08, WP-09 | no | DONE | `38ea686` | 1 review round (APPROVE) + a pre-merge round, and **an architect ruling taken before the first `delivery_id` was written**. **Production can start a ticket.** `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded and drives it to task.completed"* — a signed delivery to a running `apps/server` instance, **no seeded row**. The ingress asks four questions in order (which binding · is it authentic · which delivery · what does it mean), `verify` runs over the bytes **as they arrived** and `normalise` runs **outside any transaction**; one transaction then writes the `inbox` row and appends its events. That is a **deliberate deviation from technical/06**, which had the work happen in a job and so could lose a delivery it had already recorded as performed — the doc is amended with the reason **and** with the sweep-shaped alternative it was weighed against (rule 8: amend the doc, then point at it). **The ruling is implemented, not merely recorded**, and its real finding is closed: `inbox(headers, payload)` had carried raw deliveries since `0005_events.sql:113`, TD-012's write list never named the table, and **GitLab's legacy scheme sends the binding's own webhook secret as plaintext in `X-Gitlab-Token`** — so migration **0014** adds `redaction_count` and `verified`, both columns are stored redacted *after* `verify` and *after* the key is computed, the verdict is **persisted** because a redacted payload cannot be re-verified, and an integration test reads the row back out of PostgreSQL and asserts the credential is not in it. `redaction_count` is the **summed** count over all three redactions, pinned exactly by `toBe(2)`/`toBe(3)`, so a headers-only count fails — the dead-signal failure the ruling named. **Backlog 20 discharged by the next work package after the one that created it**: a matched ticket with no task row is **re-emitted**, not merely detected — the reconciler appends a **new** `ticket.matched` and leaves `inbox(provider, delivery_id)` untouched, which is how it coexists with the replay criterion (dedup is about a *delivery*, recovery about a *task*); two tasks are impossible because `runIntakeCheck` re-reads `findByTicket` inside its write transaction; and the grace is **data-relative**, not a sleep (rule 2). **Q52 decided rather than deferred**: no fourth task state — a throwing runner `start` fails the run and escalates to `needs_human`, and the reviewer independently agreed, because only the error *class name* reaches `events.payload` and `RunnerUnavailableError` distinguishes *the platform is unfinished* from *this task needs a person*. Filed **Q59**; **Q60** for the rate limit this public endpoint does not yet have. Reviewer mutations on copies, calibrated 21/21 green first: `verify → accept` kills **three** named tests including `packages/application/src/integrations/inbound.test.ts` › *"verifies the bytes as they arrived, before anything is redacted"*; header `redactJson → identity` kills two; dropping the `!isNew` early return kills the racing-deduplication test. The insert **is** the arbiter (`on conflict (provider, delivery_id) do nothing` + `rowCount`, in the caller's transaction — no check-then-insert). `PROVIDER_DIRECTORIES` is `readdirSync` (rules 7, 68). **`verify` was red in the orchestrator's shell after the pre-merge round** — the citation guard caught an ambiguous `inbound.test.ts` basename across three tracked files (rule 59). The implementer's targeted files were green and its report was accurate about them; the **target** is a different question (rule 61). Left behind: **backlog 22**. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
@@ -4936,6 +5088,13 @@ the Edit tool. What it left behind:
   Round 1 also corrected the two remaining stale sums (`config.ts`'s `2N + 9` and `.env.example`'s
   "three job workers"): the shape at `pipeline: 4` is **`2N + 10`** — 12 at N=1, **18** at N=4 where
   WP-15b's `3N + 8` would have been 20.
+  **Three sites were repaired and two more were not**, found by the refiner after the merge:
+  `apps/server/src/config.test.ts:134` still says *"the pipeline's three job workers"* (its assertion
+  is symbolic and correct, so the test passes while its own sentence is wrong), and
+  `packages/infrastructure/src/db/config.ts:85-93` still says the floor is **11** and that its
+  `poolMax: 13` keeps *"two connections of slack"* — at a floor of 12 it keeps one, and
+  `.env.example` ships **14**, a divergence **no test reads**. The class, the **seven** sites and
+  what "derived" can honestly mean in each medium are **backlog 22**.
 - **What stays a decision rather than a defect**: `pipeline.intake.reconcile` is composed by
   `apps/server/src/pipeline.ts` (beside `registerPartitionMaintenance`) rather than by
   `createPipelineRuntime`. It was chosen under the lock and it is defensible where it is — a
