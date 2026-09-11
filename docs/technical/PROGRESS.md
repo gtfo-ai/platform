@@ -4,47 +4,56 @@
 
 ## Resume note
 
-> **Session 3, 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned by
-> evidence" — **seventy-six rules**, each with its evidence, each paid for with a review round. Then
-> continue the loop in `14-orchestration-protocol.md`.
+> **Session 3 ended 2026-09-11.** Read this, then the **"Open findings backlog"**, then "Standing rules
+> earned by evidence" — **seventy-six rules**, each with its evidence, each paid for with a review round.
+> Then continue the loop in `14-orchestration-protocol.md`, which now has a **fourth role**.
 
-**Twenty-four work packages are DONE and pushed** — WP-00 … WP-15a plus WP-02a/04a/06a/11a/20 and five
-ci-fixes. `main` is at `03f80b4`, green on all five targets in the orchestrator's own shell and **green on
-GitHub** (`34604222753`).
+**Twenty-six work packages are DONE and pushed.** `main` is at **`31abfc6`**, green on all five targets in
+the orchestrator's own shell and **green on GitHub** (`34630283269`). No worktrees, no open branches.
 
-**The gate was red for a day and nobody looked.** `e2e-fake-claude` failed on every push from WP-14's own
-merge until session 3 — six runs — while the ledger said "main is green on all five targets", because five
-*local* targets were being read as the state of `main`. **`gh run list` is now part of "verify after every
-merge"** (rules 69, 71). Three independent clean-environment defects were stacked behind that one error
-message; the ci-fix notes have them.
+**The gate is green again, and it was red for a day before anyone looked.** `e2e-fake-claude` failed on
+every push from WP-14's merge until session 3 — six runs — while the ledger said "green on all five
+targets", because five *local* targets were being read as the state of `main`. **`gh run list` is part of
+"verify after every merge"** (rules 69, 71).
 
 **What the platform can do.** A feature ticket and a bug ticket reach `task.completed` through an
-`apps/server` instance the e2e harness starts, with the provider adapters built by a **production loader**
-from seeded `integrations`/`secrets`/`bindings` rows — deleting the bindings inserts parks all five tests at
-`ci_gate`. Real event store, dispatcher, `IntegrationActionExecutor`, jobs adapter and outbox worker,
-against fake Claude.
+`apps/server` instance the e2e harness starts, with provider adapters built by a **production loader** from
+seeded `integrations`/`secrets`/`bindings` rows, and every outbound call audited by a **real Postgres audit
+log** that `startRuntime()` composes with no caller able to supply one. Retrieval over a knowledge vault and
+a code map exists, budgeted and measured.
 
-**What it still cannot do, stated plainly.** *The pipeline is composed and production does not start it.*
-`main.ts` calls `startRuntime()` with no runner and no audit log, because `integration_actions` lacks the
-columns a Postgres audit log needs; and there is **no webhook ingress**, so nothing in production emits
-`ticket.matched` at all. Both are **backlog entry 1**, with the re-dispatch tool now owed by WP-19. "M1
-complete" is closer than it was and is still not the sentence to write.
+**What it still cannot do, stated plainly.** *Production does not start a ticket.* There is **no webhook
+ingress** (`apps/server/src/routes/` has none), so nothing emits `ticket.matched` outside a test; and **no
+prompt uses the retrieval layer** — `basicStageRunPlanner` still passes `contextPack: []`. **WP-15c** and
+**WP-17** are those two sentences. "M1 complete" is closer than it was and is still not the sentence to
+write.
 
-**Next, in order:** (1) **WP-16** (context packs + KB indexer + code map) and **WP-17** (role prompts +
-artifact schemas + evals), which are parallel-safe against each other; (2) WP-18, WP-19, WP-21, WP-22,
-WP-23; (3) M2 (WP-24–33). Backlog entry 1's three items want a work package each and should be scheduled
-before anyone calls M1 done.
+**Next, in order:** (1) **WP-15d** — move the provider calls out of the saga's open transaction; it is the
+shape under *both* of WP-15b's symptoms and it is cheap now, expensive later. (2) **WP-15c** — webhook
+ingress, which is the one that changes the headline. (3) **WP-17**, which unblocks WP-18 and WP-21 and owns
+the **prompt-delimiter contract** for untrusted pack text (BD-022). (4) WP-18, WP-19, WP-21, WP-22, WP-23.
+(5) M2 (WP-24–33). Backlog entries 8–17 hold everything else, each with the measurement that earned it.
+
+**A fourth role: the refiner** (`.claude/agents/refiner.md`, registered). A finding **bigger than the work
+package that found it** goes to it — it writes a backlog entry, a plan row with an acceptance criterion, or
+an OPEN-QUESTIONS entry with a recommendation, carrying the measurement, and it writes **no code**. It runs
+no tests, so it may run beside an implementer. Protocol step **4b**. This exists because the largest gap in
+this project's history — `createPipelineRuntime` composed only by a test harness, through twenty-three work
+packages — was a finding **no work package owned**.
 
 **Machine policy, not negotiable (rule 66).** Two kernel panics on 2026-09-10. 14 cores, Docker has 8, and
-**the user works on this machine while the session runs** — twelve of their own containers were up and the
-load reached 59 during session 3. Cap at **two agents, one** while any holds Docker or the e2e tier. **Never
-generate synthetic load.** Remove a worktree the moment its branch merges. Check `uptime` before trusting a
-timing-sensitive result, and wait for the machine rather than piling on.
+**the user works on this machine while the session runs** — thirteen of their own containers were up and the
+load reached **59** during session 3. Cap at **two agents, one** while any holds Docker or the e2e tier
+(a refiner runs no tests and does not count). **Never generate synthetic load, for any measurement, for any
+reason.** Remove a worktree the moment its branch merges. Check `uptime` and **wait for the machine** rather
+than piling on.
 
-**Verify in your own shell, and gate on the exit status, not on the line you printed** (rules 61, 75): a
-pipeline exits with `tail`'s status, which is how a `FAIL: verify:e2e` scrolled past inside an `&&` chain
-and `main` was pushed anyway. **Never `| tail` a run you might need to diagnose** — it cost the identity of
-two failures in one session. And **never verify while a mutating reviewer shares the tree** (rule 74).
+**Verification discipline, all of it earned this session.** Verify in your own shell before every review and
+after every merge, and **gate on the exit status, not on the line you printed** — a pipeline exits with
+`tail`'s status, which is how a `FAIL: verify:e2e` scrolled past inside an `&&` chain and `main` was pushed
+anyway (rule 75). **Never `| tail` a run you may need to diagnose**: it destroyed the identity of two
+failures in one day. **Never verify while a mutating reviewer shares the tree** — that cost a phantom flake
+hunt (rule 74). Quote the **verdict line**, never a test count (rule 61).
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
@@ -1261,7 +1270,8 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
-| WP-15b | Postgres `IntegrationAuditLog` + `IdempotencyStore` + the `integration_actions` migration | WP-15a | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Until it lands, `startRuntime()` composes no pipeline in production and `/readyz` is 503 for ever on `ROLE=all\|worker`. Acceptance asserts `redaction_count` in **both** directions. |
+| WP-15b | **Postgres `IntegrationAuditLog` + `IdempotencyStore` + migration 0013** | WP-15a | no | DONE | `31abfc6` | 1 review round. `startRuntime()` composes a real audit log with **no caller able to supply one** (the field is gone from `PipelineComposition`); the composed-log→no-op mutation fails the e2e with `expected 0 to be greater than 0`, so the dependency is **used**, not merely supplied (rule 35). `redaction_count` asserted in **both** directions (rule 42); counters `not null` with the **default dropped**, so an omitted one errors rather than recording a zero (rule 18). **FK on `integration_actions` dropped** — a log of external facts must not be gated on internal referential state; deferral cannot help because the audit transaction commits **before** the saga's. Zero readers today, so technical/03 carries the `LEFT JOIN` sentence the first one will need. Pool floor recomputed: only the audit connection is concurrency-proportional (both job workers call providers *outside* their transactions), poolMax 10 → 13, and the test asserts the **shape** (+6 for N 1→3) so a flat reservation fails. Round 1 found the idempotency invariant asserted by **nothing** on Postgres while the fake *was* held to it — rule 1 inverted. |
+| WP-15d | **Move the provider calls out of the saga's open transaction** — the shape under both of WP-15b's symptoms | WP-15b | no | TODO | — | **Backlog 17.** `saga.ts:215` calls a provider after `store.tasks.insert` on the same open scope; `workpad.ts:168` and `:218` do the same. `postgres-unit-of-work.ts:55` takes a second `pool.connect()`. Against CLAUDE.md's own *transaction / no transaction / transaction* shape: a pooled connection is held across provider latency. It is **why** `integration_actions`' FK had nothing to point at **and** why the pool arithmetic undercounted a dispatch. `HandlerContext.afterCommit` exists for exactly this (TD-004/TD-005), so the compensation worry is already answered — this needs scheduling, not a decision. **The load consequence is a hypothesis**; the acceptance criterion requires it measured before and after. |
 | WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
