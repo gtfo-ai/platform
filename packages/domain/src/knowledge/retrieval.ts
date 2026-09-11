@@ -150,7 +150,9 @@ export const MAX_TIER1_DOCUMENTS = 10;
  * my own, which is standing rule 27 turned on the implementer.
  *
  * **An absolute floor is backwards.** Against a real PostgreSQL 18 (2026-09-11, `ts_rank_cd` with
- * normalisation 32, `simple` configuration):
+ * normalisation 32, `simple` configuration). **These two rows are pre-fix and cannot be reproduced
+ * through the shipped path**: `"the"` now extracts to no terms and never reaches the store at all,
+ * so they are evidence about why a floor was rejected and not numbers to tune one against.
  *
  * | query | best rank | what it found |
  * |---|---|---|
@@ -160,9 +162,10 @@ export const MAX_TIER1_DOCUMENTS = 10;
  * `ts_rank_cd` measures cover density and a common word is dense, so every threshold that excludes
  * the noise excludes the signal by a factor of twenty.
  *
- * **A floor relative to the best text score is store-dependent, which is worse than useless.** For
- * the query `session OR service OR fails OR tests OR with OR foreign OR violation`, the *correct
- * second answer* — `technical/session-service.md` — sits at **0.667** of the best score against
+ * **A floor relative to the best text score is store-dependent, which is worse than useless.** This
+ * one *is* reproducible through the shipped path — the query below is what `extractQueryTerms`
+ * produces. For the query `session OR service OR fails OR tests OR with OR foreign OR violation`,
+ * the *correct second answer* — `technical/session-service.md` — sits at **0.667** of the best score against
  * PostgreSQL and at **0.267** against the in-memory double, same corpus, same query. A ratio tuned
  * on one silently drops the right page on the other, and the acceptance figure is measured on the
  * double. A guard whose verdict depends on which store is underneath is not a guard.
@@ -179,7 +182,10 @@ export const MAX_TIER1_DOCUMENTS = 10;
  * answer at 0.500. The 87 %-padding pack is still reachable and this work package did not make it
  * unreachable. Saying otherwise would be the wrong number attached to a true finding that rule 39
  * is about. The remedy needs a corpus-derived signal (IDF, or a different `ts_rank` normalisation)
- * and is therefore a product decision filed outside this work package rather than guessed at here.
+ * and is therefore a product decision: **`docs/OPEN-QUESTIONS.md` Q58**, which carries these
+ * measurements, recommends deriving inverse document frequency from the project's own index, and
+ * names the three things a human has to decide — including that the signal must live on the port so
+ * the in-memory double cannot go back on the kind side of standing rule 1.
  *
  * **What is left is a *good* query's tail**, and it is left in deliberately: for the session query
  * above, `technical/runbook.md` enters at 0.137 because it is the runbook *for the session
