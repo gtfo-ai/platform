@@ -5,7 +5,7 @@
 ## Resume note
 
 > **Session 3, 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned by
-> evidence" — **seventy-five rules**, each with its evidence, each paid for with a review round. Then
+> evidence" — **seventy-six rules**, each with its evidence, each paid for with a review round. Then
 > continue the loop in `14-orchestration-protocol.md`.
 
 **Twenty-four work packages are DONE and pushed** — WP-00 … WP-15a plus WP-02a/04a/06a/11a/20 and five
@@ -64,6 +64,24 @@ two failures in one session. And **never verify while a mutating reviewer shares
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+76. **A flake's *rate* can be the only random thing about it — the defect underneath may be fully
+   deterministic, and then "it passes four times in five" is the most misleading evidence you have.**
+   The workpad e2e failed about 1 in 5 for two sessions and survived one fix and one reviewer's
+   measurement. It was **not a race**: all three handlers of `task.stage.entered` fire in one dispatch in
+   TD-005 priority order — stage executor **10**, status mapping **110**, workpad **120** — and the test
+   **waited on the status handler (110) and asserted the workpad body (120)**. Priority order *guarantees*
+   110 commits first, so the wait was **structurally incapable** of covering the assertion; it passed only
+   because both handlers finish inside one 50 ms poll. Traced by wrapping the fake provider:
+   `upsert active (rebase_gate)` → `status In Review` → `upsert ready_for_merge`. **Bound the line you
+   assert, not one that precedes it** — rule 50 with a sharper edge. Two consequences worth carrying:
+   the earlier reviewer measurement (*delaying handler 120 by 250 ms leaves it green, so the flake is
+   handler 110*) was **correct in every part and pointed at the wrong side**, because a correct
+   measurement of the wrong quantity reads exactly like a correct diagnosis; and the fix is not another
+   wait but **making the interleaving deterministic** — `workpadDelayMs` widens the 110→120 gap and the
+   test runs with it **always on**, so the ordering is exercised **every** run rather than one in five.
+   Harness, not product, and measured: widening the window **250×** still ends at
+   `ready_for_merge (ready_for_merge)`, because band ordering is self-healing inside one dispatch.
 
 75. **Reading a verdict line is not checking an exit status, and a shell pipeline's status is its *last*
    command's.** Rule 61 says report the target's verdict rather than a test count; this is its dual and it
@@ -1131,7 +1149,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
 | WP-15b | Postgres `IntegrationAuditLog` + `IdempotencyStore` + the `integration_actions` migration | WP-15a | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Until it lands, `startRuntime()` composes no pipeline in production and `/readyz` is 503 for ever on `ROLE=all\|worker`. Acceptance asserts `redaction_count` in **both** directions. |
 | WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
-| WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | REVIEW | `wp/16` | Acceptance met on the fixture vault: **10 552 estimated tokens at the shipped 12 000 default**, produced by `context-pack.test.ts` **and reproduced against a real PostgreSQL** by `context-pack.integration.test.ts`. Review round 2 found the retrieval path returned **0 documents in production** (AND-by-default `websearch_to_tsquery`) and three untested PageRank constants; both closed. The honest boundary is narrower than the row: *the retrieval layer is built and no prompt uses it* — the planner still passes `contextPack: []`. **universal-ctags is absent on this machine and unowned by the platform (Q57)**; the extractor probes and refuses. **54 mutants, 54 dead** — 52 through the unit/contract harness (canary first) and 2 driven by hand at the integration tier. Notes below. |
+| WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
