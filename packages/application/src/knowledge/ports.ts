@@ -119,8 +119,25 @@ export interface KbChunkHit {
 
 export interface KbSearchRequest {
   readonly projectId: Id;
-  /** Untrusted: model-written for `kb_search`, ticket text for a pack (BD-022). */
-  readonly query: string;
+  /**
+   * The query's **keywords**, already extracted by `extractQueryTerms` (`@platform/domain`).
+   *
+   * Terms and not a string, and the difference is not cosmetic. technical/07 step 2 says
+   * "`websearch_to_tsquery('simple', <task keywords>)`" and round 1 passed the whole task text:
+   * measured against a real PostgreSQL, `websearch_to_tsquery` joins bare words with **AND**, so a
+   * ticket-shaped query matched **zero** documents in production while the in-memory double
+   * returned fifteen. Handing the port a term list makes the `OR` the adapter's obvious job and
+   * makes the fake's behaviour the same behaviour rather than a kinder one (standing rule 1).
+   *
+   * Every term is `[\p{L}\p{N}_]+` by construction, so no byte of untrusted ticket or
+   * model-written text is ever concatenated into a tsquery expression — the adapter cannot be
+   * handed an operator.
+   *
+   * An **empty** list is a legitimate value and means "this query had no usable keywords". It is
+   * not the same as a query that found nothing, and a store must answer it with no hits rather
+   * than with every document.
+   */
+  readonly terms: readonly string[];
   readonly limit: number;
 }
 

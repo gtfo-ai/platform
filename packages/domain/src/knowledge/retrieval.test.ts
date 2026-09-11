@@ -260,6 +260,7 @@ describe('assembleContextPack — the budget fill', () => {
     expect(assembly.record.total_tokens).toBeLessThanOrEqual(250);
     expect(assembly.documents.map((entry) => entry.path)).toEqual(['index.md', 'a.md']);
     expect(assembly.droppedForBudget).toEqual(['b.md', 'c.md']);
+    expect(assembly.droppedForCount).toEqual([]);
   });
 
   it('caps tier 1 at the product/05 ceiling even when the budget would allow more', () => {
@@ -270,7 +271,51 @@ describe('assembleContextPack — the budget fill', () => {
     expect(assembly.record.tier1.filter((entry) => entry.validated)).toHaveLength(
       MAX_TIER1_DOCUMENTS,
     );
-    expect(assembly.droppedForBudget).toHaveLength(5);
+    // The count ceiling, and **not** the budget: fifteen documents of one token each cannot
+    // exhaust 12 000. Round 1 put both causes in one list, which is what made the acceptance
+    // test's "the budget stopped the fill" warrant unsound.
+    expect(assembly.droppedForCount).toHaveLength(5);
+    expect(assembly.droppedForBudget).toEqual([]);
+  });
+
+  it('separates the three reasons a candidate is not admitted', () => {
+    // One assembly, three causes, three lists — so that a test asserting one of them is asserting
+    // the thing it names.
+    const byCount = assembleContextPack(
+      input({
+        candidates: Array.from({ length: MAX_TIER1_DOCUMENTS + 2 }, (_u, index) =>
+          candidate({ path: `count-${String(index)}.md`, tokens: 1, textRank: 0.9 }),
+        ),
+      }),
+    );
+    expect(byCount.droppedForCount).toHaveLength(2);
+    expect(byCount.droppedForBudget).toEqual([]);
+
+    const byBudget = assembleContextPack(
+      input({
+        budgetTokens: 150,
+        candidates: [
+          candidate({ path: 'fits.md', tokens: 100, textRank: 0.9 }),
+          candidate({ path: 'does-not-fit.md', tokens: 100, textRank: 0.85 }),
+        ],
+      }),
+    );
+    expect(byBudget.droppedForBudget).toEqual(['does-not-fit.md']);
+    expect(byBudget.droppedForCount).toEqual([]);
+
+    // A weak text match is *not* a third cause: there is no relevance floor, and `retrieval.ts`
+    // records the two measurements that rejected both shapes of one.
+    const byFloor = assembleContextPack(
+      input({
+        candidates: [
+          candidate({ path: 'strong.md', tokens: 1, textRank: 1 }),
+          candidate({ path: 'weak.md', tokens: 1, textRank: 0.1 }),
+        ],
+      }),
+    );
+    expect(byFloor.record.tier1.map((entry) => entry.path)).toEqual(['strong.md', 'weak.md']);
+    expect(byFloor.droppedForBudget).toEqual([]);
+    expect(byFloor.droppedForCount).toEqual([]);
   });
 
   it('reports tier0_over_budget rather than dropping a tier-0 document or ignoring the budget', () => {

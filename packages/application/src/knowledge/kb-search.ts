@@ -8,10 +8,12 @@
  * untrusted**: the query is written by the model, and the excerpt is written by whoever can push to
  * the project's repository. Three consequences, each of which is a line of code here:
  *
- *  1. **The query is data.** It reaches `websearch_to_tsquery` through a parameter, never through
- *     string concatenation, and `limit` is bounded by the schema (`kbSearchInputSchema` caps it at
- *     50) and again here, because a model that asks for a million rows must get an answer rather
- *     than a timeout.
+ *  1. **The query is data.** It is reduced to keywords by `extractQueryTerms` before it goes
+ *     anywhere — so what reaches the store is `[\p{L}\p{N}_]+` tokens that cannot carry a tsquery
+ *     operator — and it still travels as a bound parameter. `limit` is bounded by the schema
+ *     (`kbSearchInputSchema` caps it at 50) and again here, because a model that asks for a million
+ *     rows must get an answer rather than a timeout. The cost of tokenising is that a model cannot
+ *     ask for a quoted phrase; `query.ts` records why that trade was taken.
  *  2. **The answer's keys are the platform's and its values are the project's.** A document cannot
  *     add a key, cannot set `status`, and cannot make the tool claim something the platform did not
  *     say — the shape is built here from typed fields (technical/07's note on a provider forging
@@ -26,6 +28,7 @@
  * human. They are different answers and the difference is free here and impossible downstream.
  */
 import type { Id, JsonValue } from '@platform/contracts';
+import { extractQueryTerms } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import type { KbSearchInput } from '../ports/runner.js';
 import type { KnowledgeStore } from './ports.js';
@@ -53,7 +56,14 @@ export interface KbSearchHitPayload {
 
 export type KbSearchToolPayload =
   | { readonly status: 'ok'; readonly hits: readonly KbSearchHitPayload[] }
-  | { readonly status: 'not_indexed'; readonly hits: readonly [] };
+  | { readonly status: 'not_indexed'; readonly hits: readonly [] }
+  /**
+   * The query had no keyword in it — every token was shorter than
+   * `MIN_QUERY_TERM_LENGTH`. A third answer rather than an empty `ok`, for the same reason
+   * `not_indexed` is: a model told "no results" concludes the vault is silent on the subject, and a
+   * model told its query had no usable terms can ask a better one.
+   */
+  | { readonly status: 'no_query_terms'; readonly hits: readonly [] };
 
 /**
  * A chunk's text begins with the `project / path / H1 > H2` prefix the indexer wrote onto it
@@ -71,11 +81,11 @@ export const createKbSearchTool =
   (dependencies: KbSearchToolDependencies) =>
   async (projectId: Id, input: KbSearchInput): Promise<JsonValue> => {
     const limit = Math.min(input.limit ?? DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT);
-    const result = await dependencies.store.search({
-      projectId,
-      query: input.query,
-      limit,
-    });
+    const terms = extractQueryTerms(input.query);
+    if (terms.length === 0) {
+      return { status: 'no_query_terms', hits: [] } satisfies KbSearchToolPayload as JsonValue;
+    }
+    const result = await dependencies.store.search({ projectId, terms, limit });
     if (result.status === 'not_indexed') {
       dependencies.logger.warn(
         { project_id: projectId },

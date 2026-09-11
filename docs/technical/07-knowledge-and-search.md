@@ -27,6 +27,35 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > voice (BD-022). Closing it in the adapters instead would mean a second rule about provider-chosen
 > keys in the adapter ring, which already has one.
 
+> **Round 2 correction: step 2 says "task *keywords*", and it is load-bearing.** WP-16 round 1
+> passed the whole task text to `websearch_to_tsquery`, which joins bare words with **AND** —
+> measured against a real PostgreSQL 18 over the fixture vault, a ticket-shaped query of eleven
+> words matched **0 documents**, while the in-memory double returned 15. The text-match step
+> retrieved nothing in production and everything in the tests. The query is now reduced to keywords
+> (tokens of four characters or more, `extractQueryTerms`) joined with `OR`, which also removes the
+> degenerate case: `"the"` and `"and the of"` extract to no terms at all and contribute nothing,
+> while path matches still apply. The cost is that a quoted phrase can no longer be asked for.
+>
+> **There is deliberately no relevance floor, and both shapes of one were measured and rejected.**
+> An *absolute* floor is backwards: `"the"` ranks four padded pages at **0.947** while a good query
+> ranks its single correct answer at **0.048**, because `ts_rank_cd` measures cover density and a
+> common word is dense. A floor *relative* to the best score is store-dependent: the correct second
+> answer for one query sits at **0.667** of the best against PostgreSQL and **0.267** against the
+> in-memory double, so a ratio tuned on either silently drops the right page on the other. What
+> removed the measured harm is the keyword extraction above. The reasoning and the numbers are in
+> `packages/domain/src/knowledge/retrieval.ts`.
+>
+> **Control characters and bidi overrides are replaced at parse; hostile *words* are not.** A vault
+> page is untrusted (BD-022) and this is the work package that puts one in a prompt. C0/C1 controls
+> and the Unicode bidi overrides are rendering instructions rather than text — and a literal `NUL`
+> is refused outright by a PostgreSQL `text` column, so replacing them is a correctness requirement
+> before a security one. Each becomes one `U+FFFD` and the count travels on the index report.
+> Prompt-injection text, markup and a `javascript:` link pass through **byte-identical**: they are
+> words, an indexer that edited them could not hold a page about XSS, and the defences are
+> structural — the prompt's delimiters (technical/04 § "Prompt assembly", WP-17) and the web app's
+> text-node rendering. `packages/domain/src/knowledge/sanitise.ts` states the boundary and the
+> fixture vault carries a document that attacks every consumer it can reach.
+
 > **Implemented at WP-16, with three decisions this section did not make.**
 >
 > **`title` and `trigger` are written into a document's first chunk.** Step 2 is a *trigger*/

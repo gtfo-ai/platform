@@ -39,8 +39,11 @@ import {
   vaultRelativePath,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
-import { parseKbDocument } from '@platform/domain';
+import { extractQueryTerms, parseKbDocument } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
+
+/** What a caller does before it reaches the port: the query's keywords, not its text. */
+const termsOf = (text: string): readonly string[] => extractQueryTerms(text);
 
 export interface KnowledgeStoreHarness {
   readonly name: string;
@@ -100,12 +103,12 @@ export const runKnowledgeStoreContract = (harness: KnowledgeStoreHarness): void 
     });
 
     it('answers `not_indexed` before any index run, and `ok` after one', async () => {
-      const before = await store.search({ projectId, query: 'session', limit: 5 });
+      const before = await store.search({ projectId, terms: termsOf('session'), limit: 5 });
       expect(before.status).toBe('not_indexed');
       expect(await store.readIndexState(projectId)).toBeNull();
 
       await write();
-      const after = await store.search({ projectId, query: 'session', limit: 5 });
+      const after = await store.search({ projectId, terms: termsOf('session'), limit: 5 });
       expect(after.status).toBe('ok');
       const state = await store.readIndexState(projectId);
       expect(state?.commitSha).toBe('abc1234');
@@ -116,7 +119,7 @@ export const runKnowledgeStoreContract = (harness: KnowledgeStoreHarness): void 
       await write();
       const result = await store.search({
         projectId,
-        query: 'quantumchromodynamicslattice',
+        terms: termsOf('quantumchromodynamicslattice'),
         limit: 5,
       });
       expect(result.status).toBe('ok');
@@ -126,7 +129,11 @@ export const runKnowledgeStoreContract = (harness: KnowledgeStoreHarness): void 
 
     it('returns the chunk that carries the query terms, with a rank in [0, 1]', async () => {
       await write();
-      const result = await store.search({ projectId, query: 'seeded fixture user', limit: 10 });
+      const result = await store.search({
+        projectId,
+        terms: termsOf('seeded fixture user'),
+        limit: 10,
+      });
       if (result.status !== 'ok') throw new Error('expected ok');
       expect(result.hits.length).toBeGreaterThan(0);
       expect(result.hits.map((hit) => hit.path)).toContain(
@@ -141,19 +148,59 @@ export const runKnowledgeStoreContract = (harness: KnowledgeStoreHarness): void 
 
     it('honours the limit', async () => {
       await write();
-      const result = await store.search({ projectId, query: 'the session service', limit: 2 });
+      const result = await store.search({
+        projectId,
+        terms: termsOf('the session service'),
+        limit: 2,
+      });
       if (result.status !== 'ok') throw new Error('expected ok');
       expect(result.hits.length).toBeLessThanOrEqual(2);
     });
 
     it('survives a query the model could write without raising', async () => {
       // A stray operator in a ticket title must not turn every later delivery into a failing job
-      // (rule 20); `websearch_to_tsquery` is total, and the in-memory store must be too.
+      // (rule 20); `websearch_to_tsquery` is total, and the in-memory store must be too. The
+      // operators never reach either store — `extractQueryTerms` drops them — so this asserts the
+      // whole path a caller actually takes rather than the port in isolation.
       await write();
-      for (const query of ["' or 1=1 --", 'session & | ! ( ) :*', '   ', '!'.repeat(200)]) {
-        const result = await store.search({ projectId, query, limit: 5 });
+      for (const query of [
+        "' or 1=1 --",
+        'session & | ! ( ) :*',
+        '   ',
+        '!'.repeat(200),
+        'session:*',
+        '"phrase query" <-> session',
+      ]) {
+        const result = await store.search({ projectId, terms: termsOf(query), limit: 5 });
         expect(result.status).toBe('ok');
       }
+    });
+
+    it('finds nothing — not everything — for a query with no keywords', async () => {
+      // `extractQueryTerms('the')` is empty, and a store that read an empty term list as "no
+      // filter" would return the whole vault for the most degenerate query there is.
+      await write();
+      const result = await store.search({ projectId, terms: termsOf('the'), limit: 50 });
+      expect(result.status).toBe('ok');
+      if (result.status !== 'ok') throw new Error('expected ok');
+      expect(result.hits).toEqual([]);
+    });
+
+    it('matches a document carrying any one keyword, not only one carrying all of them', async () => {
+      // The defect this closes: `websearch_to_tsquery` ANDs bare words, so a ticket-shaped query
+      // matched zero documents in production while the in-memory double returned fifteen.
+      await write();
+      const result = await store.search({
+        projectId,
+        terms: termsOf('the session service fails its tests with a foreign key violation'),
+        limit: 50,
+      });
+      expect(result.status).toBe('ok');
+      if (result.status !== 'ok') throw new Error('expected ok');
+      expect(result.hits.length).toBeGreaterThan(0);
+      expect(result.hits.map((hit) => hit.path)).toContain(
+        `${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2026-01-04-session-fixtures.md`,
+      );
     });
 
     it('loads documents by path and their chunks in order', async () => {
@@ -265,9 +312,9 @@ export const runKnowledgeStoreContract = (harness: KnowledgeStoreHarness): void 
       await write();
       const other = '00000000-0000-4000-8000-0000000000ff' as Id;
       expect(await store.readIndexState(other)).toBeNull();
-      expect((await store.search({ projectId: other, query: 'session', limit: 5 })).status).toBe(
-        'not_indexed',
-      );
+      expect(
+        (await store.search({ projectId: other, terms: termsOf('session'), limit: 5 })).status,
+      ).toBe('not_indexed');
     });
   });
 };

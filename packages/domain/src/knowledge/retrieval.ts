@@ -142,6 +142,46 @@ export const EXPIRED_WEIGHT = 0.4;
 /** product/05: "top 5–10 items" for tier 1. */
 export const MAX_TIER1_DOCUMENTS = 10;
 
+/**
+ * ## There is no relevance floor, and that is a measured decision rather than an omission
+ *
+ * Review asked for one: a single stopword query returned a pack that was 87 % padding. Two shapes
+ * were built, measured over the fixture vault, and **both were rejected** — the second of them was
+ * my own, which is standing rule 27 turned on the implementer.
+ *
+ * **An absolute floor is backwards.** Against a real PostgreSQL 18 (2026-09-11, `ts_rank_cd` with
+ * normalisation 32, `simple` configuration):
+ *
+ * | query | best rank | what it found |
+ * |---|---|---|
+ * | `"the"` | **0.947** | four padded pages, about nothing |
+ * | `"seeded fixture user session tests"` | **0.048** | the one lesson that answers it |
+ *
+ * `ts_rank_cd` measures cover density and a common word is dense, so every threshold that excludes
+ * the noise excludes the signal by a factor of twenty.
+ *
+ * **A floor relative to the best text score is store-dependent, which is worse than useless.** For
+ * the query `session OR service OR fails OR tests OR with OR foreign OR violation`, the *correct
+ * second answer* — `technical/session-service.md` — sits at **0.667** of the best score against
+ * PostgreSQL and at **0.267** against the in-memory double, same corpus, same query. A ratio tuned
+ * on one silently drops the right page on the other, and the acceptance figure is measured on the
+ * double. A guard whose verdict depends on which store is underneath is not a guard.
+ *
+ * **What actually removed the measured harm is upstream of the score.** The stopword query never
+ * reaches the store any more: `extractQueryTerms` reduces `"the"` and `"and the of"` to **no terms
+ * at all**, so the text step contributes nothing and the pack is tier 0 plus whatever the author's
+ * own `paths:` globs claim. That is store-independent, needs no threshold, and fails in the
+ * direction that costs recall rather than precision.
+ *
+ * **What is left is a *good* query's tail**, and it is left in deliberately: for the session query
+ * above, `technical/runbook.md` enters at 0.137 because it is the runbook *for the session
+ * service*. Cutting it is a product judgement about recall, not a defect, and product/05 already
+ * bounds it twice — {@link MAX_TIER1_DOCUMENTS} and the token budget. The precision that *is*
+ * enforced is asserted rather than described: `context-pack.test.ts` and
+ * `context-pack.integration.test.ts` both fail if a billing query admits a session page or the
+ * reverse, against the fake and against PostgreSQL.
+ */
+
 /** product/05 and technical/07: the shipped context-pack budget for tiers 0–1. */
 export const DEFAULT_CONTEXT_BUDGET_TOKENS = 12_000;
 
@@ -195,8 +235,19 @@ export interface ContextPackAssembly {
   /** Tier 0 in the order given, then the admitted tier-1 documents by descending score. */
   readonly documents: readonly SelectedDocument[];
   readonly outcome: PackOutcome;
-  /** Paths the fill could not afford — recorded so "the budget bound this pack" is observable. */
+  /**
+   * Paths the fill could not **afford** — and nothing else.
+   *
+   * Round 1 put three causes in this one list (the budget, the tier-1 count ceiling, and a tier-0
+   * overrun that admits nothing at all), which made the acceptance test's warrant unsound: it read
+   * "`droppedForBudget` is non-empty, therefore the budget stopped the fill" from a list that is
+   * non-empty in two other cases too. The conclusion happened to be true and the argument did not
+   * support it, which is the combination that survives review. The causes are separate now, so the
+   * warrant is the assertion.
+   */
   readonly droppedForBudget: readonly string[];
+  /** Paths refused by {@link MAX_TIER1_DOCUMENTS} while the budget still had room. */
+  readonly droppedForCount: readonly string[];
   /** Paths whose cited `paths:` no longer resolve at HEAD (technical/07 step 3). */
   readonly droppedByValidation: readonly string[];
   /** Paths excluded because their `scope: stage:<x>` names a different stage. */
@@ -289,6 +340,7 @@ export const assembleContextPack = (input: AssembleContextPackInput): ContextPac
   const droppedAsDeprecated: string[] = [];
   const droppedByValidation: string[] = [];
   const droppedForBudget: string[] = [];
+  const droppedForCount: string[] = [];
 
   const scored = input.candidates
     .filter((candidate) => {
@@ -331,11 +383,11 @@ export const assembleContextPack = (input: AssembleContextPackInput): ContextPac
       });
       continue;
     }
-    const affordable =
-      !overBudget &&
-      admitted.length < MAX_TIER1_DOCUMENTS &&
-      spent + candidate.tokens <= input.budgetTokens;
-    if (!affordable) {
+    if (admitted.length >= MAX_TIER1_DOCUMENTS) {
+      droppedForCount.push(candidate.path);
+      continue;
+    }
+    if (overBudget || spent + candidate.tokens > input.budgetTokens) {
       droppedForBudget.push(candidate.path);
       continue;
     }
@@ -376,6 +428,7 @@ export const assembleContextPack = (input: AssembleContextPackInput): ContextPac
     ],
     outcome: overBudget ? 'tier0_over_budget' : 'within_budget',
     droppedForBudget,
+    droppedForCount,
     droppedByValidation,
     droppedByScope,
     droppedAsDeprecated,

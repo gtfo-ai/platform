@@ -12,13 +12,18 @@
  *
  * ## Search
  *
- * TD-008 phase 1: `websearch_to_tsquery('simple', $query)` against the **generated**
- * `kb_chunks.search` column, ranked with `ts_rank_cd`. Two details that are not obvious:
+ * TD-008 phase 1: `websearch_to_tsquery('simple', …)` against the **generated**
+ * `kb_chunks.search` column, ranked with `ts_rank_cd`. Three details that are not obvious:
  *
- *  - **The query text is a parameter.** It is model-written (`kb_search`) or ticket-written (a
- *    context pack), so it is untrusted (BD-022) — and `websearch_to_tsquery` is also *total*: it
- *    never raises on malformed input the way `to_tsquery` does, which is why TD-008 names it and
- *    why a stray `&` in a ticket title cannot turn into a failing job (rule 20).
+ *  - **The query is the caller's keywords joined with `OR`.** Bare words in
+ *    `websearch_to_tsquery` are joined with **AND**, and measured over the fixture vault a
+ *    ticket-shaped query of eleven words therefore matched **0 documents** — no page contains all
+ *    of them. `OR` is what makes the step retrieve at all; see `KbSearchRequest.terms`.
+ *  - **Nothing untrusted is concatenated.** The terms arrive already reduced to
+ *    `[\p{L}\p{N}_]+`, so `join(' OR ')` cannot be handed an operator, a quote or a `:*`. The
+ *    value still travels as a bound parameter, and `websearch_to_tsquery` is *total* — it never
+ *    raises on malformed input the way `to_tsquery` does, which is why TD-008 names it and why a
+ *    stray `&` in a ticket title cannot turn into a failing job (rule 20).
  *  - **The rank is normalised into `[0, 1]` here**, because `contextPackRecordSchema.score` is a
  *    unit interval and `ts_rank_cd` is unbounded above. Normalisation flag `32`
  *    (`rank / (rank + 1)`) is applied by PostgreSQL itself rather than by arithmetic on this side,
@@ -235,6 +240,16 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
   async search(request: KbSearchRequest): Promise<KbSearchResult> {
     const state = await this.readIndexState(request.projectId);
     if (state === null || state.ftsBuiltAt === null) return { status: 'not_indexed' };
+    // A query with no usable keywords finds nothing; it does not find everything. The index exists,
+    // so this is `ok` with no hits and never `not_indexed`.
+    //
+    // **Deliberately unreachable defence in depth** (standing rule 22): removing this line leaves
+    // the integration tier 27/27 green, because `websearch_to_tsquery('simple', '')` builds an
+    // empty tsquery and `@@` against one matches no row. The correct behaviour is PostgreSQL's, not
+    // this line's, and the contract suite's "finds nothing — not everything" case pins the
+    // behaviour rather than the guard. What the line buys is a saved round trip and a reader who
+    // does not have to know that fact about `websearch_to_tsquery` to be sure of the answer.
+    const expression = request.terms.join(' OR ');
 
     const { rows } = await this.#sql.query<{
       document_id: string;
@@ -251,7 +266,7 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
           and c.search @@ websearch_to_tsquery('simple', $2)
         order by rank desc, d.path asc, c.ordinal asc
         limit $3`,
-      [request.projectId, request.query, request.limit],
+      [request.projectId, expression, request.limit],
     );
 
     return {

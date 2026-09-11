@@ -7,7 +7,8 @@
  *
  * | # | Divergence | Direction | Why it is safe |
  * |---|---|---|---|
- * | 1 | **Ranking.** This store ranks a chunk by the fraction of the query's terms it contains; PostgreSQL uses `ts_rank_cd` over a `simple` tsvector. Both land in `[0, 1]`; the **orderings differ**. | *Different*, not kinder | No test may assert a rank value or a full ordering from this fake and claim it holds of Postgres. The shared contract suite asserts only what both guarantee: a chunk containing every query term is returned, one containing none is not, ranks are in `[0, 1]`, and `limit` is honoured. The ordering-sensitive assertions live in `postgres-knowledge-store.integration.test.ts`, against the real thing. |
+ * | 1 | **Ranking.** This store ranks a chunk by the fraction of the query's terms it contains; PostgreSQL uses `ts_rank_cd` over a `simple` tsvector. Both land in `[0, 1]`; the **orderings differ**. | *Different*, not kinder | No test may assert a rank value or a full ordering from this fake and claim it holds of Postgres. The shared contract suite asserts only what both guarantee: a chunk containing a query term is returned, one containing none is not, ranks are in `[0, 1]`, and `limit` is honoured. The ordering-sensitive assertions live in `postgres-knowledge-store.integration.test.ts`, and `context-pack.integration.test.ts` pins the **pack composition** against the real store because the acceptance figure is otherwise a property of this file. |
+ * | 1b | **Matching semantics — closed at round 2.** This store matched a chunk carrying *any* query term while `PostgresKnowledgeStore` passed the raw task text to `websearch_to_tsquery`, which joins bare words with **AND**. Measured over the fixture vault: a ticket-shaped query returned **15** documents here and **0** there, so every retrieval test was exercising a path production did not have. | was **kinder** | Closed at the port, not in the fake: `KbSearchRequest` now carries extracted terms and the adapter joins them with `OR`, so both stores match the same set and only the ranking differs. |
  * | 2 | **Tokenisation.** Terms are split on non-word characters and lowercased. Postgres's `simple` configuration splits on its own rules and does not stem either. | *Different* | Same mitigation as 1. TD-008 chose `simple` precisely so neither side stems. |
  * | 3 | **No tsvector size limit.** Postgres refuses a tsvector over 1 MB; this store accepts any chunk. | **Kinder** | `MAX_CHUNK_BYTES` in the domain ring is what keeps a chunk two orders of magnitude below the limit, and `document.test.ts` asserts the cap by *producing* an over-long section and counting the pieces. The bound is enforced before the store, so neither store can reach the state. |
  * | 4 | **Writes are not transactional.** `write` mutates the maps immediately; the `Transaction` handle is validated and otherwise unused. | **Kinder** | A caller that relies on rollback is not exercised here. The transactional half is `postgres-knowledge-store.integration.test.ts`, which asserts a failed index run leaves the previous documents in place. |
@@ -62,7 +63,8 @@ const assertOwnTransaction = (tx: Transaction): void => {
   }
 };
 
-const terms = (text: string): readonly string[] =>
+/** The chunk side of the match. The query side arrives already extracted (`KbSearchRequest`). */
+const chunkTerms = (text: string): readonly string[] =>
   text
     .toLowerCase()
     .split(/[^\p{L}\p{N}_]+/u)
@@ -141,12 +143,12 @@ export const memoryKnowledgeStore = (
     search: async (request: KbSearchRequest): Promise<KbSearchResult> => {
       const indexed = state.get(request.projectId);
       if (indexed === undefined || indexed.ftsBuiltAt === null) return { status: 'not_indexed' };
-      const wanted = terms(request.query);
+      const wanted = request.terms;
       if (wanted.length === 0) return { status: 'ok', hits: [] };
       const hits: KbChunkHit[] = [];
       for (const row of project(request.projectId).values()) {
         for (const chunk of row.chunks) {
-          const present = new Set(terms(chunk.text));
+          const present = new Set(chunkTerms(chunk.text));
           const matched = wanted.filter((term) => present.has(term)).length;
           if (matched === 0) continue;
           hits.push({

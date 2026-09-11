@@ -36,7 +36,9 @@ export * from './ids.js';
 export * from './knowledge/document.js';
 export * from './knowledge/frontmatter.js';
 export * from './knowledge/globs.js';
+export * from './knowledge/query.js';
 export * from './knowledge/retrieval.js';
+export * from './knowledge/sanitise.js';
 export * from './knowledge/tokens.js';
 export * from './permissions.js';
 // The pipeline interpreter (WP-15)

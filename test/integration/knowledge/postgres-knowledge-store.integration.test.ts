@@ -25,7 +25,7 @@ import {
   FIXTURE_VAULT,
   vaultRelativePath,
 } from '@platform/application';
-import { parseKbDocument } from '@platform/domain';
+import { extractQueryTerms, parseKbDocument } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -34,6 +34,8 @@ import { createMigratedDatabase, type MigratedDatabase } from '../support/migrat
 
 let database: MigratedDatabase;
 let projectId: string;
+
+const termsOf = (text: string): readonly string[] => extractQueryTerms(text);
 
 const connect = async (): Promise<pg.Client> => {
   const client = new pg.Client({ connectionString: database.connectionString });
@@ -109,7 +111,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
 
       const result = await store.search({
         projectId,
-        query: 'seeded fixture user session tests',
+        terms: termsOf('seeded fixture user session tests'),
         limit: 10,
       });
       expect(result.status).toBe('ok');

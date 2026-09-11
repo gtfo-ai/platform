@@ -34,6 +34,7 @@ import {
   assembleContextPack,
   type ContextPackAssembly,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
+  extractQueryTerms,
   type KbLayer,
   type RetrievalCandidate,
   type Tier0Document,
@@ -71,6 +72,14 @@ export interface ContextPack {
   /** `RunSpec.contextPack` — the tier/path/reason triples the runner is given. */
   readonly runContextPack: readonly RunContextDocument[];
   readonly assembly: ContextPackAssembly;
+  /**
+   * The keywords the text step actually searched for.
+   *
+   * Empty means the task text yielded none — a degenerate query such as a bare `"the"` — and the
+   * pack is then built from path matches and tier 0 alone. That is a fact about the query and not
+   * about the vault, so it is reported rather than looking like a knowledge base with nothing in it.
+   */
+  readonly queryTerms: readonly string[];
 }
 
 export type ContextPackResult =
@@ -157,9 +166,12 @@ export const createContextPackAssembler = (
 ): ContextPackAssembler => ({
   assemble: async (request: ContextPackRequest): Promise<ContextPackResult> => {
     const { store } = dependencies;
+    // technical/07 step 2 says "task **keywords**", and it matters: the raw text goes to
+    // `websearch_to_tsquery` as an AND of every word, which measured zero hits in production.
+    const queryTerms = extractQueryTerms(request.taskText);
     const search = await store.search({
       projectId: request.projectId,
-      query: request.taskText,
+      terms: queryTerms,
       limit: CHUNK_HIT_LIMIT,
     });
     if (search.status === 'not_indexed') {
@@ -231,6 +243,7 @@ export const createContextPackAssembler = (
       pack: {
         record: assembly.record,
         documents,
+        queryTerms,
         runContextPack: documents.map(
           (document): RunContextDocument => ({
             tier: document.tier,

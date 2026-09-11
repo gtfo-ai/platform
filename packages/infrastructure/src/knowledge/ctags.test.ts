@@ -18,11 +18,25 @@
  * `Universal Ctags 6.1.0, Copyright (C) 2015-2023 Universal Ctags Team`, which is what
  * `PROBE_BANNER` below carries. **`kind: "recorded"`** — not composed, not invented.
  *
- * What this fixture cannot tell us, stated rather than implied: that *this repository's* build of
- * ctags, on whatever machine the platform is deployed to, emits the same shape. The version is
- * pinned in the fixture's name and the probe refuses anything that is not universal-ctags, which
- * bounds the risk to "a future universal-ctags changes its JSON" — a change that would show up as
- * `unavailable` (every line unparseable) rather than as a silently empty map.
+ * **This provenance is outside the repository's provenance sweep, and that is stated here because
+ * the docblock citing rule 17 is exactly where the rule was broken.**
+ * `test/contract/integrations/fixture-provenance.contract.test.ts` walks `test/fixtures/http/` and
+ * nothing else, so an inline TypeScript literal is invisible to it — "labelled" here meant
+ * "written in prose", which is the decoration rule 17 names. Two things follow. The fixture is
+ * **not** moved under `test/fixtures/http/`: that suite is built for recorded HTTP conversations
+ * with a `source` block per interaction and a `SOURCES.md` host allow-list, and a subprocess's
+ * stdout has no URL, no host and no interaction — forcing it in would make the provenance suite
+ * admit a shape it cannot actually check. Instead the part of the claim that *is* mechanical is
+ * made mechanical: {@link RECORDED_WITH} carries the arguments as data, and a test below asserts
+ * they are the arguments the shipped adapter sends. The rest — that a container really printed
+ * this on that date — remains an unverifiable assertion by its author, which is what every
+ * recording ultimately is.
+ *
+ * What the fixture cannot tell us either: that *this repository's* build of ctags, on whatever
+ * machine the platform is deployed to, emits the same shape. The probe refuses anything that is
+ * not universal-ctags, which bounds the risk to "a future universal-ctags changes its JSON" — a
+ * change that shows up as `unavailable` (every line unparseable) rather than as a silently empty
+ * map.
  *
  * ## The other recording: what a *wrong* ctags does
  *
@@ -44,6 +58,23 @@ import {
   referencesIn,
   UNIVERSAL_CTAGS_BANNER,
 } from './ctags.js';
+
+/**
+ * The recording's provenance, as data rather than as prose.
+ *
+ * `kind: 'recorded'` in the vocabulary `test/contract/support/integrations/fixture-provenance.ts`
+ * uses — a real tool really printed this — as opposed to `composed`, `inferred` or `invented`.
+ */
+export const RECORDED_WITH = {
+  kind: 'recorded',
+  image: 'alpine:3.20',
+  install: 'apk add --no-cache ctags',
+  version: 'Universal Ctags 6.1.0, Copyright (C) 2015-2023 Universal Ctags Team',
+  retrieved: '2026-09-11',
+  /** The exact argument vector. Held to `CTAGS_ARGUMENTS` by a test below. */
+  args: ['--output-format=json', '--fields=+n', '--sort=no', '-L', '-', '-f', '-'],
+  note: 'Two source files written for the purpose: a TypeScript module (interface, const arrow function, function declaration, class with a #private field and a method) and a Python module (class, __init__, method, module-level function).',
+} as const;
 
 const PROBE_BANNER =
   'Universal Ctags 6.1.0, Copyright (C) 2015-2023 Universal Ctags Team\nUniversal Ctags is derived from Exuberant Ctags.\n';
@@ -87,6 +118,24 @@ const scriptedRunner = (
     }
     return answers.tags ?? { code: 0, stdout: RECORDED_CTAGS_STDOUT, stderr: '' };
   },
+});
+
+describe('the recording provenance, as far as it is checkable', () => {
+  it('was produced by the arguments the adapter actually sends', () => {
+    // The half of rule 17 that can be mechanised here: a fixture recorded with a different
+    // invocation is a fixture of a different program's behaviour, and nothing else would notice.
+    expect(RECORDED_WITH.args).toEqual([...CTAGS_ARGUMENTS]);
+  });
+
+  it('names the version the probe would accept', () => {
+    expect(RECORDED_WITH.version).toContain(UNIVERSAL_CTAGS_BANNER);
+    expect(PROBE_BANNER.startsWith(RECORDED_WITH.version)).toBe(true);
+  });
+
+  it('is labelled recorded, not composed or invented', () => {
+    expect(RECORDED_WITH.kind).toBe('recorded');
+    expect(RECORDED_WITH.retrieved).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
 });
 
 describe('parseCtagsJson — against the recorded output of Universal Ctags 6.1.0', () => {

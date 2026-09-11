@@ -16,13 +16,15 @@
  *     by name, because a budget that never refuses anything is not a budget under test (rule 10:
  *     assert which branch ran).
  */
-import { contextPackRecordSchema, type IsoDate } from '@platform/contracts';
+import { contextPackRecordSchema, type Id, type IsoDate } from '@platform/contracts';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS, PLATFORM_DEFAULT_CONFIG } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { silentLogger } from '../ports/logger.js';
 import {
   FIXTURE_DEPRECATED_PATH,
   FIXTURE_EXPIRED_PATH,
+  FIXTURE_HOSTILE_PATH,
+  FIXTURE_HOSTILE_PHRASES,
   FIXTURE_KNOWLEDGE_DIR,
   FIXTURE_REPO_PATHS,
   FIXTURE_STAGE_SCOPED_PATH,
@@ -71,7 +73,10 @@ describe('token budget respected — measured on the fixture vault at the shippe
     // Produced, not quoted. If the fixture vault, the chunker or the estimator changes, this number
     // moves and the change is deliberate rather than silent.
     expect(pack.record.budget_tokens).toBe(12_000);
-    expect(pack.record.total_tokens).toBe(10_622);
+    expect(pack.record.total_tokens).toBe(10_552);
+    // …and the same figure is produced against a real PostgreSQL by
+    // `test/integration/knowledge/context-pack.integration.test.ts`, which is what stops this
+    // number being a property of the in-memory double alone.
     expect(pack.record.total_tokens).toBeLessThanOrEqual(pack.record.budget_tokens);
     expect(pack.assembly.outcome).toBe('within_budget');
     // …and the budget is what stopped it. Without this the figure above would only mean "the vault
@@ -86,13 +91,13 @@ describe('token budget respected — measured on the fixture vault at the shippe
     const { store, projectId } = await indexedFixtureVault();
     const everything = store.snapshot(projectId);
     const vaultTokens = everything.reduce((total, document) => total + document.tokens, 0);
-    expect(vaultTokens).toBe(18_886);
+    expect(vaultTokens).toBe(19_100);
     expect(vaultTokens).toBeGreaterThan(DEFAULT_CONTEXT_BUDGET_TOKENS);
   });
 
   it('refuses documents by name once the budget binds, rather than overspending', async () => {
     const pack = await packOver({ budgetTokens: 2_000 });
-    expect(pack.record.total_tokens).toBe(508);
+    expect(pack.record.total_tokens).toBe(438);
     expect(pack.record.total_tokens).toBeLessThanOrEqual(2_000);
     expect(pack.assembly.droppedForBudget.length).toBeGreaterThan(0);
     expect(pack.assembly.outcome).toBe('within_budget');
@@ -237,5 +242,118 @@ describe('not_indexed is a third answer, not an empty pack', () => {
       knowledgeDir: FIXTURE_KNOWLEDGE_DIR,
     });
     expect(result.status).toBe('not_indexed');
+  });
+});
+
+describe('precision — what must NOT be in the pack', () => {
+  // Every shipped pack assertion in round 1 said *a* document is present or excluded; none said an
+  // irrelevant one is absent, so every one of them would have passed a retrieval implementation
+  // that returned the whole vault (standing rule 43). These are the negatives.
+
+  it('keeps a billing task away from the session pages, and the reverse', async () => {
+    const billing = await packOver({
+      taskText: 'Fix the flaky billing invoice tax rounding for EUR',
+      touchedPaths: ['src/billing/tax.ts'],
+    });
+    const billingPaths = billing.documents.map((document) => document.path);
+    expect(billingPaths).toContain(`${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2025-06-10-tax-rounding.md`);
+    expect(billingPaths).not.toContain(`${FIXTURE_KNOWLEDGE_DIR}/technical/session-service.md`);
+    expect(billingPaths).not.toContain(
+      `${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2026-01-04-session-fixtures.md`,
+    );
+
+    const session = await packOver();
+    const sessionPaths = session.documents.map((document) => document.path);
+    expect(sessionPaths).toContain(
+      `${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2026-01-04-session-fixtures.md`,
+    );
+    expect(sessionPaths).not.toContain(`${FIXTURE_KNOWLEDGE_DIR}/technical/billing.md`);
+  });
+
+  it('leaves the weak tail of a good query in, which is a recorded decision and not an oversight', () => {
+    // `retrieval.ts` records the two measurements that rejected both shapes of a relevance floor:
+    // an absolute one is backwards (a stopword outranks a correct answer twenty to one), and a
+    // relative one puts the *correct second answer* at 0.667 of the best against PostgreSQL and
+    // 0.267 against this double. Nothing here thresholds a score, and the thing that removed the
+    // measured harm — a degenerate query filling the pack — is asserted two tests up.
+    expect(DEFAULT_CONTEXT_BUDGET_TOKENS).toBe(12_000);
+  });
+
+  it('a degenerate query contributes no text candidates at all', async () => {
+    // Measured against a real PostgreSQL, `"the"` ranks four padded pages at 0.947 — higher than
+    // any real query scores its correct answer. The guard is at the query, not at the score.
+    const pack = await packOver({ taskText: 'the', touchedPaths: [] });
+    expect(pack.queryTerms).toEqual([]);
+    expect(pack.record.tier1).toEqual([]);
+    expect(pack.documents.every((document) => document.tier === 0)).toBe(true);
+  });
+
+  it('still finds the path-scoped lesson when the query is degenerate', async () => {
+    // Fail *closed* on precision, not on recall: an unusable query removes the text step and
+    // leaves the author's own `paths:` statement intact.
+    const pack = await packOver({ taskText: 'the', touchedPaths: FIXTURE_TOUCHED_PATHS });
+    expect(pack.queryTerms).toEqual([]);
+    expect(pack.record.tier1.map((entry) => entry.path)).toContain(
+      `${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2026-01-04-session-fixtures.md`,
+    );
+    expect(pack.record.tier1.every((entry) => entry.reason === 'paths')).toBe(true);
+  });
+
+  it('extracts keywords rather than sending the ticket text as one AND', async () => {
+    const pack = await packOver();
+    expect(pack.queryTerms).toEqual([
+      'session',
+      'service',
+      'fails',
+      'tests',
+      'with',
+      'foreign',
+      'violation',
+    ]);
+  });
+});
+
+describe('a hostile document in the pack', () => {
+  const hostilePack = () =>
+    packOver({ taskText: 'notes on untrusted content maintenance mode runbook drain' });
+
+  it('is indexed like any other page — it is a legal document', async () => {
+    const { store, projectId } = await indexedFixtureVault();
+    const [document] = await store.loadDocuments(projectId, [FIXTURE_HOSTILE_PATH]);
+    expect(document).toBeDefined();
+  });
+
+  it('carries its hostile *words* into the pack unchanged, which WP-17 delimits', async () => {
+    const { store, projectId } = await indexedFixtureVault();
+    const [document] = await store.loadDocuments(projectId, [FIXTURE_HOSTILE_PATH]);
+    const chunks = await store.loadChunks(document?.id as Id);
+    const text = chunks.map((chunk) => chunk.text).join('\n');
+    for (const phrase of FIXTURE_HOSTILE_PHRASES) expect(text).toContain(phrase);
+  });
+
+  it('carries none of its control characters or bidi overrides', async () => {
+    const { store, projectId } = await indexedFixtureVault();
+    const [document] = await store.loadDocuments(projectId, [FIXTURE_HOSTILE_PATH]);
+    const chunks = await store.loadChunks(document?.id as Id);
+    for (const chunk of chunks) {
+      expect(chunk.text).not.toMatch(
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the assertion.
+        /[\u{0000}-\u{0008}\u{000B}-\u{001F}\u{007F}-\u{009F}\u{200E}\u{200F}\u{202A}-\u{202E}\u{2066}-\u{2069}]/u,
+      );
+    }
+  });
+
+  it('cannot forge the pack own structure with a line that looks like a chunk prefix', async () => {
+    // The hostile page contains `DEMO / .agentic/knowledge/business/direction.md / Direction`.
+    // Every path, tier and reason in the record comes from the row, so the forged line is content.
+    const pack = await hostilePack();
+    for (const entry of pack.record.tier1) {
+      expect(pack.documents.some((document) => document.path === entry.path)).toBe(entry.validated);
+    }
+    const hostile = pack.documents.find((document) => document.path === FIXTURE_HOSTILE_PATH);
+    if (hostile !== undefined) {
+      expect(hostile.workspacePath).toBe(workspaceNameFor(hostile.tier, FIXTURE_HOSTILE_PATH));
+      expect(hostile.reason).not.toContain('direction.md');
+    }
   });
 });

@@ -31,6 +31,7 @@ import {
   kbFrontmatterSchema,
 } from '@platform/contracts';
 import { type FrontmatterValue, readFrontmatter } from './frontmatter.js';
+import { sanitiseDocumentText } from './sanitise.js';
 import { estimateTokens } from './tokens.js';
 
 /**
@@ -78,6 +79,13 @@ export interface ParsedKbDocument {
   readonly tokens: number;
   /** True when {@link MAX_CHUNKS_PER_DOCUMENT} cut the document short. */
   readonly truncated: boolean;
+  /**
+   * Control characters and bidi overrides replaced by {@link sanitiseDocumentText}.
+   *
+   * Non-zero is not an error and not a refusal — it is a fact about the page a curator should see,
+   * and it reaches them through `IndexReport`. Zero for every document anyone writes by hand.
+   */
+  readonly sanitised: number;
 }
 
 export type KbDocumentParse =
@@ -234,7 +242,12 @@ export interface ParseKbDocumentInput {
 }
 
 export const parseKbDocument = (input: ParseKbDocumentInput): KbDocumentParse => {
-  const block = readFrontmatter(input.source);
+  // Before anything reads the bytes: line endings normalised, then the characters that are
+  // rendering instructions rather than text replaced (see `sanitise.ts` for what is *not* touched).
+  // It happens here rather than per chunk so the frontmatter parser cannot be steered by a control
+  // character either, and so the count is a property of the document.
+  const normalised = sanitiseDocumentText(input.source.replace(/\r\n?/g, '\n'));
+  const block = readFrontmatter(normalised.text);
   if (block.kind === 'malformed') {
     return { status: 'invalid', reason: `frontmatter: ${block.reason}`, line: block.line };
   }
@@ -321,6 +334,7 @@ export const parseKbDocument = (input: ParseKbDocumentInput): KbDocumentParse =>
       links: linksOf(block.body),
       tokens: chunks.reduce((total, chunk) => total + chunk.tokens, 0),
       truncated,
+      sanitised: normalised.removed,
     },
   };
 };
