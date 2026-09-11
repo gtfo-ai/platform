@@ -2535,7 +2535,10 @@ a `perform` returning `c-1?token=<planted>` through Slack's own plan shape (`enc
 the planted value straight into the store. **The sweep then found the key too** — `marker:agentic:<planted>`
 reached `idempotencyStorageKey` verbatim, and technical/06's own example of a key ("marker ids for
 comments") is text read back out of a provider's comment, so the key is the more likely half. Both are now
-redacted in the executor, the key **once where the scope is built** so `get` and `put` cannot disagree.
+handled in the executor, the key **once where the scope is built** so `get` and `put` cannot disagree.
+**Superseded in round 3:** redacting the key was the wrong half of that fix, and the two named tests listed
+below for it (`keeps the injected secret out of the key it stores`, `still replays on a redacted key …`) no
+longer exist. The next section says why.
 Not at the call site (rule 41): one guard, four named tests, each proved by its own mutation —
 `keeps the injected secret out of the value it stores`, `keeps the injected secret out of the key it
 stores`, `still replays on a redacted key, so the guard cannot double-perform the action` (the mutant that
@@ -2572,7 +2575,7 @@ state, on top of the delivery-key table above:
 
 | path | verdict |
 |---|---|
-| `IdempotencyStore.put` value, and the `key` in `IdempotencyScope` | **the finding — both redacted here** |
+| `IdempotencyStore.put` value, and the `key` in `IdempotencyScope` | **the finding.** The value is redacted here; the **key half was changed in round 3 to a refusal** — see the next section |
 | `IdempotencyPlan` call sites in production | one: `slack/digest.ts`. Covered by the executor, not by itself |
 | `singletonKey` — `task:<uuid>`, `mr:<iid>` | clean: a platform uuid and a `number`. `JOB_KEY_PATTERN` bounds the shape, not the origin |
 | job `data` payloads (`StageExecuteData`, `ReviewWindowData`) | clean: ids, a stage slug, an ISO instant |
@@ -2590,6 +2593,80 @@ first census, which stopped at the adapter ring). Both were **verified by readin
 from a name: `stage-executor.ts` `data = outcome.structuredOutput` → `store.artifacts.insert(… data …)` and
 `artifactQuestions(data)` → `store.questions.insert`, and `event-bus.ts`'s `describeError` →
 `recordFailure` → `insert into handler_executions … error = $4`.
+
+### Same branch, round 3 — a redacted key is not an identity, and the property nothing enforced
+
+The approving review of round 2 left two things, both about the **key** half of the idempotency fix. Both
+were reproduced before anything was changed, and the reproduction moved the fix.
+
+**Reproduced first (the reviewer's measurement, confirmed).** A redactor holding two *different* secret
+values both named `jira`: the second `execute` returned `status: 'replayed'` with the **first** request's
+`{"comment_id":"comment-A"}`, `store.keys().length === 1`, and the second `perform` never ran. With
+`jira_api_token` / `jira_webhook_secret` both survived: two keys, both `ok`. Separately, a **forged literal
+placeholder** — provider text containing `marker:agentic:[REDACTED:integration:jira]` verbatim, which any
+actor who can write a ticket comment can produce (BD-022) — came back `replayed` with the real stored
+result, one key.
+
+**The fix the measurement asked for is one guard, and it is not the one that was prescribed.** Rejecting a
+duplicate name in `exactSecretRedactor` is right and is done (below), but it closes only the set one
+constructor can see: **`composeSecretRedactors` has the identical hole and cannot be made to close it** —
+`SecretRedactor` is two methods and no inventory, which is what lets a pattern redactor and a test double
+satisfy it — and `composeSecretRedactors(options.redactor, bindingSecretRedactor([…]))` is the shape all
+five adapters actually build. Measured: two composed redactors both naming a secret `jira_api_token` render
+two different values identically. So a fix that stopped at the redactor would have left the production path
+carrying the defect while reading as fixed (rule 63's shape, before the fact).
+
+**What actually fails closed is refusing the key.** `idempotencyScopeFor` now throws `invalid_request` when
+`redactText(key).count > 0`: nothing performed, nothing stored, no audit row — the same shape as
+`assertActionName`. That is the *opposite* trade from the audit row one function away, deliberately: BD-003
+obliges the row to be written, so it takes the fidelity loss; a key has no such obligation, and a lookup
+that collides returns the **wrong answer** rather than a less precise one. It also settles the forgery
+without knowing anything about the placeholder's format: no stored key is a redaction output any more, so a
+forged one can collide with nothing but a literal copy of itself, and what remains is the property every
+idempotency scheme has — whoever controls the key controls the slot, bounded by `(integration, action)`.
+
+**Reachability, measured before the decision was made, because "is it in the threat model" is a question
+about code that exists.** The repository ships **exactly one** `IdempotencyPlan`: `slack/digest.ts`'s
+`slack:digest:<channel>:<day>`, whose parts are binding configuration and the clock in the schedule's zone.
+Neither half was reachable through it or through anything else on disk; `grep` for `decode:` outside tests
+returns that one line. The guard is for the plan technical/06 describes and nobody has written yet — "marker
+ids for comments", text read back out of a provider's comment body — which is the first key an outsider
+gets to influence. The decision and the attacker's requirements are written **in the code**
+(`idempotencyScopeFor`'s docblock, `IdempotencyPlan`, the `IdempotencyStore` port, this file's CLAUDE.md
+bullet), not only here.
+
+**The other half, where it is decidable.** `exactSecretRedactor` refuses two secrets that share a
+placeholder name, at construction, and **nothing survives** the collision (rule 38) — keeping either would
+leave the other value unredacted, which is worse than failing to build, and rule 20 allows the refusal
+because constructing a redactor is not an inbound notification. It was rule 18's shape exactly: a
+configuration whose duplicate case silently produced a *permissive* result, held up only by the shipped
+bindings happening to name every secret distinctly. `bindingSecretRedactor` does **not** skip a duplicate
+the way it skips a too-short value, and says why at the line: dropping a four-character password loses
+nothing, dropping one of two differently-valued secrets leaves that secret in every row the binding writes.
+
+**Five mutations, each killed by a named test** (rules 3, 62):
+
+| mutation | named test that died |
+|---|---|
+| delete the duplicate-name `throw` | `refuses two secrets that share a placeholder name`, `refuses a duplicate name even when the two values are identical` |
+| `names.has(name)` → always true | `keeps two distinctly named secrets apart, placeholder and count` (+ 9 others) |
+| delete the `key.count > 0` `throw` (i.e. restore round 2) | `refuses an idempotency key that carries an injected secret, storing nothing`, and `gives a forged placeholder nothing to match, because the key it would collide with is refused` — which fails on `the forger is handed its own result, never somebody else's`, the harm, not on its setup |
+| `key.count > 0` → `>= 0` (refuse everything) | `leaves a key with no secret in it alone, and still replays on it` (+ 7 others) — rule 42's other side |
+| drop `extraRedactions` from the `ok` row | `keeps the injected secret out of the value it stores`, on `the store scrub is counted onto the row` |
+
+**The nit, closed both ways.** Of the two discarded `RedactionOutcome.count`s, one is now counted and the
+other says at the line why it cannot be. `redactStoredJson`'s count reaches the row through
+`buildEntry`'s `extraRedactions` — the store write is the one scrub that happens outside the row reporting
+it, and a scrub nobody counts is indistinguishable from one that found nothing. The key's count is
+structurally always zero now: a non-zero count there is a **refusal**, not a redaction, so there is no
+number for a row to carry.
+
+**Rule candidate for whoever maintains the list.** *A many-to-one transform applied to an identity is a
+defect, whatever the transform is for.* Redaction, case folding, unicode normalisation and truncation all
+have a legitimate reason to collapse two inputs into one, and all of them are wrong on a key: the losing
+call is not told it lost, it is handed the winner's answer. The question to ask of any scrub is not "does
+this hide the secret" but "is anything downstream comparing the output for equality".
+
 
 ## Discovered work (not in plan)
 
