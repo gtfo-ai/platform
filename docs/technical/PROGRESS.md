@@ -668,6 +668,43 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 > Maintained by the orchestrator. A finding leaves this list when it is **merged**, not when it is agreed.
 > Each line names where it came from, so a future session can judge the evidence rather than re-derive it.
 > **Nothing here blocks M2**; the ordering is by consequence, not by discovery.
+> **Numbers are identifiers, not ranks.** Entries are cited by number from `docs/TODO.md` and from
+> each other, so a new finding takes the next free number and is *placed* where its consequence puts
+> it. A later number above an earlier one is the ordering working, not a mistake.
+
+### 8. **`gitleaks` pre-commit is a no-op in a linked worktree, and it fails open** (TODO)
+**What is wrong.** The pre-commit secret scan reports success by scanning nothing when the repository
+it is run in is a linked worktree.
+
+**Evidence** (orchestrator, 2026-09-11, worktree `.claude/worktrees/docs`). The hook's container
+fallback printed `fatal: not a git repository: /Users/janmikes/www/agentic-platform/.git/worktrees/docs`,
+then `0 commits scanned`, then `scanned ~0 bytes (0)`, then **`no leaks found`** and a green
+`✔️ gitleaks`. The mechanism is not in doubt: a linked worktree's `.git` is a *file* holding
+`gitdir: …/.git/worktrees/<name>`, and the container follows neither the file nor the path it names.
+
+**What it costs to leave.** BD-002 — "no secrets in the repo, ever" — is one of this project's
+non-negotiables, and this is standing rule 18's shape (*an empty credential is not a credential*)
+inside the gate that exists to enforce it: a scan of zero bytes is not a scan, and it is spelled the
+same as a real pass. The exposure is bounded and worth stating precisely: CI's `secret scan` job runs
+on an ordinary full checkout and is unaffected, so the repository is covered at the gate that has the
+last word. What is lost is the *local* half — and `14-orchestration-protocol.md` tells every future
+session to work in worktrees, so the decoration is exactly what an agent's commits meet.
+
+**What done looks like.** The hook either scans the worktree correctly (mount the parent `.git` and
+the `worktrees/<name>` gitdir into the container, or take the host binary when one is present) **or
+refuses loudly**. It must not print `no leaks found` over zero bytes: a `0 commits scanned` /
+`~0 bytes` result is a failure. The refusal needs its own assertion, because the whole finding is
+that the failing path and the passing path were spelled identically — a check that cannot fail is
+rule 18 twice over.
+
+**Needs measurement** (not run here, rule 66): whether this session's *agent* worktrees —
+`.claude/worktrees/slack-fix` and the `wp/*` worktrees — were affected at all. They carry
+`node_modules`, so they may have taken the binary path rather than the container fallback, and nobody
+has checked which. Until somebody does, the honest statement is that every commit made from a
+worktree this session is **unverified** by the pre-commit half, not that it was unscanned.
+
+**Depends on.** Nothing. One file (`scripts/gitleaks.mjs`), owned by no work package — whoever next
+touches the hook, and before the next session that runs agents in worktrees.
 
 ### 0. **CI was red from WP-14 to session 3** — `e2e-fake-claude` on Linux (ci-fix, RESOLVED)
 Six consecutive red runs on `main`, `34509491314` (WP-14's merge) through `34572185799`, every other job
@@ -682,7 +719,9 @@ ci-fix notes. First green run: **`34580312845`**, all eleven jobs. Left behind b
   not taken: unkeyed it does not store "no secret" at `MIN_SECRET_LENGTH` 8; the only key an inbound adapter
   holds is the binding's webhook secret, `string | null` on GitLab, so the property would hold on some
   bindings and silently weaken on others (rule 18); `APP_SECRET_KEY` is not plumbed to a registration; and a
-  digest makes `delivery-key-redaction.test.ts` vacuous. Nothing writes `inbox` yet, so there is time.
+  digest makes `delivery-key-redaction.test.ts` vacuous. Nothing writes `inbox` yet, so there is time —
+  and the work package that first will is now named: **WP-15c**, which owns the ingress and the inbox row,
+  and which therefore has to answer this before it writes its first `delivery_id`.
 - **Two stored-secret siblings, found by the rule-49 sweep and filed rather than fixed** (WP-12/WP-15 scope,
   verified at the sinks by two reviewers): a run's `structuredOutput` reaches `artifacts.data`,
   `questions.text` and `tasks` unredacted while the same message's transcript copy is redacted
@@ -699,25 +738,127 @@ a ci-fix that grows into a design change stops being reviewable. Measured bound 
 fixed script, uuid-validated id, ~1 s, and the agent cannot influence it. **No cross-run escalation exists
 today**: `chmod -R` over a symlink to a sibling run left it at `500`, its token `400`, contents intact, and
 `rm -rf` unlinked the link rather than the target.
+Checked rather than rewritten, and the two parts it was missing: **what done looks like** is the volume per
+run plus the teardown dropping `CAP_DAC_OVERRIDE` — the capability is the *evidence* the shape is wrong, so
+a fix that keeps it has not landed — and the **owner** is **WP-22**, which builds the compose file and the
+images and is the first place the volume layout is written down rather than constructed in a test.
 
 ### 1. What WP-15a left behind — **production still does not start the pipeline** (TODO)
 The sentence a reader needs, in the reviewer's words: **"The pipeline is composed and production does not
 start it."** Three separate things, none of them WP-15a's to fix:
 
-- **A Postgres `IntegrationAuditLog` and its migration.** `integration_actions` lacks `project_id`,
-  `redaction_count` and `attempts`. Until it exists, `main.ts:18` and `scripts/dev.mjs:70` call
-  `startRuntime()` with no runner and no audit log, and `/readyz` is **503 for ever** on `ROLE=all|worker` —
-  which is honest, and is why **WP-22 must not gate `depends_on` on `/readyz`** (recorded in TD-023).
-- **No webhook ingress.** `apps/server/src/routes/` has none, so nothing in production emits `ticket.matched`
-  even once an audit log exists. Belongs with WP-08/WP-09's providers or a row of its own.
-- **A re-dispatch/backfill tool**, now owed by **WP-19** with an acceptance criterion, because
-  `run.finished`/`run.failed` are swept today (the cost ledger is unbuilt). The loss is recoverable:
-  `runFinishedEvent` carries `usage`, `model_usage`, `cost`, `num_turns`, `wall_ms`, and `events` is
-  append-only.
+All three are now scheduled — the two that had no home are **WP-15b** and **WP-15c** in
+`13-implementation-plan.md`, each with an acceptance criterion; the third already had one on WP-19.
+
+- **A Postgres `IntegrationAuditLog` and its migration** — now **WP-15b**. `integration_actions` lacks
+  `project_id`, `redaction_count` and `attempts`. Until it exists, `main.ts:18` and `scripts/dev.mjs:70`
+  call `startRuntime()` with no runner and no audit log, and `/readyz` is **503 for ever** on
+  `ROLE=all|worker` — which is honest, and is why **WP-22 must not gate `depends_on` on `/readyz`**
+  (recorded in TD-023).
+- **No webhook ingress** — now **WP-15c**. `apps/server/src/routes/` has none, so nothing in production
+  emits `ticket.matched` even once an audit log exists. Carved off WP-15a's number rather than WP-08's or
+  WP-09's because it spans both providers *and* the unwritten `inbox`, and because the inbound redaction
+  step `docs/TODO.md` has open belongs to the same door.
+- **A re-dispatch/backfill tool**, owed by **WP-19** with an acceptance criterion already on its plan row
+  (*"a run that finished before the ledger's handler was registered appears in the rollups after a
+  backfill"*), because `run.finished`/`run.failed` are swept today (the cost ledger is unbuilt). The loss
+  is recoverable: `runFinishedEvent` carries `usage`, `model_usage`, `cost`, `num_turns`, `wall_ms`, and
+  `events` is append-only. Checked rather than rewritten: the row says it.
 
 Also open, smaller: the consumption table is **derived from the implementation** rather than a declaration
 the implementation must meet — a row that stays `unconsumed` after its WP lands re-opens the hole silently,
-and guarding that direction needs a second list of landed WPs (stated, not built).
+and guarding that direction needs a second list of landed WPs (stated, not built). It is the *safe*
+direction that is guarded today and the *unsafe* one that is not, which is standing rule 7's shape again.
+What done looks like is small and worth naming so it is not re-derived: the WP that flips a row to
+`handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
+declaration is held by the work package rather than by a global list nobody maintains.
+
+### 11. What WP-16 left behind — **the retrieval layer is built and no prompt uses it** (TODO)
+The same shape as entry 1, one layer up, and in the reviewer's sentence form. Three pieces, none of
+them WP-16's to fix, all three now with an owner in the plan:
+
+- **`basicStageRunPlanner` still passes `contextPack: []`**, and `stage-executor.ts` still writes a
+  zeroed `ContextPackRecord`. The assembler, the store, `kb_search` and the code map all work and are
+  reached by nothing a run sees. **WP-17**, which owns prompt assembly.
+- **Nothing composes a `PlatformToolPort` in production, so `kb_search` has no home.** WP-12 defined
+  the port and its nine methods; the only implementations in the tree are `recordingTools` (a
+  fixture) and WP-16's `createKbSearchTool`, which is a function a composition root supplies.
+  `platform-mcp.ts` is ready and takes one. **WP-17**, which owns the run's tool surface.
+- **`KnowledgeIndexer` is not registered as a pg-boss job.** technical/07 specifies "singleton per
+  project", triggered at task start and after every merge. Registering it needs a checkout to read,
+  which needs the workspace provider, which needs the ingress entry 1 says does not exist — so
+  wiring it today would be a job nothing can trigger. **WP-18**, after **WP-15c**.
+
+Detail and measurement are in the WP-16 notes and in "Discovered work"; this entry exists so the gap
+is readable next to entry 1 rather than only under the work package that found it.
+
+### 12. **Untrusted context-pack text reaches the prompt with no delimiter, marker or count** (WP-17)
+**What is wrong.** technical/04 § "Prompt assembly" delimits the *task* block — step 5 is
+`<ticket>` … `</ticket>`, "all marked as data" — and says nothing of the kind about step 4, the
+context pack, which is rendered "tier 0 inline" and as a "Relevant knowledge" block. Nothing between
+a KB document on disk and the assembled prompt marks that text as data.
+
+**Evidence** (WP-16 review, explicitly marked *schedule, don't fix here*). A hostile document —
+injection text, a literal `<system>`, `<img onerror=…>`, a `javascript:` URL, an ANSI `ESC[31m` and a
+U+202E — flows **byte-identical** through the parser → `kb_chunks` → `kb_search.excerpt` →
+`pack.documents[].text`. Nothing strips it, escapes it, marks it or counts it, and nothing is
+supposed to at that layer: `context-pack.ts`'s own docblock says the assembler "returns text and
+paths, the prompt assembler (WP-17) is what delimits them", and the field carries the comment
+*"Untrusted document text (BD-022). Never interpreted here."* So this is a **handoff that has not
+been scheduled**, not a defect in WP-16.
+
+**What it costs to leave.** BD-022 governs, and technical/07's own block on provider text says of
+this exact obligation **"this is where it closes"** — a pack must not let integration text occupy the
+pack's own voice. Until WP-17 lands, every prompt that consumes a pack would take a KB document as
+platform voice; today nothing consumes a pack (entry 11), which is the only reason this is scheduled
+rather than urgent. The order matters: WP-17 must not ship the `contextPack` wiring of entry 11
+*before* the delimiter, or the window opens for the length of a work package.
+
+**What done looks like.** A delimiter contract for pack text in the assembler, asserted by a test
+that plants the hostile document above and reads the **assembled prompt** — not the pack — and shows
+that none of the six can close the platform's own voice. The web app's answer to the same question is
+the precedent worth copying (`apps/web/src/ui/untrusted.tsx`: no sanitiser, nothing for a later
+transform to undo), and the difference is that a prompt has no React text node, so the contract has
+to be a delimiter plus a rule about what may appear inside it.
+
+**Depends on.** WP-16 (landed); **blocks nothing**, and blocks *itself* being done after the
+`contextPack` wiring in the same work package.
+
+### 13. **`context_budget_tokens` has no ceiling** (WP-17, one line)
+`packages/contracts/src/common.ts:46` is `tokenCountSchema = z.int().nonnegative()`, and
+`config.ts:47` types `context_budget_tokens` with it — so a project may configure a budget of any
+size, and the pack that fills it is spent per stage run. A nit today (the shipped default is 12 000
+and nothing else sets it), and the cheapest fix is a `.max()` at the boundary rather than a check at
+the assembler. Found by WP-16's review.
+
+### 14. **The token estimator can under-estimate, and its properties do not constrain it** (TODO)
+**What is wrong.** `estimateTokens` (`packages/domain/src/knowledge/tokens.ts`) is `ceil(chars / 4)`,
+every budget in the platform is denominated in it, and `run_context_pack.tokens` stores it. Under-
+estimating is the direction that overflows a real model's context window; over-estimating only wastes
+budget.
+
+**Evidence.** Measured by WP-16's review: **48 000 CJK characters estimate to exactly 12 000 tokens**,
+which is the shipped default budget, so a pack that fills the budget on such a corpus is the worst
+case rather than a corner. The reviewer labels the *ratio* a **hypothesis** and it is kept as one
+here (standing rule 39 — a wrong number attached to a true finding is the combination that survives
+review): 2–4× real for CJK, ~1.6–2× for the Czech the vault fixture states. **Needs measurement**
+against a real tokeniser; nobody has run one. The second half is not a hypothesis: `tokens.test.ts`
+asserts "non-zero" and "monotone", and both properties are satisfied by an **arbitrarily wrong**
+estimator, so the suite cannot tell a 4-chars-per-token model from a 40-chars-per-token one.
+
+**What it costs to leave.** A stage run whose pack overflows the model's context is a run that fails
+or silently truncates, and the platform's own record of the spend (`run_context_pack.tokens`) is
+wrong in the same direction. The blast radius is bounded today because nothing consumes a pack
+(entry 11) and the fixture vault is English.
+
+**What done looks like.** Either a bound the estimator can be held to — an upper-bound estimator, so
+error is in the safe direction — or a real tokeniser behind the same function; and either way a
+property that fails for an estimator with the wrong ratio, which the two present properties do not.
+The honest interim is a docblock line stating the measured worst case, which the module's existing
+"the estimate is not the billed number" paragraph is the right place for.
+
+**Depends on.** Nothing; wants a measurement before it wants code. Owner: **WP-17** if it lands
+first (it is the first consumer), otherwise whoever raises the budget past a Latin-script corpus.
 
 ### 1b. `verify:e2e` failed once on `main` at `be05a9b`, unreproduced (TODO)
 One `FAIL: verify:e2e` in the orchestrator's shell at load ~20 falling, then **four consecutive passes**
@@ -755,6 +896,37 @@ undermines nothing today — `sweep.failed` is read in one place outside `outbox
 uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
 *trusting* `SweepReport`.
 
+### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO)
+**What is wrong.** The guard's scope is `git ls-files` (CLAUDE.md says so), so a **new** source file
+carrying a literal NUL passes `verify` until it is staged.
+
+**Evidence.** WP-16's implementer wrote literal NULs into two brand-new files — `knowledge/globs.ts`,
+where a NUL is the *right* sentinel and CLAUDE.md asks for the escape `\0`, and `kb-search.test.ts`,
+where a single space was meant — while `nul:check` reported `PASS: nul:check (832 tracked text files,
+…, none with a NUL byte)`. The first was found by **luck** (biome rendered the character in a
+formatting diff); the second was found by `nul:check` itself, one second after `git add`, which is
+the guard working exactly as designed. Full filing under "Discovered work", WP-16.
+
+**What it costs to leave.** Narrow, and the window closes at `git add` — before the pre-commit hook
+and long before a push — so nothing has ever reached `main` through it. What makes it worth an entry
+rather than a shrug is the *class*: this is standing rule 7 (*a guard with a hand-maintained scope
+drifts — ask git what it tracks*) reappearing inside a guard that exists because of rules 30 and 33,
+and the scope it asks git for is the wrong question rather than a stale list. Rule 33's point applies
+too: a `scripts/*.mjs` verify step has no test tier of its own, so the gap in its scope is not
+something a mutation of the guard would reveal.
+
+**What done looks like.** The sweep also walks `git ls-files --others --exclude-standard`, which is
+one flag **plus a decision** that should not be made silently: whether a guard reads files git has
+been told to ignore. It should not — an ignored file is not a source file — so `--exclude-standard`
+is the whole answer, and the decision is worth one line in the script's docblock rather than a flag
+nobody can explain later.
+
+**Depends on.** Nothing. Owner: whoever next touches `scripts/`; cheap enough to fold into any WP.
+
+**The transferable part is not the guard.** An agent editing through a tool can emit a byte it did
+not intend and cannot see in its own output — twice in one work package, in two files, where a space
+was meant. The check existed; its *scope* was the hole.
+
 ### 6. Two nits from WP-14's final round
 - A citation line ending in `,` continues, so ordinary quoted prose on the next line becomes an invented
   cited name. It fails **loudly**, and the grammar section states the constraint, so it is acceptable —
@@ -762,6 +934,13 @@ uses it only for logging — so it is an observability gap, not a live defect. F
 - Merge `b469ff2` rewrote 7 comment lines in `test/e2e/support/docker-workspace.ts`, a file `main` never
   had, *inside a merge commit* — invisible to a default `git log -p`. The text is accurate. This is the
   `d1e7b69` class in miniature: **the orchestrator's own merges are the least reviewed changes here.**
+
+### 9. **`commitlint` cannot run in a worktree that has no `pnpm install`** (nit)
+`sh: ./node_modules/.bin/commitlint: No such file or directory`, `exit status 127`, commit rejected
+(same measurement as entry 8). It **fails closed**, so it is a nit and not a gate defect — but a
+fresh worktree cannot commit at all until `pnpm install` has run in it, and the orchestration
+protocol tells every future session to use worktrees. One line in `CONTRIBUTING.md`, or a hook that
+resolves the binary from the repository root rather than from `$PWD`.
 
 ### 7. Carried, not yet scheduled
 - **Q55** — the binding redactor cannot know a run-scoped credential, so `getJobLog`'s obligation is not
@@ -803,9 +982,11 @@ uses it only for logging — so it is an observability gap, not a live defect. F
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
+| WP-15b | Postgres `IntegrationAuditLog` + `IdempotencyStore` + the `integration_actions` migration | WP-15a | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Until it lands, `startRuntime()` composes no pipeline in production and `/readyz` is 503 for ever on `ROLE=all\|worker`. Acceptance asserts `redaction_count` in **both** directions. |
+| WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | REVIEW | `wp/16` | Acceptance met on the fixture vault: **10 622 estimated tokens at the shipped 12 000 default**, produced by `context-pack.test.ts`. The honest boundary is narrower than the row: *the retrieval layer is built and no prompt uses it* — the planner still passes `contextPack: []`. **universal-ctags is absent on this machine and unowned by the platform (Q57)**; the extractor probes and refuses. 37/37 mutants dead. Notes below. |
-| WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
-| WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
+| WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
+| WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
 | WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `c744904` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evalua | WP-16, WP-17, WP-20 | no | TODO | — | |

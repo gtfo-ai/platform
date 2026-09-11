@@ -1,6 +1,6 @@
 # 14 — Orchestration protocol for the autonomous implementation session
 
-> How a single long-running Claude Code session delivers `13-implementation-plan.md` without losing context. The session's main agent is the **Orchestrator**; it delegates every work package to a fresh-context **implementer** subagent and every result to a fresh-context **reviewer** subagent (`.claude/agents/`). The **architect** agent is available read-only for design questions.
+> How a single long-running Claude Code session delivers `13-implementation-plan.md` without losing context. The session's main agent is the **Orchestrator**; it delegates every work package to a fresh-context **implementer** subagent and every result to a fresh-context **reviewer** subagent (`.claude/agents/`). The **architect** agent is available read-only for design questions, and the **refiner** agent turns a finding that is bigger than the work package that found it into a scheduled piece of work.
 
 ## Principles
 1. **State lives in files, not in the conversation.** `docs/technical/PROGRESS.md` is the ledger (status per WP, decisions, discovered work, blockers). The orchestrator re-reads it at every iteration; after any compaction or restart it can continue from the ledger alone.
@@ -16,6 +16,7 @@ repeat:
   2. Ensure clean tree and green verify on main (git status; pnpm run -s verify). If red: spawn implementer "fix main" before anything else.
   3. Spawn implementer(s) with: WP id, the exact rows/docs to read, notes from the ledger, and the report format. Parallel implementers run in isolated worktrees (Agent tool isolation: worktree); sequential ones work on main.
   4. On report: run pnpm run -s verify and the WP's test target yourself. FAIL → send the failure to the same implementer (SendMessage) with "fix, then re-report" (max 2 times), then treat as review round.
+  4b. Route the findings that are not this WP's. A report or a review that surfaces a defect **bigger than the work package it was found in**, or a product improvement, goes to a fresh-context **refiner** agent (`.claude/agents/refiner.md`), which turns it into a backlog entry, a plan row with an acceptance criterion, an OPEN-QUESTIONS entry with a recommendation, or a decision-record amendment — carrying the measurement that earned it. It is **not** fixed in the current WP and **not** left in the report. The refiner writes only `PROGRESS.md`, `13-implementation-plan.md`, `OPEN-QUESTIONS.md` and `TODO.md`; the orchestrator still owns the ledger's own sections.
   5. Spawn reviewer with the WP id and diff range. REQUEST_CHANGES → send findings to the implementer (new invocation with the findings from the ledger), max 3 rounds. APPROVE → commit, push, update PROGRESS.md (status DONE, commit sha, decisions, discovered work).
   6. For worktree WPs: merge the worktree branch into main (fast-forward or merge), run verify on main, push.
   7. Every 5 WPs or at milestone boundaries: run the full test suite incl. integration/e2e targets, check `gh run list --limit 5` for CI status on GitHub and fix-forward failures as a WP "ci-fix"; write a short milestone note in PROGRESS.md (what works end-to-end, what is missing).
@@ -23,13 +24,14 @@ until all WPs are DONE or BLOCKED.
 ```
 
 ## Context hygiene for the orchestrator
-- Keep every tool output short: use `pnpm run -s verify 2>&1 | tail -40`, `git log --oneline -5`, never `cat` sources.
+- Keep every tool output short — but **never `| tail` a run you may need to diagnose**: a pipeline exits with `tail`'s status (so a `FAIL` inside an `&&` chain scrolls past and the chain continues), and the failing test's name is destroyed with the rest of the output. Redirect to a file and filter the file: `pnpm run -s verify > /tmp/v.log 2>&1; echo $?; grep -E '^(PASS|FAIL):' /tmp/v.log`. Both halves of that cost this project a standing rule (61, 75). `git log --oneline -5` is fine; never `cat` sources.
 - Ask subagents for the report format only; if a report exceeds the limit, ask for the summary again.
 - Do not keep an in-conversation task list; PROGRESS.md is the list. Update it with small Edit calls.
 - When the conversation gets long, write a "resume note" section at the top of PROGRESS.md (current WP, current round, next step) before continuing; after compaction, read it first.
 
 ## Blockers and questions
 - Product ambiguity → `docs/OPEN-QUESTIONS.md` entry with a recommendation; implement the recommendation; continue.
+- **A finding too big for the WP that found it** → refiner agent, then continue the WP. Absorbing it makes the WP unreviewable; dropping it loses the measurement someone paid a review round for. The largest gap in this project's history — `createPipelineRuntime` composed only by a test harness, through twenty-three work packages — was a finding **no work package owned**, which is exactly the shape this step exists to catch.
 - External blocker (missing credential, unavailable service) → mark WP BLOCKED with the exact human action needed (blocker brief: what is missing, why it blocks, what to do), continue with other WPs. Never wait idle if any WP can proceed.
 - Only when no WP can proceed: write the blocker briefs at the top of PROGRESS.md and stop with a summary.
 
