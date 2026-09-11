@@ -116,7 +116,7 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'shadow.report.created': 'unconsumed', // WP-34 shadow mode.
 };
 
-/** Every type this build says something must handle, in catalogue order. */
+/** Every type this build says something must handle, in this table's declaration order. */
 export const HANDLED_EVENT_TYPES: readonly DomainEventType[] = Object.entries(EVENT_CONSUMPTION)
   .filter(([, consumption]) => consumption === 'handled')
   .map(([type]) => type as DomainEventType);
@@ -124,7 +124,7 @@ export const HANDLED_EVENT_TYPES: readonly DomainEventType[] = Object.entries(EV
 export interface SweepReadiness {
   /** True when this registry can handle everything the build declares consumed. */
   readonly ready: boolean;
-  /** The declared-consumed types with no registered handler, in catalogue order. */
+  /** The declared-consumed types with no handler registered *for that type*. */
   readonly missing: readonly DomainEventType[];
 }
 
@@ -135,8 +135,19 @@ export interface SweepReadiness {
  * start the outbox worker *and* as `/readyz`'s `dispatch` check. Two readings of one condition drift
  * apart, and the pair has to agree or an operator is told a process is ready to do work it has
  * refused to start.
+ *
+ * **A catch-all handler does not count, and that is round 2's defect one level up.** `handler.ts`
+ * blesses `eventTypes: 'all'` for audit and projections, and `handlersFor(type)` merges those into
+ * every type's list — so one such handler answered "ready" for all 21 declared types, with no
+ * pipeline behind it. WP-19's audit projection is the trigger: it would have turned the gate green
+ * the day it registered. A per-type question has to be answered per type (standing rule 56), so a
+ * type counts only when something registered **for that type by name**. The cost is stated: a future
+ * consumer that genuinely handles a type only through a catch-all has to name it instead, which is
+ * the direction that fails loudly rather than quietly.
  */
 export const sweepReadiness = (registry: HandlerRegistry): SweepReadiness => {
-  const missing = HANDLED_EVENT_TYPES.filter((type) => registry.handlersFor(type).length === 0);
+  const missing = HANDLED_EVENT_TYPES.filter((type) =>
+    registry.handlersFor(type).every((handler) => handler.eventTypes === 'all'),
+  );
   return { ready: missing.length === 0, missing };
 };

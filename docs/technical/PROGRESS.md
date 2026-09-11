@@ -2453,7 +2453,7 @@ written out in full. The decision is recorded on Q55 itself and at the top of `b
   outer guard is named (`providers/emitted-secrets.test.ts`), and the reason it is still worth having is
   that that file is a hand-written list of *two* providers rather than a sweep of `providers/` (rule 7);
 - deleting the `options.pipeline === undefined` warning in `runtime.ts` kills
-  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names what is missing, refuses to report ready, and leaves the ticket queued",
+  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names the event types it cannot handle and does not start the outbox sweep",
   which also asserts the other half — the event **dispatches** and no task is created, so it is a statement
   about the branch that ran rather than about a process that had not started yet (rule 10).
 

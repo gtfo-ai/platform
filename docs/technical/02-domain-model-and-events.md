@@ -68,8 +68,10 @@ naming any consumer declares the event **consumed**: a process that sweeps the o
 handler for it, or it destroys a work item belonging to another process in the deployment. An entry of
 **`—` declares the event unconsumed** — nothing is expected to handle it, and a sweeper needs no handler
 for it. `packages/application/src/events/consumption.ts` is that column as code, its keys held to
-`DOMAIN_EVENT_TYPES` so a new event type cannot be added without answering the question; where the
-declaration and this column differ, the entry names the work package that closes the gap.
+`DOMAIN_EVENT_TYPES` so a new event type cannot be added without answering the question. **It differs
+from this column on 28 rows today** — the column states the finished product's consumers and the
+declaration states this build's, so each divergent entry names the work package that closes it
+(TD-005's amendment records the trade).
 
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|

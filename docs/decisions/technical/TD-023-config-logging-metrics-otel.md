@@ -7,8 +7,15 @@
 ## Decision
 Single `config.ts` parsed with zod 4 at boot (fail fast; `z.stringbool()` for booleans; `_FILE` variants resolved first); `.agentic/*.yml` validated with zod schemas exported as JSON Schema under `schemas/`; pino 10 structured JSON to stdout with `redact` and an `AsyncLocalStorage` mixin carrying `request_id/task_id/run_id/trace_id`; `@prometheus-io/client` at `/metrics` (HTTP duration histogram, `agent_runs_active`, `agent_tokens_total{model,kind}`, `agent_cost_usd_total`, `queue_depth`, `queue_job_age_seconds`); OpenTelemetry traces/metrics only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`@fastify/otel`, pg, undici instrumentations; run spans wrap SDK calls; Claude Code's own OTel pass-through optional per run); `@sentry/node` only when `SENTRY_DSN` is set; `/healthz` (under-pressure) and `/readyz` (DB, migrations head, queue, **dispatch** — see the amendment below). Secrets typed as `Secret` with `toJSON → [REDACTED]`; integration secrets encrypted at rest with AES-256-GCM under `APP_SECRET_KEY` (key id for rotation).
 
-> **Amendment (WP-15a, 2026-09-11): `/readyz` has a fourth check, `dispatch`, and a worker whose
-> event bus has no handlers is `down`.**
+> **Amendment (WP-15a, 2026-09-11): `/readyz` has a fourth check, `dispatch`, and a worker that
+> cannot handle every event the platform declares consumed is `down`.**
+>
+> The check is `sweepReadiness` (`packages/application/src/events/consumption.ts`) — the **same**
+> predicate that decides whether the outbox worker starts, deliberately, because two readings of one
+> condition drift apart (standing rule 41) and a process that refused to sweep must not report ready
+> to do the work it refused. This amendment first said "no handlers is `down`"; that was round 2's
+> predicate, and TD-005's own amendment replaced it — a *partial* consumer is as destructive as an
+> empty one, so the condition is per declared type and a catch-all handler does not satisfy it.
 >
 > The three checks this record named could all be `ok` on a process that would never advance a
 > ticket. `apps/server` cannot compose the pipeline on its own in this build — there is no transport

@@ -13,6 +13,7 @@
  */
 import { DOMAIN_EVENT_TYPES, type DomainEventType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { createPipelineHarness } from '../testing/pipeline-harness.js';
 import { EVENT_CONSUMPTION, HANDLED_EVENT_TYPES, sweepReadiness } from './consumption.js';
 import type { EventHandler } from './handler.js';
 import { HandlerRegistry } from './handler.js';
@@ -102,5 +103,85 @@ describe('sweepReadiness', () => {
     // The exact defect the architect measured at the bus: one handler for an unrelated type made a
     // whole-registry predicate say "ready", and the sweep then ate every other type.
     expect(readiness.missing).toEqual(HANDLED_EVENT_TYPES);
+  });
+
+  /**
+   * The same defect one level up, and the reason the predicate filters rather than counts.
+   *
+   * `handler.ts` blesses `eventTypes: 'all'` for audit and projections, and `handlersFor(type)`
+   * merges a catch-all into **every** type's list — so a registry holding one satisfied all 21
+   * declared types. WP-19's audit projection is the trigger: the gate would have read `ready` the
+   * day it registered, with no pipeline behind it. Reverting the `eventTypes === 'all'` filter in
+   * `sweepReadiness` kills both cases here by name.
+   */
+  it('does not let one catch-all handler stand in for every declared type', () => {
+    const registry = new HandlerRegistry();
+    registry.register({
+      name: 'test.audit',
+      priority: 0,
+      eventTypes: 'all',
+      handle: async () => {},
+    });
+    const readiness = sweepReadiness(registry);
+    expect(readiness.ready).toBe(false);
+    expect(readiness.missing).toEqual(HANDLED_EVENT_TYPES);
+  });
+
+  it('still refuses when a catch-all is registered beside one real handler', () => {
+    const registry = new HandlerRegistry();
+    registry.register({
+      name: 'test.audit',
+      priority: 0,
+      eventTypes: 'all',
+      handle: async () => {},
+    });
+    registry.register(handlerFor(['ticket.matched'], 'test.intake'));
+    const readiness = sweepReadiness(registry);
+    expect(readiness.ready).toBe(false);
+    expect(readiness.missing).not.toContain('ticket.matched');
+    expect(readiness.missing).toEqual(HANDLED_EVENT_TYPES.filter((t) => t !== 'ticket.matched'));
+  });
+});
+
+/**
+ * The table against the **real** registration, which is the half a synthetic registry cannot check.
+ *
+ * Every other case in this file builds the registry it then measures, so the table could drift from
+ * the code in the direction that matters — a row left `unconsumed` after its work package lands, or
+ * a row marked `handled` that nothing registers — and nothing would notice. This binds the two:
+ * `createPipelineHarness` composes the same handlers `apps/server` registers.
+ *
+ * **It guards one direction, and the other is stated rather than built.** A row that stays
+ * `unconsumed` after its consumer ships would need the test to know which work packages have landed
+ * — a second hand-maintained list, which is rule 7's shape and would drift the same way. The cheap
+ * half of it is here: every `unconsumed` row carries the work package that flips it, so the WP's own
+ * definition of done is where the question gets asked. A mechanical version would have to read the
+ * plan's status column, which is a guard reading a document nobody validates.
+ */
+describe('the declared table against the composed pipeline', () => {
+  it('has a real handler for every type it declares handled', () => {
+    const harness = createPipelineHarness({ runs: {} });
+    const registry = new HandlerRegistry();
+    for (const handler of harness.runtime.handlers) {
+      registry.register(handler);
+    }
+    expect(sweepReadiness(registry)).toEqual({ ready: true, missing: [] });
+  });
+
+  it('declares handled exactly what the pipeline registers, so neither side drifts', () => {
+    const harness = createPipelineHarness({ runs: {} });
+    const registered = new Set<DomainEventType>();
+    for (const handler of harness.runtime.handlers) {
+      if (handler.eventTypes === 'all') {
+        continue;
+      }
+      for (const type of handler.eventTypes) {
+        registered.add(type);
+      }
+    }
+    // Both directions: a type the pipeline handles but the table calls unconsumed would let a
+    // partial consumer sweep; a type the table calls handled that nothing registers would stop every
+    // sweep. The pipeline is this build's only registration, so the two sets are equal.
+    expect([...registered].sort()).toEqual([...HANDLED_EVENT_TYPES].sort());
   });
 });

@@ -33,12 +33,27 @@ The needed schema is ~4 tables; the only TS event-store library with a Postgres 
 > to **composition**.
 >
 > The platform declares, per catalogue event type, whether it is `handled` or `unconsumed`
-> (`packages/application/src/events/consumption.ts`; the catalogue's "Core consumers" column in
-> technical/02 is the normative source, with `—` meaning *declared unconsumed*). Before the outbox
-> worker starts, every `handled` type must have at least one registered handler; otherwise the sweep
-> does not start, `/readyz`'s `dispatch` check is `down` (TD-023's own amendment), and the warning
-> names the missing types. **One predicate serves both gates**, because two readings of one
-> condition drift apart (standing rule 41).
+> (`packages/application/src/events/consumption.ts`). Before the outbox worker starts, every
+> `handled` type must have a handler registered **for that type by name** — a catch-all
+> (`eventTypes: 'all'`, which `handler.ts` blesses for audit and projections) does not satisfy it,
+> because it would answer "ready" for every type at once and reopen the same hole one level up.
+> Otherwise the sweep does not start, `/readyz`'s `dispatch` check is `down` (TD-023's own
+> amendment), and the warning names the missing types. **One predicate serves both gates**, because
+> two readings of one condition drift apart (standing rule 41).
+>
+> **Where the declaration comes from, and where it knowingly differs.** technical/02's "Core
+> consumers" column is the normative statement of intent, with `—` meaning *declared unconsumed*.
+> Read literally it marks **49 of 50** types consumed, because it describes the consumers the
+> finished product has — the Slack band, the UI band, the cost ledger, the audit projection. A
+> composed `apps/server` registers handlers for **21**. A table transcribed from the column would
+> therefore stop the outbox worker in every build that exists today, so the shipped table records
+> **what this build consumes** and diverges from the column on **28 rows**, each naming the work
+> package that closes it. That inverts the direction of the guarantee — a declaration derived from
+> the implementation rather than one the implementation must meet — and it is accepted on the
+> condition that the gate cannot be satisfied by a handler that does no work, which is why the
+> catch-all exclusion above is part of this decision rather than an implementation detail. The
+> declaration is held to `DOMAIN_EVENT_TYPES` and to the composed pipeline by
+> `consumption.test.ts`, so neither side can move without the other.
 >
 > **Deliberately not in scope, and needed before the first projection ships:** a re-dispatch/backfill
 > tool that replays a range of the log to a newly added handler, and alerting on

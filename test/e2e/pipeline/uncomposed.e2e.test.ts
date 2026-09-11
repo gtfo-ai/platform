@@ -27,7 +27,7 @@ import type { Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { eventing as eventingAdapters } from '@platform/infrastructure';
 import pg from 'pg';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createMigratedDatabase,
   type MigratedDatabase,
@@ -40,7 +40,7 @@ let instance: Instance | undefined;
 let composed: PipelineE2E | undefined;
 let database: MigratedDatabase | undefined;
 
-afterEach(async () => {
+afterAll(async () => {
   await instance?.stop();
   await composed?.stop();
   await database?.drop();
@@ -49,8 +49,24 @@ afterEach(async () => {
   database = undefined;
 });
 
+/**
+ * One instance, three assertions, because **the two gates have to be observable apart**.
+ *
+ * `sweepReadiness` decides both whether the outbox worker starts and what `/readyz`'s `dispatch`
+ * check answers, deliberately (standing rule 41). A single test asserting both in sequence hides
+ * that: the first assertion fails and the second never runs, so a mutation that broke only one of
+ * them would look the same as one that broke both. Split, mutating the predicate moves **both**
+ * named tests, which is the property the pair exists to have.
+ */
 describe('an instance started without a pipeline composition', () => {
-  it('names what is missing, refuses to report ready, and leaves the ticket queued', async () => {
+  let logged: string[] = [];
+  let readyz: { status: string; checks: Record<string, string> };
+  let readyStatus = 0;
+  let taskCount = '';
+  let metricsBody = '';
+  let projectId = '' as Id;
+
+  beforeAll(async () => {
     const lines: string[] = [];
     const destination = new PassThrough();
     destination.on('data', (chunk: Buffer) => {
@@ -64,19 +80,8 @@ describe('an instance started without a pipeline composition', () => {
       logDestination: destination,
       env: { APP_DISPATCH_POLL_INTERVAL_MS: '25' },
     });
+    logged = lines.join('').split('\n');
 
-    const logged = lines.join('').split('\n');
-    const missing = logged.find((line) => line.includes('the pipeline is not composed'));
-    expect(missing).toBeDefined();
-    expect(missing).toContain('Q52');
-    expect(missing).toContain('IntegrationAuditLog');
-    // The second decision, and the one that keeps the event: the sweep is not started at all, and
-    // the warning **names what is missing** rather than saying "not ready" (TD-005's amendment).
-    const refused = logged.find((line) => line.includes('the outbox sweep is not started'));
-    expect(refused).toBeDefined();
-    expect(refused).toContain('ticket.matched');
-
-    let seededProjectId = '' as Id;
     const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
     const inbound = eventingAdapters.createEventing({
       pool,
@@ -86,8 +91,8 @@ describe('an instance started without a pipeline composition', () => {
     try {
       // The bindings the *second* instance will load, seeded now so the handover below tests only
       // what it means to test: whether the event survived.
-      const { projectId } = await seedWorld(pool, {});
-      seededProjectId = projectId;
+      const seeded = await seedWorld(pool, {});
+      projectId = seeded.projectId;
 
       await inbound.unitOfWork.transaction(async (scope) =>
         scope.events.append([
@@ -118,38 +123,59 @@ describe('an instance started without a pipeline composition', () => {
         ]),
       );
 
-      // The positive anchor for every negative below: the instance is alive, answering, and its own
-      // report names the check that is down. A dead process cannot produce this.
+      // No assertions in `beforeAll`: a throw here skips every test in the file, which would hide
+      // *which* of the two gates a mutation moved — the exact thing this split exists to show.
       const ready = await instance.runtime.app.inject({ method: 'GET', url: '/readyz' });
-      expect(ready.statusCode).toBe(503);
-      expect(ready.json()).toMatchObject({
-        status: 'down',
-        checks: { database: 'ok', migrations: 'ok', queue: 'ok', dispatch: 'down' },
-      });
-
-      // The second anchor: the instance *sees* the event it is not dispatching, and says so on the
-      // gauge an operator would alert on.
-      const metrics = await instance.runtime.app.inject({ method: 'GET', url: '/metrics' });
-      expect(metrics.body).toMatch(/^event_dispatch_pending 1$/m);
-
-      const tasks = await pool.query<{ count: string }>(
-        'select count(*)::text as count from tasks',
-      );
-      expect(tasks.rows[0]?.count).toBe('0');
+      readyStatus = ready.statusCode;
+      readyz = { ...(ready.json() as typeof readyz) };
+      metricsBody = (await instance.runtime.app.inject({ method: 'GET', url: '/metrics' })).body;
+      taskCount =
+        (await pool.query<{ count: string }>('select count(*)::text as count from tasks')).rows[0]
+          ?.count ?? 'no row';
     } finally {
       await inbound.stop();
       await pool.end();
     }
+  }, 180_000);
 
+  it('names the event types it cannot handle and does not start the outbox sweep', () => {
+    const missing = logged.find((line) => line.includes('the pipeline is not composed'));
+    expect(missing).toBeDefined();
+    expect(missing).toContain('Q52');
+    expect(missing).toContain('IntegrationAuditLog');
+
+    const refused = logged.find((line) => line.includes('the outbox sweep is not started'));
+    expect(refused).toBeDefined();
+    expect(refused).toContain('ticket.matched');
+  });
+
+  it('reports /readyz down with the dispatch check named, however healthy the rest is', () => {
+    // The other half of the pair `sweepReadiness` serves. Asserted in its own test so a mutation
+    // that broke only this one is distinguishable from one that broke only the sweep gate.
+    expect(readyStatus).toBe(503);
+    expect(readyz).toMatchObject({
+      status: 'down',
+      checks: { database: 'ok', migrations: 'ok', queue: 'ok', dispatch: 'down' },
+    });
+    // The instance *sees* the event it is not dispatching, and says so on the gauge an operator
+    // would alert on — a positive anchor for the negatives below (standing rule 10).
+    expect(metricsBody).toMatch(/^event_dispatch_pending 1$/m);
+  });
+
+  it('leaves the ticket queued and replayable, and the next instance runs it', async () => {
     // **After** the shutdown, not before. Asserting the queue state while the instance was still up
     // is what made the first version of this test pass with the guard removed: a running sweep
     // simply had not got to the event yet. `runtime.stop()` drains the dispatcher, so this is the
     // one moment at which "the row is still here" means "nothing ever swept it" (standing rule 4).
+    expect(taskCount).toBe('0');
+
     const handedOver = instance;
     instance = undefined;
-    await handedOver.stop();
+    await handedOver?.stop();
 
-    const after = new pg.Client({ connectionString: database.connectionString });
+    const after = new pg.Client({
+      connectionString: (database as MigratedDatabase).connectionString,
+    });
     await after.connect();
     try {
       const queued = await after.query<{ attempts: number }>('select attempts from event_dispatch');
@@ -167,24 +193,18 @@ describe('an instance started without a pipeline composition', () => {
     }
 
     /**
-     * The handover, and the reason this test is not a wall-clock one.
-     *
-     * "The row is still there" is a negative, and the first version of this test asserted it
-     * immediately after the append — so it passed **with the guard removed**, because a running
-     * sweep had not got to the event yet rather than because it was not running (standing rule 4:
-     * a negative assertion passes silently on a harness that never reached the state). Stopping the
-     * instance drains the dispatcher, so an instance that *was* sweeping consumes the event on the
-     * way down; a second instance with a pipeline then finds nothing and this never settles.
-     *
-     * That makes the assertion a **positive** one about the product's actual promise: an instance
-     * that could not act on the notification did not destroy it, and the next one that can, does.
+     * The handover, and the reason this test is not a wall-clock one: an instance that *was*
+     * sweeping consumes the event as it drains on the way down, and a second instance with a
+     * pipeline then finds nothing. So the assertion is a **positive** one about the product's
+     * promise — the instance that could not act on the notification did not destroy it, and the
+     * next one that can, does.
      */
     composed = await startPipeline({
       scenarios: featureScenarios,
-      reuse: { database, projectId: seededProjectId },
+      reuse: { database: database as MigratedDatabase, projectId },
       tickets: TICKETS,
     });
     const task = await composed.settle('ready_for_merge', (row) => row.state === 'ready_for_merge');
     expect(task.template).toBe('feature');
-  });
+  }, 180_000);
 });
