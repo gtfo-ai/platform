@@ -828,41 +828,50 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   }
 
   /**
-   * Removes the run's control sub-directory, **after taking ownership of it back**.
+   * Removes the run's control sub-directory — **against an adversary, not against tidiness**.
    *
-   * The `chown` is not tidiness. `#prepare` hands the directory to uid 1000 as `0700`, and this
-   * helper is root with `CapDrop: ALL` and nothing added — so it holds neither `CAP_DAC_OVERRIDE`
-   * nor `CAP_FOWNER`, and on a real Linux kernel root is an ordinary non-owner of a `0700`
-   * directory owned by somebody else. Measured on the daemon, against a plain named volume in
-   * production's own shape (`/ctl` = `root:root 0755`):
+   * The adversary is the agent in the run container. It is uid 1000, it mounts `<ctl>/<run-id>`
+   * read-write (`hardening.ts` § `runContainerCreateBody`), and it owns that directory, so it may
+   * do anything it likes to the modes and to what is underneath. This helper is root, but root
+   * with `CapDrop: ALL` is an ordinary non-owner: it holds neither `CAP_DAC_OVERRIDE` nor
+   * `CAP_FOWNER`, so it cannot descend into a `0700` directory owned by 1000, cannot `chmod` one,
+   * and — measured, not assumed — cannot `chown -R` one either, because the recursion has to open
+   * the directory before it can walk it.
+   *
+   * Three agent moves, each run against production's own shape (a plain named volume, `/ctl` =
+   * `root:root 0755`), with the agent on the real `volume-subpath` mount:
    *
    * ```
-   * prep:  --user 0:0 --cap-drop ALL --cap-add CHOWN  → /ctl/<id> drwx------ 1000 1000
-   * ctlrm: --user 0:0 --cap-drop ALL                  → rm -rf /ctl/<id>  exit 1
-   * ctlrm: --user 0:0 --cap-drop ALL --cap-add CHOWN  → chown 0:0 && rm -rf  exit 0, /ctl empty
+   * agent: chmod 000 /ctl                      | agent: chmod 000 on a sub-directory it made
+   * --cap-add CHOWN, chown -R + chmod -R + rm  → exit 1, the directory survives  (all three)
+   * --cap-add DAC_OVERRIDE, plain rm -rf       → exit 0, /ctl empty              (all three)
    * ```
    *
-   * The failure was silent: `#teardown` runs this through `step()`, which collects the error and
-   * logs `workspace teardown partial`, so the only symptom was **the run token staying on the
-   * shared control volume for ever** — the exact thing this method's caller says it exists to
-   * prevent. It was invisible in CI because `#prepare` failed first (the same permission model,
-   * one layer up), and invisible locally because the e2e's control volume is bind-backed onto a
-   * macOS host directory, where `chown` silently does nothing at all.
+   * So the capability is `DAC_OVERRIDE` and the script stays a plain `rm -rf`. What that buys the
+   * container is the ability to read any run's token on this volume — which is why it is this
+   * script and no other: the run id is `assertRunId`-ed before it is interpolated, the container
+   * mounts nothing else, it has no network, and it lives about a second. The alternative is not a
+   * tighter capability, it is **a leak**: `#teardown` runs this through `step()`, which logs
+   * `workspace teardown partial` and carries on, so a failure here is silent and the run token
+   * stays on the shared control volume for ever. Nothing else collects it — `purgeExpired` lists
+   * *volumes* by `role=workspace` and never looks inside this one (standing rule 60, one level
+   * down: the shape the sweep cannot see is the shape reclamation will not touch).
    *
-   * `CAP_CHOWN` rather than `CAP_DAC_OVERRIDE`: taking ownership of one directory is narrower than
-   * bypassing every permission check on the mount, and `#prepare` is already granted it.
+   * It was invisible in CI because `#prepare` failed first — the same permission model, one layer
+   * up — and invisible locally because the e2e's control volume is bind-backed onto a macOS host
+   * directory, where `chown` silently does nothing at all.
    */
   async #removeControlDirectory(runId: string): Promise<void> {
     const dir = `/ctl/${assertRunId(runId)}`;
     await this.#helper({
       name: `ctlrm-${assertRunId(runId)}`,
       image: this.#images.git,
-      // Guarded, because `destroy` is idempotent: the second call finds nothing, and `chown` on a
-      // missing path is an error where `rm -rf` on one is not.
-      script: [`if [ -e ${dir} ]; then chown 0:0 ${dir}; fi`, `rm -rf ${dir}`].join('\n'),
+      // `rm -rf` on a path that is already gone is not an error, which is what makes `destroy`
+      // idempotent without a guard.
+      script: `rm -rf ${dir}`,
       mounts: [this.#volumeMount(this.#controlVolume, '/ctl', false)],
       user: '0:0',
-      capAdd: ['CHOWN'],
+      capAdd: ['DAC_OVERRIDE'],
       secrets: [],
       network: 'none',
       labels: { [WORKSPACE_LABELS.run]: runId, [WORKSPACE_LABELS.role]: 'control-cleanup' },

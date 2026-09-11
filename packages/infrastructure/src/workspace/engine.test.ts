@@ -77,15 +77,19 @@ describe('Docker engine client', () => {
     });
   });
 
-  it("carries the daemon's own message into the error detail", async () => {
+  it("carries the daemon's own message into the error message, not only the detail", async () => {
     const named = new FakeDockerDaemon({
-      fail: new Map([['POST /containers/create', { status: 500, message: 'no such image: nope' }]]),
+      fail: new Map([['POST /containers/create', { status: 404, message: 'No such image: nope' }]]),
     });
     const other = new DockerEngine({ socketPath: await named.start() });
     try {
+      // The *message* as well, because that is what a runner prints. `Docker engine answered 404`
+      // on its own named the container and not the image, and a whole CI round went on finding out
+      // which of three images was missing while the `detail` had said so all along.
       await expect(other.createContainer('c', {})).rejects.toMatchObject({
-        code: 'workspace_failed',
-        detail: expect.stringContaining('no such image: nope'),
+        code: 'not_found',
+        message: 'Docker engine answered 404: No such image: nope',
+        detail: expect.stringContaining('No such image: nope'),
       });
     } finally {
       await named.stop();

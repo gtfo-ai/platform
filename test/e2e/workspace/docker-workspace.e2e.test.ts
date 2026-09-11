@@ -35,6 +35,7 @@ import { workspace } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runWorkspaceProviderContractSuite } from '../../contract/support/workspace/provider-suite.js';
 import {
+  ALPINE_IMAGE,
   type DockerFixture,
   docker,
   exportPath,
@@ -109,36 +110,85 @@ describe('the workspace lifecycle against a real daemon', () => {
    * through the provider: a probe that starts one container says which permission failed, where a
    * `create` says only that a helper exited 1.
    *
-   * **What it is worth on each platform, honestly.** On Linux it is the real verdict: it fails
-   * against a `0700` bind source and passes against a writable one. On macOS it passes either way,
-   * because Docker Desktop reports a host-owned bind as `root:root` whatever the host uid is — so
-   * a green run here is not evidence, and standing rule 69 is the reason this comment exists.
+   * **What it is worth on each platform.** Against a *named* volume it is worth the same on both,
+   * which is the point of using one: a fresh named volume is `root:root 0755` on Docker Desktop
+   * and on a Linux runner alike (measured on each). The platform difference lives entirely in the
+   * fixture's bind-backed control root, and that is precisely why this case must not use it —
+   * standing rule 69 the other way round.
    */
-  it('admits the prep helper into the control volume: root, CAP_DAC_OVERRIDE dropped', async () => {
-    const probe = `ctl-admits-${randomUUID()}`;
-    const result = await docker(
-      [
+  it('admits the prep helper into a control volume root: root, CAP_DAC_OVERRIDE dropped', async () => {
+    // A **throwaway named volume**, deliberately not `fixture.controlVolume`. The fixture's control
+    // root is bind-backed and loosened to `0777` so this process can empty it, which would make the
+    // probe a tautology: measured, `--user 1000:1000 --cap-drop ALL --cap-add CHOWN` cannot `mkdir`
+    // into a `root:root 0755` root but can into a `0777` one, so run `#prepare` as any uid and the
+    // e2e would stay green while production broke. A fresh named volume is `root:root 0755` — what
+    // `APP_WORKSPACE_CONTROL_VOLUME` is in production — so this is that shape and no other.
+    const volume = `agentic-e2e-ctlshape-${randomUUID()}`;
+    await docker(['volume', 'create', volume]);
+    try {
+      const shape = await docker([
         'run',
         '--rm',
-        '--user',
-        '0:0',
-        '--cap-drop',
-        'ALL',
-        '--cap-add',
-        'CHOWN',
-        '--network',
-        'none',
         '-v',
-        `${fixture.controlVolume}:/ctl`,
-        'alpine:3.21',
-        'sh',
-        '-c',
-        `mkdir /ctl/${probe} && rmdir /ctl/${probe} && echo ADMITTED`,
-      ],
-      { allowFailure: true },
-    );
-    expect(`${result.stdout}${result.stderr}`).toContain('ADMITTED');
-    expect(result.ok).toBe(true);
+        `${volume}:/ctl`,
+        ALPINE_IMAGE,
+        'ls',
+        '-ldn',
+        '/ctl',
+      ]);
+      expect(shape.stdout).toMatch(/^drwxr-xr-x\s+\d+\s+0\s+0\b/);
+      const result = await docker(
+        [
+          'run',
+          '--rm',
+          '--user',
+          '0:0',
+          '--cap-drop',
+          'ALL',
+          '--cap-add',
+          'CHOWN',
+          '--network',
+          'none',
+          '-v',
+          `${volume}:/ctl`,
+          ALPINE_IMAGE,
+          'sh',
+          '-c',
+          `mkdir /ctl/${randomUUID()} && echo ADMITTED`,
+        ],
+        { allowFailure: true },
+      );
+      expect(`${result.stdout}${result.stderr}`).toContain('ADMITTED');
+      expect(result.ok).toBe(true);
+    } finally {
+      await docker(['volume', 'rm', '-f', volume], { allowFailure: true });
+    }
+  }, 60_000);
+
+  /**
+   * The engine never pulls; `docker run` does. A `create` through the API answers **404** when the
+   * image is absent — measured on this daemon, `{"message":"No such image: <tag>"}` — so an image
+   * the fixture assumes rather than ensures is green on every machine that has run the suite
+   * before and 21 failures on a clean runner, which is what happened (standing rules 4 and 69).
+   */
+  it('has every image it will create a container from, because the engine never pulls', async () => {
+    const missing: string[] = [];
+    for (const image of fixture.images) {
+      const present = await docker(['image', 'inspect', image], { allowFailure: true });
+      if (!present.ok) {
+        missing.push(image);
+      }
+    }
+    expect(missing).toEqual([]);
+    // The mapping itself, so a reader never has to take "404 means no such image" on trust — and
+    // so the message names the image, which cost this project a CI round when it did not.
+    const absent = `alpine:does-not-exist-${randomUUID()}`;
+    await expect(
+      fixture.engine.createContainer(`agentic-e2e-absent-${randomUUID()}`, {
+        Image: absent,
+        Cmd: ['true'],
+      }),
+    ).rejects.toMatchObject({ code: 'not_found', message: expect.stringContaining(absent) });
   }, 60_000);
 
   it('creates the control sub-directory before the container starts (WP-13 obligation 1)', async () => {
@@ -206,9 +256,7 @@ describe('the workspace lifecycle against a real daemon', () => {
    * The listing is taken by a container, not from the host, so this reads the volume rather than
    * the bind's macOS view of it.
    */
-  it('destroy leaves nothing of the run on the control volume, token and all', async () => {
-    const { handle } = await startRun();
-    await fixture.provider.destroy(handle);
+  const controlVolumeListing = async (): Promise<string> => {
     const listing = await docker([
       'run',
       '--rm',
@@ -216,12 +264,64 @@ describe('the workspace lifecycle against a real daemon', () => {
       'none',
       '-v',
       `${fixture.controlVolume}:/ctl`,
-      'alpine:3.21',
+      ALPINE_IMAGE,
       'ls',
       '-A',
       '/ctl',
     ]);
-    expect(listing.stdout).not.toContain(handle.runId);
+    return listing.stdout;
+  };
+
+  it('destroy leaves nothing of the run on the control volume, token and all', async () => {
+    const { handle } = await startRun();
+    await fixture.provider.destroy(handle);
+    expect(await controlVolumeListing()).not.toContain(handle.runId);
+  }, 180_000);
+
+  /**
+   * The adversary is the agent, and it owns the directory the launcher has to reclaim.
+   *
+   * `<ctl>/<run-id>` is mounted into the run container read-write and chowned to uid 1000, so the
+   * agent may `chmod 000` it — and root with `CapDrop: ALL` is an ordinary non-owner. Measured:
+   * with `CAP_CHOWN` only, `chown -R` + `chmod -R` + `rm -rf` exits 1 and the directory survives
+   * holding the run token; with `CAP_DAC_OVERRIDE` a plain `rm -rf` exits 0. Nothing else would
+   * ever collect it — `purgeExpired` lists *volumes* by `role=workspace` and never looks inside
+   * this one — and `#teardown` only logs, so the leak is silent.
+   *
+   * The write is done from a container on the run's own `volume-subpath` mount as uid 1000 rather
+   * than through the agent, because the agent is a stand-in until WP-22; the *mount* and the *uid*
+   * are the real ones, read back from the run container's own configuration.
+   */
+  it('destroy reclaims the control directory even after the agent locks it', async () => {
+    const { handle } = await startRun();
+    const hostile = await probeUnderRunContainerConfig(
+      fixture.engine,
+      handle.containerId,
+      'chmod 000 /ctl; stat -c "MODE=%a OWNER=%u" /ctl',
+      { user: '1000:1000' },
+    );
+    // Whether the lock *took* is a platform fact, and this case states it rather than asserting
+    // it: on Linux the directory really is uid 1000's and the `chmod` lands, which is the
+    // adversarial verdict; on Docker Desktop the bind reports it as root-owned, uid 1000 is
+    // refused, and what remains is an ordinary reclamation (standing rule 69 — the real verdict
+    // is CI's). The reclamation below must hold either way, and it is the half that regressed.
+    expect(hostile.output).toContain('MODE=');
+    const locked = hostile.output.includes('MODE=0 ');
+    const before = fixture.warnings.length;
+    await fixture.provider.destroy(handle);
+    expect(await controlVolumeListing()).not.toContain(handle.runId);
+    // And it did not merely *appear* to work. `#teardown` logs a failed step and carries on, so
+    // the volume listing alone would also pass if the directory had never been created. The
+    // `control-dir` step specifically — `rm-network` partials are this fixture's own doing, since
+    // a probe container of this file can still be attached to the run network when it is removed.
+    const failed = fixture.warnings
+      .slice(before)
+      .filter((entry) => entry.message === 'workspace teardown step failed')
+      .map((entry) => entry.fields['step']);
+    expect(failed).not.toContain('control-dir');
+    // Fail loudly if the platform stops being able to stage the attack at all, so this never
+    // decays into a second copy of the case above without anyone noticing.
+    expect(locked || process.platform === 'darwin').toBe(true);
   }, 180_000);
 });
 

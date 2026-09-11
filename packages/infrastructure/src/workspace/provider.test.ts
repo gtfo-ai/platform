@@ -342,22 +342,44 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     expect(JSON.stringify(cleanup)).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
 
-  it('takes ownership of the control directory back before removing it, with CAP_CHOWN', async () => {
+  it('removes the control directory with CAP_DAC_OVERRIDE, because the agent owns it', async () => {
     const handle = await created();
     await provider.destroy(handle);
     const ctlrm = daemon.byName(`ctlrm-${FIXTURE_RUN_ID}`);
-    const script = (ctlrm?.body.Cmd ?? []).join('\n');
-    // `#prepare` chowns the directory to 1000 and leaves it 0700. This helper is root with
-    // `CapDrop: ALL`, so it holds no `CAP_DAC_OVERRIDE` and, on a real Linux kernel, cannot
-    // descend into it: measured, `rm -rf` alone exits 1 and the run token stays on the shared
-    // volume for ever. Drop the `chown` and the e2e's "destroy leaves nothing of the run on the
-    // control volume" fails on Linux — and nowhere else, which is why it is pinned here too.
-    expect(script).toContain(`chown 0:0 /ctl/${FIXTURE_RUN_ID}`);
-    expect(script.indexOf('chown 0:0')).toBeLessThan(script.indexOf('rm -rf'));
-    expect(ctlrm?.body.HostConfig).toMatchObject({ CapDrop: ['ALL'], CapAdd: ['CHOWN'] });
-    // Idempotent: `destroy` is, and `chown` on a path that is already gone is an error where
-    // `rm -rf` on one is not.
-    expect(script).toContain(`if [ -e /ctl/${FIXTURE_RUN_ID} ]`);
+    // The agent is uid 1000, mounts `<ctl>/<run-id>` read-write and owns it, so it may `chmod 000`
+    // the directory or anything it puts inside. Root with `CapDrop: ALL` is an ordinary
+    // non-owner: measured against all three of those moves, `chown -R` + `chmod -R` + `rm -rf`
+    // with `CAP_CHOWN` exits 1 and the directory survives, while a plain `rm -rf` with
+    // `CAP_DAC_OVERRIDE` exits 0 and the volume is empty. Take this capability away and the run
+    // token stays on the shared control volume for ever, silently — `#teardown` only logs.
+    expect(ctlrm?.body.HostConfig).toMatchObject({ CapDrop: ['ALL'], CapAdd: ['DAC_OVERRIDE'] });
+    expect((ctlrm?.body.Cmd ?? []).join('\n')).toBe(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
+  });
+
+  /**
+   * The negative half of the two capability grants (standing rules 3, 42, 68).
+   *
+   * A census rather than two assertions: it reads every container this provider created on a
+   * whole create-and-destroy, so a helper added later is covered the day it is added (rule 44),
+   * and a capability added to *any* of them fails here by name. Measured before it existed:
+   * adding `capAdd: ['DAC_OVERRIDE']` to the clone helper left the whole unit tier green.
+   */
+  it('grants a capability to exactly two helpers and none to any other container', async () => {
+    const handle = await created();
+    await provider.destroy(handle);
+    const granted = daemon.history
+      .map((container) => [container.name, container.body.HostConfig?.CapAdd ?? []] as const)
+      .filter(([, capabilities]) => capabilities.length > 0);
+    expect(Object.fromEntries(granted)).toEqual({
+      // `chown` needs it even as root, and the shim must find the directory owned by its own uid.
+      [`prep-${FIXTURE_RUN_ID}`]: ['CHOWN'],
+      // The agent owns what this one has to delete.
+      [`ctlrm-${FIXTURE_RUN_ID}`]: ['DAC_OVERRIDE'],
+    });
+    expect(daemon.history.length).toBeGreaterThan(granted.length);
+    for (const container of daemon.history) {
+      expect(container.body.HostConfig?.CapDrop ?? ['ALL']).toEqual(['ALL']);
+    }
   });
 
   it('keeps the workspace volume, because retention owns it', async () => {

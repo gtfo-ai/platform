@@ -110,8 +110,53 @@ export interface DockerFixture {
   readonly engine: RecordingDockerEngine;
   /** The fixture repository container, reachable by this name on {@link network}. */
   readonly repoContainer: string;
+  /** Every image a container will be created from here — see {@link ensureImages}. */
+  readonly images: readonly string[];
+  /**
+   * Every `warn`/`error` the launcher logged, in order.
+   *
+   * `#teardown` collects a failed step, logs it and carries on by design, so **nothing ever
+   * failed a test when teardown did not complete** — which is how a control directory that was
+   * never removed stayed invisible for six pushes. Reading the log is the only way to assert
+   * completion from outside, and it is precise enough to tolerate the partial this fixture causes
+   * itself (`rm-network`, because a probe container of this file can still be attached).
+   */
+  readonly warnings: { readonly message: string; readonly fields: Record<string, unknown> }[];
   cleanup(): Promise<void>;
 }
+
+/**
+ * Pulls every image before anything creates a container from one, because **the engine never
+ * pulls and the CLI does**.
+ *
+ * `DockerEngine.createContainer` is `POST /containers/create`, and the daemon answers **404** when
+ * the image is absent. Measured against this daemon:
+ *
+ * ```
+ * POST /containers/create {"Image":"alpine:does-not-exist-<n>"} → HTTP 404
+ *   {"message":"No such image: alpine:does-not-exist-<n>"}
+ * POST /containers/create {"Image":"alpine:3.21"}               → HTTP 201
+ * ```
+ *
+ * `docker run` pulls on a miss; `docker compose` does; a `create` through the API does not. So on
+ * a machine that has run this suite before, every image is already there and the asymmetry is
+ * invisible — and on a clean GitHub runner it is 21 failures. `ALPINE_IMAGE` and `GIT_IMAGE`
+ * happened to be safe only because {@link startRepoContainer} reaches them through the *CLI*
+ * first, which is luck, not design: `RUNTIME_IMAGE` is handed straight to the provider and is the
+ * one the run container is created from, which is exactly where `main` failed, in the provider's
+ * `create`. Enumerated here so a fourth image cannot inherit the same luck.
+ */
+const ensureImages = async (images: readonly string[]): Promise<void> => {
+  for (const image of images) {
+    const present = await docker(['image', 'inspect', image], { allowFailure: true });
+    if (present.ok) {
+      continue;
+    }
+    // Not `allowFailure`: a fixture that cannot obtain its images must fail with the pull's own
+    // message, not with a 404 twenty seconds later that names a container instead of an image.
+    await docker(['pull', image]);
+  }
+};
 
 const uniqueSuffix = (): string => Math.random().toString(36).slice(2, 8);
 
@@ -187,6 +232,11 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
 
 /** Builds everything one e2e file needs, and a cleanup that removes all of it. */
 export const startDockerFixture = async (): Promise<DockerFixture> => {
+  // First, before anything creates a container: every image used below, whether it is reached
+  // through the CLI or through the engine. A tag added to the provider's `images` record further
+  // down and not to this list is a 404 on a clean daemon and nothing at all on a dirty one.
+  const images = [RUNTIME_IMAGE, ALPINE_IMAGE, GIT_IMAGE];
+  await ensureImages(images);
   const suffix = uniqueSuffix();
   const network = `agentic-e2e-${suffix}`;
   const repoContainer = `agentic-e2e-repo-${suffix}`;
@@ -244,26 +294,30 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
   await startRepoContainer(repoContainer, network);
 
   const engine = new RecordingDockerEngine({ socketPath: '/var/run/docker.sock' });
+  const warnings: { readonly message: string; readonly fields: Record<string, unknown> }[] = [];
+  const record = (level: string, fields: unknown, message: string): void => {
+    warnings.push({ message, fields: (fields ?? {}) as Record<string, unknown> });
+    // Printed as well as recorded: a warning from the launcher during an e2e is almost always the
+    // reason a later assertion fails, and swallowing it costs an hour of guessing.
+    process.stderr.write(`launcher ${level}: ${message} ${JSON.stringify(fields)}\n`);
+  };
   const logger: Logger = {
     debug: () => undefined,
     info: () => undefined,
-    // A warning from the launcher during an e2e is almost always the reason a later assertion
-    // fails, and swallowing it costs an hour of guessing.
-    warn: (fields, message) =>
-      process.stderr.write(`launcher warn: ${message} ${JSON.stringify(fields)}\n`),
-    error: (fields, message) =>
-      process.stderr.write(`launcher error: ${message} ${JSON.stringify(fields)}\n`),
+    warn: (fields, message) => record('warn', fields, message),
+    error: (fields, message) => record('error', fields, message),
+  };
+  const providerImages = {
+    runtime: RUNTIME_IMAGE,
+    egress: ALPINE_IMAGE,
+    egressCommand: ['sleep', '600'],
+    git: GIT_IMAGE,
+    runtimeSourceDir: REPO_ROOT,
   };
   const provider = new workspace.DockerWorkspaceProvider({
     engine,
     logger,
-    images: {
-      runtime: RUNTIME_IMAGE,
-      egress: ALPINE_IMAGE,
-      egressCommand: ['sleep', '600'],
-      git: GIT_IMAGE,
-      runtimeSourceDir: REPO_ROOT,
-    },
+    images: providerImages,
     controlVolume,
     controlRoot,
     cacheVolume,
@@ -286,6 +340,8 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
     exportDir,
     provider,
     engine,
+    images,
+    warnings,
     cleanup: async () => {
       const containers = await docker(['ps', '-aq', '--filter', `network=${network}`], {
         allowFailure: true,
