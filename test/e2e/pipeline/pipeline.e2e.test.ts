@@ -18,121 +18,8 @@
  * and the saga's handlers, not the model.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  GIT_PROJECT,
-  inboundEvent,
-  type PipelineE2E,
-  type SeededWorld,
-  startPipeline,
-} from '../support/pipeline.js';
-
-const REFINED_SPEC = {
-  goal: 'Show the totals in the invoice footer.',
-  user_value: 'Finance can read an invoice without a calculator.',
-  in_scope: ['the invoice footer'],
-  out_of_scope: ['the PDF export'],
-  acceptance_criteria: [
-    {
-      id: 'ac1',
-      given: 'an invoice with three lines',
-      when: 'it is rendered',
-      // biome-ignore lint/suspicious/noThenProperty: the published acceptance-criterion field name
-      then: 'the footer shows the sum of the lines',
-      validation: { kind: 'test', value: 'totals.test.ts' },
-    },
-  ],
-  non_functional: [],
-  dependencies: [],
-  size: 'M',
-  drift: { flag: false, justification: 'in the documented direction' },
-  assumptions: [],
-  questions: [],
-  decision: 'proceed',
-  kb_citations: [],
-};
-
-const ROOT_CAUSE = {
-  reproduction: { kind: 'reproduced', steps: ['open an invoice'], evidence: ['sentry: TOTALS-1'] },
-  root_cause: 'The footer sums the visible rows rather than all of them.',
-  confidence: 'high',
-  affected_scope: ['invoices'],
-  fix_direction: 'Sum the model, not the view.',
-  regression_test_idea: 'A three-line invoice with one row hidden.',
-  questions: [],
-};
-
-const PLAN = {
-  approach: 'Sum the invoice model in the renderer.',
-  alternatives_considered: [{ option: 'sum in SQL', why_not: 'the view already has the model' }],
-  affected_modules: ['invoices'],
-  files_to_change: [{ path: 'src/totals.ts', change: 'sum the model' }],
-  data_changes: [],
-  api_changes: [],
-  validation_contract: [{ criterion_id: 'ac1', check: { kind: 'test', value: 'totals.test.ts' } }],
-  test_plan: ['totals.test.ts'],
-  rollout_notes: 'no flag needed',
-  risks: [],
-  estimated_size: 'M',
-  decisions_to_record: [],
-  protected_path_changes: [],
-};
-
-/** The developer reports the merge request the provider gave it (`world.mr`). */
-const notesFor = (world: SeededWorld) => ({
-  summary: 'Summed the invoice model in the footer.',
-  deviations_from_plan: [],
-  tests_added: ['totals.test.ts'],
-  commands_run: [{ command: 'npm test', exit_code: 0, summary: '12 passed' }],
-  known_gaps: [],
-  followup_tickets: [],
-  mr: {
-    url: world.mr.url,
-    iid: world.mr.iid,
-    head_sha: world.mr.headSha,
-    branch: world.branch,
-  },
-});
-
-const REVIEW = {
-  verdict: 'approve',
-  findings: [],
-  summary: 'Matches the plan; the test covers the criterion.',
-  protected_path_changes_confirmed: [],
-};
-
-const ACCEPTANCE = {
-  verdict: 'approve',
-  criteria: [{ id: 'ac1', status: 'met', evidence: 'totals.test.ts passes on the head commit' }],
-  scope_creep: [],
-  missing: [],
-  ux_notes: [],
-};
-
-const RETRO = {
-  what_went_well: ['the plan held'],
-  returns: [],
-  human_corrections: [],
-  cost_summary: {
-    total_usd: 2,
-    is_estimate: false,
-    by_stage: [{ stage: 'implementation', usd: 0.4 }],
-  },
-  proposals: [],
-};
-
-const featureScenarios = (world: SeededWorld) => ({
-  refinement: { structuredOutput: REFINED_SPEC },
-  architecture: { structuredOutput: PLAN },
-  implementation: { structuredOutput: notesFor(world) },
-  code_review: { structuredOutput: REVIEW },
-  business_review: { structuredOutput: ACCEPTANCE },
-  retrospective: { structuredOutput: RETRO },
-});
-
-const bugScenarios = (world: SeededWorld) => ({
-  ...featureScenarios(world),
-  investigation: { structuredOutput: ROOT_CAUSE },
-});
+import { GIT_PROJECT, inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
+import { bugScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 
 let harness: PipelineE2E | undefined;
 
@@ -140,13 +27,6 @@ afterEach(async () => {
   await harness?.stop();
   harness = undefined;
 });
-
-/** The tickets the fake provider knows; the workpad is a comment on one of them. */
-const TICKETS = [
-  { key: 'ACME-1', title: 'Show the totals in the invoice footer', issueType: 'Story' },
-  { key: 'ACME-2', title: 'Show the totals in the invoice footer', issueType: 'Story' },
-  { key: 'ACME-9', title: 'The invoice footer sums the wrong rows', issueType: 'Bug' },
-];
 
 const ticketMatched = (pipeline: PipelineE2E, key: string, issueType: string) =>
   inboundEvent('ticket.matched', {
@@ -234,7 +114,13 @@ describe('a feature ticket, end to end', () => {
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
-    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+    // Not `settle`: the status mapping is a handler in the integrations band, so it commits *after*
+    // the transition that moved the task. Waiting on the task state and then reading the ticket
+    // asserts one transaction's effect against another's timing — it failed 1 run in 3 that way.
+    await pipeline.waitFor(
+      'the ticket status mapped for ready_for_merge',
+      async () => pipeline.tickets.peek('ACME-1')?.status === 'In Review',
+    );
 
     const ticket = pipeline.tickets.peek('ACME-1');
     // BD-023: one sticky comment, however many times the task moved.

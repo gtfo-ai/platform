@@ -60,6 +60,14 @@ export interface StartInstanceOptions {
   /** Name of the database to create; lets one file start two instances it can tell apart. */
   readonly label?: string;
   /**
+   * Start against a database that already exists instead of creating one.
+   *
+   * The instance does **not** drop it on `stop()`: whoever created it owns its lifetime. This is
+   * what lets one test hand a database from one instance to the next and ask what survived the
+   * handover — which is the only time-free way to show that an event was queued rather than eaten.
+   */
+  readonly database?: MigratedDatabase;
+  /**
    * The pipeline's two uncomposable collaborators (WP-15a).
    *
    * Absent is the production default, and the default here too: the auth and SSE e2e files start
@@ -73,7 +81,8 @@ export interface StartInstanceOptions {
 }
 
 export const startInstance = async (options: StartInstanceOptions = {}): Promise<Instance> => {
-  const database = await createMigratedDatabase(options.label ?? 'e2e');
+  const ownsDatabase = options.database === undefined;
+  const database = options.database ?? (await createMigratedDatabase(options.label ?? 'e2e'));
   const port = await reservePort();
   const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -106,7 +115,9 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
       ...(options.logDestination === undefined ? {} : { logDestination: options.logDestination }),
     });
   } catch (error) {
-    await database.drop();
+    if (ownsDatabase) {
+      await database.drop();
+    }
     throw error;
   }
 
@@ -114,7 +125,9 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     await runtime.listen();
   } catch (error) {
     await runtime.stop();
-    await database.drop();
+    if (ownsDatabase) {
+      await database.drop();
+    }
     throw error;
   }
 
@@ -124,7 +137,9 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     database,
     stop: async () => {
       await runtime.stop();
-      await database.drop();
+      if (ownsDatabase) {
+        await database.drop();
+      }
     },
   };
 };

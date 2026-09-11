@@ -12,13 +12,23 @@
  *
  * ## Absent is not broken (standing rule 20)
  *
- * A project with **no** git binding resolves to `git: null`, and the sagas and the gate evaluator
- * already say so with a blocker brief. A project *with* a git binding that cannot be built —
- * a provider nobody registered, a config that fails its schema, a credential that will not
- * decrypt — throws {@link BindingLoadError}. The two are different facts and the difference is the
- * whole rule: a binding that fails to load silently becomes a project that quietly has no
- * integrations, and a task then passes every gate that asks a provider a question by getting
- * `null` back.
+ * A project with **no** git binding resolves to `git: null`. A project *with* a git binding that
+ * cannot be built — a provider nobody registered, a config that fails its schema, a credential
+ * that will not decrypt — throws {@link BindingLoadError}. The two are different facts and the
+ * difference is the whole rule: a binding that fails to load silently becomes a project that
+ * quietly has no integrations.
+ *
+ * **This half of the guarantee is not this file's**, and review round 1 proved why saying so
+ * matters (standing rules 44 and 63: a scope claim is a claim about every *other* file). The first
+ * version of this docblock went on to assert that the split stopped "a task passing every gate that
+ * asks a provider a question by getting `null` back" — and it did not, because
+ * `pipeline/gates.ts` collapsed *two* producers of `null`: an unbound project and a commit with no
+ * CI pipeline, the second of which product/04 S4 makes **pass**. A project with no bindings walked
+ * through `ci_gate` on `passed: true`. The consumer is where that had to be fixed, and the gate now
+ * asks `bindings.git === null` by identity before it reads anything
+ * (`gates.test.ts` › "refuses the CI gate when the project has no git binding, instead of passing
+ * it"). What this file guarantees is only that *absent* and *broken* arrive here as different
+ * facts; what each consumer does with `null` is that consumer's guard to hold.
  *
  * Two bindings of one type is also a refusal rather than a coin toss. The pipeline holds exactly
  * one git repository and one ticket system per task (`PipelineIntegrations`), so choosing between

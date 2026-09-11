@@ -22,6 +22,7 @@
  * fail-closed half of a pair whose fail-open half is silent.
  */
 import type { IsoDateTime, Slug } from '@platform/contracts';
+import { BUILTIN_GATE_STAGE_IDS } from '@platform/contracts';
 import type { PipelineStage } from '@platform/domain';
 import { compilePipeline, FEATURE_TEMPLATE, stageOf } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
@@ -292,12 +293,57 @@ describe('what the platform refuses to evaluate', () => {
     expect(result.detail).toContain('needs a merge request');
   });
 
-  it('refuses the rebase gate when the project has no git binding', async () => {
-    // `gitReads` answers `null` for an unbound project rather than throwing, and `null` here is
-    // "the platform cannot tell", never "the branch is clean".
-    const result = await evaluate(templateStage('rebase_gate'), storedTask(MR), null);
-    expect(result.kind).toBe('unsupported');
-    expect(result.detail).toContain('no git binding');
+  /**
+   * The two halves of one condition, and the reason they are two `it`s rather than a loop.
+   *
+   * The CI half was **fail-open** until WP-15a's review: `gitReads` answers `null` for an unbound
+   * project and `getPipelineStatus` answers `null` for a commit with no pipeline, and product/04 S4
+   * makes the second of those *pass* — so a project with no bindings walked through `ci_gate` on
+   * `passed: true`. `rebase_gate` had it right, and the asymmetry between two branches of one file
+   * is what a reviewer saw.
+   *
+   * **Only the CI case pins the outer guard, and that is measured rather than assumed.** Reverting
+   * the `bindings.git === null` refusal in `gates.ts` fails the CI test with the fail-open in the
+   * message (`{kind:'settled', passed:true}`) and leaves the rebase test **green**, because
+   * `git.mergeRequest` answers `null` for an unbound project and the branch below it returns the
+   * same `unsupported`. That is standing rule 41 — one condition, two guards — and rule 22's
+   * remedy is applied at the inner one, which is declared unreachable and names the outer guard.
+   * Read this pair as: the CI case is the guard's test, the rebase case is the *behaviour's*.
+   *
+   * They share `refusesWithoutABinding` so neither can drift, and they are written out because a
+   * name built in a `for` loop cannot be cited (`scripts/citations.ts`: "a name built from a
+   * template literal or a variable is not collected"), and a guard nobody can name in a docblock is
+   * a guard the next author will not find. The *set* is not left to whoever remembers to add one:
+   * the test below derives it from `BUILTIN_GATE_STAGE_IDS` and fails when a fourth builtin gate
+   * appears without a case here (standing rule 68).
+   */
+  const PROVIDER_DEPENDENT_GATES = ['ci_gate', 'rebase_gate'] as const;
+
+  const refusesWithoutABinding = async (stage: (typeof PROVIDER_DEPENDENT_GATES)[number]) => {
+    const result = await evaluate(templateStage(stage), storedTask(MR), null);
+    expect(result).toEqual({
+      kind: 'unsupported',
+      detail: `gate "${stage}" needs a git provider and the project has no git binding`,
+    });
+    // Said twice on purpose: the defect this replaces was `settled`/`passed: true`, and a test that
+    // only asserted `kind` would have passed against `{kind:'unsupported'}` either way.
+    expect(result).not.toMatchObject({ passed: true });
+  };
+
+  it('refuses the CI gate when the project has no git binding, instead of passing it', async () => {
+    await refusesWithoutABinding('ci_gate');
+  });
+
+  it('refuses the rebase gate when the project has no git binding, instead of passing it', async () => {
+    await refusesWithoutABinding('rebase_gate');
+  });
+
+  it('covers every builtin gate that asks a provider anything', () => {
+    // `merged_gate` is settled by the event that got the task there and reads nothing, which is why
+    // it is the one exclusion — asserted here rather than assumed, so a fourth gate is a failure.
+    expect([...BUILTIN_GATE_STAGE_IDS].filter((id) => id !== 'merged_gate').sort()).toEqual(
+      [...PROVIDER_DEPENDENT_GATES].sort(),
+    );
   });
 });
 

@@ -53,10 +53,11 @@ describe('createReadinessCheck', () => {
     const check = createReadinessCheck({
       database: fakeDatabase({ names: shipped() }),
       jobsStarted: () => true,
+      dispatchReady: () => true,
     });
     await expect(check()).resolves.toEqual({
       status: 'ok',
-      checks: { database: 'ok', migrations: 'ok', queue: 'ok' },
+      checks: { database: 'ok', migrations: 'ok', queue: 'ok', dispatch: 'ok' },
     });
   });
 
@@ -64,6 +65,7 @@ describe('createReadinessCheck', () => {
     const check = createReadinessCheck({
       database: fakeDatabase({ fail: true }),
       jobsStarted: null,
+      dispatchReady: null,
     });
     await expect(check()).resolves.toEqual({
       status: 'down',
@@ -75,6 +77,7 @@ describe('createReadinessCheck', () => {
     const check = createReadinessCheck({
       database: fakeDatabase({ names: shipped() }),
       jobsStarted: () => false,
+      dispatchReady: () => true,
     });
     const report = await check();
     expect(report.checks.queue).toBe('down');
@@ -85,8 +88,43 @@ describe('createReadinessCheck', () => {
     const check = createReadinessCheck({
       database: fakeDatabase({ names: shipped() }),
       jobsStarted: null,
+      dispatchReady: null,
     });
     expect(Object.keys((await check()).checks)).toEqual(['database', 'migrations']);
+  });
+
+  /**
+   * The check WP-15a's review added, and the state it exists for.
+   *
+   * `apps/server` cannot compose the pipeline on its own in this build, so `main.ts` starts a
+   * worker whose bus has **no handlers**: it can reach the database, its schema matches and
+   * pg-boss is up, so every other check here is `ok` and an orchestrator was told a process was
+   * ready to serve a product that would never advance a ticket. Deleting the `checks.dispatch`
+   * block in `readiness.ts` kills this test by name.
+   */
+  it('is down when the dispatcher has no handlers, however healthy everything else is', async () => {
+    const check = createReadinessCheck({
+      database: fakeDatabase({ names: shipped() }),
+      jobsStarted: () => true,
+      dispatchReady: () => false,
+    });
+    const report = await check();
+    expect(report.checks).toEqual({
+      database: 'ok',
+      migrations: 'ok',
+      queue: 'ok',
+      dispatch: 'down',
+    });
+    expect(report.status).toBe('down');
+  });
+
+  it('omits the dispatch check in a process that runs no dispatcher', async () => {
+    const check = createReadinessCheck({
+      database: fakeDatabase({ names: shipped() }),
+      jobsStarted: () => true,
+      dispatchReady: null,
+    });
+    expect(Object.keys((await check()).checks)).toEqual(['database', 'migrations', 'queue']);
   });
 
   it('answers within its deadline rather than hanging the probe', async () => {
@@ -95,6 +133,7 @@ describe('createReadinessCheck', () => {
     const check = createReadinessCheck({
       database: fakeDatabase({ hang: true }),
       jobsStarted: null,
+      dispatchReady: null,
       timeoutMs: 20,
     });
     await expect(check()).resolves.toMatchObject({ status: 'down' });
@@ -105,6 +144,7 @@ describe('createReadinessCheck', () => {
     const check = createReadinessCheck({
       database: fakeDatabase({ names: behind }),
       jobsStarted: null,
+      dispatchReady: null,
     });
     const report = await check();
     expect(report.checks.database).toBe('ok');

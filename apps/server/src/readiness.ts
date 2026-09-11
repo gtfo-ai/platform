@@ -22,6 +22,18 @@ export interface ReadinessOptions {
   readonly database: Database;
   /** `null` when this process runs no job runtime (`ROLE=api`). */
   readonly jobsStarted: (() => boolean) | null;
+  /**
+   * Can this process's dispatcher actually advance an event? `null` when it runs none (`ROLE=api`).
+   *
+   * TD-023 lists "DB, migrations head, queue" and this is the fourth, added at WP-15a's review
+   * because the three did not cover the state the build is actually in: `apps/server` cannot
+   * compose the pipeline on its own (no runner transport, Q52; no `IntegrationAuditLog` adapter),
+   * so `main.ts` starts an instance whose bus has **no handlers**. Every existing check was `ok`
+   * and an orchestrator was told the process was ready to serve a product that could never run a
+   * ticket. A boot `warn` is not a readiness signal: nothing reads it, and `/readyz` is what a
+   * container platform, a load balancer and an operator all read instead.
+   */
+  readonly dispatchReady: (() => boolean) | null;
   /** Longest the whole report may take. */
   readonly timeoutMs?: number;
 }
@@ -97,6 +109,10 @@ export const createReadinessCheck = (
 
     if (options.jobsStarted !== null) {
       checks.queue = options.jobsStarted() ? 'ok' : 'down';
+    }
+
+    if (options.dispatchReady !== null) {
+      checks.dispatch = options.dispatchReady() ? 'ok' : 'down';
     }
 
     const worst = Object.values(checks).includes('down')

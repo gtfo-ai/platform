@@ -206,7 +206,34 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });
       }
 
-      await eventing.worker.start();
+      /**
+       * **A dispatcher with no handlers is a queue with a shredder on the end**, so it is not
+       * started (standing rule 20, inbound half).
+       *
+       * `EventBus.dispatch` treats "no handler matched" as a completed dispatch: it calls
+       * `dispatchQueue.complete(position)`, which **deletes** the `event_dispatch` row, and writes
+       * the `$dispatch` marker into `handler_executions` — which makes a later re-dispatch a
+       * deliberate no-op. So an instance with nothing registered does not ignore a `ticket.matched`,
+       * it **consumes** it, unreplayably, and the ticket is lost to a process that was never able to
+       * act on it. Being told something you cannot handle yet is not licence to forget it.
+       *
+       * Not draining leaves the row in `event_dispatch` with `attempts = 0` for an instance that
+       * *can* handle it — the outbox **is** the queue, and the cost of the choice is stated rather
+       * than hidden: the queue grows, `countPendingDispatch` is already the Prometheus gauge that
+       * shows it, and `/readyz` is `down` for the same reason (`readiness.ts`).
+       *
+       * The condition is **"the bus has no handlers"** and not "the pipeline is absent", because
+       * that is the actual invariant: a later work package that registers a projection without a
+       * pipeline should sweep, and one that registers nothing should not.
+       */
+      if (eventing.bus.registry.size === 0) {
+        logger.warn(
+          { pending_dispatch_grows: true },
+          'no event handler is registered: the outbox sweep is not started, so events stay queued rather than being consumed by a process that cannot act on them',
+        );
+      } else {
+        await eventing.worker.start();
+      }
       stopCallbacks.unshift({ name: 'eventing', stop: eventing.stop });
     }
 
@@ -246,6 +273,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       readiness: createReadinessCheck({
         database: database.db,
         jobsStarted: capabilities.worker ? () => jobsStarted : null,
+        // A worker whose bus has no handlers will never advance anything, and an operator's health
+        // check must not call that ready (WP-15a review). `null` for `ROLE=api`, which legitimately
+        // runs no dispatcher at all.
+        dispatchReady: capabilities.worker ? () => eventing.bus.registry.size > 0 : null,
       }),
       isShuttingDown: () => shuttingDown,
     });

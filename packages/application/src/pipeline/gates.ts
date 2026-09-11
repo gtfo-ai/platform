@@ -94,9 +94,32 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
       // a binding for it would make an unrelated misconfiguration fail a gate that needs no
       // provider. A gate runs outside a run — no workspace, so no minted credential — which is why
       // the call's scope holds nothing (Q55).
-      const git = gitReads(
-        await integrations.forProject(stored.task.projectId, noRunScopedSecrets()),
-      );
+      const bindings = await integrations.forProject(stored.task.projectId, noRunScopedSecrets());
+
+      /**
+       * **"The platform cannot tell" is not "the answer is yes"** — and asking the binding first is
+       * what keeps the two apart.
+       *
+       * `gitReads` answers `null` for an unbound project *and* `getPipelineStatus` answers `null`
+       * for a commit the provider has no pipeline for. Those are different facts and the CI gate's
+       * response to them is opposite: product/04 S4 says a project with **no CI** passes ("the
+       * local test run is the evidence"), while a project with **no git binding** has told the
+       * platform nothing at all. Collapsing them let a task with no bindings walk through `ci_gate`
+       * on `passed: true` — the fifth fail-open guard this project has found (standing rules 18,
+       * 56 and 67), and the one this file's own `rebase_gate` branch already got right, which is
+       * the asymmetry that gave it away.
+       *
+       * So the binding is checked **before** either gate reads anything, by identity rather than by
+       * a `null` two producers can both return. `gates.test.ts` › "refuses the CI gate when the
+       * project has no git binding, instead of passing it".
+       */
+      if (bindings.git === null) {
+        return {
+          kind: 'unsupported',
+          detail: `gate "${stage.id}" needs a git provider and the project has no git binding`,
+        };
+      }
+      const git = gitReads(bindings);
 
       if (stage.id === 'ci_gate') {
         const headSha = stored.mr.head_sha;
@@ -136,9 +159,18 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
       // rebase_gate
       const mr = await git.mergeRequest(stored.mr, context);
       if (mr === null) {
+        /**
+         * **Deliberately unreachable, and said so rather than left looking tested** (standing
+         * rule 22). `gitReads.mergeRequest` returns `null` for exactly one reason — the project has
+         * no git binding — and `GitProviderPort.getMergeRequest` is `Promise<MergeRequest>`, never
+         * nullable: a provider that cannot find the merge request throws `not_found`. The outer
+         * guard that makes this unreachable is the `bindings.git === null` refusal above, which has
+         * its own named test for both gates. Kept because the type still admits `null`, and a
+         * `??`-shaped shortcut here would be the same fail-open the guard above was written to fix.
+         */
         return {
           kind: 'unsupported',
-          detail: 'the project has no git binding, so the rebase gate cannot be evaluated',
+          detail: `gate "${stage.id}" needs a git provider and the project has no git binding`,
         };
       }
       if (mr.has_conflicts === null || mr.has_conflicts === undefined) {

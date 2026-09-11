@@ -28,7 +28,7 @@ interface Row {
 
 const row = (id: Id, field: string, value: string, key = KEY): Row => ({
   id,
-  ciphertext: sealSecret(key, secretDocument(field, value)),
+  ciphertext: sealSecret(key, secretDocument(field, value), id),
   key_id: key.keyId,
 });
 
@@ -99,11 +99,28 @@ describe('resolving an integration’s credentials', () => {
     const { store } = storeOf([
       {
         id: TOKEN_ID,
-        ciphertext: sealSecret(KEY, JSON.stringify({ token: 'glpat-FAKE-not-a-real-token' })),
+        ciphertext: sealSecret(
+          KEY,
+          JSON.stringify({ token: 'glpat-FAKE-not-a-real-token' }),
+          TOKEN_ID,
+        ),
         key_id: KEY.keyId,
       },
     ]);
     await expect(store.resolve([TOKEN_ID])).rejects.toThrow(/could not be read/);
+  });
+
+  /**
+   * The row-identity half of the same refusal: an envelope copied from another `secrets` row is
+   * refused even though it is sealed under this process's key and decrypts to a valid document.
+   * Removing `secretId` from the wrap's AAD in `envelope.ts` makes this resolve the other row's
+   * credential.
+   */
+  it('refuses an envelope that belongs to a different row', async () => {
+    const transplanted = row(WEBHOOK_ID, 'token', 'glpat-FAKE-someone-elses-token');
+    const { store } = storeOf([{ ...transplanted, id: TOKEN_ID }]);
+    const error = await store.resolve([TOKEN_ID]).catch((caught: unknown) => caught);
+    expect((error as Error).message).toBe(`secret ${TOKEN_ID} could not be read`);
   });
 
   /**

@@ -30,6 +30,7 @@
  * nothing below asserts *how long* anything took, only that it arrived.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { ClaudeRunner, IntegrationAuditLog, RunSpec } from '@platform/application';
 import type { DomainEvent, Id, JsonObject, TranscriptEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
@@ -112,8 +113,18 @@ export interface PipelineE2E {
   readonly auditActions: readonly string[];
   /** Appends the events exactly as an inbound webhook adapter would, and returns. */
   publish(events: readonly DomainEvent[]): Promise<void>;
-  /** Waits for the instance's own workers to reach a state, or fails naming what it saw. */
+  /** Waits for the instance's own workers to reach a task state, or fails naming what it saw. */
   settle(what: string, predicate: (task: TaskSnapshot) => boolean): Promise<TaskSnapshot>;
+  /**
+   * Waits for anything else the pipeline causes — a provider side effect, a row in another table.
+   *
+   * Separate from {@link settle} because **a task state is not its own consequences**. The status
+   * mapping and the workpad are handlers in TD-005's integrations band (priority 100–199), so they
+   * run *after* the core handler that wrote `tasks.state` has committed: a test that settles on
+   * `ready_for_merge` and then reads the ticket is asserting one transaction's effect against
+   * another's timing, and it fails a few runs in a hundred with the previous status still in place.
+   */
+  waitFor(what: string, check: () => Promise<boolean>): Promise<void>;
   /** Every event of the log, in position order. */
   events(): Promise<readonly DomainEvent[]>;
   task(): Promise<TaskSnapshot>;
@@ -140,6 +151,13 @@ export interface StartPipelineOptions {
   }[];
   /** `projects.config` — technical/12's effective configuration, as the settings port reads it. */
   readonly config?: JsonObject;
+  /**
+   * Start against a database another instance already used, and do not seed it again.
+   *
+   * One test needs this: the handover that shows an uncomposed instance **queued** a
+   * `ticket.matched` instead of consuming it. See `uncomposed.e2e.test.ts`.
+   */
+  readonly reuse?: { readonly database: MigratedDatabase; readonly projectId: Id };
 }
 
 /** An audit log that keeps the rows in memory; `integration_actions` has no adapter yet (WP-15a). */
@@ -163,7 +181,7 @@ const recordingAuditLog = (): IntegrationAuditLog & { readonly actions: readonly
  * path in `PostgresSecretStore` is executed rather than stubbed. A fixture that inserted plaintext
  * would leave the one piece of this work package that touches a credential untested.
  */
-const seedWorld = async (
+export const seedWorld = async (
   pool: pg.Pool,
   config: JsonObject,
 ): Promise<{ projectId: Id; userId: Id }> => {
@@ -196,9 +214,16 @@ const seedWorld = async (
     integrationConfig: JsonObject,
     token: string,
   ): Promise<void> => {
+    // The id is generated here rather than by the column default: it is in the envelope's AAD, so
+    // it has to exist before the ciphertext does (`envelope.ts`).
+    const secretId = randomUUID();
     const secret = await pool.query<{ id: string }>(
-      'insert into secrets (ciphertext, key_id) values ($1, $2) returning id',
-      [secretAdapters.sealSecret(key, secretAdapters.secretDocument('token', token)), key.keyId],
+      'insert into secrets (id, ciphertext, key_id) values ($1, $2, $3) returning id',
+      [
+        secretId,
+        secretAdapters.sealSecret(key, secretAdapters.secretDocument('token', token), secretId),
+        key.keyId,
+      ],
     );
     await pool.query(
       `insert into integrations (id, org_id, type, provider, name, config, secret_ids)
@@ -332,6 +357,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   const instance = await startInstance({
     label: options.label ?? 'pipeline',
+    ...(options.reuse === undefined ? {} : { database: options.reuse.database }),
     env: {
       APP_SECRET_KEY,
       // Turn the instance's own timers down rather than sleeping in the assertions.
@@ -344,7 +370,10 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   });
 
   const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
-  const { projectId, userId } = await seedWorld(pool, options.config ?? {});
+  const { projectId, userId } =
+    options.reuse === undefined
+      ? await seedWorld(pool, options.config ?? {})
+      : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
 
   // An inbound adapter's half of the append: a webhook endpoint writes the normalised events in a
   // transaction of its own and the instance's outbox worker picks them up. WP-15a does not build
@@ -410,6 +439,29 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
               last === null
                 ? 'not created'
                 : `state=${last.state} stage=${last.current_stage ?? 'none'}`
+            }`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+      }
+    },
+    waitFor: async (what, check) => {
+      const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+      for (;;) {
+        const stuck = await stuckDispatch();
+        if (stuck !== null) {
+          throw new Error(`${stuck} (waiting for ${what})`);
+        }
+        if (await check()) {
+          return;
+        }
+        if (Date.now() > deadline) {
+          const snapshot = await task().catch(() => null);
+          throw new Error(
+            `the pipeline never reached ${what}; the task is ${
+              snapshot === null
+                ? 'not created'
+                : `state=${snapshot.state} stage=${snapshot.current_stage ?? 'none'}`
             }`,
           );
         }

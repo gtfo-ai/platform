@@ -2399,10 +2399,14 @@ the real composition root, the real outbox worker on its own timer, the real pg-
 the git and task-management adapters built by a production loader from seeded `integrations`, `secrets`
 and `bindings` **rows**. `test/e2e/support/pipeline.ts` no longer calls `createPipelineRuntime`.
 
-**The mutation that proves the rows are load-bearing.** Removing the two `insert into bindings` statements
-from the harness's seed fails **all five** e2e tests, and the failure is the right one:
-`state=needs_human stage=rebase_gate` — a project with no git binding parks with a blocker brief instead
-of crashing, which is standing rule 20's absent-versus-broken split observed rather than asserted.
+**The mutation that proves the rows are load-bearing — and what round 1 of it actually proved.**
+Removing the two `insert into bindings` statements fails **all five** e2e tests. Before round 2 the stop
+was `state=needs_human stage=rebase_gate`, and the reviewer showed that verdict was *downstream of a
+green CI gate*: `ci_gate` precedes `rebase_gate` in all three templates, and it was failing open, so the
+run walked past the first provider-dependent step and parked later for a different reason. With the gate
+fixed the same mutation parks at **`stage=ci_gate`** — the first step that asks a provider anything,
+which is what "the bindings are load-bearing" should look like. *A falsification that stops in the right
+state for the wrong reason is not a falsification*, and only enumerating the template order showed it.
 
 **Three orientation claims were checked and one was wrong (rule 27, eighth instance).** The plan row says
 the loader decrypts "through the existing broker". *There is no such broker.* `workspace/broker.ts` is the
@@ -2418,8 +2422,13 @@ are `integrations`/`bindings`, and `createPipelineRuntime` really had no product
 **`PipelineIntegrations` had to become a port, and that was not in the brief.** `PipelineSagaOptions`
 took one composed `PipelineIntegrations` for the whole process — correct for a harness with one project
 and wrong for an instance that serves many. It is now `PipelineIntegrationsPort.forProject(projectId,
-scope)`, the same shape `ProjectSettingsPort` already had, resolved at four call sites (the branch-protection
-read, the merge-request record, the gate evaluator, the review window). The gate evaluator resolves it
+scope)`, the same shape `ProjectSettingsPort` already had. *This paragraph said "four call sites"; there
+are six* — the reviewer enumerated them, which is rules 7 and 37 in one line: a count is a checkable
+claim and a hand-maintained one drifts. The number is now not stated anywhere at all.
+`packages/application/src/pipeline/integrations.test.ts` walks the ring's own sources and requires the
+named `noRunScopedSecrets()` at every site, so the *seventh* call site has to make the same decision
+rather than inherit an inline empty literal. Mutating one site to `{ runScopedSecrets: [] }` fails it
+with the file and line. The gate evaluator resolves it
 **after** `merged_gate` returns, deliberately: that gate is settled by the event that got the task there,
 so loading a binding for it would let an unrelated misconfiguration fail a gate that needs no provider.
 
@@ -2444,7 +2453,7 @@ written out in full. The decision is recorded on Q55 itself and at the top of `b
   outer guard is named (`providers/emitted-secrets.test.ts`), and the reason it is still worth having is
   that that file is a hand-written list of *two* providers rather than a sweep of `providers/` (rule 7);
 - deleting the `options.pipeline === undefined` warning in `runtime.ts` kills
-  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names what is missing and leaves a matched ticket where it found it",
+  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names what is missing, refuses to report ready, and leaves the ticket queued",
   which also asserts the other half — the event **dispatches** and no task is created, so it is a statement
   about the branch that ran rather than about a process that had not started yet (rule 10).
 
@@ -2476,6 +2485,96 @@ TD-012 **step 2** (`patternRedactor()`), because step 1 is per-binding and lands
 **The shipped registry is two providers, not five.** The loader builds a git provider and a task manager;
 registering Slack, Sentry and Loki would be three entries constructed by nothing, which is rule 68's shape.
 They belong to the composition root that consumes them.
+
+### WP-15a — review round 2: the fifth fail-open guard, and a falsification that proved the wrong thing
+
+Round 1 returned REQUEST_CHANGES with two majors and three smaller items. The first major is the one
+worth keeping, because it invalidated the evidence the work package was reported on.
+
+**1. `ci_gate` settled `passed: true` for a project with no git binding.** `gitReads.pipelineStatus`
+answers `null` for an unbound project, and `getPipelineStatus` answers `null` for a commit that has no
+pipeline — and product/04 S4 makes the second of those **pass** ("the local test run is the evidence").
+One `null`, two producers, opposite correct answers: standing rule 56's shape with a gate on the end.
+`rebase_gate`, four lines below it, already returned `unsupported` for the same condition, and that
+asymmetry inside one file is what a reviewer saw. It is the **fifth** fail-open guard this project has
+found (rule 67's list: WP-07's shadow guard, WP-12's two, WP-15's CI gate, now this).
+
+The gate now asks `bindings.git === null` **by identity**, before either branch reads anything.
+Reverting it fails `gates.test.ts` › *"refuses the CI gate when the project has no git binding, instead
+of passing it"* with `{kind:'settled', passed:true}` in the message — and leaves the rebase case
+**green**, because the branch below it answers the same way. That is rule 41 (one condition, two guards),
+so rule 22's remedy is applied at the inner one: declared unreachable, naming the outer guard, with the
+measurement written at both. The pair is labelled in the test — *the CI case is the guard's test, the
+rebase case is the behaviour's*. The set is derived rather than remembered: a third test asserts
+`BUILTIN_GATE_STAGE_IDS` minus `merged_gate` equals the two cases, so a fourth builtin gate fails it.
+
+**The consumer sweep rule 63 asks for, done rather than promised.** The other two `gitReads` consumers
+were audited for the same collapse: `saga.ts`'s `unprotectedDefaultBranch` reads `null` as "protected or
+cannot tell" (fail-closed, correct), and `jobs.ts`'s review window reads `[]` as "nothing unresolved" and
+returns without advancing anything (not permissive). Neither needed changing; both were checked.
+
+**2. The nonces were unpinned.** Replacing either `randomBytes(IV_BYTES)` with `Buffer.alloc(IV_BYTES)`
+left all 19 envelope tests green — the ciphertexts still differed, because the data key is random too, so
+"is different every time" said nothing about the IVs. The wrap IV is the sharp one: it sits under one
+process-wide KEK, so a constant there is GCM nonce reuse across **every row in the table**, and AES-GCM
+loses *authenticity* as well as confidentiality under it. A 64-seal census over the exported field offsets
+now pins all three random values, and each of the two mutations kills `envelope.test.ts` › *"gives every
+seal its own nonces, so no two rows share one under the process key"* and nothing else. Rule 33's shape
+away from `scripts/`: the place a mutation survives is the place the next change breaks.
+
+**3. The uncomposed production state was worse than "nothing runs", and that is now the part of this work
+package I would keep if I kept one thing.** `main.ts` and `scripts/dev.mjs` call `startRuntime()` with no
+arguments, so the pipeline is composed and production does not start it. Two consequences round 1 did not
+report:
+
+- **a `ticket.matched` arriving at such an instance was eaten.** With zero handlers `EventBus.dispatch`
+  takes the "no handler matched" path: `dispatchQueue.complete(position)` deletes the `event_dispatch`
+  row and a `$dispatch` marker goes into `handler_executions`, which makes a later re-dispatch a
+  deliberate no-op. The event was consumed and unreplayable by a process that was never able to act on
+  it. Rule 20's inbound half: *being told something you cannot handle is not licence to forget it.* The
+  outbox sweep is no longer started when the bus has **no handlers** — that condition and not "the
+  pipeline is absent", because the invariant is about handlers and a later projection should still sweep.
+  The event stays queued with `attempts = 0` for an instance that can act on it. The cost is stated
+  rather than hidden: the queue grows, `event_dispatch_pending` is the gauge that shows it, and `/readyz`
+  is down for the same reason.
+- **`/readyz` was green.** Database, migrations and queue were all `ok`. TD-023's three checks did not
+  cover the state the build is in, so there is a fourth, `dispatch`, and it is **required** on
+  `ReadinessOptions` rather than optional — six existing call sites had to state it, which is the point
+  (rule 31). `readiness.test.ts` › *"is down when the dispatcher has no handlers, however healthy
+  everything else is"*.
+
+**And the first version of that e2e passed with the guard removed.** It asserted "the row is still in
+`event_dispatch`" immediately after the append — a negative, against a sweep that simply had not got
+there yet (rule 4). Two changes fixed the instrument, and the second is the one worth copying: the queue
+assertions moved to **after `runtime.stop()`**, because shutdown drains the dispatcher and that is the
+one moment at which "still here" means "nothing ever swept it"; and the test then hands the **database**
+to a second, composed instance and waits for the ticket to reach `ready_for_merge`. That turns the
+property into a positive one — *the instance that could not act on the notification did not destroy it,
+and the next one that can, does* — and it is time-free in the failing direction. Under the mutation the
+first assertion now fails in 400 ms with `expected [] to have a length of 1`; before the fix the same
+mutation was green.
+
+**4. A whole envelope could be transplanted between `secrets` rows.** `openSecret(key, ciphertext)` took
+the ciphertext alone, so an envelope copied from one row into another decrypted perfectly and a binding
+silently got another account's credential. The docblock's splice claim read wider than it was: the splice
+test only ever cut an envelope in half. The row's own uuid is now in the **wrap's** AAD — identity
+material, never a redaction output (rule 70) — which means the caller generates the id before the insert
+rather than letting the column default produce one. Removing it from the AAD kills two named tests, one
+at the envelope and one at the store.
+
+**What was refused, again, and filed instead**: the Postgres `IntegrationAuditLog` and its migration, and
+the absence of any webhook ingress, which means nothing in production emits `ticket.matched` at all. The
+third item — the e2e replacing the registry wholesale, so the **shipped** GitLab and Jira `create` were
+reached by no tier through the loader — turned out to cost about sixty lines at the *integration* tier
+rather than another e2e, because neither registration performs I/O at construction, so it was closed
+rather than filed.
+
+**One flake, found by running the target rather than by reasoning about it.** `keeps one workpad comment
+on the ticket and moves the ticket status` settled on `tasks.state === 'ready_for_merge'` and then read
+the ticket — but the status mapping is a handler in TD-005's *integrations* band, so it commits after the
+core transition. One transaction's effect asserted against another's timing: it failed 1 run in 3. The
+harness grew `waitFor`, which waits on the consequence instead of on the state, and the docblock says why
+the two are different. Three consecutive runs of the file are green.
 
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 
@@ -3103,6 +3202,20 @@ intact, and `rm -rf` unlinked the link rather than the target.
   which needs stream-sequence allocation outside a saga, the thing `NormalisedEvent` stops short of on
   purpose. Until it exists, `apps/server` starts **no pipeline** unless a caller supplies an audit log, and
   says so in a warning naming the gap.
+- **No webhook ingress exists, so nothing in production emits `ticket.matched` (found at WP-15a round
+  2).** `apps/server/src/routes/` has no `/webhooks/<provider>/<integrationId>` endpoint, which
+  technical/06 § "Inbound" specifies, and no polling fallback either. WP-15a made an instance able to
+  *act* on a ticket event and able to *keep* one it cannot act on; nothing yet produces one outside a
+  test. The inbox table is unwritten for the same reason (rule 70's digest note already depends on it).
+- ~~**The shipped GitLab and Jira registrations are reached by no tier through the loader**~~ —
+  **CLOSED at WP-15a round 2**, cheaply, at the *integration* tier rather than with another e2e:
+  `test/integration/secrets/bindings.integration.test.ts` seeds real `integrations` rows and sealed
+  `secrets`, then runs the production loader with `createPipelineProviderRegistry` and builds both
+  shipped adapters. No provider I/O happens and none is stubbed — `create` parses and constructs — so
+  it costs about a second. The gap it closes is the one nothing else covered: the **merge of a real
+  `integrations.config` row with a real decrypted secret into a real provider's strict schema**, which
+  is where a column rename or a `secretFields` typo lands. A second case asserts a row missing
+  `base_url` is a refusal rather than `git: null` (rule 20 through the shipped schema).
 - **The binding loader has no cache, deliberately, and nothing has measured whether it needs one
   (WP-15a).** Every provider call re-reads the project's bindings and rebuilds the adapters, because Q55
   makes the redactor per-call and because a cache would have to be invalidated by a settings change, a

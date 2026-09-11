@@ -11,7 +11,19 @@
  * the loader refuses two of a type, so the *refusal* would name a different pair on different runs.
  * Asserting the order here is what makes that refusal reproducible.
  */
+import { randomUUID } from 'node:crypto';
+import {
+  createIntegrationActionExecutor,
+  createMemoryAuditLog,
+  createVirtualTimer,
+  noSecretsRedactor,
+} from '@platform/application';
+import type { Id, IsoDateTime } from '@platform/contracts';
 import { secrets as secretAdapters } from '@platform/infrastructure';
+import {
+  createPipelineIntegrationsLoader,
+  createPipelineProviderRegistry,
+} from '@platform/integrations';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -44,9 +56,16 @@ afterAll(async () => {
 });
 
 const insertSecret = async (field: string, value: string): Promise<string> => {
+  // The id is in the envelope's AAD, so it is generated here and inserted explicitly rather than
+  // left to the column default (`envelope.ts`).
+  const id = randomUUID();
   const { rows } = await pool.query<{ id: string }>(
-    'insert into secrets (ciphertext, key_id) values ($1, $2) returning id',
-    [secretAdapters.sealSecret(KEY, secretAdapters.secretDocument(field, value)), KEY.keyId],
+    'insert into secrets (id, ciphertext, key_id) values ($1, $2, $3) returning id',
+    [
+      id,
+      secretAdapters.sealSecret(KEY, secretAdapters.secretDocument(field, value), id),
+      KEY.keyId,
+    ],
   );
   return rows[0]?.id as string;
 };
@@ -81,9 +100,14 @@ describe('the secret store on a real database', () => {
 
   it('refuses a row sealed under a key this process does not hold', async () => {
     const other = secretAdapters.deriveSecretKey('also-not-a-real-app-secret-key-11111111');
+    const id = randomUUID();
     const { rows } = await pool.query<{ id: string }>(
-      'insert into secrets (ciphertext, key_id) values ($1, $2) returning id',
-      [secretAdapters.sealSecret(other, secretAdapters.secretDocument('token', 'x')), other.keyId],
+      'insert into secrets (id, ciphertext, key_id) values ($1, $2, $3) returning id',
+      [
+        id,
+        secretAdapters.sealSecret(other, secretAdapters.secretDocument('token', 'x'), id),
+        other.keyId,
+      ],
     );
     const store = secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY });
     await expect(store.resolve([rows[0]?.id as never])).rejects.toThrow(/is sealed under key/);
@@ -147,5 +171,144 @@ describe('the binding repository on a real database', () => {
     );
     const repository = secretAdapters.createPostgresBindingRepository(pool);
     await expect(repository.forProject(other.rows[0]?.id as never)).resolves.toEqual([]);
+  });
+});
+
+/**
+ * The **shipped** registrations, through the **production** loader, on a **real** database.
+ *
+ * Round 2's reviewer named this hole: the `e2e-fake-claude` harness replaces the registry wholesale,
+ * so every end-to-end run exercises the fakes' `configSchema` and `create`, and `loader.test.ts`
+ * exercises the real ones against stubbed rows. Neither drives the join that actually breaks — a
+ * real `integrations.config` document merged with a real decrypted `secrets` row and parsed by a
+ * real provider's **strict** schema, which is exactly where a column rename or a `secretFields`
+ * typo lands and where nothing else would notice.
+ *
+ * No provider I/O happens here and none is stubbed: `create` parses and constructs, and the first
+ * HTTP call is a method call this never makes. That is what makes the coverage cheap enough to be
+ * worth having at this tier rather than another e2e.
+ */
+describe('the shipped provider registrations, loaded from real rows', () => {
+  it('builds GitLab and Jira from the rows an operator would have written', async () => {
+    const project = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'shipped', 'Shipped', 'https://git.example.test/acme/shipped.git')
+       returning id`,
+      [orgId],
+    );
+    const projectId = project.rows[0]?.id as Id;
+
+    const gitlabToken = await insertSecret('token', 'glpat-FAKE-shipped-binding-token-0001');
+    const jiraToken = await insertSecret('api_token', 'FAKE-shipped-jira-token-0001');
+
+    const bind = async (
+      type: string,
+      provider: string,
+      name: string,
+      config: Record<string, unknown>,
+      secretId: string,
+    ): Promise<void> => {
+      const { rows } = await pool.query<{ id: string }>(
+        `insert into integrations (org_id, type, provider, name, config, secret_ids)
+         values ($1, $2::integration_type, $3, $4, $5::jsonb, array[$6::uuid]) returning id`,
+        [orgId, type, provider, name, JSON.stringify(config), secretId],
+      );
+      await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+        projectId,
+        rows[0]?.id,
+      ]);
+    };
+
+    await bind(
+      'git',
+      'gitlab',
+      'shipped gitlab',
+      { base_url: 'https://gitlab.example.test', project: 'acme/shipped' },
+      gitlabToken,
+    );
+    await bind(
+      'task_management',
+      'jira-cloud',
+      'shipped jira',
+      { site_url: 'https://acme-example.atlassian.net', user_email: 'bot@example.test' },
+      jiraToken,
+    );
+
+    const executor = createIntegrationActionExecutor({
+      auditLog: createMemoryAuditLog(),
+      redactor: noSecretsRedactor(),
+      timer: createVirtualTimer({ autoAdvance: true }),
+      clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+    });
+    const loader = createPipelineIntegrationsLoader({
+      repository: secretAdapters.createPostgresBindingRepository(pool),
+      secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
+      registry: createPipelineProviderRegistry({
+        executor,
+        clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+      }),
+      executor,
+      gitProjectPath: async () => 'acme/shipped',
+    });
+
+    const integrations = await loader.forProject(projectId, { runScopedSecrets: [] });
+
+    expect(integrations.git?.ref).toEqual({
+      integrationId: expect.any(String),
+      provider: 'gitlab',
+      type: 'git',
+    });
+    expect(integrations.git?.project).toBe('acme/shipped');
+    expect(integrations.taskManagement?.ref).toMatchObject({
+      provider: 'jira-cloud',
+      type: 'task_management',
+    });
+    // The capability flags come off the parsed config, so reading one proves the strict parse ran
+    // over the merged document rather than over the row alone.
+    expect(integrations.git?.port.capabilities()).toMatchObject({ webhooks: expect.any(Boolean) });
+  });
+
+  it('refuses a shipped binding whose config row is missing a field the schema requires', async () => {
+    const project = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'broken', 'Broken', 'https://git.example.test/acme/broken.git')
+       returning id`,
+      [orgId],
+    );
+    const projectId = project.rows[0]?.id as Id;
+    const token = await insertSecret('token', 'glpat-FAKE-broken-binding-token-0001');
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config, secret_ids)
+       values ($1, 'git', 'gitlab', 'no base url', '{}'::jsonb, array[$2::uuid]) returning id`,
+      [orgId, token],
+    );
+    await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+      projectId,
+      rows[0]?.id,
+    ]);
+
+    const executor = createIntegrationActionExecutor({
+      auditLog: createMemoryAuditLog(),
+      redactor: noSecretsRedactor(),
+      timer: createVirtualTimer({ autoAdvance: true }),
+      clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+    });
+    const loader = createPipelineIntegrationsLoader({
+      repository: secretAdapters.createPostgresBindingRepository(pool),
+      secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
+      registry: createPipelineProviderRegistry({
+        executor,
+        clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+      }),
+      executor,
+      gitProjectPath: async () => 'acme/broken',
+    });
+
+    // Standing rule 20: broken is not absent. A missing `base_url` must not resolve to `git: null`.
+    const error = await loader
+      .forProject(projectId, { runScopedSecrets: [] })
+      .catch((caught: unknown) => caught);
+    expect((error as Error).message).toContain('fails its schema at: base_url');
+    expect((error as Error).message).not.toContain('glpat-');
   });
 });

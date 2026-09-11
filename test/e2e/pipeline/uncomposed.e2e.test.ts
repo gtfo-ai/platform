@@ -3,52 +3,77 @@
  *
  * `apps/server` cannot compose the pipeline on its own in this build — there is no transport to the
  * launcher for a `ClaudeRunner` (Q52) and no adapter for `IntegrationAuditLog` — so `startRuntime`
- * takes them as an argument and a process without them runs without a pipeline. Standing rule 18
- * says the absent case must not be the permissive one, and standing rule 10 says a test must assert
- * *which* branch ran: the companion file proves a ticket walks to `task.completed` when the
- * composition is supplied, and this one proves the same ticket moves **nothing** when it is not, and
- * that the process said so.
+ * takes them as an argument, and **that is the state `main.ts` and `pnpm dev` are actually in**.
+ * The companion file proves a ticket walks to `task.completed` when the composition is supplied;
+ * this one proves what happens when it is not, which review round 1 found was worse than "nothing":
  *
- * Deleting the `if (options.pipeline === undefined)` warning in `runtime.ts` kills the first
- * assertion; composing a pipeline unconditionally would kill the second.
+ *  1. **the ticket was eaten.** `EventBus.dispatch` treats "no handler matched" as a completed
+ *     dispatch — it deletes the `event_dispatch` row and writes the `$dispatch` marker that makes a
+ *     re-dispatch a deliberate no-op — so a `ticket.matched` arriving at such an instance was
+ *     consumed and unreplayable. Standing rule 20's inbound half: being told something you cannot
+ *     handle is not licence to forget it. The sweep is no longer started when the bus has no
+ *     handlers, and the event stays queued for an instance that can act on it.
+ *  2. **`/readyz` was green.** Database, migrations and queue were all `ok`, so an orchestrator was
+ *     told a process was ready to serve a product that would never advance a ticket. A boot `warn`
+ *     is not a readiness signal.
+ *
+ * Every negative below is anchored by something positive taken from the **live** instance over
+ * HTTP, because "the row is still there" also passes against a process that never started
+ * (standing rule 10): `/readyz` answers 503 naming the check, and `/metrics` reports the queued
+ * event in `event_dispatch_pending`.
  */
 import { PassThrough } from 'node:stream';
+import type { Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { eventing as eventingAdapters } from '@platform/infrastructure';
 import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  createMigratedDatabase,
+  type MigratedDatabase,
+} from '../../integration/support/migrated.js';
 import { type Instance, startInstance } from '../support/instance.js';
+import { type PipelineE2E, seedWorld, startPipeline } from '../support/pipeline.js';
+import { featureScenarios, TICKETS } from '../support/scenarios.js';
 
 let instance: Instance | undefined;
+let composed: PipelineE2E | undefined;
+let database: MigratedDatabase | undefined;
 
 afterEach(async () => {
   await instance?.stop();
+  await composed?.stop();
+  await database?.drop();
   instance = undefined;
+  composed = undefined;
+  database = undefined;
 });
 
 describe('an instance started without a pipeline composition', () => {
-  it('names what is missing and leaves a matched ticket where it found it', async () => {
+  it('names what is missing, refuses to report ready, and leaves the ticket queued', async () => {
     const lines: string[] = [];
     const destination = new PassThrough();
     destination.on('data', (chunk: Buffer) => {
       lines.push(chunk.toString('utf8'));
     });
 
+    database = await createMigratedDatabase('uncomposed');
     instance = await startInstance({
-      label: 'uncomposed',
+      database,
       logLevel: 'warn',
       logDestination: destination,
       env: { APP_DISPATCH_POLL_INTERVAL_MS: '25' },
     });
 
-    const warning = lines
-      .join('')
-      .split('\n')
-      .find((line) => line.includes('the pipeline is not composed'));
-    expect(warning).toBeDefined();
-    expect(warning).toContain('Q52');
-    expect(warning).toContain('IntegrationAuditLog');
+    const logged = lines.join('').split('\n');
+    const missing = logged.find((line) => line.includes('the pipeline is not composed'));
+    expect(missing).toBeDefined();
+    expect(missing).toContain('Q52');
+    expect(missing).toContain('IntegrationAuditLog');
+    // The second decision, and the one that keeps the event: the sweep is not started at all.
+    expect(logged.find((line) => line.includes('the outbox sweep is not started'))).toBeDefined();
 
+    let seededProjectId = '' as Id;
     const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
     const inbound = eventingAdapters.createEventing({
       pool,
@@ -56,12 +81,10 @@ describe('an instance started without a pipeline composition', () => {
       config: { maxConcurrency: 1 },
     });
     try {
-      const project = await pool.query<{ id: string }>(
-        `with org as (insert into organizations (name) values ('uncomposed') returning id)
-         insert into projects (org_id, key, name, repo_url)
-         select id, 'api', 'API', 'https://git.example.test/acme/api.git' from org returning id`,
-      );
-      const projectId = project.rows[0]?.id as string;
+      // The bindings the *second* instance will load, seeded now so the handover below tests only
+      // what it means to test: whether the event survived.
+      const { projectId } = await seedWorld(pool, {});
+      seededProjectId = projectId;
 
       await inbound.unitOfWork.transaction(async (scope) =>
         scope.events.append([
@@ -92,22 +115,19 @@ describe('an instance started without a pipeline composition', () => {
         ]),
       );
 
-      // The dispatcher runs on its own timer; wait for the event to leave the queue, which is the
-      // positive fact this can assert — "it dispatched, and no task exists" rather than "nothing
-      // happened yet", which would also pass against a process that had not started.
-      const deadline = Date.now() + 20_000;
-      for (;;) {
-        const pending = await pool.query<{ count: string }>(
-          'select count(*)::text as count from event_dispatch',
-        );
-        if (pending.rows[0]?.count === '0') {
-          break;
-        }
-        if (Date.now() > deadline) {
-          throw new Error('the event never left the dispatch queue');
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      // The positive anchor for every negative below: the instance is alive, answering, and its own
+      // report names the check that is down. A dead process cannot produce this.
+      const ready = await instance.runtime.app.inject({ method: 'GET', url: '/readyz' });
+      expect(ready.statusCode).toBe(503);
+      expect(ready.json()).toMatchObject({
+        status: 'down',
+        checks: { database: 'ok', migrations: 'ok', queue: 'ok', dispatch: 'down' },
+      });
+
+      // The second anchor: the instance *sees* the event it is not dispatching, and says so on the
+      // gauge an operator would alert on.
+      const metrics = await instance.runtime.app.inject({ method: 'GET', url: '/metrics' });
+      expect(metrics.body).toMatch(/^event_dispatch_pending 1$/m);
 
       const tasks = await pool.query<{ count: string }>(
         'select count(*)::text as count from tasks',
@@ -117,5 +137,51 @@ describe('an instance started without a pipeline composition', () => {
       await inbound.stop();
       await pool.end();
     }
+
+    // **After** the shutdown, not before. Asserting the queue state while the instance was still up
+    // is what made the first version of this test pass with the guard removed: a running sweep
+    // simply had not got to the event yet. `runtime.stop()` drains the dispatcher, so this is the
+    // one moment at which "the row is still here" means "nothing ever swept it" (standing rule 4).
+    const handedOver = instance;
+    instance = undefined;
+    await handedOver.stop();
+
+    const after = new pg.Client({ connectionString: database.connectionString });
+    await after.connect();
+    try {
+      const queued = await after.query<{ attempts: number }>('select attempts from event_dispatch');
+      expect(queued.rows).toHaveLength(1);
+      expect(queued.rows[0]?.attempts).toBe(0);
+
+      // Still *replayable*: the `$dispatch` marker is what makes a re-dispatch a deliberate no-op,
+      // so its absence is the difference between "not yet" and "gone".
+      const markers = await after.query<{ count: string }>(
+        "select count(*)::text as count from handler_executions where handler = '$dispatch'",
+      );
+      expect(markers.rows[0]?.count).toBe('0');
+    } finally {
+      await after.end();
+    }
+
+    /**
+     * The handover, and the reason this test is not a wall-clock one.
+     *
+     * "The row is still there" is a negative, and the first version of this test asserted it
+     * immediately after the append — so it passed **with the guard removed**, because a running
+     * sweep had not got to the event yet rather than because it was not running (standing rule 4:
+     * a negative assertion passes silently on a harness that never reached the state). Stopping the
+     * instance drains the dispatcher, so an instance that *was* sweeping consumes the event on the
+     * way down; a second instance with a pipeline then finds nothing and this never settles.
+     *
+     * That makes the assertion a **positive** one about the product's actual promise: an instance
+     * that could not act on the notification did not destroy it, and the next one that can, does.
+     */
+    composed = await startPipeline({
+      scenarios: featureScenarios,
+      reuse: { database, projectId: seededProjectId },
+      tickets: TICKETS,
+    });
+    const task = await composed.settle('ready_for_merge', (row) => row.state === 'ready_for_merge');
+    expect(task.template).toBe('feature');
   });
 });

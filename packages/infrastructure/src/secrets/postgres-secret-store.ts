@@ -13,7 +13,9 @@
  *  - an id in `secret_ids` with **no row**: the integration references a credential that has been
  *    deleted;
  *  - a row sealed under **another key** (`secrets.key_id`), which is what a half-finished
- *    `APP_SECRET_KEY` rotation looks like and is worth saying plainly rather than as "bad tag";
+ *    `APP_SECRET_KEY` rotation looks like and is worth saying plainly rather than as "bad tag" —
+ *    and, by the same authentication tag, a whole envelope **moved from another row**, because the
+ *    row's own id is in the wrap's associated data (`envelope.ts`);
  *  - a row that does not **decrypt or parse** — including one whose plaintext is not the document
  *    this platform writes;
  *  - two rows claiming the **same config field**, which would otherwise resolve to whichever the
@@ -91,7 +93,9 @@ export const createPostgresSecretStore = (options: PostgresSecretStoreOptions): 
       }
       let document: SecretDocument;
       try {
-        document = secretDocumentSchema.parse(JSON.parse(openSecret(options.key, row.ciphertext)));
+        document = secretDocumentSchema.parse(
+          JSON.parse(openSecret(options.key, row.ciphertext, row.id)),
+        );
       } catch (cause) {
         // Never the plaintext, never the ciphertext: this message reaches a log.
         throw new SecretResolutionError(`secret ${id} could not be read`, wanted, { cause });
