@@ -69,6 +69,13 @@ const build = async (
     auth,
     hub: harness.hub,
     version: { version: '1.2.3', commit: 'abc123', builtAt: '2026-09-09T10:00:00Z' },
+    // No ingress: this harness has no database behind it, and a webhook route is only registered
+    // when one is composed (`BuildAppOptions.webhooks`). The route is driven against a real
+    // instance by `test/e2e/pipeline/webhook-ingress.e2e.test.ts` ›
+    // "starts a ticket nothing seeded and drives it to task.completed" — the file cited here
+    // before never existed, which `scripts/citations.ts` missed because the citation carried no
+    // `›` (PROGRESS backlog 3).
+    webhooks: null,
     readiness: async () => {
       if (harness.readinessError !== null) {
         throw harness.readinessError;

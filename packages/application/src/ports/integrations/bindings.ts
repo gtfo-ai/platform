@@ -35,7 +35,43 @@ export interface ProjectBinding {
   readonly secretIds: readonly Id[];
 }
 
+/** One project's use of an integration, as the *integration* side sees it. */
+export interface IntegrationBinding {
+  readonly bindingId: Id;
+  readonly projectId: Id;
+  /** `integrations.config` with this binding's `bindings.config` merged over it. */
+  readonly config: JsonObject;
+}
+
+/**
+ * An integration and every project bound to it — the mirror of {@link ProjectBinding}, for a caller
+ * that starts from `integrations.id` rather than from a project.
+ *
+ * The webhook ingress is that caller: `POST /webhooks/:provider/:integrationId` names the
+ * **account**, because the credential that signs a delivery belongs to the account and
+ * `inbox(provider, delivery_id)` has no project column. Which project a delivery is *about* is then
+ * a question for the bindings, each of which may narrow the account's configuration.
+ *
+ * `config` here is therefore the account's alone, unmerged: a delivery is verified against the
+ * account and normalised per binding, and merging the two would make the two questions share one
+ * document (see `ResolvedInboundIntegration`).
+ */
+export interface IntegrationAccount {
+  readonly integrationId: Id;
+  readonly type: IntegrationType;
+  /** Registered provider id: `gitlab`, `jira-cloud`, … */
+  readonly provider: string;
+  readonly name: string;
+  /** `integrations.config`, with no binding overlay. */
+  readonly config: JsonObject;
+  readonly secretIds: readonly Id[];
+  /** Every project bound to it, in a stable order. May be empty: an account nobody uses. */
+  readonly bindings: readonly IntegrationBinding[];
+}
+
 export interface BindingRepository {
   /** Every binding of a project, in a stable order (type, then provider, then name). */
   forProject(projectId: Id): Promise<readonly ProjectBinding[]>;
+  /** The account and its bindings, or `null` when no integration has that id. */
+  forIntegration(integrationId: Id): Promise<IntegrationAccount | null>;
 }

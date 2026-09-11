@@ -328,7 +328,41 @@ the existing suite (BD-017).
 
 ## Inbound: webhooks and polling
 
-- One HTTP endpoint per provider (`/webhooks/<provider>/<integrationId>`), verifies signature (`X-Hub-Signature`, `X-Gitlab-Token`, `Sentry-Hook-Signature`, Slack signing secret when not in Socket Mode), stores the raw payload (audit), computes a **dedup key** (Jira `X-Atlassian-Webhook-Identifier`; GitLab event + object id + `updated_at`; Sentry hook id), and enqueues normalisation as a job. Response is 2xx within milliseconds; all work is asynchronous.
+- One HTTP endpoint per provider (`/webhooks/<provider>/<integrationId>`), verifies signature (`X-Hub-Signature`, `X-Gitlab-Token`, `Sentry-Hook-Signature`, Slack signing secret when not in Socket Mode), stores the payload (audit), computes a **dedup key** (Jira `X-Atlassian-Webhook-Identifier`; GitLab event + object id + `updated_at`; Sentry hook id), and appends the normalised events. Response is 2xx as soon as the delivery is recorded.
+  - **Amended at WP-15c, in three places, and each amendment is a correction rather than a detail.**
+    1. **The payload is stored redacted, not raw.** GitLab's legacy scheme sends the binding's own
+       webhook secret as plain text in `X-Gitlab-Token`, so "stores the raw payload" wrote a live
+       credential to `inbox` on **every** delivery, with no attacker and nothing planted — and
+       TD-012's write list does not name `inbox`, so nothing else would have caught it. `headers`
+       and `payload` are written `redactJson`-redacted with the **account's** own redactor,
+       **after** `verify` (which needs the bytes as they were signed) and **after** the dedup key
+       (which the adapter redacts itself), and migration `0014` adds `redaction_count` — the sum
+       over the row's three redactions, deliberately not the key's, which is ~always 0 and would be
+       a dead signal. Because a redacted payload can no longer be re-verified against its
+       signature, the **verdict is persisted** (`inbox.verified`) rather than recomputed.
+    2. **Normalisation happens in the request, not in a job.** "Enqueues normalisation as a job …
+       all work is asynchronous" has the defect PROGRESS backlog 20 is about, in its unrecoverable
+       form: the `inbox` row is written, `Jobs.enqueue` does not join that transaction (TD-004),
+       and a crash between the two leaves a delivery *recorded as performed* that never was — which
+       a redelivery cannot fix, because the row it would be deduplicated against is the one the
+       crash left behind. Normalising first and writing the row **in the same transaction as the
+       events it produced** removes the window: either both commit or the sender retries. The cost
+       is that the 2xx waits for normalisation, which is pure on Jira and at most one discussions
+       read on a GitLab *note*. If a provider's `normalise` ever grows expensive, the shape to
+       adopt is **not** the job — it is a sweep of `inbox_unprocessed_idx`, where the row *is* the
+       queue and losing the wake-up costs latency rather than the delivery.
+    3. **An unverifiable delivery writes no `inbox` row at all** (401, audited as one
+       `integration_actions` row with `direction = 'in'` and no event). A row would let anyone who
+       can address the endpoint **poison a dedup key**: plant the id a genuine future delivery will
+       carry, and that delivery is then silently taken for a redelivery and dropped.
+  - **A delivery nobody can key is received, not refused** (202, `accepted: false`): both shipped
+    providers refuse to key the hook kinds their normaliser would ignore anyway (wiki, release),
+    and a vendor that keeps receiving errors eventually **disables the webhook** — standing rule 20.
+  - **Authenticity is the account's question and meaning is the project's.** The URL names an
+    `integrations.id`, so `verify` and the dedup key are computed from `integrations.config` alone,
+    while `normalise` runs once per **binding** with that binding's `bindings.config` merged over
+    it — which is what lets one Jira site serve two projects with different pick-up rules without
+    the override changing which deliveries the account accepts.
   - **GitLab has two schemes and the choice is not ours** (WP-09). GitLab 19.0 added
     [Standard Webhooks](https://www.standardwebhooks.com/) — `webhook-id`, `webhook-timestamp` and
     `webhook-signature` (`v1,<base64 HMAC-SHA256 over "{id}.{timestamp}.{body}">`, key = the

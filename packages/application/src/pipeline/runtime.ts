@@ -21,9 +21,18 @@
  * constant is **0** now, and it is the receipt — while it is 1, the shape is back.
  *
  * So a process running the pipeline needs
- * `2 × dispatchConcurrency + 1 + stageConcurrency + reviewConcurrency + outboundConcurrency` at
- * least, and the number is a floor rather than a budget — the HTTP layer and the projections draw
- * on the same pool.
+ * `2 × dispatchConcurrency + 1 + stageConcurrency + reviewConcurrency + outboundConcurrency + 1`
+ * at least, and the number is a floor rather than a budget — the HTTP layer and the projections
+ * draw on the same pool.
+ *
+ * That trailing `+ 1` is the **fourth** worker, and it is not started here: WP-15c's
+ * `pipeline.intake.reconcile` pass is composed by `apps/server/src/pipeline.ts`, because it is a
+ * maintenance schedule the process owns rather than a queue this runtime drives. It is counted
+ * unconditionally — including when `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no worker at all —
+ * because a reservation that shrank with a setting would be a floor an operator could lower by
+ * accident. `POOL_RESERVATIONS.pipeline` is therefore **4**, and this sentence is the reason a
+ * reader of *this* file can reach that number: the term is the process's, not this function's
+ * (standing rule 63 — an arithmetic claim cannot be maintained from inside one file).
  *
  * **One thing a handler still does inside its transaction is read `ProjectSettingsPort`**, which in
  * `apps/server` is a `projects` query on a connection borrowed inside the handler's. It is a

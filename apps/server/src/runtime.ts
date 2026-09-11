@@ -33,7 +33,7 @@
  * for it. Only *chained* events — the ones a handler returns or appends through its transaction
  * scope — inherit the dispatcher's slot. Emit, never dispatch.
  */
-import type { Jobs, Logger } from '@platform/application';
+import type { Jobs, Logger, WebhookIngress } from '@platform/application';
 import { sweepReadiness } from '@platform/application';
 import {
   db as dbAdapters,
@@ -48,7 +48,12 @@ import { bootstrapAdministrator } from './auth/bootstrap.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
-import { composePipeline, type PipelineComposition } from './pipeline.js';
+import {
+  composeIntegrationStack,
+  composePipeline,
+  composeWebhookIngress,
+  type PipelineComposition,
+} from './pipeline.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { SseHub } from './sse/hub.js';
@@ -163,6 +168,28 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         : {}),
     });
 
+    /**
+     * One executor, one audit sink, one provider registry — **for the whole process**, because both
+     * directions need them (WP-15c).
+     *
+     * The pipeline builds provider adapters to *call* and the webhook ingress builds them to
+     * *read*, and both go through the same registration. Two stacks would mean two idempotency
+     * stores and two rate-limit budgets for one account, which is the duplication
+     * `shipped-registry.ts` already records for Jira's inner executor — so it is built once, here,
+     * and shared. It is `null` only for a role that serves neither the API nor the workers.
+     */
+    const stack =
+      capabilities.api || capabilities.worker
+        ? composeIntegrationStack({
+            pool: database.pool,
+            eventing,
+            ...(options.pipeline?.registry === undefined
+              ? {}
+              : { registry: options.pipeline.registry }),
+            logger: loggerPort,
+          })
+        : null;
+
     let jobsStarted = false;
     let jobs: Jobs | null = null;
     if (capabilities.worker) {
@@ -225,6 +252,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           jobs: jobsRuntime.jobs,
           secretKey: config.secretKey,
           stageConcurrency: 1,
+          intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
+          // Non-null on this branch by construction: `capabilities.worker` is what got us here and
+          // it is one of the two conditions the stack is built under.
+          stack: stack as NonNullable<typeof stack>,
           logger: loggerPort,
         });
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });
@@ -295,6 +326,31 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       });
     }
 
+    /**
+     * The door production starts a ticket through (WP-15c).
+     *
+     * Composed whenever this role serves the API — including under the `pipeline: null` seam, which
+     * is a statement about the *handlers* this process registers and not about whether it may
+     * receive a delivery. A role that serves no API has no ingress and therefore no route, which is
+     * what makes "this URL 404s" mean "wrong URL" rather than "right URL, wrong container".
+     */
+    const webhooks: WebhookIngress | null =
+      capabilities.api && stack !== null
+        ? composeWebhookIngress({
+            pool: database.pool,
+            eventing,
+            secretKey: config.secretKey,
+            stack,
+            logger: loggerPort,
+          })
+        : null;
+    if (capabilities.api && webhooks === null) {
+      logger.warn(
+        { missing: 'integration stack' },
+        'this process serves the API and composes no webhook ingress: no provider delivery can reach it',
+      );
+    }
+
     const app = await buildApp({
       config,
       logger,
@@ -302,6 +358,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       database: database.db,
       auth,
       hub,
+      webhooks,
       version: buildInfo(env),
       readiness: createReadinessCheck({
         database: database.db,

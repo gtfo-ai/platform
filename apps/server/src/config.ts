@@ -138,6 +138,23 @@ const serverConfigFields = z.strictObject({
   /** Behind a reverse proxy (technical/01's optional caddy), so `X-Forwarded-*` is honoured. */
   trustProxy: z.boolean(),
 
+  /**
+   * How often the intake reconciliation looks for a ticket the platform matched and never started,
+   * and — the same number — how old such a match must be before it is re-emitted (WP-15c, PROGRESS
+   * backlog 20).
+   *
+   * One knob rather than two, because the sentence it expresses is one: *a ticket that has had a
+   * full interval to produce a task row and has not*. A match younger than that still has its own
+   * `intake_check` job in flight, and re-emitting it would race the intake it is waiting for.
+   *
+   * The floor is not cosmetic: every pass is a query over `events` joined against `tasks`, so a
+   * sub-second interval would cost more than the loss it recovers. `0` switches the pass off, for
+   * an operator who would rather see a stuck ticket than an automatic re-emission, and
+   * `composePipeline` logs which of the two it did — "switched off" and "never composed" must not
+   * be spelled the same way (standing rule 18).
+   */
+  intakeReconcileIntervalMs: z.union([z.literal(0), z.int().min(1_000).max(3_600_000)]),
+
   argon2: argon2ConfigSchema,
   database: db.databaseConfigSchema,
   dispatch: eventing.dispatchConfigSchema,
@@ -188,6 +205,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   shutdownTimeoutMs: 30_000,
   bodyLimitBytes: 1_048_576,
   trustProxy: false,
+  intakeReconcileIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
 
@@ -206,11 +224,14 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
  * that nobody has to reassemble it from four docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 3` pipeline workers `+ 2` HTTP `+ 1` maintenance = **11**,
- * against `.env.example`'s `APP_DB_POOL_MAX=13`. WP-15b's arithmetic reached 11 too, by a different
- * route — a third connection per dispatch and one fewer job worker — and that difference is the
- * whole of WP-15d: the term that scales with concurrency shrank from 3 to 2, so the *shape* is
- * `2N + 9` rather than `3N + 8`. They agree at N=1 and diverge from N=2 up (17 against 20 at N=4).
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 2` HTTP `+ 1` maintenance = **12**,
+ * against `.env.example`'s `APP_DB_POOL_MAX=14`. The *shape* is **`2N + 10`**, and the two changes
+ * behind it are worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
+ * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
+ * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
+ * `2N + 9`, which agreed with the old one at N=1 (both 11). WP-15c then added a **fourth** flat
+ * job worker (`pipeline.intake.reconcile`), so it is `2N + 10`: 12 at N=1, and **18 at N=4** where
+ * `3N + 8` would have been 20.
  */
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
@@ -227,6 +248,14 @@ export const POOL_RESERVATIONS = {
    * `stage.execute`, `mr.comment.debounce` and, since WP-15d, `pipeline.outbound`. It is counted
    * here because every `worker` role composes the pipeline.
    *
+   * **Four since WP-15c**, and the fourth is composed by `apps/server/src/pipeline.ts` rather than
+   * by `createPipelineRuntime`: `pipeline.intake.reconcile`, the pass that re-emits a matched
+   * ticket whose intake enqueue was lost (PROGRESS backlog 20). It is a maintenance schedule the
+   * process owns, like `registerPartitionMaintenance`, and it is counted here for the same reason
+   * the other three are. It is counted **unconditionally**, including when
+   * `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no worker at all: a reservation that shrank with a
+   * setting would be a floor an operator could lower by accident.
+   *
    * It is a **flat** term and not a per-dispatch one because every one of them makes its provider
    * calls *outside* a transaction of its own: the gate evaluator runs after its load transaction
    * has closed, the review window reads discussions after its own has, and the outbound queue
@@ -234,7 +263,7 @@ export const POOL_RESERVATIONS = {
    * started from any of them therefore *replaces* the worker's connection rather than nesting
    * inside it.
    */
-  pipeline: 3,
+  pipeline: 4,
   /**
    * The audit write a **dispatch** nests inside the handler's transaction — **zero since WP-15d**,
    * and this constant is the receipt.
@@ -282,7 +311,7 @@ export class UndersizedPoolError extends Error {
 
   constructor(poolMax: number, required: number, role: string) {
     super(
-      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's three job workers, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
+      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's four job workers, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
     );
     this.name = 'UndersizedPoolError';
     this.poolMax = poolMax;
@@ -398,6 +427,10 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
       SERVER_CONFIG_DEFAULTS.bodyLimitBytes,
     ),
     trustProxy: booleanFromEnv(env.APP_TRUST_PROXY, SERVER_CONFIG_DEFAULTS.trustProxy),
+    intakeReconcileIntervalMs: numberFromEnv(
+      env.APP_INTAKE_RECONCILE_INTERVAL_MS,
+      SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,
+    ),
 
     argon2: {
       memoryCostKib: numberFromEnv(

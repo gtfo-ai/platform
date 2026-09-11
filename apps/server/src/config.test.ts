@@ -173,13 +173,53 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    expect((thrown as UndersizedPoolError).required).toBe(11);
+    // Twelve since WP-15c: the pipeline's fourth job worker is `pipeline.intake.reconcile`.
+    expect((thrown as UndersizedPoolError).required).toBe(12);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 
   it('accepts the documented default pool for the default concurrency', () => {
-    // .env.example ships APP_DB_POOL_MAX=13 and APP_DISPATCH_MAX_CONCURRENCY=1; if this ever fails,
+    // .env.example ships APP_DB_POOL_MAX=14 and APP_DISPATCH_MAX_CONCURRENCY=1; if this ever fails,
     // the shipped defaults no longer start.
     expect(() => load()).not.toThrow();
+  });
+});
+
+/**
+ * The intake reconciliation's one knob (WP-15c, PROGRESS backlog 20).
+ *
+ * Standing rule 18 twice over: the **absent** case and the **off** case must not be spelled the
+ * same way, and an unparseable value must not silently become the default — an operator who set a
+ * number and got another one has no way to find out.
+ */
+describe('the intake reconciliation interval', () => {
+  it('defaults to a minute when nothing is set', () => {
+    expect(load().intakeReconcileIntervalMs).toBe(60_000);
+  });
+
+  it('reads a whole number of milliseconds', () => {
+    expect(load({ APP_INTAKE_RECONCILE_INTERVAL_MS: '1000' }).intakeReconcileIntervalMs).toBe(
+      1_000,
+    );
+    expect(load({ APP_INTAKE_RECONCILE_INTERVAL_MS: '300000' }).intakeReconcileIntervalMs).toBe(
+      300_000,
+    );
+  });
+
+  it('accepts 0 as "off", which is a different answer from "unset"', () => {
+    // `composePipeline` logs which of the two it did; the parse only has to keep them distinct.
+    expect(load({ APP_INTAKE_RECONCILE_INTERVAL_MS: '0' }).intakeReconcileIntervalMs).toBe(0);
+  });
+
+  it.each([
+    ['a sub-second interval, which costs more than the loss it recovers', '999'],
+    ['longer than an hour', '3600001'],
+    ['a number with a unit', '60s'],
+    ['a negative number', '-1'],
+    ['prose', 'often'],
+  ])('refuses %s rather than falling back to the default', (_name, value) => {
+    expect(() => load({ APP_INTAKE_RECONCILE_INTERVAL_MS: value })).toThrow(
+      /intakeReconcileIntervalMs/,
+    );
   });
 });

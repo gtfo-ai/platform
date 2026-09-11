@@ -43,17 +43,23 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ClaudeRunner,
+  IntegrationActionExecutor,
+  IntegrationAuditLog,
+  Jobs,
   Logger,
   PipelineRuntime,
   ProjectSettings,
   ProjectSettingsPort,
+  WebhookIngress,
 } from '@platform/application';
 import {
   basicStageRunPlanner,
   createIntegrationActionExecutor,
   createPipelineRuntime,
   createRunStopReasons,
+  createWebhookIngress,
   defaultProjectSettings,
+  startIntakeReconciliation,
 } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
@@ -67,6 +73,7 @@ import {
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import {
+  createInboundIntegrationLoader,
   createPipelineIntegrationsLoader,
   createPipelineProviderRegistry,
   type PipelineProviderRegistryOptions,
@@ -87,10 +94,16 @@ export class RunnerUnavailableError extends Error {
 /**
  * The runner a process gets when nothing supplies one.
  *
- * A **refusal**, not a null object: `start()` throws, so the `stage.execute` job fails with a named
- * error instead of the pipeline being handed a fabricated outcome it would transition on. The cost
- * is stated rather than hidden — a task that reaches an agent stage stops there, visibly, and
- * nothing downstream is told the run "failed" as though it had been attempted.
+ * A **refusal**, not a null object: `start()` throws, so the stage ends with a named error instead
+ * of the pipeline being handed a fabricated outcome it would transition on.
+ *
+ * **Where that throw lands is WP-15c's answer to the question WP-15b left** (Q52, and Q59 in
+ * `docs/OPEN-QUESTIONS.md`): until this work package it landed nowhere — transaction 1 had already
+ * created the `runs` row, so the run stayed `running` for ever and the task sat at a stage nothing
+ * would move, with the failure visible only in pg-boss. `stage-executor.ts` now catches it, fails
+ * the run it created and escalates the task to `needs_human`. A task parked on a throwing job
+ * therefore needs **no state of its own**: the state that means *a human must act* already exists,
+ * and a new one would be a third spelling of "stuck" that no template, query or screen knows.
  */
 export const unavailableClaudeRunner = (): ClaudeRunner => ({
   start: (spec) => {
@@ -112,6 +125,20 @@ export interface PipelineComposition {
    */
   readonly runner?: ClaudeRunner;
   /**
+   * Wraps the `Jobs` the pipeline enqueues through — a **labelled seam**, and the only caller is
+   * the e2e tier (WP-15c).
+   *
+   * `HandlerContext.afterCommit` is at-most-once (TD-004), so a process that dies between the
+   * intake handler's commit and its enqueue leaves a matched ticket with no task row and nothing
+   * that starts it (PROGRESS backlog 20). There is no other way to ask a running instance "what
+   * happens when that wake-up is lost?", and the answer is the whole of this work package's last
+   * acceptance criterion — so the loss is reproduced by dropping the enqueue rather than by
+   * killing a process at a microsecond boundary, which is the same loss and is deterministic.
+   *
+   * Nothing in production passes it: `startRuntime()` with no options composes the real `Jobs`.
+   */
+  readonly jobs?: (jobs: Jobs) => Jobs;
+  /**
    * Replaces the shipped provider registry.
    *
    * The `e2e-fake-claude` tier registers the fakes here — which is what makes it an e2e of the
@@ -130,8 +157,137 @@ export interface ComposePipelineOptions {
   /** `APP_SECRET_KEY`, already validated by `config.ts`. */
   readonly secretKey: string;
   readonly stageConcurrency: number;
+  /**
+   * How often the intake reconciliation runs, and the age a match must reach before it is
+   * re-emitted (`APP_INTAKE_RECONCILE_INTERVAL_MS`). `0` starts no pass at all.
+   */
+  readonly intakeReconcileIntervalMs: number;
+  /** Built once per process by {@link composeIntegrationStack}; the ingress shares it. */
+  readonly stack: IntegrationStack;
   readonly logger: Logger;
 }
+
+/**
+ * The one executor, the one audit sink and the one provider registry a process has.
+ *
+ * It is built here rather than inside {@link composePipeline} because the **webhook ingress needs
+ * the same three** — a provider adapter is built through its registration whichever direction the
+ * call goes — and two executors in one process would mean two idempotency stores and two
+ * rate-limit budgets for one account, which is the defect `shipped-registry.ts` already records for
+ * Jira's inner executor. One per process, shared.
+ */
+export interface IntegrationStack {
+  readonly executor: IntegrationActionExecutor;
+  readonly registry: IntegrationRegistry;
+  readonly auditLog: IntegrationAuditLog;
+}
+
+export interface ComposeIntegrationStackOptions {
+  readonly pool: pg.Pool;
+  readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
+  readonly registry?: (options: PipelineProviderRegistryOptions) => IntegrationRegistry;
+  readonly logger: Logger;
+}
+
+export const composeIntegrationStack = (
+  options: ComposeIntegrationStackOptions,
+): IntegrationStack => {
+  const ids = { next: (): Id => randomUUID() as Id };
+
+  /**
+   * BD-003's audit sink, built here and **not** accepted from a caller (standing rule 31/35).
+   *
+   * It owns the `UnitOfWork` because the row and its `integration.action.performed` / `.failed`
+   * event have to commit together, and the read side because it allocates the integration stream's
+   * sequence before opening that transaction — the envelope a `NormalisedEvent` deliberately stops
+   * short of. `postgres-audit-log.ts` carries the reasoning and the conflict retry.
+   */
+  const auditLog = integrationAdapters.createPostgresIntegrationAuditLog({
+    unitOfWork: options.eventing.unitOfWork,
+    eventStore: options.eventing.store,
+    ids,
+    logger: options.logger,
+  });
+
+  const executor = createIntegrationActionExecutor({
+    auditLog,
+    /**
+     * TD-012 **step 2** — the gitleaks-derived pattern rules — and not `noSecretsRedactor()`.
+     *
+     * The executor is one per process and an exact-match redactor is per *binding*, so the two
+     * halves of TD-012 land in different places by construction: step 1 is composed by the binding
+     * loader and applied by the adapter that emits the string, step 2 is applied here over the
+     * audit row's payload, result and error. Passing a no-op would be the defect standing rule 31
+     * is named for, one ring further out than WP-11 put it.
+     */
+    redactor: redactionAdapters.patternRedactor(),
+    timer: {
+      now: () => Date.now(),
+      sleep: async (ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }),
+    },
+    clock: { now: nowIso },
+    /**
+     * Also unconditional. WP-07 made the executor's option optional and nothing ever supplied one,
+     * so until this line every retried job re-performed a mutation the provider had already seen.
+     *
+     * **It is load-bearing since WP-15d, and asserted** (standing rules 3, 11, 35). The note here
+     * used to say the opposite and was right at the time: no pipeline action shipped an
+     * `IdempotencyPlan`, so deleting this line left every tier green. The two ticket writes now
+     * carry one, keyed by the event that caused the wake-up, because they are made from a
+     * `pipeline.outbound` job and a job is at-least-once. The test that re-delivers one wake-up
+     * through this process's own `Jobs` adapter and reads the production audit log back is
+     * `test/e2e/pipeline/outbound-shape.e2e.test.ts` › *"replays the ticket write out of the idempotency store this instance composed"*
+     * — deleting this line fails it (measured: the `replayed` row never appears).
+     */
+    idempotencyStore: integrationAdapters.createPostgresIdempotencyStore({ sql: options.pool }),
+  });
+
+  const registryOf = options.registry ?? createPipelineProviderRegistry;
+  return { executor, auditLog, registry: registryOf({ executor, clock: { now: nowIso } }) };
+};
+
+/**
+ * The webhook ingress (WP-15c) — the thing that makes production start a ticket.
+ *
+ * It shares the process's {@link IntegrationStack}, because a provider adapter is built through its
+ * registration whichever direction the call goes, and takes the **inbound** loader: the URL names
+ * an account, and which projects a delivery is about is a question for that account's bindings.
+ */
+export interface ComposeWebhookIngressOptions {
+  readonly pool: pg.Pool;
+  readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
+  /** `APP_SECRET_KEY`, already validated by `config.ts`. */
+  readonly secretKey: string;
+  readonly stack: IntegrationStack;
+  readonly logger: Logger;
+}
+
+export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): WebhookIngress =>
+  createWebhookIngress({
+    loader: createInboundIntegrationLoader({
+      repository: secretAdapters.createPostgresBindingRepository(options.pool),
+      secrets: secretAdapters.createPostgresSecretStore({
+        sql: options.pool,
+        key: secretAdapters.deriveSecretKey(options.secretKey),
+      }),
+      registry: options.stack.registry,
+      // TD-012 step 2, beside the account's own exact-match redactor. The delivery is written to
+      // `inbox(headers, payload)`, which migration 0014 explains is why.
+      platformRedactor: redactionAdapters.patternRedactor(),
+    }),
+    inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
+    audit: integrationAdapters.createPostgresInboundAuditLog({ sql: options.pool }),
+    identities: integrationAdapters.createPostgresIdentityDirectory({ sql: options.pool }),
+    unitOfWork: options.eventing.unitOfWork,
+    eventStore: options.eventing.store,
+    ids: { next: (): Id => randomUUID() as Id },
+    clock: { now: nowIso },
+    timer: { now: () => Date.now() },
+    logger: options.logger,
+  });
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;
 
@@ -205,62 +361,15 @@ export interface ComposedPipeline {
 export const composePipeline = async (
   options: ComposePipelineOptions,
 ): Promise<ComposedPipeline> => {
-  const { composition } = options;
+  const { composition, stack } = options;
   const ids = { next: (): Id => randomUUID() as Id };
-
+  const { executor, registry } = stack;
   /**
-   * BD-003's audit sink, built here and **not** accepted from a caller (standing rule 31/35).
-   *
-   * It owns the `UnitOfWork` because the row and its `integration.action.performed` / `.failed`
-   * event have to commit together, and the read side because it allocates the integration stream's
-   * sequence before opening that transaction — the envelope a `NormalisedEvent` deliberately stops
-   * short of. `postgres-audit-log.ts` carries the reasoning and the conflict retry.
+   * The labelled seam of {@link PipelineComposition.jobs}, applied once and used everywhere below,
+   * so that a test disarming an enqueue disarms the same object the pipeline really enqueues
+   * through. Absent — every production path — is the identity.
    */
-  const auditLog = integrationAdapters.createPostgresIntegrationAuditLog({
-    unitOfWork: options.eventing.unitOfWork,
-    eventStore: options.eventing.store,
-    ids,
-    logger: options.logger,
-  });
-
-  const executor = createIntegrationActionExecutor({
-    auditLog,
-    /**
-     * TD-012 **step 2** — the gitleaks-derived pattern rules — and not `noSecretsRedactor()`.
-     *
-     * The executor is one per process and an exact-match redactor is per *binding*, so the two
-     * halves of TD-012 land in different places by construction: step 1 is composed by the binding
-     * loader and applied by the adapter that emits the string, step 2 is applied here over the
-     * audit row's payload, result and error. Passing a no-op would be the defect standing rule 31
-     * is named for, one ring further out than WP-11 put it.
-     */
-    redactor: redactionAdapters.patternRedactor(),
-    timer: {
-      now: () => Date.now(),
-      sleep: async (ms) =>
-        new Promise((resolve) => {
-          setTimeout(resolve, ms);
-        }),
-    },
-    clock: { now: nowIso },
-    /**
-     * Also unconditional. WP-07 made the executor's option optional and nothing ever supplied one,
-     * so until this line every retried job re-performed a mutation the provider had already seen.
-     *
-     * **It is load-bearing since WP-15d, and asserted** (standing rules 3, 11, 35). The note here
-     * used to say the opposite and was right at the time: no pipeline action shipped an
-     * `IdempotencyPlan`, so deleting this line left every tier green. The two ticket writes now
-     * carry one, keyed by the event that caused the wake-up, because they are made from a
-     * `pipeline.outbound` job and a job is at-least-once. The test that re-delivers one wake-up
-     * through this process's own `Jobs` adapter and reads the production audit log back is
-     * `test/e2e/pipeline/outbound-shape.e2e.test.ts` › *"replays the ticket write out of the idempotency store this instance composed"*
-     * — deleting this line fails it (measured: the `replayed` row never appears).
-     */
-    idempotencyStore: integrationAdapters.createPostgresIdempotencyStore({ sql: options.pool }),
-  });
-
-  const registryOf = composition.registry ?? createPipelineProviderRegistry;
-  const registry = registryOf({ executor, clock: { now: nowIso } });
+  const jobs = composition.jobs === undefined ? options.jobs : composition.jobs(options.jobs);
 
   const integrations = createPipelineIntegrationsLoader({
     repository: secretAdapters.createPostgresBindingRepository(options.pool),
@@ -289,7 +398,7 @@ export const composePipeline = async (
   const runtime = createPipelineRuntime({
     store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
     settings,
-    jobs: options.jobs,
+    jobs,
     integrations,
     ids,
     clock: { now: nowIso },
@@ -317,5 +426,45 @@ export const composePipeline = async (
   }
   await runtime.start();
 
-  return { runtime, stop: async () => runtime.stop() };
+  /**
+   * The recovery of PROGRESS backlog **20**, composed here beside `registerPartitionMaintenance`
+   * rather than inside `createPipelineRuntime`.
+   *
+   * It is a maintenance schedule the *process* owns, not a step of a ticket's journey: `saga.ts`'s
+   * `pipeline.intake` decides and the `pipeline.outbound` job creates the task, with
+   * `HandlerContext.afterCommit` between them — which is at-most-once (TD-004) — so a process that
+   * dies in that window leaves a matched ticket with **no task row**, and nothing re-emits it,
+   * retries it or logs it. A pass finds those tickets and appends a **new** `ticket.matched`;
+   * `packages/application/src/pipeline/intake-reconcile.ts` carries why the recovery is
+   * task-shaped rather than a replay of the delivery (which `inbox(provider, delivery_id)`
+   * deduplicates) or of the event (which `handler_executions` skips).
+   *
+   * It is one more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
+   */
+  const reconciler = await startIntakeReconciliation({
+    store: pipelineAdapters.createPostgresIntakeReconciliationStore({ sql: options.pool }),
+    eventStore: options.eventing.store,
+    unitOfWork: options.eventing.unitOfWork,
+    jobs,
+    ids,
+    clock: { now: nowIso },
+    intervalMs: options.intakeReconcileIntervalMs,
+    logger: options.logger,
+  });
+  if (reconciler === null) {
+    options.logger.warn(
+      { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
+      'intake reconciliation is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20)',
+    );
+  }
+
+  return {
+    runtime,
+    stop: async () => {
+      if (reconciler !== null) {
+        await reconciler.stop();
+      }
+      await runtime.stop();
+    },
+  };
 };

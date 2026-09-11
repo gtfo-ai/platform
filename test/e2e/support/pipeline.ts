@@ -31,7 +31,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ClaudeRunner, RunSpec } from '@platform/application';
+import type { ClaudeRunner, Jobs, RunSpec } from '@platform/application';
 import type { DomainEvent, Id, JsonObject, TranscriptEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
@@ -44,6 +44,7 @@ import {
   createFakeGitProvider,
   createFakeTaskManagement,
   createIntegrationRegistry,
+  FAKE_TASK_MANAGEMENT_PROVIDER_ID,
   fakeGitRegistration,
   fakeTaskManagementRegistration,
 } from '@platform/integrations';
@@ -172,6 +173,19 @@ export interface PipelineE2E {
   awaitingDispatch(eventId: string): Promise<boolean>;
   /** How many task rows exist, for a measurement that publishes more than one ticket. */
   taskCount(): Promise<number>;
+  /**
+   * Posts a provider delivery to the instance's own `/webhooks/:provider/:integrationId` (WP-15c).
+   *
+   * The one path in this harness that is **not** a shortcut: `publish` appends events the way an
+   * adapter would, and this makes the instance do it — through the real route, the real content-type
+   * parser, the real loader, the real signature check and the real `inbox`.
+   */
+  deliver(delivery: {
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body: string;
+  }): Promise<{ readonly status: number; readonly body: unknown }>;
+  /** Every `inbox` row, for the dedup assertions. */
+  inbox(): Promise<readonly { provider: string; delivery_id: string; verified: boolean }[]>;
   stop(): Promise<void>;
 }
 
@@ -226,6 +240,17 @@ export interface StartPipelineOptions {
   readonly gitReadLatency?: () => Promise<void>;
   /** Extra environment for the instance — `APP_DB_POOL_MAX` at the shipped default, say. */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Wraps the `Jobs` the pipeline enqueues through — the labelled seam of
+   * {@link PipelineComposition.jobs} (WP-15c).
+   *
+   * Its one user is `intake-recovery.e2e.test.ts`, which drops the intake wake-up to reproduce the
+   * loss PROGRESS backlog 20 is about: `afterCommit` is at-most-once, so a process that dies
+   * between the intake handler's commit and its enqueue leaves a matched ticket with no task row.
+   * Dropping the enqueue is the same loss and is deterministic, where killing a process at a
+   * microsecond boundary is not.
+   */
+  readonly jobs?: (jobs: Jobs) => Jobs;
   /**
    * Start against a database another instance already used, and do not seed it again.
    *
@@ -459,7 +484,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       ...options.env,
     },
     // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
-    pipeline: { runner, registry },
+    pipeline: { runner, registry, ...(options.jobs === undefined ? {} : { jobs: options.jobs }) },
   });
 
   const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
@@ -566,8 +591,11 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       }
     },
     events: async () => {
+      // `actor` and `cause_event_id` are read too: WP-15c's recovery is identified by the **system
+      // actor** it stamps on a re-emitted `ticket.matched`, and a test that could not see the actor
+      // could not tell a re-emission from the delivery that preceded it.
       const { rows } = await pool.query<{ id: string; payload: unknown; type: string }>(
-        'select id, type, payload from events order by position',
+        'select id, type, payload, actor, cause_event_id from events order by position',
       );
       return rows as unknown as readonly DomainEvent[];
     },
@@ -584,6 +612,26 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     taskCount: async () => {
       const { rows } = await pool.query<{ count: number }>('select count(*)::int from tasks');
       return rows[0]?.count ?? 0;
+    },
+    deliver: async (delivery) => {
+      const response = await fetch(
+        `${instance.baseUrl}/webhooks/${FAKE_TASK_MANAGEMENT_PROVIDER_ID}/${TICKETS_INTEGRATION_ID}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...delivery.headers },
+          body: delivery.body,
+        },
+      );
+      const text = await response.text();
+      return { status: response.status, body: text === '' ? null : JSON.parse(text) };
+    },
+    inbox: async () => {
+      const { rows } = await pool.query<{
+        provider: string;
+        delivery_id: string;
+        verified: boolean;
+      }>('select provider, delivery_id, verified from inbox order by received_at');
+      return rows;
     },
     stop: async () => {
       await inbound.stop();

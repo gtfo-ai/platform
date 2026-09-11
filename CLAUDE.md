@@ -83,9 +83,29 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   from `bindings`/`integrations` and their credentials decrypted from `secrets` by
   `packages/integrations/src/bindings/loader.ts`, which builds the adapters **per call** so the redactor can
   carry the call's run-scoped credentials (Q55). A binding that is *absent* gives `git: null`; a binding that
-  *fails to load* throws (rule 20). Two collaborators still have no production adapter — a `ClaudeRunner`
-  (no launcher transport, Q52) and `IntegrationAuditLog` — so `startRuntime` takes them as an argument and a
-  process without them starts **no** pipeline and logs which piece is missing.
+  *fails to load* throws (rule 20). One collaborator still has no production adapter — a `ClaudeRunner`
+  (no launcher transport, Q52) — so `startRuntime` composes `unavailableClaudeRunner`, which **throws**, and
+  logs that it did; since WP-15c that throw has an ending (`stage-executor.ts` fails the run it created and
+  escalates the task to `needs_human`; **no new task state**, Q59).
+- **Production starts a ticket** (WP-15c): `POST /webhooks/:provider/:integrationId`
+  (`apps/server/src/routes/webhooks.ts`) is the door, and it is the platform's only **unauthenticated**
+  endpoint — the credential is the signature over the body, so the body reaches the handler *unparsed*
+  through a content-type parser scoped to that route. `packages/application/src/integrations/inbound.ts`
+  asks the four questions in order (which binding, is it authentic, which delivery, what does it mean) and
+  writes the `inbox` row **in the same transaction as the events it produced**, which is a deliberate
+  deviation from technical/06's "enqueue normalisation as a job" — amended there, because the job shape
+  loses a delivery it has already recorded as performed. Three things are decided rather than incidental:
+  `inbox.headers`/`payload` are stored **redacted** (GitLab's legacy scheme sends the binding's webhook
+  secret as plain text in `X-Gitlab-Token`) with `redaction_count` summing the row's redactions and
+  `verified` persisting the verdict a redacted payload can no longer reproduce (migration **0014**); an
+  **unverified** delivery writes **no** inbox row, because a dedup key an unauthenticated caller can choose
+  is a key it can poison; and authenticity is the **account's** question while meaning is the **project's**,
+  so `verify` uses `integrations.config` and `normalise` runs once per binding.
+  The matched ticket whose intake wake-up was lost is recovered by `pipeline.intake.reconcile`
+  (`packages/application/src/pipeline/intake-reconcile.ts`), which appends a **new** `ticket.matched` —
+  re-dispatching the old one is skipped by its `handler_executions` record and a redelivery is deduplicated
+  by the very `inbox` row, so the recovery is **task**-shaped — bounded to one attempt per ticket by the
+  system actor it stamps.
 - Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`. The run shim `agentic-runlet` (TD-025) is `packages/infrastructure/src/runlet/` — frame protocol in `@platform/contracts`, shim, runner-side `SpawnedProcess`, credential helper — with `apps/runlet` as its entrypoint and nothing else; `node scripts/runlet-container-check.mjs` is its Docker verification (not a `verify` target: it needs a daemon), written up in `docs/research/12-run-shim-verification.md`.
 - Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`; the SPA's composition root is `apps/web/src/app/app.tsx`, the client half of the SSE contract is `apps/web/src/realtime/client.ts`, and the untrusted-text rules are `apps/web/src/ui/untrusted-text.ts`. Work plan: `docs/technical/13-implementation-plan.md`.
 - Open questions: `docs/OPEN-QUESTIONS.md`; verification backlog: `docs/TODO.md`.

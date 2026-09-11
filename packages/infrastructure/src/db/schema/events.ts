@@ -6,6 +6,7 @@ import type { Actor, JsonObject } from '@platform/contracts';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   integer,
   jsonb,
   pgTable,
@@ -100,6 +101,10 @@ export const inbox = pgTable(
     payload: jsonb('payload').$type<JsonObject>().notNull(),
     processedAt: timestamp('processed_at', { withTimezone: true }),
     error: text('error'),
+    /** Sum of the redactions the ingress made on this row — migration 0014 has the reasoning. */
+    redactionCount: integer('redaction_count').notNull(),
+    /** The signature verdict, stored because a redacted payload cannot reproduce it (0014). */
+    verified: boolean('verified').notNull().default(false),
   },
   (table) => [primaryKey({ columns: [table.provider, table.deliveryId] })],
 );

@@ -163,6 +163,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('event_streams', 'read_only', null),
       row('events', 'append_only', 'occurred_at'),
       row('human_actions', 'append_only', null),
+      // WP-15c (migration 0014): `inbox` was the one table 0005 created without registering it, and
+      // the access it needs is the default — so the row changes no privilege and closes the gap in
+      // the registry that made the omission invisible.
+      row('inbox', 'read_write', null),
       row('integration_actions', 'append_only', 'created_at'),
       // WP-15b (migration 0013): read_write, because nothing expires an idempotency key today and
       // whatever eventually does will delete rows. Registered rather than defaulted, so the

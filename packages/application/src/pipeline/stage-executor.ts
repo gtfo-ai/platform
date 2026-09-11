@@ -289,8 +289,50 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         return prepared;
       }
 
-      const handle = runner.start(prepared.spec);
-      const outcome = await handle.outcome;
+      let outcome: RunOutcome;
+      try {
+        const handle = runner.start(prepared.spec);
+        outcome = await handle.outcome;
+      } catch (error) {
+        // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
+        //
+        // Transaction 1 has already created the `runs` row and emitted `run.created`/`run.started`,
+        // so an error thrown by `start` — or a rejection of `handle.outcome` — left a run `running`
+        // for ever, a task sitting at a stage nothing would move, and a `stage.execute` job that
+        // exhausted its retries into pg-boss where no screen shows it. Nothing told a human.
+        //
+        // It is not hypothetical from the day a webhook can reach the pipeline: this build composes
+        // `unavailableClaudeRunner`, whose `start` **throws** because there is no transport to the
+        // launcher (Q52), so the first real ticket to reach an agent stage lands here.
+        //
+        // The ending is the one the executor already has for "the run produced no usable result":
+        // the run is failed and the task is **escalated to `needs_human`**, an existing state whose
+        // whole meaning is *a human must act*. No new task state — a third spelling of "stuck" that
+        // no template, query or screen knows about would be worse than the one that exists. `unavailableClaudeRunner`
+        // is unchanged and still refuses rather than fabricating a `RunOutcome`: what changed is
+        // that its refusal now has somewhere to land.
+        //
+        // The cost, stated: a *transient* start failure escalates on the first attempt instead of
+        // being retried by the job. That is the direction that tells somebody, and the platform has
+        // `retry-stage` for the case where retrying was all it needed (product/04).
+        stopReasons.forget(prepared.spec.runId);
+        logger.error(
+          { err: error, task_id: job.taskId, stage: job.stage, run_id: prepared.run.id },
+          'the runner could not start this stage; the run is failed and the task escalated',
+        );
+        return unitOfWork.transaction(async (scope) =>
+          recordUnstarted(scope, {
+            job,
+            run: prepared.run,
+            options,
+            // The **class name**, never the message: an error thrown out of a runner may quote a
+            // provider, a URL or a credential, and this string is written to `events.payload`
+            // (`run.failed`) and into the escalation's blocker brief, both of which TD-012 covers
+            // and neither of which passes a redactor here. The message is in the log line above.
+            errorName: error instanceof Error ? error.name : 'unknown error',
+          }),
+        );
+      }
       const stopReason = stopReasons.reasonFor(prepared.spec.runId);
       stopReasons.forget(prepared.spec.runId);
 
@@ -556,6 +598,77 @@ const escalateOnRun = async (
   await scope.events.append([...runEvents, ...escalated.events]);
   return { kind: 'failed', runId: run.id, reason };
 };
+
+/**
+ * A run that was created and never started: fail the run, escalate the task, in one transaction.
+ *
+ * Deliberately **not** routed through `record`: that function reads a `RunOutcome`, and there is
+ * none — fabricating one would make the pipeline transition on a verdict for a run that was never
+ * attempted, which is the fail-open direction standing rule 20 names and which
+ * `apps/server/src/pipeline.ts` refuses at the runner. The run really exists (transaction 1 wrote
+ * it) and really failed to start, so `run.failed` is the honest record of it.
+ */
+const recordUnstarted = async (
+  scope: TransactionScope,
+  input: {
+    readonly job: StageExecutionJob;
+    readonly run: Run;
+    readonly options: StageExecutorOptions;
+    readonly errorName: string;
+  },
+): Promise<StageExecutionOutcome> => {
+  const { job, run, options, errorName } = input;
+  const stored = await options.store.tasks.load(scope.tx, job.taskId);
+  if (stored === null) {
+    return { kind: 'skipped', reason: 'the task was deleted before its run could start' };
+  }
+  const context = options.context(job.taskId);
+  const reason = `the run could not be started (${errorName})`;
+  const failed = failRun(
+    run,
+    {
+      status: 'failed',
+      terminalReason: 'error_during_execution',
+      error: reason,
+      usage: NO_USAGE,
+      cost: NO_COST,
+    },
+    context,
+  );
+  await options.store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: 'failed',
+    terminalReason: 'error_during_execution',
+    sessionId: null,
+    numTurns: 0,
+    usage: NO_USAGE,
+    cost: NO_COST,
+    wallMs: 0,
+  });
+  const escalated = escalate(stored, context, job.stage, reason);
+  await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+  await options.store.tasks.recordStageExited(scope.tx, {
+    taskId: job.taskId,
+    stage: job.stage,
+    attempt: job.attempt,
+    outcome: 'failed',
+    returnReason: reason,
+  });
+  await scope.events.append([...failed.events, ...escalated.events]);
+  return { kind: 'failed', runId: run.id, reason };
+};
+
+/** Nothing was spent, because nothing ran. Written out so no caller invents a different zero. */
+const NO_USAGE = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_write_5m_tokens: 0,
+  cache_write_1h_tokens: 0,
+  cache_read_tokens: 0,
+} as const;
+
+/** `is_estimate: false` — "nothing" is a measurement, not a guess (BD-011). */
+const NO_COST = { usd: 0, is_estimate: false, price_list_id: null } as const;
 
 const escalate = (stored: StoredTask, context: CommandContext, stage: Slug, reason: string) =>
   escalateTask(

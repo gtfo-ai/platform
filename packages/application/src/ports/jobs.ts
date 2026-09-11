@@ -348,6 +348,22 @@ export const JOB_QUEUES = {
    * the order the handlers decided on.
    */
   pipelineOutbound: 'pipeline.outbound',
+  /**
+   * **The matched tickets nothing started** (WP-15c, PROGRESS backlog 20).
+   *
+   * TD-004's list is not closed ("index rebuilds, maintenance schedules") and this is a maintenance
+   * schedule: `pipeline.intake` decides and `pipeline.outbound` creates the task, with
+   * `afterCommit` between them, which is at-most-once. A pass finds matched tickets with no task
+   * row and re-emits `ticket.matched`; `pipeline/intake-reconcile.ts` carries why the recovery is
+   * task-shaped rather than a replay of the delivery or of the event.
+   *
+   * Policy `stately` with a constant singleton key, and driven by a **self-re-enqueuing timer**
+   * rather than `scheduleCron`: cron's finest grain is a minute, the interval wants to be
+   * configurable below that for the tier that proves the recovery, and `stately` is what lets the
+   * running pass enqueue the next one (at most one queued *and* one active per key) while N
+   * replicas and a process restart all collapse onto the same single pending job.
+   */
+  intakeReconcile: 'pipeline.intake.reconcile',
   /** Budget window rollover (cron). */
   budgetWindowReset: 'budget.window.reset',
   /** Knowledge-base index rebuild; singleton per project. */

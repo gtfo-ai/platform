@@ -197,3 +197,77 @@ describe('the task budget', () => {
     expect(runBudgetUsd({ config: {} } as never, 'security_scan')).toBe(5);
   });
 });
+
+/**
+ * **A run that was created and could not be started** — WP-15c's Q52/Q60 decision.
+ *
+ * The production runner of every build until Q52 is answered throws from `start`
+ * (`apps/server/src/pipeline.ts`'s `unavailableClaudeRunner`), and the day a webhook can reach the
+ * pipeline is the day a real ticket meets it. Before this branch existed, the throw escaped both of
+ * the executor's endings: transaction 1 had already written the `runs` row and emitted
+ * `run.created`/`run.started`, so the run stayed `running` for ever, the task sat at its stage, and
+ * the `stage.execute` job retried into pg-boss where no screen shows it.
+ *
+ * The answer is **no new task state**: `escalated` already means *a human must act*, and it is what
+ * the executor does for every other run that ends without a usable result.
+ */
+describe('a run that could not be started', () => {
+  class RunnerUnavailableForTest extends Error {
+    override readonly name = 'RunnerUnavailableError';
+  }
+
+  const harnessThatCannotStart = (): PipelineHarness =>
+    harnessWith({
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          throwsOnStart: new RunnerUnavailableForTest(
+            'no ClaudeRunner is composed in this build (Q52) — FAKE-PLANTED-secret-0123456789',
+          ),
+        },
+      },
+    });
+
+  it('escalates the task instead of leaving it at a stage nothing will move', async () => {
+    const harness = harnessThatCannotStart();
+    await harness.publish([ticketMatched()]);
+
+    // `needs_human` is the task state `escalateTask` produces (technical/02's state machine); the
+    // point of the decision is that it is an **existing** one, not a new "cannot start" state.
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(escalationOf(harness)?.payload.reason).toContain('could not be started');
+  });
+
+  it('records the run it had already created as failed, rather than leaving it running', async () => {
+    const harness = harnessThatCannotStart();
+    await harness.publish([ticketMatched()]);
+
+    const failed = harness.events().find((entry) => entry.type === 'run.failed');
+    expect(
+      failed,
+      'the run row exists because transaction 1 wrote it; its failure is the honest record',
+    ).toBeDefined();
+    expect((failed as Extract<DomainEvent, { type: 'run.failed' }>).payload.terminal_reason).toBe(
+      'error_during_execution',
+    );
+    // Nothing ran, so nothing was spent — and `is_estimate: false`, because "nothing" is measured.
+    expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+
+  /**
+   * The **class name, never the message** (BD-022, TD-012): this string is written to
+   * `events.payload` (`run.failed`) and into the escalation's blocker brief, and an error thrown out
+   * of a runner may quote a provider, a URL or a credential. The executor holds no redactor, so the
+   * only safe thing to carry is the name.
+   */
+  it('names the error class and carries no word of its message into the event log', async () => {
+    const harness = harnessThatCannotStart();
+    await harness.publish([ticketMatched()]);
+
+    const serialised = JSON.stringify(harness.events());
+    expect(serialised).toContain('RunnerUnavailableError');
+    expect(serialised).not.toContain('FAKE-PLANTED-secret-0123456789');
+    expect(serialised).not.toContain('no ClaudeRunner is composed');
+  });
+});

@@ -136,6 +136,16 @@ export interface ScriptedRun {
   readonly error?: string | null;
   /** Written to the transcript as the `run_stopped` row's reason (WP-12). */
   readonly stopReason?: string;
+  /**
+   * The runner **throws** instead of returning a handle (WP-15c).
+   *
+   * The production runner of every build until Q52 is answered does exactly this
+   * (`apps/server/src/pipeline.ts`'s `unavailableClaudeRunner`), and so does any transport error
+   * once there is a transport. Before this seam existed nothing in any tier could drive the branch,
+   * and the branch did not exist: a start that threw escaped both of the executor's endings and
+   * left a run `running` for ever.
+   */
+  readonly throwsOnStart?: Error;
 }
 
 const outcomeFor = (runId: Id, scripted: ScriptedRun): RunOutcome => ({
@@ -466,6 +476,9 @@ const wrapRunner = (
 ): ClaudeRunner => ({
   start: (spec) => {
     const scripted = scripts.get(spec.stage ?? '');
+    if (scripted?.throwsOnStart !== undefined) {
+      throw scripted.throwsOnStart;
+    }
     const handle = runner.start(spec);
     if (scripted?.stopReason === undefined) {
       return handle;

@@ -108,15 +108,15 @@ describe('append-only event log', () => {
   });
 
   it('deduplicates webhook deliveries in the inbox', async () => {
+    // `redaction_count` is stated because migration 0014 dropped its default: "nobody wrote the
+    // column" and "nothing was redacted" must not be spelled the same way (standing rule 18), and
+    // this insert is a writer like any other.
+    const insert =
+      'insert into inbox (provider, delivery_id, payload, redaction_count, verified)' +
+      " values ('gitlab', 'd-1', '{}'::jsonb, 0, true)";
     await withClient(database.connectionString, async (client) => {
-      await client.query(
-        "insert into inbox (provider, delivery_id, payload) values ('gitlab', 'd-1', '{}'::jsonb)",
-      );
-      await expect(
-        client.query(
-          "insert into inbox (provider, delivery_id, payload) values ('gitlab', 'd-1', '{}'::jsonb)",
-        ),
-      ).rejects.toMatchObject({ code: UNIQUE_VIOLATION });
+      await client.query(insert);
+      await expect(client.query(insert)).rejects.toMatchObject({ code: UNIQUE_VIOLATION });
     });
   });
 

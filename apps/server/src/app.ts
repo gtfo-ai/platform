@@ -24,6 +24,7 @@
 import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
+import type { WebhookIngress } from '@platform/application';
 import { type FastifyBaseLogger, type FastifyInstance, fastify, LogController } from 'fastify';
 import {
   jsonSchemaTransform,
@@ -48,6 +49,7 @@ import { roleCapabilities } from './role.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
 
@@ -65,6 +67,16 @@ export interface BuildAppOptions {
   };
   readonly readiness: () => Promise<ReadinessReport>;
   readonly isShuttingDown: () => boolean;
+  /**
+   * The webhook ingress, or `null` for a process that composes none (WP-15c).
+   *
+   * `null` is **not** a seam a production path takes: `startRuntime` builds one whenever the role
+   * serves the API. It exists because `buildApp` is also driven directly by `app.test.ts`, which
+   * has no database behind it — and a route that answered 404 because nobody composed an ingress
+   * would be indistinguishable, to an operator pasting a URL into GitLab, from a wrong URL. So the
+   * route is **absent** when the ingress is, and `runtime.ts` logs which.
+   */
+  readonly webhooks: WebhookIngress | null;
 }
 
 /** Event-loop delay above which the process reports itself degraded rather than healthy. */
@@ -115,6 +127,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         { name: 'org', description: 'Organisation-scoped reads' },
         { name: 'projects', description: 'Project-scoped reads' },
         { name: 'events', description: 'Real-time stream (TD-014)' },
+        { name: 'webhooks', description: 'Inbound provider deliveries (technical/06)' },
       ],
     },
     transform: jsonSchemaTransform,
@@ -209,6 +222,9 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       trustProxy: config.trustProxy,
     });
     await registerOrgRoutes(app, { database: options.database });
+    if (options.webhooks !== null) {
+      await registerWebhookRoutes(app, { ingress: options.webhooks });
+    }
     await registerProjectRoutes(app, { database: options.database });
     await registerSseRoutes(app, {
       hub: options.hub,

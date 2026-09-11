@@ -30,6 +30,7 @@ export * from './events/open-transaction.js';
 export * from './events/outbox.js';
 // Outbound integration actions (technical/06, WP-07)
 export * from './integrations/action-executor.js';
+export * from './integrations/inbound.js';
 export * from './integrations/rate-limiter.js';
 export * from './integrations/redaction.js';
 // The knowledge base (WP-16): indexer, context packs, `kb_search`, code map
@@ -41,6 +42,7 @@ export * from './knowledge/ports.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';
 export * from './pipeline/gates.js';
+export * from './pipeline/intake-reconcile.js';
 export * from './pipeline/integrations.js';
 export * from './pipeline/jobs.js';
 export * from './pipeline/outbound.js';
@@ -65,6 +67,7 @@ export * from './ports/integrations/bindings.js';
 export * from './ports/integrations/common.js';
 export * from './ports/integrations/communication.js';
 export * from './ports/integrations/git-provider.js';
+export * from './ports/integrations/inbox.js';
 export * from './ports/integrations/observability-errors.js';
 export * from './ports/integrations/observability-logs.js';
 export * from './ports/integrations/task-management.js';

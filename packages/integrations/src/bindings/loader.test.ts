@@ -57,6 +57,11 @@ const gitBinding = (overrides: Partial<ProjectBinding> = {}): ProjectBinding => 
 
 const repositoryOf = (bindings: readonly ProjectBinding[]): BindingRepository => ({
   forProject: async () => bindings,
+  // The project loader never asks the integration side; a fake that answered would be kinder than
+  // the adapter, which is standing rule 1's forbidden direction.
+  forIntegration: async () => {
+    throw new Error('the project loader must not resolve an integration by id');
+  },
 });
 
 const secretsOf = (

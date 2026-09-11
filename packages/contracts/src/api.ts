@@ -478,9 +478,46 @@ export const webhookDeliverySchema = z.strictObject({
   payload: jsonObjectSchema,
 });
 
+/**
+ * The answer to a delivery. `accepted: false` is still a 2xx (WP-15c).
+ *
+ * `delivery_id` is **nullable** because a delivery can be authentic and still have none: both
+ * shipped providers refuse to key a hook kind they do not handle (a wiki hook, a release hook), and
+ * answering a vendor with an error there would eventually have it disable the whole webhook —
+ * standing rule 20, fail open on an inbound notification. So the platform says "received, and I
+ * performed nothing", which needs a shape in which the identity may be absent.
+ */
 export const webhookAcceptedResponseSchema = z.strictObject({
   accepted: z.boolean(),
-  delivery_id: nonEmptyStringSchema,
+  delivery_id: nonEmptyStringSchema.nullable(),
+});
+
+/**
+ * `POST /webhooks/:provider/:integrationId` path parameters.
+ *
+ * camelCase where every payload in the platform is snake_case, and deliberately: these are **URL
+ * path segments**, named by technical/08's endpoint table, not keys on a wire document. Renaming
+ * them would change the URL an operator has already pasted into GitLab.
+ */
+export const webhookParamsSchema = z.strictObject({
+  /**
+   * A **registered provider id**, and bounded here rather than only compared later.
+   *
+   * `nonEmptyStringSchema` accepted any length, and the segment reaches
+   * `integration_actions.payload.error` on a `provider_mismatch` refusal — an unauthenticated
+   * caller's own string, bounded only by whatever request line the server accepts. The shape is the
+   * registry's own (`packages/integrations/src/registry.ts`'s `PROVIDER_ID`), written out because
+   * `contracts` may not import an adapter; every shipped id matches it (`jira-cloud`, `gitlab`,
+   * `slack`, `sentry`, `loki`, and the two fakes). A segment that cannot name any provider is a
+   * wrong URL, so refusing it costs no delivery — a *slug-shaped* mismatch still reaches the
+   * handler and is audited, which is the case worth telling an operator about.
+   */
+  provider: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z][a-z0-9-]*$/, 'expected a registered provider id such as "jira-cloud"'),
+  integrationId: idSchema,
 });
 
 export const setupGuideResponseSchema = z.strictObject({
@@ -523,4 +560,6 @@ export type SseFrame = z.infer<typeof sseFrameSchema>;
 export type SseControlEvent = z.infer<typeof sseControlEventSchema>;
 export type UpdateSubscriptionsRequest = z.infer<typeof updateSubscriptionsRequestSchema>;
 export type WebhookDelivery = z.infer<typeof webhookDeliverySchema>;
+export type WebhookParams = z.infer<typeof webhookParamsSchema>;
+export type WebhookAcceptedResponse = z.infer<typeof webhookAcceptedResponseSchema>;
 export type SetupGuideResponse = z.infer<typeof setupGuideResponseSchema>;
