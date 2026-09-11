@@ -5,7 +5,7 @@
 ## Resume note
 
 > **Session 3 opened 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned
-> by evidence" — **seventy-two rules, each with its evidence, each paid for with a review round**. Then
+> by evidence" — **seventy-four rules, each with its evidence, each paid for with a review round**. Then
 > continue the loop in `14-orchestration-protocol.md`.
 
 **Twenty-three work packages are DONE and pushed**, WP-00 … WP-15 plus WP-02a/04a/06a/11a/20 and four
@@ -64,6 +64,36 @@ CI half cost six pushes onto a red gate (rule 69). Quote the target's **verdict 
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+74. **A reviewer that mutates source shares a working tree with whoever else is in it, and both
+   measurements become worthless — this is rule 53 with the checkout right and the *tree* wrong.**
+   `verify` failed once in the orchestrator's shell on WP-15a and passed seven times after, a 1-in-8
+   "flake" that cost a hunt. The failing values named their own author: `envelope.test.ts` reported
+   `constantPositions: [4,5,6,7,8,9]` — the signature of the reviewer's 4-random + 8-byte-counter hybrid
+   IV — and `events.test.ts` collected a 51st type, `task.mutant_added`, the literal mutant from the
+   consumption-table check. Neither can arise from clean sources. Measured: **3/20 while a reviewer was
+   re-deriving its documented mutations in the same tree; 0/20 alone on the same commit and 0/20 on
+   `main`**, and an instrumented loop hashing both files around each run found them unchanged 12/12,
+   because the window is short and the reviewer restores. **The orchestrator caused this**: it ran a
+   mutating reviewer, an implementer and its own `verify` in one checkout at once, and then spent a round
+   hunting a defect that did not exist. Mutation is a *write*, and a read taken across someone else's
+   write is not a measurement. Either give a mutating reviewer its own worktree, or do not verify while
+   one is running — and when a failure names a value no clean source can produce, suspect the tree
+   before the code.
+73. **An empty handler list is a fact about the process, not about the event — decide completeness at
+   composition, not per delivery.** (Architect ruling, WP-15a.) The queue row is *global*:
+   `delete from event_dispatch where event_position = $1` discharges **every** handler in the deployment,
+   and only `ROLE=all|worker` sweep while other roles take work via pg-boss, so a partial-set sweeper
+   destroys another process's work whether its own handler list is empty or not. Two rounds answered a
+   per-type question with a whole-registry predicate and each time the hole simply moved: first "no
+   handlers at all", which a single handler for an unrelated type defeats; then a declared table, which
+   **one `eventTypes: 'all'` handler** — the shape blessed for audit and projections — satisfies
+   entirely, so WP-19's audit projection would have re-opened it. Leave-queued at the dispatch site is
+   *worse*, and that is the part worth keeping: `hasEarlierPending` blocks every later event of the same
+   stream, so one never-handled type permanently halts each aggregate that emits it, signalled only by a
+   rising gauge. Completing is safe **because `events` is append-only** (TD-005 `REVOKE DELETE`): only
+   the work item dies, and a handler added later is served by a backfill from the log. Rules 9 and 20
+   describe this and neither settles it.
 
 72. **A single pass that deletes while it walks is not a delete — and the two filesystems this repository
    runs on disagree about whether you find out.** Reclaiming a control directory an agent had flooded past
