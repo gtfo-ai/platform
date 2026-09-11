@@ -111,15 +111,30 @@ describe('a feature ticket, end to end', () => {
       label: 'feature-workpad',
       tickets: TICKETS,
       config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
+      // The interleaving this test used to fail on about one run in five, forced. See the harness:
+      // it widens the gap between handler 110 and handler 120 inside one dispatch, so a wait on the
+      // wrong one of the two fails every time rather than rarely.
+      workpadDelayMs: 250,
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
-    // Not `settle`: the status mapping is a handler in the integrations band, so it commits *after*
-    // the transition that moved the task. Waiting on the task state and then reading the ticket
-    // asserts one transaction's effect against another's timing — it failed 1 run in 3 that way.
+
+    // Wait for **the line this test asserts**, not for something that precedes it.
+    //
+    // The previous wait was on the ticket *status*, which is `pipeline.status.mapping` at TD-005
+    // priority 110; the assertions below read the workpad *body*, written by `pipeline.workpad` at
+    // 120. Priority order guarantees 110 commits first, so that wait was structurally incapable of
+    // covering these assertions — it passed only because both handlers usually finish inside one
+    // 50 ms poll. 120 is the highest priority number registered for `task.stage.entered`
+    // (10 stage executor, 110 status, 120 workpad), and `ready_for_merge` is the last stage the
+    // task enters before the human merge, so this render is the **last** consequence of the last
+    // event this half of the test is about — which is why waiting on it is sufficient and waiting
+    // on the status was not.
+    const WORKPAD_HEADER = '**ACME-1** — ready_for_merge (ready_for_merge)';
     await pipeline.waitFor(
-      'the ticket status mapped for ready_for_merge',
-      async () => pipeline.tickets.peek('ACME-1')?.status === 'In Review',
+      'the workpad rendered for ready_for_merge',
+      async () =>
+        pipeline.tickets.peek('ACME-1')?.comments[0]?.body.startsWith(WORKPAD_HEADER) === true,
     );
 
     const ticket = pipeline.tickets.peek('ACME-1');
@@ -129,9 +144,7 @@ describe('a feature ticket, end to end', () => {
     // from the first pass, so `toContain('ready_for_merge')` was satisfied by the checklist and
     // would have passed on a task that never reached the state (standing rule 10). The header is
     // the only part of the body that reports where the task actually is.
-    expect(ticket?.comments[0]?.body.split('\n')[0]).toBe(
-      '**ACME-1** — ready_for_merge (ready_for_merge)',
-    );
+    expect(ticket?.comments[0]?.body.split('\n')[0]).toBe(WORKPAD_HEADER);
     // The last mapped state the task passed through.
     expect(ticket?.status).toBe('In Review');
   });

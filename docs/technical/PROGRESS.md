@@ -958,7 +958,7 @@ in the vault's docblock saying what the corpus cannot show, which is the standin
 plan row mentions the corpus. Whoever takes entry 15 needs this first: a precision mechanism measured
 on an instrument that cannot falsify it is a mechanism nobody can review.
 
-### 1b. **The workpad e2e flake — now identified** (TODO, owner: WP-15a's harness)
+### 1b. **The workpad e2e flake — identified and fixed** (RESOLVED on `fix/workpad-flake`)
 ```
 FAIL test/e2e/pipeline/pipeline.e2e.test.ts >
   a feature ticket, end to end > keeps one workpad comment on the ticket and moves the ticket status
@@ -979,6 +979,39 @@ window must bound silence, not the drain* — and rule 4: the instrument gets au
 
 **Done looks like**: the mutation that reintroduces the race fails a named test, and the identity above is
 reproduced deliberately rather than waited for.
+
+> **RESOLVED on `fix/workpad-flake`. It was never a race — it was a wait on a strictly earlier
+> handler, and it is the harness, measured.**
+>
+> The provider call order, traced by wrapping the fake's `upsertWorkpad` and `transition`, ends:
+> `upsert active (rebase_gate)` → `status In Review` → `upsert ready_for_merge (ready_for_merge)`.
+> All three handlers of `task.stage.entered` fire in one dispatch, in TD-005 priority order —
+> stage executor **10**, status mapping **110**, workpad **120** — each in its own transaction. The
+> test waited on the *status* (110) and then asserted the *workpad body* (120). Priority order
+> **guarantees** 110 commits first, so that wait could never cover the assertion: it was not a rare
+> interleaving but a structurally insufficient wait that passed roughly four runs in five because
+> both handlers finish inside one 50 ms poll. *The failure rate was the only thing about it that was
+> random.* Rule 50's frame with the sharper edge: **bound the silence you care about — the line you
+> are about to assert — not something that merely precedes it.** The previous round's reviewer
+> measurement ("the flake is the status handler at 110, and `waitFor` waits on its consequence") was
+> correct in every part and pointed at the wrong *side*: waiting on 110's consequence is exactly the
+> defect when the assertion belongs to 120.
+>
+> **Harness, not product, and here is the measurement rather than the reasoning.** Widening the
+> window **250×** (a delay inside the fake's `upsertWorkpad`) leaves the end state correct — the last
+> render is still `ready_for_merge (ready_for_merge)` — so nothing is lost and nothing is stale once
+> the dispatch completes. What production can show is a ticket whose *status field* updates a few
+> milliseconds before its *workpad comment*, which is TD-005's band ordering working as designed and
+> self-heals inside the same dispatch. A test that samples inside that window is asserting one
+> handler's timing against another's, which is the harness's mistake to make.
+>
+> **Reproduced deliberately rather than waited for.** `StartPipelineOptions.workpadDelayMs` widens
+> the 110→120 gap, and the workpad test now runs with it **always on**, so the interleaving that used
+> to appear one run in five is exercised on every run. Restoring the status-based wait fails
+> `pipeline.e2e.test.ts` › "keeps one workpad comment on the ticket and moves the ticket status"
+> **3 times out of 3**, with the identity above word for word. The sweep rule 49 asks for was done:
+> every other assertion in that file reads `tasks` rows or the `events` table, both written in the
+> core handler's own transaction, so no sibling has this shape.
 
 ### 2. The slack/census follow-up branch — **three review rounds, merging** (branch exists)
 `fix/slack-redaction-and-census`, worktree `.claude/worktrees/slack-fix`, head `20b1e97` with `main` merged

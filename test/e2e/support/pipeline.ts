@@ -123,6 +123,15 @@ export interface PipelineE2E {
    * run *after* the core handler that wrote `tasks.state` has committed: a test that settles on
    * `ready_for_merge` and then reads the ticket is asserting one transaction's effect against
    * another's timing, and it fails a few runs in a hundred with the previous status still in place.
+   *
+   * **And the wait must be on exactly what the test then asserts** — not on a nearer consequence.
+   * That is the second half of the same lesson and it cost a second round: the workpad assertion
+   * waited on the *ticket status*, which is handler **110**, and then read the *workpad body*, which
+   * is handler **120**. Priority order guarantees 110 commits first, so the wait could never be
+   * sufficient; it passed most of the time only because the two handlers finish inside one 50 ms
+   * poll. Not a rare interleaving — a structurally short wait with a high pass rate, which is the
+   * worse kind. Standing rule 50's frame: bound the **silence** you care about, not something that
+   * happens to precede it. So: whatever line the test asserts, wait for *that* line.
    */
   waitFor(what: string, check: () => Promise<boolean>): Promise<void>;
   /** Every event of the log, in position order. */
@@ -151,6 +160,16 @@ export interface StartPipelineOptions {
   }[];
   /** `projects.config` — technical/12's effective configuration, as the settings port reads it. */
   readonly config?: JsonObject;
+  /**
+   * Delay every `upsertWorkpad` by this many milliseconds, to force the interleaving that used to
+   * make the workpad assertion flaky roughly one run in five.
+   *
+   * It is **not** load and it is not a sleep in an assertion: it widens one already-existing window
+   * — the gap between the status handler (TD-005 priority 110) and the workpad handler (120) inside
+   * a single dispatch — so a test that waits on the wrong one of the two fails **every** time
+   * instead of rarely. A flake you can only wait for is one you cannot prove fixed.
+   */
+  readonly workpadDelayMs?: number;
   /**
    * Start against a database another instance already used, and do not seed it again.
    *
@@ -346,6 +365,18 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       return fake.start(spec);
     },
   };
+
+  if (options.workpadDelayMs !== undefined) {
+    const upsert = tickets.upsertWorkpad.bind(tickets);
+    (tickets as { upsertWorkpad: typeof tickets.upsertWorkpad }).upsertWorkpad = async (
+      ref,
+      marker,
+      markdown,
+    ) => {
+      await new Promise((resolve) => setTimeout(resolve, options.workpadDelayMs));
+      return upsert(ref, marker, markdown);
+    };
+  }
 
   // The fakes reach the pipeline the way a real provider does: through the registry, resolved by
   // the `provider` column of the seeded `integrations` row (WP-15a).
