@@ -34,6 +34,21 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       *the pipeline is composed and production does not start it.* `main.ts` passes no runner and no audit
       log, and there is no webhook ingress — now **WP-15b** and **WP-15c** in the plan, with acceptance
       criteria; PROGRESS backlog entry 1 carries the measurement.
+- [ ] **The pipeline calls providers from inside an open database transaction, and the consequence
+      under load has never been measured.** Three handlers do it — the intake default-branch read
+      (`saga.ts:215` → `:261`/`:265`, `pipeline.intake` at priority 10), the workpad upsert
+      (`workpad.ts:168`) and the status transition (`workpad.ts:218`) — so a pooled connection is
+      held across provider latency and the audit write nests (`postgres-unit-of-work.ts:55` takes a
+      second `pool.connect()`). Against CLAUDE.md's *transaction / no transaction / transaction* and
+      against `technical/06-integrations-architecture.md:370`. It is the **cause** of WP-15b's
+      dropped `integration_actions_task_id_fkey` (the FK was the symptom and was correctly dropped)
+      and of the pool arithmetic: a dispatch peaks at **3** against `CONNECTIONS_PER_DISPATCH = 2`,
+      floor `2N+8` against a worst case `3N+8`, and at the shipped default (N=1,
+      `APP_DB_POOL_MAX=10`) the floor equalled the default with zero slack. **Needs measurement:**
+      the pool-exhaustion / audit-timeout hypothesis at N concurrent intakes, with the provider
+      latency and the load stated (rule 64) — not run in this session (rule 66), and it is a
+      **hypothesis**, not a finding. Now **WP-15d**, before or with WP-15c; PROGRESS backlog
+      entry 17.
 - [ ] **The retrieval layer is built and no prompt uses it** — WP-16's counterpart of the line above.
       `basicStageRunPlanner` passes `contextPack: []`, nothing composes a `PlatformToolPort` so `kb_search`
       has no home, and `KnowledgeIndexer` is not a pg-boss job. Owners assigned: the first two to **WP-17**,
