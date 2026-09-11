@@ -41,6 +41,13 @@ export const REPO_ROOT = path.resolve(
   '..',
 );
 
+/**
+ * The stand-in images, by **mutable tag**, and {@link ensureImages} pulls one only when it is
+ * absent. What that trades: a machine that pulled `node:24-alpine` months ago keeps testing against
+ * that build for ever, so a regression the current tag would show is invisible here — while CI,
+ * whose daemon is always clean, always gets the current one. Pinning by digest belongs with the
+ * real images (WP-22 owns them); until then the two environments can differ and this says so.
+ */
 export const RUNTIME_IMAGE = process.env['WORKSPACE_E2E_RUNTIME_IMAGE'] ?? 'node:24-alpine';
 export const ALPINE_IMAGE = process.env['WORKSPACE_E2E_ALPINE_IMAGE'] ?? 'alpine:3.21';
 export const GIT_IMAGE = process.env['WORKSPACE_E2E_GIT_IMAGE'] ?? 'alpine/git:v2.49.1';
@@ -146,6 +153,15 @@ export interface DockerFixture {
  * one the run container is created from, which is exactly where `main` failed, in the provider's
  * `create`. Enumerated here so a fourth image cannot inherit the same luck.
  */
+const imageTagsOf = (images: Readonly<Record<string, unknown>>): string[] =>
+  Object.entries(images)
+    // Every string in the provider's image record names an image, except the one that names a
+    // directory. Derived rather than listed beside it (standing rule 7): a second copy of the tags
+    // is a copy that can drift, and a field added to `WorkspaceImages` later is ensured the day it
+    // is added instead of the day CI fails on a clean daemon.
+    .filter(([key, value]) => typeof value === 'string' && key !== 'runtimeSourceDir')
+    .map(([, value]) => value as string);
+
 const ensureImages = async (images: readonly string[]): Promise<void> => {
   for (const image of images) {
     const present = await docker(['image', 'inspect', image], { allowFailure: true });
@@ -232,10 +248,17 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
 
 /** Builds everything one e2e file needs, and a cleanup that removes all of it. */
 export const startDockerFixture = async (): Promise<DockerFixture> => {
-  // First, before anything creates a container: every image used below, whether it is reached
-  // through the CLI or through the engine. A tag added to the provider's `images` record further
-  // down and not to this list is a 404 on a clean daemon and nothing at all on a dirty one.
-  const images = [RUNTIME_IMAGE, ALPINE_IMAGE, GIT_IMAGE];
+  // The record the provider is given, and the only place these tags are written down.
+  const providerImages = {
+    runtime: RUNTIME_IMAGE,
+    egress: ALPINE_IMAGE,
+    egressCommand: ['sleep', '600'],
+    git: GIT_IMAGE,
+    runtimeSourceDir: REPO_ROOT,
+  };
+  // First, before anything creates a container: every image it will be created from, whether it is
+  // reached through the CLI (which pulls) or through the engine (which does not).
+  const images = imageTagsOf(providerImages);
   await ensureImages(images);
   const suffix = uniqueSuffix();
   const network = `agentic-e2e-${suffix}`;
@@ -306,13 +329,6 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
     info: () => undefined,
     warn: (fields, message) => record('warn', fields, message),
     error: (fields, message) => record('error', fields, message),
-  };
-  const providerImages = {
-    runtime: RUNTIME_IMAGE,
-    egress: ALPINE_IMAGE,
-    egressCommand: ['sleep', '600'],
-    git: GIT_IMAGE,
-    runtimeSourceDir: REPO_ROOT,
   };
   const provider = new workspace.DockerWorkspaceProvider({
     engine,
@@ -438,12 +454,15 @@ export const probeUnderRunContainerConfig = async (
   engine: workspace.DockerEngine,
   containerId: string,
   script: string,
-  overrides: { user?: string; capAdd?: readonly string[] } = {},
+  overrides: { user?: string; capAdd?: readonly string[]; dnsOptions?: readonly string[] } = {},
 ): Promise<{ exitCode: number; output: string }> => {
   const inspect = await engine.inspectContainer(containerId);
   const hostConfig = { ...(inspect.HostConfig as Record<string, unknown>) };
   if (overrides.capAdd !== undefined) {
     hostConfig['CapAdd'] = overrides.capAdd;
+  }
+  if (overrides.dnsOptions !== undefined) {
+    hostConfig['DnsOptions'] = overrides.dnsOptions;
   }
   const name = `agentic-e2e-probe-${uniqueSuffix()}`;
   const id = await engine.createContainer(name, {

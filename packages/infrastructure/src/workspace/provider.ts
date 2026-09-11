@@ -828,74 +828,86 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   }
 
   /**
-   * Removes the run's control sub-directory — **against an adversary, not against tidiness**.
+   * Removes the run's control sub-directory — **against an adversary, and with no capability at
+   * all**.
    *
    * The adversary is the agent in the run container. It is uid 1000, it mounts `<ctl>/<run-id>`
    * read-write (`hardening.ts` § `runContainerCreateBody`), and it owns that directory, so it may
-   * do anything it likes to the modes and to what is underneath. This helper is root, but root
-   * with `CapDrop: ALL` is an ordinary non-owner: it holds neither `CAP_DAC_OVERRIDE` nor
-   * `CAP_FOWNER`, so it cannot descend into a `0700` directory owned by 1000, cannot `chmod` one,
-   * and — measured, not assumed — cannot `chown -R` one either, because the recursion has to open
-   * the directory before it can walk it.
+   * `chmod 000` the directory or anything it puts inside. Root with `CapDrop: ALL` is an ordinary
+   * non-owner: it cannot descend into such a directory, cannot `chmod` it, and — measured — cannot
+   * `chown -R` it either, because the recursion must open the directory before it can walk it.
    *
-   * Three agent moves, each run against production's own shape (a plain named volume, `/ctl` =
-   * `root:root 0755`), with the agent on the real `volume-subpath` mount:
+   * The way out is not a capability, it is **the right uid**. Everything under `<ctl>/<run-id>` is
+   * owned by uid 1000 and the agent cannot change that (it has no `CAP_CHOWN`), so a helper *on
+   * that uid* is the owner of every mode the agent can set and needs no privilege to undo them.
+   * Two helpers, both `CapDrop: ALL` with nothing added:
    *
-   * ```
-   * agent: chmod 000 /ctl                      | agent: chmod 000 on a sub-directory it made
-   * --cap-add CHOWN, chown -R + chmod -R + rm  → exit 1, the directory survives  (all three)
-   * --cap-add DAC_OVERRIDE, plain rm -rf       → exit 0, /ctl empty              (all three)
-   * ```
+   *  1. uid 1000 unlocks the tree, empties it, and leaves the directory `0755` so the next step can
+   *     look inside it (that last `chmod` is load-bearing: without it step 2 exits 1 on a named
+   *     volume, which is production's shape — measured);
+   *  2. uid 0 unlinks the now-empty directory, which needs write and execute on `/ctl`, and `/ctl`
+   *     is `root:root 0755`.
    *
-   * **And then the `chmod`, which is not for Linux at all.** Where the control volume is bind-backed
-   * onto a host filesystem — Docker Desktop, every developer machine — the syscall is served twice:
-   * the guest kernel, where `CAP_DAC_OVERRIDE` applies, and the host's own filesystem behind
-   * virtiofs, where it does not. Measured against that shape, with the agent nesting two `000`
-   * directories inside its own `000` one:
+   * Measured on **both** control-volume shapes — a plain named volume, and one bind-backed onto a
+   * host filesystem, where a guest capability would not have helped anyway because virtiofs checks
+   * again on the host side — in all three states `destroy` can find:
    *
    * ```
-   *                                  bind-backed (host fs)   named volume (production)
-   * rm -rf, DAC_OVERRIDE             exit 1, survives        exit 0, gone
-   * chmod -R u+rwX then rm -rf       exit 0, gone            exit 0, gone
-   * chmod -R u+rwX then rm -rf,      —                       exit 1, survives
-   *   without DAC_OVERRIDE
+   *                       benign            agent locked it     already gone
+   * named volume          rc 0/0, empty     rc 0/0, empty       rc 0/0, empty
+   * bind-backed           rc 0/0, empty     rc 0/0, empty       rc 0/0, empty
    * ```
    *
-   * So both lines are load-bearing and each covers what the other cannot: the `chmod` succeeds on a
-   * bind because the host maps this container's root onto the directory's owner, and it is refused
-   * on a named volume (`Operation not permitted`, harmlessly — `rm -rf` is the helper's exit code
-   * and `DAC_OVERRIDE` carries it there). `CAP_FOWNER` would silence that message and is not added:
-   * a capability granted to quiet a log line is a security change bought for nothing.
+   * An earlier revision did this in one helper with `CAP_DAC_OVERRIDE`. That worked, and the
+   * docblock claimed the alternative was "not a tighter capability, it is a leak" — which review
+   * disproved by measuring the two-helper form. `DAC_OVERRIDE` bypasses **every** file permission
+   * check on a volume that holds every other run's token; one extra short-lived container is the
+   * cheaper side of that trade.
    *
-   * What `DAC_OVERRIDE` buys the
-   * container is the ability to read any run's token on this volume — which is why it is this
-   * script and no other: the run id is `assertRunId`-ed before it is interpolated, the container
-   * mounts nothing else, it has no network, and it lives about a second. The alternative is not a
-   * tighter capability, it is **a leak**: `#teardown` runs this through `step()`, which logs
-   * `workspace teardown partial` and carries on, so a failure here is silent and the run token
-   * stays on the shared control volume for ever. Nothing else collects it — `purgeExpired` lists
-   * *volumes* by `role=workspace` and never looks inside this one (standing rule 60, one level
-   * down: the shape the sweep cannot see is the shape reclamation will not touch).
+   * Step 1 mounts the whole of `/ctl` rather than just this run's sub-path. A `volume-subpath`
+   * mount would stop it from even naming a sibling, and it is the better isolation — but the
+   * daemon refuses a sub-path that does not exist, and `destroy` is idempotent, so the second call
+   * could not start the container at all. The mitigation is that neither script takes a path from
+   * anywhere: the run id is `assertRunId`-ed before it is interpolated.
    *
-   * It was invisible in CI because `#prepare` failed first — the same permission model, one layer
-   * up — and invisible locally because the e2e's control volume is bind-backed onto a macOS host
-   * directory, where `chown` silently does nothing at all.
+   * Getting this wrong is silent. `#teardown` runs both steps through `step()`, which logs and
+   * carries on, so the only symptom is the run token staying on the shared control volume for
+   * ever — and nothing else collects it, since `purgeExpired` lists *volumes* by `role=workspace`
+   * and never looks inside this one (standing rule 60, one level down).
    */
   async #removeControlDirectory(runId: string): Promise<void> {
-    const dir = `/ctl/${assertRunId(runId)}`;
+    const id = assertRunId(runId);
+    const dir = `/ctl/${id}`;
+    const mounts = [this.#volumeMount(this.#controlVolume, '/ctl', false)];
+    const labels = { [WORKSPACE_LABELS.run]: runId, [WORKSPACE_LABELS.role]: 'control-cleanup' };
     await this.#helper({
-      name: `ctlrm-${assertRunId(runId)}`,
+      name: `ctlempty-${id}`,
       image: this.#images.git,
-      // `rm -rf` on a path that is already gone is not an error, which is what makes `destroy`
-      // idempotent; the `chmod` is guarded because it is not so forgiving. No `set -e`: a `chmod`
-      // the kernel refuses is expected on a named volume, and the `rm` is the verdict.
-      script: [`if [ -e ${dir} ]; then chmod -R u+rwX ${dir}; fi`, `rm -rf ${dir}`].join('\n'),
-      mounts: [this.#volumeMount(this.#controlVolume, '/ctl', false)],
-      user: '0:0',
-      capAdd: ['DAC_OVERRIDE'],
+      // Guarded on existence and ended with `exit 0`, because `destroy` is idempotent and a
+      // directory that is already gone is a success, not a failure.
+      script: [
+        `if [ -e ${dir} ]; then`,
+        `  chmod -R u+rwX ${dir} && rm -rf ${dir}/..?* ${dir}/.[!.]* ${dir}/*`,
+        `  chmod 755 ${dir}`,
+        'fi',
+        'exit 0',
+      ].join('\n'),
+      mounts,
+      user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
       secrets: [],
       network: 'none',
-      labels: { [WORKSPACE_LABELS.run]: runId, [WORKSPACE_LABELS.role]: 'control-cleanup' },
+      labels,
+    });
+    await this.#helper({
+      name: `ctlrm-${id}`,
+      image: this.#images.git,
+      // `rm -rf` on a path that is already gone is not an error.
+      script: `rm -rf ${dir}`,
+      mounts,
+      user: '0:0',
+      secrets: [],
+      network: 'none',
+      labels,
     });
   }
 

@@ -452,6 +452,14 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
         `getent hosts egress-${handle.runId} >/dev/null; echo "neighbour_rc=$?"`,
         'getent hosts example.com >/dev/null; echo "upstream_rc=$?"',
       ].join('\n'),
+      // The upstream half is a query the internal network drops, so it costs a full resolver
+      // timeout: 10 s at the default budget, 2 s at this one — measured, same two answers. The
+      // trade, since bounding a timeout can always hide a slow success: an `internal` network has
+      // no route at all, so the packet is dropped rather than answered late, and a network that
+      // *did* have a route would be answered by the host resolver far inside one second. The
+      // "no route at all" claim does not rest on this either way — `nc` and the default-route
+      // count above carry it (standing rule 43).
+      { dnsOptions: ['timeout:1', 'attempts:1'] },
     );
     expect(neighbour.output).toContain('neighbour_rc=0');
     expect(neighbour.output).toMatch(/neighbour=\d+\.\d+\.\d+\.\d+\s/);

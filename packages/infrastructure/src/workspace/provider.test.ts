@@ -342,52 +342,92 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     expect(JSON.stringify(cleanup)).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
 
-  it('removes the control directory with CAP_DAC_OVERRIDE, because the agent owns it', async () => {
+  it('reclaims the control directory with no capability, by using the uid that owns it', async () => {
     const handle = await created();
     await provider.destroy(handle);
-    const ctlrm = daemon.byName(`ctlrm-${FIXTURE_RUN_ID}`);
-    // The agent is uid 1000, mounts `<ctl>/<run-id>` read-write and owns it, so it may `chmod 000`
-    // the directory or anything it puts inside. Root with `CapDrop: ALL` is an ordinary
-    // non-owner: measured against all three of those moves, `chown -R` + `chmod -R` + `rm -rf`
-    // with `CAP_CHOWN` exits 1 and the directory survives, while a plain `rm -rf` with
-    // `CAP_DAC_OVERRIDE` exits 0 and the volume is empty. Take this capability away and the run
-    // token stays on the shared control volume for ever, silently — `#teardown` only logs.
-    expect(ctlrm?.body.HostConfig).toMatchObject({ CapDrop: ['ALL'], CapAdd: ['DAC_OVERRIDE'] });
-    const script = (ctlrm?.body.Cmd ?? []).join('\n');
-    expect(script).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
-    // The `chmod` is the other half, and it is for the bind-backed control volume every developer
-    // machine has: there the syscall is served again by the host filesystem, where the guest's
-    // `CAP_DAC_OVERRIDE` means nothing. Measured on that shape, `rm -rf` alone exits 1 and the
-    // directory survives; with this line it exits 0. It is guarded and un-`set -e`d on purpose —
-    // on a named volume the kernel refuses it and `rm -rf` is still the verdict.
-    expect(script).toContain(`chmod -R u+rwX /ctl/${FIXTURE_RUN_ID}`);
-    expect(script.indexOf('chmod -R')).toBeLessThan(script.indexOf('rm -rf'));
+    const empty = daemon.byName(`ctlempty-${FIXTURE_RUN_ID}`);
+    const remove = daemon.byName(`ctlrm-${FIXTURE_RUN_ID}`);
+    // The agent may `chmod 000` its own directory and anything in it, and root with `CapDrop: ALL`
+    // is an ordinary non-owner — it cannot descend, cannot `chmod`, cannot even `chown -R`. The
+    // way out is the uid, not a capability: everything under the directory is owned by 1000 and
+    // the agent has no `CAP_CHOWN` to change that, so uid 1000 is the owner of every mode it can
+    // set. Measured on a named volume *and* on a bind-backed one, benign / locked / already gone:
+    // rc 0 and the volume empty in all six.
+    expect(empty?.body.User).toBe('1000:1000');
+    expect(remove?.body.User).toBe('0:0');
+    const unlock = (empty?.body.Cmd ?? []).join('\n');
+    expect(unlock).toContain(`chmod -R u+rwX /ctl/${FIXTURE_RUN_ID}`);
+    // Load-bearing, and the step the first draft of this left out: uid 0 cannot look inside a
+    // `0700` directory it does not own, so step 2 exits 1 on a named volume without this line.
+    expect(unlock).toContain(`chmod 755 /ctl/${FIXTURE_RUN_ID}`);
+    expect((remove?.body.Cmd ?? []).join('\n')).toBe(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
 
   /**
-   * The negative half of the two capability grants (standing rules 3, 42, 68).
+   * The negative half: **one** capability is granted anywhere in this provider, and it is `CHOWN`
+   * on the prepare helper (standing rules 3, 42, 68).
    *
-   * A census rather than two assertions: it reads every container this provider created on a
-   * whole create-and-destroy, so a helper added later is covered the day it is added (rule 44),
-   * and a capability added to *any* of them fails here by name. Measured before it existed:
-   * adding `capAdd: ['DAC_OVERRIDE']` to the clone helper left the whole unit tier green.
+   * Two things this census got wrong on its first draft, both found by review and both fixed by
+   * asking the daemon a different question:
+   *
+   *  - it read `CapDrop` as `body.HostConfig?.CapDrop ?? ['ALL']`, so a container that emitted **no
+   *    `CapDrop` at all** — Docker's full default capability set, the worst case the check exists
+   *    to catch — passed. An absent value read as the safe one is standing rule 18 inside a
+   *    security check. It is now read as emitted, and `undefined` fails;
+   *  - its docblock claimed "a helper added later is covered the day it is added", and that was
+   *    false: it drove one create-and-destroy, while `export` and `updateMirror` create helpers on
+   *    paths that sequence never takes. Measured: `capAdd: ['SYS_ADMIN']` on the export helper left
+   *    all 171 workspace unit tests green. Every method that creates a container is driven below,
+   *    and the names are asserted — so the *scope* of this census is itself checkable (rule 44) and
+   *    a new helper on a covered path lands in `history` and must be declared here.
    */
-  it('grants a capability to exactly two helpers and none to any other container', async () => {
+  it('grants exactly one capability across every container it creates, on any path', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc1234def\nPUSHED=yes\n' }));
+    const spec = workspaceSpecFixture();
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
     const handle = await created();
+    archives.set(`export-${FIXTURE_RUN_ID}:/work/export.tar`, exportArchive());
+    await provider.export(
+      handle,
+      {
+        branch: 'agentic/task-1',
+        tarballPath: path.join(workDir, 'census.tar'),
+        commitMessage: 'wip',
+      },
+      { host: 'git.example.com', username: 'agentic', password: SECRET },
+    );
     await provider.destroy(handle);
+
     const granted = daemon.history
       .map((container) => [container.name, container.body.HostConfig?.CapAdd ?? []] as const)
       .filter(([, capabilities]) => capabilities.length > 0);
     expect(Object.fromEntries(granted)).toEqual({
       // `chown` needs it even as root, and the shim must find the directory owned by its own uid.
       [`prep-${FIXTURE_RUN_ID}`]: ['CHOWN'],
-      // The agent owns what this one has to delete.
-      [`ctlrm-${FIXTURE_RUN_ID}`]: ['DAC_OVERRIDE'],
     });
-    expect(daemon.history.length).toBeGreaterThan(granted.length);
+
+    // Read as emitted. `toEqual(['ALL'])` on a missing field fails, which is the point: no
+    // `CapDrop` is the full default set, not the empty one.
     for (const container of daemon.history) {
-      expect(container.body.HostConfig?.CapDrop ?? ['ALL']).toEqual(['ALL']);
+      expect(container.body.HostConfig?.CapDrop).toEqual(['ALL']);
     }
+
+    // And the scope claim, checkable: these are the container-creating paths this provider has.
+    const roles = new Set(daemon.history.map((container) => container.name.split('-')[0]));
+    expect([...roles].sort()).toEqual([
+      'clone',
+      'ctlempty',
+      'ctlrm',
+      'egress',
+      // The sidecar's config volume is written by its own helper. It was not in the first draft
+      // of this list and the census named it on the first run, which is the check working.
+      'egresscfg',
+      'export',
+      'mirror',
+      'prep',
+      'ws',
+    ]);
   });
 
   it('keeps the workspace volume, because retention owns it', async () => {
