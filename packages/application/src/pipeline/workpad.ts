@@ -26,15 +26,15 @@ import type { Id, Slug, TaskState } from '@platform/contracts';
 import type { EventHandler } from '../events/handler.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { PipelineIntegrations } from './integrations.js';
-import { ticketWrites } from './integrations.js';
+import type { PipelineIntegrationsPort } from './integrations.js';
+import { noRunScopedSecrets, ticketWrites } from './integrations.js';
 import type { ProjectSettingsPort } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
 
 export interface WorkpadOptions {
   readonly store: PipelineStore;
   readonly settings: ProjectSettingsPort;
-  readonly integrations: PipelineIntegrations;
+  readonly integrations: PipelineIntegrationsPort;
   readonly logger?: Logger;
 }
 
@@ -164,7 +164,12 @@ export const workpadHandler = (options: WorkpadOptions): EventHandler => ({
     const markdown = renderWorkpad(
       viewOf(stored, settings.taskBudgetUsd, payload.blocker_brief ?? null),
     );
-    const ref = await ticketWrites(options.integrations).upsertWorkpad(
+    // The workpad is written from an event handler, outside any run (Q55, `noRunScopedSecrets`).
+    const integrations = await options.integrations.forProject(
+      stored.task.projectId,
+      noRunScopedSecrets(),
+    );
+    const ref = await ticketWrites(integrations).upsertWorkpad(
       stored.task.ticket,
       workpadMarker(taskId),
       markdown,
@@ -210,7 +215,11 @@ export const statusMappingHandler = (options: WorkpadOptions): EventHandler => (
       );
       return;
     }
-    await ticketWrites(options.integrations).transition(stored.task.ticket, status, {
+    const integrations = await options.integrations.forProject(
+      stored.task.projectId,
+      noRunScopedSecrets(),
+    );
+    await ticketWrites(integrations).transition(stored.task.ticket, status, {
       projectId: stored.task.projectId,
       taskId,
       mode: stored.task.mode,

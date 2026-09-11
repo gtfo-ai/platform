@@ -18,7 +18,7 @@
 - `projects(id, org_id, key unique, name, repo_url, default_branch, agentic_dir, knowledge_dir, config jsonb, config_source jsonb, config_hash, autonomy_level, readiness_level, status, created_at, updated_at)`.
 - `project_members(project_id, user_id, role)`.
 - `integrations(id, org_id, type, provider, name, config jsonb, secret_ids uuid[], health jsonb, created_at, updated_at)`; `bindings(id, project_id, integration_id, config jsonb)`.
-- `secrets(id, ciphertext bytea, key_id, created_at, rotated_at)` — encrypted with `APP_SECRET_KEY` (envelope); never joined into API responses.
+- `secrets(id, ciphertext bytea, key_id, created_at, rotated_at)` — encrypted with `APP_SECRET_KEY` (envelope); never joined into API responses. **One row is one credential**, and its plaintext is the JSON document `{"field", "value"}` — the provider config field the value belongs to travels *with* it, because `integrations.secret_ids` is a `uuid[]` with no names in it and an operator reordering that array must not be able to swap a webhook secret for an API token (WP-15a, `packages/infrastructure/src/secrets/postgres-secret-store.ts`). The envelope is a per-row AES-256-GCM data key wrapped under a key derived from `APP_SECRET_KEY` by HKDF; `key_id` is a fingerprint of the *derived* key, so a half-finished rotation is a readable state rather than a corrupt one, and a row sealed under another key is refused by name rather than reported as a bad tag.
 - `config_audit(id, entity_type, entity_id, user_id, diff jsonb, created_at)` — append-only; secret values appear as `"changed"`.
 
 ### Pipeline

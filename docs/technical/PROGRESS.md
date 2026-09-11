@@ -2391,6 +2391,92 @@ project with no git binding). `isPlatformGate` was exported and imported nowhere
 S4 now carries one bullet saying what the platform does today and pointing at **Q55**, because the cut lived
 only in this ledger and docs win over code (rule 8).
 
+### WP-15a — the pipeline is composed into `apps/server`, and what that turned out to cost
+
+**The acceptance criterion is met.** `verify:e2e` walks a feature ticket and a bug ticket from
+`ticket.matched` to `task.completed` through an **`apps/server` instance started by `startInstance`** —
+the real composition root, the real outbox worker on its own timer, the real pg-boss jobs runtime — with
+the git and task-management adapters built by a production loader from seeded `integrations`, `secrets`
+and `bindings` **rows**. `test/e2e/support/pipeline.ts` no longer calls `createPipelineRuntime`.
+
+**The mutation that proves the rows are load-bearing.** Removing the two `insert into bindings` statements
+from the harness's seed fails **all five** e2e tests, and the failure is the right one:
+`state=needs_human stage=rebase_gate` — a project with no git binding parks with a blocker brief instead
+of crashing, which is standing rule 20's absent-versus-broken split observed rather than asserted.
+
+**Three orientation claims were checked and one was wrong (rule 27, eighth instance).** The plan row says
+the loader decrypts "through the existing broker". *There is no such broker.* `workspace/broker.ts` is the
+run-scoped **git credential** broker (TD-021) — it mints per-run tokens and has nothing to do with
+`secrets.ciphertext`. Nothing in the repository read that column, nothing imported `node:crypto` for it,
+and no work package owned it: `grep -rln "APP_SECRET_KEY|decrypt|SecretStore"` over `packages/` and
+`apps/` returned five files, all of them configuration or auth. So WP-15a built it — `SecretStore` port,
+AES-256-GCM envelope with a per-row data key, `PostgresSecretStore` — because a loader that cannot read a
+credential cannot build an adapter, and a loader that read a *plaintext* one would have left the single
+piece of this work package that touches a secret untested. The other two claims held: the tables really
+are `integrations`/`bindings`, and `createPipelineRuntime` really had no production caller.
+
+**`PipelineIntegrations` had to become a port, and that was not in the brief.** `PipelineSagaOptions`
+took one composed `PipelineIntegrations` for the whole process — correct for a harness with one project
+and wrong for an instance that serves many. It is now `PipelineIntegrationsPort.forProject(projectId,
+scope)`, the same shape `ProjectSettingsPort` already had, resolved at four call sites (the branch-protection
+read, the merge-request record, the gate evaluator, the review window). The gate evaluator resolves it
+**after** `merged_gate` returns, deliberately: that gate is settled by the event that got the task there,
+so loading a binding for it would let an unrelated misconfiguration fail a gate that needs no provider.
+
+**Q55: the mechanism is closed, the product cut is not, and the split is deliberate.** `IntegrationCallScope`
+is **required by the type** and carries the run-scoped credentials; the loader composes them into
+`ProviderCreateInput.redactor` and builds adapters **per call**, which is Q55's option (a). Rule 35 says the
+type only proves *supply*, so the behaviour is pinned by a test that plants a token in a job log the **real**
+GitLab adapter returns and greps the output. What is **not** closed is the CI gate: it still returns failing
+job names, `gates.test.ts:167` still pins that, and nothing on the pipeline's path holds a minted credential
+because the runner cannot reach the launcher's broker (Q52). Every call site passes `noRunScopedSecrets()`,
+written out in full. The decision is recorded on Q55 itself and at the top of `bindings/loader.ts`.
+
+**Two guards, two named deaths (rules 3, 22, 35).**
+
+- deleting the **scope** half of the composed redactor kills
+  `packages/integrations/src/bindings/loader.test.ts` › "keeps a run-scoped credential out of what a provider returns",
+  with the token visible in the assertion's message;
+- deleting the **binding** half kills
+  `packages/integrations/src/bindings/loader.test.ts` › "redacts a credential the provider does not redact for itself",
+  and **nothing else** — measured, because both registered adapters compose a redactor over
+  their own credentials. That is rule 41's shape, so rule 22 applies: the layer is declared at the line, the
+  outer guard is named (`providers/emitted-secrets.test.ts`), and the reason it is still worth having is
+  that that file is a hand-written list of *two* providers rather than a sweep of `providers/` (rule 7);
+- deleting the `options.pipeline === undefined` warning in `runtime.ts` kills
+  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names what is missing and leaves a matched ticket where it found it",
+  which also asserts the other half — the event **dispatches** and no task is created, so it is a statement
+  about the branch that ran rather than about a process that had not started yet (rule 10).
+
+**A defect the tests caught before it shipped.** `repositoryPathOf` read `git@host:acme/api.git` as the
+project `api`: the first `/` is inside the path, not after the host, for git's scp-style remote. Two
+spellings reach `projects.repo_url` and they separate the host from the path differently; a `:` followed by
+digits is a port and not the separator. Fixed with the enumeration in `pipeline.test.ts`.
+
+**Two things measured and written down rather than assumed.** `bindings` is ordered `by i.type, …`, and
+`type` is an **enum** — PostgreSQL orders it by the order migration 0002 declared its labels, so
+`task_management` sorts *before* `git`, not alphabetically. The integration test asserts it as it behaves
+and says why. And the e2e now runs in **real** time: ~27 s for five tests at load average 5, with
+`APP_JOBS_POLL_INTERVAL_SECONDS=0.5` and `APP_DISPATCH_POLL_INTERVAL_MS=25`. Nothing asserts a duration
+(rule 2); `settle` waits for a *state* and reports the dispatcher's own recorded error if a handler died.
+
+**What this work package refused to build, with the reason.** `apps/server` **cannot** compose the whole
+pipeline on its own, and pretending otherwise would have been rule 18 in the composition root:
+
+- **`ClaudeRunner`** needs a workspace, and the runner→launcher transport is **Q52**, deliberately unbuilt;
+- **`IntegrationAuditLog` / `IdempotencyStore`** have ports (WP-07) and no adapter, and
+  `integration_actions` (migration 0007) has no `project_id`, `redaction_count` or `attempts` column — so an
+  adapter needs a **migration** as well as code.
+
+So `StartRuntimeOptions.pipeline` is required to start the pipeline, and a process without it logs which
+piece is missing and starts no pipeline. That is the fail-closed direction — no task advances, loudly,
+rather than every task advancing with no audit row. The executor's own redactor is **not** a no-op: it is
+TD-012 **step 2** (`patternRedactor()`), because step 1 is per-binding and lands in the loader.
+
+**The shipped registry is two providers, not five.** The loader builds a git provider and a task manager;
+registering Slack, Sentry and Loki would be three entries constructed by nothing, which is rule 68's shape.
+They belong to the composition root that consumes them.
+
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 
 The finding worth keeping from the web foundation, because it is the other half of the defect that cost
@@ -2973,6 +3059,10 @@ intact, and `rm -rf` unlinked the link rather than the target.
 
 ## Discovered work (not in plan)
 
+- ~~**Nothing loads a project's integration bindings**~~ — **CLOSED at WP-15a**
+  (`packages/integrations/src/bindings/loader.ts`, composed in `apps/server/src/pipeline.ts`). The secret
+  resolution it names had no code at all: `secrets.ciphertext` was read by nothing, so WP-15a also built the
+  `SecretStore` port and its envelope adapter. Original entry, for the record:
 - **Nothing loads a project's integration bindings, so the pipeline cannot be wired into
   `apps/server` yet (WP-15).** `createPipelineRuntime` takes `PipelineIntegrations` — a git binding
   and a task-management binding, each an adapter plus its `IntegrationRef` — and the platform has
@@ -2980,6 +3070,10 @@ intact, and `rm -rf` unlinked the link rather than the target.
   provider adapter, the executor and the pipeline are ready; the composition root has nothing to
   hand them. It is a small use case (`bindingsFor(projectId)`) plus the secret resolution TD-020
   describes, and it blocks the first *real* instance rather than any test.
+- ~~**`ProviderCreateInput.secrets` is not connected to `exactSecretRedactor`**~~ — **CLOSED at WP-15a**:
+  the loader names every resolved credential `<provider>:<integrationId>:<field>` and composes it into the
+  `redactor` it passes to `create`, so a composition root cannot hand a provider a secret the redactor never
+  learns. Original entry:
 - **`ProviderCreateInput.secrets` is not connected to `exactSecretRedactor` (found at WP-15,
   untouched).** A composition root can hand a provider a secret the redactor never learns. The
   redaction fix on `main` closed the *walk*; this is the wiring. Q55 is the harder half of the same
@@ -2990,6 +3084,36 @@ intact, and `rm -rf` unlinked the link rather than the target.
   return reason — it is the difference between "test:unit failed" and a developer stage that knows
   what to fix. Round 2 wrote the cut into **product/04 S4** itself and pinned the `detail` string in
   `gates.test.ts`, so the change is a failing test rather than a silent improvement.
+
+- **Jira's adapter wraps its own calls in `IntegrationActionExecutor` and the pipeline wraps them again
+  (found at WP-15a, filed rather than fixed).** WP-09's GitLab adapter deliberately keeps the executor
+  *outside* itself — its docblock says so, citing standing rule 14 — and `pipeline/integrations.ts` wraps
+  every call the pipeline makes. WP-08's Jira adapter takes an `executor` and wraps its own. Composing both
+  in one registry therefore produces **two `integration_actions` rows and two rate-limit acquisitions for
+  one ticket write**. Nothing is unsafe: the outer executor refuses a shadow mutation before the inner one
+  is reached, and the inner `actionContext` is `fixedActionContext('normal')` for exactly that reason. The
+  fix is Jira adopting GitLab's shape, which is an adapter change with its own contract suite, so WP-15a
+  registered it and wrote the duplication down at
+  `packages/integrations/src/bindings/shipped-registry.ts` instead of quietly shipping it.
+- **`IntegrationAuditLog` and `IdempotencyStore` have no Postgres adapter, and `integration_actions` is
+  missing three columns for one (found at WP-15a).** BD-003's whole outbound-audit claim rests on a port
+  WP-07 shipped and nothing implements. Migration 0007's table has no `project_id`, `redaction_count` or
+  `attempts`, all three of which `IntegrationActionEntry` carries, so the work is a numbered migration plus
+  an adapter that appends the `integration.action.performed` / `.failed` events in the same transaction —
+  which needs stream-sequence allocation outside a saga, the thing `NormalisedEvent` stops short of on
+  purpose. Until it exists, `apps/server` starts **no pipeline** unless a caller supplies an audit log, and
+  says so in a warning naming the gap.
+- **The binding loader has no cache, deliberately, and nothing has measured whether it needs one
+  (WP-15a).** Every provider call re-reads the project's bindings and rebuilds the adapters, because Q55
+  makes the redactor per-call and because a cache would have to be invalidated by a settings change, a
+  credential rotation and a rate-limit budget that lives on the adapter — and would hold decrypted
+  credentials in memory for as long as it held an entry. The place to put one, when a measurement asks for
+  it, is `BindingRepository`; the reasoning is in `bindings/loader.ts`.
+- **`emitted-secrets.test.ts`'s provider list is still hand-written, and WP-15a now leans on it (WP-15a).**
+  The loader's binding-half redactor is defence in depth *because* that file covers only Jira and GitLab —
+  deleting the half leaves every test green but the one seam written for it. Making the file's provider
+  list a sweep of `providers/` would turn a declared rule-22 layer into a genuinely redundant one, which is
+  the better end state.
 
 - **An unlabelled `ws-<run-id>` volume: the e2e half is fixed, the production half is a decision nobody
   has taken (WP-14 round 3).** Standing rule 60 has the measurement. What is *done* here is the harness:

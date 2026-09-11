@@ -23,6 +23,7 @@
     "@platform/contracts": "workspace:*",
     "@platform/domain": "workspace:*",
     "@platform/infrastructure": "workspace:*",
+    "@platform/integrations": "workspace:*",
     "@prometheus-io/client": "0.16.1",
     "awilix": "13.0.5",
     "better-auth": "1.7.3",

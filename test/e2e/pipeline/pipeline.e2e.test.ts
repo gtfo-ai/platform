@@ -1,12 +1,18 @@
 /**
- * WP-15's acceptance criterion: **one feature ticket and one bug ticket through the whole loop**,
- * with fake Claude, on a real PostgreSQL.
+ * WP-15a's acceptance criterion: **a ticket reaches `task.completed` through an `apps/server`
+ * instance**, with its integration bindings read from the database.
  *
- * What this proves that the unit tier cannot: the loop runs on the real event store, so every
- * transition is an appended event with a contiguous `stream_seq`, dispatched exactly once through
- * `handler_executions`, with the task's state and its events committed in one transaction; and the
- * artifacts the stages produce are the *published* schemas, because `FakeClaudeRunner` refuses a
- * scenario whose structured output does not validate (its divergence 3).
+ * WP-15 proved the loop against a runtime this file composed itself. That left the product's own
+ * composition root untested and `PipelineIntegrations` with no production constructor, so the thing
+ * being demonstrated was the pipeline package rather than the platform. `startPipeline` now starts
+ * a real instance and seeds `integrations`, `secrets` and `bindings` **rows**; the adapters the
+ * stages call are built by the production loader from those rows, with the credential decrypted
+ * under the instance's own `APP_SECRET_KEY`.
+ *
+ * What that adds to WP-15's list: the outbox worker runs on its own timer and pg-boss runs the
+ * stage jobs, so nothing here drives a drain — a transition that only happened because a harness
+ * called a handler by hand would not happen at all. What it costs is determinism about *when*;
+ * `settle` waits for a state and never asserts a duration (standing rule 2).
  *
  * Every stage of the templates is scripted, so what is exercised is the interpreter's transitions
  * and the saga's handlers, not the model.
@@ -182,23 +188,22 @@ describe('a feature ticket, end to end', () => {
       label: 'feature',
       tickets: TICKETS,
       // technical/12's `status_mapping`, so the ticket's own status moves with the task.
-      settings: {
-        config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
-      },
+      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
     });
     harness = pipeline;
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
 
     // BD-007: the platform never merges. It stops here until a human does.
-    const waiting = await pipeline.task();
-    expect(waiting.state).toBe('ready_for_merge');
+    const waiting = await pipeline.settle(
+      'ready_for_merge',
+      (task) => task.state === 'ready_for_merge',
+    );
     expect(waiting.current_stage).toBe('ready_for_merge');
 
     await pipeline.publish([merged(pipeline)]);
 
-    const finished = await pipeline.task();
-    expect(finished.state).toBe('done');
+    const finished = await pipeline.settle('done', (task) => task.state === 'done');
     expect(finished.template).toBe('feature');
     // Five agent stages at 0.40 USD each, on the row a human would read.
     expect(Number(finished.cost_actual)).toBeCloseTo(2.4, 6);
@@ -225,12 +230,11 @@ describe('a feature ticket, end to end', () => {
       scenarios: featureScenarios,
       label: 'feature-workpad',
       tickets: TICKETS,
-      settings: {
-        config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
-      },
+      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
 
     const ticket = pipeline.tickets.peek('ACME-1');
     // BD-023: one sticky comment, however many times the task moved.
@@ -249,7 +253,9 @@ describe('a feature ticket, end to end', () => {
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-2', 'Story')]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
     await pipeline.publish([merged(pipeline)]);
+    await pipeline.settle('done', (task) => task.state === 'done');
 
     const stages = (await pipeline.events())
       .filter((event) => event.type === 'task.stage.entered')
@@ -286,8 +292,7 @@ describe('when the merge request’s pipeline is red', () => {
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
 
-    const parked = await pipeline.task();
-    expect(parked.state).toBe('needs_human');
+    const parked = await pipeline.settle('needs_human', (task) => task.state === 'needs_human');
     expect(parked.current_stage).toBe('ci_gate');
     // BD-008 bounds the loop at 3, and the counter never passes its limit.
     expect(parked.iteration_counters.ci_fix).toBe(3);
@@ -316,13 +321,16 @@ describe('a bug ticket, end to end', () => {
     harness = pipeline;
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-9', 'Bug')]);
-    expect((await pipeline.task()).template).toBe('bug');
+    const waiting = await pipeline.settle(
+      'ready_for_merge',
+      (task) => task.state === 'ready_for_merge',
+    );
+    expect(waiting.template).toBe('bug');
     expect(pipeline.specs.map((spec) => spec.stage)).toContain('investigation');
 
     await pipeline.publish([merged(pipeline)]);
 
-    const finished = await pipeline.task();
-    expect(finished.state).toBe('done');
+    const finished = await pipeline.settle('done', (task) => task.state === 'done');
     // Six agent stages: the feature five plus investigation.
     expect(Number(finished.cost_actual)).toBeCloseTo(2.8, 6);
     expect(pipeline.specs.map((spec) => spec.stage)).toEqual([

@@ -1,76 +1,69 @@
 /**
- * A whole pipeline on a real PostgreSQL, with fake Claude and fake providers.
+ * A whole pipeline inside a whole **`apps/server` instance**, on a real PostgreSQL — WP-15a.
  *
- * technical/10's `e2e-fake-claude` tier: "one ticket through the whole pipeline: webhook → intake →
- * stages → MR events → retro, with `FakeClaudeRunner` replaying scenario fixtures and fake
- * providers". Everything below `apps/` is the real thing —
+ * Until WP-15a this file composed its own `createPipelineRuntime`, which is what WP-15's own
+ * acceptance criterion allowed and what made "M1 complete" a claim about a test harness rather than
+ * about the product. It no longer does. `startInstance` starts the real composition root
+ * (`apps/server/src/runtime.ts`), and everything the pipeline runs on is what a container runs on:
  *
- *  - the real event store, dispatch queue and `EventBus` (`createEventing`), so ordering per stream,
- *    idempotency and chaining are the platform's, not a test double's;
- *  - the real `PipelineStore` on the migrated schema, so every transition is a row a human could
- *    query afterwards;
- *  - the real `IntegrationActionExecutor` in front of the fake providers, so the shadow guard, the
- *    audit row and the rate limiter are on the path;
- *  - the real in-memory `Jobs` adapter (held to pg-boss by a contract suite), so `stately` and
- *    `startAfter` mean what they mean in production.
+ *  - the real event store, dispatch queue and outbox **worker** on its own timer — nothing here
+ *    calls `drain()`, so ordering, chaining and idempotency are the dispatcher's;
+ *  - the real **pg-boss** jobs runtime, so `stage.execute`'s queue policy, `stately` and
+ *    `startAfter` are pg-boss's and not an in-memory double's;
+ *  - the real **binding loader**, reading `bindings` joined to `integrations` and decrypting
+ *    `secrets` with `APP_SECRET_KEY`, which is the whole point of the work package: the test seeds
+ *    *rows*, not objects.
  *
- * — and the two ends are fakes on purpose: the model (`FakeClaudeRunner`, replaying scenarios whose
- * artifacts must validate against the published schemas) and the providers.
+ * Two ends are still fakes, and they are the two technical/10 names for this tier: the model
+ * (`FakeClaudeRunner`) and the providers. The providers arrive through the **registry**, so the
+ * loader, the decryption, the config validation and the redactor composition in front of them are
+ * all production code — only the thing on the far side of the HTTP call is a double.
  *
- * **Time is virtual.** The jobs runtime carries the clock and the test moves it; nothing here waits
- * on a real deadline (standing rule 2).
+ * ## Time is real here, and that is the trade
+ *
+ * The old harness moved a virtual clock and played the worker by hand, which made it deterministic
+ * and made it a harness. A real instance owns its own timers, so this waits: {@link PipelineE2E
+ * .settle} polls the database for the state a test is waiting for and fails with the dispatcher's
+ * own recorded error if a handler died on the way. The poll intervals are turned down
+ * (`APP_JOBS_POLL_INTERVAL_SECONDS`, `APP_DISPATCH_POLL_INTERVAL_MS`) rather than the assertions
+ * being given generous sleeps — standing rule 2: a wall-clock assertion is a hardware assertion, so
+ * nothing below asserts *how long* anything took, only that it arrived.
  */
 
-import type {
-  ClaudeRunner,
-  Jobs,
-  PipelineIntegrations,
-  PipelineRuntime,
-  ProjectSettings,
-  RunSpec,
-  TaskCommandDependencies,
-} from '@platform/application';
-import {
-  basicStageRunPlanner,
-  createIntegrationActionExecutor,
-  createMemoryAuditLog,
-  createPipelineRuntime,
-  createRunStopReasons,
-  createVirtualTimer,
-  defaultProjectSettings,
-  exactSecretRedactor,
-  staticProjectSettings,
-} from '@platform/application';
-import type { DomainEvent, Id, TranscriptEvent } from '@platform/contracts';
+import type { ClaudeRunner, IntegrationAuditLog, RunSpec } from '@platform/application';
+import type { DomainEvent, Id, JsonObject, TranscriptEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   eventing as eventingAdapters,
-  jobs as jobsAdapters,
-  pipeline as pipelineAdapters,
   runner as runnerAdapters,
+  secrets as secretAdapters,
 } from '@platform/infrastructure';
-import { createFakeGitProvider, createFakeTaskManagement } from '@platform/integrations';
-import pg from 'pg';
+import type { IntegrationRegistry } from '@platform/integrations';
 import {
-  createMigratedDatabase,
-  type MigratedDatabase,
-} from '../../integration/support/migrated.js';
+  createFakeGitProvider,
+  createFakeTaskManagement,
+  createIntegrationRegistry,
+  fakeGitRegistration,
+  fakeTaskManagementRegistration,
+} from '@platform/integrations';
+import pg from 'pg';
+import type { MigratedDatabase } from '../../integration/support/migrated.js';
+import { type Instance, startInstance } from './instance.js';
 
-export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001';
-export const TICKETS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a002';
+export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001' as Id;
+export const TICKETS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a002' as Id;
 export const GIT_PROJECT = 'acme/api';
 
-/** Ids the fake Claude runner hands back; sequential so a failure names a stable run. */
-const sequentialIds = (prefix: string): { next(): Id } => {
-  let counter = 0;
-  return {
-    next: () => {
-      counter += 1;
-      return `${prefix}-0000-4000-8000-${counter.toString(16).padStart(12, '0')}` as Id;
-    },
-  };
-};
+/** Obviously fake, and the value the redaction assertions look for. */
+export const GIT_BINDING_TOKEN = 'FAKE-git-binding-token-not-a-real-secret';
+export const TICKET_BINDING_TOKEN = 'FAKE-ticket-binding-token-not-a-real-secret';
+
+/** The instance's own `APP_SECRET_KEY`; the seeded `secrets` rows are sealed under it. */
+const APP_SECRET_KEY = 'e2e-test-secret-key-not-a-real-secret-0000';
+
+/** How long a test waits for the instance's own timers before calling it a failure. */
+const SETTLE_TIMEOUT_MS = 90_000;
+const SETTLE_POLL_MS = 50;
 
 export interface ScenarioSpec {
   readonly structuredOutput: unknown;
@@ -89,27 +82,6 @@ const transcriptFor = (runId: Id, at: string, text: string): TranscriptEvent[] =
   },
 ];
 
-export interface PipelineE2E {
-  readonly world: SeededWorld;
-  readonly database: MigratedDatabase;
-  readonly runtime: PipelineRuntime;
-  readonly jobs: ReturnType<typeof jobsAdapters.createInMemoryJobs>;
-  readonly git: ReturnType<typeof createFakeGitProvider>;
-  readonly tickets: ReturnType<typeof createFakeTaskManagement>;
-  readonly commands: TaskCommandDependencies;
-  readonly projectId: Id;
-  readonly userId: Id;
-  readonly settings: ProjectSettings;
-  readonly specs: readonly RunSpec[];
-  /** Appends the events, then dispatches and drains until the pipeline is quiet. */
-  publish(events: readonly DomainEvent[]): Promise<void>;
-  drain(): Promise<void>;
-  /** Every event of the log, in position order. */
-  events(): Promise<readonly DomainEvent[]>;
-  task(): Promise<TaskSnapshot>;
-  stop(): Promise<void>;
-}
-
 export interface TaskSnapshot {
   readonly id: string;
   readonly state: string;
@@ -127,6 +99,27 @@ export interface SeededWorld {
   readonly branch: string;
 }
 
+export interface PipelineE2E {
+  readonly instance: Instance;
+  readonly world: SeededWorld;
+  readonly database: MigratedDatabase;
+  readonly git: ReturnType<typeof createFakeGitProvider>;
+  readonly tickets: ReturnType<typeof createFakeTaskManagement>;
+  readonly projectId: Id;
+  readonly userId: Id;
+  readonly specs: readonly RunSpec[];
+  /** The audit rows the executor wrote, for the calls the pipeline made through it. */
+  readonly auditActions: readonly string[];
+  /** Appends the events exactly as an inbound webhook adapter would, and returns. */
+  publish(events: readonly DomainEvent[]): Promise<void>;
+  /** Waits for the instance's own workers to reach a state, or fails naming what it saw. */
+  settle(what: string, predicate: (task: TaskSnapshot) => boolean): Promise<TaskSnapshot>;
+  /** Every event of the log, in position order. */
+  events(): Promise<readonly DomainEvent[]>;
+  task(): Promise<TaskSnapshot>;
+  stop(): Promise<void>;
+}
+
 export interface StartPipelineOptions {
   /**
    * One scenario per stage id; a stage with no scenario is an error the fake raises.
@@ -136,7 +129,6 @@ export interface StartPipelineOptions {
    * the iid is the provider's to choose, not the fixture's.
    */
   readonly scenarios: (world: SeededWorld) => Readonly<Record<string, ScenarioSpec>>;
-  readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
   readonly label?: string;
   /** CI status for the merge request's head commit. `null` seeds none (a project with no CI). */
   readonly ciStatus?: 'success' | 'failed' | null;
@@ -146,47 +138,108 @@ export interface StartPipelineOptions {
     readonly title: string;
     readonly issueType?: string;
   }[];
+  /** `projects.config` — technical/12's effective configuration, as the settings port reads it. */
+  readonly config?: JsonObject;
 }
 
-export const startPipeline = async (options: StartPipelineOptions): Promise<PipelineE2E> => {
-  const database = await createMigratedDatabase(options.label ?? 'pipeline');
-  const pool = new pg.Pool({ connectionString: database.connectionString, max: 12 });
+/** An audit log that keeps the rows in memory; `integration_actions` has no adapter yet (WP-15a). */
+const recordingAuditLog = (): IntegrationAuditLog & { readonly actions: readonly string[] } => {
+  const actions: string[] = [];
+  return {
+    get actions() {
+      return [...actions];
+    },
+    record: async (entry) => {
+      actions.push(`${entry.action}:${entry.status}`);
+    },
+  };
+};
 
+/**
+ * Seeds the rows the loader reads: an organisation, a project, a user, two integrations with a
+ * sealed credential each, and a binding per integration.
+ *
+ * Sealed with the **real** envelope under the instance's own `APP_SECRET_KEY`, so the decryption
+ * path in `PostgresSecretStore` is executed rather than stubbed. A fixture that inserted plaintext
+ * would leave the one piece of this work package that touches a credential untested.
+ */
+const seedWorld = async (
+  pool: pg.Pool,
+  config: JsonObject,
+): Promise<{ projectId: Id; userId: Id }> => {
+  const key = secretAdapters.deriveSecretKey(APP_SECRET_KEY);
   const seed = await pool.query<{ project_id: string; user_id: string }>(
     `with org as (insert into organizations (name) values ('e2e') returning id),
           project as (
-            insert into projects (org_id, key, name, repo_url)
-            select id, 'api', 'API', 'https://git.example.test/acme/api.git' from org returning id
+            insert into projects (org_id, key, name, repo_url, config)
+            select id, 'api', 'API', 'https://git.example.test/acme/api.git', $1::jsonb from org
+            returning id
           ),
           human as (
-            insert into users (email, name) values ('operator@example.test', 'Operator') returning id
+            insert into users (email, name) values ('pipeline@example.test', 'Operator') returning id
           )
      select (select id from project) as project_id, (select id from human) as user_id`,
+    [JSON.stringify(config)],
   );
   const projectId = seed.rows[0]?.project_id as Id;
   const userId = seed.rows[0]?.user_id as Id;
 
-  const eventing = eventingAdapters.createEventing({
-    pool,
-    connectionString: database.connectionString,
-    config: { pollIntervalMs: 50 },
-  });
+  const orgId = (
+    await pool.query<{ org_id: string }>('select org_id from projects where id = $1', [projectId])
+  ).rows[0]?.org_id as string;
 
-  // The virtual clock starts at the real instant the harness does, and never advances on its own.
-  // Not a fixed date: the event log has monthly partitions and refuses a back-dated event
-  // (`PartitionWindowError`), so a hard-coded 2026-06-01 would pass in June and fail in September.
-  // Everything after this point is still deterministic — only the origin is real.
-  // A job that exhausts its retries is silent by default, and a silent job failure looks exactly
-  // like a pipeline that decided to stop. The harness surfaces it as the drain's error instead.
-  const jobFailures: { queue: string; error: unknown }[] = [];
-  const jobs = jobsAdapters.createInMemoryJobs({
-    startTime: new Date(),
-    onJobFailed: (queue, _jobId, error) => {
-      jobFailures.push({ queue, error });
-    },
-  });
-  await jobs.start();
+  const bind = async (
+    integrationId: Id,
+    type: string,
+    provider: string,
+    name: string,
+    integrationConfig: JsonObject,
+    token: string,
+  ): Promise<void> => {
+    const secret = await pool.query<{ id: string }>(
+      'insert into secrets (ciphertext, key_id) values ($1, $2) returning id',
+      [secretAdapters.sealSecret(key, secretAdapters.secretDocument('token', token)), key.keyId],
+    );
+    await pool.query(
+      `insert into integrations (id, org_id, type, provider, name, config, secret_ids)
+       values ($1, $2, $3::integration_type, $4, $5, $6::jsonb, array[$7::uuid])`,
+      [
+        integrationId,
+        orgId,
+        type,
+        provider,
+        name,
+        JSON.stringify(integrationConfig),
+        secret.rows[0]?.id,
+      ],
+    );
+    await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+      projectId,
+      integrationId,
+    ]);
+  };
 
+  await bind(
+    GIT_INTEGRATION_ID,
+    'git',
+    'fake-git',
+    'acme fake git',
+    { project: GIT_PROJECT },
+    GIT_BINDING_TOKEN,
+  );
+  await bind(
+    TICKETS_INTEGRATION_ID,
+    'task_management',
+    'fake-task-management',
+    'acme fake tickets',
+    {},
+    TICKET_BINDING_TOKEN,
+  );
+
+  return { projectId, userId };
+};
+
+export const startPipeline = async (options: StartPipelineOptions): Promise<PipelineE2E> => {
   const git = createFakeGitProvider({
     integrationId: GIT_INTEGRATION_ID,
     projects: [{ path: GIT_PROJECT, defaultBranch: 'main' }],
@@ -228,33 +281,12 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   };
   const scenarios = options.scenarios(world);
 
-  const audit = createMemoryAuditLog();
-  const integrations: PipelineIntegrations = {
-    executor: createIntegrationActionExecutor({
-      auditLog: audit,
-      redactor: exactSecretRedactor([]),
-      // `autoAdvance`, or a rate-limit or backoff sleep inside the executor waits on a clock
-      // nothing drives and the test hangs rather than fails.
-      timer: createVirtualTimer({ autoAdvance: true }),
-      clock: { now: () => jobs.now().toISOString() as never },
-    }),
-    git: { port: git, ref: git.ref, project: GIT_PROJECT },
-    taskManagement: { port: tickets, ref: tickets.ref },
-  };
-
-  const settings: ProjectSettings = defaultProjectSettings(projectId, {
-    templates: SHIPPED_TEMPLATES,
-    ...options.settings,
-  });
-
-  const ids = sequentialIds('aaaaaaaa');
   const specs: RunSpec[] = [];
-  const stopReasons = createRunStopReasons();
-  const sink = stopReasons.observe({ append: async () => {} });
+  const audit = recordingAuditLog();
 
   const fake = runnerAdapters.createFakeClaudeRunner({
-    sink,
-    clock: { now: () => jobs.now().getTime(), setTimer: () => () => {} },
+    sink: { append: async () => {} },
+    clock: { now: () => Date.now(), setTimer: () => () => {} },
     select: (spec) => {
       const scenario = scenarios[spec.stage ?? ''];
       if (scenario === undefined) {
@@ -263,7 +295,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       return {
         events: transcriptFor(
           spec.runId,
-          jobs.now().toISOString(),
+          new Date().toISOString(),
           `${spec.stage ?? 'stage'} did its work`,
         ),
         status: 'completed',
@@ -290,157 +322,111 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     },
   };
 
-  /**
-   * The queue, with every handler wrapped so the *first* throw is the test's failure.
-   *
-   * `stage.execute` is declared with `retryLimit: 2` and a 30-second backoff, which is right in
-   * production and wrong here: a handler that throws would be retried on a timer nothing advances,
-   * and the test would see a pipeline that simply stopped. Recording the throw makes the cause the
-   * error rather than the symptom.
-   */
-  const observedJobs: Jobs = {
-    ...jobs.jobs,
-    work: async (request) => {
-      const handler = request.handler as (job: unknown) => Promise<void>;
-      return jobs.jobs.work({
-        ...request,
-        handler: (async (job: unknown) => {
-          try {
-            await handler(job);
-          } catch (error) {
-            jobFailures.push({ queue: request.queue, error });
-            throw error;
-          }
-        }) as typeof request.handler,
-      });
-    },
-  };
+  // The fakes reach the pipeline the way a real provider does: through the registry, resolved by
+  // the `provider` column of the seeded `integrations` row (WP-15a).
+  const registry = (): IntegrationRegistry =>
+    createIntegrationRegistry([
+      fakeGitRegistration({ port: git, token: GIT_BINDING_TOKEN }),
+      fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
+    ]);
 
-  const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
-  const commandContext = (correlationId: Id) => ({
-    ids,
-    actor: { kind: 'system' as const, component: 'pipeline' },
-    clock: { now: () => jobs.now().toISOString() as never },
-    correlationId,
-    causeEventId: null,
+  const instance = await startInstance({
+    label: options.label ?? 'pipeline',
+    env: {
+      APP_SECRET_KEY,
+      // Turn the instance's own timers down rather than sleeping in the assertions.
+      APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
+      APP_DISPATCH_POLL_INTERVAL_MS: '25',
+      // The dispatcher's floor plus the stage and review-window workers (`pipeline/runtime.ts`).
+      APP_DB_POOL_MAX: '16',
+    },
+    pipeline: { runner, auditLog: audit, registry },
   });
 
-  const runtime = createPipelineRuntime({
-    store,
-    settings: staticProjectSettings(() => settings),
-    jobs: observedJobs,
-    integrations,
-    ids,
-    clock: { now: () => jobs.now().toISOString() },
-    unitOfWork: eventing.unitOfWork,
-    execution: {
-      runner,
-      planner: basicStageRunPlanner({ workspacePath: (taskId) => `/workspaces/${taskId}` }),
-      stopReasons,
-      context: commandContext,
-    },
+  const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
+  const { projectId, userId } = await seedWorld(pool, options.config ?? {});
+
+  // An inbound adapter's half of the append: a webhook endpoint writes the normalised events in a
+  // transaction of its own and the instance's outbox worker picks them up. WP-15a does not build
+  // that endpoint, so the harness performs the same append.
+  const inbound = eventingAdapters.createEventing({
+    pool,
+    connectionString: instance.database.connectionString,
+    config: { maxConcurrency: 1 },
   });
-  for (const handler of runtime.handlers) {
-    eventing.bus.register(handler);
-  }
-  await runtime.start();
 
-  const commands: TaskCommandDependencies = {
-    unitOfWork: eventing.unitOfWork,
-    store,
-    context: commandContext,
-  };
-
-  /** Reports a queued event whose handler failed, with the error the dispatcher recorded. */
-  const assertNothingStuck = async (): Promise<void> => {
+  const stuckDispatch = async (): Promise<string | null> => {
     const { rows } = await pool.query<{ event_position: string; error: string | null }>(
-      `select event_position, error from event_dispatch where error is not null order by event_position`,
+      'select event_position, error from event_dispatch where error is not null order by event_position',
     );
     const stuck = rows[0];
-    if (stuck !== undefined) {
-      throw new Error(
-        `event ${stuck.event_position} is stuck in the dispatch queue: ${stuck.error ?? 'no error recorded'}`,
-      );
-    }
+    return stuck === undefined
+      ? null
+      : `event ${stuck.event_position} is stuck in the dispatch queue: ${stuck.error ?? 'no error recorded'}`;
   };
 
-  /**
-   * Dispatch everything pending, then run whatever the handlers enqueued, until neither moves.
-   *
-   * The outbox worker would do the first half on its own timer; driving it by hand is what keeps
-   * the test deterministic — and `jobs.drain()` is the real adapter's, so the queue policies apply.
-   */
-  const drain = async (): Promise<void> => {
-    for (let round = 0; round < 400; round += 1) {
-      const sweep = await eventing.worker.drain();
-      if (sweep.failed > 0) {
-        throw new Error(`the dispatcher failed ${sweep.failed} event(s); see handler_executions`);
-      }
-      // A *chained* dispatch's failure is invisible in the sweep report — the sweep counts the
-      // event it took off the queue, and a handler that fails three events deeper leaves its event
-      // queued with a backoff nothing here advances. Without this the loop simply stops, and the
-      // test reports the state it stopped in rather than the handler that failed.
-      await assertNothingStuck();
-      const due = jobs
-        .snapshot()
-        .filter(
-          (job) => job.state === 'created' && job.startAfter.getTime() <= jobs.now().getTime(),
-        );
-      await jobs.drain();
-      const failure = jobFailures.shift();
-      if (failure !== undefined) {
-        throw new Error(`the ${failure.queue} job failed: ${String(failure.error)}`, {
-          cause: failure.error,
-        });
-      }
-      // Quiet means both: nothing left in the outbox and no job whose timer has come.
-      if (sweep.dispatched === 0 && due.length === 0) {
-        return;
-      }
+  const task = async (): Promise<TaskSnapshot> => {
+    const { rows } = await pool.query<TaskSnapshot>(
+      `select id, state, current_stage, cost_actual, iteration_counters, stage_attempts, template
+         from tasks order by created_at limit 1`,
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      throw new Error('no task was created');
     }
-    throw new Error('the pipeline did not settle in 400 rounds');
+    return row;
   };
 
   return {
+    instance,
     world,
-    database,
-    runtime,
-    jobs,
+    database: instance.database,
     git,
     tickets,
-    commands,
     projectId,
     userId,
-    settings,
     specs,
-    publish: async (events) => {
-      await eventing.unitOfWork.transaction(async (scope) => scope.events.append(events));
-      await drain();
+    get auditActions() {
+      return audit.actions;
     },
-    drain,
+    publish: async (events) => {
+      await inbound.unitOfWork.transaction(async (scope) => scope.events.append(events));
+    },
+    settle: async (what, predicate) => {
+      const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+      let last: TaskSnapshot | null = null;
+      for (;;) {
+        const stuck = await stuckDispatch();
+        if (stuck !== null) {
+          throw new Error(`${stuck} (waiting for ${what})`);
+        }
+        last = await task().catch(() => null);
+        if (last !== null && predicate(last)) {
+          return last;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(
+            `the pipeline never reached ${what}; the task is ${
+              last === null
+                ? 'not created'
+                : `state=${last.state} stage=${last.current_stage ?? 'none'}`
+            }`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+      }
+    },
     events: async () => {
       const { rows } = await pool.query<{ payload: unknown; type: string }>(
         'select type, payload from events order by position',
       );
       return rows as unknown as readonly DomainEvent[];
     },
-    task: async () => {
-      const { rows } = await pool.query<TaskSnapshot>(
-        `select id, state, current_stage, cost_actual, iteration_counters, stage_attempts, template
-           from tasks order by created_at limit 1`,
-      );
-      const row = rows[0];
-      if (row === undefined) {
-        throw new Error('no task was created');
-      }
-      return row;
-    },
+    task,
     stop: async () => {
-      await runtime.stop();
-      await eventing.stop();
-      await jobs.stop();
+      await inbound.stop();
       await pool.end();
-      await database.drop();
+      await instance.stop();
     },
   };
 };

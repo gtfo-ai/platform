@@ -47,6 +47,7 @@ import { bootstrapAdministrator } from './auth/bootstrap.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
+import { composePipeline, type PipelineComposition } from './pipeline.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { SseHub } from './sse/hub.js';
@@ -68,6 +69,13 @@ export interface StartRuntimeOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Test seam: pino writes here instead of stdout. */
   readonly logDestination?: Parameters<typeof createLogger>[0]['destination'];
+  /**
+   * The pipeline's two uncomposable collaborators (WP-15a) — the agent runner and the outbound
+   * audit sink. See `pipeline.ts`: neither has a production adapter in this build, so a process
+   * that is not handed them runs **without a pipeline** and says which piece was missing, rather
+   * than starting one that would advance tasks with no audit row and no runner.
+   */
+  readonly pipeline?: PipelineComposition;
 }
 
 /** Build metadata; a container image sets these, a checkout has none. */
@@ -174,6 +182,29 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         name: 'partition-maintenance',
         stop: async () => maintenance.stop(),
       });
+
+      // Before `worker.start()`, and that ordering is the point: the first sweep dispatches to
+      // whatever is registered on the bus, so a pipeline registered afterwards would miss the
+      // events the sweep had already marked handled.
+      if (options.pipeline === undefined) {
+        logger.warn(
+          {
+            missing: ['ClaudeRunner (Q52: no runner/launcher transport)', 'IntegrationAuditLog'],
+          },
+          'the pipeline is not composed in this process: no ticket will advance',
+        );
+      } else {
+        const pipeline = await composePipeline({
+          composition: options.pipeline,
+          pool: database.pool,
+          eventing,
+          jobs: jobsRuntime.jobs,
+          secretKey: config.secretKey,
+          stageConcurrency: 1,
+          logger: loggerPort,
+        });
+        stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });
+      }
 
       await eventing.worker.start();
       stopCallbacks.unshift({ name: 'eventing', stop: eventing.stop });

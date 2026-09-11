@@ -19,6 +19,9 @@
  * `test/contract/support/integrations/`; WP-08…WP-11 run the same suites against their adapters in
  * nock replay mode (technical/10).
  */
+export * from './bindings/fake-registrations.js';
+export * from './bindings/loader.js';
+export * from './bindings/shipped-registry.js';
 export * from './communication/fake.js';
 export * from './errors/fake.js';
 export * from './git/fake.js';

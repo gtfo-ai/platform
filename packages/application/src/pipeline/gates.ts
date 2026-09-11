@@ -35,8 +35,8 @@
  */
 import { isBuiltinGateStageId } from '@platform/contracts';
 import type { PipelineStage } from '@platform/domain';
-import type { PipelineIntegrations } from './integrations.js';
-import { gitReads } from './integrations.js';
+import type { PipelineIntegrationsPort } from './integrations.js';
+import { gitReads, noRunScopedSecrets } from './integrations.js';
 import type { StoredTask } from './store.js';
 
 export type GateResult =
@@ -56,9 +56,7 @@ export interface GateEvaluator {
 const CI_TERMINAL_PASS = new Set(['success']);
 const CI_TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
 
-export const createGateEvaluator = (integrations: PipelineIntegrations): GateEvaluator => {
-  const git = gitReads(integrations);
-
+export const createGateEvaluator = (integrations: PipelineIntegrationsPort): GateEvaluator => {
   return {
     evaluate: async (stage, stored) => {
       if (stage.command !== null) {
@@ -90,6 +88,15 @@ export const createGateEvaluator = (integrations: PipelineIntegrations): GateEva
           detail: `gate "${stage.id}" needs a merge request and the task has none`,
         };
       }
+
+      // The project's bindings, resolved per call (WP-15a) and only for the two gates that ask a
+      // provider anything: `merged_gate` is settled by the event that got the task here, so loading
+      // a binding for it would make an unrelated misconfiguration fail a gate that needs no
+      // provider. A gate runs outside a run — no workspace, so no minted credential — which is why
+      // the call's scope holds nothing (Q55).
+      const git = gitReads(
+        await integrations.forProject(stored.task.projectId, noRunScopedSecrets()),
+      );
 
       if (stage.id === 'ci_gate') {
         const headSha = stored.mr.head_sha;

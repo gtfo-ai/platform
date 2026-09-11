@@ -31,6 +31,7 @@ import type { GitProviderPort, PipelineStatus } from '../ports/integrations/git-
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
 import { createGateEvaluator } from './gates.js';
 import type { PipelineIntegrations } from './integrations.js';
+import { staticPipelineIntegrations } from './integrations.js';
 import type { StoredTask } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -150,7 +151,7 @@ const customGate = (overrides: Partial<PipelineStage> = {}): PipelineStage => ({
 });
 
 const evaluate = (stage: PipelineStage, stored: StoredTask, git: Partial<GitProviderPort> | null) =>
-  createGateEvaluator(integrationsWith(git)).evaluate(stage, stored);
+  createGateEvaluator(staticPipelineIntegrations(integrationsWith(git))).evaluate(stage, stored);
 
 describe('the CI gate', () => {
   it('settles a failed pipeline as not passed, naming the jobs that failed', async () => {

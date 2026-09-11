@@ -29,9 +29,16 @@ export {
 export * from './errors.js';
 export { asLoggerPort, createLogger, REDACTED_PATHS, withLogContext } from './logging.js';
 export { createMetrics, type Metrics, routeLabel } from './metrics.js';
+export {
+  type ComposedPipeline,
+  composePipeline,
+  createProjectSettingsPort,
+  type PipelineComposition,
+  repositoryPathOf,
+} from './pipeline.js';
 export { createReadinessCheck, migrationStatus } from './readiness.js';
 export { isRole, ROLES, type Role, roleCapabilities, roleIsIdle } from './role.js';
-export { type ServerRuntime, startRuntime } from './runtime.js';
+export { type ServerRuntime, type StartRuntimeOptions, startRuntime } from './runtime.js';
 export {
   ConnectionIdInUseError,
   frameEventName,
