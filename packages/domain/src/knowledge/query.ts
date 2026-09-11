@@ -22,8 +22,9 @@
  *     hurt: measured, `"the"` and `"and the of"` extract to **no terms at all**.
  *  2. **`OR`, not `AND`.** A pack wants the documents that are *about* the task, and a ticket is not
  *     a phrase to be found verbatim. With `OR` the same measured query returns 12 documents with
- *     the correct lesson at rank 0.500 and the noise at 0.091 — a ranking that separates, which is
- *     what the floor in `retrieval.ts` then acts on.
+ *     the correct lesson at rank 0.500 and the noise at 0.091 — a ranking that separates. Nothing
+ *     then thresholds it: `retrieval.ts` ships **no** relevance floor and records the two
+ *     measurements that rejected both shapes of one.
  *
  * **What this gives up, said plainly:** a quoted phrase. `websearch_to_tsquery` supports
  * `"exact phrase"` and tokenising destroys it, so `kb_search` cannot be asked for a literal string.

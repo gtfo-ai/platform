@@ -240,15 +240,17 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
   async search(request: KbSearchRequest): Promise<KbSearchResult> {
     const state = await this.readIndexState(request.projectId);
     if (state === null || state.ftsBuiltAt === null) return { status: 'not_indexed' };
-    // A query with no usable keywords finds nothing; it does not find everything. The index exists,
-    // so this is `ok` with no hits and never `not_indexed`.
+    // An empty `terms` list produces an empty expression, and **PostgreSQL is what makes that
+    // correct**: `websearch_to_tsquery('simple', '')` builds an empty tsquery and `@@` against one
+    // matches no row, so a query with no usable keywords finds nothing rather than everything.
     //
-    // **Deliberately unreachable defence in depth** (standing rule 22): removing this line leaves
-    // the integration tier 27/27 green, because `websearch_to_tsquery('simple', '')` builds an
-    // empty tsquery and `@@` against one matches no row. The correct behaviour is PostgreSQL's, not
-    // this line's, and the contract suite's "finds nothing — not everything" case pins the
-    // behaviour rather than the guard. What the line buys is a saved round trip and a reader who
-    // does not have to know that fact about `websearch_to_tsquery` to be sure of the answer.
+    // There is deliberately no `if (terms.length === 0)` guard in front of it. Round 2 of this work
+    // package wrote a comment claiming there was one — describing a line a mutation-restore cycle
+    // had already removed — and carried that phantom into a ledger entry and a mutation tally.
+    // Standing rule 22 lets an unreachable branch be *declared at the line*; it does not let a
+    // comment invent the line. So the mechanism is named here and the **behaviour** is what is
+    // pinned, by `knowledge-store-suite.ts` › "finds nothing — not everything — for a query with no
+    // keywords", which runs against this store at the integration tier.
     const expression = request.terms.join(' OR ');
 
     const { rows } = await this.#sql.query<{

@@ -60,13 +60,21 @@ import {
 } from './ctags.js';
 
 /**
- * The recording's provenance, as data rather than as prose.
+ * Where this fixture came from, as data rather than as prose.
  *
- * `kind: 'recorded'` in the vocabulary `test/contract/support/integrations/fixture-provenance.ts`
- * uses — a real tool really printed this — as opposed to `composed`, `inferred` or `invented`.
+ * **It deliberately does not carry a `kind`, because the repository's taxonomy has no member for
+ * it.** `PROVENANCE_KINDS` in `test/contract/support/integrations/fixture-provenance.ts` is
+ * `documented | documented-adapted | composed | inferred | invented` — five labels about how a
+ * fixture relates to a vendor's *documentation*, because every fixture that suite governs is an
+ * HTTP interaction reconstructed from published pages. This one is the literal stdout of a program
+ * that was executed, which is a different kind of evidence and a stronger one, and round 2 of this
+ * work package labelled it `kind: 'recorded'` — a token that looks like it belongs to that
+ * vocabulary, is not in it, and was asserted against itself. Rather than borrow a word or invent a
+ * sixth label for a suite that will never read this file, the fields below say what happened and
+ * the docblock above says why the file sits outside the sweep.
  */
 export const RECORDED_WITH = {
-  kind: 'recorded',
+  capturedFrom: 'the stdout of a real process, not reconstructed from documentation',
   image: 'alpine:3.20',
   install: 'apk add --no-cache ctags',
   version: 'Universal Ctags 6.1.0, Copyright (C) 2015-2023 Universal Ctags Team',
@@ -132,9 +140,13 @@ describe('the recording provenance, as far as it is checkable', () => {
     expect(PROBE_BANNER.startsWith(RECORDED_WITH.version)).toBe(true);
   });
 
-  it('is labelled recorded, not composed or invented', () => {
-    expect(RECORDED_WITH.kind).toBe('recorded');
+  it('carries a retrieval date, which is the part of the claim a reader can act on', () => {
+    // What is deliberately *not* asserted here: a `kind`. Round 2 asserted `kind === 'recorded'`
+    // against an `as const` holding `'recorded'` — a tautology over a token that is not in
+    // `PROVENANCE_KINDS` at all. The two checks above are the ones with content: the invocation is
+    // held to the shipped argument vector, and the banner to the string the probe requires.
     expect(RECORDED_WITH.retrieved).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(RECORDED_WITH).not.toHaveProperty('kind');
   });
 });
 

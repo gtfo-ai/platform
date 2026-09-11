@@ -8,11 +8,19 @@
  * | # | Divergence | Direction | Why it is safe |
  * |---|---|---|---|
  * | 1 | **Ranking.** This store ranks a chunk by the fraction of the query's terms it contains; PostgreSQL uses `ts_rank_cd` over a `simple` tsvector. Both land in `[0, 1]`; the **orderings differ**. | *Different*, not kinder | No test may assert a rank value or a full ordering from this fake and claim it holds of Postgres. The shared contract suite asserts only what both guarantee: a chunk containing a query term is returned, one containing none is not, ranks are in `[0, 1]`, and `limit` is honoured. The ordering-sensitive assertions live in `postgres-knowledge-store.integration.test.ts`, and `context-pack.integration.test.ts` pins the **pack composition** against the real store because the acceptance figure is otherwise a property of this file. |
- * | 1b | **Matching semantics — closed at round 2.** This store matched a chunk carrying *any* query term while `PostgresKnowledgeStore` passed the raw task text to `websearch_to_tsquery`, which joins bare words with **AND**. Measured over the fixture vault: a ticket-shaped query returned **15** documents here and **0** there, so every retrieval test was exercising a path production did not have. | was **kinder** | Closed at the port, not in the fake: `KbSearchRequest` now carries extracted terms and the adapter joins them with `OR`, so both stores match the same set and only the ranking differs. |
- * | 2 | **Tokenisation.** Terms are split on non-word characters and lowercased. Postgres's `simple` configuration splits on its own rules and does not stem either. | *Different* | Same mitigation as 1. TD-008 chose `simple` precisely so neither side stems. |
+ * | 1b | **Boolean semantics — closed at round 2.** This store matched a chunk carrying *any* query term while `PostgresKnowledgeStore` passed the raw task text to `websearch_to_tsquery`, which joins bare words with **AND**. Measured over the fixture vault: a ticket-shaped query returned **15** documents here and **0** there, so every retrieval test was exercising a path production did not have. | was **kinder** | Closed at the port: `KbSearchRequest` carries extracted terms and the adapter joins them with `OR`. Round 2's register claimed this made "both stores match the same set"; row 1c is why that sentence was wrong. |
+ * | 1c | **Tokenisation — the sets still differ, and this store is the permissive one.** PostgreSQL's `simple` parser has *token types*: it reads `.agentic/knowledge/technical/session-service.md` as **one** `file` lexeme, `v1.2.3` as `file`, `10.0.0.1` as `version` and `a@b.test` as `email`. `chunkTerms` here splits every one of them on non-word characters. Because the indexer prefixes each chunk with `project / path / H1 > H2`, **the words in a document's own path are searchable here and are not in production**. Measured over the fixture vault, query `knowledge technical session`: **pg 11 documents, this store 13**; `onlyFake = [technical/hostile-document.md, technical/billing.md]`, `onlyPg = []` — one-directional, never stricter. Neither side **stems**, which is why TD-008 chose `simple`; the divergence is entirely in where a token *ends*. Pack totals for that query: **10 552** against PostgreSQL, **10 766** here. | **kinder** | Not closed, and not closable here without reimplementing a PostgreSQL text-search parser in TypeScript — which would be a second, untested tokeniser whose drift nothing could detect (rule 41's shape). The mitigation is that nothing asserts a *document set* from this store and claims it of production: the acceptance figure is reproduced against the real store by `context-pack.integration.test.ts`, and the contract suite asserts only what both guarantee. **A test that depends on a path word being searchable is a test that passes here and fails in production**, so do not write one. |
+ * | 1d | **A NUL byte, and this is the kindest divergence in the file.** PostgreSQL refuses `U+0000` in a `text` column outright — `invalid byte sequence for encoding "UTF8": 0x00`, as a bind parameter and through `PostgresKnowledgeStore.write` alike — so **one** such character anywhere in **one** vault page fails the `INSERT` and takes the entire index run with it. This store accepts it silently, as any `Map` would. | **kinder, and load-bearing** | Rule 12: the place a fake is most permissive is the place a later work package leans hardest, and a warning is not enough. The guard is `sanitiseDocumentText` in the domain ring, which runs before either store sees the text — and the divergence has a **positive assertion** rather than this row alone: `nul-refusal.integration.test.ts` › "refuses an unsanitised NUL, which is what the domain sanitiser stands between" drives the real adapter with the sanitiser bypassed and asserts PostgreSQL throws. Delete the sanitiser and that test fails by name. |
  * | 3 | **No tsvector size limit.** Postgres refuses a tsvector over 1 MB; this store accepts any chunk. | **Kinder** | `MAX_CHUNK_BYTES` in the domain ring is what keeps a chunk two orders of magnitude below the limit, and `document.test.ts` asserts the cap by *producing* an over-long section and counting the pieces. The bound is enforced before the store, so neither store can reach the state. |
  * | 4 | **Writes are not transactional.** `write` mutates the maps immediately; the `Transaction` handle is validated and otherwise unused. | **Kinder** | A caller that relies on rollback is not exercised here. The transactional half is `postgres-knowledge-store.integration.test.ts`, which asserts a failed index run leaves the previous documents in place. |
  * | 5 | **`not_indexed` is decided by an explicit flag** rather than by reading a `kb_index_state` row. | *Equivalent* | `markIndexed` is what the indexer's write does in both, and the contract suite drives it through the indexer rather than setting the flag directly. |
+ *
+ * **How the rows are meant to be read.** "Kinder" means this store admits, accepts or returns
+ * something the real adapter would not — the direction rule 1 forbids leaving undocumented, because
+ * every later work package's unit tier trusts this file. Rows 1c and 1d are both kinder and both
+ * are open; what closes them is not a change here but the fact that no test is allowed to assert
+ * the difference *from* this store and claim it of production. Each row says which test does that
+ * work instead.
  *
  * The fake extractor is separate and simpler: it returns exactly what it was constructed with, and
  * `fakeSymbolExtractor({ available: false })` is how a test reaches the `unavailable` branch that
@@ -63,7 +71,13 @@ const assertOwnTransaction = (tx: Transaction): void => {
   }
 };
 
-/** The chunk side of the match. The query side arrives already extracted (`KbSearchRequest`). */
+/**
+ * The chunk side of the match. The query side arrives already extracted (`KbSearchRequest`).
+ *
+ * This is **not** PostgreSQL's `simple` parser and cannot be made into it: that parser has token
+ * types — `file`, `version`, `email`, `url` — and keeps each whole, where this splits on every
+ * non-word character. Divergence register row 1c has the measurement and the consequence.
+ */
 const chunkTerms = (text: string): readonly string[] =>
   text
     .toLowerCase()

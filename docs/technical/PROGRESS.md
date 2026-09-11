@@ -1082,7 +1082,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
 | WP-15b | Postgres `IntegrationAuditLog` + `IdempotencyStore` + the `integration_actions` migration | WP-15a | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Until it lands, `startRuntime()` composes no pipeline in production and `/readyz` is 503 for ever on `ROLE=all\|worker`. Acceptance asserts `redaction_count` in **both** directions. |
 | WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
-| WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | REVIEW | `wp/16` | Acceptance met on the fixture vault: **10 552 estimated tokens at the shipped 12 000 default**, produced by `context-pack.test.ts` **and reproduced against a real PostgreSQL** by `context-pack.integration.test.ts`. Review round 2 found the retrieval path returned **0 documents in production** (AND-by-default `websearch_to_tsquery`) and three untested PageRank constants; both closed. The honest boundary is narrower than the row: *the retrieval layer is built and no prompt uses it* — the planner still passes `contextPack: []`. **universal-ctags is absent on this machine and unowned by the platform (Q57)**; the extractor probes and refuses. 53 of 54 mutants dead, the 54th unreachable and documented. Notes below. |
+| WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | REVIEW | `wp/16` | Acceptance met on the fixture vault: **10 552 estimated tokens at the shipped 12 000 default**, produced by `context-pack.test.ts` **and reproduced against a real PostgreSQL** by `context-pack.integration.test.ts`. Review round 2 found the retrieval path returned **0 documents in production** (AND-by-default `websearch_to_tsquery`) and three untested PageRank constants; both closed. The honest boundary is narrower than the row: *the retrieval layer is built and no prompt uses it* — the planner still passes `contextPack: []`. **universal-ctags is absent on this machine and unowned by the platform (Q57)**; the extractor probes and refuses. **54 mutants, 54 dead** — 52 through the unit/contract harness (canary first) and 2 driven by hand at the integration tier. Notes below. |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
@@ -3608,12 +3608,75 @@ own token figure. Measured, the two stores agree at **10 552** on this corpus; t
 as two independent literals anyway, so the day they diverge the failing test names which store
 moved.
 
-**Mutation results, round 2.** 54 mutants, **52 dead in the harness**, canary first. The two
-remainders are both accounted for rather than excused: `terms.join(' OR ') → join(' ')` is dead at
-the **integration** tier (two named tests) and the harness only runs unit and contract; and the
-adapter's empty-term early return is **deliberately unreachable** — deleting it leaves 27/27 green
-because `websearch_to_tsquery('simple', '')` matches no row, so the line is documented as defence
-in depth naming what makes it so (rule 22) instead of being claimed as a kill.
+**Mutation results, round 2 — and two of the three claims in this paragraph were false.** It said
+"54 mutants, 52 dead in the harness", excused one remainder as an unreachable guard and called the
+other dead by "two named tests". Round 3 measured all three: there **was no early-return line** to
+be unreachable (a mutation-restore cycle had removed it and a comment was written describing it
+anyway), so the 54-mutant tally counted a phantom; and `join(' ')` killed **one** named test, not
+two, because the test named for the defect did not catch it. See round 3 for the corrected figures.
+The paragraph is left standing rather than rewritten, because a ledger that edits its own wrong
+numbers out of existence is one nobody can audit.
+
+
+### WP-16 review round 3 — a comment described a line that was not in the tree
+
+Three majors and three minors. The first is the one that matters, because it is about the ledger
+rather than about the code.
+
+**A justification that named something that does not exist.** Round 2 claimed the Postgres adapter
+carried a deliberately-unreachable `if (terms.length === 0)` early return, documented it at the
+line under standing rule 22, wrote it into this ledger, and counted it as the 54th mutant. **There
+was no line.** A mutation-restore cycle had removed it and the comment was written from memory of
+the code rather than from the code. Rule 11's shape one level worse — rule 11 is a justification
+citing a test that does not exist; this is a justification citing *itself*. The mechanism is real
+(`websearch_to_tsquery('simple', '')` builds an empty tsquery and `@@` matches no row), so the
+adapter now **names PostgreSQL as the mechanism** and points at the contract case that pins the
+behaviour, and claims no guard of its own. Corrected tally, reproducible: **54 mutants, 54 dead** —
+52 through the harness, 2 at the integration tier by hand.
+
+**A test named for a defect it did not catch.** Round 2's integration test — the one called
+*retrieves at all, the defect a fake-only tier could not see* — **survived**
+`join(' OR ') → join(' ')`, because the task's touched paths keep two `paths` matches in tier 1 and
+`tier1.length > 0` stayed true. Rules 43 and 45: it was named for the property it was hoped to have.
+It is now `context-pack.integration.test.ts` › "admits a document the *text query* found, not merely
+one a path glob claimed".
+It now asserts a tier-1 entry whose `reason` is `trigger`, and a second case runs with **no** touched
+paths so the text query is the only signal there is. Measured: the mutation now kills **4** named
+tests (3 here, 1 in the contract suite against Postgres) where it killed 1.
+
+**The fake is still kinder, and the register said it was not.** Row 1b claimed the port change made
+"both stores match the same set". Measured over the fixture vault, query `knowledge technical
+session`: **pg 11 documents, fake 13**, `onlyFake = [hostile-document.md, billing.md]`,
+`onlyPg = []`. The cause, reproduced with `ts_debug`: PostgreSQL's `simple` parser has **token
+types** and reads `.agentic/knowledge/technical/session-service.md` as a single `file` lexeme
+(likewise `v1.2.3` → `file`, `10.0.0.1` → `version`, `a@b.test` → `email`), while `chunkTerms`
+splits all of them — so, because every chunk is prefixed with its own path, **path words are
+searchable in the fake and not in production**. New row **1c** records it with the numbers and the
+instruction that follows (never write a test that depends on a path word matching). New row **1d**
+records the divergence that was missing entirely and is the kindest in the file — a `U+0000` that
+the fake accepts and PostgreSQL refuses outright — and rule 12 says the kindest divergence needs a
+**positive assertion**: `nul-refusal.integration.test.ts` drives the real adapter with the sanitiser
+bypassed and asserts the refusal, with the mirrored case asserting the sanitiser closes it (rule 42).
+It is a **file of its own** because measured, leaving it in `context-pack.integration.test.ts` made
+the sanitiser mutation throw in `beforeAll`, which vitest reports as a failing *file* — rule 62,
+which says that is not a failing test.
+
+**Three minors, all of them false citations.** `query.ts` pointed at "the floor in `retrieval.ts`"
+and no floor ships; `sanitise.ts` attributed the NUL case to the wrong test file; and
+`ctags.test.ts` labelled its fixture `kind: 'recorded'`, a token that is **not** in
+`PROVENANCE_KINDS` (`documented | documented-adapted | composed | inferred | invented`) and was
+asserted against its own `as const`. The taxonomy is about how a fixture relates to a vendor's
+documentation and has no member for "the stdout of a process that ran", so the field is renamed to a
+sentence, the tautology is replaced by an assertion that no `kind` is present, and the docblock says
+plainly that the file sits outside the sweep and why.
+
+**One claim narrowed rather than fixed.** `retrieval.ts` said keyword extraction "removed the
+measured harm". It removes tokens of **three characters or fewer** and nothing more: review's query
+of thirteen four-letter-or-longer function words returns 10 documents at 0.900/0.898/0.898/0.898 and
+fills **10 707 of 12 000** with six tier-1 documents, top score **0.718** — above a good query's
+correct answer at 0.500. The 87 %-padding pack is still reachable. The remedy needs a corpus-derived
+signal (IDF, or a different `ts_rank` normalisation) and is a product decision filed outside this
+work package; the sentence now says what was closed and what was not.
 
 ## Discovered work (not in plan)
 

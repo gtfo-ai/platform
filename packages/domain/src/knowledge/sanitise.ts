@@ -13,8 +13,9 @@
  * display as one instruction and contain another. And a literal `U+0000` is not merely unpleasant:
  * **PostgreSQL refuses it in a `text` column**, so one NUL in one vault page fails the `INSERT` and
  * takes the whole index run with it. Replacing them is a correctness requirement before it is a
- * security one, and `postgres-knowledge-store.integration.test.ts` drives that case against a real
- * database rather than asserting it here.
+ * security one, and `context-pack.integration.test.ts` drives that case against a real database —
+ * both that a sanitised document stores, and that an **unsanitised** one is refused with
+ * `invalid byte sequence for encoding "UTF8": 0x00` — rather than asserting it here.
  *
  * **2. Text that says hostile things (NOT touched here).** "Ignore previous instructions",
  * `<system>`, an HTML tag, a `javascript:` link. Those are *words*, and an indexer that edited the

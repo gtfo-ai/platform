@@ -167,11 +167,19 @@ export const MAX_TIER1_DOCUMENTS = 10;
  * on one silently drops the right page on the other, and the acceptance figure is measured on the
  * double. A guard whose verdict depends on which store is underneath is not a guard.
  *
- * **What actually removed the measured harm is upstream of the score.** The stopword query never
- * reaches the store any more: `extractQueryTerms` reduces `"the"` and `"and the of"` to **no terms
- * at all**, so the text step contributes nothing and the pack is tier 0 plus whatever the author's
- * own `paths:` globs claim. That is store-independent, needs no threshold, and fails in the
- * direction that costs recall rather than precision.
+ * **What the query-side fix actually closed, narrowly.** `extractQueryTerms` reduces `"the"` and
+ * `"and the of"` to **no terms at all**, so those queries contribute nothing and the pack is tier 0
+ * plus whatever the author's own `paths:` globs claim. That is store-independent and needs no
+ * threshold — and it is a *length* rule, so it closes the degenerate queries made of tokens of
+ * **three characters or fewer** and nothing else.
+ *
+ * **It does not close the class.** Measured at review: a query of thirteen function words of four
+ * letters or more returns 10 documents at ranks 0.900/0.898/0.898/0.898 and fills **10 707 of
+ * 12 000** with six tier-1 documents, its top score **0.718** — *above* a good query's correct
+ * answer at 0.500. The 87 %-padding pack is still reachable and this work package did not make it
+ * unreachable. Saying otherwise would be the wrong number attached to a true finding that rule 39
+ * is about. The remedy needs a corpus-derived signal (IDF, or a different `ts_rank` normalisation)
+ * and is therefore a product decision filed outside this work package rather than guessed at here.
  *
  * **What is left is a *good* query's tail**, and it is left in deliberately: for the session query
  * above, `technical/runbook.md` enters at 0.137 because it is the runbook *for the session

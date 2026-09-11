@@ -112,11 +112,32 @@ const packOver = async (
 };
 
 describe('pack composition against PostgreSQL', () => {
-  it('retrieves at all — the defect a fake-only tier could not see', async () => {
+  it('admits a document the *text query* found, not merely one a path glob claimed', async () => {
+    // Round 2 named this test "retrieves at all — the defect a fake-only tier could not see" and it
+    // **survived** the defect: `join(' OR ') → join(' ')` restores the AND semantics that matched
+    // zero documents, and `tier1.length > 0` stayed true because the task's touched paths still
+    // produce two `paths` matches at score 1.0. A test named for a property it does not have is
+    // rules 43 and 45 together, so both the name and the assertion are now the thing under test.
     const pack = await packOver();
     expect(pack.queryTerms.length).toBeGreaterThan(0);
+    const byText = pack.record.tier1.filter((entry) => entry.reason === 'trigger');
+    expect(byText.length).toBeGreaterThan(0);
+    expect(
+      pack.documents.some((document) =>
+        byText.some((entry) => entry.path === document.path && document.tier === 1),
+      ),
+    ).toBe(true);
+  });
+
+  it('finds by text a document no path glob in the vault would have claimed', async () => {
+    // The second half of the same defect, with the path signal removed entirely: with no touched
+    // paths there is nothing but the text query, so an AND-joined expression yields an empty pack.
+    const pack = await packOver({ touchedPaths: [] });
+    expect(pack.record.tier1.every((entry) => entry.reason === 'trigger')).toBe(true);
     expect(pack.record.tier1.length).toBeGreaterThan(0);
-    expect(pack.documents.some((document) => document.tier === 1)).toBe(true);
+    expect(pack.record.tier1.map((entry) => entry.path)).toContain(
+      `${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2026-01-04-session-fixtures.md`,
+    );
   });
 
   it('respects the shipped budget, and produces its own figure', async () => {
@@ -177,7 +198,10 @@ describe('pack composition against PostgreSQL', () => {
 
   it('stores a document whose source contained a NUL, which PostgreSQL would otherwise refuse', async () => {
     // The correctness half of `sanitise.ts`: one NUL anywhere in a vault page fails the INSERT and
-    // takes the whole index run with it. The hostile fixture carries one, and it is in this write.
+    // takes the whole index run with it. The hostile fixture carries one, and it is in this write —
+    // so this whole file's `beforeAll` is itself the assertion. The *named* pair that pins the
+    // refusal and the guard lives in `nul-refusal.integration.test.ts`, because a `beforeAll` that
+    // throws reports a failing **file** rather than a failing test (rule 62).
     const { rows } = await client.query<{ count: string }>(
       'select count(*)::text as count from kb_documents where project_id = $1 and path = $2',
       [projectId, `${FIXTURE_KNOWLEDGE_DIR}/technical/hostile-document.md`],
