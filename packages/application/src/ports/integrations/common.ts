@@ -375,6 +375,44 @@ export interface InboundNormaliser<TType extends DomainEventType = DomainEventTy
    * change and different for a different one; that is what makes webhooks and the polling
    * fallback safe to run together.
    *
+   * **Every byte of it is untrusted (BD-022), and it becomes stored state**: technical/03 gives it
+   * `inbox(provider, delivery_id)`, whose primary key it is half of. So an implementation runs it
+   * through the binding's `SecretRedactor` before returning it, and
+   * `packages/integrations/src/providers/delivery-key-redaction.test.ts` fails a provider that
+   * does not — its scope is every directory under `providers/`, read off disk.
+   *
+   * **Redacted here, where the executor's outbound idempotency key is *refused* — decided, not
+   * inconsistent.** Both are identities and redaction is many-to-one, so neither answer is free;
+   * rule 20 is what points them apart. `IntegrationActionExecutor.idempotencyScopeFor` is about to
+   * perform a **mutation**, so it fails closed: refusing costs exactly one action, loudly, and
+   * nothing reaches the provider. A delivery is a **notification the platform has already been
+   * told about**, so failing closed here would *drop* it — the event never reaches the pipeline,
+   * and a field a vendor adds later becomes a silently discarded queue. It fails open.
+   *
+   * **The residual that answer keeps, stated rather than implied (rule 38).** Redaction can still
+   * collapse two distinct deliveries onto one key — they would have to differ *only* inside the
+   * same injected credential — and when it does the **first** delivery survives: the later,
+   * genuinely different one presents the same `delivery_id`, is taken for a redelivery and is
+   * dropped without a trace. That is a narrower version of the harm refusing would cause, not an
+   * absence of it. Nothing on disk demonstrates an instance: GitLab's key parts are refnames and
+   * object ids, which cannot contain `[` or `:`; Jira's is one header value; Slack's are ids and
+   * timestamps.
+   *
+   * **The option with neither cost, measured and filed rather than taken.** A one-way digest is
+   * injective in practice *and* stores no secret, which is what an inbound identity actually
+   * wants. It is *available* — `deliveryKey` is synchronous, `node:crypto` is already imported by
+   * all three adapters, and `delivery_id` is `text` — but not *cheap* where it counts. An
+   * **unkeyed** digest does not store "no secret": `MIN_SECRET_LENGTH` is 8 and the surrounding
+   * template is public, so an 8-character credential inside it is an offline search. The only key
+   * an inbound adapter holds today is the binding's own webhook secret, which is `string | null`
+   * on GitLab (`gitlab/webhook-verify.ts` — `secretToken`, `signingToken`), so the property would
+   * hold on some bindings and silently weaken on others, which is rule 18's shape. A key that
+   * would not weaken (`APP_SECRET_KEY`, `apps/server/src/config.ts`) is not plumbed to a provider
+   * registration at all. And nothing writes `inbox` yet, so the operability half of the trade — an
+   * opaque `delivery_id` in a table technical/03 calls "dedup **and raw audit**" — has no consumer
+   * to weigh it against. It is a work package, not a round's guard; `docs/technical/PROGRESS.md`
+   * carries it under Discovered work.
+   *
    * @throws {IntegrationError} `invalid_request` when the delivery carries nothing to key on.
    */
   deliveryKey(delivery: WebhookDelivery): string;

@@ -201,11 +201,22 @@ export const noSecretsRedactor = (): SecretRedactor => exactSecretRedactor([]);
  *
  * What it costs is bounded, and the bound is the reason this is documented rather than enforced.
  * A shared name is a **fidelity** loss in an audit row or a log line — the same trade the row
- * already makes — and it is no longer an identity loss anywhere: the one place a redacted string
- * was used as a key, `IntegrationActionExecutor`'s idempotency scope, now refuses a key that
- * needs redacting at all instead of comparing placeholders. A composition root that wants the
- * stronger property gives each binding's secrets a name carrying the binding (`<provider>_<id>_…`)
- * rather than hoping two adapters disagree.
+ * already makes — and an **identity** loss wherever something downstream compares a redacted
+ * string for equality.
+ *
+ * This docblock used to end "and it is no longer an identity loss **anywhere**", naming the
+ * executor's idempotency scope as the one such place. It was false when it was written, and rule
+ * 63 says why it could not have been checked from here: an exclusivity claim is a statement about
+ * every *other* file. There are at least **two** such places on disk and they answer differently,
+ * on purpose — `IntegrationActionExecutor`'s outbound idempotency scope **refuses** a key
+ * redaction would change, while every provider's inbound `InboundNormaliser.deliveryKey`
+ * **redacts** one on its way to `inbox(provider, delivery_id)`. Rule 20 points them apart
+ * (`idempotencyScopeFor` and the port's `deliveryKey` each carry the argument, and the port also
+ * states the residual redaction leaves behind). The maintained enumeration is the redacted-state
+ * census in `docs/technical/PROGRESS.md`, not a sentence in this file.
+ *
+ * A composition root that wants the stronger property gives each binding's secrets a name
+ * carrying the binding (`<provider>_<id>_…`) rather than hoping two adapters disagree.
  */
 export const composeSecretRedactors = (
   ...redactors: readonly SecretRedactor[]

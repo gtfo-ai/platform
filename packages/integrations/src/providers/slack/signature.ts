@@ -185,6 +185,10 @@ export const slackSignatureHeaders = (input: {
  * cut, because a cut applied to unredacted text leaves a fragment no exact-match redactor can ever
  * find again — a delivery whose `type` is `<the signing secret>` is the case that proves it.
  *
+ * Redacted rather than refused, where `IntegrationActionExecutor`'s outbound idempotency key is
+ * refused: rule 20 points the two apart, and `InboundNormaliser.deliveryKey` carries the trade,
+ * the residual this answer keeps and the one-way digest that would have neither cost.
+ *
  * @throws {IntegrationError} `invalid_request` when the delivery carries nothing to key on.
  */
 export const slackDeliveryKey = (delivery: WebhookDelivery, redactor: SecretRedactor): string => {

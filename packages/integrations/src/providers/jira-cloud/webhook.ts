@@ -184,6 +184,11 @@ export const verifyJiraDelivery = (
  * optional security dependency is an absent one.
  *
  * The refusal quotes only the constant header **name**, so it needs no pass of its own.
+ *
+ * Redacted rather than refused, where `IntegrationActionExecutor`'s outbound idempotency key is
+ * refused: rule 20 points the two apart, and `InboundNormaliser.deliveryKey` carries the trade,
+ * the residual this answer keeps and the one-way digest that would have neither cost.
+ *
  */
 export const jiraDeliveryKey = (delivery: WebhookDelivery, redactor: SecretRedactor): string => {
   const identifier = delivery.headers[DELIVERY_HEADER];

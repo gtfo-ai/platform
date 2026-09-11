@@ -656,6 +656,80 @@ describe('IntegrationActionExecutor', () => {
       });
 
       /**
+       * The refusal is **findable**, which the three assertions above do not cover.
+       *
+       * Measured on round 3's code with a capturing logger and an audit sink: `IntegrationError
+       * invalid_request`, 0 audit rows, 0 log lines, `performed 0`, `store 0`. BD-003 is unharmed
+       * — nothing provider-facing happened, so there is correctly no row — and the message
+       * correctly does not echo the key. Together that left an action that fails on every attempt
+       * with *nothing anywhere* to diagnose it by, which is rule 20's second half: fail closed,
+       * but say that you did. Every other data-dependent failure in this file writes a `failed`
+       * row an operator can find; this path has only the log line.
+       */
+      it('logs the refusal, because it writes no audit row to be found in', async () => {
+        const captured = capturingLogger();
+        executor = build({ logger: captured.logger });
+
+        const outcome = await outcomeOf(
+          executor.execute(
+            leakingComment({
+              idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` },
+            }),
+          ),
+        );
+
+        expect(outcome.rejected).toBe(true);
+        const warned = captured.records.filter((record) => record.level === 'warn');
+        expect(
+          warned.length,
+          'a refused action with no row and no echo has only this line to be found by',
+        ).toBe(1);
+        // Identifying, so an operator can go from the log line to the stuck action…
+        expect(warned[0]?.fields.integration_id).toBe(INTEGRATION.integrationId);
+        expect(warned[0]?.fields.action).toBe('add_comment');
+        // …and not identifying *the key*, which is the one thing that must not be written down.
+        expect(JSON.stringify(warned[0]), 'and it does not echo what it refused').not.toContain(
+          SECRET,
+        );
+        expect(auditLog.entries, 'still no row: nothing provider-facing happened').toEqual([]);
+      });
+
+      /**
+       * The branch the guard takes when there is no store — asserted, not assumed (rule 10).
+       *
+       * `idempotencyScopeFor` returns `null` before it looks at the key when
+       * `options.idempotencyStore` is absent, so a secret-bearing key runs straight through to
+       * `perform`. Nothing is stored, so there is no leak; what was missing is any test that says
+       * so, which is exactly the unasserted branch rule 10 names.
+       *
+       * The second half is the canary (rules 4, 42): the *same* request through an executor that
+       * **does** have a store is refused. Without it, a key that quietly stopped carrying the
+       * secret would make the first half green for the wrong reason.
+       */
+      it('skips the key guard when no store is configured, and performs the action', async () => {
+        const captured = capturingLogger();
+        const storeless = build({ idempotencyStore: undefined, logger: captured.logger });
+        const request = () =>
+          leakingComment({ idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` } });
+
+        const outcome = await storeless.execute(request());
+
+        expect(outcome.status, 'the store-less branch performs rather than refusing').toBe('ok');
+        expect(performed, 'and reaches the provider exactly once').toBe(1);
+        expect(
+          captured.records.filter((record) => record.level === 'warn'),
+          'the refusal branch did not run, so it did not log',
+        ).toEqual([]);
+        expect(store.size, 'and nothing was stored, which is why there is no leak').toBe(0);
+
+        // The canary: the key really is one the guard refuses, so the green above is the missing
+        // store and not a harmless key.
+        const withStore = await outcomeOf(executor.execute(request()));
+        expect(withStore.rejected, 'the same key is refused once there is a store').toBe(true);
+        expect(performed, 'and the refused one never reached the provider').toBe(1);
+      });
+
+      /**
        * The second half of the same finding, and the reason the key is refused rather than
        * redacted.
        *

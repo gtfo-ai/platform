@@ -151,9 +151,12 @@ describe('composeSecretRedactors (rule 31: the adapter keeps its own guarantee)'
    * looks like.
    *
    * What the gap costs is bounded, and the bound is why it is documented rather than closed: a
-   * shared name is a fidelity loss in a row or a log, never an identity loss, because the one
-   * place a redacted string was used as a key — the executor's idempotency scope — now refuses a
-   * key that needs redacting instead of comparing placeholders.
+   * shared name is a fidelity loss in a row or a log, and an identity loss only where something
+   * downstream compares a redacted string for equality. This used to say "never an identity loss,
+   * because the one place …" — an exclusivity claim made from inside one file (rule 63), and
+   * false. Two such places exist and answer differently on purpose: the executor's **outbound**
+   * idempotency scope refuses such a key, every provider's **inbound** `deliveryKey` redacts one,
+   * and rule 20 is the reason (`idempotencyScopeFor`, `InboundNormaliser.deliveryKey`).
    */
   it('cannot tell two composed redactors apart when they share a name', () => {
     const redactor = composeSecretRedactors(

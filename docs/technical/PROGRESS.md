@@ -2666,10 +2666,76 @@ defect, whatever the transform is for.* Redaction, case folding, unicode normali
 have a legitimate reason to collapse two inputs into one, and all of them are wrong on a key: the losing
 call is not told it lost, it is handed the winner's answer. The question to ask of any scrub is not "does
 this hide the secret" but "is anything downstream comparing the output for equality".
+*Amended in round 4*: **not always a defect — sometimes the least bad of two**. Where rule 20 forbids
+refusing (an inbound notification), the collapse is kept deliberately; what the rule then demands is that
+the site says **which value survives** (rule 38) and that the injective option is measured and filed rather
+than left unmentioned. See the next section.
+
+### Same branch, round 4 — the two keys reconciled, and a false "anywhere" withdrawn
+
+Round 3 shipped the right guard with the wrong sentence around it. `redaction.ts` claimed a shared
+placeholder name "is no longer an identity loss **anywhere**: the one place a redacted string was used as a
+key …", repeated in `redaction.test.ts`, and `CLAUDE.md` carried the refusal and the redaction adjacently
+with nothing saying why they differ. Measured false: `jira-cloud/webhook.ts`, `gitlab/webhook-verify.ts` and
+`slack/signature.ts` each return `redactor.redactText(…).value` as the **delivery key**, destined for
+`inbox(provider, delivery_id)`'s primary key (`0005_events.sql`), and `delivery-key-redaction.test.ts`
+asserts that key *contains* the placeholder. Rule 63 inside the commit that exists to fix rule 63, and rule
+44: a scope claim is a checkable claim.
+
+**The reconciliation: the two answers are genuinely different, and rule 20 is the whole reason.** The
+outbound idempotency key is about to drive a **mutation**, so refusing costs exactly one action, loudly,
+before anything reaches the provider — fail closed. An inbound delivery is a **notification the platform has
+already been told about**, so refusing one *drops* it and the event never reaches the pipeline — the
+stuck-queue failure rule 20 was written from. Fail open. Written where the code is: `idempotencyScopeFor`
+(outbound), `InboundNormaliser.deliveryKey` (inbound — the one definition all three adapters implement), a
+pointer at each of the three adapter functions, the `delivery-key-redaction.test.ts` docblock, and the
+`CLAUDE.md` bullet. The false "anywhere" is gone from `redaction.ts`, `redaction.test.ts` and `CLAUDE.md`,
+replaced by a claim that names two sites as examples and points at this file's census as the maintained
+enumeration — rule 63 says the claim cannot be maintained from inside either file.
+
+**The residual the inbound answer keeps, said out loud (rule 38).** Redaction there is still many-to-one:
+two deliveries differing *only* inside the same injected credential collapse onto one `delivery_id`, and the
+**first** survives — the later, genuinely different one is taken for a redelivery and dropped without a
+trace. That is a narrower version of the harm refusing would cause, not an absence of it. No instance is
+demonstrated: GitLab's key parts are refnames and object ids (no `[`, no `:`), Jira's is one header value,
+Slack's are ids and timestamps.
+
+**The third option, measured and left.** A one-way digest is injective in practice *and* stores no secret,
+which is what an inbound identity actually wants. It is **available** — `deliveryKey` is synchronous,
+`node:crypto` is already imported by all three adapters, `delivery_id` is `text`, and the blast radius is 12
+call sites with 2 literal-key assertions. It is **not cheap** where the property lives: an *unkeyed* digest
+does not store "no secret" when `MIN_SECRET_LENGTH` is 8 and the surrounding template is public, and the
+only key an inbound adapter holds today is the binding's own webhook secret, which is `string | null` on
+GitLab (`webhook-verify.ts` — `secretToken`, `signingToken`), so the property would hold on some bindings
+and silently weaken on others: rule 18's shape. A key that would not weaken (`APP_SECRET_KEY`,
+`apps/server/src/config.ts`) is not plumbed to a provider registration at all. And nothing writes `inbox`
+yet, so the operability half — an opaque `delivery_id` in a table technical/03 calls "dedup **and raw
+audit**" — has no consumer to weigh it against. Filed under Discovered work rather than done here.
+
+**Two minors, each closed by a named test proved with a mutation (rules 3, 10, 62):**
+
+| change | mutation | named test that died |
+|---|---|---|
+| `logger.warn(logFieldsOf(request), …)` at the refusal | delete the `logger.warn` | `logs the refusal, because it writes no audit row to be found in` |
+| assert the store-less branch | drop `!options.idempotencyStore` from the guard | `skips the key guard when no store is configured, and performs the action` |
+
+The log line is **operability, not audit**: BD-003 is unharmed because nothing provider-facing happened, and
+the measurement was `invalid_request`, 0 audit rows, 0 log lines, `performed 0`, `store 0` — a refusal with
+no row *and* no echo of the key is a stuck action with nothing anywhere to diagnose it by, which is rule
+20's second half. It logs the request's identity (`logFieldsOf`) and never the key. The store-less test
+carries its own canary (rules 4, 42): the same request through an executor that *does* have a store is
+refused, so the green half is the absent store and not a harmless key.
 
 
 ## Discovered work (not in plan)
 
+- **A one-way digest for the inbound delivery key.** Round 4 reconciled the redact-vs-refuse split and
+  filed the option that has neither cost: hash the key instead of redacting it, so distinctness survives and
+  no secret is stored. Needs a digest key an `InboundNormaliser` does not hold today (the binding's webhook
+  secret is `string | null` on GitLab; `APP_SECRET_KEY` is not plumbed to a registration), a replacement for
+  `delivery-key-redaction.test.ts`'s instrument (a digest makes its present assertion vacuous), and a
+  decision on an opaque `delivery_id` in a table technical/03 calls "dedup and raw audit". The reasoning and
+  the measurement are on `InboundNormaliser.deliveryKey`.
 - **`emitted-secrets.test.ts` covers Jira and GitLab only.** Its member enumeration is derived
   (`Object.keys(port)`) but its provider list is not, and Slack's unredacted dedup key is exactly what that
   gap hid. Slack, Sentry and Loki owe the same walk — every string they emit, planted, through the real

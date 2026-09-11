@@ -22,6 +22,12 @@
  * scope of this file is exactly what its own `PROVIDER_DIRECTORIES` reads off the disk: the dedup
  * key of every adapter under `providers/`.
  *
+ * It was closed there **differently**, and the difference is decided rather than accidental: the
+ * executor's idempotency key is now *refused* when redaction would change it, while the dedup key
+ * this file checks is *redacted*. Rule 20 — a refused mutation costs one action, a refused
+ * delivery drops a notification. `InboundNormaliser.deliveryKey` and `idempotencyScopeFor` carry
+ * the trade; what this file asserts is only that the redaction happened.
+ *
  * The same defect was found and closed **three times across two commits**:
  *
  *  - `jiraDeliveryKey` copied `x-atlassian-webhook-identifier` into the key with no redactor;

@@ -640,6 +640,23 @@ export const createIntegrationActionExecutor = (
    * pays the fidelity loss; a key carries no such obligation — it is a lookup, and a lookup that
    * collides returns the wrong answer rather than a less precise one.
    *
+   * **It is also the opposite answer from the platform's other stored identity, and that is
+   * decided rather than accidental.** Every provider's `InboundNormaliser.deliveryKey` applies the
+   * same many-to-one transform to a string that becomes `inbox(provider, delivery_id)`'s primary
+   * key — it *redacts* where this *refuses*. Rule 20 is what points the two apart, and it is the
+   * whole of the reason:
+   *
+   *  - this request is a **mutation the platform is about to make**, so refusing costs exactly one
+   *    action, loudly, before anything reaches the provider — fail closed;
+   *  - a delivery is a **notification the platform has already been told about**, so refusing one
+   *    drops it, and the event never reaches the pipeline — the stuck-queue failure rule 20 was
+   *    written from (WP-09's `mapPipelineStatus`). Fail open.
+   *
+   * Neither side is free. `InboundNormaliser.deliveryKey` states the residual its answer keeps
+   * (rule 38: when two deliveries collapse onto one key the **first** survives and the later one
+   * is silently deduped away) and the third option neither answer takes — a one-way digest, which
+   * is distinct *and* carries no secret — with the measurement that filed it rather than doing it.
+   *
    * It also makes a **forged placeholder** inert, which is the second half of the same finding.
    * All external text is untrusted (BD-022), so an actor who can write a ticket comment or an MR
    * note can write `[REDACTED:integration:jira]` verbatim; while keys were redacted, that literal
@@ -674,6 +691,17 @@ export const createIntegrationActionExecutor = (
     }
     const key = options.redactor.redactText(request.idempotency.key);
     if (key.count > 0) {
+      // Operability, not audit (rule 20's second half). The absent row is correct — nothing
+      // provider-facing happened, so there is nothing to audit — and the absent echo of the key
+      // is correct too, which together left a refused action with *nothing anywhere* to diagnose
+      // it by: measured as 0 audit rows and 0 log lines. Every other data-dependent failure in
+      // this file writes a `failed` row and can be found in one; this one has only this line.
+      // `logFieldsOf` and not the key: the identity of the request is what an operator needs, and
+      // the key is the one thing that must not be written down.
+      logger.warn(
+        logFieldsOf(request),
+        'refused an idempotency key carrying an injected secret; the action was not performed',
+      );
       throw new IntegrationError(
         'invalid_request',
         request.integration.provider,
