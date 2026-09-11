@@ -13,18 +13,24 @@
  * it: **a fake may be stricter than the real adapter, never kinder.** Each entry says which it is,
  * because a reader who takes "stricter" on faith will not re-check.
  *
- *  1. **Stricter — the audit log validates every event draft against the catalogue.**
+ *  1. **Equal — both implementations validate every event draft against the catalogue.** This
+ *     entry read "stricter" until WP-15b, when the port got its second implementation:
  *     `MemoryIntegrationAuditLog` parses the payloads `integrationActionEventDrafts` produces with
- *     `domainEventSchemasByType`, so a drafted event that the real `events` table would reject
- *     fails here first. The Postgres adapter will reject it too, one tier later.
- *  2. **Stricter — `put` on an existing idempotency key throws.** A real store keyed by
- *     `(integration, action, key)` would either overwrite or ignore; here a second `put` for a key
- *     that already holds a value is a loud error, because the executor only ever writes a key it
- *     has just missed, and a second write means two callers raced through the same key.
+ *     `domainEventSchemasByType`, and `createPostgresIntegrationAuditLog` parses the whole envelope
+ *     with the same map before it opens a transaction. A claim about the *other* implementation
+ *     cannot be maintained from inside this file, so it is restated when that one changes
+ *     (standing rule 63).
+ *  2. **Stricter — `put` on an existing idempotency key throws.** The Postgres store (WP-15b) is
+ *     `on conflict do nothing`, keeping the first result, because the first is the one every later
+ *     `get` must keep answering. Here a second `put` for a key that already holds a value is a loud
+ *     error instead, because the executor only ever writes a key it has just missed and a second
+ *     write means two callers raced through the same slot — the direction a fake is allowed to
+ *     differ in.
  *  3. **Different — no persistence, no partitions, no `REVOKE`.** The append-only guarantee of
  *     `integration_actions` (technical/03) is enforced by the database, not here; the fake simply
  *     never mutates a recorded entry. Neither stricter nor kinder: the port promises nothing about
- *     storage.
+ *     storage. The properties both implementations *do* owe are the shared suites in
+ *     `test/contract/support/integrations/audit-contract-suites.ts`, which run against each.
  *  4. **Different — the virtual timer's clock only moves when something sleeps.** Real elapsed
  *     time between two calls is zero here, so a duration recorded in an audit row is the sum of
  *     the backoff waits and nothing else. That makes durations deterministic; it also means a test
@@ -94,7 +100,7 @@ export const createMemoryAuditLog = (): MemoryIntegrationAuditLog => {
       }
       entries.push(entry);
       for (const draft of integrationActionEventDrafts(entry)) {
-        // Divergence 1: the payload must be a legal catalogue payload here, not only in Postgres.
+        // Divergence 1: a drafted payload the `events` table would reject fails here too.
         domainEventSchemasByType[draft.type].shape.payload.parse(draft.payload);
         events.push(draft);
       }

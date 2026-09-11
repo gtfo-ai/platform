@@ -35,6 +35,7 @@ const EXPECTED_TABLES = [
   'human_time_entries',
   'inbox',
   'integration_actions',
+  'integration_idempotency',
   'integrations',
   'kb_chunks',
   'kb_documents',
@@ -163,6 +164,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('events', 'append_only', 'occurred_at'),
       row('human_actions', 'append_only', null),
       row('integration_actions', 'append_only', 'created_at'),
+      // WP-15b (migration 0013): read_write, because nothing expires an idempotency key today and
+      // whatever eventually does will delete rows. Registered rather than defaulted, so the
+      // "registry lists every table" invariant above stays true.
+      row('integration_idempotency', 'read_write', null),
       row('redaction_log', 'append_only', 'created_at'),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
       row('sessions', 'read_write', null),

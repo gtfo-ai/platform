@@ -6,13 +6,16 @@
  * the Claude Agent SDK runner, its two fakes and TD-012's pattern redactor. WP-14 added the
  * launcher's `WorkspaceProvider` adapters — the Docker one, the fake the unit tier runs against,
  * and the pure policy modules they share (`workspace/`). WP-15 added the pipeline's `PipelineStore`
- * on the tables of technical/03. WP-16 added the knowledge base's adapters (`knowledge/`): the
+ * on the tables of technical/03. WP-15b added the PostgreSQL
+ * `IntegrationAuditLog` and `IdempotencyStore` (`integrations/`), which is what lets a composition
+ * root start the pipeline without a caller supplying an audit sink. WP-16 added the knowledge base's adapters (`knowledge/`): the
  * `kb_*` index and the `code_files`/`code_maps` caches on PostgreSQL, the filesystem vault reader,
  * and the universal-ctags symbol extractor. Later work packages add the rest.
  */
 export * as broadcast from './broadcast/index.js';
 export * as db from './db/index.js';
 export * as eventing from './events/index.js';
+export * as integrations from './integrations/index.js';
 export * as jobs from './jobs/index.js';
 export * as knowledge from './knowledge/index.js';
 export * as pipeline from './pipeline/index.js';

@@ -791,6 +791,120 @@ What done looks like is small and worth naming so it is not re-derived: the WP t
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
 
+### 17. **The pipeline calls providers from inside an open database transaction** (TODO — **no work package owned it**; now WP-15d)
+**What is wrong.** Three event handlers call an integration provider while the handler's transaction
+is still open, so a pooled connection is held across provider network latency and the audit write
+nests inside the caller's transaction instead of following it. It is the **cause** of two things that
+were found first and fixed separately: WP-15b's dropped foreign key, and the pool arithmetic WP-15b
+is correcting. The cause itself is unfixed and unowned.
+
+**Evidence**, quoted from the WP-15b review rather than paraphrased:
+
+> `packages/application/src/pipeline/saga.ts:215` calls a provider **after** `store.tasks.insert`,
+> **on the same open scope**. `postgres-unit-of-work.ts:55` takes a second `pool.connect()`, which
+> is how the audit write — committing in its own transaction — was able to run while the saga's was
+> still open.
+
+Resolved against the tree, so nobody re-derives it: the call at `saga.ts:215` is
+`unprotectedDefaultBranch` (`saga.ts:251`), which makes **two** provider reads —
+`defaultBranch` (`saga.ts:261`) and `branchProtected` (`saga.ts:265`) — inside `pipeline.intake`,
+a handler at **priority 10**, the core band. The unit of work is
+`packages/infrastructure/src/events/postgres-unit-of-work.ts:55` — the report cited `db/`, which is
+the wrong directory and the right line. **Three sites, one cause**, and the count is not this entry's
+guess — `packages/application/src/pipeline/runtime.ts`'s own docblock already names them: *"Three
+handlers do it today — the intake default-branch read, the workpad and the status mapping"*. The
+other two are `workpad.ts:168` (`upsertWorkpad`, priority 120, which then writes `tasks` on the same
+scope at `:183`, so the transaction is held across the call **and** continues after it) and
+`workpad.ts:218` (`transition`, priority 110). Read from code and **not** measured: each
+`forProject` also re-reads the project's bindings through a repository built from the pool
+(`apps/server/src/pipeline.ts:265`) and the loader has no cache (see "Discovered work", WP-15a), so
+the nested borrow happens twice per provider call — binding load, then audit write — but
+sequentially, which is why the peak is three connections and not four.
+
+**It contradicts two documents, and the code is what is wrong.** CLAUDE.md states the shape —
+*"the shape is transaction / no transaction / transaction, so no database connection is held while a
+run is"* — and the job path already honours it (`jobs.ts:306`, `gates.ts:97` call providers outside
+their transactions), which is what makes this a defect rather than a doc that never described
+reality. `docs/technical/06-integrations-architecture.md:370` adds the second contradiction:
+*"Actions are triggered by event handlers in the integration priority band (100–199), so the
+pipeline never calls providers directly"* — the intake read is a **core-band** handler at priority
+10 calling a provider.
+
+**Why it is filed as the cause of two other findings.**
+- **WP-15b's dropped foreign key.** `integration_actions_task_id_fkey` made **every** e2e die on its
+  first event, because the audit commits before the saga does and the task row is not yet visible.
+  The reviewer's words: *"the FK was the symptom; this is the defect."* Dropping the FK was judged
+  **correct anyway** — a log of external facts must not be gated on internal referential state — so
+  this entry is **not** a reason to revisit that decision; it is a second, independent problem the
+  same shape caused.
+- **The pool arithmetic.** `apps/server/src/config.ts:220`'s `POOL_RESERVATIONS.pipeline = 2` covers
+  the two job workers but not the connection now nested inside a dispatch handler's transaction, so
+  a dispatch peaks at **3** against `CONNECTIONS_PER_DISPATCH = 2`: floor `2N+8` versus a worst case
+  of `3N+8`, and at the shipped default (N=1, `APP_DB_POOL_MAX=10`) **the floor equals the default
+  with zero slack**. WP-15b is fixing the arithmetic while this is written (in the `wp/15b` working
+  tree: a new `POOL_RESERVATIONS.auditPerDispatch = 1`, the dispatcher term becomes
+  `3 × maxConcurrency + 1`, and `.env.example` raises `APP_DB_POOL_MAX` 10 → 13). **That is the
+  accommodation, not the fix.** The arithmetic is only wrong because of this shape, and every
+  deployment pays a third connection per concurrent dispatch for as long as the shape stands.
+
+**What it costs to leave.** A pooled connection — and the `tasks` row the handler just wrote — is
+held for the duration of a provider's HTTP round trip, on a bus whose default concurrency is 1, and
+an audit row for a task that rolls back is written anyway. **The consequence under load is a
+hypothesis and is labelled one** (rules 39 and 64): pool exhaustion, or audit writes timing out and
+failing the actions they were meant to record, when several tasks intake at once. **Nobody has
+measured it**, deliberately — synthetic load is forbidden on this machine (rule 66) — so there is no
+margin here and no load figure to quote one against. What is *not* a hypothesis: the third
+connection is now in the arithmetic, the three call sites are in the docblock, and a slow provider
+holds a pooled connection for exactly as long as it is slow.
+
+**What would make it urgent.** Nothing in production emits `ticket.matched` (entry 1), so today the
+only traffic through these three handlers is the e2e's and the exposure is bounded by it. It goes
+live the day **WP-15c**'s ingress lands, and the first thing an ingress delivers is a burst — a
+sprint transition moving ten tickets arrives as ten concurrent intakes.
+
+**What done looks like** (**WP-15d** in `13-implementation-plan.md`).
+- No pipeline handler calls a provider inside `context.scope.tx`, and that is asserted
+  **mechanically** rather than by review — the next handler to do it should fail a test, not a
+  production pool. `PipelineIntegrationsPort.forProject` is the one door (`integrations.ts:93`) and
+  the natural place for the refusal.
+- The three sites take the shape the job path already has. **The mechanism exists, which is what
+  makes this engineering rather than a product decision**: `HandlerContext.afterCommit`
+  (`packages/application/src/events/handler.ts:72`) exists precisely because `Jobs.enqueue` does not
+  join the handler's transaction (TD-004: *"there is no transactional enqueue … enqueue after commit
+  and re-validate on fire"*). `afterCommit` **alone** is at-most-once by its own docblock — *"a crash
+  between the commit and the callback loses the callback"* — so the durable form is
+  `afterCommit(enqueue)` plus a job that re-validates on fire, which is what the stage executor
+  already does.
+- **The compensation question answered rather than avoided**: *if the call goes out and the
+  transaction then rolls back, what un-does it?* Nothing does — and that is the argument **for**
+  moving the call out, not against it. Inside the transaction the failure mode is a ticket comment
+  posted for a task that never committed and an audit row naming a task that never existed; outside
+  it, it is a committed task whose comment is one job-retry late. The workpad render is re-derived
+  from the `tasks` row on every event, so a lost wake-up self-heals; a status `transition` and the
+  intake read need the re-validating job rather than a bare callback.
+- Moving the **writes** to a job makes the executor's idempotency load-bearing for the first time —
+  which is the work package the "composition of the `IdempotencyStore` has no test" entry (WP-15b,
+  "Discovered work") says owes that assertion. Take it here.
+- `POOL_RESERVATIONS.auditPerDispatch` returns to **0** when the last site moves. That constant is
+  the receipt for this entry: while it is 1, the shape is still there.
+- **Needs measurement** (not run here, rule 66): the exhaustion hypothesis — N concurrent intakes
+  against the shipped default with the provider's latency stated — and whether one project's slow
+  provider delays dispatch for every other project. Whoever takes WP-15d measures it **before** the
+  move as well as after, or the fix has no number either.
+
+**Not an open question, and said here so nobody re-opens it as one.** The decision it would ask for
+is already taken twice (TD-004, TD-005) and stated in CLAUDE.md. What the work package does owe the
+docs is one sentence: technical/02 and `06-integrations-architecture.md:370` describe *which band*
+triggers an outbound action and say nothing about the transaction it runs in, which is the silence
+that invited this.
+
+**Depends on.** WP-15b (before the Postgres audit log there was no second transaction to nest, so
+the shape was invisible). Should land **before or with WP-15c**, which is what makes it live.
+**No work package owned it**: WP-15 wrote the handlers, WP-15a composed them into a server, WP-15b
+met the consequence twice — the foreign key and the arithmetic — and fixed both symptoms because
+neither was its to fix. Related: entry 1 (nothing produces the load yet), entry 1b (the two write handlers
+of this entry, 110 and 120, whose *ordering* was that flake), entry 11 (the same "built, not owned" shape one layer up).
+
 ### 11. What WP-16 left behind — **the retrieval layer is built and no prompt uses it** (TODO)
 The same shape as entry 1, one layer up, and in the reviewer's sentence form. Three pieces, none of
 them WP-16's to fix, all three now with an owner in the plan:
@@ -2858,9 +2972,11 @@ written out in full. The decision is recorded on Q55 itself and at the top of `b
   outer guard is named (`providers/emitted-secrets.test.ts`), and the reason it is still worth having is
   that that file is a hand-written list of *two* providers rather than a sweep of `providers/` (rule 7);
 - deleting the `options.pipeline === undefined` warning in `runtime.ts` kills
-  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names the event types it cannot handle and does not start the outbox sweep",
+  `test/e2e/pipeline/composition.e2e.test.ts` › "names the event types it cannot handle and does not start the outbox sweep",
   which also asserts the other half — the event **dispatches** and no task is created, so it is a statement
-  about the branch that ran rather than about a process that had not started yet (rule 10).
+  about the branch that ran rather than about a process that had not started yet (rule 10). *(WP-15b renamed
+  that file from `uncomposed.e2e.test.ts` and inverted the branch: absent now **composes**, and the seam the
+  test drives is `pipeline: null`.)*
 
 **A defect the tests caught before it shipped.** `repositoryPathOf` read `git@host:acme/api.git` as the
 project `api`: the first `/` is inside the path, not after the host, for git's scp-style remote. Two
@@ -3906,7 +4022,146 @@ itself on the day it was applied.
 planting `evil_dir → ../runB` and `evil_tok → ../runB/token`: runB left `500`, its token `400`, contents
 intact, and `rm -rf` unlinked the link rather than the target.
 
+### WP-15b — the audit log, and the foreign key that made the audit fail the action
+
+**The acceptance criterion, answered.** `startRuntime()` with no options — the call `main.ts:18` and
+`scripts/dev.mjs` make — composes the pipeline, builds a PostgreSQL `IntegrationAuditLog` and
+`IdempotencyStore` from its own pool, and `/readyz` reads **200** on `ROLE=all` with
+`checks.dispatch: ok`. `test/e2e/pipeline/composition.e2e.test.ts` › *"reports /readyz ok on ROLE=all,
+dispatch check included"* asserts it against an instance started exactly as the auth and SSE e2e files
+start theirs, and the pipeline e2e asserts the **rows** (`integration_actions`) with **no** audit log
+supplied by anything: `PipelineComposition` no longer has the field, so rule 35's "supplied, not used"
+escape is closed by the type rather than by a promise.
+
+**Migration `0013_integration_audit.sql`** adds `project_id`, `redaction_count` and `attempts`, and
+creates `integration_idempotency`. Two decisions inside it are worth more than the columns:
+
+- **`redaction_count` and `attempts` are `not null` with the default dropped immediately.** The default
+  exists only because PostgreSQL needs one to add a NOT NULL column; dropping it makes an INSERT that
+  forgets the column an error rather than a recorded zero, so "nobody wrote the column" and "nothing was
+  redacted" stop being spelled the same way (rule 18). Named test:
+  `test/integration/integrations/audit-log.integration.test.ts` › *"refuses a row that omits
+  redaction_count, because the migration dropped the default"*.
+- **`integration_actions_task_id_fkey` is dropped and `project_id` gets no foreign key.** This was a
+  measurement, not a preference: with the constraint in place **every** e2e died on its first event at
+  `insert or update on table "integration_actions_2026_09" violates foreign key constraint
+  "integration_actions_task_id_fkey"`. The audit row commits in a transaction of its own (with its event,
+  per BD-003) while the caller is still inside one — `saga.ts`'s intake handler reads the repository's
+  default branch *after* `store.tasks.insert` on the same scope, and technical/06 says outbound actions
+  are triggered by event handlers generally. So the constraint refuses the audit **because the caller has
+  not committed**, making the audit the thing that fails the action. The residual is stated in the SQL and
+  in technical/03: a `task_id` may name a task that no longer exists or that a rolled-back transaction
+  never created, which is still the honest record, because the provider call happened outside any
+  transaction and really was made. `integration_id` keeps its key: a binding is always committed first.
+  Named test: *"records an action for a task the audit cannot see, because 0013 dropped the foreign key"*.
+
+**`redaction_count` in both directions, through the real executor** (rule 42, and the row's own words).
+`test/integration/integrations/audit-log.integration.test.ts`: the same payload, the same action, two
+redactors. *"records a non-zero count, and no credential, when the redactor holds the secret"* and
+*"records zero when the redactor was told nothing — and the credential is in the row"* — the second
+reads the planted credential back out of `integration_actions.payload` and asserts the count is `0`,
+because that zero beside a payload that plainly carries a token is the **only** signal an auditor gets
+that TD-012 did not fire. The shared contract suite asserts the same pair against both implementations.
+
+**The stream-sequence question the row flagged, answered with the precedent rather than a new mechanism.**
+`NormalisedEvent` stops at `{type, payload, actor}`, so the adapter supplies the envelope: stream
+`integration` / `integrations.id`, `correlation_id` the task (technical/03's stated purpose for that
+field), sequence from `EventStore.nextStreamSequence` read **before** the transaction — which is exactly
+what `knowledge/indexer.ts` (WP-16) already does. What is new is the **retry**: a `StreamConflictError`
+re-reads and retries up to four times, because two outbound calls on one integration really do race and
+without it the audit would be what failed the action. `would_have` and `replayed` read no sequence at all.
+The first version of the integration test for this raced two `record` calls with `Promise.all` and
+**passed with the retry deleted** — they do not race, the second reads its sequence after the first
+commits — so it was replaced by a staged loss that hits migration 0005's real trigger. Rule 3, caught by
+mutating rather than by reading.
+
+**Two changes that are consequences, named so they are not read as scope creep.**
+`POOL_RESERVATIONS.pipeline = 2` (every `worker` role now composes the pipeline, so its two job workers
+belong in the floor `pipeline/runtime.ts` already documented; `ROLE=all` goes 8 → 10 against a shipped
+default of 10), and `StartRuntimeOptions.pipeline` gains `| null` — a **labelled seam**, the only way
+left to start `apps/server` as an incomplete consumer, kept because `sweepReadiness`'s two gates would
+otherwise have no end-to-end test at all. `uncomposed.e2e.test.ts` is renamed `composition.e2e.test.ts`
+and now holds both branches.
+
+**What this work package did *not* close, measured.** The **composition** of the idempotency store is
+asserted by nothing — the adapter has a contract suite against the fake and against PostgreSQL, and
+deleting the line in `pipeline.ts` leaves every tier green, because no shipped pipeline action carries an
+`IdempotencyPlan` (`slack/digest.ts` is the only one in the repository and Slack is not in the shipped
+registry). Said at the line rather than left to be assumed. And **`ClaudeRunner` is still Q52**:
+`unavailableClaudeRunner()` **throws** `RunnerUnavailableError` rather than returning a fabricated failed
+outcome, because a fabricated outcome would make the interpreter transition on a verdict for a run that
+never happened — the fail-open direction of rule 20. A task that reaches an agent stage therefore stops
+there, in its own job, loudly. Nothing reaches one today: there is no ingress until WP-15c.
+
+**WP-15b review round 1 (REQUEST_CHANGES) — two majors, both about something the WP created.**
+
+1. **The idempotency store's documented invariant was asserted by nothing.** `on conflict do nothing`
+   keeps the *first* result, and flipping it to `do update set result = excluded.result` left the
+   integration file 18/18 and the contract file 11/11 green — while the **fake's** opposite behaviour
+   (a second `put` throws) *was* asserted. Rule 1 inverted: the fake was held to a promise the real
+   adapter was not, so the real one could drift into being the kinder of the two. Closed by a
+   Postgres-only case (it cannot go in the shared suite: the two implementations legitimately differ
+   here, and the fake's stricter answer is the allowed direction) — *"answers a raced second put with
+   the result the first one stored"*, which dies under the mutation.
+2. **The pool floor did not count the connection this WP nests inside a dispatch.** `CONNECTIONS_PER_DISPATCH`
+   is 2 — the dispatcher's transaction plus the handler's — and an audit write opens a **third**,
+   because three handlers call a provider from inside `context.scope.tx` (`saga.ts:215` after
+   `store.tasks.insert`, `workpad.ts:168`, and the status mapping beside it) and
+   `createPostgresIntegrationAuditLog` takes its own `pool.connect()`. Checked rather than accepted:
+   the two **job workers** make their provider calls *outside* their transactions
+   (`jobs.ts:194`, `jobs.ts:306`), so that term stays flat at 2 while the audit term is
+   proportional. Floor for `ROLE=all`, N=1: `(2+1)×1+1 + 2 + 2 + 2 + 1 = **11**`, so the shipped
+   default rose 10 → **13** (the same two connections of slack the old default carried over its
+   floor of 8). `config.ts` now reads `CONNECTIONS_PER_DISPATCH` instead of a literal `2` (rule 41),
+   and the arithmetic is corrected in all four places that state it: `config.ts`,
+   `UndersizedPoolError`'s message, `pipeline/runtime.ts`'s docblock and `.env.example` (rule 63).
+   A new named test asserts the **shape** rather than the value — *"scales the audit connection with
+   dispatch concurrency rather than reserving one"*, which a flat reservation fails. **No exhaustion
+   measurement exists and none was taken**: generating load on this machine is forbidden (rule 66)
+   and a margin quoted without its load is not a number (rule 64). This is worst-case arithmetic,
+   which is what a start-up refusal should rest on.
+3. **The FK residual was honest and incomplete.** technical/03 now says that every reader
+   `LEFT JOIN`s and must render a row whose task or project is missing — an inner join hides exactly
+   the rows an audit exists for, and "the audit shows nothing" then reads like "nothing happened".
+   It is in the data model rather than only in the migration because **no reader exists today**, so
+   the whole cost falls on whoever builds `GET /api/org/audit`.
+4. Minor: `test/e2e/support/instance.ts`'s docblock still claimed an instance runs without a pipeline
+   when nothing supplies a runner — false by this WP's own change.
+5. Nit, pre-existing and **wider than reported**: `slack/threads.ts` and `provider.ts` both claimed
+   `post_task_thread` "carries an `IdempotencyPlan`". It does not — `send({ action:
+   'post_task_thread' })` attaches none, and the plan in `slack-executor.contract.test.ts` is built
+   **by the test**. So the durable half is *available and unused*, and a restarted process really
+   does open a second thread. Both docblocks now say that. Rule 44 on a claim that was really a
+   statement about a fixture.
+
+**Mutation checks.** Nine guards, each with the named test that dies: `redaction_count` written verbatim
+(unit *"writes every column the entry carries…"*, integration *"stores a non-zero redaction count…"* and
+*"records a non-zero count, and no credential…"*); the conflict retry (unit *"re-reads the sequence and
+retries…"*, *"gives up after the bound…"*, integration *"retries against the real guard…"*); the
+in-transaction append (integration *"leaves no row behind when the append loses the stream sequence"* and
+two more); the migration's `drop default`; the dropped foreign key; the unconditional composition (e2e
+*"reports /readyz ok on ROLE=all…"* and *"names the agent runner as the one collaborator…"*); the composed
+audit log replaced by a no-op (e2e *"writes an integration_actions row per provider call…"*); and
+`unavailableClaudeRunner` turned into a null object (unit *"throws, naming the stage and the open
+question…"*) — which had **no** test until the mutation was run.
+
 ## Discovered work (not in plan)
+
+- **The composition of the `IdempotencyStore` has no test (WP-15b).** The adapter is held by a shared
+  contract suite against both implementations; the *line in `apps/server/src/pipeline.ts`* that builds it
+  is not, and deleting it leaves every tier green — because no shipped pipeline action carries an
+  `IdempotencyPlan`. The work package that gives one to a pipeline action (a comment marker id is
+  technical/06's own example) owns the assertion. Stated at the line in `pipeline.ts`.
+- **`apps/server` composes a pipeline whose agent stages cannot run (WP-15b, Q52).** `/readyz` is now
+  `ok` on `ROLE=all` and a task that reaches an agent stage fails in its `stage.execute` job with
+  `RunnerUnavailableError`. Nothing reaches one until WP-15c builds the ingress, so the exposure is
+  today zero — but whoever lands the ingress before the runner transport should decide whether a task
+  parked on a throwing job needs a state of its own, or whether the job's failure record is enough.
+- **`integration.action.performed` / `.failed` are `unconsumed` and now actually produced.** Every
+  outbound provider call appends one to the integration's stream, and the dispatcher completes each as
+  "no handler matched" — correct today, and WP-19's audit/health projections are what consume them.
+  `readPendingDispatch` returns at most one event per stream, so a busy integration's audit events
+  dispatch one per sweep cycle; nothing has measured that at volume.
 
 - ~~**Nothing loads a project's integration bindings**~~ — **CLOSED at WP-15a**
   (`packages/integrations/src/bindings/loader.ts`, composed in `apps/server/src/pipeline.ts`). The secret

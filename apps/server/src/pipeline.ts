@@ -9,24 +9,30 @@
  * it is the real thing — the Postgres `PipelineStore`, the pg-boss `Jobs`, the event store's
  * `UnitOfWork`, the binding loader over `bindings`/`integrations`/`secrets`.
  *
- * ## What this build cannot compose, named rather than defaulted
+ * ## What this build composes, and the one thing it still cannot (WP-15b)
  *
- * Two of the pipeline's collaborators have **no production adapter in this repository**, and a
- * default for either would be standing rule 18's shape — a configuration whose absent case quietly
- * produces a permissive result:
+ * **The audit sink and the idempotency store are built here, from the pool, and no caller may
+ * supply them.** WP-15a took both as an argument because `integration_actions` had no
+ * `project_id`, `redaction_count` or `attempts` column and nothing implemented the ports; migration
+ * `0013` and `@platform/infrastructure`'s `integrations/` adapters closed that, and the argument
+ * went with it. An audit sink a caller may omit is one that is absent in production (standing rule
+ * 31), and a required field only proves it was *supplied* (rule 35) — so the e2e tier now asserts
+ * the `integration_actions` rows **this** function's adapter wrote.
  *
- *  - **`ClaudeRunner`.** WP-12 built the runner and WP-14 the launcher, and there is no transport
- *    between them: `apps/launcher` is deployed as its own container (TD-021) and the RPC surface is
- *    **Q52**, deliberately unbuilt. A runner needs a workspace, so the pipeline cannot execute an
- *    agent stage without one.
- *  - **`IntegrationAuditLog` and `IdempotencyStore`.** WP-07 shipped the ports and the executor;
- *    nothing persists them. `integration_actions` (migration 0007) has no `project_id`,
- *    `redaction_count` or `attempts` column, so an adapter needs a migration as well as code.
+ * **`ClaudeRunner` is still missing and is named rather than defaulted.** WP-12 built the runner and
+ * WP-14 the launcher, and there is no transport between them: `apps/launcher` is its own container
+ * (TD-021) and the RPC surface is **Q52**, deliberately unbuilt. {@link unavailableClaudeRunner} is
+ * what a process gets instead, and it is a **refusal**, not a default: `start()` throws
+ * {@link RunnerUnavailableError} naming Q52, so an agent stage fails loudly in its own job. It
+ * deliberately does not fabricate a failed `RunOutcome` — that would make the pipeline record
+ * `run.failed` and transition on a verdict for a run that never happened, which is the fail-*open*
+ * direction (standing rule 20).
  *
- * So {@link PipelineComposition} is **required** to start the pipeline, and a process that is not
- * given one logs which piece is missing and runs without it rather than starting a pipeline that
- * would drop every audit row on the floor. That is the fail-closed direction: no task advances,
- * loudly, instead of every task advancing unrecorded.
+ * The rest of the pipeline — intake, gates, status mapping, the workpad, every outbound provider
+ * call — runs, and every one of those calls is now audited. That is why the pipeline is composed
+ * unconditionally and `/readyz` can finally read `ok` on `ROLE=all`: a process that registers every
+ * handler `EVENT_CONSUMPTION` declares consumed is a complete consumer, which is the only question
+ * `sweepReadiness` asks.
  *
  * ## Order
  *
@@ -37,8 +43,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ClaudeRunner,
-  IdempotencyStore,
-  IntegrationAuditLog,
   Logger,
   PipelineRuntime,
   ProjectSettings,
@@ -56,6 +60,7 @@ import type { ConfigValues } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import type { eventing as eventingAdapters, jobs as jobsAdapters } from '@platform/infrastructure';
 import {
+  integrations as integrationAdapters,
   pipeline as pipelineAdapters,
   redaction as redactionAdapters,
   secrets as secretAdapters,
@@ -68,21 +73,44 @@ import {
 } from '@platform/integrations';
 import type pg from 'pg';
 
+/** Thrown by {@link unavailableClaudeRunner}: this build has no transport to the launcher (Q52). */
+export class RunnerUnavailableError extends Error {
+  override readonly name = 'RunnerUnavailableError';
+
+  constructor(stage: string | null) {
+    super(
+      `no ClaudeRunner is composed in this build, so stage ${JSON.stringify(stage ?? 'unknown')} cannot run an agent: apps/launcher is a separate container (TD-021) and the runner-to-launcher transport is Q52, deliberately unbuilt. Every other part of the pipeline runs and is audited; pass StartRuntimeOptions.pipeline.runner to supply one.`,
+    );
+  }
+}
+
 /**
- * The collaborators this build has no production adapter for.
+ * The runner a process gets when nothing supplies one.
  *
- * Required, not optional: standing rule 31 — an optional security dependency is an absent one, and
- * `auditLog` is the whole of BD-003 for outbound provider calls.
+ * A **refusal**, not a null object: `start()` throws, so the `stage.execute` job fails with a named
+ * error instead of the pipeline being handed a fabricated outcome it would transition on. The cost
+ * is stated rather than hidden — a task that reaches an agent stage stops there, visibly, and
+ * nothing downstream is told the run "failed" as though it had been attempted.
+ */
+export const unavailableClaudeRunner = (): ClaudeRunner => ({
+  start: (spec) => {
+    throw new RunnerUnavailableError(spec.stage ?? null);
+  },
+});
+
+/**
+ * What a caller may still put into this composition — and what it may not.
+ *
+ * Nothing here is an audit or a redaction collaborator any more: those are built below, from the
+ * pool, because an optional security dependency is an absent one (standing rule 31) and because a
+ * test that supplies its own audit sink proves nothing about the production one (rule 35).
  */
 export interface PipelineComposition {
-  readonly runner: ClaudeRunner;
-  readonly auditLog: IntegrationAuditLog;
   /**
-   * Absent means **no replay protection**: a retried job re-performs a mutation the provider has
-   * already seen. WP-07 made the executor's option optional and nothing has ever supplied one, so
-   * saying so here is the honest form — the executor's own docblock carries the consequence.
+   * Replaces {@link unavailableClaudeRunner}. Absent is the state `main.ts` and `pnpm dev` are in
+   * until Q52 is answered.
    */
-  readonly idempotency?: IdempotencyStore;
+  readonly runner?: ClaudeRunner;
   /**
    * Replaces the shipped provider registry.
    *
@@ -178,9 +206,25 @@ export const composePipeline = async (
   options: ComposePipelineOptions,
 ): Promise<ComposedPipeline> => {
   const { composition } = options;
+  const ids = { next: (): Id => randomUUID() as Id };
+
+  /**
+   * BD-003's audit sink, built here and **not** accepted from a caller (standing rule 31/35).
+   *
+   * It owns the `UnitOfWork` because the row and its `integration.action.performed` / `.failed`
+   * event have to commit together, and the read side because it allocates the integration stream's
+   * sequence before opening that transaction — the envelope a `NormalisedEvent` deliberately stops
+   * short of. `postgres-audit-log.ts` carries the reasoning and the conflict retry.
+   */
+  const auditLog = integrationAdapters.createPostgresIntegrationAuditLog({
+    unitOfWork: options.eventing.unitOfWork,
+    eventStore: options.eventing.store,
+    ids,
+    logger: options.logger,
+  });
 
   const executor = createIntegrationActionExecutor({
-    auditLog: composition.auditLog,
+    auditLog,
     /**
      * TD-012 **step 2** — the gitleaks-derived pattern rules — and not `noSecretsRedactor()`.
      *
@@ -199,7 +243,19 @@ export const composePipeline = async (
         }),
     },
     clock: { now: nowIso },
-    ...(composition.idempotency === undefined ? {} : { idempotencyStore: composition.idempotency }),
+    /**
+     * Also unconditional. WP-07 made the executor's option optional and nothing ever supplied one,
+     * so until this line every retried job re-performed a mutation the provider had already seen.
+     *
+     * **What no test covers, said here rather than left to be assumed** (standing rules 3, 11): the
+     * *adapter* has a shared contract suite against the fake and against PostgreSQL, and *this line*
+     * has nothing — deleting it leaves every tier green. No pipeline action ships an
+     * `IdempotencyPlan` (`packages/integrations/src/providers/slack/digest.ts` is the only one in
+     * the repository, and Slack is not in the shipped registry), so there is no call to replay and
+     * nothing to observe. The work package that gives a pipeline action an idempotency key owns the
+     * assertion; the backlog carries it.
+     */
+    idempotencyStore: integrationAdapters.createPostgresIdempotencyStore({ sql: options.pool }),
   });
 
   const registryOf = composition.registry ?? createPipelineProviderRegistry;
@@ -226,7 +282,6 @@ export const composePipeline = async (
     },
   });
 
-  const ids = { next: (): Id => randomUUID() as Id };
   const stopReasons = createRunStopReasons();
   const settings = createProjectSettingsPort(options.pool);
 
@@ -241,7 +296,7 @@ export const composePipeline = async (
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
     execution: {
-      runner: composition.runner,
+      runner: composition.runner ?? unavailableClaudeRunner(),
       planner: basicStageRunPlanner({
         workspacePath: (taskId) => `/workspaces/${taskId}`,
       }),

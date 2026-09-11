@@ -68,10 +68,13 @@ export interface StartInstanceOptions {
    */
   readonly database?: MigratedDatabase;
   /**
-   * The pipeline's two uncomposable collaborators (WP-15a).
+   * Overrides for the pipeline composition, or `null` to start no pipeline at all.
    *
-   * Absent is the production default, and the default here too: the auth and SSE e2e files start
-   * an instance with no pipeline, which is what `apps/server` does when nothing supplies a runner.
+   * **Absent composes the pipeline** (WP-15b) — for the auth and SSE e2e files too, which is the
+   * point: what `startRuntime()` does with no argument is what `main.ts` does, and an instance the
+   * harness had to configure would not be evidence about production. What a caller may still
+   * replace is the agent runner (Q52) and the provider registry; `null` is the labelled seam that
+   * starts an incomplete consumer, and `composition.e2e.test.ts` is its only user.
    */
   readonly pipeline?: StartRuntimeOptions['pipeline'];
   /** Where pino writes; a test that asserts on a start-up decision reads it here. */

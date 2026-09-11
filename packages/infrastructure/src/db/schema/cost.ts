@@ -2,7 +2,7 @@
  * Cost ledger, price list, rollups and governance (technical/03 § "Cost and governance", BD-011).
  * Mirrors `migrations/0007_cost.sql`.
  */
-import type { JsonObject } from '@platform/contracts';
+import type { JsonObject, JsonValue } from '@platform/contracts';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -140,6 +140,8 @@ export const integrationActions = pgTable(
   {
     id: uuid('id').notNull().default(uuidv7),
     integrationId: uuid('integration_id').notNull(),
+    /** Added at WP-15b (migration 0013): an action is project-scoped even with no task. */
+    projectId: uuid('project_id'),
     taskId: uuid('task_id'),
     direction: integrationDirectionEnum('direction').notNull(),
     action: text('action').notNull(),
@@ -147,10 +149,33 @@ export const integrationActions = pgTable(
     result: jsonb('result').$type<JsonObject>(),
     status: text('status').notNull(),
     durationMs: integer('duration_ms'),
+    /**
+     * TD-012's replacement count, and **no `.default()`** — migration 0013 drops the database
+     * default it needed to add the column, so an insert that omits this is refused rather than
+     * recorded as "nothing was redacted" (standing rule 18).
+     */
+    redactionCount: integer('redaction_count').notNull(),
+    /** Provider attempts including the successful one; 0 for `would_have` and `replayed`. */
+    attempts: integer('attempts').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.id, table.createdAt] })],
 );
+
+/**
+ * The `IdempotencyStore` port's table (WP-15b, migration 0013).
+ *
+ * `storageKey` is `idempotencyStorageKey(scope)` from `@platform/application`; `result` is the
+ * redacted remembered result and is `not null`, because a stored JSON `null` is a legitimate value
+ * and "never seen" is the absence of the row.
+ */
+export const integrationIdempotency = pgTable('integration_idempotency', {
+  storageKey: text('storage_key').primaryKey(),
+  integrationId: uuid('integration_id').notNull(),
+  action: text('action').notNull(),
+  result: jsonb('result').$type<JsonValue>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export type PriceListRow = typeof priceList.$inferSelect;
 export type CostEntry = typeof costEntries.$inferSelect;
@@ -158,3 +183,4 @@ export type CostRollupDaily = typeof costRollupDaily.$inferSelect;
 export type Budget = typeof budgets.$inferSelect;
 export type BudgetWindowRow = typeof budgetWindows.$inferSelect;
 export type IntegrationAction = typeof integrationActions.$inferSelect;
+export type IntegrationIdempotencyRow = typeof integrationIdempotency.$inferSelect;

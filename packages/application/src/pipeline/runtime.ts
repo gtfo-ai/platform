@@ -9,10 +9,24 @@
  * ## Pool arithmetic, stated once
  *
  * The dispatcher needs `2 × APP_DISPATCH_MAX_CONCURRENCY + 1` connections
- * (`InsufficientPoolError`). The pipeline adds to that: each `stage.execute` worker holds one
- * connection during each of its two transactions, and each review-window worker holds one during
- * its two. So a process running the pipeline needs
- * `2 × dispatchConcurrency + 1 + stageConcurrency + reviewConcurrency` at least, and the number is
+ * (`InsufficientPoolError`). The pipeline adds to that in **two** ways, and only the first is
+ * flat:
+ *
+ *  - each `stage.execute` worker holds one connection during each of its two transactions, and
+ *    each review-window worker holds one during each of its two. Both make their provider calls
+ *    *outside* those transactions, so an audit write started from either replaces the worker's
+ *    connection rather than nesting inside it;
+ *  - a **handler** that calls a provider inside `context.scope.tx` does nest: the audit row is
+ *    written in a transaction of its own (WP-15b, BD-003 requires the row and its event to commit
+ *    together), so that dispatch holds **three** connections, not two. Three handlers do it today
+ *    — the intake default-branch read, the workpad and the status mapping — which makes the term
+ *    proportional to the dispatch concurrency. `apps/server/src/config.ts` counts it as
+ *    `POOL_RESERVATIONS.auditPerDispatch` and names the filed defect underneath it: CLAUDE.md's
+ *    shape is *transaction / no transaction / transaction*, and a handler holding a pooled
+ *    connection across provider latency is not that.
+ *
+ * So a process running the pipeline needs
+ * `3 × dispatchConcurrency + 1 + stageConcurrency + reviewConcurrency` at least, and the number is
  * a floor rather than a budget — the HTTP layer and the projections draw on the same pool.
  */
 import type { EventHandler } from '../events/handler.js';
