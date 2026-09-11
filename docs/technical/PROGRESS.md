@@ -2651,6 +2651,34 @@ refusal is parameterised over the declared set, so each `handled` type has its o
   the template from the first render — so it would have passed on a task that never reached the state
   (rule 10). It asserts the header line now, which is the only part that reports where the task is.
 
+### The `verify` flake was a mutation harness running in the shared working tree
+
+The orchestrator saw `FAIL: verify` once in eight on `1ab02bc`, then seven passes, and lost the test
+name to a `tail -6` — rule 61's mistake in miniature, and the reason the hunt had to start from
+scratch. Twenty sequential runs with **the output captured to a file per run** caught it three times.
+
+**The failing values identify the cause exactly.** `envelope.test.ts` reported
+`constantPositions: [4,5,6,7,8,9]` — the signature of the *4 random bytes + 8-byte counter* hybrid
+this session used to mutation-check the nonce census — and `events.test.ts` reported a 51st catalogue
+type, `task.mutant_added`, which is the literal name of the mutant used to prove the consumption
+table's key check. Neither value can arise from clean sources. A **reviewer was re-deriving those two
+documented mutations in the same checkout**, so a `vitest` run started by somebody else collected the
+tree mid-mutation.
+
+**Counts.** With the review finished and no other agent running: **0 failures in 20** on `60e925a`,
+**0 failures in 20** on `main` (`24b3e65`), both sequential, at load average 9–14. An instrumented
+loop that hashed `events.ts` and `envelope.ts` before and after each run reported the files unchanged
+in 12 of 12 — which is the negative result that fits: by then nobody was mutating them.
+
+**The rule this is a new spelling of.** Rule 53 says a verification run must be scoped to the checkout
+it claims to verify; this is the same failure with the checkout *right* and the **tree** wrong. A
+mutation harness is a writer, and two agents sharing a working tree cannot both run one — the second
+one's `verify` is measuring the first one's mutant and has no way to know. Nothing in the protocol
+forbids it today; the cheap mitigations are a reviewer in its own worktree (which rule 66's machine
+policy discourages) or a mutation harness that refuses to run when the tree is not clean, and neither
+is this work package's to build. What it costs when it is not done is a day of hunting a flake that
+was never in the product: **the failure was real, reproducible, and not a defect.**
+
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 
 The finding worth keeping from the web foundation, because it is the other half of the defect that cost
