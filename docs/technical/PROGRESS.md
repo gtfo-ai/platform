@@ -4,13 +4,19 @@
 
 ## Resume note
 
-> **Session 2 ended 2026-09-10 with M1's work packages all merged.** Read this, then
-> **"Open findings backlog"**, then "Standing rules earned by evidence" — **sixty-eight rules, each with
-> its evidence, each paid for with a review round**. Then continue the loop in `14-orchestration-protocol.md`.
+> **Session 3 opened 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned
+> by evidence" — **seventy-two rules, each with its evidence, each paid for with a review round**. Then
+> continue the loop in `14-orchestration-protocol.md`.
 
 **Twenty-three work packages are DONE and pushed**, WP-00 … WP-15 plus WP-02a/04a/06a/11a/20 and four
-ci-fixes. `main` is green on all five targets, verified **on `main` after the last merge**: `verify` PASS
-(**3676 tests / 93.13% statements**), `verify:integration`, `verify:e2e`, `verify:ui`, `verify:web-e2e`.
+ci-fixes. **`main` is green on all five targets locally** — re-verified in the orchestrator's own shell at
+session 3 start-up: `PASS: verify` (3676 tests, 93.14% statements), `PASS: verify:integration`,
+`PASS: verify:e2e`, `PASS: verify:ui`, `PASS: verify:web-e2e`.
+
+**And `main` is red on GitHub, and has been since WP-14's own merge** — six consecutive failing runs, the
+`e2e-fake-claude` job only, `mkdir: can't create directory '/ctl/<uuid>': Permission denied` on
+`ubuntu-latest`. Backlog **entry 0**, standing rule **69**. Local green on macOS was reported as the state
+of `main` while the authoritative gate was red; `gh run list` is now part of "verify after every merge".
 
 **What the platform can do.** A feature ticket and a bug ticket go from `ticket.matched` to
 `task.completed` on PostgreSQL 18 with the real event store, dispatcher, `IntegrationActionExecutor` and
@@ -20,23 +26,25 @@ escalation to `needs_human` at every bounded loop's exhaustion. Against fake Cla
 
 **What it cannot do, stated plainly: run a real ticket.** `createPipelineRuntime` is composed only by
 `packages/application/src/testing/pipeline-harness.ts`, and `PipelineIntegrations` has **no production
-constructor**, so nothing reads `integration_bindings`. **"M1 complete" is not an honest claim** until
+constructor**, so nothing reads the `bindings` table. **"M1 complete" is not an honest claim** until
 **WP-15a** lands — see the backlog. Every M1 work package being DONE and the product not working are both
 true at once, and the second sentence is the one a reader needs.
 
-**Next, in order:** (1) review and merge the **slack/census branch**, which is verified green but has had
-**no review round** — `fix/slack-redaction-and-census` at `7a526fe`; (2) **WP-15a**; (3) M2 (WP-24–33),
-with WP-16…WP-19 and WP-21…WP-23 still open in M1's tail.
+**Next, in order:** (1) the **slack/census branch** — reviewed at session 3 start (REQUEST_CHANGES, a
+**fourth** instance of the stored-secret class, in `action-executor.ts` itself), fix round in flight on
+`fix/slack-redaction-and-census`, `main` already merged into it at `415a3fb`; (2) the **ci-fix** for entry 0;
+(3) **WP-15a**; (4) WP-16…WP-19, WP-21…WP-23, then M2 (WP-24–33).
 
 **Machine policy, not negotiable (rule 66).** The user had **two kernel panics** on 2026-09-10
-(`watchdog timeout`). This is a 14-core machine; Docker Desktop has since been reconfigured from 12 CPUs to
-**8**. Cap at **two agents, one** while any agent holds Docker or the e2e tier. **Never generate synthetic
-load.** Remove a worktree the moment its branch merges. Check `uptime` before trusting a timing-sensitive
-result. A green build on a machine you made unusable is not a trade worth making.
+(`watchdog timeout`). This is a 14-core machine; Docker Desktop has **8 CPUs**, and the user's own
+applications hold a **baseline load of ~7** before this session starts anything. Cap at **two agents, one**
+while any agent holds Docker or the e2e tier. **Never generate synthetic load.** Remove a worktree the
+moment its branch merges. Check `uptime` before trusting a timing-sensitive result. A green build on a
+machine you made unusable is not a trade worth making.
 
-**Verify before every review and after every merge, in your own shell.** Skipping it once cost a full
-review round on a red branch whose report said PASS (rule 61). Quote the target's **verdict line**, never a
-test count — the count can be right while the run fails.
+**Verify before every review and after every merge, in your own shell — and read `gh run list`.** Skipping
+the local half once cost a full review round on a red branch whose report said PASS (rule 61); skipping the
+CI half cost six pushes onto a red gate (rule 69). Quote the target's **verdict line**, never a test count.
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
@@ -56,6 +64,69 @@ test count — the count can be right while the run fails.
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+72. **A single pass that deletes while it walks is not a delete — and the two filesystems this repository
+   runs on disagree about whether you find out.** Reclaiming a control directory an agent had flooded past
+   `ARG_MAX`, three delete strategies were tried and **two of them silently left about half the entries**:
+   `find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +` left **3 944 of 8 002**, and a bare `rm -rf $dir`
+   left **3 991** — *neither reported an error*. Removing an entry invalidates the directory cursor the walk
+   is reading, so the walk skips. A **named volume does not show it; virtiofs does**, which means no unit
+   test on this machine could have caught it and the e2e caught both. The shipped form makes the emptiness
+   test the loop condition *and* the verdict, bounded at 20 passes. Two orderings only running it could find:
+   the unlock must precede the first emptiness question, because a `000` directory answers `ls -A` with
+   nothing and "already empty" then skips the removal — that ordering **passed the flood case and failed the
+   lock case**; and the verdict must be the last line, or the step exits 0 having done nothing. The whole
+   class is rule 3 with a shell in the way: *the step that cannot fail is the step whose failure branch
+   nobody executes* — this one ended `exit 0` and reported success while leaving the token in place.
+   **It is also rule 27's seventh instance and its sharpest**: the orchestrator's prescription failed *and*
+   so did the reviewer's alternative *and* so did the implementer's own first replacement. Three informed
+   guesses, one measurement, and only the measurement was right.
+
+71. **A failure you have fixed is a failure you can finally see past — and local green can rest on
+   several independent environment differences at once, each invisible until the one in front of it is
+   gone.** CI's `e2e-fake-claude` job died at `mkdir: Permission denied` for six pushes. Fixing that revealed
+   a **second** clean-environment defect underneath (`POST /containers/create` answers **404 `No such image`**
+   and a create through the engine API **never pulls**; `RUNTIME_IMAGE` was *assumed*, while `ALPINE_IMAGE`
+   and `GIT_IMAGE` reached the daemon through the **CLI**, which pulls — luck, not design), which took out
+   21 tests and a whole suite. Fixing *that* revealed a **third** (`nslookup egress-<run>` exiting 1). Three
+   independent reasons the local run could not have found any of them: a bind mount reports `0 0` for a host
+   directory owned by uid 501, so a helper always appears to own it; this machine's daemon has every image
+   cached; and a developer machine has no `search` line in `resolv.conf` while a cloud runner's host does and
+   Docker copies it in. **None is a bug in the product and all three hid one.** The lesson is not "run CI" —
+   it is that *the number of environment differences is unknown until each is removed*, so the first green
+   run after a long red streak is the first honest measurement, not the end of the work. Rule 4's instrument
+   audit applied to the **environment** rather than to the harness.
+70. **Redacting a value that is used as a *key* trades a leak for a collision, and the collision is the
+   worse failure.** A placeholder is many-to-one by construction, so the moment a redacted string becomes
+   identity material two distinct requests can become one: measured on the slack branch, two secrets sharing
+   a placeholder name collapsed two idempotency keys into one and the second caller was handed **the first
+   request's result**, told it was its own — `store.keys().length === 1`, the second `perform` never ran.
+   Round 2 redacted the key; round 3 **reversed** it, because the answer is not a better redactor but
+   refusing identity material that needs redacting at all, and letting the audit row BD-003 already obliges
+   take the fidelity loss instead. **And the mirrored case has the opposite answer, which is rule 20 and not
+   an inconsistency**: refusing an *outbound* mutation costs one action loudly before anything reaches the
+   provider (fail closed), while refusing an *inbound* delivery drops an event the platform has already been
+   told about (fail open) — so the webhook delivery key still redacts, with its residual stated (two
+   deliveries differing only inside the same credential collapse, and the **first** wins). The third option,
+   a one-way digest, preserves distinctness where a placeholder cannot, and was measured and filed rather
+   than taken: unkeyed it does not store "no secret" at `MIN_SECRET_LENGTH` 8, and the only key an inbound
+   adapter holds is nullable on GitLab, which would make the property hold on some bindings and silently
+   weaken on others (rule 18).
+
+69. **A target that is green on the developer's platform is not green on the platform CI runs — and the
+   ledger recorded "main is green on all five targets" for six consecutive pushes while the repository's own
+   gate was red.** `verify:e2e` passes here on macOS/Docker Desktop and has failed on `ubuntu-latest` since
+   **WP-14's own merge** (`34509491314`, 2026-09-10T17:38) with
+   `mkdir: can't create directory '/ctl/<uuid>': Permission denied` — six red runs, the whole of WP-15 and
+   its follow-ups pushed on top of a red gate. Every other job in the run is green, so nothing *else* was
+   wrong; the one job that exercises container isolation on a real Linux kernel is the one that failed, which
+   is precisely the job whose result cannot be obtained locally. The mechanism (uid/gid mapping across
+   Docker Desktop's file sharing versus native Linux) is a **hypothesis for the ci-fix to measure**, not a
+   finding. Two orchestrator failures let it run: the protocol's "check `gh run list` every 5 WPs" was not
+   run between WP-14 and WP-15a, and *five local targets were reported as the state of `main`* when the
+   authoritative gate is CI. **Anything touching the filesystem, uid mapping or a network namespace has its
+   real verdict on Linux; the local run is the weaker evidence, and `gh run list` is part of "verify after
+   every merge".**
 
 1. **A fake may be stricter than the real adapter, never kinder.** Every later WP's unit tier trusts the
    fake, so one that admits what production blocks, or fires earlier than production, launders a bug into a
@@ -134,6 +205,13 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    authority to say no to me, and an implementer that only ever complies is not using them.** A brief should
    therefore state the *defect* and the *evidence*, and hold its prescribed patch loosely — I have now been
    wrong about the patch five times and right about the defect every time.
+
+   **Sixth instance, and it came from a reviewer rather than from me.** The ci-fix review prescribed
+   `chown -R 0:0 $dir && chmod -R u+rwX $dir` before `rm -rf` to reclaim a control directory an agent had
+   locked. The implementer measured it: **`chown -R` must open a directory to walk it**, so with
+   `CAP_CHOWN` only it exits 1 on all three agent moves and the token survives; plain `rm -rf` with
+   **`CAP_DAC_OVERRIDE`** exits 0 on all three. The prescription was not merely suboptimal, it did not
+   work. Six wrong patches, zero wrong defects.
 26. **`toLowerCase()` is lowercase *mapping*; a filesystem compares with full case *folding* — and the way
    to learn its equivalence classes is to ask it, not to reason about Unicode.** WP-12's round-1 fix folded
    with `normalize('NFC').toLowerCase()`; the reviewer wrote `conﬁg/app.yaml` (U+FB01) on APFS and it
@@ -549,6 +627,37 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 > Each line names where it came from, so a future session can judge the evidence rather than re-derive it.
 > **Nothing here blocks M2**; the ordering is by consequence, not by discovery.
 
+### 0. **CI was red from WP-14 to session 3** — `e2e-fake-claude` on Linux (ci-fix, RESOLVED)
+Six consecutive red runs on `main`, `34509491314` (WP-14's merge) through `34572185799`, every other job
+green. **Three** independent clean-environment defects stacked behind one another; see rule 71 and the
+ci-fix notes. First green run: **`34580312845`**, all eleven jobs. Left behind by it:
+
+- **`composeSecretRedactors` cannot detect a duplicate placeholder name** — `SecretRedactor` is two methods
+  with no inventory, and compose is what all five adapters build. `exactSecretRedactor` now refuses a
+  duplicate at construction; the compose gap is **asserted by a named test** rather than closed. Closing it
+  needs an inventory on the port.
+- **A one-way digest for inbound delivery keys** (rule 70's third option). Measured available and deliberately
+  not taken: unkeyed it does not store "no secret" at `MIN_SECRET_LENGTH` 8; the only key an inbound adapter
+  holds is the binding's webhook secret, `string | null` on GitLab, so the property would hold on some
+  bindings and silently weaken on others (rule 18); `APP_SECRET_KEY` is not plumbed to a registration; and a
+  digest makes `delivery-key-redaction.test.ts` vacuous. Nothing writes `inbox` yet, so there is time.
+- **Two stored-secret siblings, found by the rule-49 sweep and filed rather than fixed** (WP-12/WP-15 scope,
+  verified at the sinks by two reviewers): a run's `structuredOutput` reaches `artifacts.data`,
+  `questions.text` and `tasks` unredacted while the same message's transcript copy is redacted
+  (`stage-executor.ts:385,388,447`); and `handler_executions.error` / `event_dispatch.error`
+  (`event-bus.ts:486` → `recordFailure:309`).
+
+### 0b. **A per-run control volume** — the fix the ci-fix routed around (TODO, not a ci-fix)
+An agent can lock its own control directory only because `#prepare` chowns it to uid 1000 on a **shared**
+volume, which is why teardown needs `CAP_DAC_OVERRIDE` to reclaim it at all. A **per-run** control volume
+needs no capability, and it is visible to the label sweep rather than invisible to it (rule 60). Both the
+reviewer and the implementer reached this independently; it was held out of the ci-fix deliberately because
+a ci-fix that grows into a design change stops being reviewable. Measured bound on today's shape: only
+`/ctl` is mounted, so `DAC_OVERRIDE` reaches every live run's token there — rootfs read-only, no network,
+fixed script, uuid-validated id, ~1 s, and the agent cannot influence it. **No cross-run escalation exists
+today**: `chmod -R` over a symlink to a sibling run left it at `500`, its token `400`, contents intact, and
+`rm -rf` unlinked the link rather than the target.
+
 ### 1. WP-15a — compose the pipeline into `apps/server` (TODO, a work package)
 The largest and the only one that changes what the product *can do*. See the plan row and the WP-15 notes.
 `createPipelineRuntime` is composed only by `packages/application/src/testing/pipeline-harness.ts`;
@@ -557,13 +666,13 @@ pipeline e2e builds its own runtime instead of starting an `apps/server` instanc
 deviation from `CLAUDE.md`'s rule for the tier. Small in code; it belongs to no existing WP, which is
 exactly why it would have been absorbed into WP-22 and disappeared.
 
-### 2. The slack/census follow-up branch — **verified green, never reviewed** (branch exists)
-`fix/slack-redaction-and-census` at `7a526fe`, worktree `.claude/worktrees/slack-fix`. All six targets
-verified green **by the orchestrator, on the branch with `main` merged in**. It carries three things:
-`slackDeliveryKey` redaction (the **third** instance of a secret reaching a *stored dedup key* — rule 49),
-four falsified exclusivity claims (rule 63), and a 25 s bound on the two census tests measured at stated
-load (rules 57, 64). **It has had no review round at all.** Review it before merging; do not merge on the
-strength of the orchestrator's verification alone.
+### 2. The slack/census follow-up branch — **three review rounds, merging** (branch exists)
+`fix/slack-redaction-and-census`, worktree `.claude/worktrees/slack-fix`, head `20b1e97` with `main` merged
+in at `415a3fb`. Round 1 found a **fourth** instance of the stored-secret class in `action-executor.ts`
+itself; the fix found it **wider** than the finding (the idempotency *key* leaked too); round 2 APPROVEd and
+raised the collision that round 3 reversed the key half for (rule 70); round 3 found the branch's own
+"anywhere" scope claim false and it was narrowed with rule 20 as the reason. Merge, then delete the
+worktree the same minute (rule 66).
 
 ### 3. Citation guard — the oracle shares a shape with the parser it audits (rule 65)
 `scripts/citations.ts`: `CITATION_SITE` requires the backticked file token and `›` on the same **physical**
@@ -2483,6 +2592,58 @@ shapes above — a fourth (a name broken across a fenced block, say) is listed i
 known gap rather than guessed at; (2) two citations of the *same* file on one line are one site to the
 recall check, also stated there; (3) markdown continuation ignores list and heading structure, which is
 sound while no Markdown citation exists and is the reason the limit is written down.
+
+### ci-fix — six pushes onto a red gate, and three environment defects stacked behind one error
+
+**What was wrong, and why nobody saw it.** `e2e-fake-claude` had been red since WP-14's own merge
+(`34509491314`), six consecutive runs, every other job green — and the ledger said "main is green on all five
+targets" the whole time, because five *local* targets were being read as the state of `main` and
+`gh run list` was never run (rule 69). One error message hid **three** independent defects, each only
+visible once the one in front of it was gone (rule 71):
+
+1. **`mkdir: can't create directory '/ctl/<uuid>': Permission denied`.** The prep helper is root with
+   `CapDrop: ALL` and only `CAP_CHOWN` — **no `CAP_DAC_OVERRIDE`** — so it is an ordinary non-owner subject
+   to mode bits. The *e2e's* control volume is bind-backed onto a host `mkdtemp` (`0700`, owned by the
+   runner), where production's is a `root:root 0755` named volume the helper owns as uid 0. So the `mkdir`
+   half is a **fixture** defect, confirmed both ways: prep identity into a named-volume root → `PREP_OK`;
+   into `1001:1001 0700` → the CI error verbatim. macOS hid it because a bind mount reports `0 0` for a host
+   directory owned by uid 501, so the helper always *appeared* to own it.
+2. **`Docker engine answered 404`, 21 tests and a whole suite.** `POST /containers/create` with an absent
+   image answers 404 `No such image`, and **a create through the engine API never pulls**. `RUNTIME_IMAGE`
+   was handed straight to the provider and *assumed*; `ALPINE_IMAGE` and `GIT_IMAGE` reached the daemon
+   through the **CLI**, which pulls — luck, not design. A clean daemon has none of them.
+3. **`nslookup egress-<run>` exiting 1** — **a broken probe, not a broken platform**, settled by a
+   differential varying only `--dns-search`: no search domain → `nslookup rc=0`; one → `nslookup rc=1` while
+   `getent hosts` still returns the address. Busybox `nslookup` also queries `<name>.<search-domain>`, the
+   embedded resolver must forward that upstream, and an internal network has no route upstream. A developer
+   machine has no `search` line; a cloud runner's host does and Docker copies it in. Rule 56's second
+   instance: the false branch meant "did not resolve **or** some other query in the same process did not".
+   The assertion now uses `getent hosts` and asserts the **address**. `docs/research/12-run-shim-verification.md`
+   check 3 is where the unsound instrument came from and was amended; its conclusion was right.
+
+**The product defect, found one layer down (rule 4).** `#removeControlDirectory` ran as root with no
+capabilities against a directory `#prepare` had chowned to uid 1000 — so `rm -rf` exited 1 and **a run's
+token stayed on the shared control volume**, surfaced only as `teardown partial`. Three rounds on the fix:
+the reviewer's prescribed `chown -R` **does not work** (it must open a directory to walk it — rule 27's
+sixth instance); `CAP_DAC_OVERRIDE` + `chmod -R u+rwX` + `rm -rf` does, on both volume shapes; and then the
+capability turned out to be **unnecessary** — the shipped form is **two zero-capability containers**,
+`ctlempty` (uid 1000, unlock and empty, leave `0755`) then `ctlrm` (uid 0, unlink), measured rc 0 and empty
+in all six cells of {named, bind-backed} × {benign, locked, already gone}. The final `chmod 755` is
+load-bearing: without it step 2 exits 1 on a named volume.
+
+**Two review findings inside the security census itself**, both measured: its `CapDrop` half read an absent
+value with `?? ['ALL']`, so a container emitting **no** `CapDrop` — Docker's full default set, the worst case
+it exists to catch — **passed** (rule 18 inside a security check); and its "a helper added later is covered
+the day it is added" was false, because it drove one create+destroy while `export` and `updateMirror` create
+helpers on paths it never took (`capAdd: ['SYS_ADMIN']` on the export helper left 171/171 green). Driving all
+four methods immediately surfaced a helper role nobody had enumerated (`egresscfg`) — rule 68 paying for
+itself on the day it was applied.
+
+**Verdicts.** First green CI since WP-14: run **`34580312845`** at `8475c32`, then **`34582432776`** at
+`0223a77`, all eleven jobs both times. Locally at `0223a77`: `PASS: verify`, `PASS: verify:e2e`,
+`PASS: verify:integration`. **No cross-run escalation exists** under either design — measured with an agent
+planting `evil_dir → ../runB` and `evil_tok → ../runB/token`: runB left `500`, its token `400`, contents
+intact, and `rm -rf` unlinked the link rather than the target.
 
 ## Discovered work (not in plan)
 
