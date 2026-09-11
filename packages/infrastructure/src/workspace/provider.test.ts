@@ -353,7 +353,15 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     // `CAP_DAC_OVERRIDE` exits 0 and the volume is empty. Take this capability away and the run
     // token stays on the shared control volume for ever, silently — `#teardown` only logs.
     expect(ctlrm?.body.HostConfig).toMatchObject({ CapDrop: ['ALL'], CapAdd: ['DAC_OVERRIDE'] });
-    expect((ctlrm?.body.Cmd ?? []).join('\n')).toBe(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
+    const script = (ctlrm?.body.Cmd ?? []).join('\n');
+    expect(script).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
+    // The `chmod` is the other half, and it is for the bind-backed control volume every developer
+    // machine has: there the syscall is served again by the host filesystem, where the guest's
+    // `CAP_DAC_OVERRIDE` means nothing. Measured on that shape, `rm -rf` alone exits 1 and the
+    // directory survives; with this line it exits 0. It is guarded and un-`set -e`d on purpose —
+    // on a named volume the kernel refuses it and `rm -rf` is still the verdict.
+    expect(script).toContain(`chmod -R u+rwX /ctl/${FIXTURE_RUN_ID}`);
+    expect(script.indexOf('chmod -R')).toBeLessThan(script.indexOf('rm -rf'));
   });
 
   /**

@@ -409,11 +409,16 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
           ALPINE_IMAGE,
           'sh',
           '-c',
-          'rm -rf /ctl/..?* /ctl/.[!.]* /ctl/*',
+          'chmod -R u+rwX /ctl; rm -rf /ctl/..?* /ctl/.[!.]* /ctl/*',
         ],
         { allowFailure: true },
       );
       await docker(['volume', 'rm', '-f', controlVolume, cacheVolume], { allowFailure: true });
+      // A run whose agent locked its control directory leaves a `000` directory behind, and POSIX
+      // refuses even its owner the read that `fs.rm` needs — `force: true` swallows `ENOENT`, never
+      // `EACCES`, so `afterAll` would throw. The host owns this tree, and ownership is all `chmod`
+      // asks for.
+      await run('chmod', ['-R', 'u+rwX', controlRoot]).catch(() => undefined);
       await rm(controlRoot, { recursive: true, force: true });
       await rm(exportDir, { recursive: true, force: true });
     },

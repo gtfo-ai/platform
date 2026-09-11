@@ -847,7 +847,27 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * --cap-add DAC_OVERRIDE, plain rm -rf       → exit 0, /ctl empty              (all three)
    * ```
    *
-   * So the capability is `DAC_OVERRIDE` and the script stays a plain `rm -rf`. What that buys the
+   * **And then the `chmod`, which is not for Linux at all.** Where the control volume is bind-backed
+   * onto a host filesystem — Docker Desktop, every developer machine — the syscall is served twice:
+   * the guest kernel, where `CAP_DAC_OVERRIDE` applies, and the host's own filesystem behind
+   * virtiofs, where it does not. Measured against that shape, with the agent nesting two `000`
+   * directories inside its own `000` one:
+   *
+   * ```
+   *                                  bind-backed (host fs)   named volume (production)
+   * rm -rf, DAC_OVERRIDE             exit 1, survives        exit 0, gone
+   * chmod -R u+rwX then rm -rf       exit 0, gone            exit 0, gone
+   * chmod -R u+rwX then rm -rf,      —                       exit 1, survives
+   *   without DAC_OVERRIDE
+   * ```
+   *
+   * So both lines are load-bearing and each covers what the other cannot: the `chmod` succeeds on a
+   * bind because the host maps this container's root onto the directory's owner, and it is refused
+   * on a named volume (`Operation not permitted`, harmlessly — `rm -rf` is the helper's exit code
+   * and `DAC_OVERRIDE` carries it there). `CAP_FOWNER` would silence that message and is not added:
+   * a capability granted to quiet a log line is a security change bought for nothing.
+   *
+   * What `DAC_OVERRIDE` buys the
    * container is the ability to read any run's token on this volume — which is why it is this
    * script and no other: the run id is `assertRunId`-ed before it is interpolated, the container
    * mounts nothing else, it has no network, and it lives about a second. The alternative is not a
@@ -867,8 +887,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       name: `ctlrm-${assertRunId(runId)}`,
       image: this.#images.git,
       // `rm -rf` on a path that is already gone is not an error, which is what makes `destroy`
-      // idempotent without a guard.
-      script: `rm -rf ${dir}`,
+      // idempotent; the `chmod` is guarded because it is not so forgiving. No `set -e`: a `chmod`
+      // the kernel refuses is expected on a named volume, and the `rm` is the verdict.
+      script: [`if [ -e ${dir} ]; then chmod -R u+rwX ${dir}; fi`, `rm -rf ${dir}`].join('\n'),
       mounts: [this.#volumeMount(this.#controlVolume, '/ctl', false)],
       user: '0:0',
       capAdd: ['DAC_OVERRIDE'],

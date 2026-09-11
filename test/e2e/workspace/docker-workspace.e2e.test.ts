@@ -300,13 +300,11 @@ describe('the workspace lifecycle against a real daemon', () => {
       'chmod 000 /ctl; stat -c "MODE=%a OWNER=%u" /ctl',
       { user: '1000:1000' },
     );
-    // Whether the lock *took* is a platform fact, and this case states it rather than asserting
-    // it: on Linux the directory really is uid 1000's and the `chmod` lands, which is the
-    // adversarial verdict; on Docker Desktop the bind reports it as root-owned, uid 1000 is
-    // refused, and what remains is an ordinary reclamation (standing rule 69 — the real verdict
-    // is CI's). The reclamation below must hold either way, and it is the half that regressed.
-    expect(hostile.output).toContain('MODE=');
-    const locked = hostile.output.includes('MODE=0 ');
+    // The lock takes on both platforms — measured, `MODE=0 OWNER=1000` through the subpath mount
+    // on Docker Desktop as well as on Linux — so this is asserted, not hedged. An earlier revision
+    // of this case guessed the opposite and carried a `process.platform` escape hatch for a
+    // condition that never occurs.
+    expect(hostile.output).toContain('MODE=0 ');
     const before = fixture.warnings.length;
     await fixture.provider.destroy(handle);
     expect(await controlVolumeListing()).not.toContain(handle.runId);
@@ -319,9 +317,6 @@ describe('the workspace lifecycle against a real daemon', () => {
       .filter((entry) => entry.message === 'workspace teardown step failed')
       .map((entry) => entry.fields['step']);
     expect(failed).not.toContain('control-dir');
-    // Fail loudly if the platform stops being able to stage the attack at all, so this never
-    // decays into a second copy of the case above without anyone noticing.
-    expect(locked || process.platform === 'darwin').toBe(true);
   }, 180_000);
 });
 
