@@ -4,56 +4,64 @@
 
 ## Resume note
 
-> **Session 3 ended 2026-09-11.** Read this, then the **"Open findings backlog"**, then "Standing rules
-> earned by evidence" — **seventy-six rules**, each with its evidence, each paid for with a review round.
-> Then continue the loop in `14-orchestration-protocol.md`, which now has a **fourth role**.
+> **Session 4, in progress — 2026-09-11.** Read this, then the **"Open findings backlog"**, then "Standing
+> rules earned by evidence" — **seventy-nine rules**, each with its evidence, each paid for with a review
+> round. Then continue the loop in `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Twenty-six work packages are DONE and pushed.** `main` is at **`31abfc6`**, green on all five targets in
-the orchestrator's own shell and **green on GitHub** (`34630283269`). No worktrees, no open branches.
-
-**The gate is green again, and it was red for a day before anyone looked.** `e2e-fake-claude` failed on
-every push from WP-14's merge until session 3 — six runs — while the ledger said "green on all five
-targets", because five *local* targets were being read as the state of `main`. **`gh run list` is part of
-"verify after every merge"** (rules 69, 71).
+**Twenty-seven work packages are DONE and pushed.** `main` is at **`8ae121c`** (WP-15d), green on all six
+targets in the orchestrator's own shell and **green on GitHub** (`34641716949`, every job). No worktrees, no
+open branches, clean tree.
 
 **What the platform can do.** A feature ticket and a bug ticket reach `task.completed` through an
 `apps/server` instance the e2e harness starts, with provider adapters built by a **production loader** from
-seeded `integrations`/`secrets`/`bindings` rows, and every outbound call audited by a **real Postgres audit
-log** that `startRuntime()` composes with no caller able to supply one. Retrieval over a knowledge vault and
-a code map exists, budgeted and measured.
+seeded `integrations`/`secrets`/`bindings` rows, every outbound call audited by a **real Postgres audit log**
+that `startRuntime()` composes with no caller able to supply one — and, since WP-15d, **no provider call
+made while a database transaction is open**, refused mechanically rather than by review habit. Retrieval
+over a knowledge vault and a code map exists, budgeted and measured.
 
-**What it still cannot do, stated plainly.** *Production does not start a ticket.* There is **no webhook
-ingress** (`apps/server/src/routes/` has none), so nothing emits `ticket.matched` outside a test; and **no
-prompt uses the retrieval layer** — `basicStageRunPlanner` still passes `contextPack: []`. **WP-15c** and
-**WP-17** are those two sentences. "M1 complete" is closer than it was and is still not the sentence to
-write.
+**What it still cannot do, unchanged and still the headline.** *Production does not start a ticket.* There
+is **no webhook ingress** (`apps/server/src/routes/` has none), so nothing emits `ticket.matched` outside a
+test; and **no prompt uses the retrieval layer** — `basicStageRunPlanner` still passes `contextPack: []`.
+**WP-15c** and **WP-17** are those two sentences, and "M1 complete" is not the sentence to write until both
+land.
 
-**Next, in order:** (1) **WP-15d** — move the provider calls out of the saga's open transaction; it is the
-shape under *both* of WP-15b's symptoms and it is cheap now, expensive later. (2) **WP-15c** — webhook
-ingress, which is the one that changes the headline. (3) **WP-17**, which unblocks WP-18 and WP-21 and owns
-the **prompt-delimiter contract** for untrusted pack text (BD-022). (4) WP-18, WP-19, WP-21, WP-22, WP-23.
-(5) M2 (WP-24–33). Backlog entries 8–17 hold everything else, each with the measurement that earned it.
+**Next, in order:** (1) **WP-15c** — webhook ingress and the `inbox`; it changes the headline, and WP-15d
+just added a criterion to its row (backlog **20**: a matched ticket with no task row must be **re-emitted**,
+which the `inbox` dedup on the same row does not do, because dedup is about a *delivery* and recovery is
+about a *task*). (2) **WP-17**, which unblocks WP-18 and WP-21 and owns the **prompt-delimiter contract**
+for untrusted pack text (BD-022) — and whose live-model half is **externally blocked**, see below. (3)
+WP-18, WP-19, WP-21, WP-22, WP-23. (4) M2 (WP-24–33). Backlog entries 8–21 hold everything else, each with
+the measurement that earned it.
 
-**A fourth role: the refiner** (`.claude/agents/refiner.md`, registered). A finding **bigger than the work
-package that found it** goes to it — it writes a backlog entry, a plan row with an acceptance criterion, or
-an OPEN-QUESTIONS entry with a recommendation, carrying the measurement, and it writes **no code**. It runs
-no tests, so it may run beside an implementer. Protocol step **4b**. This exists because the largest gap in
-this project's history — `createPipelineRuntime` composed only by a test harness, through twenty-three work
-packages — was a finding **no work package owned**.
+**WP-17's eval half has no credential, checked at session start rather than discovered at implementation
+time.** `gh secret list` is empty, the repository has **no environments at all** — so no `llm-ci`, which
+`13-implementation-plan.md` names for WP-33 and which WP-17's *"promptfoo evals green on fixtures"* would
+need against a live model — the org secrets endpoint 403s for this account, `ANTHROPIC_API_KEY` is unset in
+the orchestrator's shell, and promptfoo is not yet a dependency. **This gets a blocker brief naming exactly
+what a human must provide, not a work package that quietly stubs its own acceptance test.** The offline half
+of WP-17 (the delimiter contract, the real `contextPack`, a production `PlatformToolPort`) does not depend on
+it and should proceed.
+
+**What WP-15d cost, because it is the pattern to expect.** It closed backlog **17** and opened **18**, **19**,
+**20** and **21** — one of which (18, whole-row `tasks.save` lost updates, `cost_actual` **2.40** where 2.80
+was owed) is a silent data-corruption class that the move *created* and that only an assertion summing seven
+runs could see. Rule **79** is that lesson. A fix that moves a writer changes the premise of every other
+writer on the same row.
 
 **Machine policy, not negotiable (rule 66).** Two kernel panics on 2026-09-10. 14 cores, Docker has 8, and
-**the user works on this machine while the session runs** — thirteen of their own containers were up and the
-load reached **59** during session 3. Cap at **two agents, one** while any holds Docker or the e2e tier
-(a refiner runs no tests and does not count). **Never generate synthetic load, for any measurement, for any
-reason.** Remove a worktree the moment its branch merges. Check `uptime` and **wait for the machine** rather
-than piling on.
+**the user works on this machine while the session runs**. Cap at **two agents, one** while any holds Docker
+or the e2e tier (a refiner runs no tests and does not count). **Never generate synthetic load, for any
+measurement, for any reason** — WP-15d's before/after numbers were taken with a fake provider whose latency
+the test controls, which is the shape to copy. Remove a worktree the moment its branch merges. Check
+`uptime` and **wait for the machine** rather than piling on.
 
-**Verification discipline, all of it earned this session.** Verify in your own shell before every review and
-after every merge, and **gate on the exit status, not on the line you printed** — a pipeline exits with
-`tail`'s status, which is how a `FAIL: verify:e2e` scrolled past inside an `&&` chain and `main` was pushed
-anyway (rule 75). **Never `| tail` a run you may need to diagnose**: it destroyed the identity of two
-failures in one day. **Never verify while a mutating reviewer shares the tree** — that cost a phantom flake
-hunt (rule 74). Quote the **verdict line**, never a test count (rule 61).
+**Verification discipline, all of it earned.** Verify in your own shell before every review and after every
+merge, **and read `gh run list`** — `main` was red on GitHub for six consecutive pushes while the ledger said
+green, because five *local* targets were being read as the state of `main`. **Gate on the exit status, not
+on the line you printed** (rule 75). **Never `| tail` a run you may need to diagnose** — it destroyed the
+identity of two failures in one day. **Never verify while a mutating reviewer shares the tree** (rule 74).
+Quote the **verdict line**, never a test count (rule 61). And **mutate on a copy**: this environment reverts
+an in-place write to any Edit-touched file, and a mutant that never lands reads as *survived* (rule 77).
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
@@ -73,6 +81,49 @@ hunt (rule 74). Quote the **verdict line**, never a test count (rule 61).
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+79. **Moving a writer across a concurrency boundary turns every whole-row `save` into a read-modify-write
+   race — and the assertion that catches it is on a *derived total*, never on the field.** WP-15d moved the
+   workpad's "remember where the comment lives" write into a job that runs beside the stage executor's
+   transactions. Nothing about either writer changed; the *premise* did. Measured on the first `verify:e2e`
+   after the move: a bug ticket walked all seven agent stages and finished with `cost_actual` **2.40**
+   instead of **2.80**, because the whole-row write landed between the executor's read and its write and put
+   a stale cost back — and a feature ticket sat at `ci_gate` until the 90 s settle gave up, same cause. The
+   fix for that one writer is a narrow port method (`tasks.saveWorkpad`, one column, pinned by a
+   contract-suite case); the **class is open** — twenty `tasks.save` sites remain, read off disk
+   (`stage-executor.ts` 4, `transitions.ts` 5, `saga.ts` 11) — and is backlog entry **18**. Two halves worth
+   carrying separately. First: *a whole-row write is correct only while nothing else writes the row, which
+   is a fact about the callers and not about the method*, so it decays silently when a caller moves.
+   Second, and the transferable one: the corruption was invisible to every assertion on the task's *state*
+   and visible only to one that **summed seven runs** — a lost update leaves a perfectly well-formed row.
+   When you move a write, assert a total.
+
+78. **A residual's named mitigation is a claim about code that exists — grep for it before you write the
+   sentence.** Stating the cost of a deliberate residual is good practice and is how half this ledger is
+   written; it is also where an unchecked claim hides best, because the sentence reads as *candour* and
+   nobody audits candour. WP-15d's intake residual said a lost `ticket.matched` is "the same outcome as a
+   delivery that was never made, and the poller that produced it is what tries again." **Both halves were
+   false**, and it took a reviewer's grep to find it: there is no poller in this build — the only hit over
+   `packages/application/src` and `packages/integrations/src` is
+   `ports/integrations/task-management.ts:157`'s comment *"the polling fallback only"* — and a webhook
+   re-delivery would not re-emit it either, because WP-15c's own plan row accepts that a replayed delivery
+   is deduplicated by `inbox(provider, delivery_id)`. The loss is also **unlogged**:
+   `event-bus.ts:377-392` logs only the case where the callback *threw*. It was the one finding to survive a
+   whole review round in an otherwise approved work package. Rules 44 and 63 in the one place they had not
+   been pointed yet: an exclusivity claim is checkable, and so is a *recovery* claim.
+
+77. **A mutation harness that writes the file in place measures nothing here, and it fails in the direction
+   that looks like diligence.** This session's environment **reverts an out-of-band write to any file the
+   Edit tool has touched** — measured by WP-15d's implementer on five files: a `python3` rewrite of
+   `integrations.ts` reported `len 15535 → 15480` and re-read **15535** one second later, and an Edit-tool
+   deletion of the same line was restored too. A mutant that never lands leaves the suite green, which a
+   harness reports as **survived** — so every guard reads as untested and an agent spends a round writing
+   tests for guards that were already covered. The working recipe, used by both the implementer and the
+   reviewer and confirmed by both: `cp x.ts zzmutant.ts`, mutate the **copy**, run a copy of the tests
+   against it, delete both; and **calibrate first** — unmutated, it must pass (the reviewer's ran 3/3).
+   Fourth spelling of rule 21 (`--reporter=basic` twice, rule 62's collection error, now this): *a mutation
+   result is a measurement, and an uncalibrated instrument reads whatever you were hoping for* — this one
+   reads whatever makes you look thorough.
 
 76. **A flake's *rate* can be the only random thing about it — the defect underneath may be fully
    deterministic, and then "it passes four times in five" is the most misleading evidence you have.**
@@ -800,7 +851,135 @@ What done looks like is small and worth naming so it is not re-derived: the WP t
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
 
-### 17. **The pipeline calls providers from inside an open database transaction** (TODO — **no work package owned it**; now WP-15d)
+### 18. **Every other `tasks.save` is a whole-row write, and a concurrent writer silently puts stale state back** (TODO — now **WP-15e**)
+**What is wrong.** `TaskRepository.save` (`packages/application/src/pipeline/store.ts:80`) writes the
+**whole** row. That is correct for a saga step — the aggregate it writes is the one it read in the same
+transaction, and the pipeline orders those — and it stopped being correct the moment a writer appeared
+*outside* that ordering. WP-15d created the first one in the ordinary course of moving a provider call out
+of a transaction: the workpad's "remember where the comment lives" write now happens in a `pipeline.outbound`
+job that runs **beside** the stage executor's transactions, which makes it a read-modify-write across a
+concurrency boundary that did not exist before. **One writer is fixed; the class is not.**
+
+**Evidence**, quoted from the WP-15d review rather than paraphrased:
+
+> "a bug ticket walked all seven agent stages and finished with `cost_actual` 2.40 instead of 2.80,
+> because the workpad's whole-row write landed between the executor's read and its write and put a
+> stale cost back."
+
+The implementer met it first and its account adds the second half: the **first `verify:e2e` after the move
+failed twice** — the bug ticket above, and a feature ticket that **"sat at `ci_gate` until the 90 s settle
+gave up"**. *One cause.* The stale snapshot put back the cost, the state **and** the stage, which is the
+part that matters beyond this instance: the loss is **not confined to the column the racing writer meant to
+touch**. The fix shipped for exactly one writer — a narrow port method `tasks.saveWorkpad(tx, taskId, ref)`
+(`store.ts:97`), one column, pinned by the contract-suite case *"writes the workpad without writing anything
+else, so a concurrent cost survives"*; the reviewer confirmed the method really writes one column and that
+its two contract cases run by name. The measurement is preserved in the method's docblock (`store.ts:82-95`).
+
+**The scope of what is left, read off disk while filing this and not measured** (`grep` over the tree,
+2026-09-11): **twenty** production `tasks.save` call sites — `stage-executor.ts` 4 (`:199`, `:453`, `:518`,
+`:548`), `transitions.ts` 5 (`:127`, `:163`, `:190`, `:219`, `:265`), `saga.ts` 11. *Which* of them can run
+concurrently with another writer is exactly the part nobody has established; the count is the cheap half.
+
+**What it costs to leave.** A **silent data-corruption class**, and both properties that make it worse than
+an ordinary race are demonstrated rather than argued: it is silent — nothing throws, nothing logs, a number
+is simply wrong afterwards — and it reaches columns the racing writer never meant to write, so its second
+observed symptom was a task that **stopped moving** with no error anywhere. The first instance was found only
+because a cost happened to be summed by an assertion, and what it corrupted is the platform's own record of
+spend, which BD-003's audit claim and WP-19's ledger both rest on.
+
+**What would make it urgent.** The *instance* is gone and the *class* is one code change away: WP-15d
+created a concurrent writer while doing something routine, and the next work package that moves a write into
+a job does it again with nothing to stop it. `APP_DISPATCH_MAX_CONCURRENCY` above its shipped 1, and
+WP-15c's ingress delivering a burst, widen every window that already exists.
+
+**What done looks like.** Two shapes were named at WP-15d and the choice is **deliberately open** — WP-15d
+took the first for one writer without claiming it as the answer for the class:
+- **a narrow write per writer**, one column per update, like `saveWorkpad`. Cheapest, no migration — and it
+  **does not compose**: every new writer needs a new method and a reviewer who notices that it needs one.
+- **optimistic concurrency on the row** — a version column, a `save` that refuses a write over a row that
+  moved, a caller that retries. It catches the writer nobody anticipated, which is the property the narrow
+  method lacks, at the cost of a migration, a retry policy and an error path per call site.
+
+Whichever ships, the criterion is the same: `save` must be **incapable** of silently overwriting a
+concurrent change, asserted by a test that reproduces the interleaving **deliberately rather than under
+load** — and **the reproduction already exists** (WP-15d's shape: a job writing a task row beside a
+stage-executor transaction), which is worth more than the argument. Both columns are worth asserting
+separately, because the two observed symptoms were different columns.
+
+**Not an open question.** It is an engineering choice between two known shapes with a reproduction to
+measure them against, not a product decision; filing it in `OPEN-QUESTIONS.md` would ask the founder to pick
+a concurrency-control strategy, which is the same mistake entry 17 refused for TD-004/TD-005.
+
+**Needs measurement** (not run here, rule 66): which of the twenty call sites can actually interleave —
+the per-site answer is what decides between the two shapes, and a narrow write per writer is only cheaper
+than a version column while the list is short.
+
+**Depends on.** WP-15d (landed; it created both the first concurrent writer and the reproduction). Owner:
+**WP-15e** in `13-implementation-plan.md`. Related: entry 17 (the move that exposed it), entry 1 (nothing
+produces production load yet, which is the only reason this is scheduled rather than urgent).
+
+### 20. **A matched ticket whose intake enqueue is lost is never started again, and nothing says so** (TODO — **WP-15c**, criterion now on its plan row)
+**What is wrong.** The other half of entry 1's sentence, one layer in. Since WP-15d the intake handler
+**writes nothing**: `pipeline.intake` (`packages/application/src/pipeline/saga.ts:194`, priority 10) checks
+the 1:1 dedup and enqueues a `pipeline.outbound` job with `duty: 'intake_check'` through
+`context.afterCommit` (`saga.ts:224`), and the task row is created by the job. `afterCommit` is at-most-once
+(TD-004, and its own docblock), so a crash between the handler's commit and the enqueue leaves a **matched
+ticket with no task row** — which nothing re-emits, nothing retries and nothing logs.
+
+**Evidence** (WP-15d review round 1). The implementer's first version of this sentence claimed a mitigation
+— *"the same outcome as a `ticket.matched` that was never delivered, and the poller that produced it is
+what tries again"* — and it was **false in both halves** and corrected in the tree (rule 44). What replaced
+it is established rather than assumed:
+- **There is no poller.** A grep over `packages/application/src` and `packages/integrations/src` finds only
+  `packages/application/src/ports/integrations/task-management.ts:157`'s comment — *"the polling fallback
+  only"*.
+- **A webhook re-delivery will not re-emit it either**: WP-15c's own plan row
+  (`docs/technical/13-implementation-plan.md:38`) accepts *"a replayed delivery is deduplicated by
+  `inbox(provider, delivery_id)` and performs nothing twice"*.
+- **And the loss is silent**: `packages/application/src/events/event-bus.ts:377-392` logs only the case
+  where the callback *threw*.
+- **Re-dispatching the same event does not help, and that is by design** (resolved against the tree here so
+  nobody proposes it as the fix): `handlerExecutions.claim` (`event-bus.ts:351`) and `complete` (`:370`) run
+  **in the handler's own transaction**, so the record that `pipeline.intake` ran commits together with the
+  effect and a second dispatch of that event position returns `skipped`. A **new** `ticket.matched` event is
+  different: `findByTicket` (`saga.ts:204`) returns null while there is no task, so intake enqueues again.
+
+**The implementer declined to add a log line, and the reason is worth carrying rather than re-deriving**:
+the loss is a process death between two statements, so the process that would write the log is the one that
+died. It named the detectable form instead — **a query: a matched ticket with no task row** — and left the
+criterion to the ingress.
+
+**What it costs to leave.** One ticket, matched, silently never started, with no signal anywhere; a human
+re-matches it by hand, and nothing tells a human to. For a platform whose headline claim is that a ticket
+reaches an MR without anyone watching, "sometimes a ticket is dropped and nobody finds out" is the failure
+that costs trust rather than time.
+
+**What would make it urgent.** Nothing emits `ticket.matched` in production today (entry 1), so the window
+does not exist yet. It opens the day **WP-15c**'s ingress lands — and the same day widens it, because the
+first thing an ingress delivers is a burst and a process that dies mid-burst loses every enqueue it had not
+yet made.
+
+**What done looks like, and the tension it has to resolve rather than ignore.** The recovery must not
+contradict WP-15c's dedup criterion, and it does not, because **the two name different units: dedup is a
+statement about a delivery, recovery is a statement about a task.** Recommended shape, stated strongly
+enough to be implemented without re-deciding it: a reconciliation finds matched tickets with no task row and
+**re-emits `ticket.matched` as a new event** — not a re-dispatch of the old one, which is skipped by the
+claim record above — leaving `inbox(provider, delivery_id)` untouched, so the delivery is still performed
+exactly once while the *task* the platform owes for it is created. It is safe to run blind because intake is
+idempotent on `tasks_project_id_ticket_key_mode` (`saga.ts:204`). **Detection alone is the weaker half and
+should not be the whole answer**: a metric tells a human to do what the platform exists to do. Surface it
+too, by all means — the query is the mechanism either way.
+
+**Needs measurement**: none to start. The reproduction is deterministic and cheap — drop the `afterCommit`
+callback (or kill the process between the commit and the enqueue) and assert the ticket still reaches
+`task.completed`.
+
+**Depends on.** **WP-15c** (owner; the criterion is on its row). Related: entry 1 (the ingress that does not
+exist), entry 17 / WP-15d (the move that opened the window), and WP-19's re-dispatch/backfill tool, which is
+a **different** mechanism and does **not** cover this — replaying the same event position is skipped by the
+handler-execution record, which is the whole reason the recovery is task-shaped.
+
+### 17. **The pipeline calls providers from inside an open database transaction** (**RESOLVED** at `8ae121c`, WP-15d — kept for its evidence; the residue is entry **19**, the class it exposed is entry **18**)
 **What is wrong.** Three event handlers call an integration provider while the handler's transaction
 is still open, so a pooled connection is held across provider network latency and the audit write
 nests inside the caller's transaction instead of following it. It is the **cause** of two things that
@@ -913,6 +1092,57 @@ the shape was invisible). Should land **before or with WP-15c**, which is what m
 met the consequence twice — the foreign key and the arithmetic — and fixed both symptoms because
 neither was its to fix. Related: entry 1 (nothing produces the load yet), entry 1b (the two write handlers
 of this entry, 110 and 120, whose *ordering* was that flake), entry 11 (the same "built, not owned" shape one layer up).
+
+### 19. **`ProjectSettingsPort.forProject` borrows a pool connection *inside* the handler's transaction** (TODO, small — the **residue** of entry 17, not a reopening of it)
+**What is wrong.** The settings port reads `projects.config` on a connection it takes from the pool itself
+(`apps/server/src/pipeline.ts:183`, `createProjectSettingsPort` → `pool.query('select config from projects
+where id = $1')`) rather than on the caller's transaction, and three pipeline handlers call it while their
+own transaction is open. WP-15d moved the **provider** calls out and installed a mechanical refusal at
+`PipelineIntegrationsPort.forProject`; that refusal covers the integrations port only, so this borrow is
+neither refused nor counted.
+
+**The implementer's own assessment, kept rather than sharpened, because the distinction is the entry's
+value:** it is a **local read**, not a call held across a third party's latency — *"it contends, it cannot
+stall, because every other borrower releases without waiting on a dispatch"* — so it is deliberately **not**
+in the pool floor. *"The honest fix is for the port to take the caller's transaction; today the claim 'a
+dispatch holds two connections' is true of what it holds and not of what it transiently borrows."*
+
+**Evidence.** The implementer named two sites — `planApprovalGate`
+(`packages/application/src/pipeline/saga.ts:526`, reached from `:443`) and `schedulerHandler` (`saga.ts:1023`,
+priority 30, which uses `context.scope.tx` on the next line). **Resolved against the tree while filing, and
+it makes that an undercount**: `statusMappingHandler` (`packages/application/src/pipeline/workpad.ts:239`,
+priority 110) does the same, after loading the task on `context.scope.tx` at `:235`. The reasoning is
+mechanical rather than measured — `EventBus` runs the whole handler body inside one `uow.transaction`
+(`event-bus.ts:351-371`), so **every** `settings.forProject` in a handler body is a borrow inside that
+transaction. The other three callers are on the job path and outside a transaction, checked the same way:
+`saga.ts:269` (`runIntakeCheck`, between two `unitOfWork.transaction` calls), `workpad.ts:287`
+(`runWorkpadRender`, after its read transaction closed) and `stage-executor.ts:277` (via `runtime.ts:96`,
+before `prepare` opens one).
+
+**What it costs to leave.** Today, one wrong inference rather than one wrong behaviour: WP-15d's receipt for
+entry 17 is `POOL_RESERVATIONS.auditPerDispatch = 0`, and a reader who checks that receipt and concludes
+that no dispatch borrows a second connection is wrong. The borrow cannot deadlock the pool — that is the
+implementer's judgement above and it is recorded as a judgement, not a measurement — so what is left is
+contention under concurrency and an arithmetic that is true of *holds* and silent about *borrows*.
+
+**What would make it urgent.** A settings read that stops being local — a cache miss that fetches, a
+`.agentic/pipeline.yml` read from the default branch (the port's own docblock at `pipeline.ts:173` says that
+is what a project's own template would need, and that it is *absent rather than guessed* today). The day
+that read needs a workspace, this borrow becomes exactly the shape entry 17 was about.
+
+**What done looks like.** `ProjectSettingsPort.forProject` takes the caller's `Transaction` — the shape
+`PipelineIntegrationsPort.forProject` was given at WP-15d — so the read runs on the connection the handler
+already holds, and the pool floor does not change because the borrow disappears rather than being accounted
+for. One port signature, one adapter, three call sites; the job-path callers pass the scope they already
+open. Worth one line beside the floor's arithmetic saying that the port takes a transaction *so that* the
+"holds" claim is also true of borrows (rule 63).
+
+**Needs measurement**: none. This one is read off code end to end, and is filed as a small piece of work
+rather than a hypothesis.
+
+**Depends on.** WP-15d (landed). **Owner: none today** — WP-15d found it and deliberately left it, and no
+plan row mentions the settings port. Cheap enough to fold into WP-15c or WP-15e, whichever touches
+`apps/server/src/pipeline.ts` next.
 
 ### 11. What WP-16 left behind — **the retrieval layer is built and no prompt uses it** (TODO)
 The same shape as entry 1, one layer up, and in the reviewer's sentence form. Three pieces, none of
@@ -1215,6 +1445,35 @@ nobody can explain later.
 not intend and cannot see in its own output — twice in one work package, in two files, where a space
 was meant. The check existed; its *scope* was the hole.
 
+### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
+**What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
+`createEventing` throw **`EventBus is not a constructor`** — `packages/infrastructure/src/events/index.ts:82`
+is the `new EventBus({` that fails. Reordering the imports, or `await import('pg')`, makes it go away.
+
+**Evidence** (WP-15d implementer, in passing). Hit in a throwaway e2e file and worked around there with
+`await import('pg')`. **Nothing in the repository does it today, and nothing stops the next file from doing
+it.** Not diagnosed further: *which* module pair forms the cycle is unestablished and is the first thing
+whoever takes this has to find. **Hypothesis, labelled one** (rule 39): an ESM cycle through the
+`@platform/*` entry points in which the `EventBus` binding is still in its temporal dead zone when the
+eventing index's factory runs under one evaluation order and not under the other.
+
+**What it costs to leave.** An hour, maybe a session. The failure **names the wrong component entirely** —
+an `EventBus` that is fine, and a `pg` import that looks unrelated to it — which is standing rule 56's shape
+(*a test that reads the wrong signal blames the wrong component*). Nothing is wrong in production; this is a
+trap laid for the next author of an e2e file, and the order that springs it is the order a formatter or an
+import-sorter might produce on its own.
+
+**What done looks like.** The cycle is **named** — a graph pass (`madge`/`dpdm` style) or the pair found by
+hand — and then either broken, or written into the e2e harness's docblock as the import rule it demands, so
+the next author meets a sentence instead of a `TypeError`. A one-line note is an acceptable close here; an
+undiagnosed workaround copied into a second file is not.
+
+**Needs measurement** (rule 66, not run here): the reproduction itself. It was observed once, by one agent,
+in a file that no longer exists, and no test pins it.
+
+**Depends on.** Nothing. **Owner: none** — no work package owns the module graph. Cheap enough to fold into
+any WP that touches `packages/infrastructure/src/events/` or `test/e2e/support/`.
+
 ### 6. Two nits from WP-14's final round
 - A citation line ending in `,` continues, so ordinary quoted prose on the next line becomes an invented
   cited name. It fails **loudly**, and the grammar section states the constraint, so it is acceptable —
@@ -1271,7 +1530,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
 | WP-15b | **Postgres `IntegrationAuditLog` + `IdempotencyStore` + migration 0013** | WP-15a | no | DONE | `31abfc6` | 1 review round. `startRuntime()` composes a real audit log with **no caller able to supply one** (the field is gone from `PipelineComposition`); the composed-log→no-op mutation fails the e2e with `expected 0 to be greater than 0`, so the dependency is **used**, not merely supplied (rule 35). `redaction_count` asserted in **both** directions (rule 42); counters `not null` with the **default dropped**, so an omitted one errors rather than recording a zero (rule 18). **FK on `integration_actions` dropped** — a log of external facts must not be gated on internal referential state; deferral cannot help because the audit transaction commits **before** the saga's. Zero readers today, so technical/03 carries the `LEFT JOIN` sentence the first one will need. Pool floor recomputed: only the audit connection is concurrency-proportional (both job workers call providers *outside* their transactions), poolMax 10 → 13, and the test asserts the **shape** (+6 for N 1→3) so a flat reservation fails. Round 1 found the idempotency invariant asserted by **nothing** on Postgres while the fake *was* held to it — rule 1 inverted. |
-| WP-15d | **Move the provider calls out of the saga's open transaction** — the shape under both of WP-15b's symptoms | WP-15b | no | TODO | — | **Backlog 17.** `saga.ts:215` calls a provider after `store.tasks.insert` on the same open scope; `workpad.ts:168` and `:218` do the same. `postgres-unit-of-work.ts:55` takes a second `pool.connect()`. Against CLAUDE.md's own *transaction / no transaction / transaction* shape: a pooled connection is held across provider latency. It is **why** `integration_actions`' FK had nothing to point at **and** why the pool arithmetic undercounted a dispatch. `HandlerContext.afterCommit` exists for exactly this (TD-004/TD-005), so the compensation worry is already answered — this needs scheduling, not a decision. **The load consequence is a hypothesis**; the acceptance criterion requires it measured before and after. |
+| WP-15d | **Move the provider calls out of the handlers' transactions** — the shape under both of WP-15b's symptoms | WP-15b | no | DONE | `8ae121c` | 1 review round (APPROVE) + a pre-merge round for three false claims. **Backlog 17, closed.** The three sites now *decide* in the handler and *call* from a `pipeline.outbound` job enqueued through `afterCommit`; the refusal is a runtime fact — `events/open-transaction.ts` marks the handler path in `EventBus` and the job path in `createPipelineRuntime`, and `integrations.ts` refuses **both** to resolve a project's bindings and to make the call while a scope is open, so the next handler to try it fails a named test rather than a production pool. Deleting any one of the three refusals kills **exactly one** named test with the other two green — re-derived by the reviewer on copies, calibrated 3/3 unmutated (rules 21, 41). Door completeness checked over the **set**: all 7 direct `.port.*` calls in the repository sit inside the guarded `read`/`mutate` (rule 68). **The hypothesis is now a measurement**, at the shipped defaults and without generating load (rules 39, 64): N=10 concurrent intakes at 250 ms per git read delayed an unrelated event by **5 464 ms** before and **63 ms** after (load 4.1/6.0), and a read held open indefinitely stopped every other project's dispatch entirely before (20 s budget exhausted) and does not now — at `APP_DISPATCH_MAX_CONCURRENCY=1` the single dispatch slot was sitting inside `pipeline.intake` waiting on HTTP. Residual stated: the outbound worker is serial, so provider *throughput* is unchanged; what moved is that it no longer happens inside the dispatcher. `auditPerDispatch` is **0** — the receipt. The floor was **recomputed, not reverted**: `2×1+1+2+3+2+1 = 11`, the same number WP-15b reached by a different route (`2N+9` against `3N+8` — they agree at N=1 and diverge above it, 17 against 20 at N=4), so `APP_DB_POOL_MAX` stays **13** with two of slack; my instruction to revert it to 10 was refused with the arithmetic, correctly (rule 27, seventh instance). Moving the writes out **created** a lost update and found the class: backlog **18**. |
 | WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
