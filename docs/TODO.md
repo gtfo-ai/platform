@@ -48,6 +48,20 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       (2–4× real for CJK, ~1.6–2× for Czech) is a **hypothesis** and needs measurement against a real
       tokeniser; `tokens.test.ts`'s "non-zero + monotone" properties are satisfied by an arbitrarily wrong
       estimator, which is not a hypothesis. PROGRESS backlog entry 14.
+- [ ] **A junk query still fills the whole context budget — retrieval has no precision floor.** A query of
+      thirteen function words of four letters or more returns 10 documents at ranks 0.900/0.898/0.898/0.898
+      and packs **10 707 of 12 000** tokens with six tier-1 documents, top score **0.718**, *above* a good
+      query's correct answer at 0.500 (`packages/domain/src/knowledge/retrieval.ts:176`). Extraction drops
+      tokens of three characters or fewer only. Both candidate floors were measured and rejected (absolute
+      is backwards, relative is store-dependent), so the remedy needs a corpus-derived signal — IDF or a
+      `ts_rank` normalisation — which is a product decision: **Q58**, with a recommendation.
+      **Needs measurement:** any threshold, against a corpus that is not the fixture vault. No work package
+      owns it; WP-17 is the nearest home. PROGRESS backlog entry 15.
+- [ ] **The fixture vault cannot falsify precision.** Its padding paragraph is held by test to share no
+      keyword with the nine queries the retrieval tests use (`fixture-vault.test.ts:26`), so no padded page
+      can rank and "precision holds" is true by construction — standing rule 5, a weakness of the instrument
+      rather than a defect. Needs near-miss documents written **without** consulting the query list. WP-18
+      and WP-21 both build on this vault. PROGRESS backlog entry 16.
 - [ ] **`gitleaks` pre-commit scans nothing in a linked worktree and reports `no leaks found`** — measured
       2026-09-11; BD-002's gate failing open, standing rule 18. CI's `secret scan` job is unaffected.
       **Needs measurement:** whether this session's agent worktrees took the container fallback or the host

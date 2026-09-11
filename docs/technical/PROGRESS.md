@@ -792,6 +792,59 @@ them WP-16's to fix, all three now with an owner in the plan:
 Detail and measurement are in the WP-16 notes and in "Discovered work"; this entry exists so the gap
 is readable next to entry 1 rather than only under the work package that found it.
 
+### 15. **Retrieval has no defence against a junk query, and the remedy is a product decision (Q58)**
+**What is wrong.** Nothing between a degenerate query and the context pack rejects it. WP-16 round 1
+measured a single stopword query filling **87 %** of the budget with padding; the implementer fixed
+the *cause* found underneath it — `websearch_to_tsquery` joins bare words with **AND**, so the
+acceptance query matched **0 documents on PostgreSQL while the in-memory fake returned 15** — by
+extracting keywords and joining them with `OR`, and **deliberately shipped no relevance floor**, both
+candidates rejected by measurement. Round 2 then measured that the hole is **still open** one letter
+up: extraction drops tokens of **three characters or fewer** only (`MIN_QUERY_TERM_LENGTH = 4`,
+`packages/domain/src/knowledge/query.ts:45`), and the module's own docblock says what survives —
+*"it keeps `with`, `that` and `from`"*.
+
+**Evidence**, quoted rather than paraphrased (`packages/domain/src/knowledge/retrieval.ts:176`):
+*"a query of thirteen function words of four letters or more returns 10 documents at ranks
+0.900/0.898/0.898/0.898 and fills **10 707 of 12 000** with six tier-1 documents, its top score
+**0.718** — above a good query's correct answer at 0.500. The 87 %-padding pack is still reachable
+and this work package did not make it unreachable."* The query was
+`"that this with from have been were will your they able such their"` → 13 terms. The same pipeline
+on a good query returns **12 documents**, correct lesson top at **0.500**, pack **10 552/12 000** —
+which is the acceptance figure. The two rejected floors are at `retrieval.ts:152` and `:163` and are
+restated in full in **Q58**: an *absolute* floor is backwards (`"the"` ranked padded pages at
+**0.947** against a good query's correct answer at **0.048**, because `ts_rank_cd` measures cover
+density), and a *relative* floor is store-dependent (the correct second answer sits at **0.667** of
+the best on PostgreSQL and **0.267** on the in-memory fake, same corpus, same query; the 0.3 ratio
+dropped the right page on the store the acceptance figure is measured on). Those round-1 figures are
+**pre-fix and cannot be reproduced** — that state is gone — so they are evidence about *why a floor
+was rejected*, not numbers to tune a new one against.
+
+**What it costs to leave.** A pack that is mostly noise is spent budget and a worse answer at every
+stage that asks for one, and it fails silently: the pack is well-formed, the token figure looks
+healthy, and nothing on `ContextPackRecord` says the text-match step contributed nothing but padding.
+Not urgent **today**, and the trigger is nameable: nothing puts a pack into a prompt yet (entry 11),
+so the first junk query that costs anything arrives with WP-17's wiring — and the queries that reach
+it are `kb_search` calls written by a model and ticket text written by whoever files tickets, neither
+of which is curated.
+
+**What done looks like.** **Q58** answered, then implemented: a precision mechanism robust to
+≥ 4-letter function words, which needs a **corpus-derived** signal (IDF, or a choice of `ts_rank`
+normalisation) because every store-independent rule of the shape already tried has been measured
+wrong in one direction or the other. Two constraints on whatever ships, both earned here: it is a
+property of the **port**, not of the PostgreSQL adapter, or the in-memory double goes back on the
+kind side of standing rule 1 (0 against 15 documents; 0.667 against 0.267); and it is asserted by a
+test the **fixture vault cannot pass by construction** (entry 16).
+
+**Needs measurement** (not run here, rule 66): any threshold. The vault's padding is one repeated
+paragraph held by test to share no keyword with the test queries, so it can neither produce a false
+positive nor calibrate a cut-off; choosing one needs a real repository corpus.
+
+**Depends on.** WP-16 (landed). **No work package owns it** — it is beyond WP-16 by the reviewer's
+judgement, and the plan's nearest home is **WP-17**, the first consumer, where the answer should land
+if Q58 is decided before WP-17 starts; otherwise it is a work package of its own. It does **not**
+block entry 12's delimiter, and that delimiter does not close this: a delimiter makes junk text safe,
+not absent.
+
 ### 12. **Untrusted context-pack text reaches the prompt with no delimiter, marker or count** (WP-17)
 **What is wrong.** technical/04 § "Prompt assembly" delimits the *task* block — step 5 is
 `<ticket>` … `</ticket>`, "all marked as data" — and says nothing of the kind about step 4, the
@@ -823,6 +876,17 @@ to be a delimiter plus a rule about what may appear inside it.
 
 **Depends on.** WP-16 (landed); **blocks nothing**, and blocks *itself* being done after the
 `contextPack` wiring in the same work package.
+
+**One line beside it, measured and unresolved.** Zero-width and formatting characters — `U+200B`,
+`U+FEFF`, `U+2060` and `U+00AD` — pass the indexer's sanitiser untouched (`sanitised = 0`), where C0
+controls, DEL, bidi overrides and isolates are replaced and counted
+(`packages/domain/src/knowledge/sanitise.ts:57`). They are invisible but do not reorder, so they sit
+outside that module's stated scope by design rather than by oversight. **Whether it matters downstream
+is unknown** — the reviewer flagged it and could not check — and it is filed here because the two
+places it could matter are both WP-17's neighbourhood: a delimiter a document could spoof by hiding a
+zero-width character inside the marker, and a term no query can match because a zero-width character
+splits it in `to_tsvector`. *Needs measurement* (rule 66, not run here); a nit until one of the two is
+shown.
 
 ### 13. **`context_budget_tokens` has no ceiling** (WP-17, one line)
 `packages/contracts/src/common.ts:46` is `tokenCountSchema = z.int().nonnegative()`, and
@@ -859,6 +923,40 @@ The honest interim is a docblock line stating the measured worst case, which the
 
 **Depends on.** Nothing; wants a measurement before it wants code. Owner: **WP-17** if it lands
 first (it is the first consumer), otherwise whoever raises the budget past a Latin-script corpus.
+
+### 16. **The fixture vault cannot falsify precision — its padding is chosen against the test queries** (rule 5)
+**What is wrong.** The corpus every retrieval test measures on cannot produce a false positive for
+those tests, because its noise was selected against their query list. This is a standing weakness of
+the **instrument**, not a defect in the code: the code does what it says, and the check that creates
+the weakness is itself correct for the claim it enforces.
+
+**Evidence.** `PADDING_PARAGRAPH` (`packages/application/src/testing/fixture-vault.ts:60`) is the one
+paragraph repeated to pad five documents to 16 000 and 8 000 characters, and
+`packages/application/src/testing/fixture-vault.test.ts:26` holds it to *"share no keyword with any
+query the retrieval tests use"* by intersecting its extracted keywords with a nine-query list kept in
+the same file. Round 2 added that check after the docblock's original claim was measured false (the
+intersection with the acceptance query is `["a", "its", "the"]`, all sub-keyword), which was the right
+fix for the claim. The side effect is the finding: padding that shares no keyword with any query
+cannot be retrieved *by* those queries, so "no padded page ranked" is true by construction, and a
+precision assertion over this vault measures the assertion rather than the retriever.
+
+**What it costs to leave.** Standing rule 5 — *a differential result is evidence about the corpus, and
+whoever built the corpus is the worst judge of what it omits* — with rule 45 beside it. It already
+misleads once, concretely: entry 15's remedy cannot be calibrated here, and the cheapest candidate (a
+`ts_rank` length normalisation) would look excellent on this vault **because the noise pages are the
+padded ones** — an artifact of the fixture rather than a property of a real corpus. **WP-18**
+(librarian proposals) and **WP-21** (onboarding discovery) both build on this vault, so the weakness
+is inherited rather than retired when WP-16 merges.
+
+**What done looks like.** A negative corpus whose author did not consult the query list: a handful of
+documents that are *plausible answers to the test queries and wrong* — same vocabulary, different
+subject — so that a precision assertion is capable of failing. The padding stays as it is; it exists
+to make the budget bind, which it does. The interim, if the documents are not written, is one sentence
+in the vault's docblock saying what the corpus cannot show, which is the standing-rule-44 half of this.
+
+**Depends on.** Nothing. **Owner: none today** — WP-16 built it, WP-18 and WP-21 consume it, and no
+plan row mentions the corpus. Whoever takes entry 15 needs this first: a precision mechanism measured
+on an instrument that cannot falsify it is a mechanism nobody can review.
 
 ### 1b. `verify:e2e` failed once on `main` at `be05a9b`, unreproduced (TODO)
 One `FAIL: verify:e2e` in the orchestrator's shell at load ~20 falling, then **four consecutive passes**
