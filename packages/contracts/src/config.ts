@@ -28,6 +28,7 @@ import {
   stageIdSchema,
   templateIdSchema,
   timeOfDaySchema,
+  tokenCountSchema,
   unitIntervalSchema,
   usdSchema,
 } from './common.js';
@@ -37,6 +38,13 @@ import { customStageSchema } from './pipeline.js';
 
 export const projectConfigSchema = z.strictObject({
   knowledge_dir: pathPatternSchema.optional(),
+  /**
+   * Tokens a run's context pack may spend on tiers 0–1 (product/05: "a project setting, default
+   * 12k"; technical/07 step 4). Added to the schema at WP-16, with technical/12's example file
+   * amended in the same change — product/05 called it a project setting and technical/12's
+   * `.agentic/config.yml` had no key for it.
+   */
+  context_budget_tokens: tokenCountSchema.optional(),
   /** `auto` follows the ticket's language (BD-016). */
   communication_language: z.union([z.literal('auto'), languageTagSchema]).optional(),
   commit_convention: z.enum(['conventional', 'none']).optional(),

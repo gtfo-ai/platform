@@ -71,6 +71,22 @@
 
 ### Knowledge and code (derived; rebuildable)
 - `kb_documents(id, project_id, path, commit_sha, type, kind, status, confidence, scope, paths text[], trigger text, expires date null, last_confirmed date null, frontmatter jsonb, content_hash, tokens int, updated_at)` — `UNIQUE(project_id, path)`; GIN on `paths`.
+> **`kb_documents.confidence` is a weight, and product/05's `confidence` is a label (clarified at
+> WP-16).** product/05's lesson schema writes `confidence: proposed | confirmed | contested`; this
+> column is `real` bounded to `[0, 1]`, because technical/07 § "Retrieval" *boosts* a candidate by
+> confidence and a boost needs a number. Both are right and neither moves: the authored label
+> survives in `kb_documents.frontmatter`, and the column stores `kbConfidenceWeight` of it
+> (`@platform/contracts`), which is what the ranking multiplies by. A document with **no**
+> `confidence` is written at `proposed`'s weight rather than at zero — most of a vault carries no
+> frontmatter at all, and zero would rank the human-written core below every machine proposal
+> (standing rule 16: a missing number is not zero).
+>
+> **The layer a document belongs to is derived, not stored (WP-16).** product/05's layers
+> (`business/`, `technical/`, `decisions/`, `lessons/`, plus `.agentic/rules/`) are a function of
+> the path, so there is no column for them: a column would give the value two writers. It is
+> carried inside `frontmatter` under a platform-owned key and recomputed by the parser on every
+> index run.
+
 - `kb_chunks(id, document_id, heading_path text, ordinal int, text, tokens, search tsvector STORED, embedding halfvec(1024) null, embedding_model text null)` — GIN on `search`; HNSW on `embedding` (phase 2, pgvector).
 - `kb_links(from_document_id, to_path, resolved_document_id null, kind)`.
 - `kb_proposals(id, project_id, task_id null, run_id null, source, kind, type, target_path, delta text, evidence jsonb, significance real, status, decided_by, decided_at, applied_commit_sha null, created_at)`.

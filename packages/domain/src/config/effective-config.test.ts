@@ -48,6 +48,7 @@ describe('precedence and provenance', () => {
     const effective = mergeProjectConfig(layers);
     expect(effective.values.project).toEqual({
       knowledge_dir: 'docs/kb',
+      context_budget_tokens: 12_000,
       communication_language: 'auto',
       commit_convention: 'none',
       default_branch: 'trunk',

@@ -24,11 +24,20 @@ export * from './aggregates/task.js';
 export * from './aggregates/task-state-machine.js';
 // Foundations
 export * from './clock.js';
+// The repository map (TD-010, WP-16)
+export * from './code-map/graph.js';
+export * from './code-map/render.js';
 // Configuration
 export * from './config/effective-config.js';
 export * from './errors.js';
 export * from './events.js';
 export * from './ids.js';
+// The knowledge base: parsing a vault document and ranking it into a context pack (WP-16)
+export * from './knowledge/document.js';
+export * from './knowledge/frontmatter.js';
+export * from './knowledge/globs.js';
+export * from './knowledge/retrieval.js';
+export * from './knowledge/tokens.js';
 export * from './permissions.js';
 // The pipeline interpreter (WP-15)
 export * from './pipeline/interpreter.js';

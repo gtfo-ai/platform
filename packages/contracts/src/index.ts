@@ -21,6 +21,7 @@ export * from './artifacts.js';
 export * from './common.js';
 export * from './config.js';
 export * from './events.js';
+export * from './knowledge.js';
 export * from './pipeline.js';
 export * from './records.js';
 export * from './runlet.js';

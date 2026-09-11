@@ -27,6 +27,31 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > voice (BD-022). Closing it in the adapters instead would mean a second rule about provider-chosen
 > keys in the adapter ring, which already has one.
 
+> **Implemented at WP-16, with three decisions this section did not make.**
+>
+> **`title` and `trigger` are written into a document's first chunk.** Step 2 is a *trigger*/
+> full-text match and product/05 calls `trigger` "the description used for matching", but both live
+> in frontmatter, which is not part of the body the chunker splits — so a `tsvector` built from the
+> body alone can never match a trigger, and nothing would have said so. They are prepended to the
+> first chunk only, so a document's metadata cannot out-rank its own text.
+>
+> **A chunk is bounded at 32 KiB of UTF-8, and an over-long section is split rather than cut.**
+> `kb_chunks.search` is a *generated* column and PostgreSQL refuses a `tsvector` over 1 MB, so an
+> unbounded chunk is not a large row — it is a failed `INSERT` that takes the document with it.
+>
+> **"Tier 0 always" and "fill the budget" can conflict, and the conflict is reported.** When tier 0
+> alone exceeds the budget, the pack keeps every tier-0 document, admits no tier-1 document, and
+> records `total_tokens > budget_tokens`. Dropping a tier-0 document would make "always" false and
+> ignoring the budget would make it decoration; the third option is the only honest one, and it is
+> visible in `run_context_pack` rather than absorbed.
+>
+> **The code map needs `universal-ctags`, which the platform does not ship — see
+> `docs/OPEN-QUESTIONS.md` Q57.** The extractor **probes** and refuses anything that is not
+> universal-ctags (macOS's `/usr/bin/ctags` is BSD ctags: no JSON output, no TypeScript parser), and
+> the refusal propagates as a typed `unavailable` all the way to the context pack, which then omits
+> the map. It is never rendered as an empty map, because an empty map is indistinguishable from a
+> correct map of a repository with no code in it and would sit in tier 0 saying nothing.
+
 ## Phase 2: hybrid search
 - Enable pgvector (`halfvec(1024)`, HNSW, cosine) on `kb_chunks`; embeddings by the `EmbeddingProvider` port (default local `Qwen3-Embedding-0.6B` int8 via transformers.js in the app process or a dedicated `indexer` role; alternatives Ollama, Voyage). Model id and dims stored on the index; changing the provider triggers a rebuild.
 - Hybrid = RRF over the tsvector rank and the vector rank in one SQL statement; optional reranker later. Adoption is gated by the per-project eval set (research/02: hybrid halves retrieval failures; measure first).
