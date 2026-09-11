@@ -36,6 +36,7 @@ Secrets may also be provided as files via `*_FILE` variants (Docker secrets conv
 version: 1                      # schema version; the platform refuses unknown majors
 project:
   knowledge_dir: .agentic/knowledge
+  context_budget_tokens: 12000   # tiers 0-1 of a run's context pack (product/05, technical/07)
   communication_language: auto   # auto | en | cs | ...
   commit_convention: conventional
   default_branch: main

@@ -14,6 +14,9 @@
         "knowledge_dir": {
           "$ref": "#/$defs/PathPattern"
         },
+        "context_budget_tokens": {
+          "$ref": "#/$defs/TokenCount"
+        },
         "communication_language": {
           "anyOf": [
             {
@@ -522,6 +525,11 @@
     "TimeOfDay": {
       "type": "string",
       "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+    },
+    "TokenCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "UnitInterval": {
       "type": "number",

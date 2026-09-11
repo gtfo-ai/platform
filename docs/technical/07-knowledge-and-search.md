@@ -27,6 +27,60 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > voice (BD-022). Closing it in the adapters instead would mean a second rule about provider-chosen
 > keys in the adapter ring, which already has one.
 
+> **Round 2 correction: step 2 says "task *keywords*", and it is load-bearing.** WP-16 round 1
+> passed the whole task text to `websearch_to_tsquery`, which joins bare words with **AND** —
+> measured against a real PostgreSQL 18 over the fixture vault, a ticket-shaped query of eleven
+> words matched **0 documents**, while the in-memory double returned 15. The text-match step
+> retrieved nothing in production and everything in the tests. The query is now reduced to keywords
+> (tokens of four characters or more, `extractQueryTerms`) joined with `OR`, which also removes the
+> degenerate case: `"the"` and `"and the of"` extract to no terms at all and contribute nothing,
+> while path matches still apply. The cost is that a quoted phrase can no longer be asked for.
+>
+> **There is deliberately no relevance floor, and both shapes of one were measured and rejected.**
+> An *absolute* floor is backwards: `"the"` ranks four padded pages at **0.947** while a good query
+> ranks its single correct answer at **0.048**, because `ts_rank_cd` measures cover density and a
+> common word is dense. A floor *relative* to the best score is store-dependent: the correct second
+> answer for one query sits at **0.667** of the best against PostgreSQL and **0.267** against the
+> in-memory double, so a ratio tuned on either silently drops the right page on the other. What
+> removed the measured harm is the keyword extraction above. The reasoning and the numbers are in
+> `packages/domain/src/knowledge/retrieval.ts`.
+>
+> **Control characters and bidi overrides are replaced at parse; hostile *words* are not.** A vault
+> page is untrusted (BD-022) and this is the work package that puts one in a prompt. C0/C1 controls
+> and the Unicode bidi overrides are rendering instructions rather than text — and a literal `NUL`
+> is refused outright by a PostgreSQL `text` column, so replacing them is a correctness requirement
+> before a security one. Each becomes one `U+FFFD` and the count travels on the index report.
+> Prompt-injection text, markup and a `javascript:` link pass through **byte-identical**: they are
+> words, an indexer that edited them could not hold a page about XSS, and the defences are
+> structural — the prompt's delimiters (technical/04 § "Prompt assembly", WP-17) and the web app's
+> text-node rendering. `packages/domain/src/knowledge/sanitise.ts` states the boundary and the
+> fixture vault carries a document that attacks every consumer it can reach.
+
+> **Implemented at WP-16, with three decisions this section did not make.**
+>
+> **`title` and `trigger` are written into a document's first chunk.** Step 2 is a *trigger*/
+> full-text match and product/05 calls `trigger` "the description used for matching", but both live
+> in frontmatter, which is not part of the body the chunker splits — so a `tsvector` built from the
+> body alone can never match a trigger, and nothing would have said so. They are prepended to the
+> first chunk only, so a document's metadata cannot out-rank its own text.
+>
+> **A chunk is bounded at 32 KiB of UTF-8, and an over-long section is split rather than cut.**
+> `kb_chunks.search` is a *generated* column and PostgreSQL refuses a `tsvector` over 1 MB, so an
+> unbounded chunk is not a large row — it is a failed `INSERT` that takes the document with it.
+>
+> **"Tier 0 always" and "fill the budget" can conflict, and the conflict is reported.** When tier 0
+> alone exceeds the budget, the pack keeps every tier-0 document, admits no tier-1 document, and
+> records `total_tokens > budget_tokens`. Dropping a tier-0 document would make "always" false and
+> ignoring the budget would make it decoration; the third option is the only honest one, and it is
+> visible in `run_context_pack` rather than absorbed.
+>
+> **The code map needs `universal-ctags`, which the platform does not ship — see
+> `docs/OPEN-QUESTIONS.md` Q57.** The extractor **probes** and refuses anything that is not
+> universal-ctags (macOS's `/usr/bin/ctags` is BSD ctags: no JSON output, no TypeScript parser), and
+> the refusal propagates as a typed `unavailable` all the way to the context pack, which then omits
+> the map. It is never rendered as an empty map, because an empty map is indistinguishable from a
+> correct map of a repository with no code in it and would sit in tier 0 saying nothing.
+
 ## Phase 2: hybrid search
 - Enable pgvector (`halfvec(1024)`, HNSW, cosine) on `kb_chunks`; embeddings by the `EmbeddingProvider` port (default local `Qwen3-Embedding-0.6B` int8 via transformers.js in the app process or a dedicated `indexer` role; alternatives Ollama, Voyage). Model id and dims stored on the index; changing the provider triggers a rebuild.
 - Hybrid = RRF over the tsvector rank and the vector rank in one SQL statement; optional reranker later. Adoption is gated by the per-project eval set (research/02: hybrid halves retrieval failures; measure first).

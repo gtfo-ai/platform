@@ -668,6 +668,43 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 > Maintained by the orchestrator. A finding leaves this list when it is **merged**, not when it is agreed.
 > Each line names where it came from, so a future session can judge the evidence rather than re-derive it.
 > **Nothing here blocks M2**; the ordering is by consequence, not by discovery.
+> **Numbers are identifiers, not ranks.** Entries are cited by number from `docs/TODO.md` and from
+> each other, so a new finding takes the next free number and is *placed* where its consequence puts
+> it. A later number above an earlier one is the ordering working, not a mistake.
+
+### 8. **`gitleaks` pre-commit is a no-op in a linked worktree, and it fails open** (TODO)
+**What is wrong.** The pre-commit secret scan reports success by scanning nothing when the repository
+it is run in is a linked worktree.
+
+**Evidence** (orchestrator, 2026-09-11, worktree `.claude/worktrees/docs`). The hook's container
+fallback printed `fatal: not a git repository: /Users/janmikes/www/agentic-platform/.git/worktrees/docs`,
+then `0 commits scanned`, then `scanned ~0 bytes (0)`, then **`no leaks found`** and a green
+`✔️ gitleaks`. The mechanism is not in doubt: a linked worktree's `.git` is a *file* holding
+`gitdir: …/.git/worktrees/<name>`, and the container follows neither the file nor the path it names.
+
+**What it costs to leave.** BD-002 — "no secrets in the repo, ever" — is one of this project's
+non-negotiables, and this is standing rule 18's shape (*an empty credential is not a credential*)
+inside the gate that exists to enforce it: a scan of zero bytes is not a scan, and it is spelled the
+same as a real pass. The exposure is bounded and worth stating precisely: CI's `secret scan` job runs
+on an ordinary full checkout and is unaffected, so the repository is covered at the gate that has the
+last word. What is lost is the *local* half — and `14-orchestration-protocol.md` tells every future
+session to work in worktrees, so the decoration is exactly what an agent's commits meet.
+
+**What done looks like.** The hook either scans the worktree correctly (mount the parent `.git` and
+the `worktrees/<name>` gitdir into the container, or take the host binary when one is present) **or
+refuses loudly**. It must not print `no leaks found` over zero bytes: a `0 commits scanned` /
+`~0 bytes` result is a failure. The refusal needs its own assertion, because the whole finding is
+that the failing path and the passing path were spelled identically — a check that cannot fail is
+rule 18 twice over.
+
+**Needs measurement** (not run here, rule 66): whether this session's *agent* worktrees —
+`.claude/worktrees/slack-fix` and the `wp/*` worktrees — were affected at all. They carry
+`node_modules`, so they may have taken the binary path rather than the container fallback, and nobody
+has checked which. Until somebody does, the honest statement is that every commit made from a
+worktree this session is **unverified** by the pre-commit half, not that it was unscanned.
+
+**Depends on.** Nothing. One file (`scripts/gitleaks.mjs`), owned by no work package — whoever next
+touches the hook, and before the next session that runs agents in worktrees.
 
 ### 0. **CI was red from WP-14 to session 3** — `e2e-fake-claude` on Linux (ci-fix, RESOLVED)
 Six consecutive red runs on `main`, `34509491314` (WP-14's merge) through `34572185799`, every other job
@@ -682,7 +719,9 @@ ci-fix notes. First green run: **`34580312845`**, all eleven jobs. Left behind b
   not taken: unkeyed it does not store "no secret" at `MIN_SECRET_LENGTH` 8; the only key an inbound adapter
   holds is the binding's webhook secret, `string | null` on GitLab, so the property would hold on some
   bindings and silently weaken on others (rule 18); `APP_SECRET_KEY` is not plumbed to a registration; and a
-  digest makes `delivery-key-redaction.test.ts` vacuous. Nothing writes `inbox` yet, so there is time.
+  digest makes `delivery-key-redaction.test.ts` vacuous. Nothing writes `inbox` yet, so there is time —
+  and the work package that first will is now named: **WP-15c**, which owns the ingress and the inbox row,
+  and which therefore has to answer this before it writes its first `delivery_id`.
 - **Two stored-secret siblings, found by the rule-49 sweep and filed rather than fixed** (WP-12/WP-15 scope,
   verified at the sinks by two reviewers): a run's `structuredOutput` reaches `artifacts.data`,
   `questions.text` and `tasks` unredacted while the same message's transcript copy is redacted
@@ -699,31 +738,247 @@ a ci-fix that grows into a design change stops being reviewable. Measured bound 
 fixed script, uuid-validated id, ~1 s, and the agent cannot influence it. **No cross-run escalation exists
 today**: `chmod -R` over a symlink to a sibling run left it at `500`, its token `400`, contents intact, and
 `rm -rf` unlinked the link rather than the target.
+Checked rather than rewritten, and the two parts it was missing: **what done looks like** is the volume per
+run plus the teardown dropping `CAP_DAC_OVERRIDE` — the capability is the *evidence* the shape is wrong, so
+a fix that keeps it has not landed — and the **owner** is **WP-22**, which builds the compose file and the
+images and is the first place the volume layout is written down rather than constructed in a test.
 
 ### 1. What WP-15a left behind — **production still does not start the pipeline** (TODO)
 The sentence a reader needs, in the reviewer's words: **"The pipeline is composed and production does not
 start it."** Three separate things, none of them WP-15a's to fix:
 
-- **A Postgres `IntegrationAuditLog` and its migration.** `integration_actions` lacks `project_id`,
-  `redaction_count` and `attempts`. Until it exists, `main.ts:18` and `scripts/dev.mjs:70` call
-  `startRuntime()` with no runner and no audit log, and `/readyz` is **503 for ever** on `ROLE=all|worker` —
-  which is honest, and is why **WP-22 must not gate `depends_on` on `/readyz`** (recorded in TD-023).
-- **No webhook ingress.** `apps/server/src/routes/` has none, so nothing in production emits `ticket.matched`
-  even once an audit log exists. Belongs with WP-08/WP-09's providers or a row of its own.
-- **A re-dispatch/backfill tool**, now owed by **WP-19** with an acceptance criterion, because
-  `run.finished`/`run.failed` are swept today (the cost ledger is unbuilt). The loss is recoverable:
-  `runFinishedEvent` carries `usage`, `model_usage`, `cost`, `num_turns`, `wall_ms`, and `events` is
-  append-only.
+All three are now scheduled — the two that had no home are **WP-15b** and **WP-15c** in
+`13-implementation-plan.md`, each with an acceptance criterion; the third already had one on WP-19.
+
+- **A Postgres `IntegrationAuditLog` and its migration** — now **WP-15b**. `integration_actions` lacks
+  `project_id`, `redaction_count` and `attempts`. Until it exists, `main.ts:18` and `scripts/dev.mjs:70`
+  call `startRuntime()` with no runner and no audit log, and `/readyz` is **503 for ever** on
+  `ROLE=all|worker` — which is honest, and is why **WP-22 must not gate `depends_on` on `/readyz`**
+  (recorded in TD-023).
+- **No webhook ingress** — now **WP-15c**. `apps/server/src/routes/` has none, so nothing in production
+  emits `ticket.matched` even once an audit log exists. Carved off WP-15a's number rather than WP-08's or
+  WP-09's because it spans both providers *and* the unwritten `inbox`, and because the inbound redaction
+  step `docs/TODO.md` has open belongs to the same door.
+- **A re-dispatch/backfill tool**, owed by **WP-19** with an acceptance criterion already on its plan row
+  (*"a run that finished before the ledger's handler was registered appears in the rollups after a
+  backfill"*), because `run.finished`/`run.failed` are swept today (the cost ledger is unbuilt). The loss
+  is recoverable: `runFinishedEvent` carries `usage`, `model_usage`, `cost`, `num_turns`, `wall_ms`, and
+  `events` is append-only. Checked rather than rewritten: the row says it.
 
 Also open, smaller: the consumption table is **derived from the implementation** rather than a declaration
 the implementation must meet — a row that stays `unconsumed` after its WP lands re-opens the hole silently,
-and guarding that direction needs a second list of landed WPs (stated, not built).
+and guarding that direction needs a second list of landed WPs (stated, not built). It is the *safe*
+direction that is guarded today and the *unsafe* one that is not, which is standing rule 7's shape again.
+What done looks like is small and worth naming so it is not re-derived: the WP that flips a row to
+`handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
+declaration is held by the work package rather than by a global list nobody maintains.
 
-### 1b. `verify:e2e` failed once on `main` at `be05a9b`, unreproduced (TODO)
-One `FAIL: verify:e2e` in the orchestrator's shell at load ~20 falling, then **four consecutive passes**
-(1 + 3 captured to files) at load 6–8, and **CI green on the same commit** (`34604222753`). The failing
-test's identity was **lost to `| tail`** — see rule 75. Recorded rather than dismissed: a flake nobody can
-name is still a flake, and the next sighting should be able to cite this one.
+### 11. What WP-16 left behind — **the retrieval layer is built and no prompt uses it** (TODO)
+The same shape as entry 1, one layer up, and in the reviewer's sentence form. Three pieces, none of
+them WP-16's to fix, all three now with an owner in the plan:
+
+- **`basicStageRunPlanner` still passes `contextPack: []`**, and `stage-executor.ts` still writes a
+  zeroed `ContextPackRecord`. The assembler, the store, `kb_search` and the code map all work and are
+  reached by nothing a run sees. **WP-17**, which owns prompt assembly.
+- **Nothing composes a `PlatformToolPort` in production, so `kb_search` has no home.** WP-12 defined
+  the port and its nine methods; the only implementations in the tree are `recordingTools` (a
+  fixture) and WP-16's `createKbSearchTool`, which is a function a composition root supplies.
+  `platform-mcp.ts` is ready and takes one. **WP-17**, which owns the run's tool surface.
+- **`KnowledgeIndexer` is not registered as a pg-boss job.** technical/07 specifies "singleton per
+  project", triggered at task start and after every merge. Registering it needs a checkout to read,
+  which needs the workspace provider, which needs the ingress entry 1 says does not exist — so
+  wiring it today would be a job nothing can trigger. **WP-18**, after **WP-15c**.
+
+Detail and measurement are in the WP-16 notes and in "Discovered work"; this entry exists so the gap
+is readable next to entry 1 rather than only under the work package that found it.
+
+### 15. **Retrieval has no defence against a junk query, and the remedy is a product decision (Q58)**
+**What is wrong.** Nothing between a degenerate query and the context pack rejects it. WP-16 round 1
+measured a single stopword query filling **87 %** of the budget with padding; the implementer fixed
+the *cause* found underneath it — `websearch_to_tsquery` joins bare words with **AND**, so the
+acceptance query matched **0 documents on PostgreSQL while the in-memory fake returned 15** — by
+extracting keywords and joining them with `OR`, and **deliberately shipped no relevance floor**, both
+candidates rejected by measurement. Round 2 then measured that the hole is **still open** one letter
+up: extraction drops tokens of **three characters or fewer** only (`MIN_QUERY_TERM_LENGTH = 4`,
+`packages/domain/src/knowledge/query.ts:45`), and the module's own docblock says what survives —
+*"it keeps `with`, `that` and `from`"*.
+
+**Evidence**, quoted rather than paraphrased (`packages/domain/src/knowledge/retrieval.ts:176`):
+*"a query of thirteen function words of four letters or more returns 10 documents at ranks
+0.900/0.898/0.898/0.898 and fills **10 707 of 12 000** with six tier-1 documents, its top score
+**0.718** — above a good query's correct answer at 0.500. The 87 %-padding pack is still reachable
+and this work package did not make it unreachable."* The query was
+`"that this with from have been were will your they able such their"` → 13 terms. The same pipeline
+on a good query returns **12 documents**, correct lesson top at **0.500**, pack **10 552/12 000** —
+which is the acceptance figure. The two rejected floors are at `retrieval.ts:152` and `:163` and are
+restated in full in **Q58**: an *absolute* floor is backwards (`"the"` ranked padded pages at
+**0.947** against a good query's correct answer at **0.048**, because `ts_rank_cd` measures cover
+density), and a *relative* floor is store-dependent (the correct second answer sits at **0.667** of
+the best on PostgreSQL and **0.267** on the in-memory fake, same corpus, same query; the 0.3 ratio
+dropped the right page on the store the acceptance figure is measured on). Those round-1 figures are
+**pre-fix and cannot be reproduced** — that state is gone — so they are evidence about *why a floor
+was rejected*, not numbers to tune a new one against.
+
+**What it costs to leave.** A pack that is mostly noise is spent budget and a worse answer at every
+stage that asks for one, and it fails silently: the pack is well-formed, the token figure looks
+healthy, and nothing on `ContextPackRecord` says the text-match step contributed nothing but padding.
+Not urgent **today**, and the trigger is nameable: nothing puts a pack into a prompt yet (entry 11),
+so the first junk query that costs anything arrives with WP-17's wiring — and the queries that reach
+it are `kb_search` calls written by a model and ticket text written by whoever files tickets, neither
+of which is curated.
+
+**What done looks like.** **Q58** answered, then implemented: a precision mechanism robust to
+≥ 4-letter function words, which needs a **corpus-derived** signal (IDF, or a choice of `ts_rank`
+normalisation) because every store-independent rule of the shape already tried has been measured
+wrong in one direction or the other. Two constraints on whatever ships, both earned here: it is a
+property of the **port**, not of the PostgreSQL adapter, or the in-memory double goes back on the
+kind side of standing rule 1 (0 against 15 documents; 0.667 against 0.267); and it is asserted by a
+test the **fixture vault cannot pass by construction** (entry 16).
+
+**Needs measurement** (not run here, rule 66): any threshold. The vault's padding is one repeated
+paragraph held by test to share no keyword with the test queries, so it can neither produce a false
+positive nor calibrate a cut-off; choosing one needs a real repository corpus.
+
+**Depends on.** WP-16 (landed). **No work package owns it** — it is beyond WP-16 by the reviewer's
+judgement, and the plan's nearest home is **WP-17**, the first consumer, where the answer should land
+if Q58 is decided before WP-17 starts; otherwise it is a work package of its own. It does **not**
+block entry 12's delimiter, and that delimiter does not close this: a delimiter makes junk text safe,
+not absent.
+
+### 12. **Untrusted context-pack text reaches the prompt with no delimiter, marker or count** (WP-17)
+**What is wrong.** technical/04 § "Prompt assembly" delimits the *task* block — step 5 is
+`<ticket>` … `</ticket>`, "all marked as data" — and says nothing of the kind about step 4, the
+context pack, which is rendered "tier 0 inline" and as a "Relevant knowledge" block. Nothing between
+a KB document on disk and the assembled prompt marks that text as data.
+
+**Evidence** (WP-16 review, explicitly marked *schedule, don't fix here*). A hostile document —
+injection text, a literal `<system>`, `<img onerror=…>`, a `javascript:` URL, an ANSI `ESC[31m` and a
+U+202E — flows **byte-identical** through the parser → `kb_chunks` → `kb_search.excerpt` →
+`pack.documents[].text`. Nothing strips it, escapes it, marks it or counts it, and nothing is
+supposed to at that layer: `context-pack.ts`'s own docblock says the assembler "returns text and
+paths, the prompt assembler (WP-17) is what delimits them", and the field carries the comment
+*"Untrusted document text (BD-022). Never interpreted here."* So this is a **handoff that has not
+been scheduled**, not a defect in WP-16.
+
+**What it costs to leave.** BD-022 governs, and technical/07's own block on provider text says of
+this exact obligation **"this is where it closes"** — a pack must not let integration text occupy the
+pack's own voice. Until WP-17 lands, every prompt that consumes a pack would take a KB document as
+platform voice; today nothing consumes a pack (entry 11), which is the only reason this is scheduled
+rather than urgent. The order matters: WP-17 must not ship the `contextPack` wiring of entry 11
+*before* the delimiter, or the window opens for the length of a work package.
+
+**What done looks like.** A delimiter contract for pack text in the assembler, asserted by a test
+that plants the hostile document above and reads the **assembled prompt** — not the pack — and shows
+that none of the six can close the platform's own voice. The web app's answer to the same question is
+the precedent worth copying (`apps/web/src/ui/untrusted.tsx`: no sanitiser, nothing for a later
+transform to undo), and the difference is that a prompt has no React text node, so the contract has
+to be a delimiter plus a rule about what may appear inside it.
+
+**Depends on.** WP-16 (landed); **blocks nothing**, and blocks *itself* being done after the
+`contextPack` wiring in the same work package.
+
+**One line beside it, measured and unresolved.** Zero-width and formatting characters — `U+200B`,
+`U+FEFF`, `U+2060` and `U+00AD` — pass the indexer's sanitiser untouched (`sanitised = 0`), where C0
+controls, DEL, bidi overrides and isolates are replaced and counted
+(`packages/domain/src/knowledge/sanitise.ts:57`). They are invisible but do not reorder, so they sit
+outside that module's stated scope by design rather than by oversight. **Whether it matters downstream
+is unknown** — the reviewer flagged it and could not check — and it is filed here because the two
+places it could matter are both WP-17's neighbourhood: a delimiter a document could spoof by hiding a
+zero-width character inside the marker, and a term no query can match because a zero-width character
+splits it in `to_tsvector`. *Needs measurement* (rule 66, not run here); a nit until one of the two is
+shown.
+
+### 13. **`context_budget_tokens` has no ceiling** (WP-17, one line)
+`packages/contracts/src/common.ts:46` is `tokenCountSchema = z.int().nonnegative()`, and
+`config.ts:47` types `context_budget_tokens` with it — so a project may configure a budget of any
+size, and the pack that fills it is spent per stage run. A nit today (the shipped default is 12 000
+and nothing else sets it), and the cheapest fix is a `.max()` at the boundary rather than a check at
+the assembler. Found by WP-16's review.
+
+### 14. **The token estimator can under-estimate, and its properties do not constrain it** (TODO)
+**What is wrong.** `estimateTokens` (`packages/domain/src/knowledge/tokens.ts`) is `ceil(chars / 4)`,
+every budget in the platform is denominated in it, and `run_context_pack.tokens` stores it. Under-
+estimating is the direction that overflows a real model's context window; over-estimating only wastes
+budget.
+
+**Evidence.** Measured by WP-16's review: **48 000 CJK characters estimate to exactly 12 000 tokens**,
+which is the shipped default budget, so a pack that fills the budget on such a corpus is the worst
+case rather than a corner. The reviewer labels the *ratio* a **hypothesis** and it is kept as one
+here (standing rule 39 — a wrong number attached to a true finding is the combination that survives
+review): 2–4× real for CJK, ~1.6–2× for the Czech the vault fixture states. **Needs measurement**
+against a real tokeniser; nobody has run one. The second half is not a hypothesis: `tokens.test.ts`
+asserts "non-zero" and "monotone", and both properties are satisfied by an **arbitrarily wrong**
+estimator, so the suite cannot tell a 4-chars-per-token model from a 40-chars-per-token one.
+
+**What it costs to leave.** A stage run whose pack overflows the model's context is a run that fails
+or silently truncates, and the platform's own record of the spend (`run_context_pack.tokens`) is
+wrong in the same direction. The blast radius is bounded today because nothing consumes a pack
+(entry 11) and the fixture vault is English.
+
+**What done looks like.** Either a bound the estimator can be held to — an upper-bound estimator, so
+error is in the safe direction — or a real tokeniser behind the same function; and either way a
+property that fails for an estimator with the wrong ratio, which the two present properties do not.
+The honest interim is a docblock line stating the measured worst case, which the module's existing
+"the estimate is not the billed number" paragraph is the right place for.
+
+**Depends on.** Nothing; wants a measurement before it wants code. Owner: **WP-17** if it lands
+first (it is the first consumer), otherwise whoever raises the budget past a Latin-script corpus.
+
+### 16. **The fixture vault cannot falsify precision — its padding is chosen against the test queries** (rule 5)
+**What is wrong.** The corpus every retrieval test measures on cannot produce a false positive for
+those tests, because its noise was selected against their query list. This is a standing weakness of
+the **instrument**, not a defect in the code: the code does what it says, and the check that creates
+the weakness is itself correct for the claim it enforces.
+
+**Evidence.** `PADDING_PARAGRAPH` (`packages/application/src/testing/fixture-vault.ts:60`) is the one
+paragraph repeated to pad five documents to 16 000 and 8 000 characters, and
+`packages/application/src/testing/fixture-vault.test.ts:26` holds it to *"share no keyword with any
+query the retrieval tests use"* by intersecting its extracted keywords with a nine-query list kept in
+the same file. Round 2 added that check after the docblock's original claim was measured false (the
+intersection with the acceptance query is `["a", "its", "the"]`, all sub-keyword), which was the right
+fix for the claim. The side effect is the finding: padding that shares no keyword with any query
+cannot be retrieved *by* those queries, so "no padded page ranked" is true by construction, and a
+precision assertion over this vault measures the assertion rather than the retriever.
+
+**What it costs to leave.** Standing rule 5 — *a differential result is evidence about the corpus, and
+whoever built the corpus is the worst judge of what it omits* — with rule 45 beside it. It already
+misleads once, concretely: entry 15's remedy cannot be calibrated here, and the cheapest candidate (a
+`ts_rank` length normalisation) would look excellent on this vault **because the noise pages are the
+padded ones** — an artifact of the fixture rather than a property of a real corpus. **WP-18**
+(librarian proposals) and **WP-21** (onboarding discovery) both build on this vault, so the weakness
+is inherited rather than retired when WP-16 merges.
+
+**What done looks like.** A negative corpus whose author did not consult the query list: a handful of
+documents that are *plausible answers to the test queries and wrong* — same vocabulary, different
+subject — so that a precision assertion is capable of failing. The padding stays as it is; it exists
+to make the budget bind, which it does. The interim, if the documents are not written, is one sentence
+in the vault's docblock saying what the corpus cannot show, which is the standing-rule-44 half of this.
+
+**Depends on.** Nothing. **Owner: none today** — WP-16 built it, WP-18 and WP-21 consume it, and no
+plan row mentions the corpus. Whoever takes entry 15 needs this first: a precision mechanism measured
+on an instrument that cannot falsify it is a mechanism nobody can review.
+
+### 1b. **The workpad e2e flake — now identified** (TODO, owner: WP-15a's harness)
+```
+FAIL test/e2e/pipeline/pipeline.e2e.test.ts >
+  a feature ticket, end to end > keeps one workpad comment on the ticket and moves the ticket status
+AssertionError: expected '**ACME-1** — active (rebase_gate)' to be '**ACME-1** — ready_for_merge (…)'
+```
+Seen twice in the orchestrator's shell: once on `main` at `be05a9b` (identity lost to `| tail`, rule 75)
+and once on `wp/16` at `307bb49`, where the full log was captured. **Not WP-16's** — it touches retrieval,
+not the pipeline, and the first sighting predates it; two immediate re-runs at load 6–8 passed.
+
+The workpad renders while the task is still `active (rebase_gate)` instead of `ready_for_merge`. This is
+the **same test** WP-15a fixed once: *"the workpad test settled on a task state and read a consequence the
+integrations-band handler commits later"*, closed with a `waitFor` in the harness, and a reviewer then
+measured that the `waitFor` bounds the right thing — delaying the workpad handler (priority 120) by 250 ms
+left it green, so the flake was the **status** handler at priority 110 and the `waitFor` waits on its
+consequence. **That measurement stands and the flake survived it**, so the remaining window is elsewhere:
+either a second consequence nothing waits on, or the wait is on the wrong band. Rule 50 is the frame — *a
+window must bound silence, not the drain* — and rule 4: the instrument gets audited before the product.
+
+**Done looks like**: the mutation that reintroduces the race fails a named test, and the identity above is
+reproduced deliberately rather than waited for.
 
 ### 2. The slack/census follow-up branch — **three review rounds, merging** (branch exists)
 `fix/slack-redaction-and-census`, worktree `.claude/worktrees/slack-fix`, head `20b1e97` with `main` merged
@@ -755,6 +1010,37 @@ undermines nothing today — `sweep.failed` is read in one place outside `outbox
 uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
 *trusting* `SweepReport`.
 
+### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO)
+**What is wrong.** The guard's scope is `git ls-files` (CLAUDE.md says so), so a **new** source file
+carrying a literal NUL passes `verify` until it is staged.
+
+**Evidence.** WP-16's implementer wrote literal NULs into two brand-new files — `knowledge/globs.ts`,
+where a NUL is the *right* sentinel and CLAUDE.md asks for the escape `\0`, and `kb-search.test.ts`,
+where a single space was meant — while `nul:check` reported `PASS: nul:check (832 tracked text files,
+…, none with a NUL byte)`. The first was found by **luck** (biome rendered the character in a
+formatting diff); the second was found by `nul:check` itself, one second after `git add`, which is
+the guard working exactly as designed. Full filing under "Discovered work", WP-16.
+
+**What it costs to leave.** Narrow, and the window closes at `git add` — before the pre-commit hook
+and long before a push — so nothing has ever reached `main` through it. What makes it worth an entry
+rather than a shrug is the *class*: this is standing rule 7 (*a guard with a hand-maintained scope
+drifts — ask git what it tracks*) reappearing inside a guard that exists because of rules 30 and 33,
+and the scope it asks git for is the wrong question rather than a stale list. Rule 33's point applies
+too: a `scripts/*.mjs` verify step has no test tier of its own, so the gap in its scope is not
+something a mutation of the guard would reveal.
+
+**What done looks like.** The sweep also walks `git ls-files --others --exclude-standard`, which is
+one flag **plus a decision** that should not be made silently: whether a guard reads files git has
+been told to ignore. It should not — an ignored file is not a source file — so `--exclude-standard`
+is the whole answer, and the decision is worth one line in the script's docblock rather than a flag
+nobody can explain later.
+
+**Depends on.** Nothing. Owner: whoever next touches `scripts/`; cheap enough to fold into any WP.
+
+**The transferable part is not the guard.** An agent editing through a tool can emit a byte it did
+not intend and cannot see in its own output — twice in one work package, in two files, where a space
+was meant. The check existed; its *scope* was the hole.
+
 ### 6. Two nits from WP-14's final round
 - A citation line ending in `,` continues, so ordinary quoted prose on the next line becomes an invented
   cited name. It fails **loudly**, and the grammar section states the constraint, so it is acceptable —
@@ -762,6 +1048,13 @@ uses it only for logging — so it is an observability gap, not a live defect. F
 - Merge `b469ff2` rewrote 7 comment lines in `test/e2e/support/docker-workspace.ts`, a file `main` never
   had, *inside a merge commit* — invisible to a default `git log -p`. The text is accurate. This is the
   `d1e7b69` class in miniature: **the orchestrator's own merges are the least reviewed changes here.**
+
+### 9. **`commitlint` cannot run in a worktree that has no `pnpm install`** (nit)
+`sh: ./node_modules/.bin/commitlint: No such file or directory`, `exit status 127`, commit rejected
+(same measurement as entry 8). It **fails closed**, so it is a nit and not a gate defect — but a
+fresh worktree cannot commit at all until `pnpm install` has run in it, and the orchestration
+protocol tells every future session to use worktrees. One line in `CONTRIBUTING.md`, or a hook that
+resolves the binary from the repository root rather than from `$PWD`.
 
 ### 7. Carried, not yet scheduled
 - **Q55** — the binding redactor cannot know a run-scoped credential, so `getJobLog`'s obligation is not
@@ -803,9 +1096,11 @@ uses it only for logging — so it is an observability gap, not a live defect. F
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
-| WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
-| WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
-| WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
+| WP-15b | Postgres `IntegrationAuditLog` + `IdempotencyStore` + the `integration_actions` migration | WP-15a | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Until it lands, `startRuntime()` composes no pipeline in production and `/readyz` is 503 for ever on `ROLE=all\|worker`. Acceptance asserts `redaction_count` in **both** directions. |
+| WP-15c | Webhook ingress + the `inbox`, and the inbound redaction door | WP-15b, WP-08, WP-09 | no | TODO | — | Carved out of WP-15a's remainder (backlog 1). Nothing in production emits `ticket.matched` without it, and the inbound redaction obligation in `docs/TODO.md` has no other door. Unblocks the `KnowledgeIndexer` job. |
+| WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | REVIEW | `wp/16` | Acceptance met on the fixture vault: **10 552 estimated tokens at the shipped 12 000 default**, produced by `context-pack.test.ts` **and reproduced against a real PostgreSQL** by `context-pack.integration.test.ts`. Review round 2 found the retrieval path returned **0 documents in production** (AND-by-default `websearch_to_tsquery`) and three untested PageRank constants; both closed. The honest boundary is narrower than the row: *the retrieval layer is built and no prompt uses it* — the planner still passes `contextPack: []`. **universal-ctags is absent on this machine and unowned by the platform (Q57)**; the extractor probes and refuses. **54 mutants, 54 dead** — 52 through the unit/contract harness (canary first) and 2 driven by hand at the integration tier. Notes below. |
+| WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
+| WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
 | WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `c744904` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evalua | WP-16, WP-17, WP-20 | no | TODO | — | |
@@ -3183,6 +3478,222 @@ carries its own canary (rules 4, 42): the same request through an executor that 
 refused, so the green half is the absent store and not a harmless key.
 
 
+
+### WP-16 — the retrieval layer, and the three states that are one state if you are not careful
+
+**The acceptance figure, and the defaults it was taken at.** "Token budget respected" is a number, so it is
+*produced* rather than quoted (standing rule 39). `packages/application/src/knowledge/context-pack.test.ts`
+indexes the fixture vault through the real parser and assembles a pack at
+`DEFAULT_CONTEXT_BUDGET_TOKENS` — **12 000**, asserted in the same test to be the value
+`PLATFORM_DEFAULT_CONFIG.project.context_budget_tokens` ships, so the figure cannot be taken at a raised cap
+the way rule 39's original did. The pack totals **10 552** estimated tokens, and the same test asserts
+`droppedForBudget` is **non-empty** — without that the number would only mean "the vault happened to fit",
+which is not a test of a budget. The vault is **19 100** tokens, so the fill is doing work; five of its
+eighteen documents are padded to a stated length for exactly that reason, and the fixture's docblock says
+which and why rather than letting a reader assume the corpus is all hand-written.
+
+> *Both figures were **10 622** and **18 886** when this paragraph was first written, and both moved at
+> round 2* — the vault gained the hostile document it was missing, and `droppedForBudget` stopped carrying
+> the count ceiling. Corrected in place rather than left with a footnote, because a stale number beside a
+> live claim is precisely what rule 39 is about; the current values are produced by
+> `context-pack.test.ts` and, for the pack total, by `context-pack.integration.test.ts` against a real
+> PostgreSQL.
+
+**The estimate is not the billed number, and the module says so at the top.** `estimateTokens` is
+`ceil(chars / 4)`. Every budget in the platform is denominated in it, `run_context_pack.tokens` stores it,
+and the only property the budget actually needs — never zero for text that exists — is held by `ceil` alone.
+A `Math.max(1, …)` in front of it was written first and then **removed**: it is unreachable by construction,
+so it is a guard no mutation can kill and rule 22's shape.
+
+**Three states, four times.** The work package's whole risk is that "I could not" and "there was nothing"
+have the same spelling, so each port returns a discriminated result and each distinction has a named test
+that dies when it is removed:
+
+- a vault that could not be read vs. a vault with no documents (`IndexReport.status`) — a failed read
+  leaves the existing index in place rather than emptying it;
+- an index that was never built vs. a query with no hits (`KbSearchResult`, `ContextPackResult`) — an agent
+  told "no results" concludes the knowledge base is silent on the subject; an agent told `not_indexed` can
+  say so to a human;
+- a document the parser refused vs. a document with no frontmatter — the refused one is *not indexed*,
+  because indexing it empty is where `paths:`-scoped injection silently stops happening;
+- an extractor that is missing vs. a repository with no symbols (`CodeMapResult`) — see below.
+
+**`ctags` is a name, not a program, and this machine proves it.** TD-010 says
+`ctags --output-format=json`. Measured here: `/usr/bin/ctags` is **BSD ctags** (`--version` exits **1**,
+`illegal option -- -`, no TypeScript parser), Homebrew has no universal-ctags installed, and the only npm
+package of that name is one unmaintained `0.0.1` emscripten build. Both wrong answers produce **zero tags**,
+and zero tags renders as a flawless repository map of a codebase with no code in it — which would then sit
+in tier 0 of every code-stage pack for the life of the deployment. So the extractor **probes** and requires
+the string `Universal Ctags` in the banner, `CodeMapper` propagates a typed `unavailable`, and
+`ContextPackRequest.codeMap` is optional so the pack omits the slot. **Q57** files the decision a human owes:
+where the binary comes from. A real universal-ctags **6.1.0** was obtained in an `alpine:3.20` container to
+record the JSON fixture the parser is tested against, so that fixture is *recorded* and labelled as such
+rather than invented (rule 17).
+
+**Two spellings of one rule, neither trusted.** `isTier0Path` is a TypeScript predicate;
+`PostgresKnowledgeStore.loadTier0` is a `where` clause. That is rule 41's shape, so the shared contract suite
+runs the predicate over the corpus and demands the store return **exactly** what it selects — with
+near-misses planted (a loose page at the vault root, a `rules/` directory *inside* the vault, an
+`.agentic/rules-draft/` sibling), because a store that returned every document would pass a suite that only
+checked the four real tier-0 paths were present. Mutating either half kills the same named test: the
+TypeScript one in the contract tier, the SQL one in the integration tier, both measured.
+
+**A defect the specification could not have told me about.** technical/07 step 2 is a *trigger*/full-text
+match and product/05 calls `trigger` "the description used for matching" — and both `title` and `trigger`
+live in frontmatter, which is not part of the body the chunker splits. Built literally, the trigger half of
+step 2 matches nothing, ever, and no test would have noticed because every other query hits the body. It was
+found by the contract suite: the query `seeded fixture user` returned the index page and not the lesson
+whose *title* is those words. They are now prepended to the first chunk only, so metadata cannot out-rank a
+document's own text. technical/07 is amended.
+
+**Mutation results.** 37 mutants, **37 dead**, each by a named test, harness canaried first and the kill
+predicate requiring the `>` separator that only a real test name carries (rules 21 and 62). The four that
+were **alive** on the first pass are the useful part, and all four were weak *tests* rather than missing
+guards: `toBe(DEFAULT_EMPHASIS)` compared the default with itself (rule 10); the glob tests had no case that
+`(?:.*/)?` refuses and a bare `.*` admits (rule 43 — ask which wrong implementations your negative also
+passes); the ctags parser had one "nothing at all" negative where three fields need three; and one mutant
+did not apply because the formatter had reflowed the line I was matching, which the harness reported as
+`NOT-APPLIED` rather than as a kill.
+
+**What is not done, in the reviewer's sentence form.** *The retrieval layer is built and no prompt uses it.*
+`basicStageRunPlanner` still passes `contextPack: []` and `stage-executor.ts` still writes a zeroed
+`ContextPackRecord`; nothing composes a `PlatformToolPort`, so `kb_search` has no home; and the indexer is
+not registered as a job, because the checkout it would read needs the ingress backlog entry 1 says does not
+exist. All three are in "Discovered work" with the work package that owns each. WP-18 and WP-21 consume the
+assembler, the store and the tool directly, which is what they were built for.
+
+
+### WP-16 review round 2 — the retrieval step returned nothing in production, and the fake hid it
+
+Six findings, three of them major. Two changed the product rather than the tests, and the second is
+the one worth reading.
+
+**The ranking had no oracle, and `37/37` was a claim about the mutants I chose.** Review mutated
+`DAMPING 0.85 → 0.5`, `sqrt(occurrences)/targets.length → occurrences`, and the definer division
+away: all three **alive** across 13 files and 215 tests — precisely the three modelling choices the
+module's docblock spends three paragraphs justifying. `graph.oracle.test.ts` now audits them with
+three hand-written graphs whose edge weights are written from the *sentence* rather than produced by
+`buildEdges`, plus a closed form for the two-file case (`a = 1/(2+d)`, solved by algebra in the
+comment, `0.3509` at 0.85 against `0.4` at 0.5). Each mutation dies by name, and each has a
+`not.toBeCloseTo` against the *alternative* model beside it so a reader can see the assertion
+discriminates (rule 43). Its docblock states what it shares with the implementation — the power
+iteration, not the weights, not the constant — and what it therefore cannot catch (rule 65).
+
+**The measurement that changed the product.** Chasing "no precision test", the real defect turned up
+underneath it: `websearch_to_tsquery` joins bare words with **AND**, so passing the raw task text —
+which is what round 1 did — matched **0 documents** against a real PostgreSQL for the acceptance
+query, while the in-memory double returned **15**. Every retrieval test in the work package was
+exercising a path production did not have, and the fake was on the kind side of standing rule 1.
+technical/07 says "task **keywords**" and round 1 read it as "task text". Closed by extracting
+keywords (`extractQueryTerms`) and joining them with `OR` at the adapter; the port now carries
+`terms`, which also means no byte of untrusted text is ever concatenated into a tsquery.
+
+**And the prescribed fix for the finding was wrong — including my own replacement for it.** Review
+asked for a relevance floor. *Absolute* is backwards: `"the"` ranks padded pages at **0.947** and a
+good query ranks its correct answer at **0.048**, because `ts_rank_cd` measures cover density.
+*Relative to the best text score* is store-dependent: the correct second answer sits at **0.667** of
+the best against PostgreSQL and **0.267** against the double, same corpus, same query — so the
+ratio I had drawn at 0.3 from the PostgreSQL numbers dropped the right page on the store the
+acceptance figure is measured on. **No floor shipped**; the degenerate query is removed at the
+query, where it is store-independent, and `retrieval.ts` carries both measurements as the reason.
+Rule 27, with the implementer wrong about their own patch this time.
+
+**The fixture vault had no hostile document** (rule 45), and review's own one flowed byte-identical
+to the prompt. It now carries `hostile-document.md` — injection text, `<system>`, `<img onerror>`,
+a `javascript:` link, ANSI `ESC[31m`, a NUL, `U+202E`, and a line impersonating the platform's own
+chunk prefix — and three consumers assert the split: control characters and bidi overrides are
+**replaced and counted**, hostile *words* survive **unchanged** because delimiting them is WP-17's
+and an indexer that edited words could not hold a page about XSS. The NUL is not decoration: a
+PostgreSQL `text` column refuses one, so one vault page would have failed an entire index run.
+
+**Three smaller ones.** `droppedForBudget` conflated the budget, the count ceiling and a tier-0
+overrun, which made the acceptance test's own warrant unsound — a true conclusion resting on an
+argument that did not support it; the causes are separate lists now and one test drives all three.
+The padding paragraph's "contains none of the query terms" was false (`a`, `its`, `the`); narrowed
+to the true claim and **enforced** by `fixture-vault.test.ts`, which intersects the paragraph's
+keywords with every query the retrieval tests use. The ctags provenance was prose inside a docblock
+citing rule 17, outside the reach of `fixture-provenance.contract.test.ts` (which walks
+`test/fixtures/http/` only) — the fixture is **not** moved there, because a subprocess's stdout has
+no URL, host or interaction and forcing it in would make that suite admit a shape it cannot check;
+instead `RECORDED_WITH` carries the invocation as data and a test holds it to `CTAGS_ARGUMENTS`.
+
+**The open question the coordinator asked to be answered rather than assumed.** Pinning pack
+composition against the real store was cheap, so it is pinned: `context-pack.integration.test.ts`
+assembles over PostgreSQL and asserts tier 0, the path match, the cross-domain negatives, and its
+own token figure. Measured, the two stores agree at **10 552** on this corpus; the figures are kept
+as two independent literals anyway, so the day they diverge the failing test names which store
+moved.
+
+**Mutation results, round 2 — and two of the three claims in this paragraph were false.** It said
+"54 mutants, 52 dead in the harness", excused one remainder as an unreachable guard and called the
+other dead by "two named tests". Round 3 measured all three: there **was no early-return line** to
+be unreachable (a mutation-restore cycle had removed it and a comment was written describing it
+anyway), so the 54-mutant tally counted a phantom; and `join(' ')` killed **one** named test, not
+two, because the test named for the defect did not catch it. See round 3 for the corrected figures.
+The paragraph is left standing rather than rewritten, because a ledger that edits its own wrong
+numbers out of existence is one nobody can audit.
+
+
+### WP-16 review round 3 — a comment described a line that was not in the tree
+
+Three majors and three minors. The first is the one that matters, because it is about the ledger
+rather than about the code.
+
+**A justification that named something that does not exist.** Round 2 claimed the Postgres adapter
+carried a deliberately-unreachable `if (terms.length === 0)` early return, documented it at the
+line under standing rule 22, wrote it into this ledger, and counted it as the 54th mutant. **There
+was no line.** A mutation-restore cycle had removed it and the comment was written from memory of
+the code rather than from the code. Rule 11's shape one level worse — rule 11 is a justification
+citing a test that does not exist; this is a justification citing *itself*. The mechanism is real
+(`websearch_to_tsquery('simple', '')` builds an empty tsquery and `@@` matches no row), so the
+adapter now **names PostgreSQL as the mechanism** and points at the contract case that pins the
+behaviour, and claims no guard of its own. Corrected tally, reproducible: **54 mutants, 54 dead** —
+52 through the harness, 2 at the integration tier by hand.
+
+**A test named for a defect it did not catch.** Round 2's integration test — the one called
+*retrieves at all, the defect a fake-only tier could not see* — **survived**
+`join(' OR ') → join(' ')`, because the task's touched paths keep two `paths` matches in tier 1 and
+`tier1.length > 0` stayed true. Rules 43 and 45: it was named for the property it was hoped to have.
+It is now `context-pack.integration.test.ts` › "admits a document the *text query* found, not merely
+one a path glob claimed".
+It now asserts a tier-1 entry whose `reason` is `trigger`, and a second case runs with **no** touched
+paths so the text query is the only signal there is. Measured: the mutation now kills **4** named
+tests (3 here, 1 in the contract suite against Postgres) where it killed 1.
+
+**The fake is still kinder, and the register said it was not.** Row 1b claimed the port change made
+"both stores match the same set". Measured over the fixture vault, query `knowledge technical
+session`: **pg 11 documents, fake 13**, `onlyFake = [hostile-document.md, billing.md]`,
+`onlyPg = []`. The cause, reproduced with `ts_debug`: PostgreSQL's `simple` parser has **token
+types** and reads `.agentic/knowledge/technical/session-service.md` as a single `file` lexeme
+(likewise `v1.2.3` → `file`, `10.0.0.1` → `version`, `a@b.test` → `email`), while `chunkTerms`
+splits all of them — so, because every chunk is prefixed with its own path, **path words are
+searchable in the fake and not in production**. New row **1c** records it with the numbers and the
+instruction that follows (never write a test that depends on a path word matching). New row **1d**
+records the divergence that was missing entirely and is the kindest in the file — a `U+0000` that
+the fake accepts and PostgreSQL refuses outright — and rule 12 says the kindest divergence needs a
+**positive assertion**: `nul-refusal.integration.test.ts` drives the real adapter with the sanitiser
+bypassed and asserts the refusal, with the mirrored case asserting the sanitiser closes it (rule 42).
+It is a **file of its own** because measured, leaving it in `context-pack.integration.test.ts` made
+the sanitiser mutation throw in `beforeAll`, which vitest reports as a failing *file* — rule 62,
+which says that is not a failing test.
+
+**Three minors, all of them false citations.** `query.ts` pointed at "the floor in `retrieval.ts`"
+and no floor ships; `sanitise.ts` attributed the NUL case to the wrong test file; and
+`ctags.test.ts` labelled its fixture `kind: 'recorded'`, a token that is **not** in
+`PROVENANCE_KINDS` (`documented | documented-adapted | composed | inferred | invented`) and was
+asserted against its own `as const`. The taxonomy is about how a fixture relates to a vendor's
+documentation and has no member for "the stdout of a process that ran", so the field is renamed to a
+sentence, the tautology is replaced by an assertion that no `kind` is present, and the docblock says
+plainly that the file sits outside the sweep and why.
+
+**One claim narrowed rather than fixed.** `retrieval.ts` said keyword extraction "removed the
+measured harm". It removes tokens of **three characters or fewer** and nothing more: review's query
+of thirteen four-letter-or-longer function words returns 10 documents at 0.900/0.898/0.898/0.898 and
+fills **10 707 of 12 000** with six tier-1 documents, top score **0.718** — above a good query's
+correct answer at 0.500. The 87 %-padding pack is still reachable. The remedy needs a corpus-derived
+signal (IDF, or a different `ts_rank` normalisation) and is a product decision filed outside this
+work package; the sentence now says what was closed and what was not.
+
 ## Discovered work (not in plan)
 
 - **A one-way digest for the inbound delivery key.** Round 4 reconciled the redact-vs-refuse split and
@@ -3220,6 +3731,32 @@ refused, so the green half is the absent store and not a harmless key.
   redact where the real adapter does is *kinder* than production, which is standing rule 1's forbidden
   direction, and every later WP's unit tier trusts the fakes. Either give the fakes a redactor or record
   the divergence explicitly in each fake's register; today it is neither.
+
+- **`pnpm nul:check` cannot see a NUL in a file that is not yet tracked, and WP-16 produced two.** Its
+  scope is `git ls-files` (CLAUDE.md says so), so a **new** source file carrying a literal NUL passes
+  `verify` until it is staged. WP-16 wrote literal NULs into two brand-new files — `knowledge/globs.ts`,
+  where a NUL is the *right* sentinel and CLAUDE.md asks for the escape `\0`, and `kb-search.test.ts`,
+  where a single space was meant — while `nul:check` reported
+  `PASS: nul:check (832 tracked text files, …, none with a NUL byte)`. The first was found by **luck**:
+  biome rendered the character in a formatting diff. The second was found by `nul:check` itself, in the
+  second after `git add`, which is the guard working exactly as designed. So the gap is real and narrow:
+  untracked files are invisible, and the window closes at `git add` — before the pre-commit hook, before
+  any push. Worth noting rather than rushing: closing it means walking `git ls-files --others
+  --exclude-standard` as well, which is one flag plus a decision about whether a guard should read files
+  git has been told to ignore. **The transferable part is not the guard.** An agent editing through a tool
+  can emit a byte it did not intend and cannot see in its own output — twice in one work package, in two
+  files, where a space was meant. Rule 30 says a lesson in prose does not prevent recurrence; here the
+  check existed and its *scope* was the hole.
+- **Nothing composes a `PlatformToolPort` in production, so `kb_search` has no home yet.** WP-12 defined the
+  port and its nine methods; the only implementations in the tree are `recordingTools` (a fixture) and
+  WP-16's `createKbSearchTool`, which is a function a composition root would supply. The MCP wiring
+  (`platform-mcp.ts`) is ready and takes a `PlatformToolPort`; what is missing is the root that builds one.
+  Belongs with WP-17, which owns prompt assembly and therefore the run's tool surface.
+- **The `KnowledgeIndexer` is not registered as a pg-boss job.** technical/07 specifies "singleton per
+  project", triggered at task start and after every merge. WP-16 ships the indexer and its `VaultSource`,
+  and registering the job needs a checkout to read — which needs the workspace provider, which needs the
+  webhook ingress that backlog entry 1 says does not exist. Wiring it before then would be a job nothing can
+  trigger.
 
 ### WP-14 round 3 — the guard against unresolvable citations could not read its own repository
 

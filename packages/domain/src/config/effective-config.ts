@@ -20,6 +20,7 @@
  * (BD-025) — that is the caller's job; this module only merges what it is handed.
  */
 import type { AgenticConfig, AutonomyLevel, ConfigSource } from '@platform/contracts';
+import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../knowledge/retrieval.js';
 import { autonomyRank } from '../policies/autonomy.js';
 import {
   type CommandVerdict,
@@ -63,6 +64,8 @@ export interface EffectiveConfig {
 export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
   project: {
     knowledge_dir: '.agentic/knowledge',
+    // product/05 and technical/07: the context-pack budget for tiers 0–1.
+    context_budget_tokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
     communication_language: 'auto',
     commit_convention: 'conventional',
     default_branch: 'main',

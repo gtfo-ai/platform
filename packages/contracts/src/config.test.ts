@@ -16,6 +16,7 @@ const DOC_EXAMPLE = {
   version: 1,
   project: {
     knowledge_dir: '.agentic/knowledge',
+    context_budget_tokens: 12000,
     communication_language: 'auto',
     commit_convention: 'conventional',
     default_branch: 'main',

@@ -331,6 +331,7 @@ export const runCostSchema = z.strictObject({
 
 export type Id = z.infer<typeof idSchema>;
 export type IsoDateTime = z.infer<typeof isoDateTimeSchema>;
+export type IsoDate = z.infer<typeof isoDateSchema>;
 export type Slug = z.infer<typeof slugSchema>;
 export type TaskState = z.infer<typeof taskStateSchema>;
 export type TaskMode = z.infer<typeof taskModeSchema>;
