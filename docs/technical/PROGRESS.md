@@ -4,47 +4,47 @@
 
 ## Resume note
 
-> **Session 3 opened 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned
-> by evidence" — **seventy-five rules, each with its evidence, each paid for with a review round**. Then
+> **Session 3, 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned by
+> evidence" — **seventy-five rules**, each with its evidence, each paid for with a review round. Then
 > continue the loop in `14-orchestration-protocol.md`.
 
-**Twenty-three work packages are DONE and pushed**, WP-00 … WP-15 plus WP-02a/04a/06a/11a/20 and four
-ci-fixes. **`main` is green on all five targets locally** — re-verified in the orchestrator's own shell at
-session 3 start-up: `PASS: verify` (3676 tests, 93.14% statements), `PASS: verify:integration`,
-`PASS: verify:e2e`, `PASS: verify:ui`, `PASS: verify:web-e2e`.
+**Twenty-four work packages are DONE and pushed** — WP-00 … WP-15a plus WP-02a/04a/06a/11a/20 and five
+ci-fixes. `main` is at `03f80b4`, green on all five targets in the orchestrator's own shell and **green on
+GitHub** (`34604222753`).
 
-**And `main` is red on GitHub, and has been since WP-14's own merge** — six consecutive failing runs, the
-`e2e-fake-claude` job only, `mkdir: can't create directory '/ctl/<uuid>': Permission denied` on
-`ubuntu-latest`. Backlog **entry 0**, standing rule **69**. Local green on macOS was reported as the state
-of `main` while the authoritative gate was red; `gh run list` is now part of "verify after every merge".
+**The gate was red for a day and nobody looked.** `e2e-fake-claude` failed on every push from WP-14's own
+merge until session 3 — six runs — while the ledger said "main is green on all five targets", because five
+*local* targets were being read as the state of `main`. **`gh run list` is now part of "verify after every
+merge"** (rules 69, 71). Three independent clean-environment defects were stacked behind that one error
+message; the ci-fix notes have them.
 
-**What the platform can do.** A feature ticket and a bug ticket go from `ticket.matched` to
-`task.completed` on PostgreSQL 18 with the real event store, dispatcher, `IntegrationActionExecutor` and
-jobs adapter — intake through retrospective, eleven transitions, iteration limits, plan approval above the
-size threshold, both convergence detectors, the workpad, ticket status mapping, BD-007's batch window, and
-escalation to `needs_human` at every bounded loop's exhaustion. Against fake Claude, in the test harness.
+**What the platform can do.** A feature ticket and a bug ticket reach `task.completed` through an
+`apps/server` instance the e2e harness starts, with the provider adapters built by a **production loader**
+from seeded `integrations`/`secrets`/`bindings` rows — deleting the bindings inserts parks all five tests at
+`ci_gate`. Real event store, dispatcher, `IntegrationActionExecutor`, jobs adapter and outbox worker,
+against fake Claude.
 
-**What it cannot do, stated plainly: run a real ticket.** `createPipelineRuntime` is composed only by
-`packages/application/src/testing/pipeline-harness.ts`, and `PipelineIntegrations` has **no production
-constructor**, so nothing reads the `bindings` table. **"M1 complete" is not an honest claim** until
-**WP-15a** lands — see the backlog. Every M1 work package being DONE and the product not working are both
-true at once, and the second sentence is the one a reader needs.
+**What it still cannot do, stated plainly.** *The pipeline is composed and production does not start it.*
+`main.ts` calls `startRuntime()` with no runner and no audit log, because `integration_actions` lacks the
+columns a Postgres audit log needs; and there is **no webhook ingress**, so nothing in production emits
+`ticket.matched` at all. Both are **backlog entry 1**, with the re-dispatch tool now owed by WP-19. "M1
+complete" is closer than it was and is still not the sentence to write.
 
-**Next, in order:** (1) the **slack/census branch** — reviewed at session 3 start (REQUEST_CHANGES, a
-**fourth** instance of the stored-secret class, in `action-executor.ts` itself), fix round in flight on
-`fix/slack-redaction-and-census`, `main` already merged into it at `415a3fb`; (2) the **ci-fix** for entry 0;
-(3) **WP-15a**; (4) WP-16…WP-19, WP-21…WP-23, then M2 (WP-24–33).
+**Next, in order:** (1) **WP-16** (context packs + KB indexer + code map) and **WP-17** (role prompts +
+artifact schemas + evals), which are parallel-safe against each other; (2) WP-18, WP-19, WP-21, WP-22,
+WP-23; (3) M2 (WP-24–33). Backlog entry 1's three items want a work package each and should be scheduled
+before anyone calls M1 done.
 
-**Machine policy, not negotiable (rule 66).** The user had **two kernel panics** on 2026-09-10
-(`watchdog timeout`). This is a 14-core machine; Docker Desktop has **8 CPUs**, and the user's own
-applications hold a **baseline load of ~7** before this session starts anything. Cap at **two agents, one**
-while any agent holds Docker or the e2e tier. **Never generate synthetic load.** Remove a worktree the
-moment its branch merges. Check `uptime` before trusting a timing-sensitive result. A green build on a
-machine you made unusable is not a trade worth making.
+**Machine policy, not negotiable (rule 66).** Two kernel panics on 2026-09-10. 14 cores, Docker has 8, and
+**the user works on this machine while the session runs** — twelve of their own containers were up and the
+load reached 59 during session 3. Cap at **two agents, one** while any holds Docker or the e2e tier. **Never
+generate synthetic load.** Remove a worktree the moment its branch merges. Check `uptime` before trusting a
+timing-sensitive result, and wait for the machine rather than piling on.
 
-**Verify before every review and after every merge, in your own shell — and read `gh run list`.** Skipping
-the local half once cost a full review round on a red branch whose report said PASS (rule 61); skipping the
-CI half cost six pushes onto a red gate (rule 69). Quote the target's **verdict line**, never a test count.
+**Verify in your own shell, and gate on the exit status, not on the line you printed** (rules 61, 75): a
+pipeline exits with `tail`'s status, which is how a `FAIL: verify:e2e` scrolled past inside an `&&` chain
+and `main` was pushed anyway. **Never `| tail` a run you might need to diagnose** — it cost the identity of
+two failures in one session. And **never verify while a mutating reviewer shares the tree** (rule 74).
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
