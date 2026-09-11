@@ -5,12 +5,22 @@
  *
  * ## Why this file exists
  *
- * `InboundNormaliser.deliveryKey` is the one string in the adapter ring that the platform *stores*:
- * the HTTP endpoint writes it to `webhook_deliveries` and compares every later delivery against it
- * (technical/03, technical/06 § "Inbound: webhooks and polling"). Every byte of it comes out of an
- * untrusted delivery (BD-022) — a header value on Jira, `object_attributes` on GitLab, `event_id`
- * or the five parts of a click on Slack — so a credential that appears in one reaches persistent
- * state, which is strictly worse than one reaching a log line.
+ * `InboundNormaliser.deliveryKey` is a string the platform *stores*: technical/06 § "Inbound:
+ * webhooks and polling" has the per-provider HTTP endpoint compute it and dedup on it, and
+ * technical/03 gives it the column — `inbox(provider, delivery_id, …)`, whose primary key it is
+ * half of. (The endpoint itself is a later WP: nothing writes `inbox` today, which is why this
+ * file exercises the key through the registrations rather than through a route.) Every byte of it
+ * comes out of an untrusted delivery (BD-022) — a header value on Jira, `object_attributes` on
+ * GitLab, `event_id` or the five parts of a click on Slack — so a credential that appears in one
+ * reaches persistent state, which is strictly worse than one reaching a log line.
+ *
+ * It is **not** the only such string, and this docblock used to say it was. The executor stores an
+ * idempotency record whose key and value are provider text too, and it stored them unredacted for
+ * as long as this sentence claimed otherwise — the fourth instance of the class, closed in
+ * `packages/application/src/integrations/action-executor.ts`. Standing rule 63: an exclusivity
+ * claim is a statement about every *other* file, so it cannot be maintained from inside one. The
+ * scope of this file is exactly what its own `PROVIDER_DIRECTORIES` reads off the disk: the dedup
+ * key of every adapter under `providers/`.
  *
  * The same defect was found and closed **three times across two commits**:
  *
@@ -242,9 +252,36 @@ describe('every provider’s stored dedup key', () => {
   });
 
   describe.each(PROVIDER_DIRECTORIES)('%s', (provider) => {
-    const testCase = CASES[provider] as DeliveryKeyCase;
+    /**
+     * The case, read **inside** each test rather than at collection time.
+     *
+     * `const testCase = CASES[provider] as DeliveryKeyCase` here used to be the first statement of
+     * this block, and the cast made a missing case `undefined`: the very scenario this file exists
+     * for — a new provider directory with no case — crashed *collection* with
+     * `TypeError: Cannot read properties of undefined (reading 'delivery')` and reported
+     * `Tests no tests`. A new provider therefore disabled all twelve assertions in the file
+     * instead of failing one of them (standing rules 3, 62 and 68: a `FAIL` naming a file is not a
+     * `FAIL` naming a test). Reading it in the test body turns that back into a named failure.
+     */
+    const caseFor = (): DeliveryKeyCase => {
+      const testCase = CASES[provider];
+      if (testCase === undefined) {
+        expect.fail(
+          `${provider}: a provider directory with no case in CASES — add one (a delivery whose ` +
+            'keyed fields carry the binding credential, or `delivery: null` if it has no webhook)',
+        );
+      }
+      return testCase;
+    };
+
+    it('has a case in this file', () => {
+      // The per-provider half of the headline assertion above: that one names the whole set, this
+      // one names the provider, and neither can be reached by a crash any more.
+      caseFor();
+    });
 
     it('agrees with its port about whether it has an inbound half', () => {
+      const testCase = caseFor();
       const inbound = inboundOf(testCase.port());
       // Both directions (rule 9): a webhook provider owes a planted delivery, and a provider
       // without a webhook must not claim one.
@@ -256,32 +293,44 @@ describe('every provider’s stored dedup key', () => {
       ).toBe(testCase.delivery !== null);
     });
 
-    const delivery = testCase.delivery;
-    if (delivery === null) {
-      return;
-    }
+    /**
+     * Whether the two assertions below apply is a property of the *case*, so it is the one thing
+     * still read at collection time — defensively (`?.`), because a directory with no case has no
+     * delivery to reason about and must reach the named failures above rather than a crash here.
+     * A provider with no inbound half reports them as skipped, which is what they are.
+     */
+    const hasDelivery = CASES[provider]?.delivery != null;
 
-    it('is fed a delivery that really carries the binding credential', () => {
+    it.skipIf(!hasDelivery)('is fed a delivery that really carries the binding credential', () => {
+      const testCase = caseFor();
+      const delivery = testCase.delivery as WebhookDelivery;
       // The harness canary (rules 4 and 42): a green redaction assertion below proves nothing if
       // the plant never reached the input — a renamed field or a mis-shaped body would emit a key
       // with no secret in it and pass.
       expect(`${delivery.body} ${JSON.stringify(delivery.headers)}`).toContain(testCase.planted);
     });
 
-    it('redacts the binding credential out of the key the platform stores', () => {
-      const inbound = inboundOf(testCase.port());
-      const key = (inbound as DeliveryKeyed).deliveryKey(delivery);
+    it.skipIf(!hasDelivery)(
+      'redacts the binding credential out of the key the platform stores',
+      () => {
+        const testCase = caseFor();
+        const delivery = testCase.delivery as WebhookDelivery;
+        const inbound = inboundOf(testCase.port());
+        const key = (inbound as DeliveryKeyed).deliveryKey(delivery);
 
-      expect(key, `${provider}: the key must not carry the binding credential`).not.toContain(
-        testCase.planted,
-      );
-      // A **fragment**, because the failure mode of this class is a cap or a cut applied before
-      // redaction, which leaves the leading bytes and nothing else would see them.
-      expect(key, `${provider}: nor a fragment of it`).not.toContain(testCase.planted.slice(0, 24));
-      expect(
-        key,
-        `${provider}: and the redaction must be the adapter's own — the caller was disarmed`,
-      ).toContain(MARKER);
-    });
+        expect(key, `${provider}: the key must not carry the binding credential`).not.toContain(
+          testCase.planted,
+        );
+        // A **fragment**, because the failure mode of this class is a cap or a cut applied before
+        // redaction, which leaves the leading bytes and nothing else would see them.
+        expect(key, `${provider}: nor a fragment of it`).not.toContain(
+          testCase.planted.slice(0, 24),
+        );
+        expect(
+          key,
+          `${provider}: and the redaction must be the adapter's own — the caller was disarmed`,
+        ).toContain(MARKER);
+      },
+    );
   });
 });

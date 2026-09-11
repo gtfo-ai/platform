@@ -168,7 +168,8 @@ export const slackSignatureHeaders = (input: {
  *
  * Every part of the key above is copied out of the delivery body — `event_id`, `team.id`,
  * `user.id`, `action_id`, `action_ts` — and the body is untrusted provider text (BD-022) that the
- * platform writes to `webhook_deliveries` and compares on every later delivery. A secret reaching
+ * platform stores as `inbox.delivery_id` (technical/03; half of that table's primary key) and
+ * compares on every later delivery. A secret reaching
  * persistent state is worse than one reaching a log line, and the object literal this function is
  * wired into (`provider.ts`) hands `normalise` a redactor for exactly that reason while this
  * function had none: `{"type":"event_callback","event_id":"Ev-<the binding's signing secret>"}`

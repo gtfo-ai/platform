@@ -2523,12 +2523,100 @@ need to stop: put the trap in a wrapper that does nothing else, make each worker
 clock** so an orphan expires without any signal, and write output to a **file** rather than a pipe a trap
 can kill.
 
+### Same branch, review round 2 — the fourth instance was in the executor, and the class guard could not fail
+
+A fresh-context reviewer returned four findings on the branch above. All four are closed, and the sweep
+rule 49 asks for was run again, wider.
+
+**1 (major) — `IntegrationActionExecutor` was the fourth instance, and it is the one that stores.**
+`idempotencyStore.put(scope, request.idempotency.encode(result))` wrote provider text to persistent state
+while the audit row on the *same success path* was redacted. Reproduced before it was fixed, as a test:
+a `perform` returning `c-1?token=<planted>` through Slack's own plan shape (`encode` is the identity) put
+the planted value straight into the store. **The sweep then found the key too** — `marker:agentic:<planted>`
+reached `idempotencyStorageKey` verbatim, and technical/06's own example of a key ("marker ids for
+comments") is text read back out of a provider's comment, so the key is the more likely half. Both are now
+redacted in the executor, the key **once where the scope is built** so `get` and `put` cannot disagree.
+Not at the call site (rule 41): one guard, four named tests, each proved by its own mutation —
+`keeps the injected secret out of the value it stores`, `keeps the injected secret out of the key it
+stores`, `still replays on a redacted key, so the guard cannot double-perform the action` (the mutant that
+redacts on the `put` path only), and `refuses to store a value a broken redactor reshaped, rather than
+storing the wrong one`. The cost is stated on `IdempotencyPlan` rather than hidden: a replay returns the
+**redacted** result, so an action that cannot tolerate that must not carry an idempotency key — the same
+shape as the existing "a result that cannot be JSON must not carry one".
+
+**2 (major) — the class guard died as a collection crash, not as an assertion.**
+`delivery-key-redaction.test.ts` read `CASES[provider]` at collection time behind an `as`, so the one
+scenario it exists for — a new provider directory with no case — produced `TypeError: Cannot read
+properties of undefined` and `Tests no tests`: a new provider **disabled** all twelve assertions instead of
+failing one (rules 3, 62, 68). The case is now read inside each test through `caseFor()`, and the reviewer's
+own experiment re-run: `mkdir providers/zz-newprovider` fails **three named tests** — `has a case here for
+every provider directory on disk`, `zz-newprovider > has a case in this file` and `zz-newprovider > agrees
+with its port about whether it has an inbound half` — while the other 16 still run. Whether the two
+delivery-fed assertions apply is still decided at collection time, but defensively (`?.`), so a missing
+case reaches the named failures rather than a crash; a provider with no inbound half reports them skipped.
+
+**3 (minor) — the exclusivity claim this branch added.** "the one string in the adapter ring that the
+platform stores" was falsified by finding 1 *in the same review round* (rule 63: an exclusivity claim is a
+statement about every other file). Narrowed to what the file can hold itself: the dedup key of every adapter
+under `providers/`, which is exactly what its own `PROVIDER_DIRECTORIES` reads off disk. The executor's
+docblock took the dual fix — "three things carry it out of this file" is now four, with the reason the count
+is checkable written next to it.
+
+**4 (minor) — a table that does not exist.** `webhook_deliveries` was cited in three places; technical/03
+calls it `inbox(provider, delivery_id, …)` and the key is half of that primary key (migration
+`0005_events.sql`). All three now name it, and say plainly that **no endpoint writes it yet** — the route is
+a later WP, which is why the check drives the registrations rather than a request.
+
+**The sweep (rule 49), and what it found.** Every place a provider-controlled string becomes stored or keyed
+state, on top of the delivery-key table above:
+
+| path | verdict |
+|---|---|
+| `IdempotencyStore.put` value, and the `key` in `IdempotencyScope` | **the finding — both redacted here** |
+| `IdempotencyPlan` call sites in production | one: `slack/digest.ts`. Covered by the executor, not by itself |
+| `singletonKey` — `task:<uuid>`, `mr:<iid>` | clean: a platform uuid and a `number`. `JOB_KEY_PATTERN` bounds the shape, not the origin |
+| job `data` payloads (`StageExecuteData`, `ReviewWindowData`) | clean: ids, a stage slug, an ISO instant |
+| `workpadMarker` → `agentic:task:<uuid>` | clean: platform-minted, and it is the marker id an idempotency key would use |
+| gate `detail` strings built from `job.name`, `status.status`, `mr.target_branch` | provider text, but downstream of the adapter's own redactor (`emitted-secrets.test.ts`) |
+| `integrations.health` ← `HealthProbe.detail` | the next instance waiting: the obligation is per-provider in `common.ts`, discharged for Jira only, and nothing writes the column yet. Filed below |
+| `tasks.ticket_key` (intake's unique key) | provider text in a column **by design** — it must round-trip to the provider, so redacting it would break the lookup it exists for. Out of the class |
+| `inbox`, `events.payload`, `integration_actions` | no writer outside the executor today |
+| **`artifacts.data`, `questions.text`, the MR fields on `tasks`** ← a run's `structuredOutput` | **the fifth instance, one ring over — filed below, not fixed here** |
+| `handler_executions.error`, `event_dispatch.error` ← a thrown handler's `${name}: ${message}` | no redactor on the dispatcher path; what the executor throws is pre-scrubbed, anything else is not. Filed below |
+| model output on the transcript path (`run_messages`) | clean: `claude-runner.ts`'s `append` redacts every entry before the write |
+
+The two new ones were found by a second sweep run wide on purpose (not by the reviewer, and not by the
+first census, which stopped at the adapter ring). Both were **verified by reading the sink**, not inferred
+from a name: `stage-executor.ts` `data = outcome.structuredOutput` → `store.artifacts.insert(… data …)` and
+`artifactQuestions(data)` → `store.questions.insert`, and `event-bus.ts`'s `describeError` →
+`recordFailure` → `insert into handler_executions … error = $4`.
+
 ## Discovered work (not in plan)
 
 - **`emitted-secrets.test.ts` covers Jira and GitLab only.** Its member enumeration is derived
   (`Object.keys(port)`) but its provider list is not, and Slack's unredacted dedup key is exactly what that
   gap hid. Slack, Sentry and Loki owe the same walk — every string they emit, planted, through the real
   registration with the caller disarmed. Sizeable: the GitLab section alone is ~240 lines.
+- **A run's `structuredOutput` reaches `artifacts.data` unredacted — TD-012 names artifacts explicitly.**
+  `claude-runner.ts` keeps the raw `SDKResultMessage` (`result = message`) and returns
+  `structuredOutput: validated.data` off it, while the transcript copy of the *same message* is redacted in
+  `append` and every sibling on the same outcome object (`error`, stderr) is redacted too. `stage-executor.ts`
+  then writes it to `artifacts.data`, turns it into `questions.text`, and `saga.ts` copies the MR url, branch
+  and head sha out of the artifact onto the `tasks` row. Model output is untrusted (BD-022) and TD-012 lists
+  "artifacts" among the writes redaction must precede. It is the same class as the four closed on this branch
+  and belongs to WP-12/WP-15, not here. The design question to answer first is the one `IdempotencyPlan` now
+  states: an artifact field that is redacted is an artifact field the pipeline may branch on — a head sha or
+  a URL — so "redact the artifact" is not obviously the right shape, and the redactor to use is the run's.
+- **`handler_executions.error` and `event_dispatch.error` take a handler's raw message.**
+  `event-bus.ts`'s `describeError` writes `${error.name}: ${error.message}` to both columns with no redactor.
+  Everything `IntegrationActionExecutor` throws is already scrubbed (that is the point of its single `catch`),
+  so the integration path is covered; a handler that throws provider text it obtained any other way is not.
+  TD-012's enumeration does not name these two columns, which is itself worth deciding.
+- **`HealthProbe.detail` has the same shape as the dedup key and no mechanical check.** It is provider text
+  bound for `integrations.health`, the obligation is stated on `healthProbeSchema` and discharged by Jira's
+  contract test alone; `delivery-key-redaction.test.ts` is the template — every provider directory, real
+  registration, caller disarmed, credential planted. Nothing writes the column yet, so it is a gap and not
+  a leak.
 - **The three fakes' `fakeDeliveryKey` takes no redactor, and the fakes accept none.** A fake that does not
   redact where the real adapter does is *kinder* than production, which is standing rule 1's forbidden
   direction, and every later WP's unit tier trusts the fakes. Either give the fakes a redactor or record

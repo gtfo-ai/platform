@@ -294,9 +294,10 @@ describe('slackDeliveryKey', () => {
   /**
    * **The key is stored, so a secret in it outlives a log line.** Every part Slack keys on comes
    * out of the delivery body, which is untrusted provider text (BD-022); the platform writes the
-   * key to `webhook_deliveries` and compares it on every later delivery. Before this parameter
-   * existed the function took no redactor at all while the same object literal's `normalise` did
-   * — the third instance of the defect the previous commit closed for Jira and GitLab (rule 49).
+   * key as `inbox.delivery_id` (technical/03) and compares it on every later delivery. Before this
+   * parameter existed the function took no redactor at all while the same object literal's
+   * `normalise` did — the third instance of the defect the previous commit closed for Jira and
+   * GitLab (rule 49).
    *
    * The refusal **cuts** to 32 characters, and a cut applied to unredacted text leaves a fragment
    * no exact-match redactor can find again, which is why redaction precedes the `slice`.

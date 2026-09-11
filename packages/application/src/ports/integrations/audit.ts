@@ -156,6 +156,15 @@ export const idempotencyStorageKey = (scope: IdempotencyScope): string =>
  *
  * `undefined` means "never seen"; a stored `null` is a legitimate remembered result, which is why
  * the miss is `undefined` rather than `null`.
+ *
+ * **The scope's `key` and the stored value arrive already redacted**, for the same reason
+ * `IntegrationActionEntry` does: both are persistent state, and both are made of provider text —
+ * an `encode` is frequently the identity over a provider's result, and technical/06's own example
+ * of a key is a marker id read back out of a provider's comment. `IntegrationActionExecutor` does
+ * it once, where the scope is built and where the value is written, so every adapter of this port
+ * may write what it is handed. It was the executor's fourth instance of that class (rule 49), and
+ * the consequence a caller must know about is stated on `IdempotencyPlan`: a replay returns the
+ * redacted result.
  */
 export interface IdempotencyStore {
   get(scope: IdempotencyScope): Promise<JsonValue | undefined>;

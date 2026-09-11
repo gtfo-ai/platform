@@ -38,22 +38,33 @@
  *
  * ## What leaves the executor, and what has been scrubbed first
  *
- * A provider's error text is untrusted and may quote back a credential the platform injected
- * (TD-012, BD-002). Three things carry it out of this file, and each is redacted:
+ * A provider's text — an error message, a result, an id read back out of a comment — is untrusted
+ * and may quote back a credential the platform injected (TD-012, BD-002). Four things carry it out
+ * of this file, and each is redacted:
  *
  *  - the audit row (`buildEntry`), where payload, result and error are redacted and counted;
- *  - the log line written when that row cannot be persisted — it logs the *row's* `error`, so the
- *    two can never diverge;
+ *  - the **idempotency record**: both the stored value (`redactStoredJson`, because `encode` is
+ *    often the identity over provider text) and the `key` the scope is built from, redacted once
+ *    where the scope is built so `get` and `put` cannot disagree;
+ *  - the log line written when the audit row cannot be persisted — it logs the *row's* `error`, so
+ *    the two can never diverge;
  *  - **every** error thrown out of `execute`, scrubbed by `redactErrorInPlace` in the single
  *    `catch` wrapped around the whole body.
+ *
+ * The list was "three things" until a reviewer measured the second one and found it storing a
+ * provider's `message_id` verbatim — the *fourth* instance of one class (Jira's, GitLab's and
+ * Slack's delivery keys were the first three, one branch earlier), and the second time a sentence
+ * in this docblock outlived the code it described (standing rules 49 and 63). The count is
+ * therefore checkable on purpose: everything a reader can reach from this file that writes
+ * provider text to a log, a row or a store is in the list above.
  *
  * The last one is a choke point rather than a rule to remember, because "the redaction is on one
  * branch and not the other" was found three times in this one file over two review rounds (the
  * audit-failure log line, the rethrown provider error, and `throw auditError` one line away from
  * a scrubbed sibling). A branch cannot forget the scrub when it has no way out except through it —
  * and there are more ways out than the two `throw`s: a failing `idempotencyStore.get`/`put`, a
- * failing audit write on the **success** path, a `describeResult` that throws, and the request
- * guards themselves all leave the same way.
+ * failing audit write on the **success** path, a `describeResult` that throws, a redactor that
+ * breaks its own contract, and the request guards themselves all leave the same way.
  *
  * ### What `redactErrorInPlace` covers, exactly
  *
@@ -92,6 +103,12 @@
  * and writes a `replayed` row, so the audit keeps a record of the action and only its *status* is
  * less precise. Neither order is atomic; this one degrades into a duplicate row rather than a
  * duplicate side effect.
+ *
+ * A replay therefore returns the **redacted** result, not the one the provider sent: the store is
+ * persistent state and is written once, so redaction has to happen before the write or not at all
+ * (BD-003). That is only visible for a result that carried an injected secret, and a caller that
+ * needs such a value back must not carry an idempotency key at all — the same decision the
+ * `IdempotencyPlan` docblock already asks of a result that cannot be JSON.
  */
 import {
   type Id,
@@ -108,6 +125,7 @@ import type {
   IntegrationActionStatus,
   IntegrationAuditLog,
   IntegrationTimer,
+  RedactionOutcome,
   SecretRedactor,
 } from '../ports/integrations/audit.js';
 import {
@@ -138,6 +156,12 @@ export interface AttemptContext {
  * The stored form must be JSON — it goes to a database — so the caller states how to get there
  * and back. An action whose result cannot be JSON (a minted credential, a stream) must not carry
  * an idempotency key; that is a decision the caller makes by not writing one.
+ *
+ * The executor **redacts both halves before they are stored** — the `key` and whatever `encode`
+ * returns — because the store is persistent state (TD-012, BD-002). So `decode` may be handed a
+ * value carrying `[REDACTED:integration:…]` where the provider had put an injected secret, and an
+ * action that cannot tolerate that must not carry an idempotency key either. Neither `encode` nor
+ * any call site redacts a second time: one guard, mutation-checked in `action-executor.test.ts`.
  */
 export interface IdempotencyPlan<TResult> {
   /** Marker id, `Idempotency-Key` header value, or any string stable across retries. */
@@ -378,6 +402,39 @@ const scrubProperty = (
   }
 };
 
+/** The one-key document `redactStoredJson` walks a bare `JsonValue` inside. */
+const STORED_WRAPPER_KEY = 'value';
+
+/**
+ * Redacts **any** `JsonValue` on its way into persistent state (TD-012, BD-002).
+ *
+ * `SecretRedactor` speaks `JsonObject` and `string`, and an encoded idempotency result is neither
+ * in general: `slack/digest.ts` stores an object, `add_comment` a bare string, and nothing stops a
+ * plan from encoding an array. So the value is walked inside a one-key document rather than
+ * branched on by type — one path, with no per-shape branch that could be the unredacted one.
+ *
+ * A redactor that did not return the key it was handed has broken the port's contract (the walk
+ * preserves the document's shape; only string leaves change). That is a `TypeError` rather than a
+ * silent `null`, because the alternative is storing something that is not what `encode` produced
+ * and handing it to `decode` on the replay. It leaves through `execute`'s scrub like every other
+ * failure of the store, and costs the same thing a failing `put` costs: the action is reported
+ * failed after the provider performed it, and the retry replays nothing.
+ */
+const redactStoredJson = (
+  redactor: SecretRedactor,
+  value: JsonValue,
+): RedactionOutcome<JsonValue> => {
+  const redacted = redactor.redactJson({ [STORED_WRAPPER_KEY]: value });
+  const unwrapped = redacted.value[STORED_WRAPPER_KEY];
+  if (unwrapped === undefined) {
+    throw new TypeError(
+      'the redactor dropped a key from the document it was given; ' +
+        'redactJson must preserve the shape of what it walks (TD-012)',
+    );
+  }
+  return { value: unwrapped, count: redacted.count };
+};
+
 /**
  * Scrubs a thrown value **in place** before it leaves the executor (TD-012, BD-002).
  *
@@ -566,13 +623,18 @@ export const createIntegrationActionExecutor = (
     }
 
     // 2 — Idempotency. The key is scoped to (integration, action, key); nothing is shared across
-    //     bindings or across actions (see `idempotencyStorageKey`).
+    //     bindings or across actions (see `idempotencyStorageKey`). The key is **redacted here**,
+    //     once, before the scope exists — so the `get` below and the `put` on the success path
+    //     cannot disagree about what they are looking for. technical/06's own example of a key is
+    //     "marker ids for comments", which is text the platform read back out of a provider's
+    //     comment body; redacting it collapses two keys that differ only inside a secret into one,
+    //     which is the same trade the audit row makes and is only reachable in the leaking case.
     const scope: IdempotencyScope | null =
       request.idempotency && options.idempotencyStore
         ? {
             integrationId: request.integration.integrationId,
             action: request.action,
-            key: request.idempotency.key,
+            key: options.redactor.redactText(request.idempotency.key).value,
           }
         : null;
 
@@ -649,8 +711,15 @@ export const createIntegrationActionExecutor = (
       lease.release();
 
       // 5 — Success: remember it, then record it. See the docblock for why in that order.
+      //     The stored value is redacted first, for the reason the audit row is: it is persistent
+      //     state, written once, and `encode` is frequently the identity over provider text
+      //     (`slack/digest.ts`). Redacted *here* rather than in `encode`, so a call site cannot
+      //     forget it and there is exactly one guard to mutate (standing rule 41).
       if (scope !== null && request.idempotency && options.idempotencyStore) {
-        await options.idempotencyStore.put(scope, request.idempotency.encode(result));
+        await options.idempotencyStore.put(
+          scope,
+          redactStoredJson(options.redactor, request.idempotency.encode(result)).value,
+        );
       }
       const durationMs = options.timer.now() - startedAt;
       await record(

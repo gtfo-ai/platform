@@ -568,6 +568,110 @@ describe('IntegrationActionExecutor', () => {
       expect(performed).toBe(1);
       expect(auditLog.entries.map((entry) => entry.status)).toEqual(['replayed']);
     });
+
+    /**
+     * **The idempotency record is persistent state, so it is redacted like the audit row.**
+     *
+     * This is the fourth instance of one class — a secret reaching stored state through a value
+     * that took no redactor — after Jira's, GitLab's and Slack's delivery keys. It was found by a
+     * reviewer measuring the executor itself: the row written on the success path is redacted and
+     * the `idempotencyStore.put` one line above it was not, so `post_digest` (Slack's digest job,
+     * whose `encode` is the identity) wrote the provider's `message_id` and `url` verbatim.
+     *
+     * Both halves are asserted, because both are stored: the **value** is a column, and the
+     * **key** is the primary key composed by `idempotencyStorageKey` — and the key is where
+     * technical/06's own example points, "marker ids for comments" being text the platform read
+     * back out of a provider's comment body.
+     *
+     * The caller's redactor is the only one in play here (there is no second layer to be confused
+     * with, unlike an adapter's `bindingSecretRedactor`), so a passing assertion can only be the
+     * executor's own work.
+     */
+    describe('redacts what it stores (TD-012, BD-002)', () => {
+      /** As Slack's digest plan does: `encode` is the identity, so the whole result is stored. */
+      const storedResultPlan = {
+        key: 'marker:agentic:workpad',
+        encode: (result: { comment_id: string }) => ({ ...result }),
+        decode: (stored: unknown) => stored as { comment_id: string },
+      };
+
+      const leakingComment = (overrides: Record<string, unknown> = {}) =>
+        addComment({
+          perform: async () => {
+            performed += 1;
+            // Provider text that quotes back the credential the platform injected (TD-012).
+            return { comment_id: `c-1?token=${SECRET}` };
+          },
+          ...overrides,
+        });
+
+      it('keeps the injected secret out of the value it stores', async () => {
+        await executor.execute(leakingComment({ idempotency: storedResultPlan }));
+
+        const stored = await store.get({
+          integrationId: INTEGRATION.integrationId,
+          action: 'add_comment',
+          key: storedResultPlan.key,
+        });
+
+        expect(stored, 'the plant must have reached the store at all').toBeDefined();
+        expect(
+          JSON.stringify(stored),
+          'the stored result is persistent state and may not carry the secret',
+        ).not.toContain(SECRET);
+        expect(JSON.stringify(stored), 'and the redaction is the executor’s own').toContain(
+          '[REDACTED:integration:jira]',
+        );
+      });
+
+      it('keeps the injected secret out of the key it stores', async () => {
+        await executor.execute(
+          leakingComment({
+            idempotency: { ...storedResultPlan, key: `marker:agentic:${SECRET}` },
+          }),
+        );
+
+        expect(store.keys().length, 'the plant must have reached the store at all').toBe(1);
+        expect(
+          store.keys().join(' '),
+          'the storage key is the row’s primary key and may not carry the secret',
+        ).not.toContain(SECRET);
+        expect(store.keys().join(' '), 'and the redaction is the executor’s own').toContain(
+          encodeURIComponent('[REDACTED:integration:jira]'),
+        );
+      });
+
+      it('refuses to store a value a broken redactor reshaped, rather than storing the wrong one', async () => {
+        // `redactStoredJson` walks a bare `JsonValue` inside a one-key document, so a redactor
+        // that drops keys would hand `put` an `undefined` the plan's `decode` never saw. The
+        // contract violation is loud: silently storing `null` would replay a result that was
+        // never produced.
+        const dropping = build({
+          redactor: {
+            redactText: (text: string) => ({ value: text, count: 0 }),
+            redactJson: () => ({ value: {}, count: 0 }),
+          },
+        });
+
+        await expect(
+          dropping.execute(addComment({ idempotency: storedResultPlan })),
+        ).rejects.toThrow(/must preserve the shape/);
+        expect(store.size, 'and nothing was stored').toBe(0);
+      });
+
+      it('still replays on a redacted key, so the guard cannot double-perform the action', async () => {
+        const plan = { ...storedResultPlan, key: `marker:agentic:${SECRET}` };
+        const first = await executor.execute(leakingComment({ idempotency: plan }));
+        const second = await executor.execute(leakingComment({ idempotency: plan }));
+
+        // Redaction happens once, before the key is composed, so `get` and `put` agree: were it
+        // applied on only one of the two paths, the second call would perform the action again.
+        expect(performed).toBe(1);
+        expect(first.status).toBe('ok');
+        expect(second.status).toBe('replayed');
+        expect(store.keys().length).toBe(1);
+      });
+    });
   });
 
   describe('rate limits and backoff (429 + Retry-After)', () => {
