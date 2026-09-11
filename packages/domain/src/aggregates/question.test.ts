@@ -7,7 +7,7 @@ import {
   InvariantViolationError,
   PermissionDeniedError,
 } from '../errors.js';
-import type { CommandContext } from '../events.js';
+import { type CommandContext, FIRST_STREAM_SEQ } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
@@ -75,7 +75,7 @@ describe('openQuestion', () => {
     expect(question.status).toBe('open');
     expect(question.askedAt).toBe('2026-09-09T09:00:00.000Z');
     expect(question.remindersSent).toBe(0);
-    expect(question.sequence).toBe(0);
+    expect(question.sequence).toBe(FIRST_STREAM_SEQ);
   });
 
   it('maps onto the wire record the event carries', () => {

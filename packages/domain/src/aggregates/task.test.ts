@@ -109,7 +109,8 @@ describe('createTask', () => {
 
     expect(aggregate.state).toBe('queued');
     expect(aggregate.currentStage).toBeNull();
-    expect(aggregate.sequence).toBe(1);
+    // One event emitted, so the next one carries `FIRST_STREAM_SEQ + 1`.
+    expect(aggregate.sequence).toBe(2);
     expect(aggregate.limits).toEqual(resolveIterationLimits());
     expect(types(events)).toEqual(['task.created']);
     const [created] = events;

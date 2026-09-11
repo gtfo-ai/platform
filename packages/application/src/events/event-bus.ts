@@ -343,6 +343,7 @@ export class EventBus {
   ): Promise<HandlerOutcome> {
     const ref = toHandlerRef(handler);
     const emitted: StoredEvent[] = [];
+    const afterCommit: (() => Promise<void> | void)[] = [];
     let stopReason: string | undefined;
 
     try {
@@ -350,9 +351,15 @@ export class EventBus {
         if (!(await scope.handlerExecutions.claim(event.position, ref))) {
           return false;
         }
-        const context = this.#contextFor(event, scope, emitted, (reason) => {
-          stopReason = reason;
-        });
+        const context = this.#contextFor(
+          event,
+          scope,
+          emitted,
+          (reason) => {
+            stopReason = reason;
+          },
+          afterCommit,
+        );
         await handler.handle(context);
         if (stopReason !== undefined && remaining.length > 0) {
           await scope.handlerExecutions.markStopped(event.position, remaining, stopReason);
@@ -363,6 +370,24 @@ export class EventBus {
 
       if (!ran) {
         return { handler: handler.name, result: 'skipped' };
+      }
+      // Only now: the handler's effect and its execution record are durable, so a job enqueued
+      // here can never outlive a rollback. A callback that throws has already lost its race with
+      // durability — log it and let the handler stand, because failing it would replay the effect.
+      for (const callback of afterCommit) {
+        try {
+          await callback();
+        } catch (error) {
+          this.#logger.error(
+            {
+              position: event.position,
+              type: event.event.type,
+              handler: handler.name,
+              err: error,
+            },
+            'an after-commit callback failed; the handler’s effect stands and the callback is lost',
+          );
+        }
       }
       chained.push(...emitted);
       if (stopReason !== undefined) {
@@ -383,6 +408,7 @@ export class EventBus {
     scope: TransactionScope,
     emitted: StoredEvent[],
     onStop: (reason: string) => void,
+    afterCommit: (() => Promise<void> | void)[],
   ): HandlerContext {
     return {
       scope,
@@ -396,6 +422,9 @@ export class EventBus {
       },
       stop: (reason: string) => {
         onStop(reason);
+      },
+      afterCommit: (callback: () => Promise<void> | void) => {
+        afterCommit.push(callback);
       },
     };
   }

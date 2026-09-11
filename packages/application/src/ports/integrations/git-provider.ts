@@ -310,6 +310,23 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   ): Promise<string>;
 
   getDefaultBranchHead(project: string): Promise<{ readonly branch: string; readonly sha: string }>;
+
+  /**
+   * Is `branch` protected against a direct push?
+   *
+   * On the port rather than on one adapter, because the pipeline evaluates it before it lets an
+   * agent push (product/04 S3, WP-15) and the pipeline may not know which provider it is talking
+   * to (BD-017). WP-09 put it on `GitLabProvider` alone, which left the only caller with a
+   * down-cast — and a down-cast in the pipeline is BD-017's claim quietly withdrawn.
+   *
+   * It is a **security** answer, so it is the one method whose failure mode is stated here: an
+   * adapter that cannot tell must throw rather than answer `false`, because "not protected" starts
+   * a run that may push to the default branch. It is the compensating control for a credential
+   * that has no branch scoping of its own (Q40, GitLab divergence 3).
+   *
+   * @throws {IntegrationError} `not_found` when the branch does not exist on the project.
+   */
+  isBranchProtected(project: string, branch: string): Promise<boolean>;
   readCodeowners(project: string, ref: string): Promise<CodeownersRules | null>;
 
   listMergedMergeRequests(

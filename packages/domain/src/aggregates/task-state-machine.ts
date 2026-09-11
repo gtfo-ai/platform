@@ -60,6 +60,22 @@ export const TERMINAL_TASK_STATES = ['done', 'cancelled'] as const satisfies rea
 export const isTerminalTaskState = (state: TaskState): boolean =>
   (TERMINAL_TASK_STATES as readonly TaskState[]).includes(state);
 
+/**
+ * States in which the pipeline may still act on a task by itself.
+ *
+ * Everything this excludes is a stop a **human** owns: `paused` (budget or take-over),
+ * `needs_human`, and the two waiting states, plus the terminal pair. It is not the complement of
+ * `active`: `ready_for_merge`, `merged` and `retro` are states the pipeline moves through under
+ * its own power, and a guard written as `state === 'active'` silently strands a task at the
+ * retrospective — which is exactly where WP-15 first found it.
+ */
+export const isRunnableTaskState = (state: TaskState): boolean =>
+  !isTerminalTaskState(state) &&
+  state !== 'paused' &&
+  state !== 'needs_human' &&
+  state !== 'waiting_answers' &&
+  state !== 'waiting_approval';
+
 export const canTransitionTask = (from: TaskState, to: TaskState): boolean =>
   (TASK_TRANSITIONS[from] as readonly TaskState[]).includes(to);
 

@@ -43,7 +43,7 @@ import {
   type TaskDecision,
   takeOverTask,
 } from './task.js';
-import { canTransitionTask, TASK_TRANSITIONS } from './task-state-machine.js';
+import { canTransitionTask, isRunnableTaskState, TASK_TRANSITIONS } from './task-state-machine.js';
 
 const TASK_ID = '00000000-0000-4000-8000-0000000000aa';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000bb';
@@ -164,10 +164,12 @@ const assertInvariants = (model: TaskModel, real: TaskReal): void => {
   );
 
   // 5. The stream is contiguous, matches the aggregate's sequence, and has unique ids.
+  // Contiguous from `FIRST_STREAM_SEQ`: the database's `stream_seq >= 1` check refuses a stream
+  // that opens at zero (migration 0005).
   expect(real.events.map((event) => event.stream_seq)).toEqual(
-    real.events.map((_, index) => index),
+    real.events.map((_, index) => index + 1),
   );
-  expect(real.task.sequence).toBe(real.events.length);
+  expect(real.task.sequence).toBe(real.events.length + 1);
   expect(new Set(real.events.map((event) => event.id)).size).toBe(real.events.length);
 };
 
@@ -217,7 +219,9 @@ class CompleteStage implements TaskCommand {
     const stage = model.currentStage ?? 'refinement';
     const command = (): TaskDecision =>
       completeStage(real.task, { stage, artifacts: [] }, context(real));
-    if (model.state !== 'active' || model.currentStage === null) {
+    // A stage completes from any state the pipeline is still moving through, not only `active`:
+    // the retrospective completes from `retro` (see `isRunnableTaskState`).
+    if (!isRunnableTaskState(model.state) || model.currentStage === null) {
       expect(command).toThrow(InvariantViolationError);
       return;
     }

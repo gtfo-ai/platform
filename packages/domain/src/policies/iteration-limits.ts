@@ -5,10 +5,16 @@
  * CI fixes 3, refinement question rounds 2, architecture revisions 2, human MR rounds 3).
  * Exceeding any limit moves the task to `Needs human` … Nothing retries silently."
  *
- * Two of those six loops have no key in `pipelineLimitsSchema` (`@platform/contracts`, from
- * technical/12's `pipeline.limits` block): refinement question rounds and architecture revisions.
- * They are enforced here with the BD-008 defaults but are not configurable yet — see the WP-02
- * report; the fix belongs in the config schema, not in a workaround here.
+ * Three of those loops have no key in `pipelineLimitsSchema` (`@platform/contracts`, from
+ * technical/12's `pipeline.limits` block): refinement question rounds, architecture revisions and
+ * — added at WP-15 — the rebase gate's attempts. They are enforced here with the documented
+ * defaults but are not configurable yet: see the WP-02 report; the fix belongs in the config
+ * schema, not in a workaround here.
+ *
+ * `rebase` is product/04 S6b rather than BD-008: "rebase (or merge, per project), resolve
+ * conflicts (**bounded, default 2 attempts**, by a short Implementation run), re-run CI". It is a
+ * return cycle like the others — the rebase gate sends the task back to `implementation` — so it
+ * is counted like the others rather than left as the one loop with no ceiling.
  */
 import type { PipelineLimits } from '@platform/contracts';
 
@@ -20,6 +26,7 @@ export const ITERATION_LOOPS = [
   'human_rounds',
   'refinement_questions',
   'architecture_revisions',
+  'rebase',
 ] as const;
 
 export type IterationLoop = (typeof ITERATION_LOOPS)[number];
@@ -32,6 +39,8 @@ export const DEFAULT_ITERATION_LIMITS = {
   human_rounds: 3,
   refinement_questions: 2,
   architecture_revisions: 2,
+  /** product/04 S6b, not BD-008. */
+  rebase: 2,
 } as const satisfies Record<IterationLoop, number>;
 
 export type IterationLimits = Record<IterationLoop, number>;
@@ -47,6 +56,7 @@ export const AGENT_ITERATION_LOOPS = [
   'ci_fix',
   'refinement_questions',
   'architecture_revisions',
+  'rebase',
 ] as const satisfies readonly IterationLoop[];
 
 export type IterationCounters = Readonly<Partial<Record<IterationLoop, number>>>;
@@ -68,6 +78,7 @@ export const resolveIterationLimits = (
   human_rounds: limits?.human_rounds ?? humanRounds ?? DEFAULT_ITERATION_LIMITS.human_rounds,
   refinement_questions: DEFAULT_ITERATION_LIMITS.refinement_questions,
   architecture_revisions: DEFAULT_ITERATION_LIMITS.architecture_revisions,
+  rebase: DEFAULT_ITERATION_LIMITS.rebase,
 });
 
 export interface IterationDecision {

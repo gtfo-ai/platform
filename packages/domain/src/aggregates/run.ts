@@ -31,7 +31,7 @@ import type {
 } from '@platform/contracts';
 import { differenceMs } from '../clock.js';
 import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
-import { type CommandContext, type Decision, eventRecorder } from '../events.js';
+import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { assertCan } from '../permissions.js';
 
 /** The transition table of technical/02, as data. */
@@ -156,7 +156,7 @@ export const createRun = (input: CreateRunInput): Run => ({
   lastOutputAt: null,
   endedAt: null,
   terminalReason: null,
-  sequence: 0,
+  sequence: FIRST_STREAM_SEQ,
 });
 
 /**

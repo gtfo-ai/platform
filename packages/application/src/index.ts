@@ -27,6 +27,21 @@ export * from './events/outbox.js';
 export * from './integrations/action-executor.js';
 export * from './integrations/rate-limiter.js';
 export * from './integrations/redaction.js';
+// The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
+export * from './pipeline/commands.js';
+export * from './pipeline/gates.js';
+export * from './pipeline/integrations.js';
+export * from './pipeline/jobs.js';
+export * from './pipeline/planner.js';
+export * from './pipeline/runtime.js';
+export * from './pipeline/saga.js';
+export * from './pipeline/settings.js';
+export * from './pipeline/stage-executor.js';
+export * from './pipeline/stop-reasons.js';
+export * from './pipeline/store.js';
+export * from './pipeline/transitions.js';
+export * from './pipeline/verdicts.js';
+export * from './pipeline/workpad.js';
 // Ports
 export * from './ports/broadcast.js';
 export * from './ports/dispatch-queue.js';
@@ -53,5 +68,6 @@ export * from './scheduling/zoned-time.js';
 export * from './testing/fixtures.js';
 export * from './testing/memory-eventing.js';
 export * from './testing/memory-integrations.js';
+export * from './testing/memory-pipeline.js';
 
 export const packageId = '@platform/application' as const;

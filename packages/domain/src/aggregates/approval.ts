@@ -18,7 +18,7 @@ import type {
 } from '@platform/contracts';
 import { isBefore } from '../clock.js';
 import { IllegalTransitionError } from '../errors.js';
-import { type CommandContext, type Decision, eventRecorder } from '../events.js';
+import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { APPROVAL_ACTIONS, assertCan } from '../permissions.js';
 
 export const APPROVAL_TRANSITIONS = {
@@ -79,7 +79,7 @@ export const createApproval = (input: RequestApprovalInput, context: CommandCont
   decidedByUserId: null,
   decidedAt: null,
   reason: null,
-  sequence: 0,
+  sequence: FIRST_STREAM_SEQ,
 });
 
 export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({

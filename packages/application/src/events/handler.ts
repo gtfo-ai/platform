@@ -51,6 +51,25 @@ export interface HandlerContext {
    * handler's transaction, so a redelivery cannot let them through.
    */
   stop(reason: string): void;
+  /**
+   * Runs `callback` **after** this handler's transaction has committed, and only then.
+   *
+   * It exists for one thing: enqueuing a job. `Jobs.enqueue` does not join this transaction — it
+   * is another connection, and pg-boss commits on its own — so an enqueue written inline is
+   * durable even when the handler that decided on it rolls back, which is a job whose reason for
+   * existing never happened. Deferring it until the commit makes the ordering the honest one:
+   * the state the job will re-read is already there when the job exists.
+   *
+   * **What it does not buy.** A crash between the commit and the callback loses the callback, so
+   * a wake-up is *at-most-once* while the state change is exactly-once. Every job the platform
+   * enqueues therefore re-validates when it fires (TD-004) and tolerates finding nothing to do,
+   * and no invariant may depend on a callback having run. A callback that throws is logged and
+   * does **not** fail the handler: the effect is already committed, and re-running the handler to
+   * retry a notification would replay the effect.
+   *
+   * Callbacks run in the order they were registered.
+   */
+  afterCommit(callback: () => Promise<void> | void): void;
 }
 
 export interface EventHandler {

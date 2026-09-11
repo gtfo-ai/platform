@@ -2,7 +2,7 @@ import { approvalKindSchema, approvalStatusSchema, type UserRole } from '@platfo
 import { describe, expect, it } from 'vitest';
 import { type Clock, fixedClock } from '../clock.js';
 import { IllegalTransitionError, PermissionDeniedError } from '../errors.js';
-import type { CommandContext } from '../events.js';
+import { type CommandContext, FIRST_STREAM_SEQ } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import {
   APPROVAL_TRANSITIONS,
@@ -58,7 +58,7 @@ describe('createApproval', () => {
     const approval = pending();
     expect(approval.status).toBe('pending');
     expect(approval.requestedAt).toBe('2026-09-09T09:00:00.000Z');
-    expect(approval.sequence).toBe(0);
+    expect(approval.sequence).toBe(FIRST_STREAM_SEQ);
     expect(toApprovalRecord(approval)).toEqual({
       id: APPROVAL_ID,
       task_id: TASK_ID,

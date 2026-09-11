@@ -4,84 +4,39 @@
 
 ## Resume note
 
-> **Session 2, in progress (started 2026-09-09; the Claude Code process restarted *twice* on 2026-09-10).**
-> Read this, then "Standing rules earned by evidence" — **sixty-four rules, each with its evidence** —
-> then continue the loop in `14-orchestration-protocol.md`.
->
-> **After a restart, resume the in-flight agents with `SendMessage` — do not re-spawn them.** Their
-> transcripts survive and their worktrees are intact, so a resumed agent keeps its analysis; a fresh one
-> repeats the reading and loses the reasoning. Both restarts have now proved this. Check each worktree's
-> `git log` and `git status` first, to know what was committed versus left dirty.
->
-> **And check the load average before resuming anything that runs tests.** The second restart came back at
-> load **196** — Spotlight reindexing after a boot, not a leaked process (verified: no orphan busy-loops,
-> every heavy PID was a system daemon two minutes old). Rule 64 says a census test times out at LA ≥ 110,
-> so resuming into that load manufactures exactly the flakes this ledger just spent a round removing.
+> **Session 2 ended 2026-09-10 with M1's work packages all merged.** Read this, then
+> **"Open findings backlog"**, then "Standing rules earned by evidence" — **sixty-eight rules, each with
+> its evidence, each paid for with a review round**. Then continue the loop in `14-orchestration-protocol.md`.
 
-**Twenty work packages are DONE and pushed.** WP-00 `8852b9e` · WP-01 `dedc4b9` · WP-02 `168d368` ·
-WP-02a `8abf247` · WP-03 `ca1ae06` · WP-05 `3397924` · WP-04 `59817d6` · ci-fix `6481b3d` ·
-WP-04a `d729616` · WP-06 `d60d770` · WP-06a `9e0be0b` · WP-07 `b036c4c` · ci-fix(sse) `f1cd8e4` ·
-WP-08 `af206c7` · WP-09 `27928b2` · WP-12 `951e343` · WP-10 `fbf0928` · ci-fix(pg-boss) `43a3f61` ·
-**WP-11 + WP-11a `d066708`** · **WP-20 `c744904`** · **WP-13 `d1e7b69`** (+ `3db7e45` conflict-marker
-fix, `95c1fed` conflict guard, `f0c7582` vitest worktree scoping, `6b6cb7a` conformance timing fixes).
-`main` is green on all five targets: **3179 unit+contract tests / 162 files, 94.5% statements,
-87.16% branches**.
+**Twenty-three work packages are DONE and pushed**, WP-00 … WP-15 plus WP-02a/04a/06a/11a/20 and four
+ci-fixes. `main` is green on all five targets, verified **on `main` after the last merge**: `verify` PASS
+(**3676 tests / 93.13% statements**), `verify:integration`, `verify:e2e`, `verify:ui`, `verify:web-e2e`.
 
-**In flight — three worktrees**
+**What the platform can do.** A feature ticket and a bug ticket go from `ticket.matched` to
+`task.completed` on PostgreSQL 18 with the real event store, dispatcher, `IntegrationActionExecutor` and
+jobs adapter — intake through retrospective, eleven transitions, iteration limits, plan approval above the
+size threshold, both convergence detectors, the workpad, ticket status mapping, BD-007's batch window, and
+escalation to `needs_human` at every bounded loop's exhaustion. Against fake Claude, in the test harness.
 
-| WP | State | Branch |
-|---|---|---|
-| WP-14 launcher + workspaces | **fix round 3** (review 2 = REQUEST_CHANGES: verify was red; 1 blocking, 1 major, 3 minor) | `worktree-agent-a1a13bbc879e220cb` |
-| WP-15 pipeline interpreter | **implementation round 1**, resumed after the restart | `wp/15` |
-| slack redaction + census flakes | **implementation round 1** (the three queued follow-ups) | `fix/slack-redaction-and-census` |
+**What it cannot do, stated plainly: run a real ticket.** `createPipelineRuntime` is composed only by
+`packages/application/src/testing/pipeline-harness.ts`, and `PipelineIntegrations` has **no production
+constructor**, so nothing reads `integration_bindings`. **"M1 complete" is not an honest claim** until
+**WP-15a** lands — see the backlog. Every M1 work package being DONE and the product not working are both
+true at once, and the second sentence is the one a reader needs.
 
-**WP-14's blocking finding**: `startRun` composes `create` with `attach` and its `catch` revokes the
-credential without destroying the container `create` just started — a live run container nobody holds a
-handle to, and nothing reaps orphans. Its major finding: `assertSafeBindSource`'s deny-list blocks three
-paths that are **symlinks on this platform**, so the forbidden branch never fires, while `$HOME` and the
-docker socket's realpath pass — the reviewer read `id_ed25519` out of a fully hardened workspace container.
-See rules 54 and 55.
+**Next, in order:** (1) review and merge the **slack/census branch**, which is verified green but has had
+**no review round** — `fix/slack-redaction-and-census` at `7a526fe`; (2) **WP-15a**; (3) M2 (WP-24–33),
+with WP-16…WP-19 and WP-21…WP-23 still open in M1's tail.
 
-**Q-number state**: `main` carries Q40–Q51. WP-14 took **Q52 and Q53**; the redaction branch's Q52 is being
-renumbered to **Q54** and adds **Q55**; WP-15 was told to start at **Q56**. Renumber at merge — the
-convention is manual on purpose, because the conflict is the signal.
+**Machine policy, not negotiable (rule 66).** The user had **two kernel panics** on 2026-09-10
+(`watchdog timeout`). This is a 14-core machine; Docker Desktop has since been reconfigured from 12 CPUs to
+**8**. Cap at **two agents, one** while any agent holds Docker or the e2e tier. **Never generate synthetic
+load.** Remove a worktree the moment its branch merges. Check `uptime` before trusting a timing-sensitive
+result. A green build on a machine you made unusable is not a trade worth making.
 
-**After these three, M1 is complete** and M2 (WP-24–33) begins. WP-16…WP-19 and WP-21…WP-23 remain in M1's
-tail: WP-22 (Docker images) already owes two things measured here — `renderEgressConfig` writes
-`User nobody` while the sidecar runs uid 1000 with `cap_drop ALL`, so tinyproxy cannot setuid and the
-rendered config will not start the real image as written; and `apps/runlet` must be bundled to a single
-file with `scripts/runlet-container-check.mjs` re-run against the real image.
-
-**One follow-up is queued, and it is three things in one branch** (all found by the redaction round 2
-reviewer, all on `main`, none blocking):
-1. **`slackDeliveryKey` is the third instance of the defect that round closed twice.** `slack/signature.ts`
-   copies unredacted body text into the stored dedup key while the same object literal's `normalise` *does*
-   redact. Executed, not asserted: a body whose `event_id` is a planted secret produced
-   `slack:event:<secret>`. Rule 49 — the reviewer ran the grep I should have briefed.
-2. **Two exclusivity claims the same commit falsified** — see rule 63.
-3. **Two census tests whose 5 s default sits inside the measured distribution** — see rule 64. Fix both
-   together, with the load stated.
-
-The **`ignored:check` versus `.DS_Store`** disagreement is fixed at `e83a881`:
-`scripts/os-artefacts.mjs` now holds `OS_ARTEFACT_NAMES` and both guards import it. The reasoning for
-keeping it a *name list* rather than a derivation is measured, not assumed — see the section below.
-
-**Merge recipe**: `git merge main` into the WP branch → verify → `git merge --squash <branch>` on `main` →
-`pnpm install` → all five targets **on main** → resolve conflicts (`pnpm-lock.yaml` by regeneration, both
-`index.ts` files as unions, `.env.example`, `docs/OPEN-QUESTIONS.md` by renumbering, and
-`docs/technical/PROGRESS.md`, which is orchestrator-owned so take your own side) → commit → push → delete
-branch and worktree. Green in a worktree is not green on `main`; this session proved it four times.
-
-**Orchestrator hygiene (rules 25 and 66).** Cap concurrency at **two** agents, **one** while any agent
-holds Docker or the e2e tier. Never generate synthetic load. See rule 66 for the two kernel panics that
-set this policy and for what was and was not established about them.
-
-**Orchestrator hygiene (rule 25).** Never use a busy-loop load generator without `trap 'kill 0' EXIT INT TERM`,
-and never `2>/dev/null` on a cleanup step: 48 orphaned spinners starved this machine at load average 137 for
-4 h 37 m and stalled a reviewer for 4 h 50 m. **Resuming a background agent with `SendMessage` preserves its
-analysis** — both agents live at the restart were resumed rather than re-spawned, and their worktrees were
-intact because reviewers restore from a `tar` snapshot rather than `git checkout --`, which deleted an
-uncommitted edit for one agent this session.
+**Verify before every review and after every merge, in your own shell.** Skipping it once cost a full
+review round on a red branch whose report said PASS (rule 61). Quote the target's **verdict line**, never a
+test count — the count can be right while the run fails.
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
@@ -254,6 +209,28 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    wrong thing; re-arm it on progress. **Verified**: the mutation dies, and the re-arm's own cost is stated —
    a grandchild dribbling faster than the window keeps the shim alive, bounded externally by a control
    disconnect.
+68. **A mechanism with two symmetric halves gets one test, and the tested half makes the untested half look
+   covered.** WP-15's convergence detector escalates a task when a stage returns the same findings twice.
+   The **CI** half has a named test — *stops after three identical failures instead of burning the loop*.
+   The **code-review** half has none: inserting `return false;` before `recentStageSignatures` disables the
+   escalation entirely and **all 3659 unit+contract tests stay green**. `recentStageSignatures`,
+   `isRepeatOfPreviousRound` and the `escalateTask` block are all zero-hit. Nobody would ship a detector
+   with no test at all; what actually happens is that one half gets written, the mechanism reads as tested,
+   and the second half is never noticed as missing — *especially* by the author, who has just proved the
+   idea works. **When a behaviour is parameterised over a set — stages, providers, event types — the test
+   must be parameterised over the same set, or the set is decoration.** Sharpest form of rule 37: enumerate
+   what you *branch on*, not what you remembered to cover.
+67. **The defect you fixed and the test that proves it are two deliverables, and finding the defect makes
+   the second one feel done.** WP-15 found a real product defect by running the loop — a convergence
+   signature in `task_stages.outcome` overwritten by the very transition it exists to stop — diagnosed it
+   correctly, fixed it correctly, and wrote it up. The escalation that the signature exists to trigger is
+   executed by **no test in any tier**, so the fix is held in place by nothing. The same round left the CI
+   gate's failure branch untested while it **fails open**: settling `CI_TERMINAL_FAIL` as `{passed: true}`
+   left 3659 tests green, and `ci_gate` is a builtin whose job polls `pipelineStatus` in production
+   regardless of its `on` event — so a bug there advances a task to code review **on red CI**. That is the
+   fourth fail-open guard this session (WP-07's shadow guard, WP-12's two, now this), and the pattern is
+   worth naming: *a guard is written on the happy path and reviewed on the happy path, so its refusal is the
+   part nobody executes.* Mutate every guard to succeed and see which tests notice.
 66. **The orchestrator's parallelism is a load on somebody's actual machine, and the machine gets a vote.**
    The user reported **two kernel panics on 2026-09-10** — `watchdog timeout: no checkins from watchdogd in
    92 seconds` — with reboots at **12:45 and 17:06**. The 17:06 one is the "restart" this ledger recorded as
@@ -566,6 +543,74 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 
 (none)
 
+## Open findings backlog — every loose end, with its source
+
+> Maintained by the orchestrator. A finding leaves this list when it is **merged**, not when it is agreed.
+> Each line names where it came from, so a future session can judge the evidence rather than re-derive it.
+> **Nothing here blocks M2**; the ordering is by consequence, not by discovery.
+
+### 1. WP-15a — compose the pipeline into `apps/server` (TODO, a work package)
+The largest and the only one that changes what the product *can do*. See the plan row and the WP-15 notes.
+`createPipelineRuntime` is composed only by `packages/application/src/testing/pipeline-harness.ts`;
+`PipelineIntegrations` has **no production constructor**, so nothing reads `integration_bindings`. The
+pipeline e2e builds its own runtime instead of starting an `apps/server` instance, which is itself a
+deviation from `CLAUDE.md`'s rule for the tier. Small in code; it belongs to no existing WP, which is
+exactly why it would have been absorbed into WP-22 and disappeared.
+
+### 2. The slack/census follow-up branch — **verified green, never reviewed** (branch exists)
+`fix/slack-redaction-and-census` at `7a526fe`, worktree `.claude/worktrees/slack-fix`. All six targets
+verified green **by the orchestrator, on the branch with `main` merged in**. It carries three things:
+`slackDeliveryKey` redaction (the **third** instance of a secret reaching a *stored dedup key* — rule 49),
+four falsified exclusivity claims (rule 63), and a 25 s bound on the two census tests measured at stated
+load (rules 57, 64). **It has had no review round at all.** Review it before merging; do not merge on the
+strength of the orchestrator's verification alone.
+
+### 3. Citation guard — the oracle shares a shape with the parser it audits (rule 65)
+`scripts/citations.ts`: `CITATION_SITE` requires the backticked file token and `›` on the same **physical**
+line, exactly as the parser does, so a citation wrapped *between* those two is read by neither and the
+recall check reports **nothing at all** — measured: suite 12 passed, sites 18, failures `[]`. Fix by making
+the site regex span a wrap (an oracle must over-approximate what it audits), or list the shared shape in
+the docblock's gap list, which currently omits it.
+
+### 4. WP-15 round 2's minors (one-line each, from the approving review)
+- `packages/application/src/pipeline/gates.test.ts:214-223` — the test **named** for the Q55 cut asserts the
+  absence of the log *ref* (`'log:test:unit'`), not the log *body* (`'FAIL src/totals.test.ts'`, present in
+  the fixture). An implementation that closed Q55 by appending log text would pass it unchanged. The pin
+  that actually enforces the cut is the exact `toEqual` at `:167`. Assert `not.toContain` on the body.
+- `gates.test.ts:199` — no case where the **only** failing job is `allow_failure`, so the
+  `failed.length === 0` arm on a `failed` status is reached only via `canceled`/`skipped`. Moot in
+  production (GitLab reports such a pipeline `success`); one line.
+
+### 5. `SweepReport` cannot see a chained dispatch's failure (discovered work, WP-15)
+A failure that does not surface is rule 10's shape at the infrastructure level. The reviewer confirmed it
+undermines nothing today — `sweep.failed` is read in one place outside `outbox.ts`, and `outbox.ts:208`
+uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
+*trusting* `SweepReport`.
+
+### 6. Two nits from WP-14's final round
+- A citation line ending in `,` continues, so ordinary quoted prose on the next line becomes an invented
+  cited name. It fails **loudly**, and the grammar section states the constraint, so it is acceptable —
+  noted for the day a writer hits it.
+- Merge `b469ff2` rewrote 7 comment lines in `test/e2e/support/docker-workspace.ts`, a file `main` never
+  had, *inside a merge commit* — invisible to a default `git log -p`. The text is accurate. This is the
+  `d1e7b69` class in miniature: **the orchestrator's own merges are the least reviewed changes here.**
+
+### 7. Carried, not yet scheduled
+- **Q55** — the binding redactor cannot know a run-scoped credential, so `getJobLog`'s obligation is not
+  dischargeable as written. WP-15a or WP-16 must compose the redactor **per run**. The CI gate returns
+  failing job *names* until it is closed, and `gates.test.ts:167` pins that so closing it is deliberate.
+- **Q56** — a custom stage cannot return, because no bounded loop counts it. Recommendation filed (refuse
+  loudly); the reviewer agreed with rejecting "borrow `ci_fix`'s budget".
+- **WP-22 owes two measured things**: `renderEgressConfig` writes `User nobody` while the sidecar runs uid
+  1000 with `cap_drop ALL`, so tinyproxy cannot setuid and the rendered config **will not start the real
+  image as written**; and `apps/runlet` must be bundled to one file with
+  `scripts/runlet-container-check.mjs` re-run against the real image.
+- **`retentionDecision` keeps an unlabelled volume for ever by design** (rule 60), and one `verify:e2e` run
+  produces exactly one unlabelled `ws-<uuid>`. The e2e sweep was fixed; the production half is a decision
+  (a reserved prefix, or an orphan report), not a code change to make quietly.
+- **Shadow mode has no e2e**, and **session resume after a runner restart** is unimplemented
+  (`docs/TODO.md`).
+
 ## Milestone M1 — the loop
 
 | WP | Title | Depends | Parallel-safe | Status | Commit | Notes |
@@ -588,7 +633,8 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
-| WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | IN_PROGRESS | — | branch `wp/15` from `e6b2d12`; acceptance is the fake-Claude e2e, one feature + one bug ticket |
+| WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
+| WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | TODO | — | **The gap nobody's WP owned.** `createPipelineRuntime` is composed only by the test harness; `PipelineIntegrations` has no production constructor. Every M1 WP is done and the platform still cannot run a real ticket. Found by WP-15's reviewer, both rounds. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
@@ -2127,6 +2173,115 @@ uid 1000 (the socket is `0600`, Q45); WP-22 must bundle `apps/runlet` to a singl
 `scripts/runlet-container-check.mjs` against the real image. Session-store resume after a runner restart is
 WP-15's half.
 
+### WP-15 — the loop runs, and four defects only running it could find
+
+**The acceptance criterion is met**: `verify:e2e` walks one feature ticket and one bug ticket from
+`ticket.matched` to `task.completed` against a migrated PostgreSQL 18, with the real event store, the real
+priority dispatcher, the real `IntegrationActionExecutor` in front of fake providers, the real in-memory
+`Jobs` adapter and `FakeClaudeRunner`. Both templates end `done`, with no escalation.
+
+**Four defects the loop found, each invisible to every tier before it.** Every one is the same shape — two
+components tested against themselves and never against each other:
+
+1. **Every aggregate opened its stream at `stream_seq` 0**, and migration 0005's
+   `events_stream_seq_positive` is `check (stream_seq >= 1)`. The domain was tested against itself and the
+   event store against hand-built fixtures whose `streamSeq` the fixture chose; WP-15 is the first code that
+   appends an aggregate's events to a store. `FIRST_STREAM_SEQ` now names it, and the two model suites assert
+   contiguity *from* it.
+2. **`state === 'active'` as a guard strands a task at the retrospective.** product/04's task states are not
+   one per stage: `ready_for_merge`, `merged` and `retro` are states the pipeline moves through under its own
+   power. The guard appeared in three places (the stage executor's re-validation, the stage-completed handler,
+   the gate job) and in the *aggregate* (`completeStage`). `isRunnableTaskState` says what was meant: not
+   stopped by a human.
+3. **A convergence signature stored in `task_stages.outcome` is overwritten by the very transition it exists
+   to stop.** `outcome` is written by whichever path closes the row — the executor writes the verdict, the
+   transition writes `returned` — so three identical CI failures never converged. Migration 0012 gives it a
+   column nothing else writes.
+4. **A gate that answers "not yet" and re-enqueues itself with no delay is a spin**: five checks in
+   milliseconds, and the task parked for a human before the pipeline it was waiting for had started. The
+   re-check is a `startAfter` now (`GATE_RECHECK_MS`), and the test moves the clock to observe it.
+
+**Two more in the test harness rather than the product**, and both are the same class — a failure the harness
+could not see:
+
+- the `IntegrationActionExecutor` was given a virtual timer nothing advanced, so the first rate-limited call
+  *hung* the suite instead of failing it (`autoAdvance` now). A hang is the worst failure mode a suite has,
+  because it reports the timeout rather than the cause;
+- **a chained dispatch's failure is invisible in the sweep report.** `SweepReport.failed` counts the event the
+  sweep took off the queue; an event three links down the chain that fails leaves *its* row queued with a
+  backoff, and the sweep that follows reports `scanned: 0`. The e2e read that as "the pipeline settled" and
+  asserted the state it had stopped in. The harness now reads `event_dispatch.error` after every sweep and
+  reports the handler's error instead — which is how the missing seeded ticket was found in one run rather
+  than by bisecting handlers. The same shape as the job-failure wrapper beside it: **a test harness has to
+  surface the failure of every asynchronous thing it drives, or it reports the symptom.**
+
+**The obligations, discharged.** `cost_unreported` branches on the `run_stopped` row's `data.reason`, not on
+the status — and because the runner takes one sink for every run, the reason arrives through
+`RunStopReasons`, a decorator the composition root installs once. The MR batcher is `stately` +
+`singletonKey: 'mr:<iid>'` + `startAfter`, never `coalesce`, and re-reads every unresolved thread on wake;
+three tests drive its three endings. Enqueues happen **after commit** through a new
+`HandlerContext.afterCommit`, whose at-most-once caveat is demonstrated by a test that kills the process
+between the commit and the callback. `isBranchProtected` is on `GitProviderPort` with a fake, a shared-suite
+case and a GitLab fixture — no down-cast. The gate schema refuses a gate that names neither `on` nor
+`command` unless it is one of the three the platform evaluates itself.
+
+**What was cut, and why.**
+
+- **The `spike` template.** It ends at a human with no MR, so it exercises none of the loop; the WP row names
+  feature, bug and chore, and all three ship.
+- **The `librarian` stage** technical/12's example template carries. It is WP-18's pipeline, and a stage whose
+  executor does not exist would park every task one step short of `done`.
+- **The CI gate's error block.** product/04 S4 wants "the failing job's error block only" in the return; this
+  returns the failing **job names** from the event. Fetching the log is `getJobLog`, whose redaction
+  obligation is **Q55** — a run-scoped credential the binding redactor cannot know — and calling it before
+  that is decided would put a token in a return reason. The gate is honest about what it read.
+- **Probation mode** (BD-006: approval for the first 5 tasks). Plan approval is implemented as
+  `never | above_size | always` with an `L` threshold; probation needs a per-project completed-task count that
+  WP-30's autonomy dial owns.
+- **`command` gates.** A gate with a `command` needs a workspace; the evaluator returns `unsupported` and the
+  task escalates with a brief naming it, rather than passing a gate nothing ran.
+
+**Assumptions, each written where the code is.** A return is attributed to a bounded loop by the stage it
+comes *from* (`RETURN_LOOPS`), and a stage with no attribution escalates — filed as **Q56**, because it is a
+product decision about custom stages. `implementation → architecture` and `architecture → refinement` share
+`architecture_revisions` deliberately. A verdict is read from the artifact's structured `data` and never from
+prose; a type with no verdict field (`ImplementationPlan`, `ImplementationNotes`) treats "the artifact the
+template asked for validated" as the approval, which is a fact about the platform's validation rather than a
+field the model can omit. `rebase` joins BD-008's loops with product/04 S6b's two attempts.
+
+**For whoever wires this into `apps/server`.** `createPipelineRuntime` returns the handlers and starts the
+workers; nothing registers them yet, because a project's integration **bindings** (which GitLab, which Jira,
+with which credentials) have no loader — that is the missing piece between this and a running instance, and
+it is listed under discovered work.
+
+**Round 2 — the two branches the tests never executed were both guards.** Review round 1 returned
+REQUEST_CHANGES with two majors of one shape: an implementation that looks correct and that the reviewer had
+to **mutate** to show was unheld.
+
+- **The code-review convergence escalation** (product/04 S5, `saga.ts`) was executed by no test in any tier:
+  `return false;` before `recentStageSignatures` disabled it and all 3659 unit+contract tests stayed green
+  (the reviewer's measurement). It is one of the two behaviours migration 0012's `signature` column exists
+  for, and the one defect 3 above was fixed *for* — a lesson kept in prose while nothing held the code
+  (rules 30 and 10). It now has the CI half's shape: two reviews with identical structured findings escalate
+  with `the review reported the same findings as the previous round` at `code_review` counter **1** of 3, and
+  a second review with *different* findings carries on instead. Re-running the mutation kills
+  `stops when the re-review reports the same findings, instead of burning the loop` by name, and the message
+  is the distinction itself — `expected 'code_review iteration limit of 3 reac…'`, the loop merely running out.
+- **The CI gate's failure branch** (`gates.ts`) was untested everywhere **and fails open**: settling
+  `CI_TERMINAL_FAIL` as `{passed: true}` also left 3659 tests green, and no e2e drove it — the harness's
+  `ciStatus: 'failed'` had no consumer. `ci_gate` is a `BUILTIN_GATE_STAGE_ID`, so the stage job polls
+  `pipelineStatus` whatever the template's `on` says, and the bug therefore **advances a task to code review
+  on red CI**. Fourth fail-open guard this session (rule 14). `gates.test.ts` now calls the evaluator directly
+  over `failed`/`canceled`/`skipped`, asserting `passed: false` **and** the `detail` — the Q55 cut, so closing
+  Q55 breaks a test rather than nothing — and the e2e drives a red pipeline end to end. Under the mutation
+  that e2e dies with `expected 'ready_for_merge' to be 'needs_human'`: the fail-open, observed.
+
+The gate evaluator's whole **refusal** surface is executed rather than inspected as well (a `command` gate, a
+custom gate with and without an event, a task with no merge request, a merge request with no head sha, a
+project with no git binding). `isPlatformGate` was exported and imported nowhere, and is deleted. product/04
+S4 now carries one bullet saying what the platform does today and pointing at **Q55**, because the cut lived
+only in this ledger and docs win over code (rule 8).
+
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 
 The finding worth keeping from the web foundation, because it is the other half of the defect that cost
@@ -2425,6 +2580,24 @@ recall check, also stated there; (3) markdown continuation ignores list and head
 sound while no Markdown citation exists and is the reason the limit is written down.
 
 ## Discovered work (not in plan)
+
+- **Nothing loads a project's integration bindings, so the pipeline cannot be wired into
+  `apps/server` yet (WP-15).** `createPipelineRuntime` takes `PipelineIntegrations` — a git binding
+  and a task-management binding, each an adapter plus its `IntegrationRef` — and the platform has
+  no code that reads `integrations` / project bindings out of the database and builds them. Every
+  provider adapter, the executor and the pipeline are ready; the composition root has nothing to
+  hand them. It is a small use case (`bindingsFor(projectId)`) plus the secret resolution TD-020
+  describes, and it blocks the first *real* instance rather than any test.
+- **`ProviderCreateInput.secrets` is not connected to `exactSecretRedactor` (found at WP-15,
+  untouched).** A composition root can hand a provider a secret the redactor never learns. The
+  redaction fix on `main` closed the *walk*; this is the wiring. Q55 is the harder half of the same
+  question (a run-scoped credential cannot be in a binding-time redactor at all).
+- **The CI gate returns failing job **names**, not the log excerpt product/04 S4 asks for (WP-15).**
+  `getJobLog` is the call, and its redaction obligation is Q55's. When Q55 is decided, the gate
+  should fetch the failing job's log through the per-run redactor and put the error block in the
+  return reason — it is the difference between "test:unit failed" and a developer stage that knows
+  what to fix. Round 2 wrote the cut into **product/04 S4** itself and pinned the `detail` string in
+  `gates.test.ts`, so the change is a failing test rather than a silent improvement.
 
 - **An unlabelled `ws-<run-id>` volume: the e2e half is fixed, the production half is a decision nobody
   has taken (WP-14 round 3).** Standing rule 60 has the measurement. What is *done* here is the harness:

@@ -96,6 +96,12 @@ export interface FakeProjectSeed {
   readonly head?: string;
   /** Raw CODEOWNERS text; `null` when the project has none. */
   readonly codeowners?: string | null;
+  /**
+   * Branches this project protects. Defaults to `[defaultBranch]`, because a project whose default
+   * branch is unprotected is the unusual case and a fake that made it the default would let every
+   * test pass the pipeline's protection gate without meaning to.
+   */
+  readonly protectedBranches?: readonly string[];
 }
 
 export interface FakeGitOptions {
@@ -111,6 +117,7 @@ interface StoredProject {
   defaultBranch: string;
   head: string;
   codeowners: string | null;
+  protectedBranches: Set<string>;
   nextIid: number;
 }
 
@@ -326,6 +333,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     projects.set(seed.path, {
       path: seed.path,
       defaultBranch: seed.defaultBranch ?? 'main',
+      protectedBranches: new Set(seed.protectedBranches ?? [seed.defaultBranch ?? 'main']),
       head: seed.head ?? nextSha(),
       codeowners: seed.codeowners ?? null,
       nextIid: 1,
@@ -860,6 +868,23 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       core.enter('get_default_branch_head');
       const stored = requireProject('get_default_branch_head', project);
       return { branch: stored.defaultBranch, sha: stored.head };
+    },
+
+    isBranchProtected: async (project, branch) => {
+      core.enter('is_branch_protected');
+      const stored = requireProject('is_branch_protected', project);
+      // Divergence: the fake knows every branch its merge requests created, plus the default. A
+      // name it has never seen is `not_found` rather than `false` — stricter than a provider that
+      // might answer "unprotected" for a typo, and stricter in the direction that matters, because
+      // "unprotected" is what lets a push credential near the default branch.
+      const known =
+        stored.protectedBranches.has(branch) ||
+        branch === stored.defaultBranch ||
+        mergeRequests.some((mr) => mr.project === project && mr.source_branch === branch);
+      if (!known) {
+        throw notFound(PROVIDER, 'is_branch_protected', `branch ${branch}`);
+      }
+      return stored.protectedBranches.has(branch);
     },
 
     readCodeowners: async (project, _ref) => {

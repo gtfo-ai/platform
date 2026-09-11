@@ -14,7 +14,7 @@ import {
 } from './iteration-limits.js';
 
 describe('BD-008 defaults', () => {
-  it('reproduces the decision verbatim', () => {
+  it("reproduces the decision verbatim, plus product/04 S6b's rebase attempts", () => {
     expect(DEFAULT_ITERATION_LIMITS).toEqual({
       code_review: 3,
       business_review: 2,
@@ -22,6 +22,8 @@ describe('BD-008 defaults', () => {
       human_rounds: 3,
       refinement_questions: 2,
       architecture_revisions: 2,
+      // Not BD-008: product/04 S6b bounds the rebase gate at "default 2 attempts" (WP-15).
+      rebase: 2,
     });
     expect([...ITERATION_LOOPS].sort()).toEqual(Object.keys(DEFAULT_ITERATION_LIMITS).sort());
   });
@@ -47,6 +49,7 @@ describe('resolveIterationLimits', () => {
       human_rounds: 4,
       refinement_questions: 2,
       architecture_revisions: 2,
+      rebase: 2,
     });
   });
 

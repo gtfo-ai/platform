@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { StoredEvent } from '../ports/event-store.js';
 import { DISPATCH_MARKER } from '../ports/handler-executions.js';
+import { silentLogger } from '../ports/logger.js';
 import { streamId, taskDequeued, taskQueued } from '../testing/fixtures.js';
 import { faultsAt, MemoryEventing, SimulatedCrashError } from '../testing/memory-eventing.js';
 import { EventBus } from './event-bus.js';
@@ -486,5 +487,108 @@ describe('EventBus', () => {
     await expect(bus.dispatch(event)).rejects.toBeInstanceOf(SimulatedCrashError);
     // Committed, so it is gone from the queue even though the caller saw an error.
     expect(memory.pending).toEqual([]);
+  });
+});
+
+describe('afterCommit', () => {
+  /** A handler that writes an effect and asks for a callback once its transaction has committed. */
+  const enqueuing = (log: string[], overrides: Partial<EventHandler> = {}): EventHandler => ({
+    name: 'core.enqueue',
+    priority: 10,
+    eventTypes: ['task.queued'],
+    handle: async (context) => {
+      log.push('handler');
+      context.afterCommit(() => {
+        log.push('callback');
+      });
+    },
+    ...overrides,
+  });
+
+  it('runs the callback after the handler committed, and in registration order', async () => {
+    const { memory, bus } = harness();
+    const log: string[] = [];
+    bus.register({
+      ...enqueuing(log),
+      handle: async (context) => {
+        log.push('handler');
+        context.afterCommit(() => {
+          log.push('first');
+        });
+        context.afterCommit(async () => {
+          log.push('second');
+        });
+      },
+    });
+    const result = await bus.dispatch(await appendOne(memory));
+    expect(result.handlers[0]?.result).toBe('ran');
+    expect(log).toEqual(['handler', 'first', 'second']);
+  });
+
+  it('does NOT run the callback when the handler transaction rolls back', async () => {
+    // This is the whole point of the seam: a job enqueued inline would outlive the rollback that
+    // deleted its reason for existing.
+    const log: string[] = [];
+    const memory = new MemoryEventing({ faults: faultsAt([2]) });
+    const bus = new EventBus({ unitOfWork: memory, retryDelayMs: 0, maxRetryDelayMs: 0 });
+    bus.register(enqueuing(log));
+
+    const result = await bus.dispatch(await appendOne(memory));
+
+    expect(result.status).toBe('failed');
+    // Rule 10: the handler body *did* run — asserting only "no callback" would pass on a bus that
+    // never called the handler at all.
+    expect(log).toEqual(['handler']);
+  });
+
+  it('loses the callback when the process dies between the commit and the callback', async () => {
+    // The at-most-once caveat in the docblock, demonstrated rather than asserted in prose: the
+    // handler's effect is durable, the callback never ran, and the redelivery skips the handler —
+    // so nothing re-arms it. Every job the pipeline enqueues has to tolerate this, which is why
+    // they all re-validate on fire.
+    const log: string[] = [];
+    const memory = new MemoryEventing({ faults: faultsAt([], [2]) });
+    const bus = new EventBus({ unitOfWork: memory, retryDelayMs: 0, maxRetryDelayMs: 0 });
+    bus.register(enqueuing(log));
+    const event = await appendOne(memory);
+
+    await bus.dispatch(event);
+    expect(log).toEqual(['handler']);
+
+    const retry = await bus.dispatch(event);
+    expect(retry.handlers[0]?.result).toBe('skipped');
+    expect(log).toEqual(['handler']);
+  });
+
+  it('logs a callback that throws and leaves the handler successful', async () => {
+    const memory = new MemoryEventing();
+    const errors: unknown[] = [];
+    const bus = new EventBus({
+      unitOfWork: memory,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      logger: {
+        ...silentLogger,
+        error: (fields) => {
+          errors.push(fields.err);
+        },
+      },
+    });
+    bus.register({
+      name: 'core.enqueue',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async (context) => {
+        context.afterCommit(() => {
+          throw new Error('pg-boss is down');
+        });
+      },
+    });
+
+    const result = await bus.dispatch(await appendOne(memory));
+
+    expect(result.status).toBe('dispatched');
+    expect(result.handlers[0]?.result).toBe('ran');
+    expect((errors[0] as Error).message).toBe('pg-boss is down');
   });
 });

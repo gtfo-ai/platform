@@ -30,6 +30,9 @@ export * from './errors.js';
 export * from './events.js';
 export * from './ids.js';
 export * from './permissions.js';
+// The pipeline interpreter (WP-15)
+export * from './pipeline/interpreter.js';
+export * from './pipeline/templates.js';
 // Policies
 export * from './policies/autonomy.js';
 export * from './policies/budgets.js';
