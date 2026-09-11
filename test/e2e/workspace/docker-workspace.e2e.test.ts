@@ -35,6 +35,7 @@ import { workspace } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runWorkspaceProviderContractSuite } from '../../contract/support/workspace/provider-suite.js';
 import {
+  ALPINE_IMAGE,
   type DockerFixture,
   docker,
   exportPath,
@@ -98,6 +99,98 @@ describe('the workspace lifecycle against a real daemon', () => {
     }
   }, 180_000);
 
+  /**
+   * The control volume's root must admit the `prep-<run-id>` helper, and that helper is **not** an
+   * omnipotent root: `CapDrop: ALL` with only `CAP_CHOWN` added leaves it without
+   * `CAP_DAC_OVERRIDE`, so it is an ordinary process subject to the directory's mode bits.
+   *
+   * This is the assertion `main` was missing for six red runs. The whole failure —
+   * `mkdir: can't create directory '/ctl/<uuid>': Permission denied`, three tiers of cases
+   * downstream of it — was this one `mkdir`, and nothing named it. It is deliberately *not* routed
+   * through the provider: a probe that starts one container says which permission failed, where a
+   * `create` says only that a helper exited 1.
+   *
+   * **What it is worth on each platform.** Against a *named* volume it is worth the same on both,
+   * which is the point of using one: a fresh named volume is `root:root 0755` on Docker Desktop
+   * and on a Linux runner alike (measured on each). The platform difference lives entirely in the
+   * fixture's bind-backed control root, and that is precisely why this case must not use it —
+   * standing rule 69 the other way round.
+   */
+  it('admits the prep helper into a control volume root: root, CAP_DAC_OVERRIDE dropped', async () => {
+    // A **throwaway named volume**, deliberately not `fixture.controlVolume`. The fixture's control
+    // root is bind-backed and loosened to `0777` so this process can empty it, which would make the
+    // probe a tautology: measured, `--user 1000:1000 --cap-drop ALL --cap-add CHOWN` cannot `mkdir`
+    // into a `root:root 0755` root but can into a `0777` one, so run `#prepare` as any uid and the
+    // e2e would stay green while production broke. A fresh named volume is `root:root 0755` — what
+    // `APP_WORKSPACE_CONTROL_VOLUME` is in production — so this is that shape and no other.
+    const volume = `agentic-e2e-ctlshape-${randomUUID()}`;
+    await docker(['volume', 'create', volume]);
+    try {
+      const shape = await docker([
+        'run',
+        '--rm',
+        '-v',
+        `${volume}:/ctl`,
+        ALPINE_IMAGE,
+        'ls',
+        '-ldn',
+        '/ctl',
+      ]);
+      expect(shape.stdout).toMatch(/^drwxr-xr-x\s+\d+\s+0\s+0\b/);
+      const result = await docker(
+        [
+          'run',
+          '--rm',
+          '--user',
+          '0:0',
+          '--cap-drop',
+          'ALL',
+          '--cap-add',
+          'CHOWN',
+          '--network',
+          'none',
+          '-v',
+          `${volume}:/ctl`,
+          ALPINE_IMAGE,
+          'sh',
+          '-c',
+          `mkdir /ctl/${randomUUID()} && echo ADMITTED`,
+        ],
+        { allowFailure: true },
+      );
+      expect(`${result.stdout}${result.stderr}`).toContain('ADMITTED');
+      expect(result.ok).toBe(true);
+    } finally {
+      await docker(['volume', 'rm', '-f', volume], { allowFailure: true });
+    }
+  }, 60_000);
+
+  /**
+   * The engine never pulls; `docker run` does. A `create` through the API answers **404** when the
+   * image is absent — measured on this daemon, `{"message":"No such image: <tag>"}` — so an image
+   * the fixture assumes rather than ensures is green on every machine that has run the suite
+   * before and 21 failures on a clean runner, which is what happened (standing rules 4 and 69).
+   */
+  it('has every image it will create a container from, because the engine never pulls', async () => {
+    const missing: string[] = [];
+    for (const image of fixture.images) {
+      const present = await docker(['image', 'inspect', image], { allowFailure: true });
+      if (!present.ok) {
+        missing.push(image);
+      }
+    }
+    expect(missing).toEqual([]);
+    // The mapping itself, so a reader never has to take "404 means no such image" on trust — and
+    // so the message names the image, which cost this project a CI round when it did not.
+    const absent = `alpine:does-not-exist-${randomUUID()}`;
+    await expect(
+      fixture.engine.createContainer(`agentic-e2e-absent-${randomUUID()}`, {
+        Image: absent,
+        Cmd: ['true'],
+      }),
+    ).rejects.toMatchObject({ code: 'not_found', message: expect.stringContaining(absent) });
+  }, 60_000);
+
   it('creates the control sub-directory before the container starts (WP-13 obligation 1)', async () => {
     // Measured on Docker 29.7.2: the daemon refuses a `volume-subpath` that does not exist, which
     // is what makes the ordering load-bearing rather than tidy. Re-measured here so the model in
@@ -148,6 +241,127 @@ describe('the workspace lifecycle against a real daemon', () => {
       await fixture.provider.destroy(first.handle);
       await fixture.provider.destroy(second.handle);
     }
+  }, 180_000);
+
+  /**
+   * `destroy` says it removes the control directory "which holds the run token"; until now only
+   * the *script* was asserted (`provider.test.ts`), never the outcome.
+   *
+   * It did not hold on Linux. `#prepare` hands the directory to uid 1000 as `0700`, and the
+   * `ctlrm-<run-id>` helper is root with `CapDrop: ALL` and nothing added — no `CAP_DAC_OVERRIDE`,
+   * so it cannot descend into a directory it no longer owns. `#teardown` runs the step through
+   * `step()`, which logs `workspace teardown partial` and carries on, so the token simply stayed on
+   * the shared control volume. Measured on the daemon before the fix: `rm -rf /ctl/<id>` exits 1.
+   *
+   * The listing is taken by a container, not from the host, so this reads the volume rather than
+   * the bind's macOS view of it.
+   */
+  const controlVolumeListing = async (): Promise<string> => {
+    const listing = await docker([
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '-v',
+      `${fixture.controlVolume}:/ctl`,
+      ALPINE_IMAGE,
+      'ls',
+      '-A',
+      '/ctl',
+    ]);
+    return listing.stdout;
+  };
+
+  it('destroy leaves nothing of the run on the control volume, token and all', async () => {
+    const { handle } = await startRun();
+    await fixture.provider.destroy(handle);
+    expect(await controlVolumeListing()).not.toContain(handle.runId);
+  }, 180_000);
+
+  /**
+   * The adversary is the agent, and it owns the directory the launcher has to reclaim.
+   *
+   * `<ctl>/<run-id>` is mounted into the run container read-write and chowned to uid 1000, so the
+   * agent may `chmod 000` it — and root with `CapDrop: ALL` is an ordinary non-owner. Measured:
+   * with `CAP_CHOWN` only, `chown -R` + `chmod -R` + `rm -rf` exits 1 and the directory survives
+   * holding the run token; with `CAP_DAC_OVERRIDE` a plain `rm -rf` exits 0. Nothing else would
+   * ever collect it — `purgeExpired` lists *volumes* by `role=workspace` and never looks inside
+   * this one — and `#teardown` only logs, so the leak is silent.
+   *
+   * The write is done from a container on the run's own `volume-subpath` mount as uid 1000 rather
+   * than through the agent, because the agent is a stand-in until WP-22; the *mount* and the *uid*
+   * are the real ones, read back from the run container's own configuration.
+   */
+  it('destroy reclaims the control directory even after the agent locks it', async () => {
+    const { handle } = await startRun();
+    const hostile = await probeUnderRunContainerConfig(
+      fixture.engine,
+      handle.containerId,
+      'chmod 000 /ctl; stat -c "MODE=%a OWNER=%u" /ctl',
+      { user: '1000:1000' },
+    );
+    // The lock takes on both platforms — measured, `MODE=0 OWNER=1000` through the subpath mount
+    // on Docker Desktop as well as on Linux — so this is asserted, not hedged. An earlier revision
+    // of this case guessed the opposite and carried a `process.platform` escape hatch for a
+    // condition that never occurs.
+    expect(hostile.output).toContain('MODE=0 ');
+    const before = fixture.warnings.length;
+    await fixture.provider.destroy(handle);
+    expect(await controlVolumeListing()).not.toContain(handle.runId);
+    // And it did not merely *appear* to work. `#teardown` logs a failed step and carries on, so
+    // the volume listing alone would also pass if the directory had never been created. The
+    // `control-dir` step specifically — `rm-network` partials are this fixture's own doing, since
+    // a probe container of this file can still be attached to the run network when it is removed.
+    const failed = fixture.warnings
+      .slice(before)
+      .filter((entry) => entry.message === 'workspace teardown step failed')
+      .map((entry) => entry.fields['step']);
+    expect(failed).not.toContain('control-dir');
+  }, 180_000);
+
+  /**
+   * The other way an agent defeats reclamation: not by locking the directory, by **filling it**.
+   *
+   * Step 1 used to empty the directory with `rm -rf <dir>/*`, and a glob is an argument list.
+   * Measured on a named volume, 8 000 files of 240-character names — about 1.9 MB of argv against
+   * a ~2 MB `ARG_MAX`: `/bin/sh: rm: Argument list too long`, the helper exiting **0**, 8 001
+   * entries left and the token among them, and `ctlrm` then exiting 1 because root cannot unlink
+   * inside a `0755` directory it does not own. Silent, and the run token stays on the shared
+   * volume — the exact thing this branch exists to close.
+   *
+   * The count is the point of the case, so it is a constant with its arithmetic rather than a
+   * round number: below the cliff this case passes against the defect.
+   */
+  it('destroy reclaims the control directory even after the agent floods it past ARG_MAX', async () => {
+    const { handle } = await startRun();
+    // 8 000 x 240 characters is ~1.9 MB of argv, against a ~2 MB ceiling. Cheap to make (file
+    // creation, not CPU) and it is the smallest shape that crosses it with a legal filename.
+    const flood = await probeUnderRunContainerConfig(
+      fixture.engine,
+      handle.containerId,
+      [
+        'n=$(printf "%0.sx" $(seq 1 240))',
+        'i=0',
+        'while [ $i -lt 8000 ]; do : > "/ctl/$n$i"; i=$((i+1)); done',
+        'ls -A /ctl | wc -l | sed "s/^/entries=/"',
+      ].join('\n'),
+      { user: '1000:1000' },
+    );
+    // At least the 8 000, plus whatever the run legitimately put there (`token`, and the shim's
+    // `ctl.sock`) — counted rather than pinned, because the exact figure is the launcher's
+    // business and this case is about crossing the cliff.
+    const entries = Number(/entries=(\d+)/.exec(flood.output)?.[1] ?? '0');
+    expect(entries).toBeGreaterThanOrEqual(8001);
+    const before = fixture.warnings.length;
+    await fixture.provider.destroy(handle);
+    expect(await controlVolumeListing()).not.toContain(handle.runId);
+    // Loudly, if at all: the emptiness test is the helper's verdict, so a step that deleted
+    // nothing fails here instead of reporting success.
+    const failed = fixture.warnings
+      .slice(before)
+      .filter((entry) => entry.message === 'workspace teardown step failed')
+      .map((entry) => entry.fields['step']);
+    expect(failed).not.toContain('control-dir');
   }, 180_000);
 });
 
@@ -262,12 +476,39 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
     expect(reachable.output.trim().endsWith('0')).toBe(true);
 
     // And the neighbour it *can* name is the sidecar, by container name on the embedded resolver.
+    //
+    // `getent hosts`, not `nslookup`. This assertion was `nslookup … ; rc=0` and it was the last
+    // red test on `main`: busybox `nslookup` also queries `<name>.<search-domain>`, the embedded
+    // resolver forwards that upstream, an `internal` network has no route upstream, and the whole
+    // invocation exits 1 while the name resolves. A developer machine has no `search` line; a
+    // cloud runner's host does, and Docker copies it into every container. Measured on one
+    // internal network, varying nothing but that: `nslookup` rc 0 → 1, `getent hosts` rc 0 → 0,
+    // same address both times. So the old probe's false branch meant "the name did not resolve
+    // **or** some other query in the same process did not" (standing rule 56).
+    //
+    // The address is asserted and not only the status, and the pair is completed by a name that
+    // *would* resolve if this network had a route off it — `example.com` rather than something
+    // `.invalid`, which would fail for the wrong reason and make the negative vacuous (rule 42).
     const neighbour = await probeUnderRunContainerConfig(
       fixture.engine,
       handle.containerId,
-      `nslookup egress-${handle.runId} >/dev/null 2>&1; echo "rc=$?"`,
+      [
+        `getent hosts egress-${handle.runId} | head -1 | sed 's/^/neighbour=/'`,
+        `getent hosts egress-${handle.runId} >/dev/null; echo "neighbour_rc=$?"`,
+        'getent hosts example.com >/dev/null; echo "upstream_rc=$?"',
+      ].join('\n'),
+      // The upstream half is a query the internal network drops, so it costs a full resolver
+      // timeout: 10 s at the default budget, 2 s at this one — measured, same two answers. The
+      // trade, since bounding a timeout can always hide a slow success: an `internal` network has
+      // no route at all, so the packet is dropped rather than answered late, and a network that
+      // *did* have a route would be answered by the host resolver far inside one second. The
+      // "no route at all" claim does not rest on this either way — `nc` and the default-route
+      // count above carry it (standing rule 43).
+      { dnsOptions: ['timeout:1', 'attempts:1'] },
     );
-    expect(neighbour.output).toContain('rc=0');
+    expect(neighbour.output).toContain('neighbour_rc=0');
+    expect(neighbour.output).toMatch(/neighbour=\d+\.\d+\.\d+\.\d+\s/);
+    expect(neighbour.output).not.toContain('upstream_rc=0');
 
     const sidecar = (await fixture.engine.inspectContainer(
       handle.sidecarContainerId ?? '',

@@ -827,16 +827,142 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     }
   }
 
+  /**
+   * Removes the run's control sub-directory — **against an adversary, and with no capability at
+   * all**.
+   *
+   * The adversary is the agent in the run container. It is uid 1000, it mounts `<ctl>/<run-id>`
+   * read-write (`hardening.ts` § `runContainerCreateBody`), and it owns that directory, so it may
+   * `chmod 000` the directory or anything it puts inside. Root with `CapDrop: ALL` is an ordinary
+   * non-owner: it cannot descend into such a directory, cannot `chmod` it, and — measured — cannot
+   * `chown -R` it either, because the recursion must open the directory before it can walk it.
+   *
+   * The way out is not a capability, it is **the right uid**. Everything under `<ctl>/<run-id>` is
+   * owned by uid 1000 and the agent cannot change that (it has no `CAP_CHOWN`), so a helper *on
+   * that uid* is the owner of every mode the agent can set and needs no privilege to undo them.
+   * Two helpers, both `CapDrop: ALL` with nothing added:
+   *
+   *  1. uid 1000 unlocks the tree, empties it, and leaves the directory `0755` so the next step can
+   *     look inside it (that last `chmod` is load-bearing: without it step 2 exits 1 on a named
+   *     volume, which is production's shape — measured);
+   *  2. uid 0 unlinks the now-empty directory, which needs write and execute on `/ctl`, and `/ctl`
+   *     is `root:root 0755`.
+   *
+   * Measured on **both** control-volume shapes — a plain named volume, and one bind-backed onto a
+   * host filesystem, where a guest capability would not have helped anyway because virtiofs checks
+   * again on the host side — in all three states `destroy` can find:
+   *
+   * ```
+   *                       benign            agent locked it     already gone
+   * named volume          rc 0/0, empty     rc 0/0, empty       rc 0/0, empty
+   * bind-backed           rc 0/0, empty     rc 0/0, empty       rc 0/0, empty
+   * ```
+   *
+   * An earlier revision did this in one helper with `CAP_DAC_OVERRIDE`. That worked, and the
+   * docblock claimed the alternative was "not a tighter capability, it is a leak" — which review
+   * disproved by measuring the two-helper form. `DAC_OVERRIDE` bypasses **every** file permission
+   * check on a volume that holds every other run's token; one extra short-lived container is the
+   * cheaper side of that trade.
+   *
+   * Step 1 mounts the whole of `/ctl` rather than just this run's sub-path. A `volume-subpath`
+   * mount would stop it from even naming a sibling, and it is the better isolation — but the
+   * daemon refuses a sub-path that does not exist, and `destroy` is idempotent, so the second call
+   * could not start the container at all. The mitigation is that neither script takes a path from
+   * anywhere: the run id is `assertRunId`-ed before it is interpolated.
+   *
+   * **One argument, never a list.** The first draft of step 1 deleted with `rm -rf $dir/*`, and an
+   * agent defeated it by making the argument list too long — measured, 8 000 files of
+   * 240-character names: `/bin/sh: rm: Argument list too long`, the step exiting **0**, 8 001
+   * entries and the token still there, and step 2 then exiting 1 because root cannot unlink inside
+   * a `0755` directory it does not own.
+   *
+   * `find $dir -mindepth 1 -maxdepth 1 -exec rm -rf {} +` was the obvious repair and it is also
+   * wrong, and so is a bare `rm -rf $dir`: **deleting invalidates the directory cursor the walk is
+   * reading**, so one pass skips entries. Measured on the same 8 000-file case: `find -exec` left
+   * **3 944 of 8 002** and `rm -rf $dir` left **3 991**, neither of them reporting an error. A
+   * named volume happens not to show it and virtiofs does, which is the usual shape (rule 69).
+   *
+   * So the removal is a **bounded retry** with the emptiness test as its condition, `rm -rf $dir`
+   * as the work — one argument, never a list, so no `ARG_MAX` — and the same test again as the
+   * verdict. Each pass removes roughly half, so the bound of 20 covers about a million entries;
+   * past it the step fails rather than looping. Measured: 8 passes on a bind-backed volume, 1 on a
+   * named one, empty on both, and a no-op on a directory that is already gone.
+   *
+   * **The last line is the verdict, never `exit 0`.** `rm -rf $dir` here ends non-zero by design
+   * (its last act is unlinking `$dir`, which needs write on `/ctl` — step 2's job), and busybox
+   * `find -exec … +` does not propagate a failing `rm` either, so the only honest answer to "did
+   * this work" is to look. With the test, the 8 000-file case that used to exit 0 exits 1, and
+   * because `#helper` throws on a non-zero exit, step 2 is skipped rather than run against a
+   * directory step 1 did not empty. A step that cannot fail is a step whose failure branch nobody
+   * executes (rule 67).
+   *
+   * The `chmod -R` is what makes the locked case work — an agent can `chmod 000` the directory or
+   * anything under it, and `rm` does not chmod anything. It runs **before the first emptiness
+   * question** as well as inside the loop, because an unreadable directory answers `ls -A` with
+   * nothing: ask first and a `chmod 000` reads as "already empty" and skips the removal, which is
+   * how the first draft of the loop passed the flood case and failed the lock case. Its own exit
+   * status is ignored on purpose: on a bind-backed volume it reports `Invalid argument` for the
+   * shim's Unix socket (measured, and it carries on), which is not a reason to abandon the work.
+   *
+   * **Both failures are silent to the caller, and they leave different things behind.** `#teardown`
+   * runs this through `step()`, which logs and carries on, and nothing retries:
+   *
+   *  - step 1 fails → the whole directory stays, **run token included**, which is the leak this
+   *    branch exists to close;
+   *  - step 1 succeeds and step 2 fails → the token is gone and an **empty `0755` directory**
+   *    stays, which is a name and a timestamp rather than a credential.
+   *
+   * Neither is collected later: `purgeExpired` lists *volumes* by `role=workspace` and never looks
+   * inside this one (standing rule 60, one level down). The two are distinguishable in the log by
+   * which helper is named, and `docker-workspace.e2e.test.ts` asserts the `control-dir` step is not
+   * among the failed ones — which is the only way either becomes visible from outside.
+   */
   async #removeControlDirectory(runId: string): Promise<void> {
+    const id = assertRunId(runId);
+    const dir = `/ctl/${id}`;
+    const mounts = [this.#volumeMount(this.#controlVolume, '/ctl', false)];
+    const labels = { [WORKSPACE_LABELS.run]: runId, [WORKSPACE_LABELS.role]: 'control-cleanup' };
     await this.#helper({
-      name: `ctlrm-${assertRunId(runId)}`,
+      name: `ctlempty-${id}`,
       image: this.#images.git,
-      script: `rm -rf /ctl/${assertRunId(runId)}`,
-      mounts: [this.#volumeMount(this.#controlVolume, '/ctl', false)],
+      // Guarded on existence, because `destroy` is idempotent and a directory that is already
+      // gone is a success — an `if` whose condition is false exits 0 on its own, which is why
+      // there is no `exit 0` to end this: the emptiness test is the verdict.
+      script: [
+        `if [ -e ${dir} ]; then`,
+        // Before the first question, not only inside the loop: an unreadable directory answers
+        // `ls -A` with nothing, so a `chmod 000` from the agent would read as "already empty" and
+        // skip the removal entirely.
+        `  chmod -R u+rwX ${dir}`,
+        '  n=0',
+        `  while [ -e ${dir} ] && [ -n "$(ls -A ${dir} | head -c 1)" ]; do`,
+        '    n=$((n+1))',
+        '    if [ $n -gt 20 ]; then break; fi',
+        `    chmod -R u+rwX ${dir}`,
+        `    rm -rf ${dir}`,
+        '  done',
+        `  if [ -e ${dir} ]; then`,
+        `    chmod 755 ${dir}`,
+        `    test -z "$(ls -A ${dir} | head -c 1)"`,
+        '  fi',
+        'fi',
+      ].join('\n'),
+      mounts,
+      user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
+      secrets: [],
+      network: 'none',
+      labels,
+    });
+    await this.#helper({
+      name: `ctlrm-${id}`,
+      image: this.#images.git,
+      // `rm -rf` on a path that is already gone is not an error.
+      script: `rm -rf ${dir}`,
+      mounts,
       user: '0:0',
       secrets: [],
       network: 'none',
-      labels: { [WORKSPACE_LABELS.run]: runId, [WORKSPACE_LABELS.role]: 'control-cleanup' },
+      labels,
     });
   }
 

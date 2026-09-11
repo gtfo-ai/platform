@@ -55,6 +55,10 @@ interface FakeCreateBody {
       readonly VolumeOptions?: { readonly Subpath?: string };
     }[];
     readonly NetworkMode?: string;
+    // Typed so the capability census in `provider.test.ts` can read them rather than reach past
+    // the type: a capability added to a container is a security change and needs a named negative.
+    readonly CapAdd?: readonly string[];
+    readonly CapDrop?: readonly string[];
   };
 }
 

@@ -25,7 +25,7 @@
  * back here to find out what was actually shown.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -41,6 +41,13 @@ export const REPO_ROOT = path.resolve(
   '..',
 );
 
+/**
+ * The stand-in images, by **mutable tag**, and {@link ensureImages} pulls one only when it is
+ * absent. What that trades: a machine that pulled `node:24-alpine` months ago keeps testing against
+ * that build for ever, so a regression the current tag would show is invisible here — while CI,
+ * whose daemon is always clean, always gets the current one. Pinning by digest belongs with the
+ * real images (WP-22 owns them); until then the two environments can differ and this says so.
+ */
 export const RUNTIME_IMAGE = process.env['WORKSPACE_E2E_RUNTIME_IMAGE'] ?? 'node:24-alpine';
 export const ALPINE_IMAGE = process.env['WORKSPACE_E2E_ALPINE_IMAGE'] ?? 'alpine:3.21';
 export const GIT_IMAGE = process.env['WORKSPACE_E2E_GIT_IMAGE'] ?? 'alpine/git:v2.49.1';
@@ -110,8 +117,65 @@ export interface DockerFixture {
   readonly engine: RecordingDockerEngine;
   /** The fixture repository container, reachable by this name on {@link network}. */
   readonly repoContainer: string;
+  /** Every image a container will be created from here — see {@link ensureImages}. */
+  readonly images: readonly string[];
+  /**
+   * Every `warn`/`error` the launcher logged, in order.
+   *
+   * `#teardown` collects a failed step, logs it and carries on by design, so **nothing ever
+   * failed a test when teardown did not complete** — which is how a control directory that was
+   * never removed stayed invisible for six pushes. Reading the log is the only way to assert
+   * completion from outside, and it is precise enough to tolerate the partial this fixture causes
+   * itself (`rm-network`, because a probe container of this file can still be attached).
+   */
+  readonly warnings: { readonly message: string; readonly fields: Record<string, unknown> }[];
   cleanup(): Promise<void>;
 }
+
+/**
+ * Pulls every image before anything creates a container from one, because **the engine never
+ * pulls and the CLI does**.
+ *
+ * `DockerEngine.createContainer` is `POST /containers/create`, and the daemon answers **404** when
+ * the image is absent. Measured against this daemon:
+ *
+ * ```
+ * POST /containers/create {"Image":"alpine:does-not-exist-<n>"} → HTTP 404
+ *   {"message":"No such image: alpine:does-not-exist-<n>"}
+ * POST /containers/create {"Image":"alpine:3.21"}               → HTTP 201
+ * ```
+ *
+ * `docker run` pulls on a miss; `docker compose` does; a `create` through the API does not. So on
+ * a machine that has run this suite before, every image is already there and the asymmetry is
+ * invisible — and on a clean GitHub runner it is 21 failures. `ALPINE_IMAGE` and `GIT_IMAGE`
+ * happened to be safe only because {@link startRepoContainer} reaches them through the *CLI*
+ * first, which is luck, not design: `RUNTIME_IMAGE` is handed straight to the provider and is the
+ * one the run container is created from, which is exactly where `main` failed, in the provider's
+ * `create`. Enumerated here so a fourth image cannot inherit the same luck.
+ */
+const imageTagsOf = (images: Readonly<Record<string, unknown>>): string[] =>
+  Object.entries(images)
+    // Every string in the provider's image record names an image, except the one that names a
+    // directory. Derived rather than listed beside it (standing rule 7): a second copy of the tags
+    // is a copy that can drift, and a field added to `WorkspaceImages` later is ensured the day it
+    // is added instead of the day CI fails on a clean daemon.
+    // Every string field here is a tag today and `runtimeSourceDir` is the one exception. A future
+    // required string field that is *not* a tag would be `docker pull`-ed instead of rejected, so
+    // exclude it here when one is added rather than discovering it from the pull's error.
+    .filter(([key, value]) => typeof value === 'string' && key !== 'runtimeSourceDir')
+    .map(([, value]) => value as string);
+
+const ensureImages = async (images: readonly string[]): Promise<void> => {
+  for (const image of images) {
+    const present = await docker(['image', 'inspect', image], { allowFailure: true });
+    if (present.ok) {
+      continue;
+    }
+    // Not `allowFailure`: a fixture that cannot obtain its images must fail with the pull's own
+    // message, not with a 404 twenty seconds later that names a container instead of an image.
+    await docker(['pull', image]);
+  }
+};
 
 const uniqueSuffix = (): string => Math.random().toString(36).slice(2, 8);
 
@@ -187,6 +251,18 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
 
 /** Builds everything one e2e file needs, and a cleanup that removes all of it. */
 export const startDockerFixture = async (): Promise<DockerFixture> => {
+  // The record the provider is given, and the only place these tags are written down.
+  const providerImages = {
+    runtime: RUNTIME_IMAGE,
+    egress: ALPINE_IMAGE,
+    egressCommand: ['sleep', '600'],
+    git: GIT_IMAGE,
+    runtimeSourceDir: REPO_ROOT,
+  };
+  // First, before anything creates a container: every image it will be created from, whether it is
+  // reached through the CLI (which pulls) or through the engine (which does not).
+  const images = imageTagsOf(providerImages);
+  await ensureImages(images);
   const suffix = uniqueSuffix();
   const network = `agentic-e2e-${suffix}`;
   const repoContainer = `agentic-e2e-repo-${suffix}`;
@@ -194,6 +270,29 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
   const cacheVolume = `agentic-e2e-cache-${suffix}`;
   // Short: the control root becomes a Unix socket path (names.ts § MAX_UNIX_SOCKET_PATH).
   const controlRoot = await workspace.shortTempDir('agentic-e2e-ctl-');
+  // **And world-writable, which is what six red CI runs cost.** `mkdtemp` makes `0700`, owned by
+  // whoever runs the tests. Production's control volume is a plain named volume whose root is
+  // `root:root 0755`, so the `prep-<run-id>` helper — root, but with `CapDrop: ALL` and only
+  // `CAP_CHOWN` added, therefore no `CAP_DAC_OVERRIDE` — owns it and may `mkdir` in it. This
+  // fixture's control volume is bind-backed onto a **host** directory instead (see below), so on
+  // Linux that helper is a non-owner of a `0700` directory and the kernel refuses it. Measured,
+  // inside the daemon's own Linux kernel, on a volume made to look like a GitHub runner's
+  // `mkdtemp` (`chown 1001:1001`, `chmod 0700`):
+  //
+  //   --user 0:0 --cap-drop ALL --cap-add CHOWN → mkdir: can't create directory '/ctl/<uuid>':
+  //                                               Permission denied      ← CI, verbatim
+  //   the same, after `chmod 0777` on the root  → exit 0
+  //
+  // macOS never showed it: Docker Desktop's file sharing reports a host-owned bind as `root:root`
+  // inside the container whatever the host uid is, so the helper always appeared to own it. That
+  // is the whole of "passes here, fails there" (standing rule 69).
+  //
+  // The trade, named rather than hidden: `/ctl` is looser here than in production. Matching
+  // production exactly would mean `chown`ing the bind source to root, and then this process — the
+  // stand-in for the launcher container — could no longer empty it at cleanup. What must stay
+  // tight is `<ctl>/<run-id>`, which the launcher creates `0700 1000:1000` and which has its own
+  // case ("creates the control sub-directory before the container starts").
+  await chmod(controlRoot, 0o777);
   // Outside the control root, which is about to become a volume: an export written into `/ctl`
   // would be a file every run's container could see the name of.
   const exportDir = await workspace.shortTempDir('agentic-e2e-out-');
@@ -221,26 +320,23 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
   await startRepoContainer(repoContainer, network);
 
   const engine = new RecordingDockerEngine({ socketPath: '/var/run/docker.sock' });
+  const warnings: { readonly message: string; readonly fields: Record<string, unknown> }[] = [];
+  const record = (level: string, fields: unknown, message: string): void => {
+    warnings.push({ message, fields: (fields ?? {}) as Record<string, unknown> });
+    // Printed as well as recorded: a warning from the launcher during an e2e is almost always the
+    // reason a later assertion fails, and swallowing it costs an hour of guessing.
+    process.stderr.write(`launcher ${level}: ${message} ${JSON.stringify(fields)}\n`);
+  };
   const logger: Logger = {
     debug: () => undefined,
     info: () => undefined,
-    // A warning from the launcher during an e2e is almost always the reason a later assertion
-    // fails, and swallowing it costs an hour of guessing.
-    warn: (fields, message) =>
-      process.stderr.write(`launcher warn: ${message} ${JSON.stringify(fields)}\n`),
-    error: (fields, message) =>
-      process.stderr.write(`launcher error: ${message} ${JSON.stringify(fields)}\n`),
+    warn: (fields, message) => record('warn', fields, message),
+    error: (fields, message) => record('error', fields, message),
   };
   const provider = new workspace.DockerWorkspaceProvider({
     engine,
     logger,
-    images: {
-      runtime: RUNTIME_IMAGE,
-      egress: ALPINE_IMAGE,
-      egressCommand: ['sleep', '600'],
-      git: GIT_IMAGE,
-      runtimeSourceDir: REPO_ROOT,
-    },
+    images: providerImages,
     controlVolume,
     controlRoot,
     cacheVolume,
@@ -263,6 +359,8 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
     exportDir,
     provider,
     engine,
+    images,
+    warnings,
     cleanup: async () => {
       const containers = await docker(['ps', '-aq', '--filter', `network=${network}`], {
         allowFailure: true,
@@ -313,7 +411,33 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
         await docker(['volume', 'rm', '-f', id], { allowFailure: true });
       }
       await docker(['network', 'rm', network], { allowFailure: true });
+      // Empty the control root from a **root container**, before the volume goes and before the
+      // host `rm` below. A case that leaves a run alive leaves `<ctl>/<run-id>` behind as
+      // `0700 1000:1000`, and on Linux this process is neither — `fs.rm` would throw `EACCES` out
+      // of `afterAll`, where `force: true` does not help (it only swallows `ENOENT`). On macOS the
+      // bind reports everything as root-owned and the host `rm` would have succeeded, which is
+      // exactly why this had to be reasoned about rather than observed.
+      await docker(
+        [
+          'run',
+          '--rm',
+          '--network',
+          'none',
+          '-v',
+          `${controlVolume}:/ctl`,
+          ALPINE_IMAGE,
+          'sh',
+          '-c',
+          'chmod -R u+rwX /ctl; rm -rf /ctl/..?* /ctl/.[!.]* /ctl/*',
+        ],
+        { allowFailure: true },
+      );
       await docker(['volume', 'rm', '-f', controlVolume, cacheVolume], { allowFailure: true });
+      // A run whose agent locked its control directory leaves a `000` directory behind, and POSIX
+      // refuses even its owner the read that `fs.rm` needs — `force: true` swallows `ENOENT`, never
+      // `EACCES`, so `afterAll` would throw. The host owns this tree, and ownership is all `chmod`
+      // asks for.
+      await run('chmod', ['-R', 'u+rwX', controlRoot]).catch(() => undefined);
       await rm(controlRoot, { recursive: true, force: true });
       await rm(exportDir, { recursive: true, force: true });
     },
@@ -333,12 +457,15 @@ export const probeUnderRunContainerConfig = async (
   engine: workspace.DockerEngine,
   containerId: string,
   script: string,
-  overrides: { user?: string; capAdd?: readonly string[] } = {},
+  overrides: { user?: string; capAdd?: readonly string[]; dnsOptions?: readonly string[] } = {},
 ): Promise<{ exitCode: number; output: string }> => {
   const inspect = await engine.inspectContainer(containerId);
   const hostConfig = { ...(inspect.HostConfig as Record<string, unknown>) };
   if (overrides.capAdd !== undefined) {
     hostConfig['CapAdd'] = overrides.capAdd;
+  }
+  if (overrides.dnsOptions !== undefined) {
+    hostConfig['DnsOptions'] = overrides.dnsOptions;
   }
   const name = `agentic-e2e-probe-${uniqueSuffix()}`;
   const id = await engine.createContainer(name, {

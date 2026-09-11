@@ -342,6 +342,118 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     expect(JSON.stringify(cleanup)).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
 
+  it('reclaims the control directory with no capability, by using the uid that owns it', async () => {
+    const handle = await created();
+    await provider.destroy(handle);
+    const empty = daemon.byName(`ctlempty-${FIXTURE_RUN_ID}`);
+    const remove = daemon.byName(`ctlrm-${FIXTURE_RUN_ID}`);
+    // The agent may `chmod 000` its own directory and anything in it, and root with `CapDrop: ALL`
+    // is an ordinary non-owner — it cannot descend, cannot `chmod`, cannot even `chown -R`. The
+    // way out is the uid, not a capability: everything under the directory is owned by 1000 and
+    // the agent has no `CAP_CHOWN` to change that, so uid 1000 is the owner of every mode it can
+    // set. Measured on a named volume *and* on a bind-backed one, benign / locked / already gone:
+    // rc 0 and the volume empty in all six.
+    expect(empty?.body.User).toBe('1000:1000');
+    expect(remove?.body.User).toBe('0:0');
+    const unlock = (empty?.body.Cmd ?? []).join('\n');
+    expect(unlock).toContain(`chmod -R u+rwX /ctl/${FIXTURE_RUN_ID}`);
+    // Load-bearing, and the step the first draft of this left out: uid 0 cannot look inside a
+    // `0700` directory it does not own, so step 2 exits 1 on a named volume without this line.
+    expect(unlock).toContain(`chmod 755 /ctl/${FIXTURE_RUN_ID}`);
+    // **One argument, never a list.** The first draft deleted with `rm -rf $dir/*`, and an agent
+    // defeated reclamation by making the argument list too long: measured, 8 000 files of
+    // 240-character names gave `rm: Argument list too long`, exit **0**, and the token still on
+    // the shared volume. `find … -exec rm -rf {} +` was the obvious repair and is also wrong —
+    // `find` reads the directory while `rm` empties it and 3 944 of 8 002 entries survived, with
+    // no error from either program. `rm -rf $dir` is one argument and one walker; it is expected
+    // to fail on its last act, unlinking the directory itself, which is step 2's job.
+    expect(unlock).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}\n`);
+    expect(unlock).not.toMatch(/rm -rf \S*\*/);
+    expect(unlock).not.toContain('find ');
+    // And it retries, because a single pass is not enough either: deleting invalidates the
+    // directory cursor the walk is reading, so `find -exec` left 3 944 of 8 002 entries and a bare
+    // `rm -rf $dir` left 3 991, neither reporting an error. Bounded, so a pathological directory
+    // fails the step instead of looping: 8 passes were needed on a bind-backed volume, 1 on a
+    // named one.
+    expect(unlock).toContain('while [ -e ');
+    expect(unlock).toContain('if [ $n -gt 20 ]; then break; fi');
+    // **And the emptiness test is the verdict, not `exit 0`.** `rm -rf $dir` always ends non-zero
+    // here by design, and busybox `find -exec … +` does not propagate a failing `rm` either, so
+    // and `#helper` throws on a non-zero exit, which is what keeps step 2 from running against a
+    // directory step 1 did not empty (standing rule 67: a step that cannot fail has a failure
+    // branch nobody executes).
+    expect(unlock).toContain(`test -z "$(ls -A /ctl/${FIXTURE_RUN_ID} | head -c 1)"`);
+    expect(unlock.trimEnd().endsWith('fi')).toBe(true);
+    expect((remove?.body.Cmd ?? []).join('\n')).toBe(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
+  });
+
+  /**
+   * The negative half: **one** capability is granted anywhere in this provider, and it is `CHOWN`
+   * on the prepare helper (standing rules 3, 42, 68).
+   *
+   * Two things this census got wrong on its first draft, both found by review and both fixed by
+   * asking the daemon a different question:
+   *
+   *  - it read `CapDrop` as `body.HostConfig?.CapDrop ?? ['ALL']`, so a container that emitted **no
+   *    `CapDrop` at all** — Docker's full default capability set, the worst case the check exists
+   *    to catch — passed. An absent value read as the safe one is standing rule 18 inside a
+   *    security check. It is now read as emitted, and `undefined` fails;
+   *  - its docblock claimed "a helper added later is covered the day it is added", and that was
+   *    false: it drove one create-and-destroy, while `export` and `updateMirror` create helpers on
+   *    paths that sequence never takes. Measured: `capAdd: ['SYS_ADMIN']` on the export helper left
+   *    all 171 workspace unit tests green. Every method that creates a container is driven below,
+   *    and the names are asserted — so the *scope* of this census is itself checkable (rule 44) and
+   *    a new helper on a covered path lands in `history` and must be declared here.
+   */
+  it('grants exactly one capability across every container it creates, on any path', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc1234def\nPUSHED=yes\n' }));
+    const spec = workspaceSpecFixture();
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    const handle = await created();
+    archives.set(`export-${FIXTURE_RUN_ID}:/work/export.tar`, exportArchive());
+    await provider.export(
+      handle,
+      {
+        branch: 'agentic/task-1',
+        tarballPath: path.join(workDir, 'census.tar'),
+        commitMessage: 'wip',
+      },
+      { host: 'git.example.com', username: 'agentic', password: SECRET },
+    );
+    await provider.destroy(handle);
+
+    const granted = daemon.history
+      .map((container) => [container.name, container.body.HostConfig?.CapAdd ?? []] as const)
+      .filter(([, capabilities]) => capabilities.length > 0);
+    expect(Object.fromEntries(granted)).toEqual({
+      // `chown` needs it even as root, and the shim must find the directory owned by its own uid.
+      [`prep-${FIXTURE_RUN_ID}`]: ['CHOWN'],
+    });
+
+    // Read as emitted. `toEqual(['ALL'])` on a missing field fails, which is the point: no
+    // `CapDrop` is the full default set, not the empty one.
+    for (const container of daemon.history) {
+      expect(container.body.HostConfig?.CapDrop).toEqual(['ALL']);
+    }
+
+    // And the scope claim, checkable: these are the container-creating paths this provider has.
+    const roles = new Set(daemon.history.map((container) => container.name.split('-')[0]));
+    expect([...roles].sort()).toEqual([
+      'clone',
+      'ctlempty',
+      'ctlrm',
+      'egress',
+      // The sidecar's config volume is written by its own helper. It was not in the first draft
+      // of this list and the census named it on the first run, which is the check working.
+      'egresscfg',
+      'export',
+      'mirror',
+      'prep',
+      'ws',
+    ]);
+  });
+
   it('keeps the workspace volume, because retention owns it', async () => {
     const handle = await created();
     await provider.destroy(handle);

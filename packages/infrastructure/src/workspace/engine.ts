@@ -220,7 +220,13 @@ export class DockerEngine {
     this.#logger.debug({ method, path, status: response.status }, 'docker engine refused');
     throw new WorkspaceError(
       response.status === 404 ? 'not_found' : 'workspace_failed',
-      `Docker engine answered ${response.status}`,
+      // The daemon's own words are in the *message*, not only in `detail`. A 404 that cannot name
+      // its object cost this project a CI round: `POST /containers/create` answers 404 when the
+      // image is absent, and `Docker engine answered 404` named the container instead — the
+      // `detail` was there and nothing printed it. What is appended is the `message` field of the
+      // daemon's error document (or 200 characters of a body that is not one), never an echo of
+      // the request, so this does not put a helper's environment into a log line.
+      `Docker engine answered ${response.status}: ${detail}`,
       { detail: `${method} ${path}: ${detail}` },
     );
   }

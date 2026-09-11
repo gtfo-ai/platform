@@ -54,6 +54,33 @@ by hitting it: the first attempt at check 5 failed until the directory was pre-c
 returned the peer's address (`172.27.0.2`). So the workspace can reach its egress sidecar by name
 without a published port, which is what technical/05's network policy assumes.
 
+> **Amendment (2026-09-11, ci-fix).** The conclusion above is right and was re-measured on both
+> platforms. The **instrument was not**: `nslookup`'s exit status is not a sound answer to "does
+> this name resolve?", and the e2e case that inherited it from this report was the last red test on
+> `main`. Busybox `nslookup` also queries `<name>.<search-domain>`, which the embedded resolver must
+> forward upstream — and an `internal` network has no route upstream, so that query fails and the
+> whole invocation exits 1 while the name resolves perfectly well. A developer machine has no
+> `search` line and a cloud runner's host does, so the report's daemon could not show it. Measured,
+> one internal network and one peer, varying nothing but the search domain:
+>
+> ```
+> (no search domain)                  nslookup rc=0   getent hosts rc=0  172.27.0.2
+> --dns-search example.invalid        nslookup rc=1   getent hosts rc=0  172.27.0.2
+> ```
+>
+> The Linux side of this is not a claim you have to take: CI run **`34582432776`** is all-green
+> including `e2e-fake-claude`, and it is the one that carries this probe as it now stands. (An
+> earlier draft of this paragraph cited `34580312845` and called it "the first all-green run on
+> `main`". Both halves were wrong: `gh run view` reports its `headBranch` as
+> `ci-fix/e2e-linux-ctl`, so it was the first all-green run **on the fix branch, through the pull
+> request** — `main` has had none since WP-14 — and it predates the bounded DNS probe, so it was
+> not evidence for the probe it was cited for.)
+>
+> `getent hosts` is the probe that answers the question asked, and it is what
+> `docker-workspace.e2e.test.ts` uses now — with the address asserted, not just the status, so the
+> false branch cannot widen again (standing rule 56). Check 4's negative is re-measured there too,
+> as `getent hosts example.com`, and still holds.
+
 ### 4. …and nothing else does — **no external resolution, no default route**
 
 `nslookup example.com` on the same network returned **SERVFAIL** (the embedded resolver lists the
