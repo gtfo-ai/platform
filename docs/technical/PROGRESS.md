@@ -3372,11 +3372,18 @@ refused, so the green half is the absent store and not a harmless key.
 indexes the fixture vault through the real parser and assembles a pack at
 `DEFAULT_CONTEXT_BUDGET_TOKENS` — **12 000**, asserted in the same test to be the value
 `PLATFORM_DEFAULT_CONFIG.project.context_budget_tokens` ships, so the figure cannot be taken at a raised cap
-the way rule 39's original did. The pack totals **10 622** estimated tokens, and the same test asserts
+the way rule 39's original did. The pack totals **10 552** estimated tokens, and the same test asserts
 `droppedForBudget` is **non-empty** — without that the number would only mean "the vault happened to fit",
-which is not a test of a budget. The vault is **18 886** tokens, so the fill is doing work; five of its
-seventeen documents are padded to a stated length for exactly that reason, and the fixture's docblock says
+which is not a test of a budget. The vault is **19 100** tokens, so the fill is doing work; five of its
+eighteen documents are padded to a stated length for exactly that reason, and the fixture's docblock says
 which and why rather than letting a reader assume the corpus is all hand-written.
+
+> *Both figures were **10 622** and **18 886** when this paragraph was first written, and both moved at
+> round 2* — the vault gained the hostile document it was missing, and `droppedForBudget` stopped carrying
+> the count ceiling. Corrected in place rather than left with a footnote, because a stale number beside a
+> live claim is precisely what rule 39 is about; the current values are produced by
+> `context-pack.test.ts` and, for the pack total, by `context-pack.integration.test.ts` against a real
+> PostgreSQL.
 
 **The estimate is not the billed number, and the module says so at the top.** `estimateTokens` is
 `ceil(chars / 4)`. Every budget in the platform is denominated in it, `run_context_pack.tokens` stores it,
