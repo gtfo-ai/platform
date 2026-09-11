@@ -5,7 +5,7 @@
 ## Resume note
 
 > **Session 3 opened 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned
-> by evidence" — **seventy-four rules, each with its evidence, each paid for with a review round**. Then
+> by evidence" — **seventy-five rules, each with its evidence, each paid for with a review round**. Then
 > continue the loop in `14-orchestration-protocol.md`.
 
 **Twenty-three work packages are DONE and pushed**, WP-00 … WP-15 plus WP-02a/04a/06a/11a/20 and four
@@ -64,6 +64,18 @@ CI half cost six pushes onto a red gate (rule 69). Quote the target's **verdict 
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+75. **Reading a verdict line is not checking an exit status, and a shell pipeline's status is its *last*
+   command's.** Rule 61 says report the target's verdict rather than a test count; this is its dual and it
+   bit the same session. Chaining six targets as
+   `pnpm run -s verify:e2e 2>&1 | grep -E "PASS:|FAIL:" | tail -1 && …` prints the verdict **and discards
+   it**: the pipeline exits with `tail`'s status, which is always 0, so `FAIL: verify:e2e` scrolled past
+   inside an `&&` chain that continued to the end and **pushed `main`**. The push was recoverable only
+   because the failure turned out to be an unreproducible intermittent and CI was green — that is luck,
+   not process. Quote the verdict for the reader; gate on the **exit status** for the machine
+   (`set -o pipefail`, or run the target bare and grep the saved output afterwards). And the corollary
+   this session paid for **twice**: `| tail -n` on a failing run **destroys the evidence you need** —
+   the failing test's name was lost both times. Capture the full output to a file, then filter the file.
 
 74. **A reviewer that mutates source shares a working tree with whoever else is in it, and both
    measurements become worthless — this is rule 53 with the checkout right and the *tree* wrong.**
@@ -688,13 +700,30 @@ fixed script, uuid-validated id, ~1 s, and the agent cannot influence it. **No c
 today**: `chmod -R` over a symlink to a sibling run left it at `500`, its token `400`, contents intact, and
 `rm -rf` unlinked the link rather than the target.
 
-### 1. WP-15a — compose the pipeline into `apps/server` (TODO, a work package)
-The largest and the only one that changes what the product *can do*. See the plan row and the WP-15 notes.
-`createPipelineRuntime` is composed only by `packages/application/src/testing/pipeline-harness.ts`;
-`PipelineIntegrations` has **no production constructor**, so nothing reads `integration_bindings`. The
-pipeline e2e builds its own runtime instead of starting an `apps/server` instance, which is itself a
-deviation from `CLAUDE.md`'s rule for the tier. Small in code; it belongs to no existing WP, which is
-exactly why it would have been absorbed into WP-22 and disappeared.
+### 1. What WP-15a left behind — **production still does not start the pipeline** (TODO)
+The sentence a reader needs, in the reviewer's words: **"The pipeline is composed and production does not
+start it."** Three separate things, none of them WP-15a's to fix:
+
+- **A Postgres `IntegrationAuditLog` and its migration.** `integration_actions` lacks `project_id`,
+  `redaction_count` and `attempts`. Until it exists, `main.ts:18` and `scripts/dev.mjs:70` call
+  `startRuntime()` with no runner and no audit log, and `/readyz` is **503 for ever** on `ROLE=all|worker` —
+  which is honest, and is why **WP-22 must not gate `depends_on` on `/readyz`** (recorded in TD-023).
+- **No webhook ingress.** `apps/server/src/routes/` has none, so nothing in production emits `ticket.matched`
+  even once an audit log exists. Belongs with WP-08/WP-09's providers or a row of its own.
+- **A re-dispatch/backfill tool**, now owed by **WP-19** with an acceptance criterion, because
+  `run.finished`/`run.failed` are swept today (the cost ledger is unbuilt). The loss is recoverable:
+  `runFinishedEvent` carries `usage`, `model_usage`, `cost`, `num_turns`, `wall_ms`, and `events` is
+  append-only.
+
+Also open, smaller: the consumption table is **derived from the implementation** rather than a declaration
+the implementation must meet — a row that stays `unconsumed` after its WP lands re-opens the hole silently,
+and guarding that direction needs a second list of landed WPs (stated, not built).
+
+### 1b. `verify:e2e` failed once on `main` at `be05a9b`, unreproduced (TODO)
+One `FAIL: verify:e2e` in the orchestrator's shell at load ~20 falling, then **four consecutive passes**
+(1 + 3 captured to files) at load 6–8, and **CI green on the same commit** (`34604222753`). The failing
+test's identity was **lost to `| tail`** — see rule 75. Recorded rather than dismissed: a flake nobody can
+name is still a flake, and the next sighting should be able to cite this one.
 
 ### 2. The slack/census follow-up branch — **three review rounds, merging** (branch exists)
 `fix/slack-redaction-and-census`, worktree `.claude/worktrees/slack-fix`, head `20b1e97` with `main` merged
@@ -773,7 +802,7 @@ uses it only for logging — so it is an observability gap, not a live defect. F
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
-| WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | TODO | — | **The gap nobody's WP owned.** `createPipelineRuntime` is composed only by the test harness; `PipelineIntegrations` has no production constructor. Every M1 WP is done and the platform still cannot run a real ticket. Found by WP-15's reviewer, both rounds. |
+| WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | TODO | — | |
 | WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12 | yes | TODO | — | |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17 | no | TODO | — | |
