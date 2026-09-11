@@ -431,12 +431,31 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
     expect(reachable.output.trim().endsWith('0')).toBe(true);
 
     // And the neighbour it *can* name is the sidecar, by container name on the embedded resolver.
+    //
+    // `getent hosts`, not `nslookup`. This assertion was `nslookup … ; rc=0` and it was the last
+    // red test on `main`: busybox `nslookup` also queries `<name>.<search-domain>`, the embedded
+    // resolver forwards that upstream, an `internal` network has no route upstream, and the whole
+    // invocation exits 1 while the name resolves. A developer machine has no `search` line; a
+    // cloud runner's host does, and Docker copies it into every container. Measured on one
+    // internal network, varying nothing but that: `nslookup` rc 0 → 1, `getent hosts` rc 0 → 0,
+    // same address both times. So the old probe's false branch meant "the name did not resolve
+    // **or** some other query in the same process did not" (standing rule 56).
+    //
+    // The address is asserted and not only the status, and the pair is completed by a name that
+    // *would* resolve if this network had a route off it — `example.com` rather than something
+    // `.invalid`, which would fail for the wrong reason and make the negative vacuous (rule 42).
     const neighbour = await probeUnderRunContainerConfig(
       fixture.engine,
       handle.containerId,
-      `nslookup egress-${handle.runId} >/dev/null 2>&1; echo "rc=$?"`,
+      [
+        `getent hosts egress-${handle.runId} | head -1 | sed 's/^/neighbour=/'`,
+        `getent hosts egress-${handle.runId} >/dev/null; echo "neighbour_rc=$?"`,
+        'getent hosts example.com >/dev/null; echo "upstream_rc=$?"',
+      ].join('\n'),
     );
-    expect(neighbour.output).toContain('rc=0');
+    expect(neighbour.output).toContain('neighbour_rc=0');
+    expect(neighbour.output).toMatch(/neighbour=\d+\.\d+\.\d+\.\d+\s/);
+    expect(neighbour.output).not.toContain('upstream_rc=0');
 
     const sidecar = (await fixture.engine.inspectContainer(
       handle.sidecarContainerId ?? '',
