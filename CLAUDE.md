@@ -69,6 +69,13 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   worker's concurrency is **additive** to the dispatcher's `2 × concurrency + 1` pool floor. Everything a
   handler enqueues goes through `HandlerContext.afterCommit`, because `Jobs.enqueue` does not join the
   handler's transaction — and every job re-validates on fire, since a timer cannot be cancelled (TD-004).
+  **`apps/server/src/pipeline.ts` is the production composition** (WP-15a): a project's bindings are read
+  from `bindings`/`integrations` and their credentials decrypted from `secrets` by
+  `packages/integrations/src/bindings/loader.ts`, which builds the adapters **per call** so the redactor can
+  carry the call's run-scoped credentials (Q55). A binding that is *absent* gives `git: null`; a binding that
+  *fails to load* throws (rule 20). Two collaborators still have no production adapter — a `ClaudeRunner`
+  (no launcher transport, Q52) and `IntegrationAuditLog` — so `startRuntime` takes them as an argument and a
+  process without them starts **no** pipeline and logs which piece is missing.
 - Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`. The run shim `agentic-runlet` (TD-025) is `packages/infrastructure/src/runlet/` — frame protocol in `@platform/contracts`, shim, runner-side `SpawnedProcess`, credential helper — with `apps/runlet` as its entrypoint and nothing else; `node scripts/runlet-container-check.mjs` is its Docker verification (not a `verify` target: it needs a daemon), written up in `docs/research/12-run-shim-verification.md`.
 - Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`; the SPA's composition root is `apps/web/src/app/app.tsx`, the client half of the SSE contract is `apps/web/src/realtime/client.ts`, and the untrusted-text rules are `apps/web/src/ui/untrusted-text.ts`. Work plan: `docs/technical/13-implementation-plan.md`.
 - Open questions: `docs/OPEN-QUESTIONS.md`; verification backlog: `docs/TODO.md`.

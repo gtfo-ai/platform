@@ -20,6 +20,7 @@
 
 // Event dispatch (TD-005)
 export * from './errors.js';
+export * from './events/consumption.js';
 export * from './events/event-bus.js';
 export * from './events/handler.js';
 export * from './events/outbox.js';
@@ -49,6 +50,7 @@ export * from './ports/event-store.js';
 export * from './ports/handler-executions.js';
 // Integration type ports (technical/06, BD-017)
 export * from './ports/integrations/audit.js';
+export * from './ports/integrations/bindings.js';
 export * from './ports/integrations/common.js';
 export * from './ports/integrations/communication.js';
 export * from './ports/integrations/git-provider.js';
@@ -58,6 +60,7 @@ export * from './ports/integrations/task-management.js';
 export * from './ports/jobs.js';
 export * from './ports/logger.js';
 export * from './ports/runner.js';
+export * from './ports/secrets.js';
 export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
 export * from './ports/workspace.js';

@@ -55,8 +55,8 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { PipelineIntegrations } from './integrations.js';
-import { gitReads } from './integrations.js';
+import type { PipelineIntegrationsPort } from './integrations.js';
+import { gitReads, noRunScopedSecrets } from './integrations.js';
 import { enqueueReviewCommentWindow, enqueueStage } from './jobs.js';
 import type { ProjectSettingsPort } from './settings.js';
 import { templateForIssueType } from './settings.js';
@@ -70,7 +70,7 @@ export interface PipelineSagaOptions {
   readonly store: PipelineStore;
   readonly settings: ProjectSettingsPort;
   readonly jobs: Jobs;
-  readonly integrations: PipelineIntegrations;
+  readonly integrations: PipelineIntegrationsPort;
   readonly ids: { next(): Id };
   readonly clock: { now(): string };
   readonly logger?: Logger;
@@ -252,7 +252,11 @@ const unprotectedDefaultBranch = async (
   options: PipelineSagaOptions,
   stored: StoredTask,
 ): Promise<string | null> => {
-  const reads = gitReads(options.integrations);
+  // Outside a run: the branch check happens before a workspace exists, so there is no minted
+  // credential for the redactor to hold (Q55, `noRunScopedSecrets`).
+  const reads = gitReads(
+    await options.integrations.forProject(stored.task.projectId, noRunScopedSecrets()),
+  );
   const callContext = { projectId: stored.task.projectId, taskId: stored.task.id };
   const head = await reads.defaultBranch(callContext);
   if (head === null) {
@@ -500,12 +504,14 @@ const recordMergeRequest = async (
   if (typeof iid !== 'number' || typeof url !== 'string') {
     return stored;
   }
+  const git = (await options.integrations.forProject(stored.task.projectId, noRunScopedSecrets()))
+    .git;
   const next: StoredTask = {
     ...stored,
     branch: typeof record.branch === 'string' ? record.branch : stored.branch,
     mr: {
-      provider: options.integrations.git?.ref.provider ?? null,
-      project_path: options.integrations.git?.project ?? null,
+      provider: git?.ref.provider ?? null,
+      project_path: git?.project ?? null,
       iid,
       url,
       branch: typeof record.branch === 'string' ? record.branch : null,

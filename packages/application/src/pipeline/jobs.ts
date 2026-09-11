@@ -31,7 +31,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
-import { gitReads } from './integrations.js';
+import { gitReads, noRunScopedSecrets } from './integrations.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import { applyDecision } from './transitions.js';
@@ -290,7 +290,6 @@ const settle = async (
  */
 export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
   const logger: Logger = options.logger ?? silentLogger;
-  const reads = gitReads(options.integrations);
 
   return async (job) => {
     const windowMs = options.reviewCommentWindowMs ?? 2 * 60_000;
@@ -302,6 +301,10 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
       return;
     }
 
+    // The window closes outside any run, so the call's scope holds no minted credential (Q55).
+    const reads = gitReads(
+      await options.integrations.forProject(stored.task.projectId, noRunScopedSecrets()),
+    );
     const discussions = await reads.discussions(stored.mr, {
       projectId: stored.task.projectId,
       taskId: stored.task.id,

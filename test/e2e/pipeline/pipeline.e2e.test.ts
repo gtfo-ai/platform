@@ -1,132 +1,25 @@
 /**
- * WP-15's acceptance criterion: **one feature ticket and one bug ticket through the whole loop**,
- * with fake Claude, on a real PostgreSQL.
+ * WP-15a's acceptance criterion: **a ticket reaches `task.completed` through an `apps/server`
+ * instance**, with its integration bindings read from the database.
  *
- * What this proves that the unit tier cannot: the loop runs on the real event store, so every
- * transition is an appended event with a contiguous `stream_seq`, dispatched exactly once through
- * `handler_executions`, with the task's state and its events committed in one transaction; and the
- * artifacts the stages produce are the *published* schemas, because `FakeClaudeRunner` refuses a
- * scenario whose structured output does not validate (its divergence 3).
+ * WP-15 proved the loop against a runtime this file composed itself. That left the product's own
+ * composition root untested and `PipelineIntegrations` with no production constructor, so the thing
+ * being demonstrated was the pipeline package rather than the platform. `startPipeline` now starts
+ * a real instance and seeds `integrations`, `secrets` and `bindings` **rows**; the adapters the
+ * stages call are built by the production loader from those rows, with the credential decrypted
+ * under the instance's own `APP_SECRET_KEY`.
+ *
+ * What that adds to WP-15's list: the outbox worker runs on its own timer and pg-boss runs the
+ * stage jobs, so nothing here drives a drain — a transition that only happened because a harness
+ * called a handler by hand would not happen at all. What it costs is determinism about *when*;
+ * `settle` waits for a state and never asserts a duration (standing rule 2).
  *
  * Every stage of the templates is scripted, so what is exercised is the interpreter's transitions
  * and the saga's handlers, not the model.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  GIT_PROJECT,
-  inboundEvent,
-  type PipelineE2E,
-  type SeededWorld,
-  startPipeline,
-} from '../support/pipeline.js';
-
-const REFINED_SPEC = {
-  goal: 'Show the totals in the invoice footer.',
-  user_value: 'Finance can read an invoice without a calculator.',
-  in_scope: ['the invoice footer'],
-  out_of_scope: ['the PDF export'],
-  acceptance_criteria: [
-    {
-      id: 'ac1',
-      given: 'an invoice with three lines',
-      when: 'it is rendered',
-      // biome-ignore lint/suspicious/noThenProperty: the published acceptance-criterion field name
-      then: 'the footer shows the sum of the lines',
-      validation: { kind: 'test', value: 'totals.test.ts' },
-    },
-  ],
-  non_functional: [],
-  dependencies: [],
-  size: 'M',
-  drift: { flag: false, justification: 'in the documented direction' },
-  assumptions: [],
-  questions: [],
-  decision: 'proceed',
-  kb_citations: [],
-};
-
-const ROOT_CAUSE = {
-  reproduction: { kind: 'reproduced', steps: ['open an invoice'], evidence: ['sentry: TOTALS-1'] },
-  root_cause: 'The footer sums the visible rows rather than all of them.',
-  confidence: 'high',
-  affected_scope: ['invoices'],
-  fix_direction: 'Sum the model, not the view.',
-  regression_test_idea: 'A three-line invoice with one row hidden.',
-  questions: [],
-};
-
-const PLAN = {
-  approach: 'Sum the invoice model in the renderer.',
-  alternatives_considered: [{ option: 'sum in SQL', why_not: 'the view already has the model' }],
-  affected_modules: ['invoices'],
-  files_to_change: [{ path: 'src/totals.ts', change: 'sum the model' }],
-  data_changes: [],
-  api_changes: [],
-  validation_contract: [{ criterion_id: 'ac1', check: { kind: 'test', value: 'totals.test.ts' } }],
-  test_plan: ['totals.test.ts'],
-  rollout_notes: 'no flag needed',
-  risks: [],
-  estimated_size: 'M',
-  decisions_to_record: [],
-  protected_path_changes: [],
-};
-
-/** The developer reports the merge request the provider gave it (`world.mr`). */
-const notesFor = (world: SeededWorld) => ({
-  summary: 'Summed the invoice model in the footer.',
-  deviations_from_plan: [],
-  tests_added: ['totals.test.ts'],
-  commands_run: [{ command: 'npm test', exit_code: 0, summary: '12 passed' }],
-  known_gaps: [],
-  followup_tickets: [],
-  mr: {
-    url: world.mr.url,
-    iid: world.mr.iid,
-    head_sha: world.mr.headSha,
-    branch: world.branch,
-  },
-});
-
-const REVIEW = {
-  verdict: 'approve',
-  findings: [],
-  summary: 'Matches the plan; the test covers the criterion.',
-  protected_path_changes_confirmed: [],
-};
-
-const ACCEPTANCE = {
-  verdict: 'approve',
-  criteria: [{ id: 'ac1', status: 'met', evidence: 'totals.test.ts passes on the head commit' }],
-  scope_creep: [],
-  missing: [],
-  ux_notes: [],
-};
-
-const RETRO = {
-  what_went_well: ['the plan held'],
-  returns: [],
-  human_corrections: [],
-  cost_summary: {
-    total_usd: 2,
-    is_estimate: false,
-    by_stage: [{ stage: 'implementation', usd: 0.4 }],
-  },
-  proposals: [],
-};
-
-const featureScenarios = (world: SeededWorld) => ({
-  refinement: { structuredOutput: REFINED_SPEC },
-  architecture: { structuredOutput: PLAN },
-  implementation: { structuredOutput: notesFor(world) },
-  code_review: { structuredOutput: REVIEW },
-  business_review: { structuredOutput: ACCEPTANCE },
-  retrospective: { structuredOutput: RETRO },
-});
-
-const bugScenarios = (world: SeededWorld) => ({
-  ...featureScenarios(world),
-  investigation: { structuredOutput: ROOT_CAUSE },
-});
+import { GIT_PROJECT, inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
+import { bugScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 
 let harness: PipelineE2E | undefined;
 
@@ -134,13 +27,6 @@ afterEach(async () => {
   await harness?.stop();
   harness = undefined;
 });
-
-/** The tickets the fake provider knows; the workpad is a comment on one of them. */
-const TICKETS = [
-  { key: 'ACME-1', title: 'Show the totals in the invoice footer', issueType: 'Story' },
-  { key: 'ACME-2', title: 'Show the totals in the invoice footer', issueType: 'Story' },
-  { key: 'ACME-9', title: 'The invoice footer sums the wrong rows', issueType: 'Bug' },
-];
 
 const ticketMatched = (pipeline: PipelineE2E, key: string, issueType: string) =>
   inboundEvent('ticket.matched', {
@@ -182,23 +68,22 @@ describe('a feature ticket, end to end', () => {
       label: 'feature',
       tickets: TICKETS,
       // technical/12's `status_mapping`, so the ticket's own status moves with the task.
-      settings: {
-        config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
-      },
+      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
     });
     harness = pipeline;
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
 
     // BD-007: the platform never merges. It stops here until a human does.
-    const waiting = await pipeline.task();
-    expect(waiting.state).toBe('ready_for_merge');
+    const waiting = await pipeline.settle(
+      'ready_for_merge',
+      (task) => task.state === 'ready_for_merge',
+    );
     expect(waiting.current_stage).toBe('ready_for_merge');
 
     await pipeline.publish([merged(pipeline)]);
 
-    const finished = await pipeline.task();
-    expect(finished.state).toBe('done');
+    const finished = await pipeline.settle('done', (task) => task.state === 'done');
     expect(finished.template).toBe('feature');
     // Five agent stages at 0.40 USD each, on the row a human would read.
     expect(Number(finished.cost_actual)).toBeCloseTo(2.4, 6);
@@ -225,18 +110,28 @@ describe('a feature ticket, end to end', () => {
       scenarios: featureScenarios,
       label: 'feature-workpad',
       tickets: TICKETS,
-      settings: {
-        config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
-      },
+      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
+    // Not `settle`: the status mapping is a handler in the integrations band, so it commits *after*
+    // the transition that moved the task. Waiting on the task state and then reading the ticket
+    // asserts one transaction's effect against another's timing — it failed 1 run in 3 that way.
+    await pipeline.waitFor(
+      'the ticket status mapped for ready_for_merge',
+      async () => pipeline.tickets.peek('ACME-1')?.status === 'In Review',
+    );
 
     const ticket = pipeline.tickets.peek('ACME-1');
     // BD-023: one sticky comment, however many times the task moved.
     expect(ticket?.comments).toHaveLength(1);
-    expect(ticket?.comments[0]?.body).toContain('ACME-1');
-    expect(ticket?.comments[0]?.body).toContain('ready_for_merge');
+    // The **first line**, not `toContain`. The render's checklist names every stage of the template
+    // from the first pass, so `toContain('ready_for_merge')` was satisfied by the checklist and
+    // would have passed on a task that never reached the state (standing rule 10). The header is
+    // the only part of the body that reports where the task actually is.
+    expect(ticket?.comments[0]?.body.split('\n')[0]).toBe(
+      '**ACME-1** — ready_for_merge (ready_for_merge)',
+    );
     // The last mapped state the task passed through.
     expect(ticket?.status).toBe('In Review');
   });
@@ -249,7 +144,9 @@ describe('a feature ticket, end to end', () => {
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-2', 'Story')]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
     await pipeline.publish([merged(pipeline)]);
+    await pipeline.settle('done', (task) => task.state === 'done');
 
     const stages = (await pipeline.events())
       .filter((event) => event.type === 'task.stage.entered')
@@ -286,8 +183,7 @@ describe('when the merge request’s pipeline is red', () => {
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
 
-    const parked = await pipeline.task();
-    expect(parked.state).toBe('needs_human');
+    const parked = await pipeline.settle('needs_human', (task) => task.state === 'needs_human');
     expect(parked.current_stage).toBe('ci_gate');
     // BD-008 bounds the loop at 3, and the counter never passes its limit.
     expect(parked.iteration_counters.ci_fix).toBe(3);
@@ -316,13 +212,16 @@ describe('a bug ticket, end to end', () => {
     harness = pipeline;
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-9', 'Bug')]);
-    expect((await pipeline.task()).template).toBe('bug');
+    const waiting = await pipeline.settle(
+      'ready_for_merge',
+      (task) => task.state === 'ready_for_merge',
+    );
+    expect(waiting.template).toBe('bug');
     expect(pipeline.specs.map((spec) => spec.stage)).toContain('investigation');
 
     await pipeline.publish([merged(pipeline)]);
 
-    const finished = await pipeline.task();
-    expect(finished.state).toBe('done');
+    const finished = await pipeline.settle('done', (task) => task.state === 'done');
     // Six agent stages: the feature five plus investigation.
     expect(Number(finished.cost_actual)).toBeCloseTo(2.8, 6);
     expect(pipeline.specs.map((spec) => spec.stage)).toEqual([

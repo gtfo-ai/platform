@@ -8,7 +8,7 @@
  * properties of the socket and cannot be shown with `app.inject()`.
  */
 import { createServer } from 'node:http';
-import type { ServerRuntime } from '@platform/server';
+import type { ServerRuntime, StartRuntimeOptions } from '@platform/server';
 import { startRuntime } from '@platform/server';
 import pg from 'pg';
 import {
@@ -57,10 +57,32 @@ export interface StartInstanceOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Skip creating the bootstrap administrator (for the "nobody can sign in" case). */
   readonly withoutBootstrapAdmin?: boolean;
+  /** Name of the database to create; lets one file start two instances it can tell apart. */
+  readonly label?: string;
+  /**
+   * Start against a database that already exists instead of creating one.
+   *
+   * The instance does **not** drop it on `stop()`: whoever created it owns its lifetime. This is
+   * what lets one test hand a database from one instance to the next and ask what survived the
+   * handover — which is the only time-free way to show that an event was queued rather than eaten.
+   */
+  readonly database?: MigratedDatabase;
+  /**
+   * The pipeline's two uncomposable collaborators (WP-15a).
+   *
+   * Absent is the production default, and the default here too: the auth and SSE e2e files start
+   * an instance with no pipeline, which is what `apps/server` does when nothing supplies a runner.
+   */
+  readonly pipeline?: StartRuntimeOptions['pipeline'];
+  /** Where pino writes; a test that asserts on a start-up decision reads it here. */
+  readonly logDestination?: StartRuntimeOptions['logDestination'];
+  /** Overrides `LOG_LEVEL`, which defaults to `silent` so a passing run prints nothing. */
+  readonly logLevel?: string;
 }
 
 export const startInstance = async (options: StartInstanceOptions = {}): Promise<Instance> => {
-  const database = await createMigratedDatabase('e2e');
+  const ownsDatabase = options.database === undefined;
+  const database = options.database ?? (await createMigratedDatabase(options.label ?? 'e2e'));
   const port = await reservePort();
   const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -72,7 +94,7 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     DATABASE_URL: database.connectionString,
     // Obviously fake, and long enough for the 32-character floor.
     APP_SECRET_KEY: 'e2e-test-secret-key-not-a-real-secret-0000',
-    LOG_LEVEL: 'silent',
+    LOG_LEVEL: options.logLevel ?? 'silent',
     TZ: 'UTC',
     APP_DB_POOL_MAX: '12',
     APP_SSE_PING_INTERVAL_MS: '1000',
@@ -87,9 +109,15 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
 
   let runtime: ServerRuntime;
   try {
-    runtime = await startRuntime({ env });
+    runtime = await startRuntime({
+      env,
+      ...(options.pipeline === undefined ? {} : { pipeline: options.pipeline }),
+      ...(options.logDestination === undefined ? {} : { logDestination: options.logDestination }),
+    });
   } catch (error) {
-    await database.drop();
+    if (ownsDatabase) {
+      await database.drop();
+    }
     throw error;
   }
 
@@ -97,7 +125,9 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     await runtime.listen();
   } catch (error) {
     await runtime.stop();
-    await database.drop();
+    if (ownsDatabase) {
+      await database.drop();
+    }
     throw error;
   }
 
@@ -107,7 +137,9 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     database,
     stop: async () => {
       await runtime.stop();
-      await database.drop();
+      if (ownsDatabase) {
+        await database.drop();
+      }
     },
   };
 };

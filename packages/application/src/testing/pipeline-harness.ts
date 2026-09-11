@@ -23,6 +23,7 @@ import { createIntegrationActionExecutor } from '../integrations/action-executor
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { TaskCommandDependencies } from '../pipeline/commands.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
+import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
 import { basicStageRunPlanner } from '../pipeline/planner.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
@@ -290,7 +291,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     store,
     settings: staticProjectSettings(() => settings),
     jobs,
-    integrations,
+    // One composed set for the harness's one project. Production reads the `bindings` table
+    // through `createPipelineIntegrationsLoader` (WP-15a).
+    integrations: staticPipelineIntegrations(integrations),
     ids,
     clock: { now: () => clock.now() },
     unitOfWork: memory,

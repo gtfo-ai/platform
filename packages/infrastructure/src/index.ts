@@ -16,6 +16,7 @@ export * as pipeline from './pipeline/index.js';
 export * as redaction from './redaction/index.js';
 export * as runlet from './runlet/index.js';
 export * as runner from './runner/index.js';
+export * as secrets from './secrets/index.js';
 export * as workspace from './workspace/index.js';
 
 export const packageId = '@platform/infrastructure' as const;

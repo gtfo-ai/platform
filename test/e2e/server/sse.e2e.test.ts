@@ -270,8 +270,16 @@ describe('graceful shutdown drains the stream (TD-002)', () => {
   });
 
   it('reports 503 from /readyz from the first instant of shutdown', async () => {
-    const before = await client.request('/readyz');
-    expect(before.status).toBe(200);
+    // The baseline is "not shutting down", not "ready". This instance is started without a pipeline
+    // composition — which is what `main.ts` does today — so its `dispatch` check is `down` and the
+    // probe is 503 for a reason that has nothing to do with the subject here (WP-15a round 2). A
+    // bare `toBe(200)` conflated the two; asserting the *absence of the shutdown check* is what
+    // actually distinguishes the two states, and it keeps working whatever else is unhealthy.
+    const before = (await (await client.request('/readyz')).json()) as {
+      checks: Record<string, string>;
+    };
+    expect(Object.keys(before.checks)).not.toContain('shutdown');
+    expect(before.checks.database).toBe('ok');
 
     // `stop()` sets the flag synchronously, before its first `await`, so a request that starts
     // after the call has been *made* — and before it has been awaited — must already see 503. That

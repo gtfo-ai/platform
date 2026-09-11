@@ -247,6 +247,9 @@ importers:
       '@platform/infrastructure':
         specifier: workspace:*
         version: link:../../packages/infrastructure
+      '@platform/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       '@prometheus-io/client':
         specifier: 0.16.1
         version: 0.16.1

@@ -5,7 +5,7 @@
 ## Resume note
 
 > **Session 3 opened 2026-09-11.** Read this, then **"Open findings backlog"**, then "Standing rules earned
-> by evidence" — **seventy-two rules, each with its evidence, each paid for with a review round**. Then
+> by evidence" — **seventy-four rules, each with its evidence, each paid for with a review round**. Then
 > continue the loop in `14-orchestration-protocol.md`.
 
 **Twenty-three work packages are DONE and pushed**, WP-00 … WP-15 plus WP-02a/04a/06a/11a/20 and four
@@ -64,6 +64,36 @@ CI half cost six pushes onto a red gate (rule 69). Quote the target's **verdict 
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+74. **A reviewer that mutates source shares a working tree with whoever else is in it, and both
+   measurements become worthless — this is rule 53 with the checkout right and the *tree* wrong.**
+   `verify` failed once in the orchestrator's shell on WP-15a and passed seven times after, a 1-in-8
+   "flake" that cost a hunt. The failing values named their own author: `envelope.test.ts` reported
+   `constantPositions: [4,5,6,7,8,9]` — the signature of the reviewer's 4-random + 8-byte-counter hybrid
+   IV — and `events.test.ts` collected a 51st type, `task.mutant_added`, the literal mutant from the
+   consumption-table check. Neither can arise from clean sources. Measured: **3/20 while a reviewer was
+   re-deriving its documented mutations in the same tree; 0/20 alone on the same commit and 0/20 on
+   `main`**, and an instrumented loop hashing both files around each run found them unchanged 12/12,
+   because the window is short and the reviewer restores. **The orchestrator caused this**: it ran a
+   mutating reviewer, an implementer and its own `verify` in one checkout at once, and then spent a round
+   hunting a defect that did not exist. Mutation is a *write*, and a read taken across someone else's
+   write is not a measurement. Either give a mutating reviewer its own worktree, or do not verify while
+   one is running — and when a failure names a value no clean source can produce, suspect the tree
+   before the code.
+73. **An empty handler list is a fact about the process, not about the event — decide completeness at
+   composition, not per delivery.** (Architect ruling, WP-15a.) The queue row is *global*:
+   `delete from event_dispatch where event_position = $1` discharges **every** handler in the deployment,
+   and only `ROLE=all|worker` sweep while other roles take work via pg-boss, so a partial-set sweeper
+   destroys another process's work whether its own handler list is empty or not. Two rounds answered a
+   per-type question with a whole-registry predicate and each time the hole simply moved: first "no
+   handlers at all", which a single handler for an unrelated type defeats; then a declared table, which
+   **one `eventTypes: 'all'` handler** — the shape blessed for audit and projections — satisfies
+   entirely, so WP-19's audit projection would have re-opened it. Leave-queued at the dispatch site is
+   *worse*, and that is the part worth keeping: `hasEarlierPending` blocks every later event of the same
+   stream, so one never-handled type permanently halts each aggregate that emits it, signalled only by a
+   rising gauge. Completing is safe **because `events` is append-only** (TD-005 `REVOKE DELETE`): only
+   the work item dies, and a handler added later is served by a backfill from the log. Rules 9 and 20
+   describe this and neither settles it.
 
 72. **A single pass that deletes while it walks is not a delete — and the two filesystems this repository
    runs on disagree about whether you find out.** Reclaiming a control directory an agent had flooded past
@@ -2391,6 +2421,294 @@ project with no git binding). `isPlatformGate` was exported and imported nowhere
 S4 now carries one bullet saying what the platform does today and pointing at **Q55**, because the cut lived
 only in this ledger and docs win over code (rule 8).
 
+### WP-15a — the pipeline is composed into `apps/server`, and what that turned out to cost
+
+**The acceptance criterion is met.** `verify:e2e` walks a feature ticket and a bug ticket from
+`ticket.matched` to `task.completed` through an **`apps/server` instance started by `startInstance`** —
+the real composition root, the real outbox worker on its own timer, the real pg-boss jobs runtime — with
+the git and task-management adapters built by a production loader from seeded `integrations`, `secrets`
+and `bindings` **rows**. `test/e2e/support/pipeline.ts` no longer calls `createPipelineRuntime`.
+
+**The mutation that proves the rows are load-bearing — and what round 1 of it actually proved.**
+Removing the two `insert into bindings` statements fails **all five** e2e tests. Before round 2 the stop
+was `state=needs_human stage=rebase_gate`, and the reviewer showed that verdict was *downstream of a
+green CI gate*: `ci_gate` precedes `rebase_gate` in all three templates, and it was failing open, so the
+run walked past the first provider-dependent step and parked later for a different reason. With the gate
+fixed the same mutation parks at **`stage=ci_gate`** — the first step that asks a provider anything,
+which is what "the bindings are load-bearing" should look like. *A falsification that stops in the right
+state for the wrong reason is not a falsification*, and only enumerating the template order showed it.
+
+**Three orientation claims were checked and one was wrong (rule 27, eighth instance).** The plan row says
+the loader decrypts "through the existing broker". *There is no such broker.* `workspace/broker.ts` is the
+run-scoped **git credential** broker (TD-021) — it mints per-run tokens and has nothing to do with
+`secrets.ciphertext`. Nothing in the repository read that column, nothing imported `node:crypto` for it,
+and no work package owned it: `grep -rln "APP_SECRET_KEY|decrypt|SecretStore"` over `packages/` and
+`apps/` returned five files, all of them configuration or auth. So WP-15a built it — `SecretStore` port,
+AES-256-GCM envelope with a per-row data key, `PostgresSecretStore` — because a loader that cannot read a
+credential cannot build an adapter, and a loader that read a *plaintext* one would have left the single
+piece of this work package that touches a secret untested. The other two claims held: the tables really
+are `integrations`/`bindings`, and `createPipelineRuntime` really had no production caller.
+
+**`PipelineIntegrations` had to become a port, and that was not in the brief.** `PipelineSagaOptions`
+took one composed `PipelineIntegrations` for the whole process — correct for a harness with one project
+and wrong for an instance that serves many. It is now `PipelineIntegrationsPort.forProject(projectId,
+scope)`, the same shape `ProjectSettingsPort` already had. *This paragraph said "four call sites"; there
+are six* — the reviewer enumerated them, which is rules 7 and 37 in one line: a count is a checkable
+claim and a hand-maintained one drifts. The number is now not stated anywhere at all.
+`packages/application/src/pipeline/integrations.test.ts` walks the ring's own sources and requires the
+named `noRunScopedSecrets()` at every site, so the *seventh* call site has to make the same decision
+rather than inherit an inline empty literal. Mutating one site to `{ runScopedSecrets: [] }` fails it
+with the file and line. The gate evaluator resolves it
+**after** `merged_gate` returns, deliberately: that gate is settled by the event that got the task there,
+so loading a binding for it would let an unrelated misconfiguration fail a gate that needs no provider.
+
+**Q55: the mechanism is closed, the product cut is not, and the split is deliberate.** `IntegrationCallScope`
+is **required by the type** and carries the run-scoped credentials; the loader composes them into
+`ProviderCreateInput.redactor` and builds adapters **per call**, which is Q55's option (a). Rule 35 says the
+type only proves *supply*, so the behaviour is pinned by a test that plants a token in a job log the **real**
+GitLab adapter returns and greps the output. What is **not** closed is the CI gate: it still returns failing
+job names, `gates.test.ts:167` still pins that, and nothing on the pipeline's path holds a minted credential
+because the runner cannot reach the launcher's broker (Q52). Every call site passes `noRunScopedSecrets()`,
+written out in full. The decision is recorded on Q55 itself and at the top of `bindings/loader.ts`.
+
+**Two guards, two named deaths (rules 3, 22, 35).**
+
+- deleting the **scope** half of the composed redactor kills
+  `packages/integrations/src/bindings/loader.test.ts` › "keeps a run-scoped credential out of what a provider returns",
+  with the token visible in the assertion's message;
+- deleting the **binding** half kills
+  `packages/integrations/src/bindings/loader.test.ts` › "redacts a credential the provider does not redact for itself",
+  and **nothing else** — measured, because both registered adapters compose a redactor over
+  their own credentials. That is rule 41's shape, so rule 22 applies: the layer is declared at the line, the
+  outer guard is named (`providers/emitted-secrets.test.ts`), and the reason it is still worth having is
+  that that file is a hand-written list of *two* providers rather than a sweep of `providers/` (rule 7);
+- deleting the `options.pipeline === undefined` warning in `runtime.ts` kills
+  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names the event types it cannot handle and does not start the outbox sweep",
+  which also asserts the other half — the event **dispatches** and no task is created, so it is a statement
+  about the branch that ran rather than about a process that had not started yet (rule 10).
+
+**A defect the tests caught before it shipped.** `repositoryPathOf` read `git@host:acme/api.git` as the
+project `api`: the first `/` is inside the path, not after the host, for git's scp-style remote. Two
+spellings reach `projects.repo_url` and they separate the host from the path differently; a `:` followed by
+digits is a port and not the separator. Fixed with the enumeration in `pipeline.test.ts`.
+
+**Two things measured and written down rather than assumed.** `bindings` is ordered `by i.type, …`, and
+`type` is an **enum** — PostgreSQL orders it by the order migration 0002 declared its labels, so
+`task_management` sorts *before* `git`, not alphabetically. The integration test asserts it as it behaves
+and says why. And the e2e now runs in **real** time: ~27 s for five tests at load average 5, with
+`APP_JOBS_POLL_INTERVAL_SECONDS=0.5` and `APP_DISPATCH_POLL_INTERVAL_MS=25`. Nothing asserts a duration
+(rule 2); `settle` waits for a *state* and reports the dispatcher's own recorded error if a handler died.
+
+**What this work package refused to build, with the reason.** `apps/server` **cannot** compose the whole
+pipeline on its own, and pretending otherwise would have been rule 18 in the composition root:
+
+- **`ClaudeRunner`** needs a workspace, and the runner→launcher transport is **Q52**, deliberately unbuilt;
+- **`IntegrationAuditLog` / `IdempotencyStore`** have ports (WP-07) and no adapter, and
+  `integration_actions` (migration 0007) has no `project_id`, `redaction_count` or `attempts` column — so an
+  adapter needs a **migration** as well as code.
+
+So `StartRuntimeOptions.pipeline` is required to start the pipeline, and a process without it logs which
+piece is missing and starts no pipeline. That is the fail-closed direction — no task advances, loudly,
+rather than every task advancing with no audit row. The executor's own redactor is **not** a no-op: it is
+TD-012 **step 2** (`patternRedactor()`), because step 1 is per-binding and lands in the loader.
+
+**The shipped registry is two providers, not five.** The loader builds a git provider and a task manager;
+registering Slack, Sentry and Loki would be three entries constructed by nothing, which is rule 68's shape.
+They belong to the composition root that consumes them.
+
+### WP-15a — review round 2: the fifth fail-open guard, and a falsification that proved the wrong thing
+
+Round 1 returned REQUEST_CHANGES with two majors and three smaller items. The first major is the one
+worth keeping, because it invalidated the evidence the work package was reported on.
+
+**1. `ci_gate` settled `passed: true` for a project with no git binding.** `gitReads.pipelineStatus`
+answers `null` for an unbound project, and `getPipelineStatus` answers `null` for a commit that has no
+pipeline — and product/04 S4 makes the second of those **pass** ("the local test run is the evidence").
+One `null`, two producers, opposite correct answers: standing rule 56's shape with a gate on the end.
+`rebase_gate`, four lines below it, already returned `unsupported` for the same condition, and that
+asymmetry inside one file is what a reviewer saw. It is the **fifth** fail-open guard this project has
+found (rule 67's list: WP-07's shadow guard, WP-12's two, WP-15's CI gate, now this).
+
+The gate now asks `bindings.git === null` **by identity**, before either branch reads anything.
+Reverting it fails `gates.test.ts` › *"refuses the CI gate when the project has no git binding, instead
+of passing it"* with `{kind:'settled', passed:true}` in the message — and leaves the rebase case
+**green**, because the branch below it answers the same way. That is rule 41 (one condition, two guards),
+so rule 22's remedy is applied at the inner one: declared unreachable, naming the outer guard, with the
+measurement written at both. The pair is labelled in the test — *the CI case is the guard's test, the
+rebase case is the behaviour's*. The set is derived rather than remembered: a third test asserts
+`BUILTIN_GATE_STAGE_IDS` minus `merged_gate` equals the two cases, so a fourth builtin gate fails it.
+
+**The consumer sweep rule 63 asks for, done rather than promised.** The other two `gitReads` consumers
+were audited for the same collapse: `saga.ts`'s `unprotectedDefaultBranch` reads `null` as "protected or
+cannot tell" (fail-closed, correct), and `jobs.ts`'s review window reads `[]` as "nothing unresolved" and
+returns without advancing anything (not permissive). Neither needed changing; both were checked.
+
+**2. The nonces were unpinned.** Replacing either `randomBytes(IV_BYTES)` with `Buffer.alloc(IV_BYTES)`
+left all 19 envelope tests green — the ciphertexts still differed, because the data key is random too, so
+"is different every time" said nothing about the IVs. The wrap IV is the sharp one: it sits under one
+process-wide KEK, so a constant there is GCM nonce reuse across **every row in the table**, and AES-GCM
+loses *authenticity* as well as confidentiality under it. A 64-seal census over the exported field offsets
+now pins all three random values, and each of the two mutations kills the one test written for it and
+nothing else. Rule 33's shape away from `scripts/`: the place a mutation survives is the place the next
+change breaks. *(Round 3 replaced that census — it admitted a counter — and renamed the test; the name
+this paragraph originally cited no longer exists, which is why it is described rather than cited.)*
+
+**3. The uncomposed production state was worse than "nothing runs", and that is now the part of this work
+package I would keep if I kept one thing.** `main.ts` and `scripts/dev.mjs` call `startRuntime()` with no
+arguments, so the pipeline is composed and production does not start it. Two consequences round 1 did not
+report:
+
+- **a `ticket.matched` arriving at such an instance was eaten.** With zero handlers `EventBus.dispatch`
+  takes the "no handler matched" path: `dispatchQueue.complete(position)` deletes the `event_dispatch`
+  row and a `$dispatch` marker goes into `handler_executions`, which makes a later re-dispatch a
+  deliberate no-op. The event was consumed and unreplayable by a process that was never able to act on
+  it. Rule 20's inbound half: *being told something you cannot handle is not licence to forget it.* The
+  outbox sweep is no longer started when the bus has **no handlers**. The event stays queued with
+  `attempts = 0` for an instance that can act on it. The cost is stated rather than hidden: the queue
+  grows, `event_dispatch_pending` is the gauge that shows it, and `/readyz` is down for the same reason.
+
+  > **Round 3 corrected this, and the correction is the interesting part.** The clause that used to
+  > follow — "that condition and not *the pipeline is absent*, because a later projection should still
+  > sweep" — was **wrong**, and it was wrong in the direction the fix was meant to close. Measured at
+  > the bus by the round-2 reviewer: a registry holding **one handler for an unrelated type** dispatches
+  > a non-matching event to `status: 'dispatched'`, because `handlersFor(type)` returns `[]` and the
+  > code completes. So the projection-only instance this sentence blessed would eat a `ticket.matched`
+  > exactly as an empty one did, *and* `/readyz` would read `ok`, taking the second signal with it. It
+  > is rule 9's **over-discharge** direction: two paths each correctly saying "nothing to do here".
+  > The architect ruled that *a process that sweeps must be a complete consumer*, and the sentence is
+  > gone rather than qualified — see round 3's notes.
+- **`/readyz` was green.** Database, migrations and queue were all `ok`. TD-023's three checks did not
+  cover the state the build is in, so there is a fourth, `dispatch`, and it is **required** on
+  `ReadinessOptions` rather than optional — six existing call sites had to state it, which is the point
+  (rule 31). `readiness.test.ts` › *"is down when the dispatcher has no handlers, however healthy
+  everything else is"*.
+
+**And the first version of that e2e passed with the guard removed.** It asserted "the row is still in
+`event_dispatch`" immediately after the append — a negative, against a sweep that simply had not got
+there yet (rule 4). Two changes fixed the instrument, and the second is the one worth copying: the queue
+assertions moved to **after `runtime.stop()`**, because shutdown drains the dispatcher and that is the
+one moment at which "still here" means "nothing ever swept it"; and the test then hands the **database**
+to a second, composed instance and waits for the ticket to reach `ready_for_merge`. That turns the
+property into a positive one — *the instance that could not act on the notification did not destroy it,
+and the next one that can, does* — and it is time-free in the failing direction. Under the mutation the
+first assertion now fails in 400 ms with `expected [] to have a length of 1`; before the fix the same
+mutation was green.
+
+**4. A whole envelope could be transplanted between `secrets` rows.** `openSecret(key, ciphertext)` took
+the ciphertext alone, so an envelope copied from one row into another decrypted perfectly and a binding
+silently got another account's credential. The docblock's splice claim read wider than it was: the splice
+test only ever cut an envelope in half. The row's own uuid is now in the **wrap's** AAD — identity
+material, never a redaction output (rule 70) — which means the caller generates the id before the insert
+rather than letting the column default produce one. Removing it from the AAD kills two named tests, one
+at the envelope and one at the store.
+
+**What was refused, again, and filed instead**: the Postgres `IntegrationAuditLog` and its migration, and
+the absence of any webhook ingress, which means nothing in production emits `ticket.matched` at all. The
+third item — the e2e replacing the registry wholesale, so the **shipped** GitLab and Jira `create` were
+reached by no tier through the loader — turned out to cost about sixty lines at the *integration* tier
+rather than another e2e, because neither registration performs I/O at construction, so it was closed
+rather than filed.
+
+**One flake, found by running the target rather than by reasoning about it.** `keeps one workpad comment
+on the ticket and moves the ticket status` settled on `tasks.state === 'ready_for_merge'` and then read
+the ticket — but the status mapping is a handler in TD-005's *integrations* band, so it commits after the
+core transition. One transaction's effect asserted against another's timing: it failed 1 run in 3. The
+harness grew `waitFor`, which waits on the consequence instead of on the state, and the docblock says why
+the two are different. Three consecutive runs of the file are green.
+
+### WP-15a — review round 3: the arbiter moved from the dispatch site to composition
+
+Round 2's fix was right about the harm and wrong about the predicate, and the reviewer's measurement is
+the whole finding: a registry holding **one handler for an unrelated type** dispatches a non-matching
+event to `status: 'dispatched'` — `handlersFor(type)` returns `[]` and the code completes. So
+`registry.size === 0` closed the empty case and left the *partial* case open, and my docblock had
+blessed exactly that ("a later projection should still sweep"). Rule 9's **over-discharge** direction,
+and rule 56: the false branch of a whole-registry predicate does not enumerate a per-type question.
+
+**The architect ruled, and the dispatch site does not change.** Completing an unmatched event is
+correct: leaving it queued makes `hasEarlierPending` block every later event of the same stream, so one
+never-handled type would permanently halt each aggregate that emits it, and the queue could not tell
+`knowledge.index.rebuilt` (catalogue consumer `—`) from a missing pipeline. Completing is safe because
+`events` is append-only and the application holds no `DELETE` on it: only the **work item** dies, and a
+handler added later is served by a backfill from the log. What changes is **who may sweep**:
+`event_dispatch` has one row per event for the whole deployment, so a partial consumer destroys another
+process's work item exactly as an empty one does. `packages/application/src/events/consumption.ts`
+declares each catalogue type `handled` or `unconsumed`, and `sweepReadiness` is **one predicate called
+by both gates** — the outbox-worker start and `/readyz`'s `dispatch` check (rule 41).
+
+**Where I deviated from the ruling, with the measurement, because the ruling invited it.** The ruling
+says the table is sourced from technical/02's "Core consumers" column. Read literally that column marks
+**49 of 50** types consumed — it describes the finished product's consumers, including the Slack band,
+the UI band and the cost ledger. Measured, a composed `apps/server` registers handlers for **21**. A
+table transcribed from the column would stop the outbox worker in *every* build that exists, including
+the one whose e2e walks a ticket to `task.completed` — this work package's own acceptance criterion. So
+the table records **what this build consumes**, and every `unconsumed` row names the work package that
+flips it. Every property the ruling protects survives: a sweeper must be complete for everything
+declared consumed, a missing handler fails a named test, and a new event type cannot be added without
+answering the question. What it does not do is declare consumers that do not exist.
+
+**The entry worth reading is `run.finished`/`run.failed`**: technical/02 gives them a cost ledger at
+priority 10, WP-19 builds it, and nothing registers it — so a `run.finished` swept today is a cost
+entry that will never be written. Declared rather than silent, and it is why the backlog carries the
+backfill tool as something WP-19 needs *before* it ships.
+
+**The guarantee, mutation-checked.** Adding a 51st member to the catalogue union without touching the
+table kills `packages/application/src/events/consumption.test.ts` › "answers for every catalogue event type, and for no type that is not one", naming `task.mutant_added`. Repointing one pipeline handler from `default_branch.moved` to an
+unconsumed type makes `sweepReadiness` answer `{ready: false, missing: ['default_branch.moved']}`. The
+refusal is parameterised over the declared set, so each `handled` type has its own case.
+
+**Also in this round, from round 2's four smaller items.**
+
+- **The nonce census admitted a counter** (rule 43). A per-process `writeUInt32BE` counter produced 64
+  distinct values and passed all 13 tests; distinctness *within one process* is not what the docblock
+  claims, and two replicas each counting from 1 collide on every row. A unit test cannot establish
+  unpredictability — that is a property of `randomBytes`, and the docblock now says so — but it can
+  reject a **structured** generator: 256 seals, and **every byte position must vary**. Three counter
+  shapes die, including a hybrid of 4 random bytes and an 8-byte counter, and the failure names the
+  constant positions.
+- **"Rotating rewraps 32 bytes per row" was false**, and the measurement that mattered came first:
+  replacing the body's AAD with a constant left **all 13 tests green, including the splice case**, so
+  the body↔key binding the docblock credited with refusing a splice was refusing nothing — the per-row
+  **random data key** is what refuses it. That made the fix cheap: both layers now take
+  `version ‖ secrets.id`, which is stable across a rewrap, and `rewrapSecret` is a **function with a
+  test** rather than a sentence (rule 30). The test asserts the body bytes are copied through
+  identically, which is the actual claim: the credential never materialises in a rotating process.
+- **TD-023 is amended** with the fourth readiness check, and it carries the consequence that was
+  written down nowhere: `ROLE=all`/`worker` are 503 until a pipeline is composed, `ROLE=all` also
+  serves the API and the SPA, so **WP-22 must not gate `depends_on` on `/readyz`** and no reverse
+  proxy may use it as an upstream health check. `routes/ops.ts` and the OpenAPI description point at it.
+- **`toContain('ready_for_merge')` was satisfied by the workpad checklist**, which names every stage of
+  the template from the first render — so it would have passed on a task that never reached the state
+  (rule 10). It asserts the header line now, which is the only part that reports where the task is.
+
+### The `verify` flake was a mutation harness running in the shared working tree
+
+The orchestrator saw `FAIL: verify` once in eight on `1ab02bc`, then seven passes, and lost the test
+name to a `tail -6` — rule 61's mistake in miniature, and the reason the hunt had to start from
+scratch. Twenty sequential runs with **the output captured to a file per run** caught it three times.
+
+**The failing values identify the cause exactly.** `envelope.test.ts` reported
+`constantPositions: [4,5,6,7,8,9]` — the signature of the *4 random bytes + 8-byte counter* hybrid
+this session used to mutation-check the nonce census — and `events.test.ts` reported a 51st catalogue
+type, `task.mutant_added`, which is the literal name of the mutant used to prove the consumption
+table's key check. Neither value can arise from clean sources. A **reviewer was re-deriving those two
+documented mutations in the same checkout**, so a `vitest` run started by somebody else collected the
+tree mid-mutation.
+
+**Counts.** With the review finished and no other agent running: **0 failures in 20** on `60e925a`,
+**0 failures in 20** on `main` (`24b3e65`), both sequential, at load average 9–14. An instrumented
+loop that hashed `events.ts` and `envelope.ts` before and after each run reported the files unchanged
+in 12 of 12 — which is the negative result that fits: by then nobody was mutating them.
+
+**The rule this is a new spelling of.** Rule 53 says a verification run must be scoped to the checkout
+it claims to verify; this is the same failure with the checkout *right* and the **tree** wrong. A
+mutation harness is a writer, and two agents sharing a working tree cannot both run one — the second
+one's `verify` is measuring the first one's mutant and has no way to know. Nothing in the protocol
+forbids it today; the cheap mitigations are a reviewer in its own worktree (which rule 66's machine
+policy discourages) or a mutation harness that refuses to run when the tree is not clean, and neither
+is this work package's to build. What it costs when it is not done is a day of hunting a flake that
+was never in the product: **the failure was real, reproducible, and not a defect.**
+
 ### WP-20 — the browser's own `lastEventId` would have undone the `reset`
 
 The finding worth keeping from the web foundation, because it is the other half of the defect that cost
@@ -2973,6 +3291,10 @@ intact, and `rm -rf` unlinked the link rather than the target.
 
 ## Discovered work (not in plan)
 
+- ~~**Nothing loads a project's integration bindings**~~ — **CLOSED at WP-15a**
+  (`packages/integrations/src/bindings/loader.ts`, composed in `apps/server/src/pipeline.ts`). The secret
+  resolution it names had no code at all: `secrets.ciphertext` was read by nothing, so WP-15a also built the
+  `SecretStore` port and its envelope adapter. Original entry, for the record:
 - **Nothing loads a project's integration bindings, so the pipeline cannot be wired into
   `apps/server` yet (WP-15).** `createPipelineRuntime` takes `PipelineIntegrations` — a git binding
   and a task-management binding, each an adapter plus its `IntegrationRef` — and the platform has
@@ -2980,6 +3302,10 @@ intact, and `rm -rf` unlinked the link rather than the target.
   provider adapter, the executor and the pipeline are ready; the composition root has nothing to
   hand them. It is a small use case (`bindingsFor(projectId)`) plus the secret resolution TD-020
   describes, and it blocks the first *real* instance rather than any test.
+- ~~**`ProviderCreateInput.secrets` is not connected to `exactSecretRedactor`**~~ — **CLOSED at WP-15a**:
+  the loader names every resolved credential `<provider>:<integrationId>:<field>` and composes it into the
+  `redactor` it passes to `create`, so a composition root cannot hand a provider a secret the redactor never
+  learns. Original entry:
 - **`ProviderCreateInput.secrets` is not connected to `exactSecretRedactor` (found at WP-15,
   untouched).** A composition root can hand a provider a secret the redactor never learns. The
   redaction fix on `main` closed the *walk*; this is the wiring. Q55 is the harder half of the same
@@ -2990,6 +3316,50 @@ intact, and `rm -rf` unlinked the link rather than the target.
   return reason — it is the difference between "test:unit failed" and a developer stage that knows
   what to fix. Round 2 wrote the cut into **product/04 S4** itself and pinned the `detail` string in
   `gates.test.ts`, so the change is a failing test rather than a silent improvement.
+
+- **Jira's adapter wraps its own calls in `IntegrationActionExecutor` and the pipeline wraps them again
+  (found at WP-15a, filed rather than fixed).** WP-09's GitLab adapter deliberately keeps the executor
+  *outside* itself — its docblock says so, citing standing rule 14 — and `pipeline/integrations.ts` wraps
+  every call the pipeline makes. WP-08's Jira adapter takes an `executor` and wraps its own. Composing both
+  in one registry therefore produces **two `integration_actions` rows and two rate-limit acquisitions for
+  one ticket write**. Nothing is unsafe: the outer executor refuses a shadow mutation before the inner one
+  is reached, and the inner `actionContext` is `fixedActionContext('normal')` for exactly that reason. The
+  fix is Jira adopting GitLab's shape, which is an adapter change with its own contract suite, so WP-15a
+  registered it and wrote the duplication down at
+  `packages/integrations/src/bindings/shipped-registry.ts` instead of quietly shipping it.
+- **`IntegrationAuditLog` and `IdempotencyStore` have no Postgres adapter, and `integration_actions` is
+  missing three columns for one (found at WP-15a).** BD-003's whole outbound-audit claim rests on a port
+  WP-07 shipped and nothing implements. Migration 0007's table has no `project_id`, `redaction_count` or
+  `attempts`, all three of which `IntegrationActionEntry` carries, so the work is a numbered migration plus
+  an adapter that appends the `integration.action.performed` / `.failed` events in the same transaction —
+  which needs stream-sequence allocation outside a saga, the thing `NormalisedEvent` stops short of on
+  purpose. Until it exists, `apps/server` starts **no pipeline** unless a caller supplies an audit log, and
+  says so in a warning naming the gap.
+- **No webhook ingress exists, so nothing in production emits `ticket.matched` (found at WP-15a round
+  2).** `apps/server/src/routes/` has no `/webhooks/<provider>/<integrationId>` endpoint, which
+  technical/06 § "Inbound" specifies, and no polling fallback either. WP-15a made an instance able to
+  *act* on a ticket event and able to *keep* one it cannot act on; nothing yet produces one outside a
+  test. The inbox table is unwritten for the same reason (rule 70's digest note already depends on it).
+- ~~**The shipped GitLab and Jira registrations are reached by no tier through the loader**~~ —
+  **CLOSED at WP-15a round 2**, cheaply, at the *integration* tier rather than with another e2e:
+  `test/integration/secrets/bindings.integration.test.ts` seeds real `integrations` rows and sealed
+  `secrets`, then runs the production loader with `createPipelineProviderRegistry` and builds both
+  shipped adapters. No provider I/O happens and none is stubbed — `create` parses and constructs — so
+  it costs about a second. The gap it closes is the one nothing else covered: the **merge of a real
+  `integrations.config` row with a real decrypted secret into a real provider's strict schema**, which
+  is where a column rename or a `secretFields` typo lands. A second case asserts a row missing
+  `base_url` is a refusal rather than `git: null` (rule 20 through the shipped schema).
+- **The binding loader has no cache, deliberately, and nothing has measured whether it needs one
+  (WP-15a).** Every provider call re-reads the project's bindings and rebuilds the adapters, because Q55
+  makes the redactor per-call and because a cache would have to be invalidated by a settings change, a
+  credential rotation and a rate-limit budget that lives on the adapter — and would hold decrypted
+  credentials in memory for as long as it held an entry. The place to put one, when a measurement asks for
+  it, is `BindingRepository`; the reasoning is in `bindings/loader.ts`.
+- **`emitted-secrets.test.ts`'s provider list is still hand-written, and WP-15a now leans on it (WP-15a).**
+  The loader's binding-half redactor is defence in depth *because* that file covers only Jira and GitLab —
+  deleting the half leaves every test green but the one seam written for it. Making the file's provider
+  list a sweep of `providers/` would turn a declared rule-22 layer into a genuinely redundant one, which is
+  the better end state.
 
 - **An unlabelled `ws-<run-id>` volume: the e2e half is fixed, the production half is a decision nobody
   has taken (WP-14 round 3).** Standing rule 60 has the measurement. What is *done* here is the harness:

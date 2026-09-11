@@ -13,6 +13,7 @@
  */
 import type { Id, JsonObject, TaskMode } from '@platform/contracts';
 import type { IntegrationActionExecutor } from '../integrations/action-executor.js';
+import type { InjectedSecret } from '../integrations/redaction.js';
 import type { IntegrationRef } from '../ports/integrations/common.js';
 import type {
   Discussion,
@@ -44,6 +45,58 @@ export interface PipelineIntegrations {
   readonly git: GitBinding | null;
   readonly taskManagement: TaskManagementBinding | null;
 }
+
+/**
+ * The credentials the **caller** knows about and a binding cannot — Q55, and the reason this is a
+ * required argument rather than an option.
+ *
+ * A provider adapter builds a redactor from its own resolved credentials; that half a caller
+ * cannot forget. The half the adapter cannot know is a token that did not exist when the binding
+ * was instantiated: `mintCredential()` runs per run, `create()` ran once, and the minted token is
+ * exactly what a CI job echoes into a log. Q55's recommendation is *make the run the scope*, so
+ * the scope is passed at the call and the adapters are built with it.
+ *
+ * It is **required by the type** because standing rule 31 says an optional security dependency is
+ * an absent one, and standing rule 35 says the type only proves it is *supplied*: the behaviour is
+ * proved by a test that plants a run-scoped secret here and greps what the provider emits
+ * (`packages/integrations/src/bindings/loader.test.ts` ›
+ * "keeps a run-scoped credential out of what a provider returns").
+ */
+export interface IntegrationCallScope {
+  /** Named so a placeholder identifies the credential; see `bindingSecretRedactor`. */
+  readonly runScopedSecrets: readonly InjectedSecret[];
+}
+
+/**
+ * The scope of a call that is **not** inside a run, written out rather than defaulted.
+ *
+ * Every pipeline call site uses this today, and that is a statement about the build rather than
+ * about the design: nothing on the pipeline's path holds a minted credential, because the runner
+ * reaches the launcher's broker through a transport that does not exist yet (Q52). The moment one
+ * does, the call sites that are inside a run are the ones that stop calling this.
+ */
+export const noRunScopedSecrets = (): IntegrationCallScope => ({ runScopedSecrets: [] });
+
+/**
+ * A project's bindings, resolved when they are needed.
+ *
+ * Per **project**, because one instance serves many, and per **call**, because the redactor is
+ * composed from the call's scope (Q55). `ProjectSettingsPort` is the same shape for the same
+ * reason, and the two are the whole of what the pipeline needs from a composition root.
+ *
+ * @throws when a binding exists and cannot be built — a provider that is not registered, a config
+ * that fails its schema, a credential that will not decrypt. That is *not* the same as a project
+ * with no binding, which resolves to `git: null` / `taskManagement: null` and is handled by the
+ * sagas and the gate evaluator (standing rule 20).
+ */
+export interface PipelineIntegrationsPort {
+  forProject(projectId: Id, scope: IntegrationCallScope): Promise<PipelineIntegrations>;
+}
+
+/** One already-composed set for every project: the unit tier's case, and a single-project instance. */
+export const staticPipelineIntegrations = (
+  integrations: PipelineIntegrations,
+): PipelineIntegrationsPort => ({ forProject: async () => integrations });
 
 interface CallContext {
   readonly projectId: Id;

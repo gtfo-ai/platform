@@ -12,6 +12,16 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [x] Run shim conformance: SDK `query()` through the shim, `volume-subpath` support on the target Docker Engine version — done at WP-13, measured on Docker 29.7.2, report in `research/12-run-shim-verification.md`. **Session-store resume after a runner restart is still open** and belongs to WP-15: the shim half is proved (a dropped control connection kills the CLI and the run container exits), the pipeline half — resuming the stage with a "you were interrupted" note — has no interpreter yet.
 - [x] Docker embedded DNS behaviour on `internal: true` networks (residual DNS channel) — done at WP-13: container names resolve through 127.0.0.11, external names SERVFAIL and there is no default route (Docker 29.7.2; `research/12`).
 - [ ] **Session-store resume after a runner restart** — carried into WP-15 from WP-13 and **still open**.
+- [ ] **A re-dispatch/backfill tool, and `run.finished` / `run.failed` are being swept meanwhile — WP-19
+  cannot ship its cost ledger without it.** WP-15a's `EVENT_CONSUMPTION` declares both types
+  `unconsumed` because nothing registers a handler, and the outbox sweep therefore **completes** them:
+  the `event_dispatch` row is deleted and the `$dispatch` marker makes a later re-dispatch a no-op
+  (TD-005's WP-15a amendment). The loss is bounded and recoverable — `runFinishedEvent` carries
+  `usage`, `model_usage`, `cost`, `num_turns` and `wall_ms`, and `events` is append-only — but WP-19's
+  ledger will be **empty for every run that happened before it shipped** unless it also replays the
+  log. So WP-19 owes two things: flip both rows to `handled`, and build the backfill that reads a
+  range of `events` and feeds a newly registered handler. Queue-depth alerting on
+  `event_dispatch_pending` belongs with it.
       The interpreter exists now, and the shape of the answer is visible: a `stage.execute` job that fires
       for a stage whose previous run ended `failed` could resume the session (`RunSpec.resumeSessionId`,
       TD-007's mirror) instead of starting a fresh one. WP-15 does neither — a run that ends without a
