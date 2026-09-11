@@ -31,7 +31,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ClaudeRunner, IntegrationAuditLog, RunSpec } from '@platform/application';
+import type { ClaudeRunner, RunSpec } from '@platform/application';
 import type { DomainEvent, Id, JsonObject, TranscriptEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
@@ -100,6 +100,17 @@ export interface SeededWorld {
   readonly branch: string;
 }
 
+/** One `integration_actions` row, as the e2e reads it back. */
+export interface IntegrationActionRow {
+  readonly action: string;
+  readonly status: string;
+  readonly project_id: string | null;
+  readonly task_id: string | null;
+  readonly redaction_count: number;
+  readonly attempts: number;
+  readonly payload: JsonObject;
+}
+
 export interface PipelineE2E {
   readonly instance: Instance;
   readonly world: SeededWorld;
@@ -109,8 +120,14 @@ export interface PipelineE2E {
   readonly projectId: Id;
   readonly userId: Id;
   readonly specs: readonly RunSpec[];
-  /** The audit rows the executor wrote, for the calls the pipeline made through it. */
-  readonly auditActions: readonly string[];
+  /**
+   * The `integration_actions` rows the **production** audit-log adapter wrote (WP-15b).
+   *
+   * Read from the database rather than from a recorder the harness supplied, which is the whole
+   * point: nothing in this tier passes an `IntegrationAuditLog` any more, so an assertion on these
+   * rows is an assertion about the adapter `apps/server` composes for itself (standing rules 31/35).
+   */
+  auditRows(): Promise<readonly IntegrationActionRow[]>;
   /** Appends the events exactly as an inbound webhook adapter would, and returns. */
   publish(events: readonly DomainEvent[]): Promise<void>;
   /** Waits for the instance's own workers to reach a task state, or fails naming what it saw. */
@@ -178,19 +195,6 @@ export interface StartPipelineOptions {
    */
   readonly reuse?: { readonly database: MigratedDatabase; readonly projectId: Id };
 }
-
-/** An audit log that keeps the rows in memory; `integration_actions` has no adapter yet (WP-15a). */
-const recordingAuditLog = (): IntegrationAuditLog & { readonly actions: readonly string[] } => {
-  const actions: string[] = [];
-  return {
-    get actions() {
-      return [...actions];
-    },
-    record: async (entry) => {
-      actions.push(`${entry.action}:${entry.status}`);
-    },
-  };
-};
 
 /**
  * Seeds the rows the loader reads: an organisation, a project, a user, two integrations with a
@@ -326,7 +330,6 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   const scenarios = options.scenarios(world);
 
   const specs: RunSpec[] = [];
-  const audit = recordingAuditLog();
 
   const fake = runnerAdapters.createFakeClaudeRunner({
     sink: { append: async () => {} },
@@ -397,7 +400,8 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       // The dispatcher's floor plus the stage and review-window workers (`pipeline/runtime.ts`).
       APP_DB_POOL_MAX: '16',
     },
-    pipeline: { runner, auditLog: audit, registry },
+    // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
+    pipeline: { runner, registry },
   });
 
   const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
@@ -446,8 +450,12 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     projectId,
     userId,
     specs,
-    get auditActions() {
-      return audit.actions;
+    auditRows: async () => {
+      const { rows } = await pool.query<IntegrationActionRow>(
+        `select action, status, project_id, task_id, redaction_count, attempts, payload
+           from integration_actions order by created_at, id`,
+      );
+      return rows;
     },
     publish: async (events) => {
       await inbound.unitOfWork.transaction(async (scope) => scope.events.append(events));

@@ -130,9 +130,13 @@ describe('loadServerConfig', () => {
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
     const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });
-    // 2 × 2 + 1 for dispatch, plus pg-boss, HTTP and maintenance.
+    // 2 × 2 + 1 for dispatch, plus pg-boss, the pipeline's two workers, HTTP and maintenance.
     expect(requiredPoolConnections(config)).toBe(
-      5 + POOL_RESERVATIONS.jobs + POOL_RESERVATIONS.http + POOL_RESERVATIONS.maintenance,
+      5 +
+        POOL_RESERVATIONS.jobs +
+        POOL_RESERVATIONS.pipeline +
+        POOL_RESERVATIONS.http +
+        POOL_RESERVATIONS.maintenance,
     );
   });
 
@@ -156,7 +160,7 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    expect((thrown as UndersizedPoolError).required).toBe(8);
+    expect((thrown as UndersizedPoolError).required).toBe(10);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 

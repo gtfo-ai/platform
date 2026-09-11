@@ -2858,9 +2858,11 @@ written out in full. The decision is recorded on Q55 itself and at the top of `b
   outer guard is named (`providers/emitted-secrets.test.ts`), and the reason it is still worth having is
   that that file is a hand-written list of *two* providers rather than a sweep of `providers/` (rule 7);
 - deleting the `options.pipeline === undefined` warning in `runtime.ts` kills
-  `test/e2e/pipeline/uncomposed.e2e.test.ts` › "names the event types it cannot handle and does not start the outbox sweep",
+  `test/e2e/pipeline/composition.e2e.test.ts` › "names the event types it cannot handle and does not start the outbox sweep",
   which also asserts the other half — the event **dispatches** and no task is created, so it is a statement
-  about the branch that ran rather than about a process that had not started yet (rule 10).
+  about the branch that ran rather than about a process that had not started yet (rule 10). *(WP-15b renamed
+  that file from `uncomposed.e2e.test.ts` and inverted the branch: absent now **composes**, and the seam the
+  test drives is `pipeline: null`.)*
 
 **A defect the tests caught before it shipped.** `repositoryPathOf` read `git@host:acme/api.git` as the
 project `api`: the first `/` is inside the path, not after the host, for git's scp-style remote. Two
@@ -3906,7 +3908,105 @@ itself on the day it was applied.
 planting `evil_dir → ../runB` and `evil_tok → ../runB/token`: runB left `500`, its token `400`, contents
 intact, and `rm -rf` unlinked the link rather than the target.
 
+### WP-15b — the audit log, and the foreign key that made the audit fail the action
+
+**The acceptance criterion, answered.** `startRuntime()` with no options — the call `main.ts:18` and
+`scripts/dev.mjs` make — composes the pipeline, builds a PostgreSQL `IntegrationAuditLog` and
+`IdempotencyStore` from its own pool, and `/readyz` reads **200** on `ROLE=all` with
+`checks.dispatch: ok`. `test/e2e/pipeline/composition.e2e.test.ts` › *"reports /readyz ok on ROLE=all,
+dispatch check included"* asserts it against an instance started exactly as the auth and SSE e2e files
+start theirs, and the pipeline e2e asserts the **rows** (`integration_actions`) with **no** audit log
+supplied by anything: `PipelineComposition` no longer has the field, so rule 35's "supplied, not used"
+escape is closed by the type rather than by a promise.
+
+**Migration `0013_integration_audit.sql`** adds `project_id`, `redaction_count` and `attempts`, and
+creates `integration_idempotency`. Two decisions inside it are worth more than the columns:
+
+- **`redaction_count` and `attempts` are `not null` with the default dropped immediately.** The default
+  exists only because PostgreSQL needs one to add a NOT NULL column; dropping it makes an INSERT that
+  forgets the column an error rather than a recorded zero, so "nobody wrote the column" and "nothing was
+  redacted" stop being spelled the same way (rule 18). Named test:
+  `test/integration/integrations/audit-log.integration.test.ts` › *"refuses a row that omits
+  redaction_count, because the migration dropped the default"*.
+- **`integration_actions_task_id_fkey` is dropped and `project_id` gets no foreign key.** This was a
+  measurement, not a preference: with the constraint in place **every** e2e died on its first event at
+  `insert or update on table "integration_actions_2026_09" violates foreign key constraint
+  "integration_actions_task_id_fkey"`. The audit row commits in a transaction of its own (with its event,
+  per BD-003) while the caller is still inside one — `saga.ts`'s intake handler reads the repository's
+  default branch *after* `store.tasks.insert` on the same scope, and technical/06 says outbound actions
+  are triggered by event handlers generally. So the constraint refuses the audit **because the caller has
+  not committed**, making the audit the thing that fails the action. The residual is stated in the SQL and
+  in technical/03: a `task_id` may name a task that no longer exists or that a rolled-back transaction
+  never created, which is still the honest record, because the provider call happened outside any
+  transaction and really was made. `integration_id` keeps its key: a binding is always committed first.
+  Named test: *"records an action for a task the audit cannot see, because 0013 dropped the foreign key"*.
+
+**`redaction_count` in both directions, through the real executor** (rule 42, and the row's own words).
+`test/integration/integrations/audit-log.integration.test.ts`: the same payload, the same action, two
+redactors. *"records a non-zero count, and no credential, when the redactor holds the secret"* and
+*"records zero when the redactor was told nothing — and the credential is in the row"* — the second
+reads the planted credential back out of `integration_actions.payload` and asserts the count is `0`,
+because that zero beside a payload that plainly carries a token is the **only** signal an auditor gets
+that TD-012 did not fire. The shared contract suite asserts the same pair against both implementations.
+
+**The stream-sequence question the row flagged, answered with the precedent rather than a new mechanism.**
+`NormalisedEvent` stops at `{type, payload, actor}`, so the adapter supplies the envelope: stream
+`integration` / `integrations.id`, `correlation_id` the task (technical/03's stated purpose for that
+field), sequence from `EventStore.nextStreamSequence` read **before** the transaction — which is exactly
+what `knowledge/indexer.ts` (WP-16) already does. What is new is the **retry**: a `StreamConflictError`
+re-reads and retries up to four times, because two outbound calls on one integration really do race and
+without it the audit would be what failed the action. `would_have` and `replayed` read no sequence at all.
+The first version of the integration test for this raced two `record` calls with `Promise.all` and
+**passed with the retry deleted** — they do not race, the second reads its sequence after the first
+commits — so it was replaced by a staged loss that hits migration 0005's real trigger. Rule 3, caught by
+mutating rather than by reading.
+
+**Two changes that are consequences, named so they are not read as scope creep.**
+`POOL_RESERVATIONS.pipeline = 2` (every `worker` role now composes the pipeline, so its two job workers
+belong in the floor `pipeline/runtime.ts` already documented; `ROLE=all` goes 8 → 10 against a shipped
+default of 10), and `StartRuntimeOptions.pipeline` gains `| null` — a **labelled seam**, the only way
+left to start `apps/server` as an incomplete consumer, kept because `sweepReadiness`'s two gates would
+otherwise have no end-to-end test at all. `uncomposed.e2e.test.ts` is renamed `composition.e2e.test.ts`
+and now holds both branches.
+
+**What this work package did *not* close, measured.** The **composition** of the idempotency store is
+asserted by nothing — the adapter has a contract suite against the fake and against PostgreSQL, and
+deleting the line in `pipeline.ts` leaves every tier green, because no shipped pipeline action carries an
+`IdempotencyPlan` (`slack/digest.ts` is the only one in the repository and Slack is not in the shipped
+registry). Said at the line rather than left to be assumed. And **`ClaudeRunner` is still Q52**:
+`unavailableClaudeRunner()` **throws** `RunnerUnavailableError` rather than returning a fabricated failed
+outcome, because a fabricated outcome would make the interpreter transition on a verdict for a run that
+never happened — the fail-open direction of rule 20. A task that reaches an agent stage therefore stops
+there, in its own job, loudly. Nothing reaches one today: there is no ingress until WP-15c.
+
+**Mutation checks.** Nine guards, each with the named test that dies: `redaction_count` written verbatim
+(unit *"writes every column the entry carries…"*, integration *"stores a non-zero redaction count…"* and
+*"records a non-zero count, and no credential…"*); the conflict retry (unit *"re-reads the sequence and
+retries…"*, *"gives up after the bound…"*, integration *"retries against the real guard…"*); the
+in-transaction append (integration *"leaves no row behind when the append loses the stream sequence"* and
+two more); the migration's `drop default`; the dropped foreign key; the unconditional composition (e2e
+*"reports /readyz ok on ROLE=all…"* and *"names the agent runner as the one collaborator…"*); the composed
+audit log replaced by a no-op (e2e *"writes an integration_actions row per provider call…"*); and
+`unavailableClaudeRunner` turned into a null object (unit *"throws, naming the stage and the open
+question…"*) — which had **no** test until the mutation was run.
+
 ## Discovered work (not in plan)
+
+- **The composition of the `IdempotencyStore` has no test (WP-15b).** The adapter is held by a shared
+  contract suite against both implementations; the *line in `apps/server/src/pipeline.ts`* that builds it
+  is not, and deleting it leaves every tier green — because no shipped pipeline action carries an
+  `IdempotencyPlan`. The work package that gives one to a pipeline action (a comment marker id is
+  technical/06's own example) owns the assertion. Stated at the line in `pipeline.ts`.
+- **`apps/server` composes a pipeline whose agent stages cannot run (WP-15b, Q52).** `/readyz` is now
+  `ok` on `ROLE=all` and a task that reaches an agent stage fails in its `stage.execute` job with
+  `RunnerUnavailableError`. Nothing reaches one until WP-15c builds the ingress, so the exposure is
+  today zero — but whoever lands the ingress before the runner transport should decide whether a task
+  parked on a throwing job needs a state of its own, or whether the job's failure record is enough.
+- **`integration.action.performed` / `.failed` are `unconsumed` and now actually produced.** Every
+  outbound provider call appends one to the integration's stream, and the dispatcher completes each as
+  "no handler matched" — correct today, and WP-19's audit/health projections are what consume them.
+  `readPendingDispatch` returns at most one event per stream, so a busy integration's audit events
+  dispatch one per sweep cycle; nothing has measured that at volume.
 
 - ~~**Nothing loads a project's integration bindings**~~ — **CLOSED at WP-15a**
   (`packages/integrations/src/bindings/loader.ts`, composed in `apps/server/src/pipeline.ts`). The secret

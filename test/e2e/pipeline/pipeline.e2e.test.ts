@@ -180,6 +180,42 @@ describe('a feature ticket, end to end', () => {
   });
 });
 
+describe('BD-003: the instance audits its own outbound calls (WP-15b)', () => {
+  it('writes an integration_actions row per provider call, with no audit log supplied', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'feature-audit',
+      tickets: TICKETS,
+      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
+    });
+    harness = pipeline;
+
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+
+    // `startPipeline` passes `{ runner, registry }` and **no** `auditLog`, so every row below was
+    // written by the adapter `composePipeline` built from the instance's own pool. That is the
+    // difference between "the port has an implementation" and "production uses it" — the defect
+    // standing rules 31 and 35 are named for, asserted from the side that cannot be faked.
+    const rows = await pipeline.auditRows();
+    expect(rows.length).toBeGreaterThan(0);
+    // The workpad is the loudest mutating call the pipeline makes, and it goes through
+    // `IntegrationActionExecutor` like everything else (`pipeline/integrations.ts`).
+    expect(rows.map((row) => row.action)).toContain('upsert_workpad');
+    expect(rows.every((row) => row.project_id === pipeline.projectId)).toBe(true);
+    // `attempts` is 0 only for a call that never reached the provider; every `ok` row made one.
+    expect(rows.filter((row) => row.status === 'ok').every((row) => row.attempts >= 1)).toBe(true);
+    // Migration 0013 dropped the column default, so a row that exists carries a number somebody
+    // wrote rather than one the database supplied.
+    expect(rows.every((row) => Number.isInteger(row.redaction_count))).toBe(true);
+
+    // The other half of the port's promise: the row and its catalogue event, appended in the same
+    // transaction, on the integration's own stream.
+    const types = (await pipeline.events()).map((event) => event.type);
+    expect(types).toContain('integration.action.performed');
+  });
+});
+
 describe('when the merge request’s pipeline is red', () => {
   it('sends the task back to implementation and parks it, never reaching code review', async () => {
     // The gate that matters most, on the real path: `ci_gate` is a builtin, so the stage job polls

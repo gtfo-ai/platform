@@ -1,11 +1,19 @@
 /**
- * The other branch of WP-15a's composition decision: an instance that was **not** given a pipeline.
+ * Both branches of the composition decision, in one file, because they are each other's control.
  *
- * `apps/server` cannot compose the pipeline on its own in this build — there is no transport to the
- * launcher for a `ClaudeRunner` (Q52) and no adapter for `IntegrationAuditLog` — so `startRuntime`
- * takes them as an argument, and **that is the state `main.ts` and `pnpm dev` are actually in**.
- * The companion file proves a ticket walks to `task.completed` when the composition is supplied;
- * this one proves what happens when it is not, which review round 1 found was worse than "nothing":
+ * **The first describe is WP-15b's acceptance criterion.** `startRuntime()` with *no options at
+ * all* — the call `main.ts:18` and `scripts/dev.mjs` make — composes the pipeline, builds a real
+ * `IntegrationAuditLog` from its own pool, and answers `/readyz` **200** on `ROLE=all`. Until this
+ * work package that was 503 for ever: `integration_actions` had no `project_id`, `redaction_count`
+ * or `attempts` column, nothing implemented the port, and so no production process registered a
+ * single handler. The instance here is started exactly as `auth.e2e.test.ts` and `sse.e2e.test.ts`
+ * start theirs — `startInstance()` passes no `pipeline` — so the composition under test is the
+ * production one and not an argument a harness supplied (standing rules 31 and 35).
+ *
+ * **The second describe is the state that used to be production**, kept because the gate it proves
+ * is still the thing standing between a partial consumer and another process's work. It is now
+ * reached through the labelled seam `pipeline: null` (see `StartRuntimeOptions.pipeline`), and it
+ * is worse than "nothing" in two ways that review round 1 of WP-15a found:
  *
  *  1. **the ticket was eaten.** `EventBus.dispatch` treats "no handler matched" as a completed
  *     dispatch — it deletes the `event_dispatch` row and writes the `$dispatch` marker that makes a
@@ -39,14 +47,65 @@ import { featureScenarios, TICKETS } from '../support/scenarios.js';
 let instance: Instance | undefined;
 let composed: PipelineE2E | undefined;
 let database: MigratedDatabase | undefined;
+let defaultInstance: Instance | undefined;
 
 afterAll(async () => {
   await instance?.stop();
   await composed?.stop();
+  await defaultInstance?.stop();
   await database?.drop();
   instance = undefined;
   composed = undefined;
+  defaultInstance = undefined;
   database = undefined;
+});
+
+describe('an instance started the way main.ts starts one', () => {
+  let logged: string[] = [];
+  let readyStatus = 0;
+  let readyz: { status: string; checks: Record<string, string> };
+
+  beforeAll(async () => {
+    const lines: string[] = [];
+    const destination = new PassThrough();
+    destination.on('data', (chunk: Buffer) => {
+      lines.push(chunk.toString('utf8'));
+    });
+
+    // No `pipeline` argument of any kind — `startInstance` only forwards one when it is given one.
+    defaultInstance = await startInstance({
+      label: 'default-composition',
+      logLevel: 'warn',
+      logDestination: destination,
+    });
+    logged = lines.join('').split('\n');
+
+    const ready = await defaultInstance.runtime.app.inject({ method: 'GET', url: '/readyz' });
+    readyStatus = ready.statusCode;
+    readyz = { ...(ready.json() as typeof readyz) };
+  }, 180_000);
+
+  it('reports /readyz ok on ROLE=all, dispatch check included', () => {
+    // The line WP-15b exists to change. `dispatch` is `sweepReadiness(bus.registry).ready`, so a
+    // 200 here says the process registered a handler, by name, for every type
+    // `EVENT_CONSUMPTION` declares consumed — which nothing in production did before this.
+    expect(readyStatus).toBe(200);
+    expect(readyz).toMatchObject({
+      status: 'ok',
+      checks: { database: 'ok', migrations: 'ok', queue: 'ok', dispatch: 'ok' },
+    });
+  });
+
+  it('names the agent runner as the one collaborator it still has no adapter for', () => {
+    // And **not** the audit log: this assertion is the mutation guard for the composition change.
+    // If `composePipeline` went back to taking an `IntegrationAuditLog` from its caller, a process
+    // with no caller would log that it is missing one, and the second half of this would fail.
+    const missing = logged.find((line) => line.includes('composed without an agent runner'));
+    expect(missing).toBeDefined();
+    expect(missing).toContain('Q52');
+    expect(logged.join('\n')).not.toContain('IntegrationAuditLog');
+    expect(logged.join('\n')).not.toContain('the pipeline is not composed');
+  });
 });
 
 /**
@@ -58,7 +117,7 @@ afterAll(async () => {
  * them would look the same as one that broke both. Split, mutating the predicate moves **both**
  * named tests, which is the property the pair exists to have.
  */
-describe('an instance started without a pipeline composition', () => {
+describe('an instance started with the pipeline disabled', () => {
   let logged: string[] = [];
   let readyz: { status: string; checks: Record<string, string> };
   let readyStatus = 0;
@@ -78,6 +137,9 @@ describe('an instance started without a pipeline composition', () => {
       database,
       logLevel: 'warn',
       logDestination: destination,
+      // The labelled seam. `undefined` would compose the pipeline, which is the whole point of the
+      // describe above; `null` is the only way to reach the incomplete-consumer state now.
+      pipeline: null,
       env: { APP_DISPATCH_POLL_INTERVAL_MS: '25' },
     });
     logged = lines.join('').split('\n');
@@ -139,10 +201,8 @@ describe('an instance started without a pipeline composition', () => {
   }, 180_000);
 
   it('names the event types it cannot handle and does not start the outbox sweep', () => {
-    const missing = logged.find((line) => line.includes('the pipeline is not composed'));
-    expect(missing).toBeDefined();
-    expect(missing).toContain('Q52');
-    expect(missing).toContain('IntegrationAuditLog');
+    const disabled = logged.find((line) => line.includes('the pipeline disabled'));
+    expect(disabled).toBeDefined();
 
     const refused = logged.find((line) => line.includes('the outbox sweep is not started'));
     expect(refused).toBeDefined();

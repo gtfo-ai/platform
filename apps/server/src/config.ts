@@ -210,6 +210,16 @@ export const POOL_RESERVATIONS = {
   http: 2,
   /** Readiness checks and partition maintenance, which must not queue behind request traffic. */
   maintenance: 1,
+  /**
+   * The pipeline's two job workers (WP-15b).
+   *
+   * `pipeline/runtime.ts` states the arithmetic: each `stage.execute` worker holds one connection
+   * during each of its two transactions and each review-window worker holds one during each of
+   * its two, and the composition root runs one of each (`stageConcurrency: 1`). It is counted here
+   * because every `worker` role now composes the pipeline — before WP-15b a process that was not
+   * handed an audit sink ran none, so the floor did not have to include it.
+   */
+  pipeline: 2,
 } as const;
 
 /** The smallest `APP_DB_POOL_MAX` that can serve this configuration's workloads. */
@@ -217,8 +227,9 @@ export const requiredPoolConnections = (config: ServerConfig): number => {
   const capabilities = roleCapabilities(config.role);
   const dispatcher = capabilities.worker ? 2 * config.dispatch.maxConcurrency + 1 : 0;
   const jobsReserve = capabilities.worker ? POOL_RESERVATIONS.jobs : 0;
+  const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
   const httpReserve = capabilities.api ? POOL_RESERVATIONS.http : 0;
-  return dispatcher + jobsReserve + httpReserve + POOL_RESERVATIONS.maintenance;
+  return dispatcher + jobsReserve + pipelineReserve + httpReserve + POOL_RESERVATIONS.maintenance;
 };
 
 /** Thrown at boot rather than deadlocking later; see `requiredPoolConnections`. */

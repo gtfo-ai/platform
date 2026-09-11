@@ -71,12 +71,23 @@ export interface StartRuntimeOptions {
   /** Test seam: pino writes here instead of stdout. */
   readonly logDestination?: Parameters<typeof createLogger>[0]['destination'];
   /**
-   * The pipeline's two uncomposable collaborators (WP-15a) — the agent runner and the outbound
-   * audit sink. See `pipeline.ts`: neither has a production adapter in this build, so a process
-   * that is not handed them runs **without a pipeline** and says which piece was missing, rather
-   * than starting one that would advance tasks with no audit row and no runner.
+   * Overrides for the pipeline composition, or `null` to start no pipeline at all.
+   *
+   * **Absent is the production path and it composes the pipeline** (WP-15b). WP-15a had to take the
+   * audit sink as an argument because nothing implemented `IntegrationAuditLog`; migration `0013`
+   * and `@platform/infrastructure`'s adapters closed that, so `startRuntime()` — the call
+   * `main.ts:18` and `scripts/dev.mjs` make, with no options at all — now builds a real one. What
+   * a caller may still replace is listed on {@link PipelineComposition}: the agent runner (Q52) and
+   * the provider registry.
+   *
+   * **`null` is a seam, and it is labelled as one.** No production path passes it: `pipeline.ts`
+   * can compose from a pool alone. It exists because `sweepReadiness` — the gate that stops a
+   * partial consumer from completing another process's dispatch, and the predicate behind
+   * `/readyz`'s `dispatch` check — has no other way to be driven end-to-end once `apps/server`
+   * always registers the full handler set, and the failure it guards (a build whose registry drifts
+   * from `EVENT_CONSUMPTION`) is real. `test/e2e/pipeline/uncomposed.e2e.test.ts` is its only user.
    */
-  readonly pipeline?: PipelineComposition;
+  readonly pipeline?: PipelineComposition | null;
 }
 
 /** Build metadata; a container image sets these, a checkout has none. */
@@ -187,16 +198,15 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       // Before `worker.start()`, and that ordering is the point: the first sweep dispatches to
       // whatever is registered on the bus, so a pipeline registered afterwards would miss the
       // events the sweep had already marked handled.
-      if (options.pipeline === undefined) {
+      if (options.pipeline === null) {
+        // The labelled seam on `StartRuntimeOptions.pipeline`. Nothing in production reaches here.
         logger.warn(
-          {
-            missing: ['ClaudeRunner (Q52: no runner/launcher transport)', 'IntegrationAuditLog'],
-          },
-          'the pipeline is not composed in this process: no ticket will advance',
+          { seam: 'pipeline: null' },
+          'this process was started with the pipeline disabled: no ticket will advance, and the outbox sweep below will refuse to start because the bus is an incomplete consumer',
         );
       } else {
         const pipeline = await composePipeline({
-          composition: options.pipeline,
+          composition: options.pipeline ?? {},
           pool: database.pool,
           eventing,
           jobs: jobsRuntime.jobs,
@@ -205,6 +215,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           logger: loggerPort,
         });
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });
+        if (options.pipeline?.runner === undefined) {
+          // Named rather than defaulted: `unavailableClaudeRunner` refuses, it does not pretend.
+          logger.warn(
+            { missing: ['ClaudeRunner (Q52: no runner/launcher transport)'] },
+            'the pipeline is composed without an agent runner: gates, status mapping, the workpad and every outbound provider call run and are audited, and a stage that needs an agent fails naming Q52',
+          );
+        }
       }
 
       /**

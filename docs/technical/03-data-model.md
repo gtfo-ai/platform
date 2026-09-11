@@ -67,7 +67,48 @@
 - `cost_rollup_daily(org_id, project_id, template, stage, model, day date, mode enum(actual|estimated), runs, input_tokens, output_tokens, cache_write_5m, cache_write_1h, cache_read, usd numeric(14,6), wall_ms bigint, turns int)` PK `(project_id, day, template, stage, model, mode)` — `INSERT … ON CONFLICT DO UPDATE` on run finish; nightly recompute of yesterday.
 - `budgets(id, scope, scope_id, window, limit_usd, notify_pct int[], created_by, updated_at)`; `budget_windows(budget_id, window_start, spent_usd, notified_pct int[])` projection.
 - `human_time_entries(task_id, kind enum(review|question|approval), user_id null, started_at, ended_at, minutes)` derived from events by a projector.
-- `integration_actions(id, integration_id, task_id null, direction enum(in|out), action, payload jsonb, result jsonb, status, duration_ms, created_at)` append-only.
+- `integration_actions(id, integration_id, project_id null, task_id null, direction enum(in|out), action, payload jsonb, result jsonb, status, duration_ms, redaction_count, attempts, created_at)` append-only.
+> **Three columns added at WP-15b (migration `0013`).** `IntegrationActionEntry` (WP-07) has carried
+> `projectId`, `redactionCount` and `attempts` since the port was written, and the table created at
+> migration `0007` had no home for any of them — so the first adapter of `IntegrationAuditLog` needed a
+> migration as well as code. Each earns its column:
+> - **`project_id`** because an action is scoped to a project even when it has no task: a binding health
+>   check or an inbound normalisation belongs to a project's audit, and `task_id` is nullable precisely
+>   for those. Reconstructing it through `integrations` would be wrong — one integration serves many
+>   projects.
+> - **`redaction_count`** because it is the only signal that a row which *should* have hidden something
+>   did not (TD-012). A redactor that silently stops working writes rows that look exactly like clean
+>   ones; a zero next to a payload that carried a credential is the discrepancy an auditor can see. It is
+>   a **count on the row**, never part of an identity (the idempotency *key* is refused rather than
+>   redacted — technical/06 § "Outbound: actions").
+> - **`attempts`** because "the provider was called and it worked" and "the provider was called four
+>   times and the fourth worked" are different facts about an integration's health, and the executor's
+>   retry loop is the only place that knows.
+>
+> **`task_id` and `project_id` carry no foreign key** — `task_id`'s was dropped by the same
+> migration. An audit row commits in a transaction of its own (with its event, per BD-003) while the
+> *caller* is usually still inside one: technical/06 says actions are triggered by event handlers,
+> and the intake saga reads the repository's default branch in the same transaction that inserts the
+> task. A referential constraint refuses that row **because the caller has not committed**, making
+> the audit the thing that fails the action — measured, as an e2e that died on its first event. The
+> residual is stated: `task_id` may name a task that no longer exists, or that a rolled-back
+> transaction never created, which is still the honest record because the provider call really
+> happened. Dropping it is also what lets a project be deleted at all, since a RESTRICT from an
+> append-only table nobody may delete from is permanent. `integration_id` keeps its foreign key: a
+> binding is always committed before a call is made through it.
+>
+> Both `redaction_count` and `attempts` are `not null` **with no default**: an INSERT that omits either is
+> refused by the database rather than recorded as a zero, because "nothing was redacted" and "nobody wrote
+> the column" must not be spelled the same way (standing rule 18). `platform_table_policy` keeps the table
+> `append_only` on `created_at`, unchanged.
+
+- `integration_idempotency(storage_key pk, integration_id, action, result jsonb, created_at)` — the
+  `IdempotencyStore` port's table (WP-15b). `storage_key` is `idempotencyStorageKey(scope)`, the one
+  composition of `(integration_id, action, key)` the port exports so no adapter invents its own; the
+  parts are stored beside it so an operator can read the table without decoding the key. `result` is
+  `jsonb not null` and holds the **redacted** remembered result, so a JSON `null` (a legitimate remembered
+  value) stays distinguishable from "never seen", which is the absence of the row. Not append-only and not
+  partitioned: nothing expires a key today, and when something does it will delete rows.
 
 ### Knowledge and code (derived; rebuildable)
 - `kb_documents(id, project_id, path, commit_sha, type, kind, status, confidence, scope, paths text[], trigger text, expires date null, last_confirmed date null, frontmatter jsonb, content_hash, tokens int, updated_at)` — `UNIQUE(project_id, path)`; GIN on `paths`.

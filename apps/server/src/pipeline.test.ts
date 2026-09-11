@@ -6,8 +6,43 @@
  * at once, and a unit test of it would be a test of a mock. What is unit-testable is what it
  * *decides*: where a git binding's repository path comes from, and what a project's settings are.
  */
+import type { RunSpec } from '@platform/application';
 import { describe, expect, it, vi } from 'vitest';
-import { createProjectSettingsPort, repositoryPathOf } from './pipeline.js';
+import {
+  createProjectSettingsPort,
+  RunnerUnavailableError,
+  repositoryPathOf,
+  unavailableClaudeRunner,
+} from './pipeline.js';
+
+describe('unavailableClaudeRunner', () => {
+  /**
+   * The runner every production process gets until Q52 is answered, and the reason it is a
+   * *refusal* rather than a null object.
+   *
+   * A runner that returned a handle whose outcome resolved to a failed `RunOutcome` would be
+   * kinder and much worse: the stage executor would record `run.failed` and the interpreter would
+   * transition on a verdict for a run that was never attempted — a fabricated fact, and the
+   * fail-open direction of standing rule 20. Throwing keeps the failure inside the
+   * `stage.execute` job that asked for it.
+   */
+  it('throws, naming the stage and the open question, instead of faking an outcome', () => {
+    const runner = unavailableClaudeRunner();
+    let thrown: unknown;
+    try {
+      runner.start({ stage: 'implementation' } as RunSpec);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(RunnerUnavailableError);
+    expect((thrown as Error).message).toContain('implementation');
+    expect((thrown as Error).message).toContain('Q52');
+  });
+
+  it('still names the failure when the spec has no stage', () => {
+    expect(() => unavailableClaudeRunner().start({} as RunSpec)).toThrow(RunnerUnavailableError);
+  });
+});
 
 describe('repositoryPathOf', () => {
   it('reads the path a provider addresses a repository by, from every spelling of the url', () => {
