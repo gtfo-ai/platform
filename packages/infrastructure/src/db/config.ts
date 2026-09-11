@@ -82,7 +82,16 @@ export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 
 export const DATABASE_CONFIG_DEFAULTS = {
   appRole: 'platform_app',
-  poolMax: 10,
+  /**
+   * 13 at WP-15b, from 10.
+   *
+   * `apps/server`'s `requiredPoolConnections` refuses to start below its own floor, and that floor
+   * rose to **11** for `ROLE=all` when an outbound provider call started writing an audit row from
+   * inside a dispatch handler's transaction — a third connection per in-flight dispatch. 10 would
+   * therefore no longer boot. 13 keeps the two connections of slack the previous default carried
+   * over its floor of 8; it is a floor plus slack, not a capacity plan, and `.env.example` says so.
+   */
+  poolMax: 13,
   connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;

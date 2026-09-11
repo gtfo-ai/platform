@@ -97,6 +97,16 @@
 > append-only table nobody may delete from is permanent. `integration_id` keeps its foreign key: a
 > binding is always committed before a call is made through it.
 >
+> **So every reader of this table `LEFT JOIN`s `tasks` and `projects`, and must render a row whose
+> task or project is missing rather than dropping it.** An inner join silently hides exactly the
+> rows an audit exists for — an action attributed to a task that was rolled back, or to a project
+> somebody has since deleted — and "the audit shows nothing" is indistinguishable from "nothing
+> happened". This is written here rather than only in the migration because **no reader exists
+> today**: there is no route, no projection and no query over `integration_actions` outside the
+> writer and its tests, so the whole cost of the trade falls on whoever builds the audit view
+> (`GET /api/org/audit`, WP-19's audit and health projections), and they will read this document
+> and not a commit message.
+>
 > Both `redaction_count` and `attempts` are `not null` **with no default**: an INSERT that omits either is
 > refused by the database rather than recorded as a zero, because "nothing was redacted" and "nobody wrote
 > the column" must not be spelled the same way (standing rule 18). `platform_table_policy` keeps the table

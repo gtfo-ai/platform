@@ -130,14 +130,25 @@ describe('loadServerConfig', () => {
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
     const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });
-    // 2 × 2 + 1 for dispatch, plus pg-boss, the pipeline's two workers, HTTP and maintenance.
+    // (2 + 1) × 2 + 1 for dispatch — the dispatcher's own transaction, the handler's, and the
+    // audit write WP-15b nests inside the handler's — plus pg-boss, the pipeline's two workers,
+    // HTTP and maintenance.
     expect(requiredPoolConnections(config)).toBe(
-      5 +
+      7 +
         POOL_RESERVATIONS.jobs +
         POOL_RESERVATIONS.pipeline +
         POOL_RESERVATIONS.http +
         POOL_RESERVATIONS.maintenance,
     );
+  });
+
+  it('scales the audit connection with dispatch concurrency rather than reserving one', () => {
+    // The shape of the term, not its value: a handler that calls a provider inside its transaction
+    // holds a third connection **per in-flight dispatch**, so doubling the concurrency must cost
+    // three more, not two. A flat reservation passes the test above and fails this one.
+    const one = load({ APP_DISPATCH_MAX_CONCURRENCY: '1', APP_DB_POOL_MAX: '30' });
+    const three = load({ APP_DISPATCH_MAX_CONCURRENCY: '3', APP_DB_POOL_MAX: '30' });
+    expect(requiredPoolConnections(three) - requiredPoolConnections(one)).toBe(6);
   });
 
   it('asks for less when the role runs fewer workloads', () => {
@@ -160,12 +171,12 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    expect((thrown as UndersizedPoolError).required).toBe(10);
+    expect((thrown as UndersizedPoolError).required).toBe(11);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 
   it('accepts the documented default pool for the default concurrency', () => {
-    // .env.example ships APP_DB_POOL_MAX=10 and APP_DISPATCH_MAX_CONCURRENCY=1; if this ever fails,
+    // .env.example ships APP_DB_POOL_MAX=13 and APP_DISPATCH_MAX_CONCURRENCY=1; if this ever fails,
     // the shipped defaults no longer start.
     expect(() => load()).not.toThrow();
   });

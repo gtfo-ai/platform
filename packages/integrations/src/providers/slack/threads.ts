@@ -12,12 +12,19 @@
  * ## The durable half is the executor's, and that is deliberate
  *
  * The default implementation is in memory, so a restart forgets. That is a **divergence, written
- * down** (see `provider.ts`), and it is not the whole story: the platform's durable answer to "did
- * I already do this" is `IntegrationActionExecutor`'s idempotency store, and a `ThreadRef` is
- * JSON, so `post_task_thread` carries an `IdempotencyPlan` keyed by task. A second call after a
- * restart replays the stored `ThreadRef` and issues **zero** HTTP requests — asserted in
- * `test/contract/integrations/slack-executor.contract.test.ts` against a *fresh* adapter, which
- * is the only version of that assertion the in-memory map cannot fake.
+ * down** (see `provider.ts`), and the platform's durable answer to "did I already do this" is
+ * `IntegrationActionExecutor`'s idempotency store. A `ThreadRef` is JSON, so the executor *can*
+ * replay one: given an `IdempotencyPlan` keyed by task, a second call after a restart returns the
+ * stored ref and issues **zero** HTTP requests, which
+ * `test/contract/integrations/slack-executor.contract.test.ts` asserts against a *fresh* adapter —
+ * the only version of that assertion the in-memory map cannot fake.
+ *
+ * **The plan is the caller's, and no production caller writes one** (corrected at WP-15b). This
+ * docblock and `provider.ts` both said `post_task_thread` "carries" one; it does not —
+ * `provider.ts`'s `send({ action: 'post_task_thread' })` attaches no `idempotency`, and the plan in
+ * that contract test is built by the test. So the durable half is *available* and unused, and a
+ * restarted process really would open a second thread. Whoever gives the action a plan owns the
+ * assertion; `slack/digest.ts` is the only place in this repository that ships one.
  *
  * The interface is exported so WP-15 can supply a database-backed one without touching the
  * adapter: it is the seam, not an implementation detail.

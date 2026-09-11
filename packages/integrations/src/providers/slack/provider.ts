@@ -44,12 +44,15 @@
  *
  *  1. **`postTaskThread`'s idempotency is per adapter instance.** The port promises one thread per
  *     task; Slack will happily start a second. The adapter remembers in a `SlackThreadDirectory`,
- *     which is in memory by default, so a restarted process would open a second thread. The
- *     **durable** half is the executor's idempotency store: `post_task_thread` carries an
- *     `IdempotencyPlan` keyed by task and a `ThreadRef` is JSON, so a second call replays the
- *     stored ref and issues zero HTTP requests — asserted against a *fresh* adapter, which is the
- *     only version of that assertion an in-memory map cannot fake. `SlackThreadDirectory` is
- *     exported so WP-15 can supply a database-backed one.
+ *     which is in memory by default, so a restarted process **does** open a second thread. The
+ *     durable half is the executor's idempotency store and it is *available*, not wired: a
+ *     `ThreadRef` is JSON, so a second call replays the stored ref and issues zero HTTP requests
+ *     given an `IdempotencyPlan` — asserted against a *fresh* adapter, which is the only version
+ *     of that assertion an in-memory map cannot fake. **The plan belongs to the caller and no
+ *     production caller writes one** (corrected at WP-15b: this entry and `threads.ts` both said
+ *     the action "carries" one, and `send({ action: 'post_task_thread' })` attaches none — the
+ *     plan in that contract test is the test's). `SlackThreadDirectory` is exported so a later WP
+ *     can supply a database-backed one.
  *  2. **A `ThreadRef`/`MessageRef` carries no permalink.** `chat.postMessage` returns `channel` and
  *     `ts` and no URL; a permalink is a second call (`chat.getPermalink`) per message. The port
  *     allows `null` and `null` is what "unknown" means, so the adapter does not assemble a URL

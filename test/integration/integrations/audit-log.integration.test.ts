@@ -294,6 +294,44 @@ describe('redaction_count, asserted from both sides', () => {
   });
 });
 
+describe('the idempotency store keeps the first result, not the last', () => {
+  beforeEach(truncate);
+
+  it('answers a raced second put with the result the first one stored', async () => {
+    /**
+     * The invariant `postgres-idempotency-store.ts` documents, and which nothing asserted:
+     * `on conflict do nothing` rather than `do update`. Measured before this test existed —
+     * flipping it to `do update set result = excluded.result` left the whole integration file and
+     * the whole contract file green, while the *fake's* opposite behaviour (a second `put` throws)
+     * **is** asserted in `memory-integrations.test.ts`. That is standing rule 1 inverted: the fake
+     * was held to a promise the real adapter was not, so the real one could drift into being the
+     * kinder of the two.
+     *
+     * It cannot live in the shared suite, because the two implementations legitimately differ here
+     * (the fake throws, which is the stricter direction a fake is allowed) — so it is a
+     * Postgres-only case, and the fake's divergence register points at it.
+     *
+     * Why *first* rather than last: the executor only ever writes a key it has just missed, so a
+     * conflict means two callers raced through one slot. The winner's result is the one already
+     * handed back, and "a replay returns the first call's result" would otherwise depend on who
+     * committed last.
+     */
+    const store = integrationAdapters.createPostgresIdempotencyStore({ sql: pool });
+    const scope = { integrationId, action: 'add_comment', key: 'marker-raced' };
+
+    await store.put(scope, { comment_id: 'first' });
+    await store.put(scope, { comment_id: 'second' });
+
+    expect(await store.get(scope)).toEqual({ comment_id: 'first' });
+    const { rows: stored } = await pool.query<{ count: string }>(
+      'select count(*)::text as count from integration_idempotency',
+    );
+    // And one slot, not two: the conflict was on the key, so the assertion above is about which
+    // write won rather than about which row was read back.
+    expect(stored[0]?.count).toBe('1');
+  });
+});
+
 describe('the columns migration 0013 added', () => {
   beforeEach(truncate);
 

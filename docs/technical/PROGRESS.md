@@ -4093,6 +4093,47 @@ outcome, because a fabricated outcome would make the interpreter transition on a
 never happened — the fail-open direction of rule 20. A task that reaches an agent stage therefore stops
 there, in its own job, loudly. Nothing reaches one today: there is no ingress until WP-15c.
 
+**WP-15b review round 1 (REQUEST_CHANGES) — two majors, both about something the WP created.**
+
+1. **The idempotency store's documented invariant was asserted by nothing.** `on conflict do nothing`
+   keeps the *first* result, and flipping it to `do update set result = excluded.result` left the
+   integration file 18/18 and the contract file 11/11 green — while the **fake's** opposite behaviour
+   (a second `put` throws) *was* asserted. Rule 1 inverted: the fake was held to a promise the real
+   adapter was not, so the real one could drift into being the kinder of the two. Closed by a
+   Postgres-only case (it cannot go in the shared suite: the two implementations legitimately differ
+   here, and the fake's stricter answer is the allowed direction) — *"answers a raced second put with
+   the result the first one stored"*, which dies under the mutation.
+2. **The pool floor did not count the connection this WP nests inside a dispatch.** `CONNECTIONS_PER_DISPATCH`
+   is 2 — the dispatcher's transaction plus the handler's — and an audit write opens a **third**,
+   because three handlers call a provider from inside `context.scope.tx` (`saga.ts:215` after
+   `store.tasks.insert`, `workpad.ts:168`, and the status mapping beside it) and
+   `createPostgresIntegrationAuditLog` takes its own `pool.connect()`. Checked rather than accepted:
+   the two **job workers** make their provider calls *outside* their transactions
+   (`jobs.ts:194`, `jobs.ts:306`), so that term stays flat at 2 while the audit term is
+   proportional. Floor for `ROLE=all`, N=1: `(2+1)×1+1 + 2 + 2 + 2 + 1 = **11**`, so the shipped
+   default rose 10 → **13** (the same two connections of slack the old default carried over its
+   floor of 8). `config.ts` now reads `CONNECTIONS_PER_DISPATCH` instead of a literal `2` (rule 41),
+   and the arithmetic is corrected in all four places that state it: `config.ts`,
+   `UndersizedPoolError`'s message, `pipeline/runtime.ts`'s docblock and `.env.example` (rule 63).
+   A new named test asserts the **shape** rather than the value — *"scales the audit connection with
+   dispatch concurrency rather than reserving one"*, which a flat reservation fails. **No exhaustion
+   measurement exists and none was taken**: generating load on this machine is forbidden (rule 66)
+   and a margin quoted without its load is not a number (rule 64). This is worst-case arithmetic,
+   which is what a start-up refusal should rest on.
+3. **The FK residual was honest and incomplete.** technical/03 now says that every reader
+   `LEFT JOIN`s and must render a row whose task or project is missing — an inner join hides exactly
+   the rows an audit exists for, and "the audit shows nothing" then reads like "nothing happened".
+   It is in the data model rather than only in the migration because **no reader exists today**, so
+   the whole cost falls on whoever builds `GET /api/org/audit`.
+4. Minor: `test/e2e/support/instance.ts`'s docblock still claimed an instance runs without a pipeline
+   when nothing supplies a runner — false by this WP's own change.
+5. Nit, pre-existing and **wider than reported**: `slack/threads.ts` and `provider.ts` both claimed
+   `post_task_thread` "carries an `IdempotencyPlan`". It does not — `send({ action:
+   'post_task_thread' })` attaches none, and the plan in `slack-executor.contract.test.ts` is built
+   **by the test**. So the durable half is *available and unused*, and a restarted process really
+   does open a second thread. Both docblocks now say that. Rule 44 on a claim that was really a
+   statement about a fixture.
+
 **Mutation checks.** Nine guards, each with the named test that dies: `redaction_count` written verbatim
 (unit *"writes every column the entry carries…"*, integration *"stores a non-zero redaction count…"* and
 *"records a non-zero count, and no credential…"*); the conflict retry (unit *"re-reads the sequence and

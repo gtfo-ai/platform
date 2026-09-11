@@ -16,6 +16,7 @@
  *    HTTP process itself needs.
  */
 import process from 'node:process';
+import { CONNECTIONS_PER_DISPATCH } from '@platform/application';
 import { db, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
 import { ROLES, roleCapabilities } from './role.js';
@@ -218,14 +219,47 @@ export const POOL_RESERVATIONS = {
    * its two, and the composition root runs one of each (`stageConcurrency: 1`). It is counted here
    * because every `worker` role now composes the pipeline — before WP-15b a process that was not
    * handed an audit sink ran none, so the floor did not have to include it.
+   *
+   * It is a **flat** term and not a per-dispatch one because both workers make their provider
+   * calls *outside* a transaction of their own: `jobs.ts:194` evaluates a gate after its load
+   * transaction has closed, and `jobs.ts:306` reads the merge request's discussions after
+   * `reviewWindowHandler`'s has. An audit write started from either therefore replaces the
+   * worker's connection rather than nesting inside it.
    */
   pipeline: 2,
+  /**
+   * The audit write a **dispatch** nests inside the handler's transaction (WP-15b).
+   *
+   * `CONNECTIONS_PER_DISPATCH` is 2 — the dispatcher's own transaction plus the handler's — and
+   * that was the whole of it until an outbound provider call started writing an
+   * `integration_actions` row. `createPostgresIntegrationAuditLog` opens a transaction of its own
+   * (`postgres-unit-of-work.ts` takes a second `pool.connect()`), and three handlers call a
+   * provider **from inside `context.scope.tx`**: `saga.ts:215` (the intake default-branch read,
+   * after `store.tasks.insert` on the same scope), `workpad.ts:168` and the status mapping beside
+   * it. So an in-flight dispatch peaks at **three** connections, not two, and the term is
+   * proportional to `APP_DISPATCH_MAX_CONCURRENCY` rather than flat.
+   *
+   * **This exists because of a defect that is not the pool's**: CLAUDE.md's shape is
+   * *transaction / no transaction / transaction*, and a handler holding a pooled connection across
+   * provider latency breaks it. The defect is filed; until it is fixed the arithmetic has to
+   * describe the code that exists, and when it is, this term goes to 0 rather than being quietly
+   * absorbed.
+   *
+   * **What is not claimed**: no measurement of exhaustion under load exists, and none was taken —
+   * generating load on this machine is forbidden (rule 66), and a margin quoted without the load it
+   * was measured at is not a number (rule 64). This is arithmetic about the worst case, which is
+   * what a start-up refusal should be built on.
+   */
+  auditPerDispatch: 1,
 } as const;
 
 /** The smallest `APP_DB_POOL_MAX` that can serve this configuration's workloads. */
 export const requiredPoolConnections = (config: ServerConfig): number => {
   const capabilities = roleCapabilities(config.role);
-  const dispatcher = capabilities.worker ? 2 * config.dispatch.maxConcurrency + 1 : 0;
+  // `CONNECTIONS_PER_DISPATCH` rather than a literal 2: `createEventing` enforces its own floor
+  // from that constant, and two readings of one number drift apart (standing rule 41).
+  const perDispatch = CONNECTIONS_PER_DISPATCH + POOL_RESERVATIONS.auditPerDispatch;
+  const dispatcher = capabilities.worker ? perDispatch * config.dispatch.maxConcurrency + 1 : 0;
   const jobsReserve = capabilities.worker ? POOL_RESERVATIONS.jobs : 0;
   const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
   const httpReserve = capabilities.api ? POOL_RESERVATIONS.http : 0;
@@ -239,7 +273,7 @@ export class UndersizedPoolError extends Error {
 
   constructor(poolMax: number, required: number, role: string) {
     super(
-      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: the dispatcher holds 2 × APP_DISPATCH_MAX_CONCURRENCY + 1, and pg-boss, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
+      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds three at once (its own transaction, the handler's, and the audit row an outbound provider call writes from inside the handler's), the sweep needs one to read with, and pg-boss, the pipeline's two job workers, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
     );
     this.name = 'UndersizedPoolError';
     this.poolMax = poolMax;
