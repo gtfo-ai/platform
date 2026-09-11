@@ -68,8 +68,13 @@ without a published port, which is what technical/05's network policy assumes.
 > --dns-search example.invalid        nslookup rc=1   getent hosts rc=0  172.27.0.2
 > ```
 >
-> The Linux side of this is not a claim you have to take: CI run **`34580312845`** is the first
-> all-green run on `main` since WP-14, and it is the one that carries the rewritten probe.
+> The Linux side of this is not a claim you have to take: CI run **`34582432776`** is all-green
+> including `e2e-fake-claude`, and it is the one that carries this probe as it now stands. (An
+> earlier draft of this paragraph cited `34580312845` and called it "the first all-green run on
+> `main`". Both halves were wrong: `gh run view` reports its `headBranch` as
+> `ci-fix/e2e-linux-ctl`, so it was the first all-green run **on the fix branch, through the pull
+> request** — `main` has had none since WP-14 — and it predates the bounded DNS probe, so it was
+> not evidence for the probe it was cited for.)
 >
 > `getent hosts` is the probe that answers the question asked, and it is what
 > `docker-workspace.e2e.test.ts` uses now — with the address asserted, not just the status, so the

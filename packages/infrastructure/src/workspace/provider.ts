@@ -870,10 +870,52 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * could not start the container at all. The mitigation is that neither script takes a path from
    * anywhere: the run id is `assertRunId`-ed before it is interpolated.
    *
-   * Getting this wrong is silent. `#teardown` runs both steps through `step()`, which logs and
-   * carries on, so the only symptom is the run token staying on the shared control volume for
-   * ever — and nothing else collects it, since `purgeExpired` lists *volumes* by `role=workspace`
-   * and never looks inside this one (standing rule 60, one level down).
+   * **One argument, never a list.** The first draft of step 1 deleted with `rm -rf $dir/*`, and an
+   * agent defeated it by making the argument list too long — measured, 8 000 files of
+   * 240-character names: `/bin/sh: rm: Argument list too long`, the step exiting **0**, 8 001
+   * entries and the token still there, and step 2 then exiting 1 because root cannot unlink inside
+   * a `0755` directory it does not own.
+   *
+   * `find $dir -mindepth 1 -maxdepth 1 -exec rm -rf {} +` was the obvious repair and it is also
+   * wrong, and so is a bare `rm -rf $dir`: **deleting invalidates the directory cursor the walk is
+   * reading**, so one pass skips entries. Measured on the same 8 000-file case: `find -exec` left
+   * **3 944 of 8 002** and `rm -rf $dir` left **3 991**, neither of them reporting an error. A
+   * named volume happens not to show it and virtiofs does, which is the usual shape (rule 69).
+   *
+   * So the removal is a **bounded retry** with the emptiness test as its condition, `rm -rf $dir`
+   * as the work — one argument, never a list, so no `ARG_MAX` — and the same test again as the
+   * verdict. Each pass removes roughly half, so the bound of 20 covers about a million entries;
+   * past it the step fails rather than looping. Measured: 8 passes on a bind-backed volume, 1 on a
+   * named one, empty on both, and a no-op on a directory that is already gone.
+   *
+   * **The last line is the verdict, never `exit 0`.** `rm -rf $dir` here ends non-zero by design
+   * (its last act is unlinking `$dir`, which needs write on `/ctl` — step 2's job), and busybox
+   * `find -exec … +` does not propagate a failing `rm` either, so the only honest answer to "did
+   * this work" is to look. With the test, the 8 000-file case that used to exit 0 exits 1, and
+   * because `#helper` throws on a non-zero exit, step 2 is skipped rather than run against a
+   * directory step 1 did not empty. A step that cannot fail is a step whose failure branch nobody
+   * executes (rule 67).
+   *
+   * The `chmod -R` is what makes the locked case work — an agent can `chmod 000` the directory or
+   * anything under it, and `rm` does not chmod anything. It runs **before the first emptiness
+   * question** as well as inside the loop, because an unreadable directory answers `ls -A` with
+   * nothing: ask first and a `chmod 000` reads as "already empty" and skips the removal, which is
+   * how the first draft of the loop passed the flood case and failed the lock case. Its own exit
+   * status is ignored on purpose: on a bind-backed volume it reports `Invalid argument` for the
+   * shim's Unix socket (measured, and it carries on), which is not a reason to abandon the work.
+   *
+   * **Both failures are silent to the caller, and they leave different things behind.** `#teardown`
+   * runs this through `step()`, which logs and carries on, and nothing retries:
+   *
+   *  - step 1 fails → the whole directory stays, **run token included**, which is the leak this
+   *    branch exists to close;
+   *  - step 1 succeeds and step 2 fails → the token is gone and an **empty `0755` directory**
+   *    stays, which is a name and a timestamp rather than a credential.
+   *
+   * Neither is collected later: `purgeExpired` lists *volumes* by `role=workspace` and never looks
+   * inside this one (standing rule 60, one level down). The two are distinguishable in the log by
+   * which helper is named, and `docker-workspace.e2e.test.ts` asserts the `control-dir` step is not
+   * among the failed ones — which is the only way either becomes visible from outside.
    */
   async #removeControlDirectory(runId: string): Promise<void> {
     const id = assertRunId(runId);
@@ -883,14 +925,27 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     await this.#helper({
       name: `ctlempty-${id}`,
       image: this.#images.git,
-      // Guarded on existence and ended with `exit 0`, because `destroy` is idempotent and a
-      // directory that is already gone is a success, not a failure.
+      // Guarded on existence, because `destroy` is idempotent and a directory that is already
+      // gone is a success — an `if` whose condition is false exits 0 on its own, which is why
+      // there is no `exit 0` to end this: the emptiness test is the verdict.
       script: [
         `if [ -e ${dir} ]; then`,
-        `  chmod -R u+rwX ${dir} && rm -rf ${dir}/..?* ${dir}/.[!.]* ${dir}/*`,
-        `  chmod 755 ${dir}`,
+        // Before the first question, not only inside the loop: an unreadable directory answers
+        // `ls -A` with nothing, so a `chmod 000` from the agent would read as "already empty" and
+        // skip the removal entirely.
+        `  chmod -R u+rwX ${dir}`,
+        '  n=0',
+        `  while [ -e ${dir} ] && [ -n "$(ls -A ${dir} | head -c 1)" ]; do`,
+        '    n=$((n+1))',
+        '    if [ $n -gt 20 ]; then break; fi',
+        `    chmod -R u+rwX ${dir}`,
+        `    rm -rf ${dir}`,
+        '  done',
+        `  if [ -e ${dir} ]; then`,
+        `    chmod 755 ${dir}`,
+        `    test -z "$(ls -A ${dir} | head -c 1)"`,
+        '  fi',
         'fi',
-        'exit 0',
       ].join('\n'),
       mounts,
       user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,

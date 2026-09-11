@@ -360,6 +360,30 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     // Load-bearing, and the step the first draft of this left out: uid 0 cannot look inside a
     // `0700` directory it does not own, so step 2 exits 1 on a named volume without this line.
     expect(unlock).toContain(`chmod 755 /ctl/${FIXTURE_RUN_ID}`);
+    // **One argument, never a list.** The first draft deleted with `rm -rf $dir/*`, and an agent
+    // defeated reclamation by making the argument list too long: measured, 8 000 files of
+    // 240-character names gave `rm: Argument list too long`, exit **0**, and the token still on
+    // the shared volume. `find … -exec rm -rf {} +` was the obvious repair and is also wrong —
+    // `find` reads the directory while `rm` empties it and 3 944 of 8 002 entries survived, with
+    // no error from either program. `rm -rf $dir` is one argument and one walker; it is expected
+    // to fail on its last act, unlinking the directory itself, which is step 2's job.
+    expect(unlock).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}\n`);
+    expect(unlock).not.toMatch(/rm -rf \S*\*/);
+    expect(unlock).not.toContain('find ');
+    // And it retries, because a single pass is not enough either: deleting invalidates the
+    // directory cursor the walk is reading, so `find -exec` left 3 944 of 8 002 entries and a bare
+    // `rm -rf $dir` left 3 991, neither reporting an error. Bounded, so a pathological directory
+    // fails the step instead of looping: 8 passes were needed on a bind-backed volume, 1 on a
+    // named one.
+    expect(unlock).toContain('while [ -e ');
+    expect(unlock).toContain('if [ $n -gt 20 ]; then break; fi');
+    // **And the emptiness test is the verdict, not `exit 0`.** `rm -rf $dir` always ends non-zero
+    // here by design, and busybox `find -exec … +` does not propagate a failing `rm` either, so
+    // and `#helper` throws on a non-zero exit, which is what keeps step 2 from running against a
+    // directory step 1 did not empty (standing rule 67: a step that cannot fail has a failure
+    // branch nobody executes).
+    expect(unlock).toContain(`test -z "$(ls -A /ctl/${FIXTURE_RUN_ID} | head -c 1)"`);
+    expect(unlock.trimEnd().endsWith('fi')).toBe(true);
     expect((remove?.body.Cmd ?? []).join('\n')).toBe(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
 

@@ -318,6 +318,51 @@ describe('the workspace lifecycle against a real daemon', () => {
       .map((entry) => entry.fields['step']);
     expect(failed).not.toContain('control-dir');
   }, 180_000);
+
+  /**
+   * The other way an agent defeats reclamation: not by locking the directory, by **filling it**.
+   *
+   * Step 1 used to empty the directory with `rm -rf <dir>/*`, and a glob is an argument list.
+   * Measured on a named volume, 8 000 files of 240-character names — about 1.9 MB of argv against
+   * a ~2 MB `ARG_MAX`: `/bin/sh: rm: Argument list too long`, the helper exiting **0**, 8 001
+   * entries left and the token among them, and `ctlrm` then exiting 1 because root cannot unlink
+   * inside a `0755` directory it does not own. Silent, and the run token stays on the shared
+   * volume — the exact thing this branch exists to close.
+   *
+   * The count is the point of the case, so it is a constant with its arithmetic rather than a
+   * round number: below the cliff this case passes against the defect.
+   */
+  it('destroy reclaims the control directory even after the agent floods it past ARG_MAX', async () => {
+    const { handle } = await startRun();
+    // 8 000 x 240 characters is ~1.9 MB of argv, against a ~2 MB ceiling. Cheap to make (file
+    // creation, not CPU) and it is the smallest shape that crosses it with a legal filename.
+    const flood = await probeUnderRunContainerConfig(
+      fixture.engine,
+      handle.containerId,
+      [
+        'n=$(printf "%0.sx" $(seq 1 240))',
+        'i=0',
+        'while [ $i -lt 8000 ]; do : > "/ctl/$n$i"; i=$((i+1)); done',
+        'ls -A /ctl | wc -l | sed "s/^/entries=/"',
+      ].join('\n'),
+      { user: '1000:1000' },
+    );
+    // At least the 8 000, plus whatever the run legitimately put there (`token`, and the shim's
+    // `ctl.sock`) — counted rather than pinned, because the exact figure is the launcher's
+    // business and this case is about crossing the cliff.
+    const entries = Number(/entries=(\d+)/.exec(flood.output)?.[1] ?? '0');
+    expect(entries).toBeGreaterThanOrEqual(8001);
+    const before = fixture.warnings.length;
+    await fixture.provider.destroy(handle);
+    expect(await controlVolumeListing()).not.toContain(handle.runId);
+    // Loudly, if at all: the emptiness test is the helper's verdict, so a step that deleted
+    // nothing fails here instead of reporting success.
+    const failed = fixture.warnings
+      .slice(before)
+      .filter((entry) => entry.message === 'workspace teardown step failed')
+      .map((entry) => entry.fields['step']);
+    expect(failed).not.toContain('control-dir');
+  }, 180_000);
 });
 
 describe('the hardening flags, as the daemon recorded them and as the kernel enforces them', () => {

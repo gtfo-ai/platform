@@ -159,6 +159,9 @@ const imageTagsOf = (images: Readonly<Record<string, unknown>>): string[] =>
     // directory. Derived rather than listed beside it (standing rule 7): a second copy of the tags
     // is a copy that can drift, and a field added to `WorkspaceImages` later is ensured the day it
     // is added instead of the day CI fails on a clean daemon.
+    // Every string field here is a tag today and `runtimeSourceDir` is the one exception. A future
+    // required string field that is *not* a tag would be `docker pull`-ed instead of rejected, so
+    // exclude it here when one is added rather than discovering it from the pull's error.
     .filter(([key, value]) => typeof value === 'string' && key !== 'runtimeSourceDir')
     .map(([, value]) => value as string);
 
