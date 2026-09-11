@@ -793,6 +793,22 @@ ci-fix notes. First green run: **`34580312845`**, all eleven jobs. Left behind b
   with no inventory, and compose is what all five adapters build. `exactSecretRedactor` now refuses a
   duplicate at construction; the compose gap is **asserted by a named test** rather than closed. Closing it
   needs an inventory on the port.
+- ~~**A one-way digest for inbound delivery keys**~~ — **CLOSED by architect ruling at WP-15c** (recorded in
+  full under "Architect ruling (WP-15c)" below). The answer is **(a)**: `inbox.delivery_id` stays the
+  adapter's redacted plaintext key, and the digest is closed rather than deferred. Two of the four objections
+  this bullet recorded were **wrong**, and the ruling says so: `APP_SECRET_KEY` is **unplumbed, not
+  unavailable** (`apps/server/src/config.ts:353` reads it; `apps/server/src/pipeline.ts:269` already calls
+  `deriveSecretKey(options.secretKey)`), so a keyed digest was a parameter away; and the collapse residual is
+  **unreachable on both shipped providers** by charset and vendor-generation rather than by "no instance on
+  disk" — every GitLab key part is vendor-generated except the push `ref`, and `git-check-ref-format` forbids
+  `[` and `:`, both of which the placeholder contains, while Jira's whole key is one vendor identifier header.
+  What decided it is not either of those: **(a)'s safety property is a post-condition of the redactor and
+  holds on every binding unconditionally**, while **(b)'s weakness is conditional on deployment configuration
+  an operator cannot see** — so (a) does not have the defect it was being preferred for avoiding. The ruling
+  also keeps `delivery-key-redaction.test.ts` **unchanged** and explains why that is the load-bearing half:
+  `expect(key).toContain(MARKER)` fails both when an adapter forgets to redact and when a new provider keys a
+  field its recipe does not plant into, whereas the two `not.toContain` halves are satisfied by *any* digest,
+  including one over the empty string. Original bullet, for the record:
 - **A one-way digest for inbound delivery keys** (rule 70's third option). Measured available and deliberately
   not taken: unkeyed it does not store "no secret" at `MIN_SECRET_LENGTH` 8; the only key an inbound adapter
   holds is the binding's webhook secret, `string | null` on GitLab, so the property would hold on some
@@ -4129,6 +4145,57 @@ fills **10 707 of 12 000** with six tier-1 documents, top score **0.718** — ab
 correct answer at 0.500. The 87 %-padding pack is still reachable. The remedy needs a corpus-derived
 signal (IDF, or a different `ts_rank` normalisation) and is a product decision filed outside this
 work package; the sentence now says what was closed and what was not.
+
+### Architect ruling (WP-15c) — the inbound delivery key, and the column nobody was looking at
+
+**Asked before WP-15c wrote its first `delivery_id`**, because backlog entry 0 named WP-15c as the work
+package that owes the answer. Three candidates were on the table: (a) keep the adapter's redacted plaintext
+key with its stated collision residual, (b) a one-way digest, (c) something else.
+
+**Ruling: (a). The digest is closed, not deferred.** The reasoning that decides it is *not* the residual's
+reachability, which is where I expected the argument to be. It is that **the two candidates are conditional
+on different things**: (a)'s safety property — no injected secret in stored state — is a **post-condition of
+the redactor**, so it holds on every binding unconditionally, and only *distinctness* is conditional, on
+delivery **content**, and a violation additionally requires the platform's own credential to be verbatim in
+provider text already. (b)'s weakness is conditional on **deployment configuration an operator cannot see**.
+A property that holds on some bindings and silently weakens on others was the stated objection to (b) — the
+ruling checked whether (a) had the same defect and found it does not.
+
+**It corrected the ledger twice, which is why it was worth asking.** `APP_SECRET_KEY` is **unplumbed, not
+unavailable** — `apps/server/src/config.ts:353` reads it and `apps/server/src/pipeline.ts:269` already calls
+`deriveSecretKey(options.secretKey)` — so "a keyed digest is unavailable" was false and is struck; what
+survives against (b) is operability (an opaque id in a table technical/03 calls *"dedup **and raw audit**"*)
+and **rotation coupling**, since `APP_SECRET_KEY` also wraps `secrets`, so rotating it would silently
+un-match every stored `delivery_id`. And the residual is **unreachable on both shipped providers** by charset
+and vendor-generation, which is a stronger statement than "no instance on disk" and should be written that
+way.
+
+**The finding the question was not about, and the reason this ruling earns its place.** *"This question was
+spent on the one column already guaranteed clean."* `inbox(headers, payload)` has existed since
+`0005_events.sql:113`, **TD-012's write list does not name `inbox`**, and technical/06 says the row *"stores
+the raw payload (audit)"* — while **GitLab's legacy scheme sends the binding's webhook secret as plaintext in
+`X-Gitlab-Token`**. An ingress that stores the raw delivery therefore writes a live credential to the
+database on **every** delivery, with no attacker and nothing planted. Also: **`inbox` has no
+`redaction_count` column**, which WP-15c's plan row requires — it owes migration **0014**.
+
+**What the `inbox` row stores.** `delivery_id` = the port's redacted key verbatim. `headers` and `payload` =
+`redactor.redactJson(...)` of the raw delivery, applied **after** `verify` and **after** the key is computed.
+`redaction_count` = the summed count over all three redactions on the row — **not** the key's alone, which is
+~always 0 and therefore a dead signal. Stated cost: a redacted `payload` can no longer be re-verified against
+its signature, so the verdict must be persisted rather than recomputed.
+
+**The accepted failure mode, in the ledger's form.** *When* a binding's own credential appears verbatim in a
+delivery's keyed fields and a later, genuinely different delivery differs only inside it, *the platform*
+stores one `delivery_id`, keeps the first and drops the second without a trace, *and that is the cost* —
+narrower than the harm of failing closed. Rule 20 is not overturned.
+
+**What must be asserted, or the ruling is only recorded.** `delivery-key-redaction.test.ts` stays
+**unchanged**; `expect(key).toContain(MARKER)` is what makes it non-vacuous permanently, because it fails
+both when an adapter forgets to redact and when a new provider keys a field its recipe does not plant into,
+while the two `not.toContain` halves are satisfied by *any* digest — including one over the empty string,
+which is exactly what (b) would have deleted. **Added**: an integration assertion that a GitLab
+**legacy-token** delivery's stored `inbox.headers` does not contain `webhook_secret_token` and that the row's
+`redaction_count >= 1` — a live invariant, where a key-only count would read 0 for ever.
 
 ## Discovered work (not in plan)
 
