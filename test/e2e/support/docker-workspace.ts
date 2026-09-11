@@ -25,7 +25,7 @@
  * back here to find out what was actually shown.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -194,6 +194,29 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
   const cacheVolume = `agentic-e2e-cache-${suffix}`;
   // Short: the control root becomes a Unix socket path (names.ts § MAX_UNIX_SOCKET_PATH).
   const controlRoot = await workspace.shortTempDir('agentic-e2e-ctl-');
+  // **And world-writable, which is what six red CI runs cost.** `mkdtemp` makes `0700`, owned by
+  // whoever runs the tests. Production's control volume is a plain named volume whose root is
+  // `root:root 0755`, so the `prep-<run-id>` helper — root, but with `CapDrop: ALL` and only
+  // `CAP_CHOWN` added, therefore no `CAP_DAC_OVERRIDE` — owns it and may `mkdir` in it. This
+  // fixture's control volume is bind-backed onto a **host** directory instead (see below), so on
+  // Linux that helper is a non-owner of a `0700` directory and the kernel refuses it. Measured,
+  // inside the daemon's own Linux kernel, on a volume made to look like a GitHub runner's
+  // `mkdtemp` (`chown 1001:1001`, `chmod 0700`):
+  //
+  //   --user 0:0 --cap-drop ALL --cap-add CHOWN → mkdir: can't create directory '/ctl/<uuid>':
+  //                                               Permission denied      ← CI, verbatim
+  //   the same, after `chmod 0777` on the root  → exit 0
+  //
+  // macOS never showed it: Docker Desktop's file sharing reports a host-owned bind as `root:root`
+  // inside the container whatever the host uid is, so the helper always appeared to own it. That
+  // is the whole of "passes here, fails there" (standing rule 69).
+  //
+  // The trade, named rather than hidden: `/ctl` is looser here than in production. Matching
+  // production exactly would mean `chown`ing the bind source to root, and then this process — the
+  // stand-in for the launcher container — could no longer empty it at cleanup. What must stay
+  // tight is `<ctl>/<run-id>`, which the launcher creates `0700 1000:1000` and which has its own
+  // case ("creates the control sub-directory before the container starts").
+  await chmod(controlRoot, 0o777);
   // Outside the control root, which is about to become a volume: an export written into `/ctl`
   // would be a file every run's container could see the name of.
   const exportDir = await workspace.shortTempDir('agentic-e2e-out-');
@@ -313,6 +336,27 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
         await docker(['volume', 'rm', '-f', id], { allowFailure: true });
       }
       await docker(['network', 'rm', network], { allowFailure: true });
+      // Empty the control root from a **root container**, before the volume goes and before the
+      // host `rm` below. A case that leaves a run alive leaves `<ctl>/<run-id>` behind as
+      // `0700 1000:1000`, and on Linux this process is neither — `fs.rm` would throw `EACCES` out
+      // of `afterAll`, where `force: true` does not help (it only swallows `ENOENT`). On macOS the
+      // bind reports everything as root-owned and the host `rm` would have succeeded, which is
+      // exactly why this had to be reasoned about rather than observed.
+      await docker(
+        [
+          'run',
+          '--rm',
+          '--network',
+          'none',
+          '-v',
+          `${controlVolume}:/ctl`,
+          ALPINE_IMAGE,
+          'sh',
+          '-c',
+          'rm -rf /ctl/..?* /ctl/.[!.]* /ctl/*',
+        ],
+        { allowFailure: true },
+      );
       await docker(['volume', 'rm', '-f', controlVolume, cacheVolume], { allowFailure: true });
       await rm(controlRoot, { recursive: true, force: true });
       await rm(exportDir, { recursive: true, force: true });

@@ -98,6 +98,49 @@ describe('the workspace lifecycle against a real daemon', () => {
     }
   }, 180_000);
 
+  /**
+   * The control volume's root must admit the `prep-<run-id>` helper, and that helper is **not** an
+   * omnipotent root: `CapDrop: ALL` with only `CAP_CHOWN` added leaves it without
+   * `CAP_DAC_OVERRIDE`, so it is an ordinary process subject to the directory's mode bits.
+   *
+   * This is the assertion `main` was missing for six red runs. The whole failure —
+   * `mkdir: can't create directory '/ctl/<uuid>': Permission denied`, three tiers of cases
+   * downstream of it — was this one `mkdir`, and nothing named it. It is deliberately *not* routed
+   * through the provider: a probe that starts one container says which permission failed, where a
+   * `create` says only that a helper exited 1.
+   *
+   * **What it is worth on each platform, honestly.** On Linux it is the real verdict: it fails
+   * against a `0700` bind source and passes against a writable one. On macOS it passes either way,
+   * because Docker Desktop reports a host-owned bind as `root:root` whatever the host uid is — so
+   * a green run here is not evidence, and standing rule 69 is the reason this comment exists.
+   */
+  it('admits the prep helper into the control volume: root, CAP_DAC_OVERRIDE dropped', async () => {
+    const probe = `ctl-admits-${randomUUID()}`;
+    const result = await docker(
+      [
+        'run',
+        '--rm',
+        '--user',
+        '0:0',
+        '--cap-drop',
+        'ALL',
+        '--cap-add',
+        'CHOWN',
+        '--network',
+        'none',
+        '-v',
+        `${fixture.controlVolume}:/ctl`,
+        'alpine:3.21',
+        'sh',
+        '-c',
+        `mkdir /ctl/${probe} && rmdir /ctl/${probe} && echo ADMITTED`,
+      ],
+      { allowFailure: true },
+    );
+    expect(`${result.stdout}${result.stderr}`).toContain('ADMITTED');
+    expect(result.ok).toBe(true);
+  }, 60_000);
+
   it('creates the control sub-directory before the container starts (WP-13 obligation 1)', async () => {
     // Measured on Docker 29.7.2: the daemon refuses a `volume-subpath` that does not exist, which
     // is what makes the ordering load-bearing rather than tidy. Re-measured here so the model in
@@ -148,6 +191,37 @@ describe('the workspace lifecycle against a real daemon', () => {
       await fixture.provider.destroy(first.handle);
       await fixture.provider.destroy(second.handle);
     }
+  }, 180_000);
+
+  /**
+   * `destroy` says it removes the control directory "which holds the run token"; until now only
+   * the *script* was asserted (`provider.test.ts`), never the outcome.
+   *
+   * It did not hold on Linux. `#prepare` hands the directory to uid 1000 as `0700`, and the
+   * `ctlrm-<run-id>` helper is root with `CapDrop: ALL` and nothing added — no `CAP_DAC_OVERRIDE`,
+   * so it cannot descend into a directory it no longer owns. `#teardown` runs the step through
+   * `step()`, which logs `workspace teardown partial` and carries on, so the token simply stayed on
+   * the shared control volume. Measured on the daemon before the fix: `rm -rf /ctl/<id>` exits 1.
+   *
+   * The listing is taken by a container, not from the host, so this reads the volume rather than
+   * the bind's macOS view of it.
+   */
+  it('destroy leaves nothing of the run on the control volume, token and all', async () => {
+    const { handle } = await startRun();
+    await fixture.provider.destroy(handle);
+    const listing = await docker([
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '-v',
+      `${fixture.controlVolume}:/ctl`,
+      'alpine:3.21',
+      'ls',
+      '-A',
+      '/ctl',
+    ]);
+    expect(listing.stdout).not.toContain(handle.runId);
   }, 180_000);
 });
 

@@ -342,6 +342,24 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     expect(JSON.stringify(cleanup)).toContain(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
 
+  it('takes ownership of the control directory back before removing it, with CAP_CHOWN', async () => {
+    const handle = await created();
+    await provider.destroy(handle);
+    const ctlrm = daemon.byName(`ctlrm-${FIXTURE_RUN_ID}`);
+    const script = (ctlrm?.body.Cmd ?? []).join('\n');
+    // `#prepare` chowns the directory to 1000 and leaves it 0700. This helper is root with
+    // `CapDrop: ALL`, so it holds no `CAP_DAC_OVERRIDE` and, on a real Linux kernel, cannot
+    // descend into it: measured, `rm -rf` alone exits 1 and the run token stays on the shared
+    // volume for ever. Drop the `chown` and the e2e's "destroy leaves nothing of the run on the
+    // control volume" fails on Linux — and nowhere else, which is why it is pinned here too.
+    expect(script).toContain(`chown 0:0 /ctl/${FIXTURE_RUN_ID}`);
+    expect(script.indexOf('chown 0:0')).toBeLessThan(script.indexOf('rm -rf'));
+    expect(ctlrm?.body.HostConfig).toMatchObject({ CapDrop: ['ALL'], CapAdd: ['CHOWN'] });
+    // Idempotent: `destroy` is, and `chown` on a path that is already gone is an error where
+    // `rm -rf` on one is not.
+    expect(script).toContain(`if [ -e /ctl/${FIXTURE_RUN_ID} ]`);
+  });
+
   it('keeps the workspace volume, because retention owns it', async () => {
     const handle = await created();
     await provider.destroy(handle);

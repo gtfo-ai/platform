@@ -827,13 +827,42 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     }
   }
 
+  /**
+   * Removes the run's control sub-directory, **after taking ownership of it back**.
+   *
+   * The `chown` is not tidiness. `#prepare` hands the directory to uid 1000 as `0700`, and this
+   * helper is root with `CapDrop: ALL` and nothing added — so it holds neither `CAP_DAC_OVERRIDE`
+   * nor `CAP_FOWNER`, and on a real Linux kernel root is an ordinary non-owner of a `0700`
+   * directory owned by somebody else. Measured on the daemon, against a plain named volume in
+   * production's own shape (`/ctl` = `root:root 0755`):
+   *
+   * ```
+   * prep:  --user 0:0 --cap-drop ALL --cap-add CHOWN  → /ctl/<id> drwx------ 1000 1000
+   * ctlrm: --user 0:0 --cap-drop ALL                  → rm -rf /ctl/<id>  exit 1
+   * ctlrm: --user 0:0 --cap-drop ALL --cap-add CHOWN  → chown 0:0 && rm -rf  exit 0, /ctl empty
+   * ```
+   *
+   * The failure was silent: `#teardown` runs this through `step()`, which collects the error and
+   * logs `workspace teardown partial`, so the only symptom was **the run token staying on the
+   * shared control volume for ever** — the exact thing this method's caller says it exists to
+   * prevent. It was invisible in CI because `#prepare` failed first (the same permission model,
+   * one layer up), and invisible locally because the e2e's control volume is bind-backed onto a
+   * macOS host directory, where `chown` silently does nothing at all.
+   *
+   * `CAP_CHOWN` rather than `CAP_DAC_OVERRIDE`: taking ownership of one directory is narrower than
+   * bypassing every permission check on the mount, and `#prepare` is already granted it.
+   */
   async #removeControlDirectory(runId: string): Promise<void> {
+    const dir = `/ctl/${assertRunId(runId)}`;
     await this.#helper({
       name: `ctlrm-${assertRunId(runId)}`,
       image: this.#images.git,
-      script: `rm -rf /ctl/${assertRunId(runId)}`,
+      // Guarded, because `destroy` is idempotent: the second call finds nothing, and `chown` on a
+      // missing path is an error where `rm -rf` on one is not.
+      script: [`if [ -e ${dir} ]; then chown 0:0 ${dir}; fi`, `rm -rf ${dir}`].join('\n'),
       mounts: [this.#volumeMount(this.#controlVolume, '/ctl', false)],
       user: '0:0',
+      capAdd: ['CHOWN'],
       secrets: [],
       network: 'none',
       labels: { [WORKSPACE_LABELS.run]: runId, [WORKSPACE_LABELS.role]: 'control-cleanup' },
