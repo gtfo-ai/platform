@@ -156,6 +156,46 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await expect(store.tasks.save(tx, task())).rejects.toThrow();
       });
 
+      it('writes the workpad without writing anything else, so a concurrent cost survives', async () => {
+        // WP-15d. The workpad is rendered by a `pipeline.outbound` job that runs beside the stage
+        // executor's own transactions, so it holds a snapshot of the row that is already stale by
+        // the time the provider answers. A whole-row `save` from there puts the stale cost, state
+        // and stage back: measured as a bug ticket finishing with 2.40 USD of recorded spend after
+        // seven runs of 0.40. `saveWorkpad` is the narrow write that cannot.
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const stale = await store.tasks.load(tx, stored.task.id);
+        // Somebody else moves the task on, exactly as the stage executor does.
+        await store.tasks.save(tx, {
+          ...(stale as NonNullable<typeof stale>),
+          task: { ...stored.task, state: 'active', currentStage: 'implementation' },
+          costActualUsd: 4.25,
+        });
+        await store.tasks.saveWorkpad(tx, stored.task.id, {
+          provider: 'fake-jira',
+          ticket_key: stored.task.ticket.key,
+          comment_id: 'comment-1',
+          url: null,
+        });
+
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.workpad?.comment_id).toBe('comment-1');
+        expect(loaded?.costActualUsd).toBeCloseTo(4.25, 6);
+        expect(loaded?.task.state).toBe('active');
+        expect(loaded?.task.currentStage).toBe('implementation');
+      });
+
+      it('refuses a workpad for a task it has never seen', async () => {
+        await expect(
+          store.tasks.saveWorkpad(tx, nextId(), {
+            provider: 'fake-jira',
+            ticket_key: 'ACME-1',
+            comment_id: 'comment-1',
+            url: null,
+          }),
+        ).rejects.toThrow();
+      });
+
       it('answers null for a task that does not exist, rather than throwing', async () => {
         expect(await store.tasks.load(tx, nextId())).toBeNull();
       });

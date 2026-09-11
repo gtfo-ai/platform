@@ -203,6 +203,14 @@ export const SERVER_CONFIG_DEFAULTS = {
  * failures rather than a hang, which is better but still an outage.
  *
  * So the composition root adds its own floor on top, per workload it actually starts.
+ *
+ * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
+ * that nobody has to reassemble it from four docblocks:
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 3` pipeline workers `+ 2` HTTP `+ 1` maintenance = **11**,
+ * against `.env.example`'s `APP_DB_POOL_MAX=13`. WP-15b's arithmetic reached 11 too, by a different
+ * route — a third connection per dispatch and one fewer job worker — and that difference is the
+ * whole of WP-15d: the term that scales with concurrency shrank from 3 to 2, so the *shape* is
+ * `2N + 9` rather than `3N + 8`. They agree at N=1 and diverge from N=2 up (17 against 20 at N=4).
  */
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
@@ -212,45 +220,46 @@ export const POOL_RESERVATIONS = {
   /** Readiness checks and partition maintenance, which must not queue behind request traffic. */
   maintenance: 1,
   /**
-   * The pipeline's two job workers (WP-15b).
+   * The pipeline's job workers — **one connection each** (WP-15b, recounted at WP-15d).
    *
-   * `pipeline/runtime.ts` states the arithmetic: each `stage.execute` worker holds one connection
-   * during each of its two transactions and each review-window worker holds one during each of
-   * its two, and the composition root runs one of each (`stageConcurrency: 1`). It is counted here
-   * because every `worker` role now composes the pipeline — before WP-15b a process that was not
-   * handed an audit sink ran none, so the floor did not have to include it.
+   * `pipeline/runtime.ts` states the arithmetic: each worker holds one connection during each of
+   * its transactions, and the composition root runs one of each at concurrency 1 —
+   * `stage.execute`, `mr.comment.debounce` and, since WP-15d, `pipeline.outbound`. It is counted
+   * here because every `worker` role composes the pipeline.
    *
-   * It is a **flat** term and not a per-dispatch one because both workers make their provider
-   * calls *outside* a transaction of their own: `jobs.ts:194` evaluates a gate after its load
-   * transaction has closed, and `jobs.ts:306` reads the merge request's discussions after
-   * `reviewWindowHandler`'s has. An audit write started from either therefore replaces the
-   * worker's connection rather than nesting inside it.
+   * It is a **flat** term and not a per-dispatch one because every one of them makes its provider
+   * calls *outside* a transaction of its own: the gate evaluator runs after its load transaction
+   * has closed, the review window reads discussions after its own has, and the outbound queue
+   * exists precisely to be the place where a provider call is not inside anything. An audit write
+   * started from any of them therefore *replaces* the worker's connection rather than nesting
+   * inside it.
    */
-  pipeline: 2,
+  pipeline: 3,
   /**
-   * The audit write a **dispatch** nests inside the handler's transaction (WP-15b).
+   * The audit write a **dispatch** nests inside the handler's transaction — **zero since WP-15d**,
+   * and this constant is the receipt.
    *
-   * `CONNECTIONS_PER_DISPATCH` is 2 — the dispatcher's own transaction plus the handler's — and
-   * that was the whole of it until an outbound provider call started writing an
-   * `integration_actions` row. `createPostgresIntegrationAuditLog` opens a transaction of its own
-   * (`postgres-unit-of-work.ts` takes a second `pool.connect()`), and three handlers call a
-   * provider **from inside `context.scope.tx`**: `saga.ts:215` (the intake default-branch read,
-   * after `store.tasks.insert` on the same scope), `workpad.ts:168` and the status mapping beside
-   * it. So an in-flight dispatch peaks at **three** connections, not two, and the term is
-   * proportional to `APP_DISPATCH_MAX_CONCURRENCY` rather than flat.
+   * `CONNECTIONS_PER_DISPATCH` is 2: the dispatcher's own transaction plus the handler's. WP-15b
+   * had to add a third, because `createPostgresIntegrationAuditLog` opens a transaction of its own
+   * (`postgres-unit-of-work.ts` takes a second `pool.connect()`) and three handlers called a
+   * provider from inside `context.scope.tx` — the intake branch check, the workpad and the status
+   * mapping. That was the accommodation of a defect rather than a property of the design, and the
+   * note here said so: *when it is fixed, this term goes to 0 rather than being quietly absorbed.*
    *
-   * **This exists because of a defect that is not the pool's**: CLAUDE.md's shape is
-   * *transaction / no transaction / transaction*, and a handler holding a pooled connection across
-   * provider latency breaks it. The defect is filed; until it is fixed the arithmetic has to
-   * describe the code that exists, and when it is, this term goes to 0 rather than being quietly
-   * absorbed.
+   * WP-15d fixed it. The three sites enqueue a `pipeline.outbound` job from
+   * `HandlerContext.afterCommit` and the job makes the call, so **no handler's transaction contains
+   * a provider call or an audit write**, and the per-dispatch term is back to
+   * `CONNECTIONS_PER_DISPATCH`. While this reads 1, the shape is back: it is not a knob.
    *
-   * **What is not claimed**: no measurement of exhaustion under load exists, and none was taken —
-   * generating load on this machine is forbidden (rule 66), and a margin quoted without the load it
-   * was measured at is not a number (rule 64). This is arithmetic about the worst case, which is
-   * what a start-up refusal should be built on.
+   * **What is still true and is not counted here.** A handler may borrow a connection *transiently*
+   * inside its transaction — `ProjectSettingsPort.forProject` is a `projects` query, and the status
+   * mapping makes one. That is a read of the local database, not a connection held across a third
+   * party's latency: it contends for a connection, it cannot stall on one, because every other
+   * borrower in this process releases without waiting on a dispatch. The reservations above are
+   * what cover it. Filed as discovered work; the honest fix is for the settings port to take the
+   * caller's transaction.
    */
-  auditPerDispatch: 1,
+  auditPerDispatch: 0,
 } as const;
 
 /** The smallest `APP_DB_POOL_MAX` that can serve this configuration's workloads. */
@@ -273,7 +282,7 @@ export class UndersizedPoolError extends Error {
 
   constructor(poolMax: number, required: number, role: string) {
     super(
-      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds three at once (its own transaction, the handler's, and the audit row an outbound provider call writes from inside the handler's), the sweep needs one to read with, and pg-boss, the pipeline's two job workers, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
+      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's three job workers, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
     );
     this.name = 'UndersizedPoolError';
     this.poolMax = poolMax;

@@ -149,11 +149,29 @@ export interface PipelineE2E {
    * poll. Not a rare interleaving — a structurally short wait with a high pass rate, which is the
    * worse kind. Standing rule 50's frame: bound the **silence** you care about, not something that
    * happens to precede it. So: whatever line the test asserts, wait for *that* line.
+   *
+   * **WP-15d moved what that ordering rests on, and the wait has to move with it.** Neither handler
+   * calls the provider any more: each enqueues a `pipeline.outbound` job after its own commit, and
+   * one worker serves that queue, so the status still normally reaches the ticket before the render
+   * — in the order the handlers decided, which is the useful half of the old guarantee. What is
+   * gone is the *guarantee*: two jobs enqueued microseconds apart are ordered by pg-boss, not by
+   * TD-005's bands. A test that asserts both must therefore wait for **both**, which is what
+   * `pipeline.e2e.test.ts` now does, and no test may infer one from the other.
    */
   waitFor(what: string, check: () => Promise<boolean>): Promise<void>;
   /** Every event of the log, in position order. */
   events(): Promise<readonly DomainEvent[]>;
   task(): Promise<TaskSnapshot>;
+  /**
+   * Is this event still on TD-005's dispatch queue?
+   *
+   * The queue row is deleted when every handler of the event has committed, so `false` is "the
+   * dispatcher got to it" — the one question the WP-15d measurement asks of an event that has
+   * nothing to do with the provider call holding the pipeline up.
+   */
+  awaitingDispatch(eventId: string): Promise<boolean>;
+  /** How many task rows exist, for a measurement that publishes more than one ticket. */
+  taskCount(): Promise<number>;
   stop(): Promise<void>;
 }
 
@@ -179,14 +197,35 @@ export interface StartPipelineOptions {
   readonly config?: JsonObject;
   /**
    * Delay every `upsertWorkpad` by this many milliseconds, to force the interleaving that used to
-   * make the workpad assertion flaky roughly one run in five.
+   * make the workpad assertion flaky roughly one run in five (backlog 1b, standing rule 76).
    *
    * It is **not** load and it is not a sleep in an assertion: it widens one already-existing window
-   * — the gap between the status handler (TD-005 priority 110) and the workpad handler (120) inside
-   * a single dispatch — so a test that waits on the wrong one of the two fails **every** time
-   * instead of rarely. A flake you can only wait for is one you cannot prove fixed.
+   * so that a test waiting on the wrong line fails **every** time instead of rarely. A flake you
+   * can only wait for is one you cannot prove fixed.
+   *
+   * **Which window, since WP-15d.** It used to be the gap between the status handler (TD-005
+   * priority 110) and the workpad handler (120) *inside one dispatch*. Neither handler calls the
+   * provider now: each enqueues a `pipeline.outbound` job after its own commit, and one worker runs
+   * that queue in the order they were enqueued — so the delay lands on the render **after** the
+   * status transition has already reached the ticket, which is the same window with the same sign.
+   * A test that waits for the status and then reads the workpad body still fails deterministically;
+   * a test that asserts both must wait for both, because the ordering is now the queue's rather
+   * than TD-005's.
    */
   readonly workpadDelayMs?: number;
+  /**
+   * Awaited before **every git read the intake makes** — the default-branch head and the branch
+   * protection — so a test can hold one open and ask what the rest of the instance can still do.
+   *
+   * It is the knob WP-15d's measurement needs and nothing else: a provider call is the one thing
+   * on the pipeline's path whose latency is somebody else's, so the question "what does the
+   * platform stop doing while a provider is slow?" cannot be asked without being able to make one
+   * slow. A promise the test resolves is used rather than a sleep, so the assertion is about what
+   * happened *while the call was in flight* rather than about a duration (standing rule 2).
+   */
+  readonly gitReadLatency?: () => Promise<void>;
+  /** Extra environment for the instance — `APP_DB_POOL_MAX` at the shipped default, say. */
+  readonly env?: Readonly<Record<string, string>>;
   /**
    * Start against a database another instance already used, and do not seed it again.
    *
@@ -381,6 +420,24 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     };
   }
 
+  if (options.gitReadLatency !== undefined) {
+    const { gitReadLatency } = options;
+    const head = git.getDefaultBranchHead.bind(git);
+    const protectedBranch = git.isBranchProtected.bind(git);
+    const slow = git as {
+      getDefaultBranchHead: typeof git.getDefaultBranchHead;
+      isBranchProtected: typeof git.isBranchProtected;
+    };
+    slow.getDefaultBranchHead = async (project) => {
+      await gitReadLatency();
+      return head(project);
+    };
+    slow.isBranchProtected = async (project, branch) => {
+      await gitReadLatency();
+      return protectedBranch(project, branch);
+    };
+  }
+
   // The fakes reach the pipeline the way a real provider does: through the registry, resolved by
   // the `provider` column of the seeded `integrations` row (WP-15a).
   const registry = (): IntegrationRegistry =>
@@ -397,8 +454,9 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       // Turn the instance's own timers down rather than sleeping in the assertions.
       APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
-      // The dispatcher's floor plus the stage and review-window workers (`pipeline/runtime.ts`).
+      // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`).
       APP_DB_POOL_MAX: '16',
+      ...options.env,
     },
     // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
     pipeline: { runner, registry },
@@ -508,12 +566,25 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       }
     },
     events: async () => {
-      const { rows } = await pool.query<{ payload: unknown; type: string }>(
-        'select type, payload from events order by position',
+      const { rows } = await pool.query<{ id: string; payload: unknown; type: string }>(
+        'select id, type, payload from events order by position',
       );
       return rows as unknown as readonly DomainEvent[];
     },
     task,
+    awaitingDispatch: async (eventId) => {
+      const { rows } = await pool.query<{ pending: number }>(
+        `select count(*)::int as pending
+           from event_dispatch d join events e on e.position = d.event_position
+          where e.id = $1`,
+        [eventId],
+      );
+      return (rows[0]?.pending ?? 0) > 0;
+    },
+    taskCount: async () => {
+      const { rows } = await pool.query<{ count: number }>('select count(*)::int from tasks');
+      return rows[0]?.count ?? 0;
+    },
     stop: async () => {
       await inbound.stop();
       await pool.end();

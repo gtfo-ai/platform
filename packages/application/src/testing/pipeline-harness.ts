@@ -36,7 +36,11 @@ import type { EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
 import { MemoryEventing } from './memory-eventing.js';
-import { createMemoryAuditLog, createVirtualTimer } from './memory-integrations.js';
+import {
+  createMemoryAuditLog,
+  createMemoryIdempotencyStore,
+  createVirtualTimer,
+} from './memory-integrations.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pipeline.js';
 
 /** Enough for the longest template plus every bounded loop; a runaway pipeline passes it. */
@@ -177,6 +181,7 @@ export interface PipelineHarness {
   readonly settings: ProjectSettings;
   readonly integrations: PipelineIntegrations;
   readonly audit: ReturnType<typeof createMemoryAuditLog>;
+  readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** Every spec the runner was started with, in order. */
   readonly specs: readonly RunSpec[];
   /** What `answerTaskQuestion` and friends need (`../pipeline/commands.js`). */
@@ -241,6 +246,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const store = createMemoryPipelineStore();
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();
+  // Composed like production's (`apps/server/src/pipeline.ts` builds the PostgreSQL one), so the
+  // pipeline's ticket writes are replayable in this tier too: a fake may be stricter than the real
+  // adapter, never kinder (standing rule 1), and one with **no** store would be kinder.
+  const idempotency = createMemoryIdempotencyStore();
   const scripts = new Map<string, ScriptedRun>(Object.entries(options.runs ?? {}));
   const specs: RunSpec[] = [];
 
@@ -254,6 +263,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       // nothing drives and the test hangs rather than fails.
       timer: createVirtualTimer({ autoAdvance: true }),
       clock: { now: () => clock.now() },
+      idempotencyStore: idempotency,
     }),
     git: gitPort === null ? null : { port: gitPort, ref: gitPort.ref, project: 'acme/api' },
     taskManagement:
@@ -386,8 +396,12 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     await started;
     for (let round = 0; round < 200; round += 1) {
       const dispatched = await dispatchPending();
+      // `pipelineOutbound` first: it is what the handlers of the dispatch just enqueued, and the
+      // intake check is the job that creates the task the rest of the loop is about (WP-15d).
       const ran =
-        (await runJobs(JOB_QUEUES.stageExecute)) + (await runJobs(JOB_QUEUES.mrCommentDebounce));
+        (await runJobs(JOB_QUEUES.pipelineOutbound)) +
+        (await runJobs(JOB_QUEUES.stageExecute)) +
+        (await runJobs(JOB_QUEUES.mrCommentDebounce));
       if (dispatched === 0 && ran === 0) {
         return;
       }
@@ -425,6 +439,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     settings,
     integrations,
     audit,
+    idempotency,
     specs,
     script: (stage, run) => {
       scripts.set(stage, run);

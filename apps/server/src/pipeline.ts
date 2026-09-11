@@ -247,13 +247,14 @@ export const composePipeline = async (
      * Also unconditional. WP-07 made the executor's option optional and nothing ever supplied one,
      * so until this line every retried job re-performed a mutation the provider had already seen.
      *
-     * **What no test covers, said here rather than left to be assumed** (standing rules 3, 11): the
-     * *adapter* has a shared contract suite against the fake and against PostgreSQL, and *this line*
-     * has nothing — deleting it leaves every tier green. No pipeline action ships an
-     * `IdempotencyPlan` (`packages/integrations/src/providers/slack/digest.ts` is the only one in
-     * the repository, and Slack is not in the shipped registry), so there is no call to replay and
-     * nothing to observe. The work package that gives a pipeline action an idempotency key owns the
-     * assertion; the backlog carries it.
+     * **It is load-bearing since WP-15d, and asserted** (standing rules 3, 11, 35). The note here
+     * used to say the opposite and was right at the time: no pipeline action shipped an
+     * `IdempotencyPlan`, so deleting this line left every tier green. The two ticket writes now
+     * carry one, keyed by the event that caused the wake-up, because they are made from a
+     * `pipeline.outbound` job and a job is at-least-once. The test that re-delivers one wake-up
+     * through this process's own `Jobs` adapter and reads the production audit log back is
+     * `test/e2e/pipeline/outbound-shape.e2e.test.ts` › *"replays the ticket write out of the idempotency store this instance composed"*
+     * — deleting this line fails it (measured: the `replayed` row never appears).
      */
     idempotencyStore: integrationAdapters.createPostgresIdempotencyStore({ sql: options.pool }),
   });

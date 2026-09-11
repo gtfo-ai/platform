@@ -4097,7 +4097,11 @@ and now holds both branches.
 asserted by nothing — the adapter has a contract suite against the fake and against PostgreSQL, and
 deleting the line in `pipeline.ts` leaves every tier green, because no shipped pipeline action carries an
 `IdempotencyPlan` (`slack/digest.ts` is the only one in the repository and Slack is not in the shipped
-registry). Said at the line rather than left to be assumed. And **`ClaudeRunner` is still Q52**:
+registry). Said at the line rather than left to be assumed. ~~Open.~~ **Closed at WP-15d**, which gave the
+two ticket writes a plan keyed by the wake-up and re-delivers one through the instance's own `Jobs`
+adapter: deleting the line now fails
+`test/e2e/pipeline/outbound-shape.e2e.test.ts` › *"replays the ticket write out of the idempotency store this instance composed"*
+— measured, the `replayed` row never appears. And **`ClaudeRunner` is still Q52**:
 `unavailableClaudeRunner()` **throws** `RunnerUnavailableError` rather than returning a fabricated failed
 outcome, because a fabricated outcome would make the interpreter transition on a verdict for a run that
 never happened — the fail-open direction of rule 20. A task that reaches an agent stage therefore stops
@@ -4348,6 +4352,132 @@ question…"*) — which had **no** test until the mutation was run.
 - **Licence allow-list check** (`pnpm licenses`, TD-017) is not wired; it belongs with WP-23's
   `THIRD_PARTY_NOTICES.md`.
 - **Agent registry:** in session 1 the roles in `.claude/agents/{implementer,reviewer,architect}.md` were not exposed as `subagent_type` values, and the orchestrator worked around it with `general-purpose` subagents. **In session 2 they are registered** (`implementer`, `reviewer`, `architect` appear as agent types with the tool sets their role files imply), so they are spawned directly — and still told, as their first instruction, to read and obey their role file, because the registration carries the tool list but not the protocol.
+
+### WP-15d — the provider calls left the handlers' transactions, and what that turned out to cost
+
+**The shape.** The three sites (intake branch check, workpad render, ticket status) now *decide* in the
+handler and *call* from a `pipeline.outbound` job enqueued through `HandlerContext.afterCommit`. One queue,
+one worker, `standard` policy, three duties. `JOB_QUEUES.pipelineOutbound` carries why the policy is
+`standard` and not `stately`: a coalesced wake-up would drop the **blocker brief**, which is the one thing a
+render cannot re-derive from the task row.
+
+**The measurement, before and after** (criterion 5; shipped defaults — `APP_DB_POOL_MAX=13`,
+`APP_DISPATCH_MAX_CONCURRENCY=1` — on the e2e tier, provider latency stated, load average stated):
+
+| quantity | before | after |
+|---|---|---|
+| N=10 concurrent intakes, 250 ms per git read (500 ms per intake): unrelated event dispatched after | **5 464 ms** | **63 ms** |
+| the same run: 10 task rows exist after | 5 465 ms | 5 555 ms |
+| one git read held open indefinitely: was an unrelated event dispatched while it was in flight? | **no** (20 s budget exhausted) | **yes** |
+
+Load average 4.09 / 3.76 (before) and 6.05 / 5.96 (after), 1-minute, taken at the start and end of each run
+on the 14-core machine with the user's own containers up (rule 64). The first row is the defect: with
+`APP_DISPATCH_MAX_CONCURRENCY` at its shipped 1, the single dispatch slot sat inside `pipeline.intake`
+waiting for an HTTP response, so **every other project's events waited too** — that is the answer to "does
+one project's slow provider delay dispatch for every other project", and it is *yes* before and *no* after.
+The second row is the honest residual: the outbound worker is serial at concurrency 1, so the *throughput*
+of provider work is unchanged — what moved is that it no longer happens inside the dispatcher. The third row
+ships as `test/e2e/pipeline/outbound-shape.e2e.test.ts`, a liveness assertion rather than a duration
+(rule 2): the fake provider's read is held open by a promise the test resolves.
+
+**The pool arithmetic, recomputed rather than reverted** (criterion 4). `auditPerDispatch` is **0** —
+no handler's transaction contains a provider call or an audit write any more — and `pipeline` is **3**, one
+per job worker (the new outbound worker is the third). At the shipped defaults the floor is `2×1+1+2+3+2+1`
+= **11**, the same number WP-15b reached by a different route (`3N+8` against `2N+9`); they agree at N=1 and
+diverge above it — 17 against 20 at N=4. `.env.example` keeps `APP_DB_POOL_MAX=13`, which is that floor plus
+two of slack. Stated in all four places (`config.ts`'s `POOL_RESERVATIONS` preamble, `UndersizedPoolError`'s
+message, `pipeline/runtime.ts`'s docblock, `.env.example`) because an arithmetic claim cannot be maintained
+from inside one file (rule 63).
+
+**A defect the move created, found by running it, and fixed.** The first `verify:e2e` after the move failed
+twice: a bug ticket finished `done` with `cost_actual` **2.40** after seven runs of 0.40, and a feature
+ticket sat at `ci_gate` until the 90 s settle gave up. One cause. `TaskRepository.save` writes the **whole**
+row, and the workpad's "remember where the comment lives" write now happens in a job that runs *beside* the
+stage executor's transactions — so it put back the cost, the state and the stage as they were when the job
+started. A read-modify-write across a concurrency boundary that did not exist before. The fix is a narrow
+port method, `tasks.saveWorkpad(tx, taskId, ref)`, one column, with the contract-suite case that pins it
+("writes the workpad without writing anything else, so a concurrent cost survives"). **The general shape is
+still there and is filed below**: every other `save` is a whole-row write, and the stage executor and the
+saga handlers can still race.
+
+**Mutation checks** (rules 3, 67 — every guard, by a named assertion). Each of the five kills exactly one
+test, and the other guards' tests stay green, so they are five guards and not one guard bounded five times
+(rule 41):
+
+| mutation | the named test that dies |
+|---|---|
+| drop the refusal in `integrationsForProject` | *refuses to resolve a project's bindings inside a transaction, and resolves outside one* |
+| drop the refusal in `read` | *refuses a provider read whose bindings were resolved before the transaction opened* |
+| drop the refusal in `mutate` | *refuses a provider mutation whose bindings were resolved before the transaction opened* |
+| `EventBus` stops marking the handler's transaction | *fails the next handler that reaches for a provider, rather than the production pool* |
+| `createPipelineRuntime` stops wrapping its `UnitOfWork` | *marks the job path's transactions too, so a job that tried would be refused as well* |
+| `POOL_RESERVATIONS.auditPerDispatch` back to 1 | *costs two connections per added dispatch, not three, because no handler calls a provider* (and two more) |
+
+**How the mutations were applied, because it is not the obvious way and the next agent will hit it.** This
+session's environment **reverts an out-of-band write to any file the Edit tool has touched** — verified on
+five files: a `python3` rewrite of `integrations.ts` reported `len 15535 → 15480` and re-read `15535` one
+second later, and an Edit-tool deletion of the same line was restored too. The harness above therefore
+mutates a **copy** (`cp integrations.ts zzmutant.ts`, mutate the copy, run a copy of the refusal tests
+against it) and deletes both afterwards. The copy is calibrated first — unmutated, it passes 3/3 (rule 21).
+
+**Decisions and assumptions, each of which a reviewer may reverse.**
+- **The status the ticket moves to is decided by the handler and carried in the job payload; the workpad is
+  re-rendered from the task row when the job fires.** They are different on purpose. A workpad is a
+  *picture*, so rendering from committed state is strictly better; a transition is a *movement*, and a job
+  that re-derived it would send a task that moved twice to its final status twice and never show the one in
+  between. Re-deriving it was measured first: it turned one existing test's `['In Refinement']` into
+  `['In Refinement', 'In Refinement']`, which is the shape of the regression.
+- **`recordMergeRequest` no longer records which provider and repository path the merge request is on.**
+  Learning that means resolving the project's bindings — a pool borrow and a credential decryption — and it
+  runs inside the handler's transaction. `gitReads` fills both in from the binding that is live when the ref
+  is *used*, which is also more correct: a re-bound project would otherwise be addressed at its old account.
+  Nothing reads the stored fields (the UI reads `mr_ref.url`), and the git adapter already falls back to the
+  binding's own project.
+- **The intake handler writes nothing at all.** The task is created by the job, in the transaction that
+  admits or escalates it, so there is no window in which a half-intaken task row exists for the scheduler to
+  start behind the branch check's back. The cost, **corrected at review round 1 because the first version of
+  this sentence named a mitigation that does not exist** (rule 44): a crash between that commit and the
+  enqueue leaves the ticket without a task, and **nothing re-emits it**. There is no poller in this build
+  (the only mention is a comment on `ports/integrations/task-management.ts`), and WP-15c's plan row accepts a
+  re-delivery being deduplicated on `inbox(provider, delivery_id)`, so the same webhook twice performs
+  nothing twice. It is also **unlogged and cannot be logged at the loss point**: the process that would write
+  the line is the one that died, and `event-bus.ts` logs only a callback that *threw*. The detectable form is
+  a query — a matched ticket with no task row — which is the ingress's to own, and is being routed to the
+  refiner as a WP-15c acceptance criterion rather than built here.
+- **The two ticket writes carry an `IdempotencyPlan` keyed by the cause event** (`<action>:<platform
+  id>:<cause event id>`), which is the first thing in this repository to make the executor's
+  `idempotencyStore` load-bearing — the assertion the WP-15b "Discovered work" entry asked for. A key stable
+  across events would be worse than none: the ticket would show the task's first state for ever. Both halves
+  are asserted (*replays instead of writing again* / *writes again for the next event*).
+- **Ordering between handler 110 and handler 120 is now the queue's, not TD-005's.** Both enqueue onto one
+  queue served by one worker, so the order normally holds, but two jobs created microseconds apart are
+  ordered by pg-boss. `pipeline.e2e.test.ts` now waits for **both** consequences before asserting either
+  (rule 76), and the harness docblock says no test may infer one from the other.
+
+**A risk this change adds to the e2e tier, stated rather than discovered later.** Every e2e now waits on
+pg-boss for its *first* step — the task is created by the intake job, so a starved worker means "the task is
+not created" rather than "the task stopped at stage N". Four full `verify:e2e` runs: green, green, **nine
+failures**, green. The bad one started at load average **10.3**, immediately after a `verify` whose vitest
+workers were still winding down, and every failure in it was a job that never ran in *any* instance
+(including the two that existed before this work package). The good runs were at 5.8 and 8.1. It is one more
+job hop in front of a tier that already needed pg-boss for every stage, and it is worth knowing before
+somebody calls it a flake in this file's code: the machine is the variable that moved.
+
+**Discovered work (not done here).**
+- **`ProjectSettingsPort.forProject` is a `projects` query on a connection borrowed *inside* the handler's
+  transaction** (`apps/server/src/pipeline.ts`), at `planApprovalGate` and `schedulerHandler`. It is a local
+  read, not a call held across a third party's latency — it contends, it cannot stall, because every other
+  borrower releases without waiting on a dispatch — so it is not in the floor. The honest fix is for the
+  port to take the caller's transaction; today the claim "a dispatch holds two connections" is true of what
+  it *holds* and not of what it transiently borrows.
+- **Every other `tasks.save` is a whole-row write** and the stage executor, the saga handlers and the
+  outbound job can still interleave. The workpad's case is fixed because WP-15d created it; the class is
+  not. A narrow write per writer, or optimistic concurrency on the row, is a work package of its own — and
+  it now has a reproduction (see above).
+- **A static `import pg from 'pg'` placed before the harness import in an e2e file makes
+  `createEventing` throw `EventBus is not a constructor`** — a module-graph cycle that only bites at a
+  particular import order. Worked around in a throwaway file with `await import('pg')`; nothing in the
+  repository does it today, and nothing stops the next file from doing it.
 
 ## Milestone notes
 

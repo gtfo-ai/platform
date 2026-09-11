@@ -54,6 +54,7 @@ import { type Logger, silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { EventHandler, HandlerContext } from './handler.js';
 import { HandlerRegistry } from './handler.js';
+import { withOpenTransaction } from './open-transaction.js';
 
 /** Why a dispatch attempt ended. */
 export type DispatchStatus =
@@ -360,7 +361,9 @@ export class EventBus {
           },
           afterCommit,
         );
-        await handler.handle(context);
+        // Marked, so anything the handler reaches that must not hold a pooled connection across a
+        // network round trip can refuse rather than be reviewed for (WP-15d, `open-transaction.ts`).
+        await withOpenTransaction(async () => handler.handle(context));
         if (stopReason !== undefined && remaining.length > 0) {
           await scope.handlerExecutions.markStopped(event.position, remaining, stopReason);
         }

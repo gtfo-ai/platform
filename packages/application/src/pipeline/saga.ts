@@ -29,7 +29,7 @@
  * result for a commit the task has moved past is not a failure; treating it as one would park a
  * task for a human every time somebody re-ran an old pipeline.
  */
-import type { DomainEvent, Id, Slug } from '@platform/contracts';
+import { type DomainEvent, type Id, type Slug, ticketRefSchema } from '@platform/contracts';
 import type { CommandContext, PipelineSignal } from '@platform/domain';
 import {
   compilePipeline,
@@ -55,9 +55,15 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { PipelineIntegrationsPort } from './integrations.js';
-import { gitReads, noRunScopedSecrets } from './integrations.js';
-import { enqueueReviewCommentWindow, enqueueStage } from './jobs.js';
+import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import {
+  enqueueOutbound,
+  enqueueReviewCommentWindow,
+  enqueueStage,
+  type PipelineOutboundData,
+} from './jobs.js';
 import type { ProjectSettingsPort } from './settings.js';
 import { templateForIssueType } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
@@ -157,10 +163,34 @@ const emitAndSchedule = async (
 /**
  * product/04 S0: create the task, classify it, check the WIP limits, start it or queue it.
  *
- * The protected-branch check is here rather than at the first push because it is a property of the
- * *project* and the honest time to refuse is before any spend: a default branch with no protection
- * makes the push credential the agent will be given (which has no branch scoping of its own, Q40)
- * enough to write to `main`.
+ * The protected-branch check is part of intake rather than of the first push because it is a
+ * property of the *project* and the honest time to refuse is before any spend: a default branch
+ * with no protection makes the push credential the agent will be given (which has no branch
+ * scoping of its own, Q40) enough to write to `main`.
+ *
+ * ## The handler decides to intake; the job intakes (WP-15d)
+ *
+ * The check is two provider reads, and this handler runs at priority **10** — the core band, with
+ * the dispatcher's transaction and its own open and `APP_DISPATCH_MAX_CONCURRENCY` shipping as 1.
+ * Making the calls here held both connections and the platform's only dispatch slot for the length
+ * of somebody else's HTTP round trip: measured, nothing else was dispatched *at all* while one git
+ * read was in flight. So the handler does the one cheap thing that is worth doing inside the
+ * transaction — the 1:1 dedup, so a repeated `ticket.matched` does not even cost a provider read —
+ * and {@link runIntakeCheck} does the rest from a job.
+ *
+ * **Nothing is written here, deliberately.** The task is created by the job, in the same
+ * transaction that admits or escalates it, so there is no window in which a half-intaken task row
+ * exists for the scheduler to start behind the check's back.
+ *
+ * **The cost, stated as it actually is.** A crash between this commit and the enqueue
+ * (`afterCommit` is at-most-once, TD-004) leaves the ticket without a task, and **nothing re-emits
+ * it**: there is no poller in this build, and WP-15c's ingress is specified to deduplicate a
+ * re-delivery on `inbox(provider, delivery_id)`, so the same webhook arriving twice performs
+ * nothing twice. It is also **unlogged**, and cannot be logged here — the process that would write
+ * the line is the one that died; `EventBus` logs a callback that *threw*, which is a different
+ * failure. What would find it is a query the platform does not run yet — a matched ticket with no
+ * task row — and that belongs to the ingress (WP-15c), not to this handler. Until then the residual
+ * is: one ticket, silently not started, recoverable by re-matching it by hand.
  */
 const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.intake',
@@ -172,7 +202,6 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
     const { payload } = event;
-    const settings = await options.settings.forProject(payload.project_id);
     const existing = await options.store.tasks.findByTicket(context.scope.tx, {
       projectId: payload.project_id,
       provider: payload.ticket.provider,
@@ -184,25 +213,89 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
       // a poll that overlapped a webhook, not a second task.
       return;
     }
+    const data: PipelineOutboundData = {
+      duty: 'intake_check',
+      project_id: payload.project_id,
+      cause_event_id: event.id,
+      ticket: payload.ticket,
+      issue_type: payload.issue_type ?? null,
+      priority: payload.priority ?? null,
+    };
+    context.afterCommit(async () => {
+      await enqueueOutbound(options.jobs, data);
+    });
+  },
+});
 
-    const template = templateForIssueType(settings, payload.issue_type ?? null);
-    const commandContext = contextFor(options, payload.project_id, event.id);
+/** What {@link runIntakeCheck} needs beyond the saga's own collaborators. */
+export interface IntakeCheckOptions extends PipelineSagaOptions {
+  readonly unitOfWork: UnitOfWork;
+}
+
+/**
+ * `pipeline.outbound` duty **intake_check**: ask the provider, then create the task.
+ *
+ * CLAUDE.md's shape, with the decision at the end: *read* (the dedup, in a transaction of its own),
+ * *call* (the two git reads, in none), *write* (create and either escalate, queue or start, in one
+ * transaction). Everything the handler used to do in one transaction still happens in one
+ * transaction — it is simply not the dispatcher's.
+ *
+ * It **re-validates on fire** (TD-004), which is what makes the wake-up replaceable: a job that
+ * arrives twice, or long after the event, finds the task already created and returns. That is the
+ * durability `afterCommit` alone cannot give, and the reason this duty is a job rather than a
+ * callback.
+ */
+export const runIntakeCheck = async (
+  options: IntakeCheckOptions,
+  data: PipelineOutboundData,
+): Promise<void> => {
+  const projectId = data.project_id as Id;
+  // The job payload is a wire boundary like any other, and the ticket in it is provider text.
+  const ticket = ticketRefSchema.parse(data.ticket);
+  const causeEventId = data.cause_event_id as Id;
+
+  const alreadyIntaken = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.findByTicket(scope.tx, {
+      projectId,
+      provider: ticket.provider,
+      ticketKey: ticket.key,
+      mode: 'normal',
+    }),
+  );
+  if (alreadyIntaken !== null) {
+    return;
+  }
+
+  const settings = await options.settings.forProject(projectId);
+  const unprotected = await unprotectedDefaultBranch(options, projectId);
+
+  const work = await options.unitOfWork.transaction(async (scope) => {
+    const existing = await options.store.tasks.findByTicket(scope.tx, {
+      projectId,
+      provider: ticket.provider,
+      ticketKey: ticket.key,
+      mode: 'normal',
+    });
+    if (existing !== null) {
+      return null;
+    }
+    const template = templateForIssueType(settings, data.issue_type ?? null);
+    const commandContext = contextFor(options, projectId, causeEventId);
     const created = createTask(
       {
         id: options.ids.next(),
-        projectId: payload.project_id,
-        ticket: payload.ticket,
+        projectId,
+        ticket,
         template,
         mode: 'normal',
         limits: resolveIterationLimits(settings.config.pipeline?.limits),
       },
       { ...commandContext, correlationId: null },
     );
-
     const stored: StoredTask = {
       task: created.aggregate,
       template: settings.templates[template] as StoredTask['template'],
-      priorityRank: priorityRankOf(payload.priority ?? null),
+      priorityRank: priorityRankOf((data.priority as string | null | undefined) ?? null),
       createdAt: options.clock.now(),
       branch: null,
       mr: null,
@@ -210,54 +303,75 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
       costActualUsd: 0,
       estimateUsd: null,
     };
-    await options.store.tasks.insert(context.scope.tx, stored);
+    await options.store.tasks.insert(scope.tx, stored);
 
-    const unprotected = await unprotectedDefaultBranch(options, stored);
     if (unprotected !== null) {
       const escalated = escalateTask(
         created.aggregate,
         {
           reason: `the default branch "${unprotected}" is not protected`,
           blockerBrief:
-            `The platform will not start ${payload.ticket.key}: the repository's default branch "${unprotected}" is not protected, ` +
+            `The platform will not start ${ticket.key}: the repository's default branch "${unprotected}" is not protected, ` +
             'and the push credential an agent is given cannot be scoped to a branch. Protect the branch in the repository settings, then hand the task back.',
         },
-        contextFor(options, created.aggregate.id, event.id),
+        contextFor(options, created.aggregate.id, causeEventId),
       );
-      await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
-      await context.emit([...created.events, ...escalated.events]);
-      return;
+      await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+      await scope.events.append([...created.events, ...escalated.events]);
+      return null;
     }
 
-    const counts = await options.store.tasks.counts(context.scope.tx, payload.project_id);
+    const counts = await options.store.tasks.counts(scope.tx, projectId);
     const admission = evaluateTaskAdmission(counts, settings.wip);
     if (!admission.admitted) {
       const queued = queueTask(
         created.aggregate,
         { reason: admission.reason === 'max_parallel_runs' ? 'wip' : 'wip' },
-        contextFor(options, created.aggregate.id, event.id),
+        contextFor(options, created.aggregate.id, causeEventId),
       );
-      await options.store.tasks.save(context.scope.tx, { ...stored, task: queued.aggregate });
-      await context.emit([...created.events, ...queued.events]);
-      return;
+      await options.store.tasks.save(scope.tx, { ...stored, task: queued.aggregate });
+      await scope.events.append([...created.events, ...queued.events]);
+      return null;
     }
 
-    await context.emit(created.events);
-    await step(options, context, stored, { kind: 'start' });
-  },
-});
+    const pipeline = compilePipeline(stored.task.template, stored.template);
+    const applied = await applyDecision({
+      store: options.store,
+      pipeline,
+      tx: scope.tx,
+      stored,
+      decision: interpret(pipeline, { kind: 'start' }),
+      context: contextFor(options, stored.task.id, causeEventId),
+      causedByEventId: causeEventId,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    });
+    await scope.events.append([...created.events, ...applied.events]);
+    return applied.work;
+  });
 
-/** `null` when the branch is protected, when there is no git binding, or when nobody can tell. */
+  if (work !== null) {
+    await enqueueStage(options.jobs, work);
+  }
+};
+
+/**
+ * `null` when the branch is protected, when there is no git binding, or when nobody can tell.
+ *
+ * Called from the job and never from a handler: `integrationsForProject` refuses inside a
+ * transaction, so a future caller that tries gets an error rather than a held connection.
+ */
 const unprotectedDefaultBranch = async (
   options: PipelineSagaOptions,
-  stored: StoredTask,
+  projectId: Id,
 ): Promise<string | null> => {
   // Outside a run: the branch check happens before a workspace exists, so there is no minted
   // credential for the redactor to hold (Q55, `noRunScopedSecrets`).
   const reads = gitReads(
-    await options.integrations.forProject(stored.task.projectId, noRunScopedSecrets()),
+    await integrationsForProject(options.integrations, projectId, noRunScopedSecrets()),
   );
-  const callContext = { projectId: stored.task.projectId, taskId: stored.task.id };
+  // No task exists yet — the row is written by the transaction this read precedes — so the audit
+  // row names the project and the action, and the ticket key is in the payload the caller passes.
+  const callContext = { projectId, taskId: null };
   const head = await reads.defaultBranch(callContext);
   if (head === null) {
     return null;
@@ -504,14 +618,17 @@ const recordMergeRequest = async (
   if (typeof iid !== 'number' || typeof url !== 'string') {
     return stored;
   }
-  const git = (await options.integrations.forProject(stored.task.projectId, noRunScopedSecrets()))
-    .git;
   const next: StoredTask = {
     ...stored,
     branch: typeof record.branch === 'string' ? record.branch : stored.branch,
     mr: {
-      provider: git?.ref.provider ?? null,
-      project_path: git?.project ?? null,
+      // Which account and which repository path this merge request is on is **not** recorded here
+      // (WP-15d): learning it means resolving the project's bindings, which is a pool borrow and a
+      // credential decryption, and this runs inside the handler's transaction. `gitReads` fills
+      // both in from the binding that is live when the ref is used, which is also the more correct
+      // answer — a project that was re-bound would otherwise be addressed at its old account.
+      provider: null,
+      project_path: null,
       iid,
       url,
       branch: typeof record.branch === 'string' ? record.branch : null,

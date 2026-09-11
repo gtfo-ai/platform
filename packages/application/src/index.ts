@@ -26,6 +26,7 @@ export * from './errors.js';
 export * from './events/consumption.js';
 export * from './events/event-bus.js';
 export * from './events/handler.js';
+export * from './events/open-transaction.js';
 export * from './events/outbox.js';
 // Outbound integration actions (technical/06, WP-07)
 export * from './integrations/action-executor.js';
@@ -42,6 +43,7 @@ export * from './pipeline/commands.js';
 export * from './pipeline/gates.js';
 export * from './pipeline/integrations.js';
 export * from './pipeline/jobs.js';
+export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
 export * from './pipeline/runtime.js';
 export * from './pipeline/saga.js';

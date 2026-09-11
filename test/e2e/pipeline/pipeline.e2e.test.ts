@@ -111,30 +111,39 @@ describe('a feature ticket, end to end', () => {
       label: 'feature-workpad',
       tickets: TICKETS,
       config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
-      // The interleaving this test used to fail on about one run in five, forced. See the harness:
-      // it widens the gap between handler 110 and handler 120 inside one dispatch, so a wait on the
-      // wrong one of the two fails every time rather than rarely.
+      // The interleaving this test used to fail on about one run in five, forced. Since WP-15d the
+      // delay lands on the render's `pipeline.outbound` job rather than inside the dispatch — the
+      // status job was enqueued first and runs first on the same single worker, so the render is
+      // still the later of the two and a wait that stops at the status still fails every time
+      // rather than rarely. The harness's `workpadDelayMs` has the full reasoning.
       workpadDelayMs: 250,
     });
     harness = pipeline;
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1', 'Story')]);
 
-    // Wait for **the line this test asserts**, not for something that precedes it.
+    // Wait for **every line this test asserts**, and for nothing that merely precedes them.
     //
-    // The previous wait was on the ticket *status*, which is `pipeline.status.mapping` at TD-005
-    // priority 110; the assertions below read the workpad *body*, written by `pipeline.workpad` at
-    // 120. Priority order guarantees 110 commits first, so that wait was structurally incapable of
-    // covering these assertions — it passed only because both handlers usually finish inside one
-    // 50 ms poll. 120 is the highest priority number registered for `task.stage.entered`
-    // (10 stage executor, 110 status, 120 workpad), and `ready_for_merge` is the last stage the
-    // task enters before the human merge, so this render is the **last** consequence of the last
-    // event this half of the test is about — which is why waiting on it is sufficient and waiting
-    // on the status was not.
+    // The original wait was on the ticket *status* while the assertions read the workpad *body*:
+    // priority order (110 before 120) guaranteed the status committed first, so the wait was
+    // structurally incapable of covering them and passed only because both handlers finished
+    // inside one 50 ms poll. WP-15d changes what the ordering rests on and therefore what this
+    // wait may assume. Neither handler calls the provider now: each enqueues a `pipeline.outbound`
+    // job after its commit, and one worker runs that queue, so the status still normally reaches
+    // the ticket before the render — but that is a property of the queue, not a guarantee of the
+    // pipeline, and two jobs enqueued microseconds apart are ordered by pg-boss and not by TD-005.
+    // So the wait covers **both** consequences and the assertions read them afterwards. There is
+    // nothing to wait for beyond them: `ready_for_merge` is the last stage the task enters before
+    // the human merge, and the workpad render is the last outbound job that dispatch enqueues.
     const WORKPAD_HEADER = '**ACME-1** — ready_for_merge (ready_for_merge)';
     await pipeline.waitFor(
-      'the workpad rendered for ready_for_merge',
-      async () =>
-        pipeline.tickets.peek('ACME-1')?.comments[0]?.body.startsWith(WORKPAD_HEADER) === true,
+      'the workpad rendered for ready_for_merge and the ticket status moved with it',
+      async () => {
+        const seen = pipeline.tickets.peek('ACME-1');
+        return (
+          seen?.comments[0]?.body.startsWith(WORKPAD_HEADER) === true &&
+          seen?.status === 'In Review'
+        );
+      },
     );
 
     const ticket = pipeline.tickets.peek('ACME-1');

@@ -255,6 +255,19 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    saveWorkpad: async (tx, taskId, workpad) => {
+      // One column. `save` writes the whole row, and the workpad is written from a job that runs
+      // beside the stage executor's transactions (WP-15d), so a whole-row write from there is a
+      // lost update of whatever it did not read.
+      const result = await sqlOf(tx).query(
+        'update tasks set workpad_ref = $2::jsonb, updated_at = now() where id = $1',
+        [taskId, JSON.stringify(workpad)],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
     save: async (tx, stored) => {
       const { task } = stored;
       const result = await sqlOf(tx).query(

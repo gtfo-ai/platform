@@ -43,6 +43,11 @@ describe('the review-comment window', () => {
     expect(declared).toEqual([
       expect.objectContaining({ name: JOB_QUEUES.stageExecute, policy: 'stately' }),
       expect.objectContaining({ name: JOB_QUEUES.mrCommentDebounce, policy: 'stately' }),
+      // WP-15d's outbound queue is `standard` on purpose, and the difference is load-bearing: a
+      // coalescing policy admits one queued job per key and *drops* the rest, which would take the
+      // blocker brief an escalation carried with it — the one thing a workpad render cannot
+      // re-derive from the task row.
+      expect.objectContaining({ name: JOB_QUEUES.pipelineOutbound, policy: 'standard' }),
     ]);
     // A stage is a whole agent run; the 15-minute default would call it lost mid-way.
     const stage = declared.find((entry) => entry.name === JOB_QUEUES.stageExecute);

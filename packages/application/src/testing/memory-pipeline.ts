@@ -109,6 +109,15 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
       }
       tasks.set(stored.task.id, clone(stored));
     },
+    saveWorkpad: async (_tx, taskId, workpad) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Only this field, like the SQL `update tasks set workpad_ref = …`: a whole-row write from
+      // the outbound job would put back whatever the stage executor had just changed (WP-15d).
+      tasks.set(taskId, clone({ ...current, workpad }));
+    },
     counts: async (_tx, projectId) => {
       const owned = [...tasks.values()].filter((stored) => stored.task.projectId === projectId);
       return {

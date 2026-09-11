@@ -69,6 +69,16 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   worker's concurrency is **additive** to the dispatcher's `2 × concurrency + 1` pool floor. Everything a
   handler enqueues goes through `HandlerContext.afterCommit`, because `Jobs.enqueue` does not join the
   handler's transaction — and every job re-validates on fire, since a timer cannot be cancelled (TD-004).
+  **The same shape covers every provider call the pipeline makes** (WP-15d): a handler *decides* and the
+  `pipeline.outbound` job (`packages/application/src/pipeline/outbound.ts`) *calls*, so nothing reaches a
+  provider while a transaction is open. It is refused mechanically rather than reviewed for —
+  `events/open-transaction.ts` marks the handler path (in `EventBus`) and the job path (in
+  `createPipelineRuntime`), and `integrations.ts` refuses both to resolve a project's bindings and to make
+  the call. Two consequences to know before touching it: **ordering between the status mapping (110) and
+  the workpad (120) is now the queue's, not TD-005's**, so a test that asserts both waits for both; and a
+  write made from that job uses a **narrow** repository method (`tasks.saveWorkpad`), because a whole-row
+  `save` from a job that runs beside the stage executor is a lost update — measured, at 0.40 USD of a
+  task's recorded spend.
   **`apps/server/src/pipeline.ts` is the production composition** (WP-15a): a project's bindings are read
   from `bindings`/`integrations` and their credentials decrypted from `secrets` by
   `packages/integrations/src/bindings/loader.ts`, which builds the adapters **per call** so the redactor can

@@ -78,6 +78,23 @@ export interface TaskRepository {
   listAtStage(tx: Transaction, projectId: Id, stage: Slug): Promise<readonly StoredTask[]>;
   insert(tx: Transaction, stored: StoredTask): Promise<void>;
   save(tx: Transaction, stored: StoredTask): Promise<void>;
+  /**
+   * Writes **only** `workpad_ref` — the one column a writer outside the pipeline's own ordering
+   * touches.
+   *
+   * `save` writes the whole row, which is correct for a saga step: the aggregate it writes is the
+   * one it read in the same transaction, and the pipeline orders those. The workpad is different
+   * since WP-15d: the render happens in a `pipeline.outbound` job, concurrently with the stage
+   * executor's own transactions, so a `save` from there is a read-modify-write of *every* column
+   * against a snapshot somebody else has already moved on from. **Measured** rather than reasoned:
+   * a bug ticket walked all seven agent stages and finished with `cost_actual` 2.40 instead of
+   * 2.80, because the workpad's whole-row write landed between the executor's read and its write
+   * and put a stale cost back. One column, one update, and the class is gone.
+   *
+   * @throws when the task does not exist, like `save` — a write that hit no row is how a projection
+   * silently stops being written.
+   */
+  saveWorkpad(tx: Transaction, taskId: Id, workpad: WorkpadRef): Promise<void>;
   /** WIP counting (BD-010); `countsAsActive` / `countsInPipeline` decide which states count. */
   counts(
     tx: Transaction,

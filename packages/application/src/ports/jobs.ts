@@ -330,6 +330,24 @@ export const JOB_QUEUES = {
    * handler runs finds the queued slot free again and starts the next window, so nothing is lost.
    */
   mrCommentDebounce: 'mr.comment.debounce',
+  /**
+   * **Every provider call the pipeline makes because of an event** (WP-15d).
+   *
+   * TD-004 names the workloads it knew about and is not a closed list ("index rebuilds,
+   * maintenance schedules"); this is the one the transaction shape requires. An event handler may
+   * decide that the outside world has to be told something, and it may not be the thing that tells
+   * it: a provider call inside `context.scope.tx` holds a pooled connection and the dispatch slot
+   * for the length of an HTTP round trip (measured: with one git read held open, nothing else was
+   * dispatched at all). So the handler enqueues here after its commit and this queue makes the
+   * call, outside every transaction, re-validating from the task row when it fires — CLAUDE.md's
+   * *transaction / no transaction / transaction*, and technical/06 § "Outbound: actions".
+   *
+   * Policy `standard`, deliberately, where `stage.execute` is `stately`: a wake-up that a
+   * coalescing policy dropped would take with it the one thing the render cannot re-derive from
+   * the task row — the blocker brief the event carried. One worker keeps the calls for a task in
+   * the order the handlers decided on.
+   */
+  pipelineOutbound: 'pipeline.outbound',
   /** Budget window rollover (cron). */
   budgetWindowReset: 'budget.window.reset',
   /** Knowledge-base index rebuild; singleton per project. */

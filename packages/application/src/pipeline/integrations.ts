@@ -10,9 +10,29 @@
  * A project with no git or task-management binding gets `null`, and the sagas that need one say so
  * with a blocker brief instead of throwing: a project whose GitLab integration was removed should
  * park its tasks, not crash its dispatcher.
+ *
+ * ## Nothing here may run inside a database transaction (WP-15d)
+ *
+ * Two refusals, and they are **not** the same guard bounded twice (standing rule 41) — they stop
+ * different things, and each has a test the other cannot pass:
+ *
+ *  - {@link integrationsForProject} refuses to *resolve a project's bindings* inside a transaction.
+ *    In production that resolution is itself I/O — a `bindings` read, a `secrets` read and an
+ *    envelope decryption per call (`packages/integrations/src/bindings/loader.ts`), on a connection
+ *    borrowed *inside* the caller's — so it is a nested borrow before a provider is even reached;
+ *  - {@link read} and {@link mutate} refuse the *call*. That is the one a caller who resolved the
+ *    bindings before opening its transaction would otherwise walk straight past, and it is where
+ *    the connection would actually be held across the provider's latency.
+ *
+ * The place that answers "a transaction is open" is `events/open-transaction.ts`, which has the
+ * measurement and the honest list of what the mechanism cannot see.
  */
 import type { Id, JsonObject, TaskMode } from '@platform/contracts';
-import type { IntegrationActionExecutor } from '../integrations/action-executor.js';
+import { assertOutsideTransaction } from '../events/open-transaction.js';
+import type {
+  IdempotencyPlan,
+  IntegrationActionExecutor,
+} from '../integrations/action-executor.js';
 import type { InjectedSecret } from '../integrations/redaction.js';
 import type { IntegrationRef } from '../ports/integrations/common.js';
 import type {
@@ -26,6 +46,7 @@ import type {
   CommentRef,
   TaskManagementPort,
   TicketRefInput,
+  TransitionResult,
 } from '../ports/integrations/task-management.js';
 
 export interface GitBinding {
@@ -98,6 +119,26 @@ export const staticPipelineIntegrations = (
   integrations: PipelineIntegrations,
 ): PipelineIntegrationsPort => ({ forProject: async () => integrations });
 
+/**
+ * **The door.** Every pipeline path that wants a provider starts here, and it refuses to open
+ * inside a transaction.
+ *
+ * It is a function rather than a decorator on the port so that no call site can be handed an
+ * unguarded instance: `staticPipelineIntegrations` in a unit test, the production loader and
+ * whatever a later composition root writes all go through this one call, and
+ * `integrations.test.ts` reads the ring off disk and fails a site that calls `forProject` directly.
+ *
+ * @throws {TransactionOpenError} when a transaction is open on this call path.
+ */
+export const integrationsForProject = async (
+  port: PipelineIntegrationsPort,
+  projectId: Id,
+  scope: IntegrationCallScope,
+): Promise<PipelineIntegrations> => {
+  assertOutsideTransaction('integrations.forProject');
+  return port.forProject(projectId, scope);
+};
+
 interface CallContext {
   readonly projectId: Id;
   readonly taskId: Id | null;
@@ -112,6 +153,7 @@ const read = async <T>(
   context: CallContext,
   perform: () => Promise<T>,
 ): Promise<T> => {
+  assertOutsideTransaction(`the provider read "${action}"`);
   const outcome = await integrations.executor.execute<T>({
     integration: ref,
     action,
@@ -139,7 +181,9 @@ const mutate = async <T>(
   perform: () => Promise<T>,
   shadowResult: () => T,
   describeResult: (result: T) => JsonObject | null,
+  idempotency?: IdempotencyPlan<T>,
 ): Promise<T> => {
+  assertOutsideTransaction(`the provider mutation "${action}"`);
   const outcome = await integrations.executor.execute<T>({
     integration: ref,
     action,
@@ -151,9 +195,27 @@ const mutate = async <T>(
     perform,
     shadowResult,
     describeResult,
+    ...(idempotency === undefined ? {} : { idempotency }),
   });
   return outcome.result;
 };
+
+/**
+ * The merge request, addressed at the binding that is **live now**.
+ *
+ * `tasks.mr_ref` records what the developer stage reported — the iid, the URL, the branch, the head
+ * commit — and deliberately not which account it is on: learning that means resolving the project's
+ * bindings, and the saga learns about a merge request from inside its handler's transaction, where
+ * resolving a binding is a nested pool borrow and a credential decryption (WP-15d). So the provider
+ * and the repository path are filled in **here**, where the binding is already in hand and is the
+ * one in force rather than the one that was in force when the row was written. A ref that carries
+ * its own path (an older row, or an event payload that named one) keeps it.
+ */
+const addressed = (git: GitBinding, ref: MergeRequestRefInput): MergeRequestRefInput => ({
+  ...ref,
+  provider: ref.provider ?? git.ref.provider,
+  project_path: ref.project_path ?? git.project,
+});
 
 export const gitReads = (integrations: PipelineIntegrations) => ({
   mergeRequest: async (
@@ -170,7 +232,7 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       'get_merge_request',
       { project: git.project, iid: ref.iid },
       context,
-      async () => git.port.getMergeRequest(ref),
+      async () => git.port.getMergeRequest(addressed(git, ref)),
     );
   },
 
@@ -203,7 +265,7 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       'list_discussions',
       { project: git.project, iid: ref.iid },
       context,
-      async () => git.port.listDiscussions(ref),
+      async () => git.port.listDiscussions(addressed(git, ref)),
     );
   },
 
@@ -248,13 +310,45 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
   },
 });
 
+/**
+ * What makes a ticket write replayable: the wake-up that asked for it.
+ *
+ * Both ticket writes are made from a job now (WP-15d), and a job is *at-least-once* — pg-boss
+ * re-delivers one whose lease expired and retries one that threw after the provider had already
+ * answered. The event that caused the wake-up is the identity of the work: the same event asking
+ * twice is the same write, and the next event is a new one. Nothing untrusted goes into the key —
+ * a platform-chosen marker or task id and an event id — because an idempotency key is an identity
+ * and the executor **refuses** one that needs redacting (`idempotencyScopeFor`).
+ */
+export interface TicketWriteContext extends CallContext {
+  readonly mode: TaskMode;
+  /** The event this write is the consequence of; `null` outside a dispatch (a manual re-render). */
+  readonly causeEventId: Id | null;
+}
+
+/**
+ * `encode`/`decode` are casts and not a `parse`, matching the one other plan in the repository
+ * (`slack/digest.ts`).
+ *
+ * The stored value is redacted before it is written, so a `parse` would turn the rare case where
+ * TD-012's pattern redactor matched something inside a provider's own comment id into a job that
+ * fails, retries, replays the same unparseable value and dies — a workpad that stops rendering
+ * because a URL looked like a token. The cast keeps the replay lossy-but-alive instead, which is
+ * the fail-open direction on a *notification* (standing rule 20).
+ */
+const replayable = <T>(key: string): IdempotencyPlan<T> => ({
+  key,
+  encode: (result) => result as unknown as JsonObject,
+  decode: (stored) => stored as unknown as T,
+});
+
 export const ticketWrites = (integrations: PipelineIntegrations) => ({
   /** BD-023's sticky comment: one per task, edited in place. */
   upsertWorkpad: async (
     ticket: TicketRefInput,
     markerId: string,
     markdown: string,
-    context: CallContext & { readonly mode: TaskMode },
+    context: TicketWriteContext,
   ): Promise<CommentRef | null> => {
     const binding = integrations.taskManagement;
     if (binding === null) {
@@ -274,6 +368,9 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
         url: null,
       }),
       (result) => ({ comment_id: result.comment_id }),
+      context.causeEventId === null
+        ? undefined
+        : replayable<CommentRef>(`upsert_workpad:${markerId}:${context.causeEventId}`),
     );
   },
 
@@ -281,7 +378,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
   transition: async (
     ticket: TicketRefInput,
     status: string,
-    context: CallContext & { readonly mode: TaskMode },
+    context: TicketWriteContext,
   ): Promise<void> => {
     const binding = integrations.taskManagement;
     if (binding === null) {
@@ -296,6 +393,11 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       async () => binding.port.transition(ticket, status),
       () => ({ changed: false, from: status, to: status }),
       (result) => ({ changed: result.changed, from: result.from, to: result.to }),
+      context.causeEventId === null || context.taskId === null
+        ? undefined
+        : replayable<TransitionResult>(
+            `transition_ticket:${context.taskId}:${context.causeEventId}`,
+          ),
     );
   },
 });

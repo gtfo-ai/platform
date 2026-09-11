@@ -36,7 +36,7 @@
 import { isBuiltinGateStageId } from '@platform/contracts';
 import type { PipelineStage } from '@platform/domain';
 import type { PipelineIntegrationsPort } from './integrations.js';
-import { gitReads, noRunScopedSecrets } from './integrations.js';
+import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { StoredTask } from './store.js';
 
 export type GateResult =
@@ -94,7 +94,11 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
       // a binding for it would make an unrelated misconfiguration fail a gate that needs no
       // provider. A gate runs outside a run — no workspace, so no minted credential — which is why
       // the call's scope holds nothing (Q55).
-      const bindings = await integrations.forProject(stored.task.projectId, noRunScopedSecrets());
+      const bindings = await integrationsForProject(
+        integrations,
+        stored.task.projectId,
+        noRunScopedSecrets(),
+      );
 
       /**
        * **"The platform cannot tell" is not "the answer is yes"** — and asking the binding first is

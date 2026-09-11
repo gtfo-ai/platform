@@ -33,7 +33,7 @@
  * for it. Only *chained* events — the ones a handler returns or appends through its transaction
  * scope — inherit the dispatcher's slot. Emit, never dispatch.
  */
-import type { Logger } from '@platform/application';
+import type { Jobs, Logger } from '@platform/application';
 import { sweepReadiness } from '@platform/application';
 import {
   db as dbAdapters,
@@ -56,6 +56,17 @@ import { SseHub } from './sse/hub.js';
 export interface ServerRuntime {
   readonly config: ServerConfig;
   readonly app: FastifyInstance;
+  /**
+   * The job runtime this process started, or `null` for a role that starts none (`ROLE=api`).
+   *
+   * A **labelled seam**, and the only caller is the e2e tier (WP-15d): a job is at-least-once and
+   * pg-boss re-delivers one whose lease expired, and there is no other way to ask a running
+   * instance "what happens when the same wake-up arrives twice?" — which is the question that makes
+   * the idempotency store `composePipeline` builds load-bearing rather than merely supplied
+   * (standing rule 35). Exposed rather than reached for through pg-boss's own tables, so the test
+   * enqueues through the same adapter the pipeline does.
+   */
+  readonly jobs: Jobs | null;
   readonly logger: PinoLogger;
   readonly metrics: Metrics;
   readonly hub: SseHub;
@@ -153,6 +164,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
     });
 
     let jobsStarted = false;
+    let jobs: Jobs | null = null;
     if (capabilities.worker) {
       const jobsRuntime = jobsAdapters.createPgBossJobs({
         database: jobsAdapters.asJobsDatabase(database.pool),
@@ -169,6 +181,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       // with `migrate: false, createSchema: false` so a runtime can never race the migrator.
       await jobsRuntime.start();
       jobsStarted = true;
+      jobs = jobsRuntime.jobs;
       stopCallbacks.unshift({
         name: 'jobs',
         stop: async () => {
@@ -306,6 +319,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
     return {
       config,
       app,
+      jobs,
       logger,
       metrics,
       hub,

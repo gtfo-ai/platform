@@ -1,9 +1,10 @@
 /**
- * The pipeline's two background jobs (TD-004).
+ * The pipeline's background jobs (TD-004) — the queue names, the payloads and two of the handlers.
  *
  * `stage.execute` runs one stage of one task — an agent run, or a gate the platform evaluates
  * itself. `mr.comment.debounce` is BD-007's two-minute batch window for human merge-request
- * comments.
+ * comments. `pipeline.outbound` is every provider call an event handler decided on (WP-15d); its
+ * handler lives in `outbound.ts`, because it routes to duties this file must not depend on.
  *
  * ## Why the batch window is a delayed wake-up and not a coalesced job
  *
@@ -31,7 +32,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
-import { gitReads, noRunScopedSecrets } from './integrations.js';
+import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import { applyDecision } from './transitions.js';
@@ -56,6 +57,54 @@ export interface ReviewWindowData {
   readonly [key: string]: unknown;
 }
 
+/**
+ * One outbound duty: a provider call an event handler decided on and did not make (WP-15d).
+ *
+ * snake_case, like every other payload on the wire (CLAUDE.md). It carries **ids and the event's
+ * own text**, never a resolved binding or a credential: the job re-reads the task and re-resolves
+ * the project's bindings when it fires, because a job is a wake-up and not a message
+ * (TD-004: "re-validate on fire").
+ */
+export interface PipelineOutboundData {
+  readonly duty: 'intake_check' | 'workpad' | 'status';
+  readonly project_id: string;
+  /** Absent for `intake_check`, which runs before there is a task. */
+  readonly task_id?: string;
+  /** The event that caused the wake-up: the replay identity of a ticket write, and the cause id. */
+  readonly cause_event_id: string;
+  /** `intake_check` only — `ticket.matched`'s payload, which no row holds until the task exists. */
+  readonly ticket?: {
+    readonly provider: string;
+    readonly key: string;
+    readonly url: string;
+  };
+  readonly issue_type?: string | null;
+  readonly priority?: string | null;
+  /** `workpad` only: the brief lives on the event, not on the task row. */
+  readonly blocker_brief?: string;
+  /**
+   * `status` only: the provider's own status name the handler mapped this event to.
+   *
+   * Decided by the handler rather than re-derived when the job fires, because a transition is a
+   * movement and the board owes a human every move in order; see `statusMappingHandler`.
+   */
+  readonly status?: string;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * The only way a handler asks for a provider call.
+ *
+ * Always from `HandlerContext.afterCommit`: `Jobs.enqueue` does not join the handler's transaction
+ * (TD-004), so an enqueue written inline would be durable even when the decision that caused it
+ * rolled back. The consequence — a crash between the commit and the callback loses the wake-up —
+ * is the at-most-once residual `afterCommit` documents, and it is why every duty here re-derives
+ * what it should do from committed state rather than trusting the payload.
+ */
+export const enqueueOutbound = async (jobs: Jobs, data: PipelineOutboundData): Promise<void> => {
+  await jobs.enqueue<PipelineOutboundData>({ queue: JOB_QUEUES.pipelineOutbound, data });
+};
+
 export const declarePipelineQueues = async (jobs: Jobs): Promise<void> => {
   await jobs.defineQueue({
     name: JOB_QUEUES.stageExecute,
@@ -73,6 +122,15 @@ export const declarePipelineQueues = async (jobs: Jobs): Promise<void> => {
     policy: 'stately',
     retryLimit: 2,
     retryDelaySeconds: 30,
+  });
+  await jobs.defineQueue({
+    name: JOB_QUEUES.pipelineOutbound,
+    // `standard`, not `stately`: see `JOB_QUEUES.pipelineOutbound`. A dropped wake-up would take
+    // the event's blocker brief with it, and that is the one thing a render cannot re-derive.
+    policy: 'standard',
+    retryLimit: 2,
+    retryDelaySeconds: 30,
+    retryBackoff: true,
   });
 };
 
@@ -303,7 +361,11 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
 
     // The window closes outside any run, so the call's scope holds no minted credential (Q55).
     const reads = gitReads(
-      await options.integrations.forProject(stored.task.projectId, noRunScopedSecrets()),
+      await integrationsForProject(
+        options.integrations,
+        stored.task.projectId,
+        noRunScopedSecrets(),
+      ),
     );
     const discussions = await reads.discussions(stored.mr, {
       projectId: stored.task.projectId,

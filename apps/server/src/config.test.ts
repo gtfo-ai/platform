@@ -130,11 +130,10 @@ describe('loadServerConfig', () => {
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
     const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });
-    // (2 + 1) × 2 + 1 for dispatch — the dispatcher's own transaction, the handler's, and the
-    // audit write WP-15b nests inside the handler's — plus pg-boss, the pipeline's two workers,
-    // HTTP and maintenance.
+    // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
+    // the pipeline's three job workers, HTTP and maintenance.
     expect(requiredPoolConnections(config)).toBe(
-      7 +
+      5 +
         POOL_RESERVATIONS.jobs +
         POOL_RESERVATIONS.pipeline +
         POOL_RESERVATIONS.http +
@@ -142,13 +141,16 @@ describe('pool sizing', () => {
     );
   });
 
-  it('scales the audit connection with dispatch concurrency rather than reserving one', () => {
-    // The shape of the term, not its value: a handler that calls a provider inside its transaction
-    // holds a third connection **per in-flight dispatch**, so doubling the concurrency must cost
-    // three more, not two. A flat reservation passes the test above and fails this one.
+  it('costs two connections per added dispatch, not three, because no handler calls a provider', () => {
+    // The shape of the term, not its value. Until WP-15d a handler called a provider inside its
+    // transaction and the audit row (BD-003) opened a second one inside *that*, so every added
+    // dispatch cost three connections; the call is made from `pipeline.outbound` now, so it costs
+    // two. `POOL_RESERVATIONS.auditPerDispatch` back at 1 fails this and nothing else, which is
+    // what makes it the receipt rather than a comment.
     const one = load({ APP_DISPATCH_MAX_CONCURRENCY: '1', APP_DB_POOL_MAX: '30' });
     const three = load({ APP_DISPATCH_MAX_CONCURRENCY: '3', APP_DB_POOL_MAX: '30' });
-    expect(requiredPoolConnections(three) - requiredPoolConnections(one)).toBe(6);
+    expect(requiredPoolConnections(three) - requiredPoolConnections(one)).toBe(4);
+    expect(POOL_RESERVATIONS.auditPerDispatch).toBe(0);
   });
 
   it('asks for less when the role runs fewer workloads', () => {
