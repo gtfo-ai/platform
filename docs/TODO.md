@@ -4,6 +4,9 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 
 ## Verification (owner: implementer during the named WP; spikes produce a short report in `research/`)
 
+- [ ] **Blobless partial clone for the platform-side knowledge mirror (TD-026 § Alternatives)** — is `uploadpack.allowFilter` enabled on gitlab.com and on a default self-managed GitLab, so that `git clone --mirror --filter=blob:none` works against a project the platform has a binding for? `[unverified]`. If it is, the platform's copy becomes trees and commits with document blobs fetched on demand, which is the answer for a monorepo (Q63). Measure the clone size both ways on a real project, and measure what a lazy blob fetch does to a vault read when the remote is slow — WP-18.
+- [ ] **`git` in the platform image, and a writable mirror volume** — TD-026 makes the indexer spawn `git` from the platform process, so the product image needs the binary and the compose file needs a data volume for `APP_KNOWLEDGE_MIRROR_ROOT`. WP-18 owns the env var and the refusal when it is absent; WP-22 owns the image and the volume, and this line exists so the two do not each assume the other did it.
+- [ ] **Concurrent fetch into one mirror** — TD-026 relies on the index job being singleton per project for mutual exclusion, the same way the launcher relies on `#mirrorLocks`. Not measured: what two overlapping `git remote update` runs do to one bare repository if the singleton guarantee is ever weakened — WP-18.
 - [ ] Obsidian: can a vault be rooted at a hidden directory (`.agentic/knowledge`)? Manual test — WP-21. If not, default `knowledge_dir` to `docs/agentic/` (Q6 fallback).
 - [ ] `acli` on-disk session location; re-login at container start as planned — WP-22.
 - [ ] `local` provider mode in Docker: Linux `claude` binary in the runtime image, OAuth token/credentials refresh with parallel runs; macOS hosts can only pass `CLAUDE_CODE_OAUTH_TOKEN` — WP-22 (BD-004).

@@ -94,3 +94,24 @@ a compose file that binds the socket into the launcher container only — is **W
 above assigns it there. And **no test tier exercises the real `DockerWorkspaceProvider.attach`**: the
 contract suite runs the real provider only behind a daemon and an absent `platform-runtime` image, so the
 control-socket readiness handshake stays mutation-blind until WP-22 (PROGRESS, WP-15g's refiner note).
+
+## Amendment (WP-18 ruling, 2026-09-12) — the launcher's mirror is not the platform's read path
+
+Recorded from an architect ruling taken before WP-18 registers the `KnowledgeIndexer` job, because the
+lifecycle line above — *"bare mirror per project updated before each run"* — reads as though it were the
+platform's copy of a project's repository. **It is the launcher's, and only the launcher can advance
+it.** `updateMirror` runs a helper **container** (`packages/infrastructure/src/workspace/provider.ts:389-443`),
+which the amendment above forbids the platform process from doing; the volume it writes is mounted into
+run containers and into helpers, never into the platform's own filesystem.
+
+So the knowledge indexer, which technical/07 triggers at task start and after every merge, **does not
+read `repo-cache`**. It reads a second, platform-side bare mirror that the platform process clones and
+fetches itself, with `git ls-tree` and `git cat-file` and no working tree. That is **TD-026**, which
+carries the reasoning, the measurement and what the read must never do.
+
+Two mirrors per project is the consequence, and it is deliberate rather than an oversight waiting to be
+consolidated: they have different owners, different refresh points and different failure modes, and
+merging them means either giving the platform process a Docker client (forbidden above) or giving the
+launcher a vault-read API (blocked on Q52's transport, and it widens the smallest privileged component
+in the system). A future session that wants one mirror should read TD-026 § Alternatives before
+starting.

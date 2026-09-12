@@ -7,6 +7,29 @@
 - `KnowledgeIndexer` job (pg-boss, singleton per project): `git diff --name-only <last_indexed>..<head>` restricted to `knowledge_dir`, `.agentic/rules`, `CLAUDE.md`, `AGENTS.md` → parse frontmatter (schema in product/05) → split into chunks by heading (each chunk prefixed with `project / path / H1 > H2`) → upsert `kb_documents`, `kb_chunks`, `kb_links` → update `kb_index_state`. Full rebuild on demand or when the parser version changes.
 - Validation on index: frontmatter schema, dangling wikilinks, expired items, duplicated ids; results feed the KB health report.
 
+> **Where the tree the indexer reads comes from — decided at TD-026, before WP-18 wires the job.**
+> This section says the platform "reads it from the default branch" and never said *from what*. The
+> answer is a **platform-side bare mirror** of the project, one per project, cloned and fetched by the
+> platform process itself and read with `git ls-tree` and `git cat-file`: **no working tree is ever
+> created**, and `repoPaths` is the tree at the commit rather than a walk of a directory. It is a
+> **different** mirror from the one technical/05 §1 keeps on `repo-cache` for run workspaces — that one
+> is refreshed by a helper container only the launcher may start (TD-021's WP-15g amendment), so after a
+> merge it would not yet hold the merge commit and the index would report `unchanged` while being stale,
+> and on a project's first task it would not exist at all.
+>
+> Four rules travel with it, and they are the ones an implementer would otherwise re-decide. A fetch
+> that fails is `vault_unavailable` and leaves the existing index alone — never a read of the stale copy
+> reported as success. An explicit commit must be an **ancestor of the default branch** or the read is
+> refused, because the sha reaches the job from a provider event and BD-025 reads agent configuration
+> from the default branch only. Tree entries of mode `120000` (symlink) and `160000` (gitlink) are listed
+> in `repoPaths` and **never read as documents**. And with no mirror root configured, no vault source is
+> composed and the job refuses **by name** rather than indexing nothing.
+>
+> **The code map below is not covered by this**, because `ctags` reads files. Its production composition
+> extracts `git archive <sha>` from the same mirror into a scratch directory and must drop any symlink
+> whose target escapes it — `git archive` recreates one verbatim, measured in
+> `docs/research/13-bare-mirror-vault-read.md`.
+
 ## Retrieval for context packs (phase 1)
 Inputs: task text (ticket + spec), touched paths (from plan/diff when available), stage.
 1. **Path match:** documents whose `paths` globs match any touched path → score 1.0.

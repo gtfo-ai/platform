@@ -20,6 +20,7 @@ Neutral names, no product prefix for standard variables; `APP_` for product-spec
 | `CLAUDE_CODE_OAUTH_TOKEN` | — (secret, `local` mode, optional) | operator-supplied |
 | `APP_CLAUDE_BINARY` | bundled | path to a `claude` binary in `local` mode |
 | `APP_WORKSPACE_ROOT` | `/var/lib/app/workspaces` | runner volume |
+| `APP_KNOWLEDGE_MIRROR_ROOT` | unset | where the platform keeps its own bare mirror per project, which the knowledge indexer reads with git plumbing (TD-026). **Unset composes no `VaultSource`** and the index job refuses by name; it never defaults to a path. Distinct from the launcher's `APP_WORKSPACE_CACHE_VOLUME`, which only the launcher can advance |
 | `APP_TRANSCRIPT_STORE` | `db` | `db | fs:<path> | s3:<bucket>` (03) |
 | `APP_RUNNER_MAX_PARALLEL` | `4` | org `max_parallel_runs` seed |
 | `APP_WEBHOOK_PUBLIC_URL` | unset | if set, webhooks are advertised in setup guides; else polling |

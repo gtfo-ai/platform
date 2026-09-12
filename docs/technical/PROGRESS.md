@@ -9,10 +9,18 @@
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Session 5 so far.** `main` is at **`9b1187a`**, **green on GitHub** (`34688812021`, all jobs, read as
-`completed success` — not `in_progress`, rule 84). Clean tree, no worktrees, no open branches. Verified in
-the orchestrator's own shell at `0ba3baf` (`PASS: verify`, exit 0) and at `9b1187a` before the push
-(`PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e`, each exit 0).
+**Session 5 so far.** `main` is at **`19da103`** (WP-15h part 1). CI, every run read as `completed success`
+and never as `in_progress` (rule 84): `9b1187a` (`34688812021`), `c6f38ca` (`34689127671`), `19da103`
+(`34692412614`). Clean tree, no worktrees, no open branches. Verified in the orchestrator's own shell before
+every push (`PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e`, and `PASS: verify:ui` for
+WP-15h, each exit 0). **The docs commit after `19da103` has its own run; the next session resolves it from
+`gh run list` before starting.**
+
+**WP-15h part 1 is DONE at `19da103`** (row in M1). **Backlog 26 is DECIDED** by an architect ruling —
+**TD-026**, a git-backed `VaultSource` over a bare mirror the platform owns — recorded under "Architect
+ruling (WP-18 / backlog 26, session 5)"; the WP-18 row is rewritten with its criteria. **Backlog 30** (a
+leaked `pg.Client` still kills the process on a forced drop) and **backlog 10 as a class** with a member
+list were filed by a refiner.
 
 **Backlog 28 is RESOLVED at `9b1187a`**, first in the order a refiner argued for: CI's `e2e-fake-claude`
 had died on `5b01f73` with every test passing, on an uncaught `57P01` during teardown. The mechanism is in
@@ -1108,7 +1116,14 @@ What done looks like is small and worth naming so it is not re-derived: the WP t
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
 
-### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (TODO — now **WP-15h**; the SSE transcript bridge is one half of it)
+### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1, session 5; the instance is half closed — eleven paths remain, listed in the census with their owning rows)
+
+> **Session 5.** The recurrence is closed by `apps/server/src/routes/client-census.test.ts`, which fails on a
+> path the client names and the server does not serve, over tracked **and** untracked client files, in both
+> directions. The run endpoints, `GET /api/tasks/:id` and the `run:<id>` publisher landed; `/api/org/agents`,
+> `/api/org/inbox`, `/api/integrations` and its setup guide, `/api/projects` and its `readiness`, `budgets`,
+> `tasks`, `kb/tree`, `kb/doc`, `kb/proposals` children remain, each named in the test with the row that owns
+> it, so the census is the honest list rather than this entry. Part 2 is WP-15h's second commit.
 
 **What is wrong.** WP-20 shipped every screen and WP-15g now writes real `run_messages` rows, and **nothing
 joins them**: the server has no route that returns a run, a task, a transcript, an inbox, an agent, a budget
@@ -1739,6 +1754,78 @@ size, and the pack that fills it is spent per stage run. A nit today (the shippe
 and nothing else sets it), and the cheapest fix is a `.max()` at the boundary rather than a check at
 the assembler. Found by WP-16's review.
 
+### 31. **`run_context_pack` has never been written, and it could not hold the record if it were** (TODO — **no work package owns the writer**; found by the first reader, WP-15h)
+Placed here because the two entries below it argue their cost from this table's contents.
+
+**What is wrong.** technical/03 lists `run_context_pack` as the per-run record of the knowledge a
+prompt was built from, and **nothing in this repository inserts a row**. It is not only missing a
+producer: the table cannot express `ContextPackRecord` — there is **no column for `budget_tokens`**,
+and `reason`/`score` are nullable here where the published tier-1 entry requires them — so a writer
+added today still could not store the record WP-17 already builds. The pack exists in exactly one
+place: the `run.started` event payload.
+
+**Evidence** (WP-15h's implementer and its review round 1, session 5; refiner grep, no test run — rule 66).
+- The DDL is `run_context_pack (run_id, tier smallint, source_path, reason, score real, tokens,
+  validated, kb_commit_sha)`, PK `(run_id, source_path)` —
+  `packages/infrastructure/src/db/migrations/0004_pipeline.sql:125-136`. No budget column exists in
+  it or anywhere else in the schema.
+- The record it is supposed to hold requires `budget_tokens`, and a non-null `reason` and `score` on
+  every tier-1 entry — `packages/contracts/src/records.ts:146-160`.
+- The only production record of a pack is the event: `run.started` carries
+  `context_pack: contextPackRecordSchema` (`packages/contracts/src/events.ts:285-292`) from
+  `StageRunPlan.contextPack` (`packages/application/src/pipeline/stage-executor.ts:98`), and
+  `run.started` is declared unconsumed with the comment `// UI band, WP-20.`
+  (`packages/application/src/events/consumption.ts:94`) — so the outbox sweep completes it and the
+  payload stays in the append-only `events` table.
+- **Two live claims rest on the table and are false today** (rule 44, rule 83). Of a document
+  recorded `validated: false`, `packages/application/src/pipeline/planner.ts:135` says
+  *"That is visible in `run_context_pack` and logged once per run here"*. And of a tier-0 overflow,
+  `docs/technical/07-knowledge-and-search.md:101-105` says the pack records `total_tokens >
+  budget_tokens` and that this is *"visible in `run_context_pack` rather than absorbed"* — which no
+  column in it could hold.
+- The reader is written and refuses by name: `GET /api/runs/:id/context-pack` has **no success
+  branch at all** and answers 409 `context_pack_not_recorded` carrying the row count, so `0` (no
+  producer) and a non-zero count (a producer arrived before the schema was fixed) are
+  distinguishable — `apps/server/src/routes/runs.ts:175-201`,
+  `apps/server/src/queries/pipeline-queries.ts:24-29`. Round 1 found the first draft **fabricating**
+  all three missing values (`budget_tokens = total_tokens`, `'paths'` for a null `reason`, `0` for a
+  null `score`) with its own integration case pinning them, while
+  `apps/web/src/features/run-detail.tsx:288` renders `budget_tokens` to the user as a fact.
+
+**What it costs to leave.** The run-detail screen's Context tab is a permanent error state, and the
+platform keeps no queryable record of what any agent was shown: *which runs were built on document X*
+and *which packs overflowed their budget* are jsonb scans of one event type rather than a query. Two
+backlog entries below already argue their cost from this table — entry **23** (*"`run_context_pack`
+faithfully records the tokens spent on a pack assembled for a one-term query"*) and entry **14**
+(*"`run_context_pack.tokens` stores it"*) — so an unwritten table is cited as the platform's audit in
+two places.
+
+**What "done" looks like** — one of two. What is missing is a decision and an owner, not a design.
+- **(a) Keep the table.** A new numbered migration adding a per-run budget column (and either filling
+  `reason`/`score` at the write or relaxing them in `@platform/contracts`), an insert on the
+  run-creation path where `StageRunPlan.contextPack` already exists, and something that tells an
+  **empty** pack from an **unwritten** one — then the endpoint grows the success branch its route
+  schema already declares, asserted against a pack this repository's own planner produced rather than
+  a seeded table.
+- **(b) Drop the table** in a new migration and serve `/context-pack` from the `run.started` payload.
+  `events` is append-only and carries the whole record, so nothing is lost; what it costs is that the
+  pack is only ever as queryable as a jsonb scan.
+Either way the two false claims above are corrected in the same change, and technical/03 and
+technical/07 are amended first (docs win).
+
+**What would make it urgent.** Latent for correctness, live for the screen: no production run reaches
+a real model today (`unavailableClaudeRunner`, Q52), so no pack is being lost that anyone could have
+audited. The dangerous order is a **writer landing before the schema decision** — rows that cannot be
+projected would then exist, and the refusal's row count is the only thing that makes that visible.
+
+**Depends on / owner.** **None today, and that is the finding.** WP-16's plan row is *"retrieval tests
+on a fixture vault; token budget respected"* and WP-17's row owns the assembler and the prompt;
+neither names the table. Closest by subject: **WP-17** built the pack, **WP-15h part 2** owns the
+endpoint's reader, **WP-19** owns the rest of the per-run audit family. No measurement needed.
+The sibling finding from the same reader — `runs.system_prompt`/`user_prompt` have no writer either,
+so `/prompt` refuses the same way — is **not** an entry here: storing the assembled prompt is a
+retention decision about untrusted text and is **Q64**.
+
 ### 14. **The token estimator can under-estimate, and its properties do not constrain it** (TODO)
 **What is wrong.** `estimateTokens` (`packages/domain/src/knowledge/tokens.ts`) is `ceil(chars / 4)`,
 every budget in the platform is denominated in it, and `run_context_pack.tokens` stores it. Under-
@@ -2229,6 +2316,55 @@ reserved), not how many places restate it, so neither entry covers the other; an
 criterion already carries rule 63's *"with the count stated in the change rather than left to a
 reader to recount"*.
 
+### 32. **`task_stages.state` has two vocabularies and neither is declared, so a *returned* stage is published as `completed`** (TODO, small — the deferral it was waiting for expired when WP-15 merged)
+
+**What is wrong.** The column is `text` with a note deferring its vocabulary to a work package that is
+now DONE, the interpreter writes one pair of words, the published DTO declares a different set of six,
+and `GET /api/tasks/:task_id` bridges them with a hand-written mapping. The mapping is honest about
+what it cannot know, but it is lossy in one direction that matters: a stage the pipeline **returned**
+is stored `state = 'exited'` and is published as `completed`, so three of the DTO's six states
+(`returned`, `skipped`, `failed`) are unreachable from any row this repository writes.
+
+**Evidence** (WP-15h's implementer notes, assumption (b), session 5; refiner grep, no test run — rule 66).
+- The deferral, still in the applied migration:
+  `packages/infrastructure/src/db/migrations/0004_pipeline.sql:45` reads
+  `-- State, outcome and return reason are free-form until WP-15 fixes the interpreter's vocabulary.`
+  WP-15 merged at `79582c6` and `0012_pipeline_interpreter.sql:3-6` quotes that same note as its own
+  premise while adding three other columns — so the sentence is **stale** (rule 83) and the
+  vocabulary was never fixed.
+- What is actually written: `'entered'` on entry and `'exited'` on exit, both as SQL literals —
+  `packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:360-378`. The return path writes
+  `outcome: 'returned'` with that same `state = 'exited'`
+  (`packages/application/src/pipeline/transitions.ts:179-185`).
+- What is published: `state: z.enum(['pending', 'running', 'completed', 'returned', 'skipped', 'failed'])`
+  — `packages/contracts/src/api.ts:209`.
+- The bridge: `stageStateOf` maps `entered` with a null `exited_at` to `running`, `entered` with one
+  and `exited` to `completed`, and **anything unrecognised to `pending`** —
+  `apps/server/src/queries/pipeline-queries.ts:468-488`. Its docblock states the reasoning, and
+  `pending` for an unknown row is the reading that claims least; it is still a claim about a row the
+  projection does not understand.
+
+**What it costs to leave.** BD-008's rework loops are a headline of the product, and the task screen
+cannot show one: a stage returned for a second attempt looks finished. The information is not lost —
+`outcome` is published beside the state — so a reader who knows to look can reconstruct it, which is
+why this is small rather than major. The second cost is the shape: a projection that *maps* an
+undeclared vocabulary cannot fail when a new writer invents a third word; it silently answers
+`pending`.
+
+**What "done" looks like.** Declare the vocabulary **in `packages/contracts`** — one exported schema
+that the store's writer and the DTO both use — so `apps/server/src/queries/pipeline-queries.ts` does a
+`parse` and an unknown value is an error rather than `pending`. Contracts is the right home rather
+than the migration or the store: it is the only ring both the writer (`infrastructure`) and the
+publisher (`apps/server`) may import, and the DTO enum already lives there. A migration adding a
+`check` constraint or an enum type is optional and second; deleting the stale comment from a
+**new** migration's prose (0004 is applied and never edited) is part of the same change. A returned
+stage must publish `returned`.
+
+**Depends on / owner.** **None today.** WP-15 owned the deferral and closed without it; the reader
+that exposed it is WP-15h. Smallest sensible home is **WP-15h part 2** (it already touches this
+projection) or the next row that writes a `task_stages` state. No measurement needed; needs a
+decision on whether `skipped`/`failed` get writers at the same time or stay declared-and-unused.
+
 ### 24. **The ten platform skills were correctly refused at WP-17, and nothing mounts a skill** (TODO — now **WP-14a**)
 **What is wrong.** WP-17's plan row lists "platform skills" and the implementer did not build them.
 **The refusal is right and is recorded here so it is not re-litigated**, together with the SDK fact
@@ -2594,6 +2730,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15c | **Webhook ingress + the `inbox`, and the inbound redaction door** | WP-15b, WP-08, WP-09 | no | DONE | `38ea686` | 1 review round (APPROVE) + a pre-merge round, and **an architect ruling taken before the first `delivery_id` was written**. **Production can start a ticket.** `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded and drives it to task.completed"* — a signed delivery to a running `apps/server` instance, **no seeded row**. The ingress asks four questions in order (which binding · is it authentic · which delivery · what does it mean), `verify` runs over the bytes **as they arrived** and `normalise` runs **outside any transaction**; one transaction then writes the `inbox` row and appends its events. That is a **deliberate deviation from technical/06**, which had the work happen in a job and so could lose a delivery it had already recorded as performed — the doc is amended with the reason **and** with the sweep-shaped alternative it was weighed against (rule 8: amend the doc, then point at it). **The ruling is implemented, not merely recorded**, and its real finding is closed: `inbox(headers, payload)` had carried raw deliveries since `0005_events.sql:113`, TD-012's write list never named the table, and **GitLab's legacy scheme sends the binding's own webhook secret as plaintext in `X-Gitlab-Token`** — so migration **0014** adds `redaction_count` and `verified`, both columns are stored redacted *after* `verify` and *after* the key is computed, the verdict is **persisted** because a redacted payload cannot be re-verified, and an integration test reads the row back out of PostgreSQL and asserts the credential is not in it. `redaction_count` is the **summed** count over all three redactions, pinned exactly by `toBe(2)`/`toBe(3)`, so a headers-only count fails — the dead-signal failure the ruling named. **Backlog 20 discharged by the next work package after the one that created it**: a matched ticket with no task row is **re-emitted**, not merely detected — the reconciler appends a **new** `ticket.matched` and leaves `inbox(provider, delivery_id)` untouched, which is how it coexists with the replay criterion (dedup is about a *delivery*, recovery about a *task*); two tasks are impossible because `runIntakeCheck` re-reads `findByTicket` inside its write transaction; and the grace is **data-relative**, not a sleep (rule 2). **Q52 decided rather than deferred**: no fourth task state — a throwing runner `start` fails the run and escalates to `needs_human`, and the reviewer independently agreed, because only the error *class name* reaches `events.payload` and `RunnerUnavailableError` distinguishes *the platform is unfinished* from *this task needs a person*. Filed **Q59**; **Q60** for the rate limit this public endpoint does not yet have. Reviewer mutations on copies, calibrated 21/21 green first: `verify → accept` kills **three** named tests including `packages/application/src/integrations/inbound.test.ts` › *"verifies the bytes as they arrived, before anything is redacted"*; header `redactJson → identity` kills two; dropping the `!isNew` early return kills the racing-deduplication test. The insert **is** the arbiter (`on conflict (provider, delivery_id) do nothing` + `rowCount`, in the caller's transaction — no check-then-insert). `PROVIDER_DIRECTORIES` is `readdirSync` (rules 7, 68). **`verify` was red in the orchestrator's shell after the pre-merge round** — the citation guard caught an ambiguous `inbound.test.ts` basename across three tracked files (rule 59). The implementer's targeted files were green and its report was accurate about them; the **target** is a different question (rule 61). Left behind: **backlog 22**. |
 | WP-15f | **The ticket's own words** — the platform read no ticket text | WP-15c, WP-17 | no | DONE | `b6793aa` | **2 review rounds (the second by fresh eyes) + a comment round.** The finding that stopped "M1 complete" being written: `tasks` stored `ticket_provider`/`key`/`url` and nothing else, `ticketBlock` was those same three lines, `get_task_context` **refused**, and `readTicket` — which already returned `title`, `description`, `comments[]`, `epic`, `siblings`, `attachments_text` — had **zero production callers**. The refinement stage was asked to spec a ticket nobody opened and retrieval's query was `extractQueryTerms('ACME-1')` → `["acme"]`. `readTicket` is now called from **two ordered points**, both outside every transaction and through `IntegrationActionExecutor`: intake's call phase puts the snapshot in the `insert` that creates the task, `stage.execute` backfills when a row has none. **A fourth `pipeline.outbound` duty was measured and rejected** — Q61 recommended one, but `enqueueStage` runs on the line after the commit (`saga.ts:385-388`), so a duty woken by `task.created` waits for the outbox sweep, two reads, a decryption and a round trip, and *"the criterion would be held by luck"*. **It did not join backlog 18**: a narrow `tasks.saveTicketSnapshot`, **no new `save` site**, and `save`'s column list **omits** `ticket_snapshot`, so the twenty whole-row writers are structurally unable to clobber it; the contract case dies on the **derived cost total** (rule 79), `expected +0 to be close to 4.25`. **Budget derived, not inherited** (Q61's numbers were a stated proposal): title 512, description 20 000, newest 20 comments × 1 000 +128 id +128 author = **45 632** chars / **182 528** B / **11 408** tokens, **additive to** the 12 000 pack budget rather than inside it, **292×** under Q54's measured 53 284 565, and **produced by a test rather than quoted** (rule 39). **Two majors, both fixed rather than argued down.** A blanket `catch` swallowed `TransactionOpenError`, disarming WP-15d's guard on **both** call sites — probed `{"threw":false,"value":null}` where the docblock *and this ledger* claimed a refusal; it is terminal now at both refusal points, re-probed `{"threw":true,"ctor":"TransactionOpenError"}` twice, fail-open for a provider that is down unchanged. And a credential pasted into a description was pattern-redacted in the audit row of **the same call** and stored **verbatim**, because `inbox` gets TD-012 step 2 and the pipeline loader had no equivalent — **the filing misstated its own precedent**, and it was **closed** rather than re-filed: `platformRedactor` composed after the binding's own, held in **production** by the ingress e2e, and verified by a reviewer planting its **own** credential shapes, one straddling the cap. **The implementer refused two of my instructions and was right both times** (rule 27): sub-decision (b)'s *"last provider signal"* is not a quantity this build holds (`consumption.ts:89-90` both `unconsumed`, `events.ts:134,145` nullish `task_id`, `inbound.ts:180` project stream), so my brief demanded the consumer change it forbade in the same paragraph. Rule **83** was earned here. Left behind: backlog **25**. |
 | WP-15g | **Compose a production `ClaudeRunner` and the run's workspace** | WP-15f | no | DONE | `5b01f73` | **1 review round + an architect ruling taken before the brief.** `apps/server/src/agent.ts` composes `createWorkspaceClaudeRunner` over the **real** `createClaudeRunner`, with the production `run_messages` sink, `unattendedToolApprovals` (BD-025 deny) and a per-run TD-012 redactor from `RunSpec.secretEnvNames`; it takes a `RunWorkspaceProvisioner` and **never a Docker client**. **The ruling changed the design before an implementer met it**: composing the launcher in `apps/server` would have contradicted TD-021, and no Docker client is needed because **TD-025 §2 already gives the runner a socket-free path** — `WorkspaceAttachment` is *"a path in the runner process' own filesystem"* (`ports/workspace.ts:182-188`) and the only daemon call in `attach` is a liveness probe the socket connect supersedes. It also found **there is no `ROLE=launcher`** (TD-021 and `.env.example` both said so; both corrected) and that **`parseDockerHost(undefined)` returned `/var/run/docker.sock`** — *absence of configuration granting the unfiltered daemon TD-021 deploys a proxy to remove*, rule 55's shape, now a **startup error**. **Criterion 1 defeats rule 82 rather than satisfying it**: the assertion is on the bytes the **CLI received** (`FakeCli.stdin`/`spawnOptions`), never the `RunSpec` the fake ignores — `test/e2e/pipeline/agent-run.e2e.test.ts` › *"sends the ticket’s own title to the process, and stores a redacted transcript"*. A measurement corrected the plan: with SDK **0.3.267** *both* prompt halves are on **stdin** (the append inside the `initialize` control request) and **neither** in argv, asserted both ways. It proves nothing about the real binary, container, shim or model, and says so. **`run_messages` has its first writer since `0006_transcripts.sql` created the table** — planted credential absent, placeholder **present**, control text present, `sum(redaction_count) > 0`. Writing one exposed a constraint nothing had ever exercised, `check (seq >= 1)` against a zero-based producer → migration **0016**, which **lowers** the bound without dropping it (the parity test excludes check constraints, so what holds it is the e2e insert). **Composing it found a live defect**: `attach` did not wait for the shim's control socket. **Review then found the fix half-tested**, which was the better finding — a one-look mutant (`deadline = Date.now() - 1`) left `provider.test.ts` at **37/37** because every success case opened the socket *before* `attach`, while deleting the call died in 8 ms; rule **42** on the very wait added to close the other side. A late-booting-shim case now holds it, and the blast radius is stated **as measured** — one failed `runs` row and one 30 s retry per task, absorbed by Q59(a) — not *"every task lost"*, which was true of the code before the wait. **Q59 answered both halves**: (a) `RunStartError.retryable` + 3 × 30 s, terminal escalates on attempt 1; (b) the refusal **kept and made configuration-conditional** — provisioner absent → no agent runner, missing piece named, and the gates, status mapping and workpad still run. **The `attach` deviation was upheld**: a runner-side `readLocalAttachment` would have had **no caller** until Q52's transport (backlog 11's shape), and the prohibition holds **structurally at the repository level** rather than by configuration. TD-021 carries an as-built note. Left behind: **Q62**, four discovered-work items, and the fact that **no tier exercises the real `attach`** until WP-22. |
+| WP-15h | **The read API the SPA already calls, and the `run:<id>` SSE topic** — run endpoints, `GET /api/tasks/:id`, the transcript bridge, the client-vs-routes census | WP-06, WP-15g, WP-20 | no | DONE (**part 1 of 2**: the run and task endpoints; the eleven remaining client paths are listed in the census as an admitted gap with their owning rows) | `19da103` | **1 review round (APPROVE, four minors and a nit, all fixed pre-merge).** Backlog **29**'s *cause* is closed: `apps/server/src/routes/client-census.test.ts` reads the client's paths off every file git knows about under `apps/web/src` — tracked **and** untracked (rule 85) — and the server's half is a real unauthenticated request through the real router, so the same probe is the per-route auth assertion; equality holds in **both** directions and the reviewer re-derived three mutations on copies. A second census, `apps/server/src/routes/scope.test.ts`, replaced a docblock claim the review found unasserted (rule 44). `run:<id>` has its first publisher: the sink announces a stored entry's **position** on one dotted broadcast topic and `apps/server/src/sse/transcript-bridge.ts` reads the rows back into its own hub — only for a watched run (TD-014), one pump per run so positional replay cannot skip, `stop()` waiting for in-flight pumps — asserted against two real `LISTEN` sessions, so `ROLE=api` serves what `ROLE=worker` produced. **Rule 82 held by construction**: `FakeClaudeRunner` is composed with a no-op sink, so the e2e drives the real runner over the fake CLI and asserts the planted secret **both ways on two paths** (the HTTP page and the SSE frame): `test/e2e/server/run-api.e2e.test.ts` › *"serves the run, its transcript, its task — and the live frames — without the run’s secret"*. Where a column has no writer the route **refuses by name** (409 `prompt_not_recorded`; 409 `context_pack_not_recorded` — `run_context_pack` has no `budget_tokens` column and no writer; a `blob_id` row is `row_not_projectable`). Round 1's sharpest finding: a **fabricated** `budget_tokens: total` that a screen would have rendered as *budget equals total*, pinned by its own integration case — removed, and the refusal now carries the row count so a producer that arrives before the schema is fixed is visible. **Two defects found by the first reader of two columns**: `RunRecord.stage` had never been stored (`runs.task_stage_id` never written; `load` returned the literal null for every run this repository ever stored) and `tasks.workpad_ref` stored a `marker_id` the DTO rejects, so `GET /api/tasks/:id` answered 500 for every task with a workpad — both fixed at the writer with contract cases, no new `tasks.save` site. One biome **warning** (not an error) survives in the census fixture at `client-census.test.ts:330`, a template placeholder inside a deliberately plain string; nit. Left behind: part 2 (eleven paths), and the dead-table findings routed to the refiner. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | **Role prompts + the delimiter contract + the real context pack** | WP-12, WP-16 | yes | DONE | `1497fe9` | **2 review rounds (the second by fresh eyes on round 2's fixes) + a pre-merge round.** The delimiter landed **in the same change as the wiring**, which is what backlog 12 required: a block is `<untrusted-data-<nonce> kind="…">` … `</untrusted-data-<nonce>>`, nonce 32 hex from `randomUUID` drawn **per prompt**, and the rule inside it is that *every byte of the prompt is either text the platform wrote or is inside a block*. Body **byte-identical** — no sanitiser, nothing for a later transform to undo (`apps/web/src/ui/untrusted.tsx`'s answer to the same question). Nothing untrusted reaches a **marker**: a value outside `SAFE_ATTRIBUTE_VALUE` is **refused**, a body containing the nonce is refused after four draws, and the reviewer established the part that actually closes it — the degradation renders a **closed set of three platform literals**, so **no input renders attacker bytes in a marker**. Nothing persists the nonce (`runs.system_prompt`/`user_prompt` exist and nothing writes them). **The ledger was wrong and is corrected at the source**: two of the ten hostile constructs do *not* flow byte-identical — `sanitiseDocumentText` replaces each control/bidi character with one `U+FFFD` and counts it, **2 per construct** as written and **4** over `HOSTILE_TEXT` (backlog 12 amended). The four zero-width characters do arrive untouched and buy nothing **against the structural parse** — a spliced nonce fails `NONCE_PATTERN` for the reader too — which is one word narrower than the implementer first claimed, because the reader is a parse and the model is not. **Round 1 found a live veto**: a vault path past the marker alphabet **threw**, failing `plan()`, failing the run and escalating to `needs_human` — *one deeply nested KB page stopping every task on the project*, measured at 476 renders / 568 throws with `.agentic/knowledge/<255>/<255>` reaching 530. Both names derived from a vault path now degrade independently; the implementer audited the attribute **set** unprompted (rule 68) and found no third asymmetry, and the reviewer re-derived the set off the code rather than off its table. **Three wrong causes attached to correct numbers** in one work package (rule **81**), all three found by re-deriving the cause rather than re-checking the figure. **Backlog 13 closed** (`.max(200_000)`); **backlog 14's unit half closed** — `ceil(utf8Bytes/4)`, 48 000 CJK 12 000 → 36 000, ASCII unchanged, and the new property **fails** for a wrong ratio where the old two could not; the ratio stays a **hypothesis**, labelled with a vendor datum. Backlog 15/Q58 deliberately not taken. **The ten platform skills were refused and the refusal was upheld**: `skills?: string[] | 'all'` is *a context filter, not a sandbox* (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`), mounted at provisioning, which needs a `WorkspaceProvider` the pipeline does not compose — ten files nothing reads is backlog 11's shape. Now **WP-14a**. **Eval half externally BLOCKED** and nothing stubbed: `pnpm eval` exists and **exits 1** naming what is missing, and `scripts/eval.test.ts` holds it there including rule 18's empty-key case. See "Blocker briefs needing a human". Left behind: backlog **23**, which is why M1 is not complete. |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
