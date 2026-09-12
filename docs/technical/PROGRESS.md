@@ -20,13 +20,19 @@ retrieval pack beside it, and the task reaches `task.completed`. That last claus
 carefully: it is true **through `FakeClaudeRunner`**. In production `unavailableClaudeRunner()` **throws**, so
 a real task reaching an agent stage stops there, loudly, in its own job.
 
-**So the honest headline is one sentence: the pipeline is complete and the agent is not composed.** Backlog
-23 is closed — the platform reads the ticket — and what remains between here and a working product is
-**Q52**: no production `ClaudeRunner` and no `WorkspaceProvider` in the pipeline's composition. **No plan row
-owns it.** WP-22 is images, WP-14a is provisioning, Q52 is a *question*. This is `createPipelineRuntime`'s
-shape exactly — the gap that went twenty-three work packages composed only by a test harness — and it is the
-single most likely thing for a future session to re-derive from scratch. **Give it a row before it becomes
-another archaeology entry.**
+**So the honest headline is one sentence: the pipeline is complete and the agent is not composed.** That now
+has a row — **WP-15g** — and scoping it corrected the orchestrator twice, which is why the row is worth more
+than the sentence. It is **not** pure composition: **four collaborators have no production implementation**
+— nothing builds a `WorkspaceSpec` (only the test fixture `workspace/fixtures.ts:38`, and
+`agenticConfigSchema` has no workspace section), the runner must be built **per run** (`spawnClaudeCodeProcess`
+is construction-time at `claude-runner.ts:140` while the socket and token are per run, and `start` is
+synchronous), there is **no production `RunTranscriptSink`** (nothing has written `run_messages` since
+`0006_transcripts.sql` created the table; the e2e passes `sink: { append: async () => {} }` at
+`test/e2e/support/pipeline.ts:433`), and there is **no production `ToolApprovalPort`**. The transcript one is
+rule 82's family again: a table, a renderer and a whole feature, with nothing in production ever writing a
+row. And composing the launcher in `apps/server` would have **contradicted TD-021** — see "Architect ruling
+(WP-15g)" below, which also found that `ROLE=launcher` does not exist and that `DOCKER_HOST` unset currently
+returns the host socket.
 
 **Next, in order.** (1) **A row for Q52** — compose a production `ClaudeRunner` and `WorkspaceProvider`;
 nothing downstream is a product without it. (2) **WP-18** (librarian, and it registers `KnowledgeIndexer`,
@@ -2046,11 +2052,47 @@ asserts about workspace contents.
 Owner: **WP-14a** in `13-implementation-plan.md`, carved off WP-14 rather than WP-17 or WP-22 because
 the deliverable is a **provisioning** step and WP-14 is the row that owns provisioning; WP-22 owns the
 image and the compose file, which is where the *layout* question would land if the copy turned out to
-belong in the image instead. **And the sentence that has no row at all, said plainly here because it is
+belong in the image instead. **And the sentence that had no row at all, said plainly here because it is
 the same shape as WP-15a's**: *no plan row composes a production `ClaudeRunner` or `WorkspaceProvider`
 into `apps/server`.* Q52 is the transport **question**, not a work package; WP-22 builds images and
-compose, not the composition root. Until such a row exists, tier 3 above has nowhere to live and
-`apps/server` starts no pipeline runs at all.
+compose, not the composition root. Until such a row existed, tier 3 above had nowhere to live and
+`apps/server` started no pipeline runs at all. **That row is now WP-15g** (refiner, session 4), and
+tier 3 is its criterion rather than this one's; tiers 1 and 2 here still do not wait on it.
+
+### 26. **Composing the workspace provider does not give WP-18 a checkout it can read** (TODO, small — the residual **WP-15g** does *not* discharge)
+
+**What is wrong.** WP-18's plan row defers the `KnowledgeIndexer` job because it *"needs a checkout to
+read, which needs the workspace provider, which needs WP-15c's ingress"*. The ingress landed and WP-15g
+composes the workspace provider — and **neither hands WP-18 a checkout it can read**. The only
+`VaultSource` adapter reads the **server process' own filesystem**; the platform's checkouts live on
+Docker volumes that process does not mount. So the dependency arrow from WP-18 to the provider must not
+be read as "solved once WP-15g lands".
+
+**Evidence** (refiner, session 4, reading only). `FilesystemVaultOptions.rootPath` is documented
+*"Absolute path of the checkout."* (`packages/infrastructure/src/knowledge/filesystem-vault.ts:47-48`)
+and the adapter walks it with `node:fs/promises` — `readdir`, `readFile`, `stat` (`:29`). TD-021 §
+Decision puts the run's tree on `ws-<id>` rw at `/work` **inside the run container** and the project's
+bare mirror on the cache volume ro at `/cache`; the launcher mounts only the **control** volume into its
+own filesystem (`apps/launcher/src/config.ts:115`, `APP_WORKSPACE_CONTROL_ROOT`). `createFilesystemVaultSource`
+(`filesystem-vault.ts:87`) has **no** production caller — grep finds the definition and its own test.
+
+**What it costs to leave.** WP-18 wires the job, discovers at implementation time that its adapter can
+see no repository, and either invents a path in the composition root or redesigns the read mid-work-package.
+The first failure is **silent**: a missing directory is `{status:'unavailable'}`, and the indexer then
+*correctly* leaves the index alone rather than failing (`packages/application/src/knowledge/indexer.ts:25`,
+*"It never empties the index because a read failed"*), so a job that indexes nothing looks exactly like a
+project with nothing to index.
+
+**What "done" looks like.** WP-18 **states** where its checkout comes from instead of assuming one: a
+server-side clone of its own (one more copy per project, and it needs a credential the pipeline mints), a
+default-branch read through `GitProviderPort` with no checkout at all (no volume, but every file is a
+provider call), or mounting the cache volume read-only into the server's container (cheapest at run time,
+widens the server's mounts, pins the deployment to one machine). **Needs measurement** for the third
+(rule 66, not run here): whether the bare mirror alone can answer `VaultSnapshot.repoPaths` and read the
+four indexed path classes with no working tree.
+
+**Depends on / owner.** **WP-18** owns it; no other row does. WP-15g's criteria are all about a *run*, so
+it neither discharges this nor is blocked by it.
 
 ### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
 **What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
@@ -4737,6 +4779,53 @@ fills **10 707 of 12 000** with six tier-1 documents, top score **0.718** — ab
 correct answer at 0.500. The 87 %-padding pack is still reachable. The remedy needs a corpus-derived
 signal (IDF, or a different `ts_rank` normalisation) and is a product decision filed outside this
 work package; the sentence now says what was closed and what was not.
+
+### Architect ruling (WP-15g) — "only component" is a deployment boundary, and the default was the thing the decision forbids
+
+**Asked before WP-15g composed the agent runner**, because a refiner scoping the row found that composing the
+launcher inside `apps/server` would contradict TD-021's *"only component that can reach the Docker socket"* —
+and Q52 had already ruled *"compose it in-process for now"*, which reads like permission until you notice it
+means *the launcher's own process rather than an RPC*.
+
+**Ruling: no.** WP-15g composes the **runner half** only and does not build a Docker client into
+`apps/server`. It does not need one: **TD-025 §2 already gives the runner a socket-free path to the
+container**. `packages/application/src/ports/workspace.ts:182-188` documents `WorkspaceAttachment` as *"the
+control channel, from the runner's side of the volume (TD-025 §2)… a path in the runner process' own
+filesystem"*, and its three fields derive from `controlRoot` + `runId` + a token file. The **only** part of
+`DockerWorkspaceProvider.attach` that touches the daemon is an `inspectContainer` liveness probe
+(`packages/infrastructure/src/workspace/provider.ts:721-722`) — and **the connect is a better liveness check
+than an inspect that races it**. So `attach` becomes local, the launcher-side calls stay launcher-side, and
+**the second half of Q52 is settled**: `WorkspaceProvider` is not one interface with a remote implementation.
+
+**It corrected the orchestrator's framing twice, and the second correction is a live defect.**
+
+1. **There is no `ROLE=launcher`.** `apps/server/src/role.ts:22` is `all | api | worker | runner | indexer`;
+   TD-021's own line 8 and `.env.example`'s launcher section both said otherwise. So TD-021 **cannot** be
+   satisfied "by deployment via a ROLE", which was the orchestrator's hopeful reading — and `ROLE=all` is the
+   **shipped default**, which would put the Docker socket beside the platform's only unauthenticated
+   endpoint. Also `capabilities.runner` **gates nothing**: `apps/server/src/runtime.ts` reads only
+   `capabilities.api`/`capabilities.worker`, the pipeline is composed under `worker` (`:195`, `:251`), and
+   `roleIsIdle('runner')` is `true`.
+2. **A rule-55-shaped default is in the tree today.** `parseDockerHost(undefined)` returns
+   `/var/run/docker.sock` (`apps/launcher/src/config.ts:79`), reproduced from `readLauncherConfig({})` with
+   nothing set. *Absence of configuration grants the unfiltered daemon that TD-021 deploys a proxy to
+   remove.* That is rule **55**'s shape — a guard whose default is the thing it exists to prevent — and rule
+   **18**'s: an unset value must not produce the permissive result. **`DOCKER_HOST` absent must be a startup
+   error.**
+
+**What positively enforces the property, which is the part worth copying.** Asked to rank arrangements by
+what survives an RCE in the API process, it ranked: **separate container** (the only one that preserves blast
+radius) · separate process (only if the OS denies the socket to that uid — nothing does) · separate `ROLE`
+(nothing; `ROLE=all` is the default) · separate **package** (nothing at runtime — `DockerEngine` is already
+reachable through `@platform/infrastructure`, which `apps/server/package.json:25` depends on). The amendment
+therefore **requires the container**, and what WP-15g can add *now* is a test read **off disk** — the shape of
+`delivery-key-redaction.test.ts` — asserting `workspace.DockerEngine` is constructed in **exactly one** file
+and `DOCKER_HOST` read in **exactly one**, both under `apps/launcher/src/`. **A claim about this repository's
+own sources rather than a hope about a deployment** (rule 55: a deny-list is a claim about the platform's
+layout, not about intent).
+
+**Applied**: TD-021 carries the amendment, `.env.example`'s launcher section is corrected. Docs before code,
+so both landed before WP-15g's implementer was briefed.
 
 ### Architect ruling (WP-15c) — the inbound delivery key, and the column nobody was looking at
 
