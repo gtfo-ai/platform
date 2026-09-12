@@ -1,13 +1,13 @@
 /**
  * Every endpoint of technical/08 this app talks to, as one function each.
  *
- * The response schema is always the one `@platform/contracts` publishes. Three responses have no
- * published envelope — `GET /api/projects`, `GET /api/projects/:id/tasks` and
- * `GET /api/integrations` — because contracts publishes the *item* (`projectSummarySchema`,
- * `taskRecordSchema`, `integrationSummarySchema`) and technical/08 names the route without fixing
- * the page shape. They are composed here from the published item plus the published pagination
- * envelope, marked below, and they move into `packages/contracts` when the work package that
- * implements the route lands (Q45).
+ * The response schema is always the one `@platform/contracts` publishes — including the three that
+ * used to be composed here. `GET /api/projects`, `GET /api/projects/:id/tasks` and
+ * `GET /api/integrations` had no published envelope while nothing served them, so this file built
+ * one from the published item (`projectSummarySchema`, `taskRecordSchema`,
+ * `integrationSummarySchema`); **Q45 said to move them into `packages/contracts` when the work
+ * package that implements the route lands**, and WP-15h part 2 is that work package. The shapes are
+ * byte-for-byte what was composed here, so nothing this client parses changed.
  *
  * **What is not here, and why.**
  *
@@ -34,15 +34,14 @@ import {
   decideKbProposalRequestSchema,
   effectiveConfigResponseSchema,
   inboxResponseSchema,
-  integrationSummarySchema,
+  integrationsResponseSchema,
   kbDocResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
-  nonEmptyStringSchema,
   orgAuditResponseSchema,
   orgUsersResponseSchema,
   pauseTaskRequestSchema,
-  projectSummarySchema,
+  projectsResponseSchema,
   readinessResponseSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
@@ -56,27 +55,11 @@ import {
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
   taskDetailResponseSchema,
-  taskRecordSchema,
+  tasksResponseSchema,
   versionResponseSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
 import type { ApiClient } from './http.js';
-
-// ── Envelopes composed here, not redeclared ──────────────────────────────────
-//
-// `page()` is the shape `packages/contracts` uses for every list it *does* publish
-// (`kbProposalsResponseSchema`, `orgAuditResponseSchema`, `kbSearchResponseSchema`), so composing
-// the missing three the same way keeps one shape rather than inventing a second.
-const page = <T extends z.ZodType>(item: T) =>
-  z.strictObject({ items: z.array(item), next_cursor: nonEmptyStringSchema.nullable() });
-
-export const projectsResponseSchema = z.strictObject({
-  items: z.array(projectSummarySchema),
-});
-export const tasksResponseSchema = page(taskRecordSchema);
-export const integrationsResponseSchema = z.strictObject({
-  items: z.array(integrationSummarySchema),
-});
 
 /**
  * Command responses.

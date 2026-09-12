@@ -1,13 +1,23 @@
 /**
  * The knowledge-base surface of technical/08 § "Knowledge" (WP-18b).
  *
- * Four paths, and they close the three `kb/*` reads and the proposal command that
- * `routes/client-census.test.ts` has carried as admitted gaps since WP-15h:
+ * Five paths. Four of them closed the three `kb/*` reads and the proposal command that
+ * `routes/client-census.test.ts` had carried as admitted gaps since WP-15h; the fifth was added by
+ * WP-15h part 2 and is the one the census **cannot** see, because no screen calls it:
  *
  *   GET  /api/projects/:project_id/kb/tree
  *   GET  /api/projects/:project_id/kb/doc?path=…
  *   GET  /api/projects/:project_id/kb/proposals
  *   POST /api/projects/:project_id/kb/proposals/:proposal_id/:decision
+ *   GET  /api/projects/:project_id/kb/health
+ *
+ * `kb/health` is served because the rows exist and nothing could read them: the nightly hygiene pass
+ * has written `kb_health_reports` since WP-18b (migration 0018) and PROGRESS backlog **37** is that
+ * nobody reads it. A client-driven census is blind to that — it compares the client's calls against
+ * the router — so this one is a criterion on WP-15h's plan row rather than a gap a test would find.
+ * It has no screen yet, which is why `apps/web/src/api/endpoints.ts` does not call it: a client
+ * method with no caller would make the census's own "every path here is one the app talks to" claim
+ * false.
  *
  * ## Everything served here is untrusted text, and none of it is interpreted
  *
@@ -53,6 +63,7 @@ import {
   type Id,
   type IsoDateTime,
   kbDocResponseSchema,
+  kbHealthResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   knowledgeProposalRecordSchema,
@@ -66,7 +77,7 @@ import { HttpError, NotFoundError } from '../errors.js';
 import type { KnowledgeCommands } from '../knowledge.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole } from '../queries/identity-queries.js';
-import { findKbDoc, findKbTree } from '../queries/knowledge-queries.js';
+import { findKbDoc, findKbHealth, findKbTree } from '../queries/knowledge-queries.js';
 
 export interface KbRoutesOptions {
   readonly database: Database;
@@ -222,6 +233,30 @@ export const registerKbRoutes = async (
         throw new NotFoundError(`knowledge document ${request.query.path}`);
       }
       return document;
+    },
+  );
+
+  typed.get(
+    '/api/projects/:project_id/kb/health',
+    {
+      preValidation: requirePermission(guard, 'kb.read', { project: projectOf }),
+      schema: {
+        summary: 'The project’s most recent knowledge-base health report',
+        description:
+          'What the nightly hygiene pass last saw (technical/07 § "Librarian pipeline" step 6): how many documents were indexed, and what is wrong with them. A finding is an **observation** — nothing in the platform deletes or rewrites a page because one names it (product/05) — and `commit_sha` is the commit the *index* was at, not the repository’s head. 404 when no pass has run for this project yet, because a report that has never been written and a vault with nothing wrong with it are different facts. Every `path` and `detail` quotes a committed page and is untrusted content (BD-022).',
+        tags: ['knowledge'],
+        params: projectParamsSchema,
+        response: { 200: kbHealthResponseSchema },
+      },
+    },
+    async (request) => {
+      const report = await findKbHealth(options.database, request.params.project_id);
+      if (report === null) {
+        throw new NotFoundError(
+          `knowledge health report for project ${request.params.project_id}: the nightly hygiene pass writes one, and none has run for it yet`,
+        );
+      }
+      return report;
     },
   );
 

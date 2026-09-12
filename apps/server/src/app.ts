@@ -47,6 +47,7 @@ import {
   projectExists,
 } from './queries/identity-queries.js';
 import { roleCapabilities } from './role.js';
+import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
@@ -236,6 +237,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       trustProxy: config.trustProxy,
     });
     await registerOrgRoutes(app, { database: options.database });
+    await registerIntegrationRoutes(app, {
+      database: options.database,
+      baseUrl: config.baseUrl,
+    });
     if (options.webhooks !== null) {
       await registerWebhookRoutes(app, { ingress: options.webhooks });
     }

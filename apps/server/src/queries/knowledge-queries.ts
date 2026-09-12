@@ -1,5 +1,6 @@
 /**
- * The reads behind `GET /api/projects/:id/kb/tree` and `/kb/doc` (WP-18b).
+ * The reads behind `GET /api/projects/:id/kb/tree`, `/kb/doc` (WP-18b) and `/kb/health`
+ * (WP-15h part 2).
  *
  * Projections onto the published DTOs, like `pipeline-queries.ts` beside them, and with the same
  * rule about a column nothing writes: what cannot be projected is refused rather than invented.
@@ -24,12 +25,21 @@
  * and `updated_at` the newest of them — which is what a tree view needs and what a reader would
  * otherwise compute from the file list themselves.
  */
-import type { IsoDateTime, JsonObject, KbDocResponse, KbTreeResponse } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  JsonObject,
+  KbDocResponse,
+  KbHealthResponse,
+  KbTreeResponse,
+} from '@platform/contracts';
+import { kbHealthResponseSchema } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import type { Database } from './identity-queries.js';
+import { UnprojectableRowError } from './pipeline-queries.js';
 
-const { kbChunks, kbDocuments, kbIndexState } = dbAdapters.schema;
+const { kbChunks, kbDocuments, kbHealthReports, kbIndexState } = dbAdapters.schema;
 
 /** The platform-owned frontmatter key the indexer writes the layer under; not the page's own. */
 const LAYER_KEY = '__layer';
@@ -128,4 +138,56 @@ export const findKbDoc = async (
     // and the text has been through the sanitiser. The route's description says so.
     content: chunks.map((chunk) => chunk.text).join('\n\n'),
   };
+};
+
+/**
+ * `GET /api/projects/:id/kb/health` — the newest `kb_health_reports` row, or `null`.
+ *
+ * **The newest, not a page.** The nightly hygiene pass writes one row per project per night
+ * (`packages/application/src/knowledge/hygiene.ts`), so the table is a history and the question a
+ * reader asks is about *now*. `created_at` is what makes a stale report visible; the endpoint never
+ * hides one for being old, because "the pass has not run since Tuesday" is exactly the thing an
+ * operator needs to see.
+ *
+ * `findings` is `jsonb` written by the domain's `computeKbHealth`, so it is parsed back through the
+ * published schema rather than cast: a row written by an older shape is refused by name instead of
+ * being served as something it is not. `source` is a `text` column with two legal values for the
+ * same reason — an unrecognised one is a row this projection does not understand.
+ *
+ * Every `path` and `detail` in it quotes a page somebody committed, which is untrusted text
+ * (BD-022). Nothing here renders or interprets it.
+ */
+export const findKbHealth = async (
+  database: Database,
+  projectId: string,
+): Promise<KbHealthResponse | null> => {
+  const rows = await database
+    .select()
+    .from(kbHealthReports)
+    .where(eq(kbHealthReports.projectId, projectId))
+    .orderBy(desc(kbHealthReports.createdAt), desc(kbHealthReports.id))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const parsed = kbHealthResponseSchema.safeParse({
+    id: row.id as Id,
+    project_id: row.projectId as Id,
+    commit_sha: row.commitSha,
+    documents: row.documents,
+    findings: row.findings,
+    source: row.source,
+    created_at: row.createdAt.toISOString() as IsoDateTime,
+  });
+  if (!parsed.success) {
+    // The issue *paths*, never the values: a finding quotes a knowledge page (BD-022).
+    throw new UnprojectableRowError(
+      `knowledge health report ${row.id}`,
+      `its stored shape does not match the published record at ${parsed.error.issues
+        .map((issue) => issue.path.join('.') || '(root)')
+        .join(', ')}`,
+    );
+  }
+  return parsed.data;
 };

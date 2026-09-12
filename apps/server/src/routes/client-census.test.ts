@@ -61,16 +61,11 @@ const WEB_SOURCES = 'apps/web/src';
  * which is standing rule 7's corollary.
  */
 const ADMITTED_GAPS: Readonly<Record<string, string>> = {
-  // Reads, by screen. WP-15h's row says "scope may be split by screen; the run endpoints go
-  // first, because they are the only ones with a producer already writing rows".
-  '/api/org/agents': 'WP-15h, later iteration — the running-agents screen',
-  '/api/org/inbox': 'WP-15h, later iteration — the inbox screen',
-  '/api/integrations': 'WP-15h, later iteration — the integrations screen',
-  '/api/integrations/{}/setup-guide': 'WP-15h, later iteration — the integrations screen',
-  '/api/projects': 'WP-15h, later iteration — the projects screen',
-  '/api/projects/{}/readiness': 'WP-15h, later iteration — the project screen',
-  '/api/projects/{}/tasks': 'WP-15h, later iteration — the task list',
-
+  // Every remaining gap is a **command**. The seven reads WP-15h's row attributed to a later
+  // iteration — the running-agents, inbox, integrations, setup-guide, projects, readiness and
+  // task-list screens — left this list at part 2, which is what makes the "serves this
+  // iteration's" cases below the other half of the same check (standing rule 10).
+  //
   // Commands. Every one of these writes, so each needs the aggregate, a `human_actions` row and an
   // `Idempotency-Key`, which is a different work package from a read API (technical/08 § Tasks).
   '/api/tasks/{}/pause': 'the task command surface — not this row',
@@ -301,6 +296,41 @@ describe('the client’s endpoint list against the server’s router', () => {
     ]) {
       expect((await probe(path)).served, path).toBe(true);
     }
+  });
+
+  it('serves the seven reads WP-15h part 2 took off the gap list', async () => {
+    // The other direction of the equality above, named (standing rule 10): "not in the gap list"
+    // is also satisfied by a path the client sweep failed to find at all.
+    for (const path of [
+      '/api/org/agents',
+      '/api/org/inbox',
+      '/api/integrations',
+      '/api/integrations/{}/setup-guide',
+      '/api/projects',
+      '/api/projects/{}/readiness',
+      '/api/projects/{}/tasks',
+    ]) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('serves the kb health read no client calls, which is why the census cannot see it', async () => {
+    // `GET /api/projects/:id/kb/health` reads `kb_health_reports` (WP-18b, migration 0018) and no
+    // screen asks for it, so it appears in neither half of the comparison above — this census is
+    // driven by the client's calls. It is a criterion on WP-15h's plan row (PROGRESS backlog 37)
+    // and therefore asserted here by hand, including the 401 its siblings get automatically.
+    const probed = await probe('/api/projects/{}/kb/health');
+    expect(probed.served).toBe(true);
+    expect(probed.status).toBe(401);
+    expect(probed.code).toBe('unauthenticated');
+
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+      })),
+    );
+    expect(paths).not.toContain('/api/projects/{}/kb/health');
   });
 
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {

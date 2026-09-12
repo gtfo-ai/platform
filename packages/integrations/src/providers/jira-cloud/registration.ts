@@ -40,15 +40,32 @@ export interface JiraCloudRegistrationDeps {
  */
 export const JIRA_CLOUD_AGENT_TOOLING: AgentTooling | null = null;
 
-export const createJiraCloudRegistration = (
-  deps: JiraCloudRegistrationDeps,
-): ProviderRegistration<'task_management'> => ({
+/**
+ * Everything about this provider that is true before an executor exists.
+ *
+ * Split out because Jira is the one shipped provider whose registration is a **factory** — it
+ * captures an executor, a clock and an action context — while the read surface of technical/08
+ * (`GET /api/integrations`, `GET /api/integrations/:id/setup-guide`) needs the metadata and never
+ * calls `create`. The factory spreads this object, so the display name, the secret field list and
+ * the guide path have exactly one definition rather than one per consumer (standing rule 7).
+ */
+export const JIRA_CLOUD_PROVIDER_METADATA = {
   id: PROVIDER_ID,
   type: 'task_management',
   displayName: 'Jira Cloud',
   configSchema: jiraCloudConfigSchema,
   secretFields: [...JIRA_CLOUD_SECRET_FIELDS],
   setupGuidePath: 'packages/integrations/src/providers/jira-cloud/setup-guide.md',
+} as const satisfies Pick<
+  ProviderRegistration<'task_management'>,
+  'id' | 'type' | 'displayName' | 'configSchema' | 'secretFields' | 'setupGuidePath'
+>;
+
+export const createJiraCloudRegistration = (
+  deps: JiraCloudRegistrationDeps,
+): ProviderRegistration<'task_management'> => ({
+  ...JIRA_CLOUD_PROVIDER_METADATA,
+  secretFields: [...JIRA_CLOUD_PROVIDER_METADATA.secretFields],
   agentTooling: JIRA_CLOUD_AGENT_TOOLING,
   create: ({ integrationId, config, secrets, redactor }) =>
     createJiraCloudTaskManagement({

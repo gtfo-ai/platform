@@ -24,15 +24,33 @@
 | Events | `GET /events?topics=org,project:<id>,task:<id>,run:<id>` (SSE), `POST /events/subscriptions` (add/remove topics for the connection id) |
 | Ops | `GET /healthz`, `GET /readyz`, `GET /metrics` (Prometheus; optional basic auth), `GET /api/version` |
 
-> **Four of the Knowledge row's eight endpoints are served since WP-18b**, and the other four are
-> not, which is worth stating because the row reads as one surface. Served: `GET …/kb/tree`, `GET …/kb/doc?path=`,
-> `GET …/kb/proposals` and `POST …/kb/proposals/:pid/{approve,reject,edit}`. Not served, and each
-> for a different reason: `PUT …/kb/doc` is a human writing a page, which needs the same commit path
-> the Librarian uses plus an editor the SPA does not have; `GET …/kb/search` duplicates the
-> `kb_search` platform tool over HTTP and nothing calls it; `GET …/kb/health` has rows to read
-> (`kb_health_reports`, migration 0018) and no screen; `POST …/kb/bootstrap` is product/18's history
+> **Five of the Knowledge row's eight endpoints are served** — four since WP-18b and `kb/health`
+> since WP-15h part 2 — and the other three are not, which is worth stating because the row reads as
+> one surface. Served: `GET …/kb/tree`, `GET …/kb/doc?path=`, `GET …/kb/proposals`,
+> `POST …/kb/proposals/:pid/{approve,reject,edit}` and `GET …/kb/health`. Not served, and each for a
+> different reason: `PUT …/kb/doc` is a human writing a page, which needs the same commit path the
+> Librarian uses plus an editor the SPA does not have; `GET …/kb/search` duplicates the `kb_search`
+> platform tool over HTTP and nothing calls it; `POST …/kb/bootstrap` is product/18's history
 > bootstrap, which is its own work package. `apps/server/src/routes/client-census.test.ts` is the
-> list that is kept true — it compares the client's calls against the router in both directions.
+> list that is kept true — it compares the client's calls against the router in both directions, and
+> **`kb/health` is the one endpoint it cannot see**: no screen calls it, so the census is blind to it
+> by construction and `routes/kb.ts` carries the assertion by hand.
+>
+> **The rest of the read surface is served since WP-15h**: the four run reads, `GET /api/tasks/:id`
+> and `GET /api/org/{users,audit}` at part 1, and at part 2 `GET /api/org/agents`,
+> `GET /api/org/inbox`, `GET /api/integrations`, `GET /api/integrations/:id/setup-guide`,
+> `GET /api/projects`, `GET /api/projects/:id/{readiness,tasks}` — with `readiness` answering
+> **409 `readiness_not_evaluated`** while nothing writes `readiness_evaluations`, the shape
+> `/context-pack` established. What is still missing from this document's tables is the **command**
+> surface (every `POST`, plus `PATCH` and `PUT`) and four more reads — `GET /api/org`,
+> `GET /api/org/stats`, `GET …/bindings`, `GET …/stats`.
+>
+> **Only part of that list is kept true by a test, and the boundary is worth knowing.** The census is
+> **client-driven**: it compares the paths `apps/web/src` names against the router, so it holds the
+> twelve commands the SPA calls — each with the row that owns it — and is blind to everything no
+> client calls. The four reads above, the writes no screen fires, and any route served but uncalled
+> (`kb/health` is the shipped example) are outside it **by construction**, not by omission. This
+> paragraph is the only record of those, so it is the one to correct when one of them lands.
 >
 > **The two reads answer from the index, not from git.** `kb/tree` is the pages the platform has
 > indexed at `kb_index_state.commit_sha` and `kb/doc` is a document's chunks re-joined, sanitised at

@@ -9,7 +9,7 @@
  * set.
  */
 import * as z from 'zod';
-import { artifactRefSchema, artifactSchema } from './artifacts.js';
+import { artifactRefSchema, artifactSchema, kbHealthFindingSchema } from './artifacts.js';
 import {
   agentRoleSchema,
   autonomyLevelSchema,
@@ -133,6 +133,18 @@ export const integrationSummarySchema = z.strictObject({
   }),
 });
 
+/**
+ * `GET /api/integrations` — the account list (WP-15h part 2).
+ *
+ * No `next_cursor`: an organisation has a handful of integrations and the client does not
+ * paginate it. It was composed in `apps/web/src/api/endpoints.ts` until the route existed, which
+ * is exactly what **Q45** said to do with it — *"move it into `packages/contracts` when the work
+ * package that implements the route lands"* — so the shape is unchanged and now has one home.
+ */
+export const integrationsResponseSchema = z.strictObject({
+  items: z.array(integrationSummarySchema),
+});
+
 export const createIntegrationRequestSchema = z.strictObject({
   type: integrationTypeSchema,
   provider: nonEmptyStringSchema,
@@ -173,6 +185,16 @@ export const projectSummarySchema = projectRecordSchema.extend({
   spent_usd_30d: usdSchema,
 });
 
+/**
+ * `GET /api/projects` — every project the caller may read (WP-15h part 2, Q45's second envelope).
+ *
+ * No `next_cursor`, for the same reason as the integration list: the dashboard renders every
+ * project it is given and nothing in the client asks for a second page.
+ */
+export const projectsResponseSchema = z.strictObject({
+  items: z.array(projectSummarySchema),
+});
+
 export const readinessResponseSchema = z.strictObject({
   level: z.int().min(0).max(5),
   evaluated_at: isoDateTimeSchema,
@@ -194,6 +216,15 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
   mode: taskModeSchema.optional(),
   stage: stageIdSchema.optional(),
 });
+
+/**
+ * `GET /api/projects/:id/tasks` — one page of a project's tasks, newest first (WP-15h part 2).
+ *
+ * This one **is** paginated, because a project accumulates tasks without bound and the client
+ * already sends `limit` and `cursor`. `next_cursor` is opaque: it is the keyset the server issued,
+ * and a client that parses it is reading a shape no contract fixes.
+ */
+export const tasksResponseSchema = page(taskRecordSchema);
 
 export const createTaskRequestSchema = z.strictObject({
   ticket_key: nonEmptyStringSchema,
@@ -370,6 +401,31 @@ export const kbSearchResponseSchema = page(
 );
 
 export const kbProposalsResponseSchema = page(knowledgeProposalRecordSchema);
+
+/**
+ * `GET /api/projects/:id/kb/health` — the most recent health report (technical/07 § 6, WP-15h
+ * part 2; the row is `kb_health_reports`, migration 0018).
+ *
+ * **One report, not a page.** The nightly hygiene pass writes a row per project per night, so the
+ * table is a history; what a reader wants is the current state of the vault, and a history is a
+ * different endpoint with a different question behind it. `created_at` is what makes staleness
+ * visible, and `commit_sha` is the indexed commit the findings were computed against — *not* the
+ * repository's head, because the pass reads the index (BD-012).
+ *
+ * Every `path` and `detail` in `findings` is untrusted text: a finding quotes a page somebody
+ * committed (BD-022). It is an observation and never an instruction — nothing in the platform
+ * deletes or rewrites a page because a finding names it.
+ */
+export const kbHealthResponseSchema = z.strictObject({
+  id: idSchema,
+  project_id: idSchema,
+  commit_sha: nonEmptyStringSchema.nullable(),
+  documents: z.int().nonnegative(),
+  findings: z.array(kbHealthFindingSchema),
+  /** Which pass produced it: the nightly hygiene sweep, or a Librarian run's own report. */
+  source: z.enum(['hygiene', 'librarian']),
+  created_at: isoDateTimeSchema,
+});
 
 /**
  * Longest reason a maintainer may attach to a decision.
@@ -556,10 +612,13 @@ export type OrgAuditQuery = z.infer<typeof orgAuditQuerySchema>;
 export type OrgAuditResponse = z.infer<typeof orgAuditResponseSchema>;
 export type EventsQuery = z.infer<typeof eventsQuerySchema>;
 export type IntegrationSummary = z.infer<typeof integrationSummarySchema>;
+export type IntegrationsResponse = z.infer<typeof integrationsResponseSchema>;
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
+export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
 export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
+export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type AnswerQuestionRequest = z.infer<typeof answerQuestionRequestSchema>;
@@ -574,6 +633,8 @@ export type InboxResponse = z.infer<typeof inboxResponseSchema>;
 export type KbTreeResponse = z.infer<typeof kbTreeResponseSchema>;
 export type KbDocResponse = z.infer<typeof kbDocResponseSchema>;
 export type KbProposalsResponse = z.infer<typeof kbProposalsResponseSchema>;
+export type KbHealthResponse = z.infer<typeof kbHealthResponseSchema>;
+export type AgentsResponse = z.infer<typeof agentsResponseSchema>;
 export type KbSearchResponse = z.infer<typeof kbSearchResponseSchema>;
 export type DecideKbProposalRequest = z.infer<typeof decideKbProposalRequestSchema>;
 export type SseTopic = z.infer<typeof sseTopicSchema>;

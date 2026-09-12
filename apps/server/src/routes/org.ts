@@ -1,21 +1,25 @@
 /**
- * Two organisation reads from technical/08's endpoint table, at two different role levels.
+ * The organisation-scoped reads of technical/08's endpoint table, at three different role levels.
  *
- * They are here because the RBAC middleware has to be exercised by something real: a guard that
- * only appears in its own unit test is a guard nobody has watched refuse a live request. `GET
- * /api/org/users` needs `org.read` (viewer and above) and `GET /api/org/audit` needs
- * `org.audit.read` (maintainer and above, Q36), so one signed-in `member` is enough to see both
- * sides of the decision.
+ * `GET /api/org/users` needs `org.read` (viewer and above), `GET /api/org/audit` needs
+ * `org.audit.read` (maintainer and above, Q36), and the two WP-15h part 2 added — `GET
+ * /api/org/agents` (`run.read`) and `GET /api/org/inbox` (`task.read`) — are both viewer. So one
+ * signed-in `member` still sees both sides of the RBAC decision on this file alone, which is why
+ * these live together: a guard that only appears in its own unit test is a guard nobody has watched
+ * refuse a live request.
  *
- * The rest of technical/08's surface belongs to the work packages that build what it reads — org
- * settings and budgets, projects, the agent and inbox lists, knowledge. Adding stubs for them here
- * would publish an OpenAPI document describing endpoints that answer nothing. **Tasks and runs
- * left that list at WP-15h** (`routes/tasks.ts`, `routes/runs.ts`), and what the client still calls
- * and the server still does not serve is enumerated, with the row that owns each one, in
- * `routes/client-census.test.ts` — which fails if that list drifts from the router in either
- * direction.
+ * **Neither of the two new ones filters by organisation**, and that matches every other
+ * organisation-wide read in this server (`listUsers`, `listAuditEntries`): this is a
+ * single-organisation self-hosted deployment (product/01) and no route has ever filtered on
+ * `org_id`. Written up in `PROGRESS.md` as the assumption it is.
+ *
+ * What technical/08 names and this server still does not serve is enumerated, with the row that
+ * owns each one, in `routes/client-census.test.ts` — which fails if that list drifts from the
+ * router in either direction.
  */
 import {
+  agentsResponseSchema,
+  inboxResponseSchema,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
   orgUsersResponseSchema,
@@ -26,6 +30,7 @@ import { requirePermission } from '../auth/rbac.js';
 import { BadRequestError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole, listAuditEntries, listUsers } from '../queries/identity-queries.js';
+import { listInbox, listRunningAgents } from '../queries/pipeline-queries.js';
 
 export interface OrgRoutesOptions {
   readonly database: Database;
@@ -97,5 +102,38 @@ export const registerOrgRoutes = async (
       });
       return { items: page.items, next_cursor: page.nextCursor };
     },
+  );
+
+  typed.get(
+    '/api/org/agents',
+    {
+      // `run.read` is `viewer`: the record is metadata — stage, model, tokens, cost — and carries
+      // no model output. The transcript behind it is separately gated at `transcript.read`
+      // (`routes/runs.ts` says why the two differ).
+      preHandler: requirePermission(guard, 'run.read'),
+      schema: {
+        summary: 'Every agent that is still running',
+        description:
+          'The runs that have not reached an ending, newest first (technical/08 § "Agents"). Unpaginated: the list is bounded by how many runs a deployment executes at once, not by how long it has been up. `last_output_at` is null until the run has produced something.',
+        tags: ['org'],
+        response: { 200: agentsResponseSchema },
+      },
+    },
+    async () => listRunningAgents(options.database),
+  );
+
+  typed.get(
+    '/api/org/inbox',
+    {
+      preHandler: requirePermission(guard, 'task.read'),
+      schema: {
+        summary: 'Questions and approvals that are still waiting',
+        description:
+          'Open questions and pending approvals across the organisation, oldest first. technical/08 says "pending for the caller"; nothing records an assignee, so this answers what is pending and the permission check is what scopes it (see the module note). Question text is written by an agent and is untrusted content (BD-022): render it, never execute it — and it is copied out of `artifacts.data`, which TD-012 does not redact yet (PROGRESS backlog 35).',
+        tags: ['org'],
+        response: { 200: inboxResponseSchema },
+      },
+    },
+    async () => listInbox(options.database),
   );
 };

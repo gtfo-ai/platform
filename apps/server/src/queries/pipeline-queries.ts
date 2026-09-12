@@ -1,5 +1,10 @@
 /**
- * The reads behind `GET /api/tasks/:id` and the four `GET /api/runs/:id*` endpoints (WP-15h).
+ * The reads behind `GET /api/tasks/:id`, the four `GET /api/runs/:id*` endpoints (WP-15h part 1)
+ * and the three list projections part 2 added — `GET /api/org/agents`, `GET /api/org/inbox` and
+ * `GET /api/projects/:id/tasks`. They are here rather than in a file of their own because they
+ * project the same tables through the same mappers: an agent *is* a run, an inbox entry *is* a
+ * question or an approval, and a task page *is* `toTaskRecord` over a keyset. The project and
+ * integration projections have their own modules, because they touch neither.
  *
  * These are **projections onto the published DTOs**, not repository methods: every function here
  * returns the exact shape `@platform/contracts` publishes for a route, and the route's zod response
@@ -41,22 +46,27 @@
  * the client never sees.
  */
 import type {
+  AgentsResponse,
   Id,
+  InboxResponse,
   ModelUsage,
   QuestionRecord,
   RunRecord,
+  RunStatus,
   TaskDetailResponse,
   TaskRecord,
+  TaskState,
   TranscriptEvent,
 } from '@platform/contracts';
 import { transcriptEventSchema } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, eq, gt, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 
 const {
   approvals,
   artifacts,
+  projects,
   questions,
   runContextPack,
   runMessages,
@@ -564,5 +574,223 @@ export const findTaskDetail = async (
       reason: row.reason,
     })),
     runs: runRows.map((row) => toRunRecord(row, usage.get(row.id) ?? [])),
+  };
+};
+
+/**
+ * The run statuses that mean **this run has ended**, whatever the outcome.
+ *
+ * Its complement is what `GET /api/org/agents` answers with, and the two are asserted to partition
+ * `runStatusSchema` exactly (`pipeline-queries.test.ts`): a status added to the enum and to neither
+ * set here would otherwise silently pick a side, and the side it would pick is "still running",
+ * which is the one that puts a finished run on the agents screen for ever.
+ */
+export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+  'budget_exceeded',
+  'timed_out',
+  // A stalled run has stopped producing and `runs.terminal_reason` has a value for it; it is an
+  // ending the platform reached rather than one the model reported.
+  'stalled',
+];
+
+/**
+ * `GET /api/org/agents` — every run that has not ended, newest first (technical/08 § "Agents").
+ *
+ * Organisation-wide and unpaginated: the list is bounded by how many runs a deployment can execute
+ * at once, which is the dispatcher's concurrency, not by how long it has been running.
+ *
+ * `project_id`, `task_id`, `role` and `last_output_at` are on the run row already and the DTO
+ * repeats them beside it — that is technical/08's shape and it is kept, because the agents screen
+ * groups by project without unpacking the record.
+ */
+export const listRunningAgents = async (database: Database): Promise<AgentsResponse> => {
+  const rows = await database
+    .select(runColumns)
+    .from(runs)
+    .leftJoin(taskStages, eq(taskStages.id, runs.taskStageId))
+    .where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]))
+    .orderBy(desc(runs.createdAt));
+  const usage = await modelUsageFor(
+    database,
+    rows.map((row) => row.id),
+  );
+  return {
+    items: rows.map((row) => {
+      const run = toRunRecord(row, usage.get(row.id) ?? []);
+      return {
+        run,
+        project_id: run.project_id,
+        task_id: run.task_id,
+        role: run.role,
+        last_output_at: run.last_output_at ?? null,
+      };
+    }),
+  };
+};
+
+/**
+ * `GET /api/org/inbox` — the questions and approvals that are still waiting (technical/08 § "Inbox").
+ *
+ * **"Pending for the caller" is read as "pending", and that is a decision the data model forces.**
+ * technical/08 describes the inbox as *"questions + approvals pending for the caller"*, and nothing
+ * in `questions` or `approvals` records an assignee: a question is asked of whoever can answer it,
+ * and `answered_by_user_id` is written when somebody does. Filtering by a column that does not exist
+ * would mean inventing a routing rule here, so the endpoint answers the organisation's open work and
+ * the permission check is what scopes it (`task.read`, viewer). Written up in `PROGRESS.md`.
+ *
+ * Oldest first, both lists: an inbox is a queue, and the item that has waited longest is the one a
+ * deadline is about to expire on.
+ *
+ * **`questions.text` is an artifact-derived column, and PROGRESS backlog 35 is open on it.** The
+ * stage executor copies the draft out of the run's `structuredOutput` (`stage-executor.ts`'s
+ * `artifactQuestions(data)`), and that document reaches `artifacts.data` — and therefore this
+ * column — **unredacted**, while the same model message's transcript copy went through TD-012 step
+ * 1. So a credential the platform injected into the run's environment and the model repeated into a
+ * question would be served here. This reader does not fix it: redaction belongs at the write
+ * (TD-012), a reader that redacted would give the row and the response two different texts, and
+ * backlog 35 is owned by no work package. Stated here rather than discovered by the next reader.
+ */
+export const listInbox = async (database: Database): Promise<InboxResponse> => {
+  const [questionRows, approvalRows] = await Promise.all([
+    database
+      .select()
+      .from(questions)
+      .where(eq(questions.status, 'open'))
+      .orderBy(asc(questions.askedAt)),
+    database
+      .select()
+      .from(approvals)
+      .where(eq(approvals.status, 'pending'))
+      .orderBy(asc(approvals.requestedAt)),
+  ]);
+  return {
+    questions: questionRows.map(toQuestionRecord),
+    approvals: approvalRows.map((row) => ({
+      id: row.id as Id,
+      task_id: row.taskId as Id,
+      kind: row.kind,
+      status: row.status,
+      requested_at: isoRequired(row.requestedAt),
+      deadline_at: iso(row.deadlineAt),
+      decided_by_user_id: row.decidedByUserId as Id | null,
+      decided_at: iso(row.decidedAt),
+      reason: row.reason,
+    })),
+  };
+};
+
+/**
+ * The task states that mean **this task is finished**.
+ *
+ * `merged` and `retro` are deliberately *not* here: the retrospective stage runs after the merge, so
+ * a task in either is still work in flight and still costs money. Asserted to partition
+ * `taskStateSchema` exactly, for the reason {@link TERMINAL_RUN_STATUSES} gives.
+ */
+export const CLOSED_TASK_STATES: readonly TaskState[] = ['done', 'cancelled'];
+
+/**
+ * Where a page of `GET /api/projects/:id/tasks` stopped: the keyset of its last row.
+ *
+ * **`createdAt` is a string, and that is the fix for a row this cursor used to skip.** `timestamptz`
+ * has microsecond resolution and node-postgres parses it into a JavaScript `Date`, which has
+ * milliseconds — so a cursor built from the parsed value is *earlier* than the row it came from, and
+ * the keyset's `created_at = $1` never matches while `created_at < $1` excludes it. The row is
+ * dropped, silently, and the short page is indistinguishable from the last page. Measured on the
+ * integration tier: three tasks, `limit: 1`, **two** returned.
+ *
+ * So the cursor carries the database's own rendering — `YYYY-MM-DDTHH:MM:SS.ffffffZ`, six fractional
+ * digits — and the comparison casts it back to `timestamptz`. Nothing in between is a `Date`.
+ */
+export interface TaskCursor {
+  readonly createdAt: string;
+  readonly id: string;
+}
+
+/**
+ * `tasks.created_at` rendered to the microsecond, in UTC.
+ *
+ * `to_char` rather than `::text` so the result is ISO-8601 with a `T` and a `Z` — the shape
+ * `z.iso.datetime()` accepts (it admits six fractional digits; verified) and the shape every other
+ * timestamp on the wire has. `::text` would render `2026-09-13 00:41:40.123456+00`, which the
+ * route's own cursor schema would refuse.
+ */
+const cursorAt = sql<string>`to_char(${tasks.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+
+export interface ProjectTasksQuery {
+  readonly limit: number;
+  readonly before?: TaskCursor;
+  readonly state?: TaskState;
+  readonly template?: string;
+  readonly mode?: TaskRecord['mode'];
+  readonly stage?: string;
+}
+
+export interface ProjectTaskPage {
+  readonly items: readonly TaskRecord[];
+  /** The keyset of the last row, or `null` on the last page. */
+  readonly next?: TaskCursor;
+}
+
+/**
+ * One page of a project's tasks, newest first — or `null` when there is no such project.
+ *
+ * A **keyset** over `(created_at, id)` rather than an offset, for the reason `routes/kb.ts` gives
+ * about the proposal queue: the table is written to while a human reads it, and an offset silently
+ * repeats or skips a row when one lands in between. The pair is needed because `tasks.id` is a
+ * uuidv7 whose default is generated per row while `created_at` is `now()` — two tasks created inside
+ * one transaction share the timestamp exactly.
+ *
+ * **The existence check is a second query and it is not optional.** "This project has no tasks" and
+ * "there is no such project" are different facts and the `where` cannot tell them apart — both are
+ * an empty page — so without it this endpoint would answer `200 {items: []}` for a uuid that names
+ * nothing while its siblings (`/config`, `/budgets`, `/readiness`) all answer 404 for the same id.
+ * One question, one answer: every project-scoped read in this server resolves the project first, and
+ * the cost is one indexed primary-key lookup per page.
+ */
+export const listProjectTasks = async (
+  database: Database,
+  projectId: string,
+  query: ProjectTasksQuery,
+): Promise<ProjectTaskPage | null> => {
+  const project = await database
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  if (project.length === 0) {
+    return null;
+  }
+
+  const conditions = [
+    eq(tasks.projectId, projectId),
+    ...(query.state === undefined ? [] : [eq(tasks.state, query.state)]),
+    ...(query.template === undefined ? [] : [eq(tasks.template, query.template)]),
+    ...(query.mode === undefined ? [] : [eq(tasks.mode, query.mode)]),
+    ...(query.stage === undefined ? [] : [eq(tasks.currentStage, query.stage)]),
+    ...(query.before === undefined
+      ? []
+      : [
+          // The cursor goes back to the database as text and is cast there, so the comparison runs
+          // at the column's own resolution rather than at a `Date`'s (see {@link TaskCursor}).
+          sql`(${tasks.createdAt}, ${tasks.id}) < (${query.before.createdAt}::timestamptz, ${query.before.id}::uuid)`,
+        ]),
+  ];
+  const rows = await database
+    .select({ task: tasks, cursorAt })
+    .from(tasks)
+    .where(and(...conditions))
+    .orderBy(desc(tasks.createdAt), desc(tasks.id))
+    .limit(query.limit + 1);
+
+  const page = rows.slice(0, query.limit);
+  const last = page.at(-1);
+  return {
+    items: page.map((row) => toTaskRecord(row.task)),
+    ...(rows.length > query.limit && last !== undefined
+      ? { next: { createdAt: last.cursorAt, id: last.task.id } }
+      : {}),
   };
 };

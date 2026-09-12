@@ -40,6 +40,22 @@ non-existent name still fails, so the check is not weakened) landed at `d337173`
 script that had only ever run locally is the first honest measurement of it** — rule 71 in its sharpest
 form yet: the script had passed 7/7 on this machine for two sessions.
 
+**CI went RED on `3eaf34b` (a docs-only commit; `ci` run `34722271238`; `image` `34722271241` green) and
+is GREEN again at `93ffb32` (`ci` `34724884638`, `image` `34724884600`, read as `completed success`).**
+`e2e-fake-claude` had failed in WP-18b's new `test/e2e/pipeline/librarian.e2e.test.ts` › *"serves the
+queue, the tree and a document, and commits what a maintainer approves"* with `expected 'queued' to be
+'applied'`; the same job was green on `24efdc7`, the code commit. **Measured**: the test observed the
+second commit in the fake git at line 264 and read the proposal row on the next line, while
+`knowledge.apply` writes `applied` in its own transaction **after** the git call returns — the wait bound
+the commit and the assertion belonged to the row (rule 50); the ci-fix waits on the row and asserts the
+commit the row implies, adding `applied_commit_sha === second.sha`, and a fake-side post-commit delay on
+a copy reproduces CI's message by name with the old ordering (rule 76). The rule-49 sweep found **one
+sibling**: `test/e2e/pipeline/agent-run.e2e.test.ts` waited on the workpad comment and asserted
+`integration_actions`, which is written after the call — it waits on the `upsert_workpad` audit row now.
+Third harness flake of the session, third distinct mechanism (backlog 28: an unlistened pool `error`;
+the event-log case: a handler attached one `await` late; this: a wait on the call rather than on the row
+it implies), all found by CI on docs-only commits and none by a local run.
+
 **Six work packages closed in session 5 so far** — backlog 28 (the e2e teardown flake, now standing
 rule 85), **WP-15h part 1** (the read API and the `run:<id>` topic), **WP-19** (the cost ledger; every
 run the platform produces is now cost-accounted), **WP-22** (five images, compose, and the real provider
@@ -1331,7 +1347,7 @@ What done looks like is small and worth naming so it is not re-derived: the WP t
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
 
-### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1, session 5; the instance is half closed — eleven paths remain, listed in the census with their owning rows)
+### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1; **every read the SPA calls is served** after WP-19, WP-18b and WP-15h part 2 — what remains in the census's admitted gaps is the **command** surface, twelve writes, unowned; serving the SPA itself is backlog **33**)
 
 > **Session 5.** The recurrence is closed by `apps/server/src/routes/client-census.test.ts`, which fails on a
 > path the client names and the server does not serve, over tracked **and** untracked client files, in both
@@ -1414,7 +1430,7 @@ documentation and cannot own a route. **Recommendation: it belongs to WP-15h par
 owns `apps/server/src/routes/` and already carries the client-route census — a sentence has been added to
 that row. The fallback rule is an engineering decision, not a product one; it needs no open question.
 
-### 37. **The KB health report is written nightly, read by nobody, and cannot contain two of the findings its own documents promise** (TODO — **no work package owns either half**; found by WP-18b and WP-18a, session 5)
+### 37. **The KB health report is written nightly, ~~read by nobody~~ (read by `GET /api/projects/:id/kb/health` since WP-15h part 2 — an endpoint no screen calls yet), and cannot contain two of the findings its own documents promise** (the reader half **RESOLVED** at WP-15h part 2; the invalid-documents half TODO — **no work package owns it**; found by WP-18b and WP-18a, session 5)
 **What is wrong.** Two halves, both about the same report, and they have **different causes** — which is why
 they are one entry with the causes named rather than two:
 - **No reader.** `kb_health_reports` (migration **0018**) gains a row per project per night from the hygiene
@@ -7821,6 +7837,151 @@ not a sleep (rule 2). The both-direction secret assertion is
 frames — without the run’s secret", and it is asserted **twice on two paths**: on the HTTP page
 (placeholder present, plaintext absent) and on the SSE frame, which never touches the projection.
 
+### WP-15h part 2 — the remaining reads
+
+**What was built.** The seven reads the census attributed to a later iteration —
+`GET /api/org/agents`, `/api/org/inbox`, `/api/integrations`, `/api/integrations/:id/setup-guide`,
+`/api/projects`, `/api/projects/:id/readiness`, `/api/projects/:id/tasks` — plus
+`GET /api/projects/:id/kb/health`, the one the plan row names and the census **cannot** see. Four
+projection modules now (`queries/{pipeline,project,integration,knowledge}-queries.ts`), two new
+route files' worth of routes, four DTOs in `packages/contracts`, and
+`packages/integrations/src/catalogue.ts`. The census's `ADMITTED_GAPS` is now **commands only**.
+
+**The one thing in the plan row that is NOT here:** the row's second half — serving the SPA itself
+(backlog **33**, `@fastify/static` and the allow-list-shaped fallback). The brief scoped part 2 to
+the reads; the row is not finished by this change.
+
+**The defect this work package found, and it is the interesting one.** The task page's keyset
+carried `created_at` as the `Date` node-postgres parsed it. `timestamptz` is **microseconds** and a
+JavaScript `Date` is **milliseconds**, so the cursor was strictly *earlier* than the row it was built
+from: `created_at = $1` never matched and `created_at < $1` excluded it, and the row was dropped.
+Measured on the integration tier — three tasks, `limit: 1`, **two** came back — and it is invisible
+from the outside, because a short page and the last page are the same response. The cursor now
+carries the database's own rendering (`to_char(… 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`, six fractional
+digits, which `z.iso.datetime()` accepts — checked) and the comparison casts it back to
+`timestamptz`; nothing between the two is a `Date`. The unit test asserts the microseconds survive
+the round trip and the integration case asserts the page count, with a regex pinning the six digits
+so the fix is not being tested against millisecond data (rule 4).
+
+**Decisions and assumptions, each with its reason.**
+
+1. **"Pending for the caller" is read as "pending".** technical/08 describes the inbox that way and
+   **nothing records an assignee** — `questions` has `answered_by_user_id` (written when somebody
+   answers) and no "asked of" column. Filtering by a column that does not exist would mean inventing
+   a routing rule in a reader, so the endpoint answers the organisation's open work and `task.read`
+   (viewer) is what scopes it.
+2. **No organisation filter on any organisation-wide read.** `listUsers` and `listAuditEntries` have
+   never had one and this is a single-organisation self-hosted deployment (product/01). Adding one
+   here would make these three endpoints the only ones with an opinion about `org_id`.
+3. **`GET /api/projects` is decided on the organisation role**, not per project. `project.read` is
+   `viewer` at organisation level anyway, so a per-item filter would answer a different question
+   from `can()` in exactly one place.
+4. **`/readiness` refuses by name — 409 `readiness_not_evaluated` — with the row count.** Nothing
+   writes `readiness_evaluations` (grep: the only hits are the migration and the parity test).
+   `projects.readiness_level` is `not null default 0`, so a projection *could* answer
+   `{level: 0, evaluated_at: <now>, criteria: []}` — and two of those three would be invented:
+   `evaluated_at` would be the time of the read, and an empty criteria list renders as "nothing
+   passed", a claim about the project rather than about the schema. Same shape as part 1's
+   `/context-pack`, including the row count so "no producer yet" and "a producer exists" differ.
+5. **`GET /api/integrations` strips the provider's declared credential fields, and that is a
+   security guard rather than tidiness.** `bindings/loader.ts` merges `{...config, ...secrets}` and
+   every provider's schema accepts its credential from either side, so a binding whose token was
+   pasted into `integrations.config` works — and would be served to anyone holding
+   `integration.read`. For a provider this build does **not** ship the projection cannot tell
+   configuration from credential, so it publishes `{}` and logs which row (fail closed; the
+   alternative is a guess about a field list nobody here has). Both directions are asserted at the
+   unit, integration and e2e tiers: the secret is gone *and* the configuration beside it survived.
+6. **`integrations.health` is `unknown`/`checked_at: null` for the unwritten column.** Nothing writes
+   it — `POST /api/integrations/:id/test` is the endpoint that would — and `unknown` is the published
+   enum's own spelling for "nobody has checked", so this is reading the column rather than inventing
+   a value. A stored block that does **not** match the published shape is refused by name, because a
+   broken writer must not be indistinguishable from an unchecked integration.
+7. **`webhook_url` is non-null only for a provider with an inbound half.** Sentry's own shipped guide
+   says *"Do not point a Sentry webhook at the platform; nothing would consume it"*, and
+   `IntegrationIngress` refuses such a delivery with `unsupported_provider` — so publishing a URL
+   beside that guide would contradict the page on the same screen. It is the one **declared** field
+   in the catalogue and `catalogue.test.ts` checks it against the object each provider's own `create`
+   returns (`'inbound' in port`, the question `inbound-loader.ts` asks), in both directions, over
+   every entry. The check is live: it failed loudly the first time, because GitLab refuses to be
+   constructed without a token.
+8. **The provider catalogue is separate from the pipeline registry, deliberately.**
+   `createPipelineProviderRegistry` registers **two** providers and its docblock argues against
+   adding the other three, because entries nothing constructs are a set the tests are not
+   parameterised over. That argument is about `create`. A read surface calls `create` never and must
+   still name every provider an operator can configure, or the integrations screen refuses to
+   describe rows the platform itself reads on every webhook. Two questions, two lists — and nothing
+   in the catalogue is hand-copied: four entries are derived from the provider's exported
+   registration and Jira's metadata half is now `JIRA_CLOUD_PROVIDER_METADATA`, which its factory
+   spreads. `catalogue.test.ts` reads the provider directories off disk (rule 7), so a sixth provider
+   fails on the commit that adds it.
+9. **Q45's three envelopes moved into `packages/contracts`**, which is what Q45 said to do "when the
+   work package that implements the route lands". `projectsResponseSchema`, `tasksResponseSchema` and
+   `integrationsResponseSchema` are byte-for-byte the shapes `endpoints.ts` composed, and that file
+   now imports them. It is the only change to `apps/web` and it changes no screen.
+10. **`kb/health` gets no client method.** The SPA has no screen for it, and a client method with no
+    caller would falsify `endpoints.ts`'s own claim to be the list of endpoints the app talks to —
+    and put a path into the census that the server serves and nobody uses. The endpoint plus its e2e
+    is the deliverable; the panel is backlog 37's remaining half.
+11. **Two partitions are asserted against the enums they partition** (rule 68):
+    `TERMINAL_RUN_STATUSES` (agents = the complement) and `CLOSED_TASK_STATES` (`open_tasks` = the
+    complement), read off `runStatusSchema`/`taskStateSchema` in `pipeline-queries.test.ts`. A status
+    added to the enum and to neither list would otherwise silently pick the **visible** side: a
+    finished run on the agents screen for ever, a closed task counted as open on every dashboard.
+    Two judgement calls are named there: `stalled` is an ending, and `merged`/`retro` are not.
+12. **`spent_usd_30d` is calendar arithmetic on the rollup key**, never an instant minus
+    30 × 86 400 000 ms. `cost_rollup_daily.day` is written in the organisation's timezone (WP-19,
+    Q12), so the cutoff is `rollupDay(now, zone)` minus 29 days computed on the `YYYY-MM-DD` string.
+
+**PROGRESS backlog 35 is live on one of these reads, and it is said at the line rather than fixed.**
+`GET /api/org/inbox` serves `questions.text`, which the stage executor copies out of the run's
+`structuredOutput` — the document that reaches `artifacts.data` **unredacted** while the same
+message's transcript copy went through TD-012 step 1. Backlog 35 names `questions.text` explicitly.
+A reader that redacted would give the row and the response two different texts, so the fix stays at
+the write; the docblock on `listInbox` and the route's own description both say so.
+
+**The e2e composition, and what the fake emits (rule 82).** `agent: 'real-over-fake-cli'` for both
+cases, because two assertions exist only there: `onAgentSpec` is awaited inside the workspace
+provisioner, which is composed only in that mode, and it is the only way to read `/api/org/agents`
+while a run is **running** rather than after every run has ended; and the scripted `result` reports
+`total_cost_usd: 0.4` per run across two models, which is what gives `spent_usd_30d` a real figure to
+sum. Checked before asserting: **no shipped scenario asks a question or requests an approval** —
+`REFINED_SPEC.questions` is `[]` and its `decision` is `'proceed'` — so an inbox assertion on the
+happy path would have been an assertion about an empty table. The second case therefore overrides the
+refinement scenario to `decision: 'ask'` with one blocking question, which is the shipped mechanism
+(`stageVerdict` maps `'ask'` onto the `questions` verdict) and parks the task at `waiting_answers`
+after one stage. `kb_health_reports` is written by the **nightly hygiene cron and nothing else** (the
+librarian stage's own `health` list is stored nowhere — backlog 37's other half), so the e2e enqueues
+`JOB_QUEUES.knowledgeHygiene` on the instance's own job runtime and waits for the row; the 404 before
+it and the 200 after it are both asserted. `open_tasks` is asserted at 1 before the merge and 0 after
+it, and `spent_usd_30d` is asserted to have **increased** between the two reads rather than to equal a
+constant, which a reader returning the same number twice could not satisfy.
+
+**`integrations` is the one table with no writer anywhere in this build**, so "rows the pipeline
+wrote" cannot apply to it: a row arrives by provisioning. The e2e says that out loud and asserts the
+projection over the two rows the harness provisions the way an operator would — both of which name a
+provider this build does not ship, so the e2e exercises the fail-closed branch and the integration
+tier adds a real `gitlab` row for the filtered one.
+
+**Sentences the fix falsified, and what was done with them (rule 83).** `technical/08`'s "Four of the
+Knowledge row's eight endpoints are served" is now five, and the paragraph gained the rest of the
+read surface with the `readiness` refusal named; `CLAUDE.md`'s read-API bullet said the projections
+are one file and the gap list still held seven reads; `apps/web/src/api/endpoints.ts`'s docblock said
+three envelopes "move into `packages/contracts` when the work package that implements the route
+lands"; `routes/org.ts`'s docblock listed "the agent and inbox lists" among what belongs to later work
+packages; `routes/kb.ts` said "four paths"; `docs/OPEN-QUESTIONS.md` **Q66**'s refiner note said the
+health report "has **no reader**" and **Q45** said the envelopes were still to move. Three more are
+**orchestrator-owned and reported rather than edited**: the WP-15h plan row (`13-implementation-plan.md:44`,
+which still says part 2 is open and counts twenty-four unserved paths), PROGRESS backlog **29**'s
+heading ("eleven paths remain"), and backlog **37**'s title ("read by nobody").
+
+**Assumption a reviewer should check first:** `GET /api/org/agents` and `GET /api/org/inbox` refuse
+the **whole list** when one row cannot be projected — a run with no `task_stage_id`, a question with
+no `stage` — rather than dropping it. That is `findTaskDetail`'s existing stance ("a composite DTO
+that silently dropped the row it could not describe would report a task with fewer runs than it
+has"), and it is a stronger claim for a cross-project list: one malformed row blanks the dashboard.
+It is fail-closed and it is diagnosable (409 naming the row), and it is the call most worth
+disagreeing with.
+
 ### WP-19 — the cost ledger, and the three tables that had never held a row
 
 **What was built.** A `cost.ledger` handler on `run.finished` / `run.failed` at TD-005 priority 10
@@ -8494,6 +8655,40 @@ default-branch read now, and what is missing is that it answers the four indexed
   fixed — and the fake's header sentence *"Git itself is deliberately absent"* was falsified by
   divergence 9 (rule 83), so it now says which half is absent and which the commits API supplies.
 
+#### ci-fix — the librarian e2e bound the commit, not the row
+
+CI run **`34722271238`** failed `test/e2e/pipeline/librarian.e2e.test.ts` ›
+*"serves the queue, the tree and a document, and commits what a maintainer approves"* with
+`expected 'queued' to be 'applied'` — on the **docs-only** commit `3eaf34b`, while the same job was
+green on `24efdc7`, which is the shape of a race rather than of a defect.
+
+**Mechanism, read off the failure and then reproduced.** The test waited on `pipeline.git.commits`
+and asserted the **row** on the next line. `knowledge.apply` calls `commitFiles` and
+`openMergeRequest` and *then* writes `status = 'applied'` in a transaction of its own, so
+"the provider has the commit" is true one transaction before "the row says applied". Nothing about
+the ordering is random; only the rate is (standing rule 76), and a loaded CI runner is all it takes.
+Standing rule **50** in its usual form: bound the line you assert, not one that precedes it.
+
+**The fix** waits on the row — `waitFor` over `pipeline.proposals()` until the target row is
+`applied` — and then asserts the commit, which the row now implies. No assertion was weakened and
+one was **added**: `applied_commit_sha === second.sha`, the tie the old ordering could not make
+because it read the row before the writer had put a sha on it.
+
+**Rule 49's sweep, over every `test/e2e/` assertion that reads a row after observing a provider
+call.** Four candidates, one more defect: `agent-run.e2e.test.ts` waited on the workpad comment and
+then asserted `integration_actions` rows, which the executor writes *after* the call returns — the
+same window, and `every(status === 'ok')` is true of an empty set as well, so the assertion was not
+a measurement either. It waits for the `upsert_workpad` audit row now. The other two are already
+right and now say so at the line: this file's first case waits on the row inside `startMerged` and
+asserts the commit afterwards, and the cost ledger's reconciliation already waits for
+`cost_entries` rather than inferring them from a task state.
+
+**Rule 3, on a copy** (`zz` copies of the e2e and of `support/pipeline.ts`, both deleted): the
+harness copy wraps the fake's `commitFiles` so it records the commit and then holds the call open
+for 1.5 s — a fake-side hook, never a sleep in the test — which makes the window deterministic.
+**Calibrated 1/1 with the fix; with the pre-fix ordering restored it fails by name with CI's own
+message**, `expected 'queued' to be 'applied'`.
+
 **Assumptions, stated because the docs did not settle them.** (a) The librarian's four actions map
 onto two git actions — `add`/`update`/`deprecate` write the page, `no-op` writes nothing — and
 nothing ever produces a `delete`, which is why `commitActionSchema` has no such member (product/05:
@@ -8530,6 +8725,34 @@ strongly than it reads):
 
 
 ## Discovered work — session 5 (not in plan)
+- **The proposal queue's cursor carries the same truncation the task page's did, and is safe only by
+  accident** (WP-15h part 2, **latent**, measured on its sibling). `routes/kb.ts`'s
+  `next_cursor` is `StoredKnowledgeProposal.createdAt`, which `postgres-proposal-store.ts:95` builds
+  from the parsed `Date` — millisecond resolution against a `timestamptz` column, which is exactly the
+  keyset that dropped a task row (three in, two out). It does not bite **today** because the same
+  store *writes* `created_at` from `Clock.now()`, an ISO string with three fractional digits
+  (`:141`), so the stored value has no microseconds to lose. But the column is
+  `timestamptz not null default now()` (`0008_knowledge.sql:74`), so the first insert that omits the
+  value — a backfill, a fixture, a second writer — makes a page silently skip a proposal, and a short
+  page is indistinguishable from the last page. The fix is the one on `TaskCursor`: render the cursor
+  in SQL and cast it back. Not this work package's file to change, and nobody owns it.
+- **`GET /api/org/inbox` serves `questions.text`, which backlog 35 leaves unredacted** (WP-15h part 2,
+  stated at the line rather than fixed). The stage executor copies the draft out of the run's
+  `structuredOutput`, which reaches `artifacts.data` and this column without TD-012 step 1 — backlog
+  35 names `questions.text` explicitly. The reader cannot fix it (a reader that redacted would give
+  the row and the response two different texts); it is one more consumer of a write that is already
+  filed and owned by nobody.
+- **`ProviderRegistration` cannot say whether a provider takes webhooks**, so the setup-guide endpoint
+  has to declare it beside the registration (WP-15h part 2, small). `packages/integrations/src/catalogue.ts`
+  carries `inboundWebhook` and `catalogue.test.ts` checks it by constructing every provider — which
+  works, and is a test doing a type's job. The field belongs on the registration, where a sixth
+  provider would be forced to answer it at registration time; moving it touches every registration
+  and both fakes, which is more than a read endpoint should carry.
+- **The integrations screen shows an empty configuration for a provider this build does not ship, and
+  the response has no way to say why** (WP-15h part 2, small). `publishableConfig` fails closed and
+  the route logs which rows it withheld, but `integrationSummarySchema` has no field for "withheld",
+  so an operator sees `{}` and cannot tell it from "nothing configured". A `config_withheld: boolean`
+  on the DTO would close it; that is a contracts change plus a UI line.
 - **`artifacts.data` is written unredacted, and TD-012 names artifacts** (WP-18b, **measured** — **refined into backlog 35**, which no work package owns).
   `createClaudeRunner` hands `structuredOutput: validated.data` straight to the stage executor, which
   writes it to `artifacts.data`; the transcript sink is the only redacted path out of a run. The
@@ -8549,6 +8772,9 @@ strongly than it reads):
   the bullet below it; the reader half is recommended to **WP-15h part 2**). The nightly pass writes one per project
   per night; technical/08's `GET /api/projects/:id/kb/health` is not served and no screen asks for it,
   so the report is visible only in the log line and in the table. One route plus one panel.
+  **The route half landed at WP-15h part 2** — `routes/kb.ts` serves it, `findKbHealth` projects the
+  newest row and the e2e drives the pass that writes one — so what is left of this bullet is the
+  **panel**: no screen calls it, which is also why the client-driven census cannot see it.
 - **The indexer's invalid documents are in no report** (WP-18b — **refined into backlog 37**, as the
   second half, and it is a defect against `docs/technical/07-knowledge-and-search.md:8`). `IndexReport.invalid` lives for the
   length of one job, so the health pass — which reads the index — cannot see a document the parser

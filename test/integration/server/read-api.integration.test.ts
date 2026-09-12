@@ -16,18 +16,32 @@
  * that tier cannot reach — a `blob_id` nothing writes, a run linked to no stage, a page boundary.
  */
 import { RUN_TRANSCRIPT_TOPIC, runTopic } from '@platform/application';
-import type { TranscriptEvent } from '@platform/contracts';
+import type { IsoDateTime, TranscriptEvent } from '@platform/contracts';
 import { broadcast as broadcastAdapter, db, runner } from '@platform/infrastructure';
+import { findShippedProvider } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  findIntegrationRow,
+  listIntegrationRows,
+  toIntegrationSummary,
+} from '../../../apps/server/src/queries/integration-queries.js';
+import { findKbHealth } from '../../../apps/server/src/queries/knowledge-queries.js';
 import {
   findRun,
   findRunContextPack,
   findRunPrompt,
   findTaskDetail,
+  listInbox,
+  listProjectTasks,
   listRunMessages,
+  listRunningAgents,
 } from '../../../apps/server/src/queries/pipeline-queries.js';
+import {
+  findProjectReadiness,
+  listProjectSummaries,
+} from '../../../apps/server/src/queries/project-queries.js';
 import { SseHub, type SseTransport } from '../../../apps/server/src/sse/hub.js';
 import { startTranscriptBridge } from '../../../apps/server/src/sse/transcript-bridge.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -436,4 +450,290 @@ describe('the transcript bridge, across two broadcast connections', () => {
       await publisher.close();
     }
   }, 60_000);
+});
+
+/**
+ * The five list projections WP-15h part 2 added, against real SQL.
+ *
+ * What only a database can show here: a `date` column compared as a string, a `count(*)::int` that
+ * arrives as a number rather than a string, a `numeric(14,6)` summed in JavaScript, a keyset over a
+ * `(timestamptz, uuid)` pair where the timestamps are equal, and a `jsonb` health block parsed back
+ * through the published schema. The e2e tier asserts the same endpoints over rows the pipeline
+ * wrote; this tier asserts the cases that tier cannot reach.
+ */
+describe('the list projections', () => {
+  /** A second task, created in the same statement as a third, so the two share `created_at`. */
+  let twinA: string;
+  let twinB: string;
+  let orgId: string;
+
+  beforeAll(async () => {
+    const org = await pool.query<{ org_id: string }>('select org_id from projects where id = $1', [
+      projectId,
+    ]);
+    orgId = org.rows[0]?.org_id as string;
+
+    // Two tasks in one statement: `now()` is the transaction's clock, so both rows carry the same
+    // `created_at` to the microsecond — the case a timestamp-only cursor loses silently.
+    const twins = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-2', 'https://jira.example.test/browse/ACME-2', 'feature',
+               'done', 'retro'),
+              ($1, 'fake-jira', 'ACME-3', 'https://jira.example.test/browse/ACME-3', 'bug',
+               'queued', null)
+       returning id`,
+      [projectId],
+    );
+    [twinA, twinB] = [twins.rows[0]?.id as string, twins.rows[1]?.id as string];
+
+    await pool.query(
+      `insert into questions (task_id, stage, text, blocking, status)
+       values ($1, 'refinement', 'Which payment provider?', true, 'open'),
+              ($1, 'refinement', 'Answered already', true, 'answered')`,
+      [taskId],
+    );
+    await pool.query(
+      `insert into approvals (task_id, kind, status)
+       values ($1, 'plan', 'pending'), ($1, 'budget', 'approved')`,
+      [taskId],
+    );
+  }, 60_000);
+
+  it('lists the runs that have not ended, and no others', async () => {
+    // A run of its own, unlinked: the seed's unlinked run is *deleted* by the task-projection case
+    // above, so relying on it would make this assertion depend on another test's cleanup.
+    const mine = await pool.query<{ id: string }>(
+      `insert into runs (task_id, project_id, role, model, prompt_version, status)
+       values ($1, $2, 'developer', 'claude-opus-5', 'feature@1+developer', 'starting')
+       returning id`,
+      [taskId, projectId],
+    );
+    const startingRunId = mine.rows[0]?.id as string;
+
+    // A run with no stage is refused by name rather than dropped from the list — a list that
+    // silently omitted it would show fewer agents than are working (standing rule 10).
+    await expect(listRunningAgents(drizzled)).rejects.toThrow(/is not linked to a stage/);
+
+    const stage = await pool.query<{ id: string }>(
+      `insert into task_stages (task_id, stage, attempt, state)
+       values ($1, 'implementation', 1, 'entered') returning id`,
+      [taskId],
+    );
+    await pool.query('update runs set task_stage_id = $2 where id = $1', [
+      startingRunId,
+      stage.rows[0]?.id,
+    ]);
+
+    const agents = await listRunningAgents(drizzled);
+    const ids = agents.items.map((item) => item.run.id);
+    // Both directions (standing rule 42): the two non-terminal runs are present and the two
+    // `completed` ones are absent, so neither "everything" nor "nothing" would pass.
+    expect(ids).toContain(startingRunId);
+    expect(ids).not.toContain(runId);
+    expect(ids).not.toContain(blobRunId);
+    expect(agents.items.every((item) => item.run.status !== 'completed')).toBe(true);
+
+    const item = agents.items.find((entry) => entry.run.id === startingRunId);
+    expect(item?.project_id).toBe(projectId);
+    expect(item?.task_id).toBe(taskId);
+    expect(item?.role).toBe('developer');
+    expect(item?.run.stage).toBe('implementation');
+    // Never started, so it has produced nothing — a fact, not a missing value.
+    expect(item?.last_output_at).toBeNull();
+
+    await pool.query('delete from runs where id = $1', [startingRunId]);
+  });
+
+  it('lists the open questions and the pending approvals, oldest first', async () => {
+    const inbox = await listInbox(drizzled);
+    expect(inbox.questions.map((question) => question.text)).toEqual(['Which payment provider?']);
+    expect(inbox.questions[0]?.stage).toBe('refinement');
+    // Both directions: the answered question and the decided approval are *absent*, and the
+    // pending ones are present — a filter that dropped everything would satisfy only one of them.
+    expect(inbox.approvals.map((approval) => approval.kind)).toEqual(['plan']);
+    expect(inbox.approvals[0]?.status).toBe('pending');
+  });
+
+  it('pages a project’s tasks by a keyset, through two rows with the same created_at', async () => {
+    const all = await listProjectTasks(drizzled, projectId, { limit: 50 });
+    expect(all?.items.length).toBe(3);
+    expect(all?.next).toBeUndefined();
+
+    // One row at a time across the twins. **This is the case that found a real defect**: the cursor
+    // used to carry the `created_at` node-postgres had parsed into a `Date`, which is milliseconds
+    // while the column is microseconds, so the keyset excluded the very row it came from and this
+    // loop saw 2 of 3. A short page and the last page are indistinguishable, so nothing else would
+    // ever have noticed. The cursor is now the database's own rendering.
+    const seen: string[] = [];
+    let cursor = undefined as { createdAt: string; id: string } | undefined;
+    for (let page = 0; page < 4; page += 1) {
+      const next = await listProjectTasks(drizzled, projectId, {
+        limit: 1,
+        ...(cursor === undefined ? {} : { before: cursor }),
+      });
+      seen.push(...(next?.items ?? []).map((task) => task.id));
+      if (next?.next === undefined) {
+        break;
+      }
+      cursor = next.next;
+    }
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen).size).toBe(3);
+    expect(seen).toContain(twinA);
+    expect(seen).toContain(twinB);
+    expect(seen).toContain(taskId);
+
+    // And the cursor really is finer than a millisecond, or the case above would be asserting the
+    // fix against data that never exercises it (standing rule 4 — audit the instrument).
+    const firstPage = await listProjectTasks(drizzled, projectId, { limit: 1 });
+    expect(firstPage?.next?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
+  });
+
+  it('answers null for a project that does not exist, rather than an empty page', async () => {
+    // An empty page and a uuid that names nothing are different facts, and the `where` cannot tell
+    // them apart — so without the existence check this endpoint would answer `200 {items: []}` for
+    // an id its siblings (`/config`, `/budgets`, `/readiness`) all answer 404 for. Both directions
+    // (standing rule 42): the unknown id is null **and** a real project with no matching task is
+    // still a page, or "return null whenever the page is empty" would pass.
+    expect(
+      await listProjectTasks(drizzled, '00000000-0000-4000-8000-00000000dead', { limit: 50 }),
+    ).toBeNull();
+    expect(
+      (await listProjectTasks(drizzled, projectId, { limit: 50, state: 'cancelled' }))?.items,
+    ).toEqual([]);
+  });
+
+  it('filters the task page by state and by stage', async () => {
+    const done = await listProjectTasks(drizzled, projectId, { limit: 50, state: 'done' });
+    expect(done?.items.map((task) => task.ticket.key)).toEqual(['ACME-2']);
+    const bugs = await listProjectTasks(drizzled, projectId, { limit: 50, template: 'bug' });
+    expect(bugs?.items.map((task) => task.ticket.key)).toEqual(['ACME-3']);
+    const refining = await listProjectTasks(drizzled, projectId, {
+      limit: 50,
+      stage: 'refinement',
+    });
+    expect(refining?.items.map((task) => task.ticket.key)).toEqual(['ACME-1']);
+    // A filter that matches nothing is an empty page, not an unfiltered one.
+    expect(
+      (await listProjectTasks(drizzled, projectId, { limit: 50, state: 'cancelled' }))?.items,
+    ).toEqual([]);
+  });
+
+  it('summarises a project’s open work and its thirty-day spend', async () => {
+    const at = '2026-09-30T12:00:00.000Z' as IsoDateTime;
+    await pool.query(
+      `insert into cost_rollup_daily (org_id, project_id, template, stage, model, day, mode, usd)
+       values ($1, $2, 'feature', 'refinement', 'claude-opus-5', '2026-09-30', 'actual', 1.5),
+              ($1, $2, 'feature', 'refinement', 'claude-opus-5', '2026-09-01', 'actual', 0.25),
+              ($1, $2, 'feature', 'refinement', 'claude-opus-5', '2026-08-31', 'actual', 99)`,
+      [orgId, projectId],
+    );
+
+    const summaries = await listProjectSummaries(drizzled, at);
+    const project = summaries.items.find((entry) => entry.id === projectId);
+    // Three tasks, one of them `done` — `merged` and `retro` would still count, `done` does not.
+    expect(project?.open_tasks).toBe(2);
+    // Both ends of the window (standing rule 42): the 1st is the thirtieth day back and is
+    // included; 31 August is the thirty-first and is not. Without the second assertion a reader
+    // that ignored the cutoff entirely would pass.
+    expect(project?.spent_usd_30d).toBe(1.75);
+    expect(project?.key).toBe('api');
+    expect(project?.readiness_level).toBe(0);
+  });
+
+  it('refuses a readiness read, with the row count that says which reason it is', async () => {
+    expect(await findProjectReadiness(drizzled, projectId)).toEqual({
+      found: true,
+      recorded: false,
+      rows: 0,
+    });
+    await pool.query(
+      `insert into readiness_evaluations (project_id, level, criteria, source)
+       values ($1, 2, '[]'::jsonb, 'test')`,
+      [projectId],
+    );
+    try {
+      // With a row present, which is the direction a refusal can get wrong silently: the answer is
+      // still a refusal, and the count now says "a producer exists".
+      expect(await findProjectReadiness(drizzled, projectId)).toEqual({
+        found: true,
+        recorded: false,
+        rows: 1,
+      });
+    } finally {
+      await pool.query('delete from readiness_evaluations where project_id = $1', [projectId]);
+    }
+    expect(await findProjectReadiness(drizzled, '00000000-0000-4000-8000-00000000dead')).toEqual({
+      found: false,
+    });
+  });
+
+  it('publishes an integration without its credentials, and withholds a config it cannot read', async () => {
+    const planted = 'FAKE-gitlab-token-DO-NOT-USE-integration-tier';
+    await pool.query(
+      `insert into integrations (org_id, type, provider, name, config)
+       values ($1, 'git', 'gitlab', 'acme gitlab', $2::jsonb),
+              ($1, 'git', 'unshipped-forge', 'acme other', $3::jsonb)`,
+      [
+        orgId,
+        JSON.stringify({ base_url: 'https://gitlab.example.test', token: planted }),
+        JSON.stringify({ base_url: 'https://forge.example.test', token: planted }),
+      ],
+    );
+
+    const rows = await listIntegrationRows(drizzled);
+    const summaries = rows.map((row) =>
+      toIntegrationSummary(row, findShippedProvider(row.provider)),
+    );
+    const gitlab = summaries.find((summary) => summary.provider === 'gitlab');
+    const other = summaries.find((summary) => summary.provider === 'unshipped-forge');
+
+    // Both directions on the credential (standing rules 35 and 42): it is gone from the response,
+    // and the configuration beside it survived — so this is not a reader that publishes nothing.
+    expect(JSON.stringify(summaries)).not.toContain(planted);
+    expect(gitlab?.config).toEqual({ base_url: 'https://gitlab.example.test' });
+    expect(gitlab?.health).toEqual({ status: 'unknown', checked_at: null, detail: null });
+    // A provider this build does not ship: fail closed, because its credential fields are unknown.
+    expect(other?.config).toEqual({});
+    expect(other?.name).toBe('acme other');
+
+    const one = await findIntegrationRow(drizzled, rows[0]?.id ?? '');
+    expect(one?.id).toBe(rows[0]?.id);
+    expect(
+      await findIntegrationRow(drizzled, '00000000-0000-4000-8000-00000000dead'),
+    ).toBeUndefined();
+  });
+
+  it('reads the newest knowledge health report, and null when no pass has run', async () => {
+    expect(await findKbHealth(drizzled, projectId)).toBeNull();
+    await pool.query(
+      `insert into kb_health_reports (project_id, commit_sha, documents, findings, source, created_at)
+       values ($1, 'older', 1, '[]'::jsonb, 'hygiene', '2026-09-01T00:00:00Z'),
+              ($1, 'newer', 4, $2::jsonb, 'hygiene', '2026-09-02T00:00:00Z')`,
+      [
+        projectId,
+        JSON.stringify([
+          { kind: 'expired', path: 'knowledge/payments.md', detail: 'not touched since March' },
+        ]),
+      ],
+    );
+
+    const report = await findKbHealth(drizzled, projectId);
+    expect(report?.commit_sha).toBe('newer');
+    expect(report?.documents).toBe(4);
+    expect(report?.findings).toEqual([
+      { kind: 'expired', path: 'knowledge/payments.md', detail: 'not touched since March' },
+    ]);
+    expect(report?.source).toBe('hygiene');
+
+    // A row whose stored findings no longer match the published shape is refused by name rather
+    // than served as something it is not.
+    await pool.query(
+      `insert into kb_health_reports (project_id, commit_sha, documents, findings, source, created_at)
+       values ($1, 'broken', 1, $2::jsonb, 'hygiene', '2026-09-03T00:00:00Z')`,
+      [projectId, JSON.stringify([{ kind: 'stale', path: 'knowledge/a.md', detail: 'x' }])],
+    );
+    await expect(findKbHealth(drizzled, projectId)).rejects.toThrow(/findings/);
+  });
 });

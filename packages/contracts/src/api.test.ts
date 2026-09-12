@@ -7,17 +7,21 @@ import {
   decideApprovalRequestSchema,
   effectiveConfigResponseSchema,
   eventsQuerySchema,
+  integrationsResponseSchema,
+  kbHealthResponseSchema,
   listTasksQuerySchema,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
   orgUsersResponseSchema,
   paginationQuerySchema,
+  projectsResponseSchema,
   putKbDocRequestSchema,
   runMessagesQuerySchema,
   sseFrameSchema,
   sseTopicSchema,
   startShadowRunsRequestSchema,
   steerRunRequestSchema,
+  tasksResponseSchema,
   updateSubscriptionsRequestSchema,
   webhookDeliverySchema,
 } from './api.js';
@@ -251,5 +255,114 @@ describe('org DTOs', () => {
       limit: 10,
       entity_type: 'project',
     });
+  });
+});
+
+/**
+ * The four envelopes WP-15h part 2 published.
+ *
+ * Three of them were composed in `apps/web/src/api/endpoints.ts` while nothing served the routes
+ * (Q45), so the cases that matter are the ones that would catch a shape that drifted while it was
+ * being moved: which of them carries `next_cursor`, and that all four stay strict.
+ */
+describe('the list envelopes and the KB health report', () => {
+  const project = {
+    id: uuid(10),
+    key: 'api',
+    name: 'API',
+    repo_url: 'https://git.example.test/acme/api.git',
+    default_branch: 'main',
+    agentic_dir: '.agentic',
+    knowledge_dir: '.agentic/knowledge',
+    autonomy_level: 'supervised' as const,
+    readiness_level: 2,
+    status: 'active' as const,
+    created_at: AT,
+    updated_at: AT,
+    open_tasks: 3,
+    spent_usd_30d: 12.5,
+  };
+
+  it('lists projects without a cursor, because the client does not page them', () => {
+    expect(projectsResponseSchema.parse({ items: [project] })).toBeTruthy();
+    // The absence of `next_cursor` is the contract, not an oversight: adding one here would make
+    // the client's "render every project" true of one page only.
+    expect(projectsResponseSchema.safeParse({ items: [project], next_cursor: null }).success).toBe(
+      false,
+    );
+    expect(
+      projectsResponseSchema.safeParse({ items: [{ ...project, open_tasks: -1 }] }).success,
+    ).toBe(false);
+  });
+
+  it('lists integrations without a cursor and keeps the config opaque', () => {
+    const integration = {
+      id: uuid(11),
+      type: 'git' as const,
+      provider: 'gitlab',
+      name: 'acme gitlab',
+      config: { base_url: 'https://gitlab.example.test' },
+      health: { status: 'unknown' as const, checked_at: null, detail: null },
+    };
+    expect(integrationsResponseSchema.parse({ items: [integration] })).toBeTruthy();
+    expect(
+      integrationsResponseSchema.safeParse({
+        items: [{ ...integration, health: { status: 'fine', checked_at: null, detail: null } }],
+      }).success,
+    ).toBe(false);
+    expect(
+      integrationsResponseSchema.safeParse({ items: [integration], next_cursor: null }).success,
+    ).toBe(false);
+  });
+
+  it('pages tasks, because a project accumulates them without bound', () => {
+    const task = {
+      id: uuid(12),
+      project_id: uuid(10),
+      ticket: { provider: 'jira-cloud', key: 'ACME-1', url: 'https://jira.example.test/ACME-1' },
+      template: 'feature',
+      mode: 'normal' as const,
+      state: 'active' as const,
+      current_stage: 'refinement',
+      iteration_counters: {},
+      risk_classes: [],
+      cost_actual_usd: 0,
+      cost_estimated_usd: 0,
+      created_at: AT,
+      updated_at: AT,
+    };
+    expect(tasksResponseSchema.parse({ items: [task], next_cursor: null })).toBeTruthy();
+    expect(
+      tasksResponseSchema.parse({ items: [task], next_cursor: `${AT}|${uuid(12)}` }),
+    ).toBeTruthy();
+    // `next_cursor` is required, not optional: "no more pages" and "the field was forgotten" would
+    // otherwise be the same response.
+    expect(tasksResponseSchema.safeParse({ items: [task] }).success).toBe(false);
+  });
+
+  it('publishes one health report, with its findings bounded to the kinds the domain computes', () => {
+    const report = {
+      id: uuid(13),
+      project_id: uuid(10),
+      commit_sha: 'a'.repeat(40),
+      documents: 12,
+      findings: [{ kind: 'expired' as const, path: 'kb/api.md', detail: 'last touched in March' }],
+      source: 'hygiene' as const,
+      created_at: AT,
+    };
+    expect(kbHealthResponseSchema.parse(report)).toBeTruthy();
+    // A project whose vault has never been committed has no commit; a report with none is still a
+    // report (the index can be empty).
+    expect(
+      kbHealthResponseSchema.parse({ ...report, commit_sha: null, findings: [] }),
+    ).toBeTruthy();
+    expect(kbHealthResponseSchema.safeParse({ ...report, source: 'cron' }).success).toBe(false);
+    expect(
+      kbHealthResponseSchema.safeParse({
+        ...report,
+        findings: [{ kind: 'stale', path: 'kb/api.md', detail: 'x' }],
+      }).success,
+    ).toBe(false);
+    expect(kbHealthResponseSchema.safeParse({ ...report, unexpected: 1 }).success).toBe(false);
   });
 });

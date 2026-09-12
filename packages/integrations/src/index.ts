@@ -24,6 +24,7 @@ export * from './bindings/git-mirror.js';
 export * from './bindings/inbound-loader.js';
 export * from './bindings/loader.js';
 export * from './bindings/shipped-registry.js';
+export * from './catalogue.js';
 export * from './communication/fake.js';
 export * from './errors/fake.js';
 export * from './git/fake.js';
