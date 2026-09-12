@@ -214,6 +214,16 @@ export interface StoredRun {
   readonly id: Id;
   readonly taskId: Id;
   readonly projectId: Id;
+  /**
+   * The stage attempt this run belongs to — a **link**, not a column of `runs`.
+   *
+   * technical/03 keeps the stage on `task_stages`, so an adapter resolves `runs.task_stage_id` from
+   * `(taskId, stage, attempt)` on insert and joins it back on load. `null` is therefore "this run
+   * is attached to no stage attempt", which is what a run created outside the pipeline has and what
+   * every run stored before WP-15h has — that work package is where the link started being written
+   * at all, and where the reader that needs it (`RunRecord.stage` is required) started refusing the
+   * rows that have none.
+   */
   readonly stage: Slug | null;
   readonly role: string;
   readonly mode: string;

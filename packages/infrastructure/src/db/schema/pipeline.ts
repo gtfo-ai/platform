@@ -3,7 +3,11 @@
  *
  * Note for the DTO layer: `records.ts` in `@platform/contracts` exposes `RunRecord.stage`, which is
  * not a column here — technical/03 keeps the stage on `task_stages` and links `runs.task_stage_id`
- * to it, so the API projection joins rather than reads it.
+ * to it, so the API projection joins rather than reads it. **That link was never written until
+ * WP-15h**: `RunRepository.insert` took a `stage` and dropped it, so the join it describes had
+ * nothing on the other side and the published field had no source at all. The insert now resolves
+ * `task_stage_id` from `(task_id, stage, attempt)`, and `apps/server/src/queries/pipeline-queries.ts`
+ * is the projection that joins.
  */
 import type {
   ExternalIdentity,

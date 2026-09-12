@@ -335,6 +335,17 @@ export interface StartPipelineOptions {
    */
   readonly agent?: 'fake-runner' | 'real-over-fake-cli' | 'none';
   /**
+   * Awaited inside `provision`, before the scripted CLI plays a single frame (WP-15h).
+   *
+   * The knob one test needs, and it is the same shape as {@link StartPipelineOptions.gitReadLatency}:
+   * a live transcript can only be observed while a run is running, and a run driven by a scripted
+   * CLI finishes in milliseconds. Holding the run at its workspace lets a test learn `spec.runId`,
+   * open an SSE stream on `run:<id>`, and only then let the CLI speak — so the assertion is about
+   * frames that arrive, not about winning a race. A promise the test resolves rather than a sleep
+   * (standing rule 2).
+   */
+  readonly onAgentSpec?: (spec: RunSpec) => void | Promise<void>;
+  /**
    * Start against a database another instance already used, and do not seed it again.
    *
    * One test needs this: the handover that shows an uncomposed instance **queued** a
@@ -596,8 +607,9 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       }
       return scenario;
     },
-    (spec) => {
+    async (spec) => {
       specs.push(spec);
+      await options.onAgentSpec?.(spec);
     },
   );
   const realRunner = options.agent === 'real-over-fake-cli';

@@ -256,6 +256,13 @@ export interface RunOutcome {
  * Where normalised, redacted transcript entries go: `run_messages` plus the `run:<id>` SSE topic
  * (TD-007, technical/08). Appends are sequential — the runner awaits each one — so a sink may
  * assume `seq` arrives in order.
+ *
+ * **Both destinations are real since WP-15h, and only one of them is this port's business.** The
+ * production sink writes the row and then announces its *position* on the broadcast
+ * (`RUN_TRANSCRIPT_TOPIC`); `apps/server/src/sse/transcript-bridge.ts` reads the row back and
+ * publishes the frame, in whichever process holds the stream. An implementation that only writes
+ * the row is complete as far as this interface is concerned — the stream is a consequence of the
+ * row, not a second obligation on the caller.
  */
 export interface RunTranscriptSink {
   append(event: TranscriptEvent): Promise<void>;

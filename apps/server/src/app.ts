@@ -49,6 +49,8 @@ import { roleCapabilities } from './role.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { registerRunRoutes } from './routes/runs.js';
+import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
@@ -126,6 +128,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         { name: 'ops', description: 'Health, metrics and build metadata' },
         { name: 'org', description: 'Organisation-scoped reads' },
         { name: 'projects', description: 'Project-scoped reads' },
+        { name: 'tasks', description: 'Task-scoped reads' },
+        { name: 'runs', description: 'Runs, their transcripts and their inputs' },
         { name: 'events', description: 'Real-time stream (TD-014)' },
         { name: 'webhooks', description: 'Inbound provider deliveries (technical/06)' },
       ],
@@ -226,6 +230,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       await registerWebhookRoutes(app, { ingress: options.webhooks });
     }
     await registerProjectRoutes(app, { database: options.database });
+    await registerTaskRoutes(app, { database: options.database });
+    await registerRunRoutes(app, { database: options.database });
     await registerSseRoutes(app, {
       hub: options.hub,
       metrics: options.metrics,

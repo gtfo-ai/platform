@@ -162,15 +162,17 @@
  *     `Connection.close`. Arbiter: the `#connections` map, deleted from *before* `connection.close()`
  *     runs, so the re-entrant call finds nothing and returns.
  *
- * ## What this is not, yet
+ * ## Fan-out between app instances: one topic has it, the rest do not
  *
- * Fan-out **between** app instances. TD-014 routes that through `NOTIFY` behind the `Broadcast`
- * port, and the port's own documentation is explicit that a broadcast carries a hint rather than
- * content: the receiving instance is expected to read the rows back from `events` / `run_messages`.
- * Those read-back paths are built by the work packages that write those rows (WP-15, WP-12), so
- * wiring a hint transport now would produce an instance that announces changes it cannot render.
- * Single instance is what this hub supports, and `docs/technical/PROGRESS.md` carries it as
- * discovered work rather than a comment claiming otherwise.
+ * TD-014 routes cross-instance fan-out through `NOTIFY` behind the `Broadcast` port, which carries
+ * a **hint** rather than content — the receiving instance reads the rows back. That path exists for
+ * exactly one topic, `run:<id>`: `sse/transcript-bridge.ts` subscribes to the sink's
+ * `run.transcript.appended` hints, reads `run_messages` and calls {@link SseHub.publish}, so a
+ * stream held by a `ROLE=api` process carries a transcript a `ROLE=worker` process produced
+ * (WP-15h). Nothing else publishes into this hub yet, so `org`, `project:<id>` and `task:<id>` are
+ * still single-instance: the read-back for a **domain event** belongs to the work package that
+ * builds it, and a hint nothing renders would be an announcement of a change the instance cannot
+ * show. `docs/technical/PROGRESS.md` carries the remainder as discovered work.
  */
 import type { Logger } from '@platform/application';
 import { silentLogger } from '@platform/application';
@@ -751,6 +753,19 @@ export class SseHub {
   /** Topics with at least one subscriber. Exposed so a test can see the index is not leaking. */
   get watchedTopics(): string[] {
     return [...this.#byTopic.keys()];
+  }
+
+  /**
+   * Is anybody watching this topic?
+   *
+   * Exact rather than approximate, because a producer uses it to decide whether to do work:
+   * `sse/transcript-bridge.ts` reads a run's rows back only for a run somebody is watching
+   * (TD-014). `#byTopic` deletes an emptied subscriber set rather than leaving it behind — see
+   * `close` and `updateSubscriptions` — so the key's presence *is* the answer, with no stale
+   * entry to return `true` for a topic every connection has left.
+   */
+  hasSubscribers(topic: string): boolean {
+    return this.#byTopic.has(topic);
   }
 
   /** Frames currently retained for a topic. Exposed for tests and for the readiness view. */

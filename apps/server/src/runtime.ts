@@ -60,9 +60,11 @@ import {
   composeWebhookIngress,
   type PipelineComposition,
 } from './pipeline.js';
+import { listRunMessages } from './queries/pipeline-queries.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { SseHub } from './sse/hub.js';
+import { startTranscriptBridge } from './sse/transcript-bridge.js';
 
 export interface ServerRuntime {
   readonly config: ServerConfig;
@@ -342,6 +344,41 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         database: database.db,
         config,
         logger: loggerPort,
+      });
+
+      /**
+       * The `run:<id>` topic's producer (WP-15h), started by every process that serves the API.
+       *
+       * It is on the API side rather than the worker side deliberately: the hub it publishes into
+       * is *this* process's, holding *this* process's streams, and the hint that wakes it comes
+       * over the broadcast from whichever process appended the row. A `ROLE=api` + `ROLE=worker`
+       * deployment therefore works without either half knowing about the other.
+       *
+       * Its stop callback also closes the broadcast when this process runs no worker: `eventing`
+       * is built for every role but only the worker branch registers `eventing.stop`, so without
+       * this an API-only process would hold a live `LISTEN` connection open through shutdown.
+       */
+      const bridge = await startTranscriptBridge({
+        hub,
+        broadcast: eventing.broadcast,
+        read: async (runId, after, limit) => {
+          const page = await listRunMessages(database.db, runId, {
+            limit,
+            ...(after === null ? {} : { after }),
+            partials: true,
+          });
+          return page.items;
+        },
+        logger: loggerPort,
+      });
+      stopCallbacks.unshift({
+        name: 'transcript-bridge',
+        stop: async () => {
+          await bridge.stop();
+          if (!capabilities.worker) {
+            await eventing.broadcast.close();
+          }
+        },
       });
     }
 

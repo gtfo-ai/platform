@@ -38,15 +38,21 @@
  *     cannot be written is a hole in the platform's own record of what an agent did, and a run that
  *     carried on regardless would be a run whose audit is quietly incomplete. The runner awaits
  *     `append`, so the throw ends the run through its own failure path.
- *  3. **The SSE half of TD-007 is not here, and that is stated rather than implied.** The port's
- *     docblock says a transcript entry goes to `run_messages` *plus* the `run:<id>` SSE topic.
- *     Nothing bridges that topic to `SseHub` yet, and it cannot be a `NOTIFY` payload: broadcasts
- *     are capped at 7 000 bytes and carry hints, so the receiving instance is expected to read the
- *     rows back (`ports/broadcast.ts`, `sse/hub.ts:169`) — which is what these rows finally make
- *     possible. Publishing a hint nothing consumes would be a collaborator with no consumer
- *     (standing rule 31's shape), so it is left to the work package that adds the reader.
+ *  3. **The SSE half of TD-007 is a hint, and it is published here** (WP-15h). The port's docblock
+ *     says a transcript entry goes to `run_messages` *plus* the `run:<id>` SSE topic. It cannot be
+ *     a `NOTIFY` payload — broadcasts are capped at 7 000 bytes and carry hints, so the receiving
+ *     instance reads the rows back (`ports/broadcast.ts`) — so what leaves this file is
+ *     {@link TranscriptAppendedHint}, a run id and a `seq`, and `apps/server/src/sse/transcript-bridge.ts`
+ *     turns it into a frame for the connections that are watching. The hint is published **after**
+ *     the insert has returned, so a reader woken by it always finds the row.
+ *
+ *     **A failed hint does not fail the run.** Standing rule 20: refusing a mutation costs one
+ *     action, refusing a notification loses one the platform already performed. The row is written
+ *     and durable; a dropped hint costs a live stream some latency until the next entry, and costs
+ *     a client that reconnects nothing at all, because it refetches from
+ *     `GET /api/runs/:id/messages`. So it is caught and logged, and the sink still resolves.
  */
-import type { Logger, RunTranscriptSink } from '@platform/application';
+import type { Logger, RunTranscriptSink, TranscriptAppendedHint } from '@platform/application';
 import { silentLogger } from '@platform/application';
 import type { TranscriptEvent } from '@platform/contracts';
 import type { SqlExecutor } from '../events/sql.js';
@@ -65,6 +71,14 @@ export interface PostgresTranscriptSinkOptions {
    * technical/04) and by the SDK's own message sizes.
    */
   readonly maxSearchTextChars?: number;
+  /**
+   * Announces the stored entry's **position** on the broadcast (decision 3).
+   *
+   * Absent means this process publishes no hint, which is what a composition with no broadcast
+   * does — the rows are still written and still readable over HTTP, so the only thing an absent
+   * announcer costs is the live stream. `apps/server` always supplies one.
+   */
+  readonly announce?: (hint: TranscriptAppendedHint) => Promise<void>;
 }
 
 const DEFAULT_MAX_SEARCH_TEXT_CHARS = 8_000;
@@ -203,6 +217,20 @@ export const createPostgresTranscriptSink = (
           { run_id: row.runId, seq: row.seq, kind: row.kind },
           'a transcript entry with this sequence number is already stored; keeping the first',
         );
+      }
+      // After the insert, never before: a subscriber woken by the hint reads the row back, and a
+      // hint that overtook its own row would find nothing. The hint is published even for the
+      // absorbed duplicate above — the position is true either way, and the reader is a catch-up
+      // read rather than a per-hint fetch.
+      if (options.announce !== undefined) {
+        try {
+          await options.announce({ run_id: row.runId, seq: row.seq });
+        } catch (error) {
+          logger.warn(
+            { err: error, run_id: row.runId, seq: row.seq },
+            'the transcript entry was stored but its broadcast hint was not delivered; live streams will catch up on the next entry and a reconnecting client refetches',
+          );
+        }
       }
     },
   };

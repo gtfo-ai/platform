@@ -6,7 +6,13 @@
  * happens when a collaborator is missing, and that each absence is reported *by name* rather than as
  * a boolean, because the name is what an operator has to act on.
  */
-import type { LogFields, Logger, RunSpec, ToolApprovalRequest } from '@platform/application';
+import type {
+  Broadcast,
+  LogFields,
+  Logger,
+  RunSpec,
+  ToolApprovalRequest,
+} from '@platform/application';
 import { runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -29,6 +35,25 @@ const recordingLogger = (): { logger: Logger; lines: { fields: LogFields; messag
 };
 
 const pool = {} as pg.Pool;
+/**
+ * A broadcast that refuses every call.
+ *
+ * Composition must not *use* it — the transcript hint is published from inside a run, and these
+ * cases compose without running — so a throwing double is the assertion: a composition that
+ * reached for the transport would fail here rather than pass silently against a no-op (standing
+ * rule 1's direction, applied to a test double).
+ */
+const broadcast = {
+  publish: async () => {
+    throw new Error('composition must not publish');
+  },
+  subscribe: async () => {
+    throw new Error('composition must not subscribe');
+  },
+  close: async () => {
+    throw new Error('composition must not close the broadcast');
+  },
+} satisfies Broadcast;
 const tools = runnerAdapters.recordingTools();
 const provisioner: runnerAdapters.RunWorkspaceProvisioner = {
   provision: async () => {
@@ -41,6 +66,7 @@ describe('composing the agent runner', () => {
     const { logger } = recordingLogger();
     const composed = composeAgentRunner({
       pool,
+      broadcast,
       provisioner,
       tools,
       providerMode: 'api',
@@ -54,6 +80,7 @@ describe('composing the agent runner', () => {
     const { logger } = recordingLogger();
     const composed = composeAgentRunner({
       pool,
+      broadcast,
       provisioner: undefined,
       tools,
       providerMode: 'api',
@@ -71,6 +98,7 @@ describe('composing the agent runner', () => {
     const { logger } = recordingLogger();
     const composed = composeAgentRunner({
       pool,
+      broadcast,
       provisioner,
       tools,
       providerMode: 'api',
@@ -85,6 +113,7 @@ describe('composing the agent runner', () => {
     const { logger } = recordingLogger();
     const composed = composeAgentRunner({
       pool,
+      broadcast,
       provisioner,
       tools,
       providerMode: 'local',
@@ -98,6 +127,7 @@ describe('composing the agent runner', () => {
     const { logger } = recordingLogger();
     const composed = composeAgentRunner({
       pool,
+      broadcast,
       provisioner: undefined,
       tools,
       providerMode: 'api',

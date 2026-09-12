@@ -40,6 +40,7 @@
  *    2) after it.
  */
 import type {
+  Broadcast,
   ClaudeRunner,
   Logger,
   PlatformToolPort,
@@ -47,7 +48,11 @@ import type {
   SecretRedactor,
   ToolApprovalPort,
 } from '@platform/application';
-import { exactSecretRedactor, MIN_SECRET_LENGTH } from '@platform/application';
+import {
+  exactSecretRedactor,
+  MIN_SECRET_LENGTH,
+  RUN_TRANSCRIPT_TOPIC,
+} from '@platform/application';
 import { runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 
@@ -115,6 +120,14 @@ export const injectedSecretRedactorFor = (spec: RunSpec, logger: Logger): Secret
 
 export interface AgentRunnerOptions {
   readonly pool: pg.Pool;
+  /**
+   * Where the transcript sink announces each stored entry's position (WP-15h).
+   *
+   * A hint, never content: `apps/server/src/sse/transcript-bridge.ts` reads the rows back for the
+   * connections it holds, which is what lets the process serving the stream be a different one
+   * from the process that ran the agent.
+   */
+  readonly broadcast: Broadcast;
   /** Absent means "this process runs no agent" — the Q59(b) default. */
   readonly provisioner: runnerAdapters.RunWorkspaceProvisioner | undefined;
   /** The nine in-process MCP tools this process composed (`platform-tools.ts`). */
@@ -158,6 +171,10 @@ export const composeAgentRunner = (options: AgentRunnerOptions): ComposedAgentRu
   const sink = runnerAdapters.createPostgresTranscriptSink({
     sql: options.pool,
     logger: options.logger,
+    // TD-007's second destination, as a hint (WP-15h). `publish` is outside any transaction and
+    // runs after the insert has returned, so the row is committed before anybody is told about it.
+    announce: async (hint) =>
+      options.broadcast.publish({ topic: RUN_TRANSCRIPT_TOPIC, payload: hint }),
   });
   const approvals = unattendedToolApprovals(options.logger);
   const provisioner = options.provisioner;

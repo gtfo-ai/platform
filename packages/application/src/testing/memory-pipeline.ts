@@ -16,6 +16,7 @@
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  */
 import type { ArtifactType, Id, Slug } from '@platform/contracts';
+import { workpadRefSchema } from '@platform/contracts';
 import type { Approval, Question, QueuedTask } from '@platform/domain';
 import { countsAsActive, countsInPipeline } from '@platform/domain';
 import type {
@@ -117,7 +118,11 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
       }
       // Only this field, like the SQL `update tasks set workpad_ref = …`: a whole-row write from
       // the outbound job would put back whatever the stage executor had just changed (WP-15d).
-      tasks.set(taskId, clone({ ...current, workpad }));
+      //
+      // Parsed for the same reason the SQL adapter parses (WP-15h): the column's published shape is
+      // strict, a `CommentRef` passes the port's `WorkpadRef` parameter structurally, and a fake
+      // that accepted what PostgreSQL's reader refuses would be kinder than production (rule 1).
+      tasks.set(taskId, clone({ ...current, workpad: workpadRefSchema.parse(workpad) }));
     },
     saveTicketSnapshot: async (_tx, taskId, ticketSnapshot, readAt) => {
       const current = tasks.get(taskId);
@@ -229,8 +234,22 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
   };
 
   const runRepository: RunRepository = {
+    /**
+     * Stores the stage as a **link**, exactly as the SQL adapter does, which makes this fake
+     * stricter rather than kinder (standing rule 1).
+     *
+     * `runs` has no `stage` column: the SQL adapter resolves `task_stage_id` from
+     * `(task_id, stage, attempt)` at insert time and `load` joins it back, so a run inserted for a
+     * stage that was never entered loads with `stage: null` there. Keeping the caller's value here
+     * would make the in-memory store answer a question the database cannot, which is the direction
+     * that launders a bug into a pass.
+     */
     insert: async (_tx, run) => {
-      runs.set(run.id, clone(run));
+      const linked = stages.some(
+        (row) =>
+          row.taskId === run.taskId && row.stage === run.stage && row.attempt === run.attempt,
+      );
+      runs.set(run.id, clone({ ...run, stage: linked ? run.stage : null }));
     },
     finish: async (_tx, outcome) => {
       const run = runs.get(outcome.runId);

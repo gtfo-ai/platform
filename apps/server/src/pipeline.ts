@@ -483,6 +483,11 @@ export const composePipeline = async (
     tools: platformTools,
     providerMode: options.agent.providerMode,
     modelApiKey: options.agent.modelApiKey,
+    // The SSE half of TD-007 (WP-15h): the transcript sink announces each stored entry's position
+    // on the broadcast, and whichever process holds the `run:<id>` stream reads the rows back
+    // (`sse/transcript-bridge.ts`). It is the same broadcast the outbox worker wakes on, so a
+    // deployment that already runs one runs no second transport.
+    broadcast: options.eventing.broadcast,
     logger: options.logger,
   });
   const runEnvironment = agentRunEnvironment(options.agent);

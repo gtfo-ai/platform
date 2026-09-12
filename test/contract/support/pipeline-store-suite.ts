@@ -12,7 +12,7 @@
  * rollback means anything.
  */
 import type { PipelineStore, StoredTask, Transaction } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -185,6 +185,34 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(loaded?.costActualUsd).toBeCloseTo(4.25, 6);
         expect(loaded?.task.state).toBe('active');
         expect(loaded?.task.currentStage).toBe('implementation');
+      });
+
+      /**
+       * The column is `jsonb`, so it accepts anything and the disagreement surfaces only when
+       * something **reads** it — which nothing did for nine work packages (WP-15h).
+       *
+       * `upsertWorkpad` returns a `CommentRef`, which is `workpadRefSchema.extend({ marker_id })`.
+       * TypeScript passes it through this method's `WorkpadRef` parameter structurally, the adapter
+       * stringified it whole, and `GET /api/tasks/:id` — the first reader — answered **500** on
+       * `Unrecognized key: "marker_id"` for every task that had a workpad. Both stores now refuse at
+       * the write (standing rule 20: fail closed on a mutation), which is where the stack trace
+       * still names the caller.
+       */
+      it('refuses a workpad reference the published shape cannot describe', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await expect(
+          store.tasks.saveWorkpad(tx, stored.task.id, {
+            provider: 'fake-jira',
+            ticket_key: stored.task.ticket.key,
+            comment_id: 'comment-1',
+            url: null,
+            // The `CommentRef` field that reached the column.
+            marker_id: 'agentic:workpad',
+          } as never),
+        ).rejects.toThrow(/marker_id/);
+        // …and nothing was written, so a refusal is not a half-write.
+        expect((await store.tasks.load(tx, stored.task.id))?.workpad).toBeNull();
       });
 
       /**
@@ -448,6 +476,16 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       it('records a run and its outcome, and totals them for the task', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);
+        // The stage the run belongs to has to exist before the run does: `runs` has no `stage`
+        // column and the adapter links `task_stage_id` to the `(task_id, stage, attempt)` row
+        // (WP-15h). This is the order the pipeline produces — `task.stage.entered` writes the row,
+        // then the `stage.execute` job inserts the run.
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'refinement' as Slug,
+          attempt: 1,
+          causedByEventId: null,
+        });
         const runId = nextId();
         await store.runs.insert(tx, {
           id: runId,
@@ -488,6 +526,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
         const loaded = await store.runs.load(tx, runId);
         expect(loaded?.status).toBe('completed');
+        // The stage the caller passed comes back (WP-15h). It had never been asserted, and it had
+        // never been true: the SQL adapter dropped the field on insert and answered `stage: null`
+        // on load, so `RunRecord.stage` — a required field of the published DTO — had no source at
+        // all. The value is not stored on `runs`; it is the joined `task_stages` row.
+        expect(loaded?.stage).toBe('refinement');
         expect(loaded?.sessionId).toBe('session-1');
         expect(loaded?.cost?.usd).toBeCloseTo(0.25, 6);
         expect(loaded?.cost?.is_estimate).toBe(false);
@@ -497,6 +540,50 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(totals.costUsd).toBeCloseTo(0.25, 6);
         expect(totals.isEstimate).toBe(false);
         expect(totals.wallMs).toBe(1234);
+      });
+
+      /**
+       * The other side of the same boundary (standing rule 42), and the reason the API refuses such
+       * a row by name instead of inventing a stage for it: the stage is a **link** to a
+       * `task_stages` row, so a run inserted for an attempt nobody entered has none. Asserting only
+       * that the stage round-trips would leave an implementation free to store the caller's string
+       * and answer it back without the row ever existing.
+       */
+      it('keeps no stage for a run whose stage attempt was never entered', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'refinement' as Slug,
+          attempt: 1,
+          causedByEventId: null,
+        });
+        const runId = nextId();
+        await store.runs.insert(tx, {
+          id: runId,
+          taskId: stored.task.id,
+          projectId,
+          // Attempt 2 of a stage whose only entered attempt is 1.
+          stage: 'refinement' as Slug,
+          role: 'product_manager',
+          mode: 'normal',
+          attempt: 2,
+          model: 'claude-opus-5',
+          effort: 'medium',
+          promptVersion: 'basic@1+product_manager',
+          status: 'running',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: '2026-06-01T09:00:00.000Z',
+        });
+
+        const loaded = await store.runs.load(tx, runId);
+        expect(loaded?.attempt).toBe(2);
+        expect(loaded?.stage).toBeNull();
       });
 
       it('refuses to finish a run it has never seen', async () => {

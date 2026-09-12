@@ -2013,7 +2013,7 @@ undermines nothing today — `sweep.failed` is read in one place outside `outbox
 uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
 *trusting* `SweepReport`.
 
-### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO — **second instance at session 5**, closed for one census and still open here)
+### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO — **second instance at session 5**, closed for one census and still open here; **four guards share the hole**, counted under “Scope”)
 **What is wrong.** The guard's scope is `git ls-files` (CLAUDE.md says so), so a **new** source file
 carrying a literal NUL passes `verify` until it is staged.
 
@@ -2022,6 +2022,37 @@ carrying a literal NUL passes `verify` until it is staged.
 > was untracked until the commit. That census now walks `git ls-files --others --exclude-standard` as well,
 > with the decision stated in its docblock and a case planting a tracked, an untracked and an ignored file.
 > `nul:check` is unchanged and this entry stays open; the shape of the fix is now in the tree to copy.
+
+**Scope — the class, counted, and the guards that are clean** (refiner, session 5; grep only, rule 66).
+Six tracked sources ask git for a file list. The method was a grep for `ls-files` over `.ts`, `.tsx`, `.mjs`
+and `.js`, which cannot see a guard that shells out through a variable or a helper — so the list below is a
+floor. **Four have this hole**, at the line each reads its list:
+
+- `scripts/check-nul.mjs:57` — this entry's subject, and the behaviour is **pinned by a passing test**:
+  `scripts/check-nul.test.ts:116-118` plants an untracked file full of NUL bytes and asserts
+  `PASS: nul:check (3 tracked text files, 0 declared binary, none with a NUL byte)`, inside
+  `scripts/check-nul.test.ts` › "passes on a tree of text files, and says how many it examined"
+- `scripts/check-conflict.mjs:119` — the same guard shape and the same pin: an untracked file holding a
+  whole conflict is *expected* to pass, at `scripts/check-conflict.test.ts:145-147`, inside
+  `scripts/check-conflict.test.ts` › "passes on content that only looks like a marker, and says how many files it examined"
+- `scripts/citations.test.ts:76` — the citation guard's own scope, so a citation written in a **new**
+  untracked file resolves against nothing until `git add`. Narrowest of the four, because its subject is
+  prose in files that are already tracked.
+- `apps/launcher/src/docker-access.test.ts:55` — TD-021's census, scoped to `git ls-files -z -- *.ts *.tsx
+  *.mjs *.js`, so a new file composing a Docker client is invisible to it until staged. Widest consequence
+  of the four: it is the mechanical half of an amended decision record, not a formatting guard.
+
+**Three were checked and do not have it**, which is what makes this a class with a boundary rather than an
+open-ended worry (rules 44/63):
+
+- `scripts/check-ignored.mjs:101` reads `git ls-files` **and** walks the untracked tree (`sourceRoots` at
+  `:127`, `walkRootFiles` at `:155`, joined at `:195`), because an ignored file can never become tracked —
+  it had to solve this problem to exist at all, and its docblock already states the two cases no derivation
+  can see.
+- `apps/web/src/no-html.test.ts:184` and
+  `packages/integrations/src/providers/delivery-key-redaction.test.ts:107` read **disk** (`readdirSync`)
+  rather than the index, so an untracked file is in scope for both. So does
+  `test/contract/integrations/fixture-provenance.contract.test.ts:25`.
 
 **Evidence.** WP-16's implementer wrote literal NULs into two brand-new files — `knowledge/globs.ts`,
 where a NUL is the *right* sentinel and CLAUDE.md asks for the escape `\0`, and `kb-search.test.ts`,
@@ -2044,7 +2075,19 @@ been told to ignore. It should not — an ignored file is not a source file — 
 is the whole answer, and the decision is worth one line in the script's docblock rather than a flag
 nobody can explain later.
 
-**Depends on.** Nothing. Owner: whoever next touches `scripts/`; cheap enough to fold into any WP.
+**The shape to copy is now in the tree** (session 5, backlog 28). The pool census unions the two lists at
+`packages/infrastructure/src/db/pool-errors.test.ts:161-162` and tolerates at `:169` a path that disappears
+between the listing and the read — the concurrent-editor case a `--others` sweep newly has to handle and a
+tracked-only sweep never did, so it is worth copying rather than re-deriving. Its case is
+`packages/infrastructure/src/db/pool-errors.test.ts` › "names a planted pool whether it is tracked or merely untracked, and skips an ignored one"
+which builds a throwaway repository holding a tracked, an untracked and an ignored file and expects exactly
+the first two. **Done for this entry is all four guards above carrying that**, not `nul:check` alone; the
+two script guards additionally need their pinned pass cases rewritten, because a guard whose own suite
+asserts the hole is a guard whose fix fails that suite — which is the cheap early signal that the change
+landed, not an obstacle.
+
+**Depends on.** Nothing. Owner: whoever next touches `scripts/`; cheap enough to fold into any WP — but
+the `docker-access` and `citations` halves are outside `scripts/` and are owned by nobody at all.
 
 **The transferable part is not the guard.** An agent editing through a tool can emit a byte it did
 not intend and cannot see in its own output — twice in one work package, in two files, where a space
@@ -2263,7 +2306,13 @@ compose, not the composition root. Until such a row existed, tier 3 above had no
 `apps/server` started no pipeline runs at all. **That row is now WP-15g** (refiner, session 4), and
 tier 3 is its criterion rather than this one's; tiers 1 and 2 here still do not wait on it.
 
-### 26. **Composing the workspace provider does not give WP-18 a checkout it can read** (TODO, small — the residual **WP-15g** does *not* discharge)
+### 26. **Composing the workspace provider does not give WP-18 a checkout it can read** (**DECIDED** by architect ruling, session 5 — **TD-026**; the work is on the rewritten **WP-18** row, and this entry closes when that row merges)
+
+> **Ruling recorded under "Architect ruling (WP-18 / backlog 26, session 5)"**: shape (a), sharpened — a
+> git-backed `VaultSource` over a bare mirror the **platform** owns and fetches itself, never the
+> launcher's `repo-cache` ((c) refused on freshness: that mirror advances only before a run, so the
+> after-merge trigger would index a tree without the merge) and never a provider read per file ((b)
+> refused on surface and cost). The three *needs measurement* items that remain are listed there.
 
 **What is wrong.** WP-18's plan row defers the `KnowledgeIndexer` job because it *"needs a checkout to
 read, which needs the workspace provider, which needs WP-15c's ingress"*. The ingress landed and WP-15g
@@ -2359,6 +2408,70 @@ covered" claim should name the run id, as the evidence above does.
 
 **Depends on / owner.** The images are **WP-22**'s and the criterion is on its row. The mutation measurement
 is owned by nobody and needs no image.
+
+### 30. **A leaked `pg.Client` still ends the process on a forced drop, and nothing refuses a leak** (TODO — the half of backlog **28** that a census cannot cover)
+**What is wrong.** Backlog 28 closed the **pool** half: every pool comes from one of two factories, both
+attach an `error` listener, and a census refuses a third construction site. A bare `pg.Client` sits outside
+that guarantee, and where it is safe it is safe for a *different* reason — `Client.end()` resolves on the
+connection's `end` event, so a client the caller **closed** is genuinely closed. A client the caller
+**leaks** is still attached when the harness drops its database `with (force)`; the `57P01` then arrives as
+an `'error'` on an `EventEmitter` nobody listens to, which is a process death of exactly the shape standing
+rule **85** names. Twelve clients are safe today because a `finally` or an `afterAll` ends them, and nothing
+refuses the edit that moves one.
+
+**Evidence** (backlog 28's implementer, session 5; measured against the tier's own PostgreSQL 18 container,
+full note under `## WP notes — session 5`). Quoted from the discovered-work bullet rather than paraphrased:
+
+> `Client.end()` resolves on the connection's `end` event, so a closed client is genuinely closed —
+> but a *leaked* one still takes the process down when its database is dropped with `(force)`, and
+> nothing refuses a leak. Twelve bare-client sites in `test/` rely on a `finally`/`afterAll` that a
+> future edit could drop. A census like the pool one would need to prove “every client is ended”,
+> which is a dataflow question rather than a grep, so it is filed rather than done.
+
+**The twelve, listed** so the next reader does not re-derive them (refiner, session 5, grep only — rule 66):
+nine files, twelve `new pg.Client(` sites —
+`test/integration/support/postgres.ts:140` and `:180`;
+`test/integration/pipeline/postgres-pipeline-store.integration.test.ts:26` and `:54`;
+`test/integration/knowledge/nul-refusal.integration.test.ts:46` and `:85`;
+`test/integration/knowledge/postgres-knowledge-store.integration.test.ts:41`;
+`test/integration/knowledge/context-pack.integration.test.ts:68`;
+`test/e2e/pipeline/context-pack.e2e.test.ts:47` and `:77`;
+`test/e2e/pipeline/composition.e2e.test.ts:237`;
+`test/e2e/support/instance.ts:175`.
+The two **production** bare clients are accounted for and are not part of this:
+`packages/infrastructure/src/broadcast/postgres-broadcast.ts:309` exposes the `onError` seam the
+`NotificationClient` wires, and `packages/infrastructure/src/db/migrator.ts:97-98` ends its client in a
+`finally` (`:281-289`). The migrator's client carries **no** `error` listener, though — **hypothesis**
+(rule 39), not measured: a failover or a `pg_terminate_backend` during a migration would end the migrate
+container on an uncaught error rather than a typed one.
+
+**What it costs to leave.** Nothing today: all twelve sites do end their client, so this is **latent**
+rather than live and the trigger is an edit — a thirteenth site, an `await client.end()` moved out of a
+`finally`, a `return` added above one. What it costs *then* is backlog 28 again: a red `e2e-fake-claude`
+with every test in it green, which took a session, a measurement round and a rejected push to diagnose.
+The census that exists would not say a word, because it allows exactly two **pool** factories and makes no
+claim about clients.
+
+**What done looks like.** The harness **owns the lifetime**, which turns the dataflow question into the
+grep the pool census already is. Two parts, and the second is what makes it a guard rather than a
+convention: (1) a `withClient` helper beside the existing ones in `test/integration/support/postgres.ts`
+that connects, runs the body and ends the client in a `finally`, with the twelve sites moved onto it;
+(2) one more refusal in `packages/infrastructure/src/db/pool-errors.test.ts` — or a sibling census in the
+same shape — naming any `new pg.Client` under `test/` outside that helper. Calibrate it the way the pool
+census was: plant a bare client **tracked** and **untracked** and expect both named. That census already
+walks both sets, which is the reason to extend it rather than write a new one; the case to copy is
+`packages/infrastructure/src/db/pool-errors.test.ts` › "names a planted pool whether it is tracked or merely untracked, and skips an ignored one"
+
+**Needs measurement** (rule 66, not run here). The bullet states the leaked-client failure as measured, but
+session 5's measurement 2 held its idle client **in a pool** and the delivery path it traced ends at
+pg-pool's `makeIdleListener`. Whoever writes the failing case should expect to re-derive the bare-client
+path: that a connected `pg.Client` with no `error` listener, and no pool anywhere, raises `57P01` as an
+uncaught exception when its database is dropped `with (force)`. If it does not, this entry shrinks to a
+convention and the helper is still worth having for the twelve sites.
+
+**Depends on.** Nothing; the census it extends is in the tree. **Owner: none** — no work package owns the
+integration/e2e harness, the same gap entry **28** records. Cheapest for whoever next touches
+`test/integration/support/postgres.ts`, and before **WP-22** leans on this tier for its images.
 
 ### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
 **What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
@@ -5079,6 +5192,46 @@ correct answer at 0.500. The 87 %-padding pack is still reachable. The remedy ne
 signal (IDF, or a different `ts_rank` normalisation) and is a product decision filed outside this
 work package; the sentence now says what was closed and what was not.
 
+### Architect ruling (WP-18 / backlog 26, session 5) — the index reads a bare mirror the platform owns, and never the launcher's
+
+**Asked before WP-18 was briefed**, because backlog 26 found that composing the workspace provider gives
+WP-18 no checkout it can read: the only `VaultSource` adapter walks the server's own filesystem and the
+platform's checkouts live on volumes the server never mounts. Three shapes were on the table — (a) a
+platform-side clone of its own, (b) a default-branch read through `GitProviderPort`, (c) mounting the
+launcher's `repo-cache` read-only into the server.
+
+**Ruling: (a), sharpened — a git-backed `VaultSource` over a platform-side bare mirror.** Recorded as
+**TD-026** (`docs/decisions/technical/TD-026-knowledge-vault-read-path.md`), with an amendment to TD-021
+and paragraphs in technical/05, /07 and /12; the WP-18 row is rewritten with the criteria; **Q63** files
+the mirror disk budget; `docs/research/13-bare-mirror-vault-read.md` carries the measurements. WP-18
+builds `createGitVaultSource` beside the filesystem adapter: `git rev-parse`, `git ls-tree -r -z`, one
+`git cat-file --batch`, **no working tree ever**, the application-ring port unchanged. The bare repo is
+the **platform's own** mirror, cloned and fetched by the platform process under a new
+`APP_KNOWLEDGE_MIRROR_ROOT`, named by `mirrorCacheKeyFor(projectId)`, fetched with the project's existing
+git-binding credential through WP-15a's loader as a credential-helper env. It must **never** read the
+launcher's `repo-cache`, never construct a Docker client or helper container (TD-021's WP-15g amendment,
+held by `apps/launcher/src/docker-access.test.ts`), never read the task branch (BD-025 — an explicit sha
+must pass `git merge-base --is-ancestor`), never read mode `120000`/`160000` entries, and never default
+the mirror root (rules 31/18: unset composes no source and the job refuses by name).
+
+**Why not the others, in the ruling's words.** (c) is refused on **freshness, not mechanics**:
+`updateMirror` runs a helper container, so the platform cannot advance that mirror; it refreshes before
+each *run*, so the after-merge trigger would read a tree without the merge commit and report `unchanged`
+— a stale index indistinguishable from a current one — and on a project's first task the mirror does not
+exist yet. (b) is refused on surface and cost: `GitProviderPort` has no file read and no tree listing, and
+`repoPaths` alone is a full recursive listing per trigger through `IntegrationActionExecutor`. The price
+of (a): a second copy per project and `git` in the platform image (**WP-22** owns image and volume); the
+mirror carries no credential either way. **Not covered**: the code map — `ctags` needs files, and TD-026
+§12 gives it `git archive` from the same mirror, dropping escaping symlinks.
+
+**Measured with plain git 2.50.1, no test target** (rule 66): a mirror of this repository answers
+`repoPaths` with 962 entries in 19 ms; all four indexed path classes read by sha from `ls-tree` on a
+synthetic vault; a symlink blob returns the target string and a gitlink has no blob; `cat-file --batch`
+frames by byte length and says `missing`; the ancestry guard exits non-zero for a side branch; a
+read-only mirror serves all three reads; `git archive` recreates a `/etc/passwd` symlink, which is why
+the code-map path drops escaping symlinks. **Still needs measurement**: `uploadpack.allowFilter` for
+blobless clones, fetch cost against a real remote, concurrent fetches.
+
 ### Architect ruling (WP-15g) — "only component" is a deployment boundary, and the default was the thing the decision forbids
 
 **Asked before WP-15g composed the agent runner**, because a refiner scoping the row found that composing the
@@ -6658,7 +6811,142 @@ moment later, so `eventing.stop()` can also return before that socket is gone. I
 `NotificationClient` carries its own `error` listener and `#onConnectionLost` returns early once
 closed — and it is noted here so the next reader does not have to re-measure it.
 
+### WP-15h — the read API and the run topic
+
+**Scope, as the orchestrator set it.** The run endpoints (`GET /api/runs/:id`, `/messages`,
+`/prompt`, `/context-pack`), `GET /api/tasks/:task_id`, the `run:<id>` SSE publisher, and the census.
+The other eleven client paths stay unimplemented and are listed **in the census** with the row that
+owns each.
+
+**How a frame reaches a stream in another process — decided, built, and asserted against two real
+`LISTEN` sessions.** The sink publishes a **position** (`{run_id, seq}`) on one dotted broadcast topic,
+`run.transcript.appended`; `apps/server/src/sse/transcript-bridge.ts`, started by every process that
+serves the API, reads `run_messages` back and publishes into **its own** hub. So a `ROLE=api` process
+serves a transcript a `ROLE=worker` process produced, and `ROLE=all` is the same path with both ends in
+one process (PostgreSQL delivers a notification to every listening session, including the publisher's).
+Four decisions at the line: **one** dotted topic rather than one per run, because `subscribe` fixes its
+topic set and a topic per run would mean re-subscribing per browser tab; the read is a **catch-up** read
+after a watermark, so a dropped notification (the port documents them as droppable) costs latency rather
+than a hole; **only a watched run is read back** (TD-014: content is forwarded "only while a client is
+subscribed to the run"), so an unwatched run costs one map lookup and no query; and **one pump per run**,
+because the listener is synchronous and two interleaved catch-up reads would publish out of `seq` order,
+which the hub's *positional* replay turns into a skipped entry.
+
+**Two defects found by reading, both of the same shape: a column whose stored value nobody had ever
+read back.**
+
+1. **`RunRecord.stage` had no source.** `RunRepository.insert` takes a `stage`, the SQL adapter
+   **dropped it**, and `load` returned the literal `stage: null` — for every run this repository has
+   ever stored. The schema's own docblock says the projection "joins rather than reads it", and there
+   was nothing to join to, because `runs.task_stage_id` was never written either. The insert now
+   resolves it from `(task_id, stage, attempt)` — the key `recordStageEntered` upserts on — and the
+   contract suite asserts the round trip **and** the null case (a run for an attempt nobody entered).
+   The in-memory store mirrored the bug in the kind direction: it cloned the caller's `stage` and
+   answered a question the database could not (rule 1), and now resolves it the same way.
+2. **`tasks.workpad_ref` stored a shape the published DTO rejects.** `upsertWorkpad` returns a
+   `CommentRef` = `workpadRefSchema.extend({ marker_id })`; TypeScript passes it through
+   `saveWorkpad(… : WorkpadRef)` structurally, and the adapter stringified it whole. `jsonb` accepts
+   anything, so it surfaced only when the first reader existed: `GET /api/tasks/:id` answered **500**
+   `Unrecognized key: "marker_id"` for every task with a workpad, found by the e2e on its first run.
+   Fixed at the writer (the marker is `workpadMarker(taskId)`, derivable, which is why the published
+   shape never carried it) **and** guarded — both stores now `workpadRefSchema.parse` before writing
+   (rule 20, fail closed on a mutation), with a contract-suite case that plants `marker_id`.
+
+**Where a column is never written, the route refuses by name rather than returning an empty document.**
+`runs.system_prompt`/`user_prompt`: nothing writes them — `StoredRun` has no field for them at all — so
+`/prompt` is **409 `prompt_not_recorded`**. `/context-pack` is **409 `context_pack_not_recorded`** and
+has **no success branch at all** — see the round-1 finding below. A `run_messages` row with a non-null
+`blob_id` is refused (`row_not_projectable`) rather than served from `payload`, whose contents are
+undefined by the schema in that case. All three are 4xx deliberately: `toApiError` strips a 5xx's
+message, and a table name, a uuid and a column name carry no untrusted content, so naming them costs
+nothing a 5xx protects. Both refusals are declared in the route schema (`409: apiErrorSchema`), so the
+OpenAPI document describes the answer these endpoints actually give.
+
+**Round 1's five findings, and the one that is a lesson rather than a tidy-up.** Four were: a dead
+`findRunMessage` whose docblock called itself "the SSE bridge's read-back" while the bridge used
+`listRunMessages` (deleted — rule 31); an unenforced pairing claim on `scopeToProject` (now
+`routes/scope.test.ts`, a disk-read census over the route modules asserting both directions —
+*resolves a project and decides nothing* is the dangerous one, and `client-census.test.ts` **cannot**
+see it because its anonymous probe gets 401 from either half); `TranscriptBridge.stop()` not awaiting
+the pumps in flight while `runtime.ts` closes the broadcast and the pool on the next lines (now
+`stopped` first, subscription second, `allSettled` third — bounded by the work, not a timer); and
+decision 3 ("one pump per run") having no case at all, every test being too fast to reach it.
+
+**The fifth is the one to carry: the reader fabricated the field its own refusal said it could not
+fill.** `findRunContextPack` summed the rows into `budget_tokens`, invented `'paths'` for a null
+`reason` and `0` for a null `score` — and **the integration test pinned all three**. `run_context_pack`
+has no budget column anywhere, and `apps/web/src/features/run-detail.tsx` renders `budget_tokens` as a
+fact, so the first real producer would have shipped *"budget equals total"* for every run with nothing
+in any tier able to contradict it. It is rule 3's shape at the level of a *value* rather than a guard:
+the test asserted what the code did, and both were wrong in the same direction, so nothing disagreed.
+The endpoint now has no success branch — it refuses with the **row count** in the message, so `0` ("no
+producer yet") and `2` ("a producer exists, the schema gap is still open") are distinguishable — and
+the integration case asserts the refusal **with rows present**, which is the assertion the first
+version could not have made. Giving this endpoint an answer is a schema change plus a writer, not a
+reader.
+
+**The census (`apps/server/src/routes/client-census.test.ts`), calibrated then mutated.** The client's
+half is read from every `.ts`/`.tsx` file git knows about under `apps/web/src` — **tracked and
+untracked** (rule 85) — excluding `*.test.*` by suffix and comments by stripping them, so
+`endpoints.ts`'s own claim to be the only caller is enforced rather than decorative (rule 44). The
+server's half is a real unauthenticated request through the real router, classified by the not-found
+handler's own body — not `openapi.json`, which hides `/api/auth/*` — which makes the same probe the
+**per-route auth assertion** (rule 68). Six measurements: unmutated **6 passed**; a fabricated path in
+an **untracked** file → fails naming it; the same file `git add -N`'d → fails naming it; one route's
+`preHandler` removed → fails with `/api/runs/{} -> 500 internal_error`; a gap entry for a path that *is*
+served → fails; a gap entry the client never names → fails. The `scopeToProject` 401-before-lookup
+guard was mutated too (all five routes → 500).
+
+**Assumptions, written because the docs do not settle them.** (a) `/prompt` is gated at
+`transcript.read` (member) and `/context-pack` at `run.read` (viewer): the prompt is the ticket's own
+words and the role prompt, which is the content technical/08 gates at member; the pack is a list of
+paths, scores and token counts. (b) `task_stages.state` is `text` and "free-form until WP-15 fixes the
+interpreter's vocabulary" — the interpreter writes `entered`/`exited`, the DTO publishes neither, so
+the projection maps them (`entered` + no `exited_at` → `running`, otherwise `completed`) and anything
+unrecognised becomes `pending`, the reading that claims least. (c) `model_usage` comes from
+`run_model_usage`, which nothing writes, so it is `[]` — an empty **list** is not a missing value, and
+the totals are on `runs` where the reader finds them.
+
+**The e2e is `agent: 'real-over-fake-cli'`, and the choice is the criterion.** `FakeClaudeRunner` is
+composed with `sink: { append: async () => {} }` (`test/e2e/support/pipeline.ts:493`), so a run driven
+through it writes **no `run_messages` row**: an assertion about a transcript in that mode is an
+assertion about an empty table (rules 4 and 82 — audit the instrument first). The harness gained one
+knob, `onAgentSpec`, awaited inside `provision`: it holds the first run at its workspace so the test can
+learn `spec.runId`, open the SSE stream and only then let the CLI speak — a promise the test resolves,
+not a sleep (rule 2). The both-direction secret assertion is
+`test/e2e/server/run-api.e2e.test.ts` › "serves the run, its transcript, its task — and the live
+frames — without the run’s secret", and it is asserted **twice on two paths**: on the HTTP page
+(placeholder present, plaintext absent) and on the SSE frame, which never touches the projection.
+
 ## Discovered work — session 5 (not in plan)
+- **`runs` is written with eleven of its ~30 columns, and nobody had noticed because nothing read the
+  row back** (WP-15h). `RunRepository.insert` names `id, task_id, project_id, task_stage_id, role,
+  mode, attempt, model, effort, prompt_version, status`; `system_prompt`, `user_prompt`,
+  `provider_mode`, `permission_mode`, `settings_snapshot`, `settings_hash`, `allowed_tools`,
+  `disallowed_tools`, `mcp_servers`, `skills`, `run_key`, `last_output_at`, `price_list_id`,
+  `exit_detail` and `usd_estimated` are left at their defaults by every writer in the tree. Two of them
+  are now user-visible refusals (`/prompt`), and `run_key` is the memoisation key technical/03 says "the
+  same spec must never be executed twice" rests on. A row per column deciding *writer or drop* is bigger
+  than this work package.
+- **`run_context_pack` cannot express three fields of `ContextPackRecord`** (WP-15h), which is why
+  `GET /api/runs/:id/context-pack` has no success branch: no column holds `budget_tokens`, and
+  `reason`/`score` are nullable here where the published tier-1 entry requires them. A producer needs
+  a schema change first — somewhere for the budget, and `reason`/`score` either filled at the write or
+  made nullable in `@platform/contracts` — plus a way to tell an empty pack from an unwritten one.
+  `total_tokens` is summable from the rows; nothing else is.
+- **`RunRepository.load` has exactly one caller and it is the contract suite** (WP-15h). Nothing in
+  production loads a run through the store; the read API projects the columns itself because the
+  published DTO needs `provider_mode`, `model_usage` and `redaction_count`, which `StoredRun` does not
+  carry. Either the port grows the fields or the method goes; leaving a port method whose only exercise
+  is its own test is rule 31's shape.
+- **The hub still replays only from memory** (WP-15h). TD-014 says the ring buffer is "backed by the
+  event/message tables"; `SseHub.open` answers `reset` for any cursor it cannot place, and now that
+  `run_messages` has both a writer and a reader, a run topic's replay *could* come from the rows. The
+  client refetches through `GET /api/runs/:id/messages`, so the gap costs a round trip rather than
+  correctness — filed rather than done.
+- **Eleven client paths are still 404** (WP-15h), each named in `routes/client-census.test.ts` with the
+  row that owns it. The commands (`pause`, `answer`, `decide`, `steer`, …) need the aggregate, a
+  `human_actions` row and an `Idempotency-Key`; the reads are one screen each.
 - **`pg.Client` teardown is safe only because callers `await client.end()`** (backlog 28). Measured:
   `Client.end()` resolves on the connection's `end` event, so a closed client is genuinely closed —
   but a *leaked* one still takes the process down when its database is dropped with `(force)`, and

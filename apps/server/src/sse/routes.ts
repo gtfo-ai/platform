@@ -126,9 +126,10 @@ export const registerSseRoutes = async (
       // authorised.** A user banned or demoted while a stream is open keeps receiving its frames
       // until they reconnect — the "a ban bites on the next request" property that
       // `auth/plugin.ts` gives every other endpoint has no next request on a connection that lives
-      // for hours. Closing it needs a revocation signal the platform does not have yet (the
-      // `Broadcast` port carries no such topic, and nothing publishes one), so WP-12 and WP-15,
-      // which are what make these frames carry anything, inherit it visibly from here.
+      // for hours. Closing it needs a revocation signal the platform does not have yet — the
+      // `Broadcast` port carries no such topic. It carries one for the transcript since WP-15h
+      // (`run.transcript.appended`), which is the shape a revocation hint would take and is not
+      // one, so the gap is unchanged and now has a worked example beside it.
       await authoriseTopics(access, actor, topics);
       const cursors = parseCursors(
         request.query.last_event_id ?? (request.headers['last-event-id'] as string | undefined),

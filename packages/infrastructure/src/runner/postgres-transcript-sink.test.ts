@@ -175,3 +175,73 @@ describe('the insert', () => {
     await expect(sink.append(assistant('hello'))).rejects.toThrow('connection terminated');
   });
 });
+
+/**
+ * Decision 3 — TD-007's second destination (WP-15h).
+ *
+ * The hint is a **position**, it is published **after** the row exists, and a failure to deliver it
+ * does not fail the run. All three are asserted, because each one is a different failure: a hint
+ * carrying content would hit `NOTIFY`'s 7 000-byte cap on a large entry; a hint that overtook its
+ * row would wake a reader that finds nothing; and a throw would end a run over a notification the
+ * platform had already performed the work for (standing rule 20).
+ */
+describe('the broadcast hint', () => {
+  it('announces the position after the row is stored, and carries no content', async () => {
+    const sql = recordingSql();
+    const order: string[] = [];
+    const hints: unknown[] = [];
+    const sink = createPostgresTranscriptSink({
+      sql: {
+        query: async (text: string, values?: unknown[]) => {
+          order.push('insert');
+          return sql.query(text, values);
+        },
+      },
+      announce: async (hint) => {
+        order.push('announce');
+        hints.push(hint);
+      },
+    });
+
+    await sink.append(assistant('hello there', 4));
+
+    expect(order).toEqual(['insert', 'announce']);
+    // Exactly the two fields, so a later edit cannot quietly start shipping the entry itself.
+    expect(hints).toEqual([{ run_id: FIXTURE_RUN_ID, seq: 4 }]);
+    expect(JSON.stringify(hints)).not.toContain('hello there');
+  });
+
+  it('announces the absorbed duplicate too: the position is true either way', async () => {
+    const hints: unknown[] = [];
+    const sink = createPostgresTranscriptSink({
+      sql: recordingSql(0),
+      announce: async (hint) => {
+        hints.push(hint);
+      },
+    });
+    await sink.append(assistant('hello', 2));
+    expect(hints).toEqual([{ run_id: FIXTURE_RUN_ID, seq: 2 }]);
+  });
+
+  it('stores the row even when the hint cannot be delivered', async () => {
+    const sql = recordingSql();
+    const sink = createPostgresTranscriptSink({
+      sql,
+      announce: async () => {
+        throw new Error('the listening connection is down');
+      },
+    });
+    await expect(sink.append(assistant('hello'))).resolves.toBeUndefined();
+    // The branch that ran is the one that wrote: a resolved promise alone would also be produced by
+    // a sink that skipped the insert (standing rule 10).
+    expect(sql.calls).toHaveLength(1);
+  });
+
+  it('writes the row with no announcer at all', async () => {
+    const sql = recordingSql();
+    await expect(
+      createPostgresTranscriptSink({ sql }).append(assistant('hello')),
+    ).resolves.toBeUndefined();
+    expect(sql.calls).toHaveLength(1);
+  });
+});

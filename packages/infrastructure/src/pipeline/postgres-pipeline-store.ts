@@ -44,6 +44,7 @@ import type {
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
+import { workpadRefSchema } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
 import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -282,9 +283,17 @@ export const createPostgresPipelineStore = (
       // One column. `save` writes the whole row, and the workpad is written from a job that runs
       // beside the stage executor's transactions (WP-15d), so a whole-row write from there is a
       // lost update of whatever it did not read.
+      //
+      // **Parsed before it is written** (WP-15h). `workpad_ref` is `jsonb`, so the column accepts
+      // any document and the disagreement only surfaces when something *reads* it: `upsertWorkpad`
+      // returns a `CommentRef` (a `WorkpadRef` plus `marker_id`), TypeScript passed the wider
+      // object through the port's `WorkpadRef` parameter structurally, and the first reader — the
+      // API of technical/08 — answered 500 on a strict schema's `Unrecognized key`. Fail closed on
+      // a mutation (standing rule 20): a value the published shape cannot describe is refused at
+      // the write, where the stack trace still names the caller.
       const result = await sqlOf(tx).query(
         'update tasks set workpad_ref = $2::jsonb, updated_at = now() where id = $1',
-        [taskId, JSON.stringify(workpad)],
+        [taskId, JSON.stringify(workpadRefSchema.parse(workpad))],
       );
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);
@@ -446,11 +455,31 @@ export const createPostgresPipelineStore = (
   };
 
   const runs: RunRepository = {
+    /**
+     * **`task_stage_id` is written here, and until WP-15h it was not** — so every run this
+     * repository ever stored was unattached to the stage it ran, and `load` answered `stage: null`
+     * for all of them while the caller had passed the stage in.
+     *
+     * The link is the schema's own answer to where a run's stage lives: technical/03 keeps the
+     * stage on `task_stages` and `packages/infrastructure/src/db/schema/pipeline.ts` says in as
+     * many words that `RunRecord.stage` "is not a column here … so the API projection joins rather
+     * than reads it". There was nothing to join to. The subquery resolves the row by the same
+     * `(task_id, stage, attempt)` key `recordStageEntered` upserts on, which is unique, so it picks
+     * exactly one row or none.
+     *
+     * **None is a legitimate answer and it is left as null rather than refused** (rule 20's read
+     * side): a run inserted for a stage nobody entered — a repository-level test, a future
+     * out-of-pipeline run — still records everything else about itself, and the reader that needs
+     * the stage refuses that row by name (`apps/server/src/routes/runs.ts`).
+     */
     insert: async (tx, run) => {
       await sqlOf(tx).query(
-        `insert into runs (id, task_id, project_id, role, mode, attempt, model, effort,
-                           prompt_version, status, started_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())`,
+        `insert into runs (id, task_id, project_id, task_stage_id, role, mode, attempt, model,
+                           effort, prompt_version, status, started_at)
+         values ($1, $2, $3,
+                 (select id from task_stages
+                   where task_id = $2 and stage = $11 and attempt = $6),
+                 $4, $5, $6, $7, $8, $9, $10, now())`,
         [
           run.id,
           run.taskId,
@@ -462,6 +491,7 @@ export const createPostgresPipelineStore = (
           run.effort,
           run.promptVersion,
           run.status,
+          run.stage,
         ],
       );
     },
@@ -494,10 +524,12 @@ export const createPostgresPipelineStore = (
     },
     load: async (tx, runId) => {
       const { rows } = await sqlOf(tx).query<RunRow>(
-        `select id, task_id, project_id, role, mode, attempt, model, effort, prompt_version, status,
-                terminal_reason, session_id, num_turns, usd_reported, usd_estimated, wall_ms,
-                created_at
-           from runs where id = $1`,
+        `select r.id, r.task_id, r.project_id, s.stage, r.role, r.mode, r.attempt, r.model,
+                r.effort, r.prompt_version, r.status, r.terminal_reason, r.session_id, r.num_turns,
+                r.usd_reported, r.usd_estimated, r.wall_ms, r.created_at
+           from runs r
+           left join task_stages s on s.id = r.task_stage_id
+          where r.id = $1`,
         [runId],
       );
       const row = rows[0];
@@ -690,6 +722,8 @@ interface RunRow extends Record<string, unknown> {
   id: string;
   task_id: string;
   project_id: string;
+  /** From the joined `task_stages` row; null when the run is linked to none. */
+  stage: string | null;
   role: string;
   mode: string;
   attempt: number;
@@ -710,7 +744,7 @@ const toStoredRun = (row: RunRow): StoredRun => ({
   id: row.id,
   taskId: row.task_id,
   projectId: row.project_id,
-  stage: null,
+  stage: row.stage as Slug | null,
   role: row.role,
   mode: row.mode,
   attempt: row.attempt,

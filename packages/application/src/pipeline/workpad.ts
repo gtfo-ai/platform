@@ -317,7 +317,21 @@ export const runWorkpadRender = async (
     // link to it. `saveWorkpad`, never `save`: this transaction runs beside the stage executor's,
     // and a whole-row write here puts back the cost, the state and the stage as they were when
     // this job started. Measured — it cost a task 0.40 USD of recorded spend.
-    await options.store.tasks.saveWorkpad(scope.tx, taskId, ref);
+    //
+    // **Narrowed field by field, and that is not cosmetic** (WP-15h). `upsertWorkpad` returns a
+    // `CommentRef`, which is `workpadRefSchema.extend({ marker_id })`; `saveWorkpad` declares a
+    // `WorkpadRef` and TypeScript passes the wider object through structurally, so the adapter
+    // `JSON.stringify`d the provider's `marker_id` into `tasks.workpad_ref`. The column's published
+    // shape is **strict**, so the first thing ever to read the row back — `GET /api/tasks/:id` —
+    // answered 500 on `Unrecognized key: "marker_id"` for every task that had a workpad. The
+    // marker is not lost by dropping it: it is `workpadMarker(taskId)`, a pure function of the id
+    // the row is keyed by, which is why the published shape never carried it.
+    await options.store.tasks.saveWorkpad(scope.tx, taskId, {
+      provider: ref.provider,
+      ticket_key: ref.ticket_key,
+      comment_id: ref.comment_id,
+      url: ref.url,
+    });
   });
 };
 

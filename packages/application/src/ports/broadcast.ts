@@ -21,6 +21,34 @@ import type { Id, JsonObject } from '@platform/contracts';
  */
 export const EVENTS_APPENDED_TOPIC = 'events.appended';
 
+/**
+ * Topic the SSE layer listens on for "a transcript entry was appended" (WP-15h).
+ *
+ * **One dotted topic for every run, not one topic per run**, for the same reason
+ * {@link EVENTS_APPENDED_TOPIC} is one: `subscribe` fixes its topic set at subscription time and
+ * the Postgres adapter filters in-process off a single `LISTEN`, so a topic per run would mean
+ * re-subscribing every time a browser tab opened a transcript. The run id travels in the payload
+ * and the subscriber filters on it — which it has to do anyway, because it only forwards a run
+ * somebody is watching (TD-014: partial content is "only forwarded while a client is subscribed to
+ * the run").
+ *
+ * It carries {@link TranscriptAppendedHint} — a **position**, never the entry. The entry is read
+ * back from `run_messages` by whichever process holds the stream, which is what makes a 7 000-byte
+ * cap irrelevant to a transcript row that can be far larger.
+ */
+export const RUN_TRANSCRIPT_TOPIC = 'run.transcript.appended';
+
+/**
+ * The payload of {@link RUN_TRANSCRIPT_TOPIC}: which run, and how far it has got.
+ *
+ * A `type` rather than an `interface` on purpose — only an alias gets the implicit index signature
+ * that makes it assignable to {@link BroadcastMessage.payload}'s `JsonObject`.
+ */
+export type TranscriptAppendedHint = {
+  readonly run_id: string;
+  readonly seq: number;
+};
+
 /** SSE topics of technical/08 (`GET /events?topics=org,project:<id>,task:<id>,run:<id>`). */
 export const ORG_TOPIC = 'org';
 export const projectTopic = (projectId: Id): string => `project:${projectId}`;

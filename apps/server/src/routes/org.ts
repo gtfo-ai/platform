@@ -8,8 +8,12 @@
  * sides of the decision.
  *
  * The rest of technical/08's surface belongs to the work packages that build what it reads — org
- * settings and budgets, projects, tasks, runs, knowledge. Adding stubs for them here would publish
- * an OpenAPI document describing endpoints that answer nothing.
+ * settings and budgets, projects, the agent and inbox lists, knowledge. Adding stubs for them here
+ * would publish an OpenAPI document describing endpoints that answer nothing. **Tasks and runs
+ * left that list at WP-15h** (`routes/tasks.ts`, `routes/runs.ts`), and what the client still calls
+ * and the server still does not serve is enumerated, with the row that owns each one, in
+ * `routes/client-census.test.ts` — which fails if that list drifts from the router in either
+ * direction.
  */
 import {
   orgAuditQuerySchema,

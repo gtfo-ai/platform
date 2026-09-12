@@ -184,7 +184,14 @@ export interface ScriptedWorkspaces {
  */
 export const scriptedWorkspaces = (
   scenarioFor: (stage: string) => { readonly structuredOutput: unknown; readonly costUsd?: number },
-  onSpec?: (spec: RunSpec) => void,
+  /**
+   * Called — and **awaited** — inside `provision`, before the CLI exists.
+   *
+   * Awaiting it is what lets a caller hold a run at its workspace: `provision` is the last thing
+   * that happens before the scripted process starts playing, so a promise resolved by the test is
+   * a run paused at a known point (WP-15h's live-transcript assertion needs one).
+   */
+  onSpec?: (spec: RunSpec) => void | Promise<void>,
 ): ScriptedWorkspaces => {
   const runs: AgentRunCapture[] = [];
   const releases: WorkspaceRelease[] = [];
@@ -194,7 +201,7 @@ export const scriptedWorkspaces = (
     provisioner: {
       provision: async (spec) => {
         const stage = spec.stage ?? '';
-        onSpec?.(spec);
+        await onSpec?.(spec);
         const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
           fakeCliScriptFor(spec, scenarioFor(stage)),
         );
