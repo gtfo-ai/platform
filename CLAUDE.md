@@ -111,10 +111,16 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   from `bindings`/`integrations` and their credentials decrypted from `secrets` by
   `packages/integrations/src/bindings/loader.ts`, which builds the adapters **per call** so the redactor can
   carry the call's run-scoped credentials (Q55). A binding that is *absent* gives `git: null`; a binding that
-  *fails to load* throws (rule 20). One collaborator still has no production adapter — a `ClaudeRunner`
-  (no launcher transport, Q52) — so `startRuntime` composes `unavailableClaudeRunner`, which **throws**, and
-  logs that it did; since WP-15c that throw has an ending (`stage-executor.ts` fails the run it created and
-  escalates the task to `needs_human`; **no new task state**, Q59).
+  *fails to load* throws (rule 20). **Since WP-15g a production `ClaudeRunner` exists**: `apps/server/src/agent.ts`
+  composes `createWorkspaceClaudeRunner` over `createClaudeRunner`, with the production `run_messages`
+  transcript sink and a per-run TD-012 redactor, and it takes a `RunWorkspaceProvisioner` — **never a Docker
+  client**, because TD-021's amendment forbids one in any process that composes the pipeline or serves
+  `/webhooks/*`, and `apps/launcher/src/docker-access.test.ts` holds that as a census over `git ls-files`.
+  The provisioner is **absent by default**, and when it is absent `startRuntime` composes
+  `unavailableClaudeRunner`, which **throws** and names the missing piece; that throw has an ending
+  (`stage-executor.ts` fails the run it created and escalates to `needs_human` — **no new task state**, Q59),
+  and a start failure is **retryable or terminal** rather than a state of its own (Q59a). Q52's remaining half
+  is the out-of-process **transport**, deliberately unbuilt.
 - **Production starts a ticket** (WP-15c): `POST /webhooks/:provider/:integrationId`
   (`apps/server/src/routes/webhooks.ts`) is the door, and it is the platform's only **unauthenticated**
   endpoint — the credential is the signature over the body, so the body reaches the handler *unparsed*
