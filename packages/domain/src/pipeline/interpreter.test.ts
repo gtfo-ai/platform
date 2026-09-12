@@ -127,6 +127,11 @@ describe('the happy path of each shipped template', () => {
     ).toEqual({ kind: 'enter', stage: 'retrospective' });
     expect(interpret(feature, completed('retrospective', 'approve'))).toEqual({
       kind: 'enter',
+      stage: 'librarian',
+    });
+    // The Librarian curates what the retrospective proposed (WP-18b) and then the task is done.
+    expect(interpret(feature, completed('librarian', 'approve'))).toEqual({
+      kind: 'enter',
       stage: 'done',
     });
     expect(interpret(feature, completed('done', null))).toEqual({ kind: 'complete', from: 'done' });
@@ -422,12 +427,27 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
   it('completes rather than entering a disabled tail', () => {
     const stopAfterRetro = compilePipeline('feature', {
       stages: FEATURE_TEMPLATE.stages.map((stage) =>
-        stage.id === 'done' ? { ...stage, enabled: false } : stage,
+        stage.id === 'done' || stage.id === 'librarian' ? { ...stage, enabled: false } : stage,
       ),
     });
     expect(interpret(stopAfterRetro, completed('retrospective', 'approve'))).toEqual({
       kind: 'complete',
       from: 'retrospective',
+    });
+  });
+
+  it('walks past a disabled librarian stage, which is how a project opts out of it', () => {
+    // BD-018's `auto_apply` decides what happens to a proposal; disabling the stage is how a
+    // project decides it wants none. The task still finishes (standing rule 42's shape: the
+    // enabled case is asserted in the happy path above).
+    const noLibrarian = compilePipeline('feature', {
+      stages: FEATURE_TEMPLATE.stages.map((stage) =>
+        stage.id === 'librarian' ? { ...stage, enabled: false } : stage,
+      ),
+    });
+    expect(interpret(noLibrarian, completed('retrospective', 'approve'))).toEqual({
+      kind: 'enter',
+      stage: 'done',
     });
   });
 

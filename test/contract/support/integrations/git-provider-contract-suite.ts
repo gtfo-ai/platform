@@ -39,6 +39,18 @@ export interface GitProviderContractContext {
     readonly unprotected: string;
     readonly missing: string;
   };
+  /**
+   * A branch this provider does **not** have and a path no branch of it holds — what
+   * `commitFiles` creates (WP-18b).
+   *
+   * Named by the harness rather than by the suite because a provider's fixtures decide what exists:
+   * the fake keeps a real map of branches, the GitLab replay matches on the endpoint and not on the
+   * body, and a literal here would be a fake detail the next adapter has to reproduce (BD-017).
+   */
+  readonly commit: {
+    readonly branch: string;
+    readonly path: string;
+  };
   /** An existing merge request, and one that does not exist. */
   readonly mergeRequestIid: number;
   readonly missingMergeRequestIid: number;
@@ -332,6 +344,48 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         await expectIntegrationError(
           () => port.getMergeRequest(mrRef(context.missingMergeRequestIid)),
           'not_found',
+        );
+      });
+    });
+
+    /**
+     * WP-18b: the platform writing files of its own, with no working copy (BD-025, technical/07's
+     * knowledge MR).
+     *
+     * Both halves are here because a one-sided case passes against an adapter that refuses
+     * everything (standing rule 42), and the refusal is the one a caller has to handle: the
+     * Librarian decides `add` from an index that can be stale, so "create a file that is already
+     * there" is a real outcome rather than a programming error.
+     */
+    describe('commits', () => {
+      it('writes files as one commit on a new branch, and refuses to create one that is there', async () => {
+        const commit = await port.commitFiles({
+          project: context.project,
+          branch: context.commit.branch,
+          start_branch: context.branches.target,
+          message:
+            'docs(knowledge): apply 1 knowledge proposal\n\nAgentic-Source: task ACME-1 run 00000000-0000-4000-8000-000000000001\n',
+          author_name: 'Agentic Bot',
+          author_email: 'agentic-bot@example.test',
+          actions: [{ action: 'create', path: context.commit.path, content: '# a lesson\n' }],
+        });
+        expect(commit.branch).toBe(context.commit.branch);
+        expect(commit.sha).toMatch(/^[0-9a-f]{7,64}$/);
+
+        // The branch exists now, so this one does not create it — and the file does, so `create`
+        // is the caller's mistake and the provider says so rather than overwriting.
+        await expectIntegrationError(
+          () =>
+            port.commitFiles({
+              project: context.project,
+              branch: context.commit.branch,
+              start_branch: null,
+              message: 'docs(knowledge): the same page again',
+              author_name: null,
+              author_email: null,
+              actions: [{ action: 'create', path: context.commit.path, content: '# again\n' }],
+            }),
+          'invalid_request',
         );
       });
     });

@@ -39,6 +39,7 @@ describe('published JSON Schemas', () => {
       'artifacts/review-verdict.schema.json',
       'artifacts/acceptance-verdict.schema.json',
       'artifacts/retro-report.schema.json',
+      'artifacts/librarian-proposals.schema.json',
       'artifacts/shadow-report.schema.json',
       'artifacts/readiness-report.schema.json',
       'artifacts/discovery-draft.schema.json',

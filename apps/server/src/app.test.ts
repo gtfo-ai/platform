@@ -76,6 +76,7 @@ const build = async (
     // before never existed, which `scripts/citations.ts` missed because the citation carried no
     // `›` (PROGRESS backlog 3).
     webhooks: null,
+    knowledge: null,
     readiness: async () => {
       if (harness.readinessError !== null) {
         throw harness.readinessError;

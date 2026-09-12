@@ -100,12 +100,40 @@ export const unattendedToolApprovals = (logger: Logger): ToolApprovalPort => ({
  * answer to "this run has an 8-character credential" is a warning about the credential, not a run
  * that cannot start.
  */
-export const injectedSecretRedactorFor = (spec: RunSpec, logger: Logger): SecretRedactor => {
-  const secrets = spec.secretEnvNames.flatMap((name) => {
-    const value = spec.env[name];
+export const injectedSecretRedactorFor = (spec: RunSpec, logger: Logger): SecretRedactor =>
+  injectedSecretRedactorForEnvironment(
+    { env: spec.env, secretEnvNames: spec.secretEnvNames },
+    logger,
+    { runId: spec.runId },
+  );
+
+/**
+ * The same redactor, built from the environment a run *would* be given rather than from one run.
+ *
+ * Its second caller is the Librarian (WP-18b): a proposal's text is model output on its way to a
+ * `kb_proposals` row and to a commit on the project's repository, and the model that wrote it was
+ * handed this process' own model credential. The run-scoped redactor lives inside the runner and is
+ * gone by the time a proposal is curated, so the composition root builds the same set of secrets
+ * from `agentRunEnvironment` — the one function that decides what a run's environment contains, so
+ * the two cannot name different values.
+ */
+export const injectedSecretRedactorForEnvironment = (
+  environment: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly secretEnvNames: readonly string[];
+  },
+  logger: Logger,
+  context: { readonly runId?: string } = {},
+): SecretRedactor => {
+  const secrets = environment.secretEnvNames.flatMap((name) => {
+    const value = environment.env[name];
     if (value === undefined || value.length < MIN_SECRET_LENGTH) {
       logger.warn(
-        { run_id: spec.runId, env_name: name, present: value !== undefined },
+        {
+          ...(context.runId === undefined ? {} : { run_id: context.runId }),
+          env_name: name,
+          present: value !== undefined,
+        },
         'a run names a secret environment variable that cannot be redacted, so its value is not replaced in this run’s transcript',
       );
       return [];

@@ -15,8 +15,25 @@
  * is a prompt with no knowledge in it and nothing anywhere saying why. WP-18 and WP-21 both build
  * on these types, so the distinction is in the type rather than in a convention.
  */
-import type { Id, IsoDateTime, JsonObject, KbFrontmatter } from '@platform/contracts';
-import type { CodeFileSymbols, KbChunk, KbLayer, ParsedKbDocument } from '@platform/domain';
+import type {
+  Id,
+  IsoDateTime,
+  JsonObject,
+  KbFrontmatter,
+  KbHealthFinding,
+  KnowledgeProposalKind,
+  KnowledgeProposalSource,
+  KnowledgeProposalStatus,
+  KnowledgeProposalType,
+} from '@platform/contracts';
+import type {
+  CodeFileSymbols,
+  HealthDocument,
+  HealthLink,
+  KbChunk,
+  KbLayer,
+  ParsedKbDocument,
+} from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
 
 // ── The vault (the project's repository at its default branch) ───────────────
@@ -262,3 +279,150 @@ export const isTier0Path = (path: string, knowledgeDir: string): boolean =>
   path === `${knowledgeDir}/index.md` ||
   path.startsWith(RULES_PREFIX) ||
   ROOT_TIER0_PATHS.includes(path);
+
+// ── Proposals and the health report (`kb_proposals`, `kb_health_reports`) ─────
+
+/**
+ * One `kb_proposals` row (technical/03, migration 0008), as this ring reads and writes it.
+ *
+ * `targetPath` is **repository-relative** — the curator has already joined the model's
+ * vault-relative path onto the project's knowledge directory and refused anything that would land
+ * outside it (`vaultPathOf` in `@platform/domain`). Nothing downstream re-derives it, so a row that
+ * exists is a row whose path was checked when it was written.
+ *
+ * `delta` and `evidence` are **model output that has already been through the redactor** (TD-012):
+ * the recorder redacts before it curates, so the bytes here are the bytes the commit will carry.
+ */
+export interface StoredKnowledgeProposal {
+  readonly id: Id;
+  readonly projectId: Id;
+  readonly taskId: Id | null;
+  readonly runId: Id | null;
+  readonly source: KnowledgeProposalSource;
+  readonly kind: KnowledgeProposalKind;
+  readonly type: KnowledgeProposalType;
+  readonly targetPath: string;
+  readonly delta: string;
+  readonly evidence: readonly string[];
+  readonly significance: number;
+  readonly status: KnowledgeProposalStatus;
+  readonly decidedByUserId: Id | null;
+  readonly decidedAt: IsoDateTime | null;
+  readonly appliedCommitSha: string | null;
+  readonly createdAt: IsoDateTime;
+}
+
+/**
+ * Where a page of the proposal queue stopped: the last row it carried.
+ *
+ * A keyset, not an offset — the queue is written to while a human reads it — and a *pair*, because
+ * a batch's rows share a timestamp. `apps/server/src/routes/kb.ts` renders it as the opaque string
+ * technical/08's `next_cursor` publishes; nothing outside that route knows its shape.
+ */
+export interface ProposalCursor {
+  readonly createdAt: IsoDateTime;
+  readonly id: Id;
+}
+
+/** What a maintainer decided about one proposal (technical/08 `POST …/kb/proposals/:id/:decision`). */
+export interface KnowledgeProposalDecision {
+  readonly id: Id;
+  readonly status: Extract<KnowledgeProposalStatus, 'queued' | 'rejected'>;
+  readonly decidedByUserId: Id;
+  readonly decidedAt: IsoDateTime;
+  /** Present for an `edit`: the replacement the maintainer accepted, already redacted. */
+  readonly delta?: string;
+}
+
+/** One row of `kb_health_reports` (migration 0018). */
+export interface KbHealthReportWrite {
+  readonly id: Id;
+  readonly projectId: Id;
+  readonly commitSha: string | null;
+  readonly documents: number;
+  readonly findings: readonly KbHealthFinding[];
+  readonly source: 'hygiene' | 'librarian';
+  readonly createdAt: IsoDateTime;
+}
+
+/**
+ * The knowledge base's *governed* half: what a Librarian proposed and what a human did about it.
+ *
+ * Split from {@link KnowledgeStore} rather than added to it because the two have different
+ * lifetimes and different owners — `kb_documents` is a **derived index** that a rebuild replaces
+ * wholesale (BD-012: "losing the index loses nothing"), while a proposal is a record of a decision
+ * and survives every rebuild. One store with both would make "rebuildable" a property of half its
+ * methods.
+ *
+ * Writes take a transaction; reads do not, for the reason `KnowledgeStore` states: the apply job
+ * reads before it opens its transaction, because a provider call happens in between.
+ */
+export interface KnowledgeProposalStore {
+  insert(tx: Transaction, proposals: readonly StoredKnowledgeProposal[]): Promise<void>;
+  load(projectId: Id, id: Id): Promise<StoredKnowledgeProposal | null>;
+  /**
+   * Proposals this project has decided to apply and has not applied yet.
+   *
+   * Two statuses answer to that, and the pair is the whole state model: `auto_applied` is "the
+   * policy decided" (BD-018's band with `auto_apply` on) and a `queued` row with `decided_at` set is
+   * "a maintainer decided". Both become `applied` when a commit carries them, which is what
+   * technical/02's `scored → (discarded | queued | auto_applied) → (applied | rejected)` means by
+   * its second arrow.
+   */
+  listAwaitingApply(projectId: Id, limit: number): Promise<readonly StoredKnowledgeProposal[]>;
+  /**
+   * A page of the project's proposals, newest first — the UI queue (technical/08).
+   *
+   * The cursor is the pair `(created_at, id)` and **not `created_at` alone**, because one curation
+   * writes every one of its rows with the *same* timestamp (`recordLibrarianProposals` takes one
+   * `clock.now()` for the batch). A cursor of the timestamp alone would skip the rest of a batch
+   * whenever a page boundary fell inside one — silently, because a short page looks like the end.
+   */
+  list(
+    projectId: Id,
+    query: { readonly limit: number; readonly before?: ProposalCursor },
+  ): Promise<readonly StoredKnowledgeProposal[]>;
+  /** Records a maintainer's decision. Returns `false` when the row was not in a decidable state. */
+  decide(tx: Transaction, decision: KnowledgeProposalDecision): Promise<boolean>;
+  /** Marks a batch applied by one commit. */
+  markApplied(
+    tx: Transaction,
+    input: { readonly ids: readonly Id[]; readonly commitSha: string },
+  ): Promise<void>;
+  /** Projects that have something waiting to be applied — the nightly pass's work list. */
+  projectsAwaitingApply(limit: number): Promise<readonly Id[]>;
+  /**
+   * The index rows the nightly health pass reports on.
+   *
+   * On **this** port rather than on {@link KnowledgeStore}, and the trade is worth stating: the rows
+   * it reads (`kb_documents`, `kb_links`) belong to the derived index, but the report it feeds is
+   * governance — it is written beside the proposals, it survives an index rebuild, and its only
+   * caller is the pass that also reads `projectsAwaitingApply`. Widening `KnowledgeStore` would add
+   * a method to a port two adapters, an in-memory double and a contract suite implement, for one
+   * reader that never touches the rest of it.
+   */
+  readHealthInputs(projectId: Id): Promise<KbHealthInputs>;
+  writeHealthReport(tx: Transaction, report: KbHealthReportWrite): Promise<void>;
+}
+
+/** What the nightly pass reads to build a health report (technical/07 step 6). */
+export interface KbHealthInputs {
+  /** The commit the index was built from, or null when it has never been built. */
+  readonly commitSha: string | null;
+  readonly documents: readonly HealthDocument[];
+  readonly danglingLinks: readonly HealthLink[];
+}
+
+/**
+ * Is this proposal decided and not yet committed?
+ *
+ * The predicate `listAwaitingApply` is written to, in this ring rather than in each adapter's SQL,
+ * so "approved" has **one** definition: `auto_applied` (BD-018's band decided it) or `queued` with
+ * a maintainer's decision on it (`decide.ts` says why there is no sixth status). Two spellings of
+ * it — one here and one in a `where` clause — is standing rule 41's shape, so the contract suite
+ * runs this predicate over the rows and demands the store agree.
+ */
+export const isAwaitingApply = (proposal: StoredKnowledgeProposal): boolean =>
+  proposal.appliedCommitSha === null &&
+  (proposal.status === 'auto_applied' ||
+    (proposal.status === 'queued' && proposal.decidedAt !== null));

@@ -29,8 +29,14 @@
  *
  * **It never indexes a document it could not parse.** An invalid document is reported, counted and
  * left out; it is not written as a document with no frontmatter, because that spelling makes
- * `paths:`-scoped injection stop happening with nothing to show for it. The invalid list is what
- * product/05's KB health report is built from at WP-18.
+ * `paths:`-scoped injection stop happening with nothing to show for it.
+ *
+ * **The invalid list is still only logged, and WP-18b's health report is not built from it.** That
+ * work package created `kb_health_reports` and the nightly pass that writes one, and the pass reads
+ * the *index* — expired pages, dangling links, duplicated ids, oversized pages. A document the
+ * parser refused is in none of those, because it is in no table: `IndexReport.invalid` lives for
+ * the length of one job. Joining the two means either storing the refusals or running the pass
+ * inside the index run, and neither was WP-18b's to decide.
  */
 import { type Id, knowledgeIndexRebuiltEvent } from '@platform/contracts';
 import { type Clock, type IdSource, parseKbDocument } from '@platform/domain';
@@ -45,8 +51,10 @@ import type { IndexableDocument, InvalidDocument, KnowledgeStore, VaultSource } 
  * It is compared against nothing today — there is no column for it (technical/03's
  * `kb_index_state` has `commit_sha`, `fts_built_at`, `embeddings_built_at`, `embedding_model`) —
  * and a `force` rebuild is how an operator applies a parser change. Stated here, and in the
- * `IndexReport`, so that the version a row was built by is at least visible in the log; wiring it
- * to a column is WP-18's, which is the work package that starts writing to the vault.
+ * `IndexReport`, so that the version a row was built by is at least visible in the log. **WP-18b
+ * did not wire it to a column either** — it writes to the vault, which is what that sentence used
+ * to promise, and it touches `kb_index_state` not at all. Whoever adds the column owns the rebuild
+ * that a version bump implies.
  */
 export const KB_PARSER_VERSION = 1;
 

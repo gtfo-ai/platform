@@ -68,6 +68,7 @@
         "ReviewVerdict",
         "AcceptanceVerdict",
         "RetroReport",
+        "LibrarianProposals",
         "ShadowReport",
         "ReadinessReport",
         "DiscoveryDraft"

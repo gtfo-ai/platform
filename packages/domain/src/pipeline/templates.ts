@@ -14,9 +14,13 @@
  *    (product/04 § "Spike template") is in `BUILTIN_TEMPLATE_IDS` and is **not** shipped here: it
  *    ends at a human with no MR, so it exercises none of the loop this work package is about, and a
  *    template nothing runs is a template nothing tests.
- *  - **No `librarian` stage.** technical/12's example template carries one after `retrospective`;
- *    the Librarian is WP-18's pipeline (product/05), and a stage whose executor does not exist
- *    would park every task one step short of `done`.
+ *  - **The `librarian` stage** technical/12's example template carries after `retrospective`. It was
+ *    cut at WP-15 ("a stage whose executor does not exist would park every task one step short of
+ *    `done`") and put back at **WP-18b**, which built the executor's other half: the
+ *    `LibrarianProposals` artifact, the curator that turns it into `kb_proposals` rows, and the
+ *    apply policy. It runs with the task in `retro`, like the retrospective before it — see
+ *    `startLibrarianCuration` — and it has no `return_to`: the merge has already happened, so
+ *    nothing it finds can send the task back to work.
  *  - `intake` and `done` are `system` stages: the interpreter passes straight through them, which
  *    is what makes "the task entered the pipeline" and "the task finished it" observable as
  *    `task.stage.entered` events rather than as a gap in the log.
@@ -103,7 +107,14 @@ const mergeTail = (options: { readonly businessReview: boolean }): readonly Stag
     kind: 'agent',
     role: 'facilitator',
     produces: 'RetroReport',
-    next: 'done',
+    next: 'librarian',
+  },
+  {
+    id: 'librarian',
+    kind: 'agent',
+    role: 'librarian',
+    produces: 'LibrarianProposals',
+    requires: ['RetroReport'],
   },
   { id: 'done', kind: 'system' },
 ];

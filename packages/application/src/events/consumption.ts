@@ -115,9 +115,16 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'budget.exhausted': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
   'budget.reset': 'unconsumed', // WP-20. Nothing emits it in this build either (`cost/window.ts`).
   'feedback.received': 'unconsumed', // Feedback intake agent, WP-24.
-  'knowledge.proposal.created': 'unconsumed', // Librarian, WP-18.
-  'knowledge.proposal.applied': 'unconsumed', // WP-18.
-  'knowledge.proposal.rejected': 'unconsumed', // WP-18.
+  // Emitted since WP-18b, and unconsumed **by decision** rather than by omission. technical/02's
+  // column names "Index rebuild (40), UI" for all three; the index rebuild is the one that has to be
+  // argued. It does not belong on `applied`: the platform commits a knowledge page to an
+  // `agentic/knowledge/*` branch with a merge request and never to the default branch (Q66), and the
+  // indexer reads the **default branch** (BD-025) — so rebuilding on `applied` would re-read a tree
+  // that has not changed. The rebuild happens when a human merges that MR, on `mr.merged`, which is
+  // consumed. The UI half is a read model nothing builds yet.
+  'knowledge.proposal.created': 'unconsumed', // Librarian, WP-18b.
+  'knowledge.proposal.applied': 'unconsumed', // WP-18b; see above — `mr.merged` triggers the index.
+  'knowledge.proposal.rejected': 'unconsumed', // WP-18b.
   'knowledge.index.rebuilt': 'unconsumed', // `—` in technical/02: unconsumed by design, not by omission.
   'readiness.evaluated': 'unconsumed', // Policy suggestions, WP-21.
   'config.changed': 'unconsumed', // Audit projection and effective-config rebuild, WP-21.

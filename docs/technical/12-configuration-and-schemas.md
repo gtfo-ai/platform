@@ -110,7 +110,7 @@ templates:
       - id: ready_for_merge; kind: human ; on: [mr.review.comment -> implementation, mr.merged -> merged_gate]
       - id: merged_gate   ; kind: gate   ; pass_to: retrospective
       - id: retrospective ; kind: agent  ; role: facilitator     ; produces: RetroReport
-      - id: librarian     ; kind: agent  ; role: librarian
+      - id: librarian     ; kind: agent  ; role: librarian ; produces: LibrarianProposals ; requires: [RetroReport]
       - id: done          ; kind: system
     custom:
       - id: security_scan ; kind: gate ; after: ci_gate ; command: "trivy fs ." ; fail_to: implementation
@@ -129,6 +129,7 @@ All artifacts share an envelope: `{ artifact_type, version, task_id, run_id, cre
 - **ReviewVerdict**: `verdict: approve|request_changes, findings[{id, severity: blocker|major|minor|nit, category, file, line, explanation, suggestion}], summary, suspicious_inputs_noted?, protected_path_changes_confirmed[]`.
 - **AcceptanceVerdict**: `verdict, criteria[{id, status: met|not_met|untestable, evidence}], scope_creep[], missing[], ux_notes[]`.
 - **RetroReport**: `what_went_well[], returns[{stage, reason, avoidable_by_kb, existing_item?, readiness_criterion?}], human_corrections[], cost_summary, proposals[{kind: business|technical|process, type: lesson|pitfall|rule|decision|skill-draft|doc-update, target_path, diff, evidence[], significance}]`.
+- **LibrarianProposals** *(added at WP-18b; the `librarian` stage above carried no `produces`, so what a Librarian run decided was validated and then dropped)*: `proposals[{action: add|update|deprecate|no-op, kind, type, target_path, delta, evidence[], significance, reason}], health[{kind: expired|dangling|duplicate|contradiction|oversized, path, detail}], summary`. Two fields are read by the platform rather than by a human: `target_path` is **relative to the project's knowledge directory** (the platform joins it, and refuses anything that would land outside — BD-025), and `delta` is the page's **whole intended content**, not a patch (technical/07 says why).
 - **ShadowReport**: `ticket, human_mr?, agent_diff_stats, overlap: {files_jaccard, size_ratio}, agent_review_of_human_mr[], predicted_cost, notes`.
 - **ReadinessReport**: `level, criteria[{id, passed, evidence, unlocks}]`.
 

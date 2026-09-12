@@ -82,6 +82,10 @@ All retrieved **2026-09-10**.
 - `https://docs.gitlab.com/user/project/integrations/webhooks/` — webhook delivery, the legacy
   `X-Gitlab-Token` secret, and the Standard Webhooks headers (`webhook-id`, `webhook-timestamp`,
   `webhook-signature`) the verifier implements; transcribed in `webhook-verify.ts`.
+- `https://docs.gitlab.com/api/commits/` — § "Create a commit with multiple files and actions": the
+  request attributes (`branch`, `commit_message`, `start_branch`, `author_name`, `author_email`,
+  `actions[{action, file_path, content}]`) and the commit object the endpoint answers with. Retrieved
+  **2026-09-12**, later than the rest of this corpus, which is why this line carries its own date.
 - `https://docs.gitlab.com/api/rest/` — the namespaced `/api/v4` paths and the `PRIVATE-TOKEN`
   header; cited by `http.ts` and behind every path in these files.
 - `https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/` — the rate-limit
@@ -112,3 +116,8 @@ All retrieved **2026-09-10**.
    and the fixture repeats it.
 4. **GitLab publishes `user_notes_count` (notes) and no thread count.** The adapter counts
    non-system threads from the discussions endpoint instead.
+5. **No published body for a `create` action on a file that already exists (`400`).** The commits
+   page documents the action and the status and not the error body, so the second interaction in
+   `commits.json` is labelled `inferred` and carries the observed message as illustration. What the
+   contract asserts is the classification — `400` → `invalid_request` — which holds whatever the
+   body says, and the adapter never reads it.

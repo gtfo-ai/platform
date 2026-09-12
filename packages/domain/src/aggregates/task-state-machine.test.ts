@@ -62,8 +62,8 @@ const EXPECTED_TASK_EDGES = {
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   // "merged ─► retro"; a merged task can still escalate but can never be cancelled.
   merged: ['retro', 'needs_human'],
-  // "retro ─► done".
-  retro: ['done', 'needs_human'],
+  // "retro ─► retro ─► done": the retrospective and the librarian stage both run in `retro`.
+  retro: ['retro', 'done', 'needs_human'],
   done: [],
   cancelled: [],
 };

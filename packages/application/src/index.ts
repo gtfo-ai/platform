@@ -44,12 +44,17 @@ export * from './integrations/inbound.js';
 export * from './integrations/rate-limiter.js';
 export * from './integrations/redaction.js';
 // The knowledge base (WP-16): indexer, context packs, `kb_search`, code map
+export * from './knowledge/apply.js';
 export * from './knowledge/code-mapper.js';
 export * from './knowledge/context-pack.js';
+export * from './knowledge/decide.js';
+export * from './knowledge/hygiene.js';
 export * from './knowledge/index-job.js';
 export * from './knowledge/indexer.js';
 export * from './knowledge/kb-search.js';
+export * from './knowledge/librarian.js';
 export * from './knowledge/ports.js';
+export * from './knowledge/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';
 export * from './pipeline/gates.js';
@@ -101,5 +106,6 @@ export * from './testing/memory-eventing.js';
 export * from './testing/memory-integrations.js';
 export * from './testing/memory-knowledge.js';
 export * from './testing/memory-pipeline.js';
+export * from './testing/memory-proposals.js';
 
 export const packageId = '@platform/application' as const;

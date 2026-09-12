@@ -12,6 +12,8 @@ import {
   artifactTypeSchema,
   idSchema,
   isoDateTimeSchema,
+  knowledgeProposalKindSchema,
+  knowledgeProposalTypeSchema,
   languageTagSchema,
   mergeRequestRefSchema,
   nonEmptyStringSchema,
@@ -175,8 +177,8 @@ export const acceptanceVerdictDataSchema = z.strictObject({
 
 /** A knowledge-base change the retrospective proposes (BD-018 thresholds decide what happens). */
 export const knowledgeProposalDraftSchema = z.strictObject({
-  kind: z.enum(['business', 'technical', 'process']),
-  type: z.enum(['lesson', 'pitfall', 'rule', 'decision', 'skill-draft', 'doc-update']),
+  kind: knowledgeProposalKindSchema,
+  type: knowledgeProposalTypeSchema,
   target_path: pathPatternSchema,
   diff: nonEmptyStringSchema,
   evidence: z.array(nonEmptyStringSchema),
@@ -201,6 +203,62 @@ export const retroReportDataSchema = z.strictObject({
     by_stage: z.array(z.strictObject({ stage: stageIdSchema, usd: usdSchema })),
   }),
   proposals: z.array(knowledgeProposalDraftSchema),
+});
+
+/**
+ * What the Librarian decided to do with one curated proposal (technical/07 § "Librarian pipeline"
+ * step 2, and the four choices the shipped role prompt names).
+ *
+ * `deprecate` and `no-op` are **not** "nothing happens": product/05 keeps a superseded page and
+ * marks it, and a no-op has to say what already covers the proposal or the same one comes back
+ * every retrospective. Both therefore carry a `reason` like every other action.
+ */
+export const librarianActionSchema = z.enum(['add', 'update', 'deprecate', 'no-op']);
+
+/**
+ * One knowledge change the Librarian proposes, reconciled against the vault it was shown.
+ *
+ * Two fields are read by the platform rather than by a human, and both are stated here because a
+ * model cannot infer a convention from a schema:
+ *
+ *  - **`target_path` is relative to the project's knowledge directory** (`lessons/L-2026-09-12.md`),
+ *    never repository-relative and never absolute. The platform joins it to `knowledge_dir`, which
+ *    is per project and which the model is not told — so a path that is already prefixed, or that
+ *    climbs out with `..`, is refused by the curator rather than written (BD-025).
+ *  - **`delta` is the page's intended content, not a patch.** technical/07 step 4 describes a
+ *    Librarian editing files in a knowledge workspace; this build commits through the git
+ *    provider's commits API instead (there is no workspace on the apply path), and applying a
+ *    unified diff would need a base file and a patch engine the platform does not ship. The whole
+ *    body is what the commit writes, which is also what the proposal queue can show a human.
+ */
+export const librarianProposalSchema = z.strictObject({
+  action: librarianActionSchema,
+  kind: knowledgeProposalKindSchema,
+  type: knowledgeProposalTypeSchema,
+  target_path: pathPatternSchema,
+  delta: nonEmptyStringSchema,
+  evidence: z.array(nonEmptyStringSchema),
+  significance: unitIntervalSchema,
+  reason: nonEmptyStringSchema,
+});
+
+/**
+ * One thing wrong with the vault, as the Librarian saw it (technical/07 § 6's health report, and
+ * product/05's "contradictions are flagged for humans, never auto-resolved").
+ *
+ * It is an observation, never an instruction: nothing in the platform deletes or rewrites a page
+ * because a finding names it.
+ */
+export const kbHealthFindingSchema = z.strictObject({
+  kind: z.enum(['expired', 'dangling', 'duplicate', 'contradiction', 'oversized']),
+  path: pathPatternSchema,
+  detail: nonEmptyStringSchema,
+});
+
+export const librarianProposalsDataSchema = z.strictObject({
+  proposals: z.array(librarianProposalSchema),
+  health: z.array(kbHealthFindingSchema),
+  summary: z.string(),
 });
 
 export const shadowReportDataSchema = z.strictObject({
@@ -271,6 +329,7 @@ export const artifactDataSchemas = {
   ReviewVerdict: reviewVerdictDataSchema,
   AcceptanceVerdict: acceptanceVerdictDataSchema,
   RetroReport: retroReportDataSchema,
+  LibrarianProposals: librarianProposalsDataSchema,
   ShadowReport: shadowReportDataSchema,
   ReadinessReport: readinessReportDataSchema,
   DiscoveryDraft: discoveryDraftDataSchema,
@@ -308,6 +367,7 @@ export const artifactSchema = z.discriminatedUnion('artifact_type', [
   artifactOf('ReviewVerdict', reviewVerdictDataSchema),
   artifactOf('AcceptanceVerdict', acceptanceVerdictDataSchema),
   artifactOf('RetroReport', retroReportDataSchema),
+  artifactOf('LibrarianProposals', librarianProposalsDataSchema),
   artifactOf('ShadowReport', shadowReportDataSchema),
   artifactOf('ReadinessReport', readinessReportDataSchema),
   artifactOf('DiscoveryDraft', discoveryDraftDataSchema),
@@ -334,6 +394,10 @@ export type ReviewVerdictData = z.infer<typeof reviewVerdictDataSchema>;
 export type AcceptanceVerdictData = z.infer<typeof acceptanceVerdictDataSchema>;
 export type KnowledgeProposalDraft = z.infer<typeof knowledgeProposalDraftSchema>;
 export type RetroReportData = z.infer<typeof retroReportDataSchema>;
+export type LibrarianAction = z.infer<typeof librarianActionSchema>;
+export type LibrarianProposal = z.infer<typeof librarianProposalSchema>;
+export type KbHealthFinding = z.infer<typeof kbHealthFindingSchema>;
+export type LibrarianProposalsData = z.infer<typeof librarianProposalsDataSchema>;
 export type ShadowReportData = z.infer<typeof shadowReportDataSchema>;
 export type ReadinessReportData = z.infer<typeof readinessReportDataSchema>;
 export type DiscoveryDraftData = z.infer<typeof discoveryDraftDataSchema>;

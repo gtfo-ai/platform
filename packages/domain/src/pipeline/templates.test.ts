@@ -40,6 +40,7 @@ describe('the shipped templates', () => {
       'ready_for_merge',
       'merged_gate',
       'retrospective',
+      'librarian',
       'done',
     ]);
     expect(ids(BUG_TEMPLATE)).toContain('investigation');
@@ -53,11 +54,12 @@ describe('the shipped templates', () => {
   it('sends every template through the same merge tail', () => {
     for (const template of Object.values(SHIPPED_TEMPLATES)) {
       const ids = template.stages.map((stage) => stage.id);
-      expect(ids.slice(-5)).toEqual([
+      expect(ids.slice(-6)).toEqual([
         'rebase_gate',
         'ready_for_merge',
         'merged_gate',
         'retrospective',
+        'librarian',
         'done',
       ]);
     }

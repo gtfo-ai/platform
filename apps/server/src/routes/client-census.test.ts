@@ -70,9 +70,6 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   '/api/projects': 'WP-15h, later iteration — the projects screen',
   '/api/projects/{}/readiness': 'WP-15h, later iteration — the project screen',
   '/api/projects/{}/tasks': 'WP-15h, later iteration — the task list',
-  '/api/projects/{}/kb/tree': 'WP-18 — the librarian and the knowledge index',
-  '/api/projects/{}/kb/doc': 'WP-18 — the librarian and the knowledge index',
-  '/api/projects/{}/kb/proposals': 'WP-18 — the librarian and the knowledge index',
 
   // Commands. Every one of these writes, so each needs the aggregate, a `human_actions` row and an
   // `Idempotency-Key`, which is a different work package from a read API (technical/08 § Tasks).
@@ -88,7 +85,6 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   '/api/runs/{}/steer': 'the run command surface — not this row',
   '/api/runs/{}/retry': 'the run command surface — not this row',
   '/api/runs/{}/cancel': 'the run command surface — not this row',
-  '/api/projects/{}/kb/proposals/{}/{}': 'WP-18 — approve/reject/edit a knowledge proposal',
 };
 
 /**
@@ -197,6 +193,9 @@ beforeAll(async () => {
       shutdownDrainMs: 100,
     }),
     webhooks: null,
+    // The commands a process with no pipeline composes: the routes are still registered and still
+    // refuse an anonymous caller, which is what this census probes (the 503 is behind the guard).
+    knowledge: null,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
@@ -288,6 +287,17 @@ describe('the client’s endpoint list against the server’s router', () => {
       '/api/runs/{}/messages',
       '/api/runs/{}/prompt',
       '/api/runs/{}/context-pack',
+    ]) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('serves the four knowledge endpoints WP-18b took off the gap list', async () => {
+    for (const path of [
+      '/api/projects/{}/kb/tree',
+      '/api/projects/{}/kb/doc',
+      '/api/projects/{}/kb/proposals',
+      '/api/projects/{}/kb/proposals/{}/{}',
     ]) {
       expect((await probe(path)).served, path).toBe(true);
     }

@@ -7,6 +7,7 @@
  * refuses a scenario whose structured output does not validate (its divergence 3), so these are
  * held to the contracts by every run that uses them.
  */
+import { PLANTED_MODEL_KEY } from './agent-workspace.js';
 import type { SeededWorld } from './pipeline.js';
 
 const REFINED_SPEC = {
@@ -103,6 +104,75 @@ const RETRO = {
   proposals: [],
 };
 
+/**
+ * The Librarian's curation of what the retrospective proposed (WP-18b).
+ *
+ * Four proposals, chosen so that one scenario exercises every branch of BD-018's policy **and** the
+ * two refusals that have nothing to do with significance:
+ *
+ *  - `L-2026-09-12-totals.md` sits **inside** the band (0.4) and is what `auto_apply` decides on. Its
+ *    body repeats this run's own model credential, the way a model quoting its environment would —
+ *    planted so the redaction assertion has something to look for (standing rule 45), and **not**
+ *    redacted by the runner, which passes `structuredOutput` through untouched;
+ *  - `L-2026-09-12-noise.md` is **below** `discard_below` (0.05): recorded, never applied;
+ *  - `L-2026-09-12-rounding.md` is **above** `proposal_above` (0.9): always a maintainer's decision,
+ *    whatever `auto_apply` says;
+ *  - the fourth aims at `.github/workflows/ci.yml` through a `..`, which BD-025 refuses whatever its
+ *    significance is.
+ */
+const librarianFor = (world: SeededWorld) => ({
+  proposals: [
+    {
+      action: 'add',
+      kind: 'technical',
+      type: 'lesson',
+      target_path: 'lessons/L-2026-09-12-totals.md',
+      delta: `---\ntype: lesson\nconfidence: proposed\n---\n\nSum the invoice model, not the view.\n\nThe run was given ${PLANTED_MODEL_KEY} and repeated it here.\n`,
+      evidence: [world.mr.url],
+      significance: 0.4,
+      reason: 'nothing in the vault covers where the totals are summed',
+    },
+    {
+      action: 'add',
+      kind: 'process',
+      type: 'doc-update',
+      target_path: 'lessons/L-2026-09-12-noise.md',
+      delta: '---\ntype: lesson\n---\n\nA typo was fixed.\n',
+      evidence: [world.mr.url],
+      significance: 0.05,
+      reason: 'barely worth saying',
+    },
+    {
+      action: 'add',
+      kind: 'technical',
+      type: 'rule',
+      target_path: 'lessons/L-2026-09-12-rounding.md',
+      delta: '---\ntype: pitfall\n---\n\nRound once, at the edge.\n',
+      evidence: [world.mr.url],
+      significance: 0.9,
+      reason: 'a new rule always goes to a maintainer',
+    },
+    {
+      action: 'update',
+      kind: 'process',
+      type: 'doc-update',
+      target_path: '../../.github/workflows/ci.yml',
+      delta: 'on: [push]\n',
+      evidence: [world.mr.url],
+      significance: 0.95,
+      reason: 'the pipeline should run on push',
+    },
+  ],
+  health: [
+    {
+      kind: 'expired',
+      path: 'lessons/L-2025-01-01-old.md',
+      detail: 'expires: 2025-06-01 has passed',
+    },
+  ],
+  summary: 'One page to add, one rule for a human, one drop and one refusal.',
+});
+
 export const featureScenarios = (world: SeededWorld) => ({
   refinement: { structuredOutput: REFINED_SPEC },
   architecture: { structuredOutput: PLAN },
@@ -110,6 +180,7 @@ export const featureScenarios = (world: SeededWorld) => ({
   code_review: { structuredOutput: REVIEW },
   business_review: { structuredOutput: ACCEPTANCE },
   retrospective: { structuredOutput: RETRO },
+  librarian: { structuredOutput: librarianFor(world) },
 });
 
 export const bugScenarios = (world: SeededWorld) => ({

@@ -40,6 +40,8 @@ export * from './ids.js';
 export * from './knowledge/document.js';
 export * from './knowledge/frontmatter.js';
 export * from './knowledge/globs.js';
+export * from './knowledge/health.js';
+export * from './knowledge/proposals.js';
 export * from './knowledge/query.js';
 export * from './knowledge/retrieval.js';
 export * from './knowledge/sanitise.js';

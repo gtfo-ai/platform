@@ -47,6 +47,11 @@
       "description": "Structured output of the stage that produces a RetroReport artifact (technical/12)."
     },
     {
+      "file": "artifacts/librarian-proposals.schema.json",
+      "title": "LibrarianProposals data",
+      "description": "Structured output of the stage that produces a LibrarianProposals artifact (technical/12)."
+    },
+    {
       "file": "artifacts/shadow-report.schema.json",
       "title": "ShadowReport data",
       "description": "Structured output of the stage that produces a ShadowReport artifact (technical/12)."

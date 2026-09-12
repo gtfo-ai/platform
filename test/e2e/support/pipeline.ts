@@ -234,6 +234,16 @@ export interface PipelineE2E {
   /** Every `run_messages` row the production sink wrote, in order. */
   transcript(): Promise<readonly TranscriptRow[]>;
   /**
+   * Every `kb_proposals` row, oldest first — what the Librarian's curation wrote (WP-18b).
+   *
+   * Read from the table rather than from a recorder, for the reason `auditRows` is: nothing in this
+   * tier supplies a `KnowledgeProposalStore`, so an assertion on these rows is an assertion about
+   * the adapter `apps/server` composed for itself.
+   */
+  proposals(): Promise<readonly ProposalRow[]>;
+  /** The `data` of a task's newest artifact of one type — the bytes the model actually produced. */
+  artifactData(artifactType: string): Promise<unknown>;
+  /**
    * What the cost ledger wrote (WP-19), read back out of the database.
    *
    * Read from the tables rather than from a recorder, for the same reason `auditRows` is: nothing
@@ -303,6 +313,20 @@ export interface CostRows {
     spent_usd: number;
     notified_pct: number[];
   }[];
+}
+
+/** One `kb_proposals` row, as the e2e reads it back (WP-18b). */
+export interface ProposalRow {
+  readonly id: string;
+  readonly target_path: string;
+  readonly delta: string;
+  readonly significance: number;
+  readonly status: string;
+  readonly task_id: string | null;
+  readonly run_id: string | null;
+  readonly evidence: unknown;
+  readonly applied_commit_sha: string | null;
+  readonly decided_by: string | null;
 }
 
 /** One `run_messages` row, as the e2e reads it back. */
@@ -696,7 +720,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
       // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`).
-      APP_DB_POOL_MAX: '16',
+      APP_DB_POOL_MAX: '19',
       // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
       // planted rather than absent precisely so the redaction assertions have something to look for.
       ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),
@@ -766,6 +790,22 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
            from run_messages order by created_at, seq`,
       );
       return rows;
+    },
+    proposals: async () => {
+      const { rows } = await pool.query<ProposalRow>(
+        `select id, target_path, delta, significance::float8 as significance, status::text as status,
+                task_id, run_id, evidence, applied_commit_sha, decided_by
+           from kb_proposals order by created_at, id`,
+      );
+      return rows;
+    },
+    artifactData: async (artifactType) => {
+      const { rows } = await pool.query<{ data: unknown }>(
+        `select data from artifacts where type = $1::artifact_type
+          order by version desc limit 1`,
+        [artifactType],
+      );
+      return rows[0]?.data ?? null;
     },
     costRows: async () => {
       const entries = await pool.query<CostRows['entries'][number]>(

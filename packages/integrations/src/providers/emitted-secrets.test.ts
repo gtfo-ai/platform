@@ -302,6 +302,18 @@ const gitlabScript = (): Script => ({
       merge_access_levels: [{ access_level: 40 }],
     },
   },
+  [`POST /projects/${P}/repository/commits`]: {
+    status: 201,
+    body: {
+      id: SHA,
+      short_id: SHA.slice(0, 8),
+      // Planted: a commit's own message comes back from the provider, and the platform puts it in
+      // an audit payload and a log line.
+      title: `docs(knowledge) ${GITLAB_TOKEN}`,
+      message: `docs(knowledge) ${GITLAB_TOKEN}`,
+      web_url: `${HOST}/acme/api/-/commit/${SHA}`,
+    },
+  },
   [`POST /projects/${P}/merge_requests`]: { status: 201, body: gitlabMr() },
   [`PUT /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
   [`GET /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
@@ -409,6 +421,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   clone_url: 'cloneUrl',
   mint_credential: 'mintCredential',
   revoke_credential: 'revokeCredential',
+  commit_files: 'commitFiles',
   open_merge_request: 'openMergeRequest',
   update_merge_request: 'updateMergeRequest',
   get_merge_request: 'getMergeRequest',
@@ -463,6 +476,23 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.ref = port.ref;
     emitted.capabilities = port.capabilities();
     emitted.test_connection = await port.testConnection();
+    emitted.commit_files = await port.commitFiles({
+      project: PROJECT,
+      branch: 'agentic/knowledge/2026-09-12-abcdef01',
+      start_branch: 'main',
+      // The platform's own emission again: a knowledge page a model wrote may repeat anything it
+      // was shown, and the message and the content both travel to the provider and back.
+      message: `docs(knowledge): apply 1 proposal\n\nseen: ${GITLAB_TOKEN}\n`,
+      author_name: 'Agentic',
+      author_email: 'agentic@platform.invalid',
+      actions: [
+        {
+          action: 'create',
+          path: '.agentic/knowledge/lessons/L-1.md',
+          content: `the token was ${GITLAB_TOKEN}`,
+        },
+      ],
+    });
     emitted.open_merge_request = await port.openMergeRequest({
       project: PROJECT,
       branch: 'agentic/task-1',

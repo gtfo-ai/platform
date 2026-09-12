@@ -17,6 +17,7 @@ import {
   idSchema,
   integrationTypeSchema,
   isoDateTimeSchema,
+  MAX_PROPOSAL_DELTA_BYTES,
   nonEmptyStringSchema,
   pathPatternSchema,
   sequenceSchema,
@@ -370,11 +371,28 @@ export const kbSearchResponseSchema = page(
 
 export const kbProposalsResponseSchema = page(knowledgeProposalRecordSchema);
 
+/**
+ * Longest reason a maintainer may attach to a decision.
+ *
+ * It is stored on an event payload rather than in a page, so it is bounded far below the delta: a
+ * sentence, not a document. Unbounded free text on a `jsonb` payload is the shape TD-012's write
+ * list is about — and the value is redacted as well (`decide.ts`).
+ */
+export const MAX_PROPOSAL_DECISION_REASON_CHARS = 2_000;
+
 export const decideKbProposalRequestSchema = z.strictObject({
   decision: z.enum(['approve', 'reject', 'edit']),
-  reason: z.string().optional(),
-  /** Present for `edit`: the replacement delta the maintainer accepted. */
-  delta: z.string().optional(),
+  /** Free text from a human; it reaches `knowledge.proposal.rejected` and is redacted on the way. */
+  reason: z.string().max(MAX_PROPOSAL_DECISION_REASON_CHARS).optional(),
+  /**
+   * Present for `edit`: the replacement delta the maintainer accepted.
+   *
+   * Bounded by the **same** budget the curator applies to a model's page
+   * ({@link MAX_PROPOSAL_DELTA_BYTES}): an edit reaches the row, the commit and every later context
+   * pack, so a path that skipped the cap would make "a knowledge page is at most 64 KiB" true of one
+   * producer and not of the other.
+   */
+  delta: z.string().max(MAX_PROPOSAL_DELTA_BYTES).optional(),
 });
 
 export const startShadowRunsRequestSchema = z.strictObject({
@@ -553,6 +571,9 @@ export type RunMessagesResponse = z.infer<typeof runMessagesResponseSchema>;
 export type SteerRunRequest = z.infer<typeof steerRunRequestSchema>;
 export type RetryRunRequest = z.infer<typeof retryRunRequestSchema>;
 export type InboxResponse = z.infer<typeof inboxResponseSchema>;
+export type KbTreeResponse = z.infer<typeof kbTreeResponseSchema>;
+export type KbDocResponse = z.infer<typeof kbDocResponseSchema>;
+export type KbProposalsResponse = z.infer<typeof kbProposalsResponseSchema>;
 export type KbSearchResponse = z.infer<typeof kbSearchResponseSchema>;
 export type DecideKbProposalRequest = z.infer<typeof decideKbProposalRequestSchema>;
 export type SseTopic = z.infer<typeof sseTopicSchema>;

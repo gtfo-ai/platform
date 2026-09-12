@@ -228,6 +228,11 @@ const compose = async (options: { readonly mirrorRoot?: string | null } = {}) =>
     pool,
     eventing,
     jobs: jobsRuntime.jobs,
+    // WP-18a's tier is about the index; the librarian half needs an integrations loader, and a
+    // `null` one is what a process with no pipeline composes (the queues are then not started).
+    integrations: null,
+    runEnvironment: { env: {}, secretEnvNames: [] },
+    timezone: 'UTC',
     secretKey: SECRET_KEY,
     registry,
     mirrorRoot: options.mirrorRoot === undefined ? mirrorRoot : options.mirrorRoot,

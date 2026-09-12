@@ -2,7 +2,7 @@
  * The Task state machine — technical/02 § "State machines" → Task.
  *
  * ```
- * queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged ─► retro ─► done
+ * queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged ─► retro ─► retro ─► done
  *    │           │  ▲                     │
  *    │           │  └── returned(stage) ◄─┘ (human comments / rework)
  *    │           ├─► waiting_answers ─► active
@@ -28,6 +28,11 @@ import { IllegalTransitionError } from '../errors.js';
  *  - `needs_human` is reachable from every non-terminal state: every bounded loop ends there
  *    (BD-008), as does every expired question or approval.
  *  - `active → active` is legal and common: it is a stage transition inside the pipeline.
+ *  - `retro → retro` is the same edge one phase later, added at WP-18b: the retrospective phase has
+ *    **two** stages now — the facilitator's report and the Librarian's curation of the proposals it
+ *    produced — and both run with the task in `retro`. Without the self edge the Librarian stage
+ *    would either have to move the task back to `active` (which `retro` has no edge to, by design:
+ *    a merged task never goes back to work) or run outside the pipeline entirely.
  *  - `ready_for_merge → returned` is the human-MR-comment path (BD-007).
  */
 export const TASK_TRANSITIONS = {
@@ -49,7 +54,7 @@ export const TASK_TRANSITIONS = {
   needs_human: ['active', 'paused', 'cancelled'],
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   merged: ['retro', 'needs_human'],
-  retro: ['done', 'needs_human'],
+  retro: ['retro', 'done', 'needs_human'],
   done: [],
   cancelled: [],
 } as const satisfies Record<TaskState, readonly TaskState[]>;

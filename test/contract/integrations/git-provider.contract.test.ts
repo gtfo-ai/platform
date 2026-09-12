@@ -106,6 +106,10 @@ runGitProviderContract({
         unprotected: 'agentic/task-1',
         missing: 'no/such-branch',
       },
+      commit: {
+        branch: 'agentic/knowledge/2026-09-12',
+        path: '.agentic/knowledge/lessons/L-2026-09-12-locks.md',
+      },
       mergeRequestIid: existing.ref.iid,
       missingMergeRequestIid: 4242,
       mergeability: {

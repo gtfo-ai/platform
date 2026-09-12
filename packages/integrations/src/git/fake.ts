@@ -2,11 +2,16 @@
  * `FakeGitProvider` — the in-memory provider behind the GitProvider contract suite and every
  * pipeline test that opens a merge request (technical/06, technical/10).
  *
- * It models the six things the pipeline actually depends on: a project with a moving default
+ * It models the seven things the pipeline actually depends on: a project with a moving default
  * branch, merge requests with a draft flag, discussion threads that resolve, pipelines with job
- * logs, CODEOWNERS, and short-lived credentials that can be revoked. Git itself is deliberately
- * absent — clone, commit, rebase and push belong to the workspace manager (BD-025), and this fake
- * would be lying if it pretended to hold a working copy.
+ * logs, CODEOWNERS, short-lived credentials that can be revoked, and — since WP-18b — the files a
+ * `commitFiles` call wrote, per branch.
+ *
+ * **A working copy is still deliberately absent**, and the distinction is the port's: clone,
+ * rebase and push belong to the workspace manager (BD-025) and are how an *agent* changes a
+ * repository, while `commitFiles` is the provider's own commits API — one request, whole files, no
+ * checkout anywhere. This fake answers that endpoint and nothing more; divergence 9 says where it
+ * is stricter and where it is kinder than GitLab.
  *
  * ## Known divergences from a real git provider
  *
@@ -47,9 +52,21 @@
  *     fake knows exactly what it minted, and refusing is the stricter of the two answers. A second
  *     revocation of a credential it *did* mint stays a no-op, which is the idempotency the port
  *     asks for. Asserted by `fake.test.ts` ("refuses to revoke a credential it never minted").
+ *  9. **Different, and the one place this fake holds repository content — `commitFiles`.** WP-18b
+ *     gave the port a way to write whole files through the provider's API (no working copy: see the
+ *     port's own docblock), so the fake keeps a map of `branch → path → content` and the sha of the
+ *     commit that last wrote it. It is **stricter** than GitLab in the two ways that matter to a
+ *     caller: `create` on a path that already exists on the branch and `update` on one that does not
+ *     are both `invalid_request` (GitLab answers 400 with the same distinction), and naming
+ *     `start_branch` for a branch that already exists is `conflict`. It is **kinder** in one: there
+ *     is no merge, no rebase and no concurrent writer, so a commit can never fail because somebody
+ *     else moved the branch. Whoever builds retry-on-conflict must not conclude from a green test
+ *     here that the race does not exist.
  */
 import {
   type CodeownersRules,
+  type CommitFilesRequest,
+  type CommitRef,
   type CredentialScope,
   type Discussion,
   type GitProviderCapabilities,
@@ -177,6 +194,24 @@ interface StoredMergeRequest {
   merged_at: string | null;
 }
 
+/** One branch of one project, with the files this fake has been asked to write on it. */
+interface StoredBranch {
+  project: string;
+  name: string;
+  head: string;
+  files: Map<string, string>;
+}
+
+/** One commit `commitFiles` made, kept so a test can assert what was written and with what message. */
+export interface FakeCommit {
+  readonly project: string;
+  readonly branch: string;
+  readonly sha: string;
+  readonly message: string;
+  readonly author: { readonly name: string | null; readonly email: string | null };
+  readonly files: readonly { readonly path: string; readonly content: string }[];
+}
+
 interface StoredCredential {
   value: string;
   revokeId: string;
@@ -252,6 +287,17 @@ export interface FakeGitProvider extends GitProviderPort {
   }): MergeRequest;
   /** Moves the default branch, as a merge on another MR would. */
   moveDefaultBranch(project: string, newHead: string): void;
+  /** Every commit `commitFiles` made, oldest first. */
+  readonly commits: readonly FakeCommit[];
+  /** The content of a file on a branch, or `null` when the branch does not have it. */
+  fileAt(project: string, branch: string, path: string): string | null;
+  /** Seeds a file on a branch without a commit — the state a repository was already in. */
+  seedFile(input: {
+    readonly project: string;
+    readonly branch: string;
+    readonly path: string;
+    readonly content: string;
+  }): void;
   /** Adds a human discussion thread, the way a reviewer would. */
   addHumanDiscussion(input: {
     readonly project: string;
@@ -313,6 +359,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
   const discussions: StoredDiscussion[] = [];
   const pipelines: StoredPipeline[] = [];
   const credentials = new Map<string, StoredCredential>();
+  const branches = new Map<string, StoredBranch>();
+  const commits: FakeCommit[] = [];
   let shaCounter = 0x100;
   let discussionCounter = 0;
   let noteCounter = 0;
@@ -349,6 +397,30 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       throw notFound(PROVIDER, action, `project ${path}`);
     }
     return project;
+  };
+
+  const branchKey = (project: string, branch: string): string => `${project}\u0000${branch}`;
+
+  const branchOf = (project: string, branch: string): StoredBranch | undefined =>
+    branches.get(branchKey(project, branch));
+
+  const seedFile = (input: {
+    readonly project: string;
+    readonly branch: string;
+    readonly path: string;
+    readonly content: string;
+  }): void => {
+    const existing = branchOf(input.project, input.branch);
+    const target =
+      existing ??
+      ({
+        project: input.project,
+        name: input.branch,
+        head: nextSha(),
+        files: new Map<string, string>(),
+      } satisfies StoredBranch);
+    target.files.set(input.path, input.content);
+    branches.set(branchKey(input.project, input.branch), target);
   };
 
   const projectOf = (mrRef: MergeRequestRefInput): string => {
@@ -679,6 +751,86 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       stored.revoked = true;
     },
 
+    commitFiles: async (request: CommitFilesRequest): Promise<CommitRef> => {
+      core.enter('commit_files');
+      const project = requireProject('commit_files', request.project);
+      const existing = branchOf(request.project, request.branch);
+      const start = request.start_branch ?? null;
+
+      if (start !== null && existing !== undefined) {
+        // Divergence 9: naming a start branch is *creating* a branch, and the branch is there.
+        throw conflict(
+          PROVIDER,
+          'commit_files',
+          `branch ${request.branch} already exists on ${request.project}`,
+        );
+      }
+      if (start === null && existing === undefined) {
+        throw notFound(PROVIDER, 'commit_files', `branch ${request.branch} on ${request.project}`);
+      }
+      if (
+        start !== null &&
+        start !== project.defaultBranch &&
+        branchOf(request.project, start) === undefined
+      ) {
+        throw notFound(PROVIDER, 'commit_files', `branch ${start} on ${request.project}`);
+      }
+
+      // A branch created from another starts with that branch's files; the default branch is
+      // whatever was seeded onto it (usually nothing), which is how a first knowledge commit works.
+      const base =
+        existing ??
+        ({
+          project: request.project,
+          name: request.branch,
+          head: project.head,
+          files: new Map(
+            start === null ? [] : (branchOf(request.project, start)?.files ?? new Map()),
+          ),
+        } satisfies StoredBranch);
+
+      // Validated *before* anything is written: the port promises the commit is atomic, so a fake
+      // that applied the first action and then refused the second would be kinder than the real
+      // provider in the one way a caller cannot see (rule 1).
+      for (const action of request.actions) {
+        const present = base.files.has(action.path);
+        if (action.action === 'create' && present) {
+          throw invalidRequest(
+            PROVIDER,
+            'commit_files',
+            `a file with the name ${action.path} already exists on branch ${request.branch}`,
+          );
+        }
+        if (action.action === 'update' && !present) {
+          throw invalidRequest(
+            PROVIDER,
+            'commit_files',
+            `${action.path} does not exist on branch ${request.branch}`,
+          );
+        }
+      }
+
+      for (const action of request.actions) {
+        base.files.set(action.path, action.content);
+      }
+      const sha = nextSha();
+      base.head = sha;
+      branches.set(branchKey(request.project, request.branch), base);
+      commits.push({
+        project: request.project,
+        branch: request.branch,
+        sha,
+        message: request.message,
+        author: { name: request.author_name ?? null, email: request.author_email ?? null },
+        files: request.actions.map((action) => ({ path: action.path, content: action.content })),
+      });
+      return {
+        sha,
+        branch: request.branch,
+        url: `${baseUrl}/${request.project}/-/commit/${sha}`,
+      };
+    },
+
     openMergeRequest: async (draft: MergeRequestDraft) => {
       core.enter('open_merge_request');
       const project = requireProject('open_merge_request', draft.project);
@@ -934,6 +1086,10 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     inbound,
 
     seedProject,
+    seedFile,
+    commits,
+    fileAt: (project: string, branch: string, path: string) =>
+      branchOf(project, branch)?.files.get(path) ?? null,
 
     setMergeability: (input) => {
       const only = [...projects.keys()][0];

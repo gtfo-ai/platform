@@ -22,6 +22,22 @@
  * with no git binding and throws for one whose binding cannot be read, which the adapter turns into
  * two different reasons.
  *
+ * ## The Librarian's half (WP-18b)
+ *
+ * The same composition now also starts the three queues of `createLibrarianRuntime` — the curation
+ * that turns a `LibrarianProposals` artifact into `kb_proposals` rows, the apply pass that commits
+ * them through the git provider, and the nightly hygiene schedule — plus the `decideKnowledgeProposal`
+ * command the API routes call. They are here rather than in `composePipeline` for the reason the
+ * index job is: technical/07's knowledge base is a projection of the project's **default branch**
+ * and a governance queue over it, not a step of a ticket's journey.
+ *
+ * Two collaborators it borrows from the pipeline, and both are deliberate rather than convenient:
+ * the **integrations loader**, because a knowledge commit is a provider mutation and must go
+ * through the same `IntegrationActionExecutor` (shadow mode, idempotency, rate limits, audit) as
+ * every other one; and the **redactor**, which is TD-012 step 2 composed *after* this process'
+ * run-environment secrets, so a proposal repeating the model credential it was given cannot reach a
+ * row or a commit.
+ *
  * ## Why the credential is read here and not through the pipeline's loader
  *
  * `createPipelineIntegrationsLoader` hands back provider **ports** — HTTP clients that deliberately
@@ -34,27 +50,57 @@
 
 import { randomUUID } from 'node:crypto';
 import type {
+  DecideProposalInput,
+  DecideProposalResult,
   EventHandler,
   Jobs,
   KnowledgeIndexProject,
+  LibrarianArtifact,
   Logger,
+  PipelineIntegrationsPort,
+  ProposalCursor,
+  StoredKnowledgeProposal,
   VaultSource,
 } from '@platform/application';
-import { createKnowledgeIndexer, createKnowledgeIndexRuntime } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import {
+  composeSecretRedactors,
+  createKnowledgeIndexer,
+  createKnowledgeIndexRuntime,
+  createLibrarianRuntime,
+  decideKnowledgeProposal,
+  thresholdsFromConfig,
+} from '@platform/application';
+import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
 import {
   type eventing as eventingAdapters,
   knowledge as knowledgeAdapters,
+  redaction as redactionAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import { createGitMirrorCredentials } from '@platform/integrations';
 import type pg from 'pg';
+import { injectedSecretRedactorForEnvironment } from './agent.js';
 
 export interface ComposeKnowledgeOptions {
   readonly pool: pg.Pool;
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   readonly jobs: Jobs;
+  /**
+   * The pipeline's own binding loader, so a knowledge commit goes through the one executor this
+   * process composed (`composePipeline` returns it).
+   *
+   * `null` for a process that composed no pipeline: the librarian queues are then not started at
+   * all, because every one of them ends in a provider call or in a decision about one.
+   */
+  readonly integrations: PipelineIntegrationsPort | null;
+  /** TD-012 step 1 over this process' run environment; composed with the pattern rules here. */
+  readonly runEnvironment: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly secretEnvNames: readonly string[];
+  };
+  /** IANA zone the nightly hygiene schedule is read in (`APP_TIMEZONE`). */
+  readonly timezone: string;
   /** `APP_SECRET_KEY`, already validated by `config.ts`. */
   readonly secretKey: string;
   /** The process's one provider registry, from the shared {@link IntegrationStack}. */
@@ -75,6 +121,76 @@ export interface ComposedKnowledgeIndexing {
   readonly missing: readonly string[];
   stop(): Promise<void>;
 }
+
+/**
+ * What the API routes may ask the Librarian to do.
+ *
+ * One method today. It is an object rather than a bare function so that `buildApp` takes the same
+ * shape it takes for `webhooks` — a collaborator a role composes or does not — and so that the next
+ * command (a rebuild, a bootstrap) lands beside it instead of in a second parameter.
+ */
+export interface KnowledgeCommands {
+  decide(input: DecideProposalInput): Promise<DecideProposalResult>;
+  /** A page of a project's proposals, newest first — `GET /api/projects/:id/kb/proposals`. */
+  list(
+    projectId: Id,
+    query: { readonly limit: number; readonly before?: ProposalCursor },
+  ): Promise<readonly StoredKnowledgeProposal[]>;
+}
+
+export interface KnowledgeCommandOptions {
+  readonly pool: pg.Pool;
+  readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
+  /**
+   * The job runtime, or `null` on a process that runs no workers (`ROLE=api`).
+   *
+   * Not an omission: `decide.ts` takes a nullable `Jobs` on purpose and states the cost — with one,
+   * an approved proposal is committed in seconds; without one, the decision is still recorded and
+   * the nightly hygiene pass picks it up. What must not happen is the *decision* being lost, and
+   * that is written inside the transaction before anything is enqueued.
+   */
+  readonly jobs: Jobs | null;
+  readonly runEnvironment: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly secretEnvNames: readonly string[];
+  };
+  readonly logger: Logger;
+}
+
+/**
+ * The Librarian's commands, for whichever process serves the API.
+ *
+ * Composed separately from the queues because the two answer to different capabilities: a process
+ * that serves the API can read the proposal queue and record a decision on it with nothing but the
+ * pool, while *applying* one needs a job runtime and an integrations loader. A deployment split into
+ * `ROLE=api` and `ROLE=worker` therefore keeps a working knowledge screen.
+ */
+export const createKnowledgeCommands = (options: KnowledgeCommandOptions): KnowledgeCommands => {
+  const proposals = new knowledgeAdapters.PostgresProposalStore(options.pool);
+  const clock = { now: () => new Date().toISOString() as IsoDateTime };
+  const ids = { next: (): Id => randomUUID() as Id };
+  const redactor = composeSecretRedactors(
+    injectedSecretRedactorForEnvironment(options.runEnvironment, options.logger),
+    redactionAdapters.patternRedactor(),
+  );
+  return {
+    decide: async (input) =>
+      decideKnowledgeProposal(
+        {
+          unitOfWork: options.eventing.unitOfWork,
+          eventStore: options.eventing.store,
+          proposals,
+          clock,
+          ids,
+          redactor,
+          jobs: options.jobs,
+          logger: options.logger,
+        },
+        input,
+      ),
+    list: async (projectId, query) => proposals.list(projectId, query),
+  };
+};
 
 /** `projects` row the indexer needs. One query, two readers — the job's and the mirror's. */
 interface ProjectVaultRow {
@@ -173,5 +289,146 @@ export const composeKnowledgeIndexing = async (
 
   await runtime.start();
 
-  return { handlers: runtime.handlers, missing, stop: runtime.stop };
+  const clock = { now: () => new Date().toISOString() as IsoDateTime };
+  const ids = { next: (): Id => randomUUID() as Id };
+  const knowledgeStore = new knowledgeAdapters.PostgresKnowledgeStore(options.pool);
+  const proposals = new knowledgeAdapters.PostgresProposalStore(options.pool);
+  /**
+   * TD-012 over proposal text, both steps and in order.
+   *
+   * Step 1 is this process' **run environment** — the model credential a Librarian run was handed,
+   * which is exactly the value a model repeating its environment would put in a page — and step 2
+   * is the shipped pattern rules. Composed left to right, so the exact match wins where both would
+   * fire and the placeholder names the variable (`[REDACTED:integration:anthropic_api_key]`).
+   */
+  const proposalRedactor = composeSecretRedactors(
+    injectedSecretRedactorForEnvironment(options.runEnvironment, options.logger),
+    redactionAdapters.patternRedactor(),
+  );
+
+  const librarianProject = async (projectId: Id) => {
+    const { rows } = await options.pool.query<{ knowledge_dir: string; config: unknown }>(
+      'select knowledge_dir, config from projects where id = $1',
+      [projectId],
+    );
+    const row = rows[0];
+    return row === undefined
+      ? null
+      : {
+          knowledgeDir: row.knowledge_dir,
+          thresholds: thresholdsFromConfig(
+            (row.config ?? {}) as Parameters<typeof thresholdsFromConfig>[0],
+          ),
+        };
+  };
+
+  /**
+   * The librarian's own queues, started only when this process composed a pipeline.
+   *
+   * A process with no pipeline has no integrations loader, so the apply pass could not commit and
+   * the curation would queue proposals nothing could act on. Refusing to start the queues is
+   * louder than a worker that dequeues and logs.
+   */
+  let librarian: Awaited<ReturnType<typeof createLibrarianRuntime>> | null = null;
+  if (options.integrations === null) {
+    // Not added to `missing`: that list is what an *index run* lacks, and the job's refusal quotes
+    // it. This is a different absence with a different consequence, so it gets its own line rather
+    // than making the index report name something it does not use.
+    options.logger.warn(
+      { missing: 'the pipeline’s integrations loader' },
+      'this process composed no pipeline, so the librarian queues are not started: no proposal is curated, committed or decided here',
+    );
+  } else {
+    librarian = createLibrarianRuntime({
+      timezone: options.timezone,
+      curation: {
+        unitOfWork: options.eventing.unitOfWork,
+        eventStore: options.eventing.store,
+        proposals,
+        knowledge: knowledgeStore,
+        jobs: options.jobs,
+        clock,
+        ids,
+        redactor: proposalRedactor,
+        logger: options.logger,
+        project: librarianProject,
+        artifact: async ({ taskId, artifactId }): Promise<LibrarianArtifact | null> => {
+          const { rows } = await options.pool.query<{
+            data: unknown;
+            produced_by_run_id: string | null;
+            mode: string;
+          }>(
+            `select a.data, a.produced_by_run_id, t.mode
+               from artifacts a
+               join tasks t on t.id = a.task_id
+              where a.id = $1 and a.task_id = $2`,
+            [artifactId, taskId],
+          );
+          const row = rows[0];
+          return row === undefined
+            ? null
+            : {
+                data: (row.data ?? null) as LibrarianArtifact['data'],
+                runId: row.produced_by_run_id as Id | null,
+                taskMode: row.mode as TaskMode,
+              };
+        },
+      },
+      apply: {
+        unitOfWork: options.eventing.unitOfWork,
+        eventStore: options.eventing.store,
+        proposals,
+        knowledge: knowledgeStore,
+        integrations: options.integrations,
+        jobs: options.jobs,
+        clock,
+        ids,
+        logger: options.logger,
+        project: async (projectId) => {
+          const project = await readProject(options.pool, projectId);
+          return project === null
+            ? null
+            : {
+                knowledgeDir: project.knowledge_dir,
+                defaultBranch: project.default_branch,
+              };
+        },
+        ticketKeys: async (taskIds) => {
+          if (taskIds.length === 0) return new Map();
+          const { rows } = await options.pool.query<{ id: string; ticket_key: string }>(
+            'select id, ticket_key from tasks where id = any($1::uuid[])',
+            [[...taskIds]],
+          );
+          return new Map(rows.map((row) => [row.id as Id, row.ticket_key]));
+        },
+      },
+      hygiene: {
+        unitOfWork: options.eventing.unitOfWork,
+        proposals,
+        jobs: options.jobs,
+        clock,
+        ids,
+        logger: options.logger,
+        projects: async (limit) => {
+          const { rows } = await options.pool.query<{ id: string }>(
+            'select id from projects order by created_at desc limit $1',
+            [limit],
+          );
+          return rows.map((row) => row.id as Id);
+        },
+      },
+    });
+    // The handlers are returned rather than registered here — `runtime.ts` puts every one of them on
+    // the bus before the outbox worker's first sweep, exactly as it does for the index triggers.
+    await librarian.start();
+  }
+
+  return {
+    handlers: [...runtime.handlers, ...(librarian?.handlers ?? [])],
+    missing,
+    stop: async () => {
+      await librarian?.stop();
+      await runtime.stop();
+    },
+  };
 };

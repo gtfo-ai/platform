@@ -14,6 +14,7 @@ import { encodeProjectId, type GitLabHttp } from './http.js';
 import {
   gitlabAccessTokenSchema,
   gitlabBranchSchema,
+  gitlabCommitSchema,
   gitlabDiscussionSchema,
   gitlabJobSchema,
   gitlabMergeRequestSchema,
@@ -57,6 +58,26 @@ export interface DiffNotePosition {
   readonly new_line: number;
 }
 
+/**
+ * The body of § "Create a commit with multiple files and actions", in the subset the platform sends.
+ *
+ * `start_branch` is documented as "Name of the branch to use as the parent for the new commit"; the
+ * platform passes it only when it wants the branch created. `encoding` is left at its `text`
+ * default: a knowledge page is UTF-8 Markdown.
+ */
+export interface CreateCommitBody {
+  readonly branch: string;
+  readonly commit_message: string;
+  readonly start_branch?: string;
+  readonly author_name?: string;
+  readonly author_email?: string;
+  readonly actions: readonly {
+    readonly action: 'create' | 'update';
+    readonly file_path: string;
+    readonly content: string;
+  }[];
+}
+
 export interface GitLabClient {
   /** <https://docs.gitlab.com/api/version/> — the read-only probe behind `testConnection`. */
   version(): Promise<z.output<typeof gitlabVersionSchema>>;
@@ -69,6 +90,16 @@ export interface GitLabClient {
     project: string,
     branch: string,
   ): Promise<z.output<typeof gitlabProtectedBranchSchema> | null>;
+  /**
+   * <https://docs.gitlab.com/api/commits/> § "Create a commit with multiple files and actions".
+   *
+   * One request, one commit, every action or none — which is what lets the caller treat a knowledge
+   * commit as atomic.
+   */
+  createCommit(
+    project: string,
+    body: CreateCommitBody,
+  ): Promise<z.output<typeof gitlabCommitSchema>>;
   /** <https://docs.gitlab.com/api/merge_requests/> § "Create a merge request". */
   createMergeRequest(
     project: string,
@@ -205,6 +236,18 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
         ? null
         : parse(gitlabProtectedBranchSchema, response.body, 'get_protected_branch');
     },
+
+    createCommit: async (project, body) =>
+      required(
+        gitlabCommitSchema,
+        'commit_files',
+        http.request({
+          method: 'POST',
+          path: `/projects/${encodeProjectId(project)}/repository/commits`,
+          json: body,
+          action: 'commit_files',
+        }),
+      ),
 
     createMergeRequest: async (project, body) =>
       required(

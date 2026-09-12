@@ -83,6 +83,7 @@ const enteredAttempt = (task: Task, stage: Slug): number => (task.stageAttempts[
 export const READY_FOR_MERGE_STAGE = 'ready_for_merge' as const;
 export const MERGED_GATE_STAGE = 'merged_gate' as const;
 export const RETROSPECTIVE_STAGE = 'retrospective' as const;
+export const LIBRARIAN_STAGE = 'librarian' as const;
 
 // ── creation ─────────────────────────────────────────────────────────────────
 
@@ -551,6 +552,18 @@ export const recordMerge = (task: Task, context: CommandContext): TaskDecision =
 /** The retrospective stage (product/04 S9). */
 export const startRetrospective = (task: Task, context: CommandContext): TaskDecision =>
   enterTerminalStage(task, RETROSPECTIVE_STAGE, 'retro', context);
+
+/**
+ * The Librarian stage, which curates what the retrospective proposed (technical/07, WP-18b).
+ *
+ * It keeps the task in `retro` rather than returning it to `active`: the merge has happened and no
+ * work can follow it, so the two stages of the retrospective phase share one state and the state
+ * machine carries the self edge that says so. Written as its own command rather than falling to
+ * `enterStage` because that one sets `active`, which `retro` has no edge to — the task would
+ * escalate one stage short of `done`.
+ */
+export const startLibrarianCuration = (task: Task, context: CommandContext): TaskDecision =>
+  enterTerminalStage(task, LIBRARIAN_STAGE, 'retro', context);
 
 export const completeTask = (
   task: Task,

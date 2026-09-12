@@ -154,5 +154,53 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 5. `knowledge.proposal.applied` → indexer job.
 6. Nightly hygiene job: expiring items re-verified against HEAD; deprecate candidates (included N times, never cited — citation detected by matching KB paths in assistant text); consolidation suggestions; health report stored in `readiness_evaluations`-like table `kb_health_reports` and shown in the UI.
 
+> **Built at WP-18b, and five things this section left open that the change had to decide.**
+>
+> **The artifact.** The librarian stage had no `produces` — technical/12's example carries
+> `- id: librarian ; kind: agent ; role: librarian` and nothing else — so a Librarian run's
+> structured output was validated against a schema and then dropped. `LibrarianProposals` is the
+> type (`schemas/artifacts/librarian-proposals.schema.json`, migration **0018**), and the shipped
+> role prompt describes it.
+>
+> **`delta` is the page's whole intended content, not a patch.** Step 4 describes a Librarian
+> editing files in a knowledge workspace; this build has no workspace on the apply path and commits
+> through the git provider's own commits API instead, and applying a unified diff would need a base
+> file and a patch engine the platform does not ship. The whole body is what the commit writes and
+> what the proposal queue shows a human.
+>
+> **A branch and a merge request, always.** Step 4's parenthesis — *"or direct push to default
+> branch when the project allows and the branch is not protected"* — is **not built**, and `Q66`
+> records the reasoning and what it leaves for the founder: BD-025 reads agent configuration from
+> the default branch, so a direct push is the one write that changes the rules every later run is
+> governed by with nobody in between. `auto_apply` therefore means *no queue entry*, not *no
+> review*. The branch is `agentic/knowledge/<date>-<batch>`, not `agentic/knowledge/<date>`: a date
+> alone is not a name a second batch on the same day can use, and the discriminator is the batch's
+> earliest proposal id, so it is stable across a retry and different for the next batch.
+>
+> **`index.md` is not regenerated.** Step 4 asks for it. The index page is a curated summary
+> (product/05 § "Curated, not dumped"), the Librarian can propose a change to it like any other page
+> — `index.md` is a legal `target_path` and is held to its 200-line budget — and a generator that
+> rewrote it from the file list would overwrite whatever a human wrote there.
+>
+> **Step 6's "deprecate candidates (included N times, never cited)" is not computed**, and the
+> nightly pass says so rather than approximating it: it needs `run_context_pack` rows, which
+> nothing writes (PROGRESS backlog 31), and citation detection over `run_messages.search_text`. The
+> pass reports `expired`, `dangling`, `duplicate` and `oversized` into `kb_health_reports`, makes
+> **no** git call at all, and deletes nothing — the strongest thing it may do to a page a human
+> wrote is mention it in a report.
+>
+> **Step 5 does not hold as written, and the reason is step 4's branch.** `knowledge.proposal.applied`
+> is emitted and **nothing consumes it**: an applied proposal is a commit on an
+> `agentic/knowledge/*` branch, and the indexer reads the **default branch** (BD-025), so a rebuild
+> there would re-read a tree that has not changed. The index run happens when a human merges the
+> knowledge MR — `mr.merged`, which the indexer already listens to (WP-18a). If the direct-push half
+> of step 4 is ever built (Q66), step 5 becomes true again for that path and only for it.
+>
+> Two more decisions that live at the policy rather than in the pipeline. A proposal from a
+> **shadow** task is queued for a human even when `auto_apply` is on (BD-021: a shadow task's
+> mutations are recorded, never performed). And "below `discard_below` → dropped (audit only)" is
+> implemented as a `kb_proposals` row with status `discarded`: technical/02's state machine has that
+> state, and a drop nobody can see afterwards is not an audit.
+
 ## History bootstrap (product/18)
 Job: list merged MRs (`listMergedMergeRequests`, N default 200) → fetch discussions → a Sonnet 5 run per batch of ~20 MRs extracting recurring reviewer requests, conventions and pitfalls into proposals with MR links as evidence → curator → proposal queue. Budget-capped; progress in the UI.

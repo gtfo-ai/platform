@@ -221,9 +221,9 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Thirteen since WP-18a: twelve (the pipeline's fourth job worker, `pipeline.intake.reconcile`,
-    // made it that at WP-15c) plus the `knowledge.index` worker.
-    expect((thrown as UndersizedPoolError).required).toBe(13);
+    // Sixteen since WP-18b: thirteen (WP-15c's fourth pipeline worker and WP-18a's `knowledge.index`)
+    // plus the Librarian's three — `knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`.
+    expect((thrown as UndersizedPoolError).required).toBe(16);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 

@@ -39,6 +39,7 @@ const EXPECTED_TABLES = [
   'integrations',
   'kb_chunks',
   'kb_documents',
+  'kb_health_reports',
   'kb_index_state',
   'kb_links',
   'kb_proposals',

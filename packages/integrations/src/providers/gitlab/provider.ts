@@ -60,6 +60,8 @@
 import {
   bindingSecretRedactor,
   type CodeownersRules,
+  type CommitFilesRequest,
+  type CommitRef,
   type CredentialScope,
   composeSecretRedactors,
   type Discussion,
@@ -550,6 +552,34 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         );
       }
       credentials.markRevoked(credential.revokeId);
+    },
+
+    /**
+     * § "Create a commit with multiple files and actions" — one request, one commit (WP-18b).
+     *
+     * The mapping is the whole of it: the port's `path` is GitLab's `file_path`, and `start_branch`
+     * travels only when the caller asked for the branch to be created. Nothing is read back: the
+     * response's `id` is the sha and `web_url` the link, and the platform does not re-read the tree
+     * it just wrote.
+     */
+    commitFiles: async (request: CommitFilesRequest): Promise<CommitRef> => {
+      const commit = await client.createCommit(request.project, {
+        branch: request.branch,
+        commit_message: request.message,
+        ...(request.start_branch == null ? {} : { start_branch: request.start_branch }),
+        ...(request.author_name == null ? {} : { author_name: request.author_name }),
+        ...(request.author_email == null ? {} : { author_email: request.author_email }),
+        actions: request.actions.map((action) => ({
+          action: action.action,
+          file_path: action.path,
+          content: action.content,
+        })),
+      });
+      return {
+        sha: commit.id,
+        branch: request.branch,
+        url: commit.web_url ?? null,
+      };
     },
 
     openMergeRequest: async (draft: MergeRequestDraft) => {

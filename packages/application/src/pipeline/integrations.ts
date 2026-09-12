@@ -37,11 +37,17 @@ import type { InjectedSecret } from '../integrations/redaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { IntegrationRef } from '../ports/integrations/common.js';
 import type {
+  CommitAction,
+  CommitRef,
   Discussion,
   GitProviderPort,
   MergeRequest,
   MergeRequestRefInput,
   PipelineStatus,
+} from '../ports/integrations/git-provider.js';
+import {
+  commitFilesRequestSchema,
+  mergeRequestDraftSchema,
 } from '../ports/integrations/git-provider.js';
 import type {
   CommentRef,
@@ -451,6 +457,120 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
         : replayable<TransitionResult>(
             `transition_ticket:${context.taskId}:${context.causeEventId}`,
           ),
+    );
+  },
+});
+
+/**
+ * The writes the **Librarian** makes (WP-18b): a knowledge commit and the merge request that offers
+ * it for review.
+ *
+ * Beside `ticketWrites` rather than in the knowledge package because this is the same door — every
+ * provider call the platform makes goes through the executor, with the same shadow guard, the same
+ * idempotency and the same audit row — and because `assertOutsideTransaction` has to stay on the
+ * path. The knowledge job holds no transaction when it calls these; `open-transaction.ts` refuses
+ * if a later change opens one.
+ *
+ * **`mode` is `normal` and that is a decision, not an oversight.** A shadow task's proposals are
+ * never auto-applied (the curator queues them instead, BD-021), so the only way one of these pages
+ * reaches a commit is a maintainer approving it — a human's action attributed to the platform's bot
+ * identity (BD-025 §4), not the shadow run's.
+ */
+export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
+  /** One commit carrying whole files, on a branch of its own (never the default branch). */
+  commit: async (
+    input: {
+      readonly branch: string;
+      readonly startBranch: string;
+      readonly message: string;
+      readonly authorName: string;
+      readonly authorEmail: string;
+      readonly actions: readonly CommitAction[];
+      /** The identity of this batch, for the replay: the branch it is committing to. */
+      readonly idempotencyKey: string;
+    },
+    context: CallContext,
+  ): Promise<CommitRef | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    // **Parsed, not merely typed** (standing rule 14): the message carries a ticket key and page
+    // paths, and a bound only TypeScript knows about is not a bound at a boundary. This is the one
+    // place the platform builds a commit, so it is the place the schema is applied.
+    const request = commitFilesRequestSchema.parse({
+      project: git.project,
+      branch: input.branch,
+      start_branch: input.startBranch,
+      message: input.message,
+      author_name: input.authorName,
+      author_email: input.authorEmail,
+      actions: input.actions.map((action) => ({ ...action })),
+    });
+    return mutate(
+      integrations,
+      git.ref,
+      'commit_files',
+      {
+        project: git.project,
+        branch: input.branch,
+        start_branch: input.startBranch,
+        // The paths, never the contents: a knowledge page is model output on its way to
+        // `integration_actions.payload`, and the audit row wants what was touched rather than a
+        // copy of every byte (technical/06's payload is a description, not a body).
+        paths: input.actions.map((action) => action.path),
+      },
+      { ...context, mode: 'normal' },
+      async () => git.port.commitFiles(request),
+      () => ({ sha: 'would-have', branch: input.branch, url: null }),
+      (result) => ({ sha: result.sha, branch: result.branch }),
+      replayable<CommitRef>(input.idempotencyKey),
+    );
+  },
+
+  /** The knowledge merge request (technical/07 step 4). BD-007 still applies: a human merges it. */
+  openMergeRequest: async (
+    input: {
+      readonly branch: string;
+      readonly target: string;
+      readonly title: string;
+      readonly description: string;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext,
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    // Parsed here too, and for the same reason: the description carries the same two untrusted
+    // values the commit message does. **It does not cover the other caller** — the developer's
+    // `open_mr` platform tool will build its own draft, and that one is a named refusal today
+    // (`apps/server/src/platform-tools.ts`); whoever builds it inherits this obligation.
+    const draft = mergeRequestDraftSchema.parse({
+      project: git.project,
+      branch: input.branch,
+      target: input.target,
+      title: input.title,
+      description: input.description,
+      // Not a draft: there is nothing for CI to finish and nothing more for the platform to
+      // add — the whole change is in the commit, and a draft would need a second call to
+      // undraft it before a human could merge (BD-007).
+      draft: false,
+      labels: ['agentic', 'knowledge'],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    return mutate(
+      integrations,
+      git.ref,
+      'open_merge_request',
+      { project: git.project, branch: input.branch, target: input.target },
+      { ...context, mode: 'normal' },
+      async () => git.port.openMergeRequest(draft),
+      () => null as unknown as MergeRequest,
+      (result) => ({ iid: result.ref.iid, url: result.web_url }),
+      replayable<MergeRequest>(input.idempotencyKey),
     );
   },
 });

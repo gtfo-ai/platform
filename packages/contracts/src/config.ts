@@ -233,6 +233,7 @@ export type PipelineConfig = z.infer<typeof pipelineConfigSchema>;
 export type PipelineLimits = z.infer<typeof pipelineLimitsSchema>;
 export type StageAgentSettings = z.infer<typeof stageAgentSettingsSchema>;
 export type PoliciesConfig = z.infer<typeof policiesConfigSchema>;
+export type KnowledgeApplyPolicy = z.infer<typeof knowledgeApplyPolicySchema>;
 export type RiskClass = z.infer<typeof riskClassSchema>;
 export type CommandPolicy = z.infer<typeof commandPolicySchema>;
 export type FeaturesConfig = z.infer<typeof featuresConfigSchema>;

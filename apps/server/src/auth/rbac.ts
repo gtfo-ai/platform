@@ -18,9 +18,17 @@
  *
  * ## Untrusted input
  *
- * The project id comes from the URL. It is validated as a UUID by the route schema before this
- * runs, so the membership lookup can never be handed a fragment of SQL — and Drizzle parameterises
- * it regardless.
+ * The project id comes from the URL, and **whether it has been validated depends on where the guard
+ * is hooked** — which is the part that used to be wrong here. A guard registered as a `preHandler`
+ * runs *after* Fastify has validated params, query and body, so the id really is a UUID by then.
+ * The four knowledge routes (`routes/kb.ts`, WP-18b) register it as a **`preValidation`** hook
+ * instead, because `/kb/doc?path=` and `/kb/proposals/:id/:decision` would otherwise answer an
+ * anonymous caller `400` describing their own shape rather than `401` — so there the guard sees the
+ * raw path segment. That is why those routes pass a `project` hook (`projectOf`) which returns the
+ * id **only when it is a uuid** and `undefined` otherwise: `undefined` means organisation-scoped
+ * here, the caller is still refused if they may not read, and the `400` arrives from the validator a
+ * moment later. Either way the membership lookup cannot be handed a fragment of SQL — Drizzle
+ * parameterises it, and a non-uuid never reaches it.
  */
 
 import type { UserRole } from '@platform/contracts';
@@ -65,7 +73,12 @@ export interface PermissionGuardDependencies {
 }
 
 /**
- * Builds a Fastify `preHandler` that refuses the request unless `can()` allows it.
+ * Builds a Fastify hook that refuses the request unless `can()` allows it.
+ *
+ * Registered as a `preHandler` by most routes and as a **`preValidation`** hook by the knowledge
+ * routes; the module docblock says what that changes (the `project` hook then sees an unvalidated
+ * path segment, which is why `routes/kb.ts` hands it `projectOf`). Both positions run after the
+ * session hook, which is an `onRequest` one, so `request.actor` is set either way.
  *
  * Refusals are two different answers on purpose: no session at all is 401 (authenticate and try
  * again), an authenticated caller without the role is 403 (authenticating differently will not

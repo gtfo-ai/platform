@@ -113,9 +113,15 @@ export interface StageRunPlannerOptions {
   /** Absolute path of the task's workspace; WP-14's `WorkspaceProvider` supplies the real one. */
   readonly workspacePath: (taskId: Id) => string;
   /**
-   * The shipped role prompts (`@platform/prompts`), or a project's overrides once WP-18 can read
-   * them from the default branch. Required: a planner with no prompts is the placeholder this work
-   * package replaced.
+   * The shipped role prompts (`@platform/prompts`). Required: a planner with no prompts is the
+   * placeholder this work package replaced.
+   *
+   * A project's own `prompts/<stage>.md` override is **still not read**, and the reason is no
+   * longer "there is no default-branch read": WP-18a built one and WP-18b commits to it. What is
+   * missing is that the vault source answers the four *indexed* path classes and a prompt override
+   * is not one of them, so serving it means widening what the adapter returns or reading twice —
+   * both decisions with consequences (a template a project declared and the platform could not read
+   * parks every task one stage short of `done`). It is in the ledger's discovered work, unowned.
    */
   readonly prompts: Readonly<Record<AgentRole, RolePromptDefinition>>;
   /**

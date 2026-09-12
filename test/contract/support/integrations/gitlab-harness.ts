@@ -105,6 +105,10 @@ export const gitlabReplayContext = (
       unprotected: 'agentic/task-1',
       missing: 'no/such-branch',
     },
+    commit: {
+      branch: 'agentic/knowledge/2026-09-12',
+      path: '.agentic/knowledge/lessons/L-2026-09-12-locks.md',
+    },
     mergeRequestIid: MR_IID,
     missingMergeRequestIid: MISSING_MR_IID,
     mergeability: {

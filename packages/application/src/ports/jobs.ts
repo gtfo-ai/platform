@@ -368,6 +368,25 @@ export const JOB_QUEUES = {
   budgetWindowReset: 'budget.window.reset',
   /** Knowledge-base index rebuild; singleton per project. */
   knowledgeIndex: 'knowledge.index',
+  /**
+   * One Librarian artifact's proposals, curated and written to `kb_proposals` (WP-18b).
+   *
+   * Policy `standard`, not `stately`: each wake-up carries a **different** artifact, so a
+   * coalescing policy would silently drop one task's proposals in favour of another's. The work is
+   * short and there is nothing to serialise — two projects' batches are independent rows.
+   */
+  knowledgeProposals: 'knowledge.proposals',
+  /**
+   * The knowledge commit and its merge request; `stately` per project (WP-18b).
+   *
+   * Singleton per project because BD-012 says so in as many words — "knowledge commits are
+   * serialised per repository" — and because two concurrent batches would both branch from the
+   * default branch and open two merge requests touching the same pages. The trailing slot is what
+   * keeps a decision made while a batch is in flight from being lost.
+   */
+  knowledgeApply: 'knowledge.apply',
+  /** The nightly KB hygiene pass (cron, technical/07 § "Librarian pipeline" step 6). */
+  knowledgeHygiene: 'knowledge.hygiene',
   /** Monthly partition creation and transcript retention (cron, technical/03). */
   partitionMaintenance: 'db.partitions.maintain',
 } as const;

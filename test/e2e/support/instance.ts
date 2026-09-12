@@ -99,10 +99,10 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     APP_SECRET_KEY: 'e2e-test-secret-key-not-a-real-secret-0000',
     LOG_LEVEL: options.logLevel ?? 'silent',
     TZ: 'UTC',
-    // The floor `requiredPoolConnections` computes for `ROLE=all` at concurrency 1 — 13 since
-    // WP-18a added the `knowledge.index` worker. A value below it is refused at boot, which is how
-    // this line found out.
-    APP_DB_POOL_MAX: '13',
+    // The floor `requiredPoolConnections` computes for `ROLE=all` at concurrency 1 — 16 since
+    // WP-18b added the Librarian's three job workers to WP-18a's index worker. A value below it is
+    // refused at boot, which is how this line keeps finding out.
+    APP_DB_POOL_MAX: '16',
     APP_SSE_PING_INTERVAL_MS: '1000',
     ...(options.withoutBootstrapAdmin === true
       ? {}

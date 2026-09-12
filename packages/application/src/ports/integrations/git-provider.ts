@@ -125,17 +125,88 @@ export const mergedMergeRequestSchema = z.strictObject({
   discussion_count: z.int().nonnegative(),
 });
 
+/** Longest merge-request description the platform sends; GitLab's own limit is ~1 MB. */
+export const MAX_MERGE_REQUEST_DESCRIPTION_CHARS = 32_768;
+
 export const mergeRequestDraftSchema = z.strictObject({
   project: nonEmptyStringSchema,
   branch: nonEmptyStringSchema,
   target: nonEmptyStringSchema,
   title: nonEmptyStringSchema,
-  description: z.string(),
+  /**
+   * Markdown a human reads. Bounded at WP-18b for the same reason the commit message is: the
+   * Librarian's body carries a ticket key and a page path, and an unbounded string on a provider
+   * request is a request whose size somebody else chooses.
+   */
+  description: z.string().max(MAX_MERGE_REQUEST_DESCRIPTION_CHARS),
   draft: z.boolean(),
   labels: z.array(nonEmptyStringSchema),
   /** Provider user ids, not emails — reviewer routing resolves CODEOWNERS beforehand. */
   reviewers: z.array(nonEmptyStringSchema),
   remove_source_branch: z.boolean(),
+});
+
+/**
+ * One file the platform writes in a {@link CommitFilesRequest}.
+ *
+ * There is no `delete`, and that is a property of this port rather than of its one caller: the only
+ * thing the platform commits is a knowledge page (WP-18b), and product/05 keeps a superseded page
+ * and marks it rather than removing it. A provider adapter that grew a delete would be offering the
+ * pipeline a capability nothing has decided to give it.
+ */
+export const commitActionSchema = z.strictObject({
+  action: z.enum(['create', 'update']),
+  /** Repository-relative. The caller has already decided it is a path it is allowed to write. */
+  path: nonEmptyStringSchema,
+  /** The file's whole new content, never a patch. */
+  content: z.string(),
+});
+
+/**
+ * Longest commit message the platform sends.
+ *
+ * A commit message is **line-structured** and is assembled from provider text (a ticket key) and
+ * from model-chosen paths, so it needs a ceiling that does not depend on either staying small. The
+ * platform's own builder is already bounded well under this — twenty path lines of at most 200
+ * characters plus twenty trailers of at most 64 + 36 — so reaching it means a caller built
+ * something else, which is exactly when a bound is worth having (standing rule 22: the outer guard
+ * is named, this is the layer behind it, and `knowledgeWrites.commit` parses so the layer has a
+ * seam rather than being unreachable by construction).
+ */
+export const MAX_COMMIT_MESSAGE_CHARS = 16_384;
+
+/**
+ * A commit made through the provider's API, with no working copy (technical/06, BD-025).
+ *
+ * The port's own docblock says clone, branch, commit, rebase and push belong to the workspace
+ * manager — and they still do for an agent's own work, which happens in a workspace with a minted
+ * credential. This is the other case: the platform itself writing a small, bounded set of files it
+ * chose, on a branch it names, with no checkout anywhere. Every provider worth supporting has such
+ * an endpoint (GitLab's commits API, GitHub's contents/trees API), and the alternative — giving the
+ * platform process a workspace to run `git` in — would put a checkout and a push credential in the
+ * process TD-021 keeps away from both.
+ *
+ * `start_branch` is what makes the branch: absent, the commit lands on `branch` and the branch must
+ * already exist; present, `branch` is created from it. A caller that names an existing `branch`
+ * **and** a `start_branch` is asking the provider to create a branch that is already there, which
+ * is an error rather than a fast-forward.
+ */
+export const commitFilesRequestSchema = z.strictObject({
+  project: nonEmptyStringSchema,
+  branch: nonEmptyStringSchema,
+  start_branch: nonEmptyStringSchema.nullish(),
+  /** The whole commit message, provenance trailer included (technical/07 `Agentic-Source:`). */
+  message: nonEmptyStringSchema.max(MAX_COMMIT_MESSAGE_CHARS),
+  author_name: nonEmptyStringSchema.nullish(),
+  author_email: nonEmptyStringSchema.nullish(),
+  actions: z.array(commitActionSchema).min(1),
+});
+
+/** What a commit that happened is, as the platform records it. */
+export const commitRefSchema = z.strictObject({
+  sha: shaSchema,
+  branch: nonEmptyStringSchema,
+  url: urlSchema.nullish(),
 });
 
 export const mergeRequestUpdateSchema = z.strictObject({
@@ -157,6 +228,9 @@ export type CodeownersRules = z.infer<typeof codeownersRulesSchema>;
 export type MergedMergeRequest = z.infer<typeof mergedMergeRequestSchema>;
 export type MergeRequestDraft = z.infer<typeof mergeRequestDraftSchema>;
 export type MergeRequestUpdate = z.infer<typeof mergeRequestUpdateSchema>;
+export type CommitAction = z.infer<typeof commitActionSchema>;
+export type CommitFilesRequest = z.infer<typeof commitFilesRequestSchema>;
+export type CommitRef = z.infer<typeof commitRefSchema>;
 
 // ── Credentials ──────────────────────────────────────────────────────────────
 
@@ -258,6 +332,23 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * adapter did not mint. `invalid_request` when `revokeId` is not a handle this adapter wrote.
    */
   revokeCredential(credential: MintedCredential): Promise<void>;
+
+  /**
+   * Writes a set of whole files as **one commit**, on a branch, through the provider's API.
+   *
+   * Atomic by construction: a provider that cannot apply every action applies none, so a partly
+   * written knowledge commit is not a state a caller has to reason about. The failure modes a
+   * caller must handle are stated rather than discovered — an action that creates a file that
+   * exists, or updates one that does not, is `invalid_request`; a branch that already exists when
+   * `start_branch` is given is `conflict`; and a credential without push rights is `forbidden`.
+   *
+   * **It is a mutation** (technical/06): every call goes through `IntegrationActionExecutor`, so a
+   * shadow-mode caller never reaches it.
+   *
+   * @throws {IntegrationError} as above; `not_found` for a project or a `start_branch` that is not
+   * there.
+   */
+  commitFiles(request: CommitFilesRequest): Promise<CommitRef>;
 
   openMergeRequest(draft: MergeRequestDraft): Promise<MergeRequest>;
   updateMergeRequest(ref: MergeRequestRefInput, update: MergeRequestUpdate): Promise<MergeRequest>;

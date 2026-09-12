@@ -35,6 +35,7 @@ import type { Auth } from './auth/better-auth.js';
 import { authPlugin } from './auth/plugin.js';
 import type { ServerConfig } from './config.js';
 import { toApiError } from './errors.js';
+import type { KnowledgeCommands } from './knowledge.js';
 import { type PinoLogger, withLogContext } from './logging.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
@@ -46,6 +47,7 @@ import {
   projectExists,
 } from './queries/identity-queries.js';
 import { roleCapabilities } from './role.js';
+import { registerKbRoutes } from './routes/kb.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -79,6 +81,14 @@ export interface BuildAppOptions {
    * route is **absent** when the ingress is, and `runtime.ts` logs which.
    */
   readonly webhooks: WebhookIngress | null;
+  /**
+   * The Librarian's commands (WP-18b), or `null` for a process that composed no pipeline.
+   *
+   * Nullable like `webhooks` and for the same reason: which collaborators exist is a property of the
+   * ROLE, and the routes that need one say `503` by name rather than disappearing (a missing route
+   * would read as "wrong URL").
+   */
+  readonly knowledge: KnowledgeCommands | null;
 }
 
 /** Event-loop delay above which the process reports itself degraded rather than healthy. */
@@ -230,6 +240,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       await registerWebhookRoutes(app, { ingress: options.webhooks });
     }
     await registerProjectRoutes(app, { database: options.database });
+    await registerKbRoutes(app, {
+      database: options.database,
+      knowledge: options.knowledge,
+    });
     await registerTaskRoutes(app, { database: options.database });
     await registerRunRoutes(app, { database: options.database });
     await registerSseRoutes(app, {

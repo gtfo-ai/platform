@@ -129,6 +129,17 @@ export const readinessEvaluations = pgTable('readiness_evaluations', {
   source: text('source').notNull(),
 });
 
+/** technical/07 § "Librarian pipeline" step 6, created by migration 0018. */
+export const kbHealthReports = pgTable('kb_health_reports', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  projectId: uuid('project_id').notNull(),
+  commitSha: text('commit_sha'),
+  documents: integer('documents').notNull().default(0),
+  findings: jsonb('findings').$type<JsonValue>().notNull().default([]),
+  source: text('source').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const shadowReports = pgTable('shadow_reports', {
   taskId: uuid('task_id').primaryKey(),
   humanMrRef: jsonb('human_mr_ref').$type<MergeRequestRef>(),
@@ -142,4 +153,5 @@ export type KbProposal = typeof kbProposals.$inferSelect;
 export type CodeFile = typeof codeFiles.$inferSelect;
 export type CodeMap = typeof codeMaps.$inferSelect;
 export type ReadinessEvaluation = typeof readinessEvaluations.$inferSelect;
+export type KbHealthReport = typeof kbHealthReports.$inferSelect;
 export type ShadowReport = typeof shadowReports.$inferSelect;

@@ -150,6 +150,7 @@
 - `kb_links(from_document_id, to_path, resolved_document_id null, kind)`.
 - `kb_proposals(id, project_id, task_id null, run_id null, source, kind, type, target_path, delta text, evidence jsonb, significance real, status, decided_by, decided_at, applied_commit_sha null, created_at)`.
 - `kb_index_state(project_id, commit_sha, fts_built_at, embeddings_built_at, embedding_model)`.
+- `kb_health_reports(id, project_id, commit_sha null, documents int, findings jsonb, source, created_at)` — technical/07 § "Librarian pipeline" step 6 names this table and no migration created it until **0018** (WP-18b). `findings` is `[{kind, path, detail}]`, the same vocabulary the `LibrarianProposals` artifact uses, and `documents` is how many indexed pages the pass looked at — so a report of no findings over no documents is distinguishable from a clean vault. It is an observation: nothing in the platform deletes or edits a page because a report names it.
 - `code_files(project_id, blob_sha, path, language, symbols jsonb)` PK `(project_id, blob_sha)`; `code_maps(project_id, commit_sha, focus_hash, token_budget, map_text, created_at)`.
 - `readiness_evaluations(id, project_id, level, criteria jsonb, evaluated_at, source)`.
 - `shadow_reports(task_id, human_mr_ref jsonb, comparison jsonb, created_at)`.

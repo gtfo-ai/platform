@@ -341,3 +341,105 @@ describe('FakeGitProvider discussions', () => {
     expect(result.ignored[0]?.reason).toBe('malformed_payload');
   });
 });
+
+/**
+ * Divergence 9's claims, asserted rather than described (standing rule 12: the place a fake is most
+ * permissive is the place a later work package leans hardest, and the knowledge apply path leans
+ * entirely on this one).
+ */
+describe('FakeGitProvider commits', () => {
+  const commit = (port: ReturnType<typeof build>, overrides: Record<string, unknown> = {}) =>
+    port.commitFiles({
+      project: PROJECT,
+      branch: 'agentic/knowledge/2026-09-12',
+      start_branch: 'main',
+      message: 'docs(knowledge): a page\n\nAgentic-Source: task ACME-1 run r-1\n',
+      author_name: 'Agentic Bot',
+      author_email: 'bot@example.test',
+      actions: [
+        { action: 'create', path: '.agentic/knowledge/lessons/L-1.md', content: '# one\n' },
+      ],
+      ...overrides,
+    });
+
+  it('creates the branch, writes the files and records the message', async () => {
+    const port = build();
+    const first = await commit(port);
+
+    expect(
+      port.fileAt(PROJECT, 'agentic/knowledge/2026-09-12', '.agentic/knowledge/lessons/L-1.md'),
+    ).toBe('# one\n');
+    // …and nothing was written to the branch it started from.
+    expect(port.fileAt(PROJECT, 'main', '.agentic/knowledge/lessons/L-1.md')).toBeNull();
+    expect(port.commits).toHaveLength(1);
+    expect(port.commits[0]?.sha).toBe(first.sha);
+    expect(port.commits[0]?.message).toContain('Agentic-Source: task ACME-1 run r-1');
+    expect(port.commits[0]?.author).toEqual({ name: 'Agentic Bot', email: 'bot@example.test' });
+  });
+
+  it('refuses to create a branch that is already there', async () => {
+    const port = build();
+    await commit(port);
+    await expect(
+      commit(port, {
+        actions: [
+          { action: 'create', path: '.agentic/knowledge/lessons/L-2.md', content: '# two\n' },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('commits onto an existing branch when no start branch is named', async () => {
+    const port = build();
+    await commit(port);
+    await commit(port, {
+      start_branch: null,
+      actions: [
+        { action: 'update', path: '.agentic/knowledge/lessons/L-1.md', content: '# two\n' },
+      ],
+    });
+    expect(
+      port.fileAt(PROJECT, 'agentic/knowledge/2026-09-12', '.agentic/knowledge/lessons/L-1.md'),
+    ).toBe('# two\n');
+    expect(port.commits).toHaveLength(2);
+  });
+
+  it('applies every action or none', async () => {
+    const port = build();
+    await commit(port);
+    // The first action is legal and the second is not; the port promises the commit is atomic, so
+    // the legal one must not have landed either.
+    await expect(
+      commit(port, {
+        start_branch: null,
+        actions: [
+          { action: 'create', path: '.agentic/knowledge/lessons/L-3.md', content: '# three\n' },
+          { action: 'update', path: '.agentic/knowledge/lessons/nope.md', content: '# no\n' },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(
+      port.fileAt(PROJECT, 'agentic/knowledge/2026-09-12', '.agentic/knowledge/lessons/L-3.md'),
+    ).toBeNull();
+    expect(port.commits).toHaveLength(1);
+  });
+
+  it('refuses a branch it does not have when no start branch is named', async () => {
+    const port = build();
+    await expect(commit(port, { start_branch: null })).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('starts a branch from a seeded one and keeps its files', async () => {
+    const port = build();
+    port.seedFile({
+      project: PROJECT,
+      branch: 'main',
+      path: '.agentic/knowledge/index.md',
+      content: '# index\n',
+    });
+    await commit(port);
+    expect(
+      port.fileAt(PROJECT, 'agentic/knowledge/2026-09-12', '.agentic/knowledge/index.md'),
+    ).toBe('# index\n');
+  });
+});

@@ -17,8 +17,10 @@ describe('Drizzle schema', () => {
     // 45 from technical/03 (WP-03), plus `event_dispatch`, the dispatch queue TD-005 needs
     // (WP-04), plus `accounts` and `verifications`, the two tables Better Auth needs that
     // technical/03 does not name (TD-022, migration 0011, WP-06), plus
-    // `integration_idempotency`, the `IdempotencyStore` port's table (migration 0013, WP-15b).
-    expect(tables.length).toBe(49);
+    // `integration_idempotency`, the `IdempotencyStore` port's table (migration 0013, WP-15b),
+    // plus `kb_health_reports`, which technical/07 § "Librarian pipeline" names and no migration
+    // had created (migration 0018, WP-18b).
+    expect(tables.length).toBe(50);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

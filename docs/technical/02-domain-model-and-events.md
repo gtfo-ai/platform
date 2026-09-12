@@ -35,7 +35,7 @@
 
 ### Task
 ```
-queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged ─► retro ─► done
+queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged ─► retro ─► retro ─► done
    │           │  ▲                     │
    │           │  └── returned(stage) ◄─┘ (human comments / rework)
    │           ├─► waiting_answers ─► active
@@ -45,6 +45,12 @@ queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged 
    └─► cancelled
 ```
 Guards: WIP limits on `queued → active`; iteration limits on any `returned`; budget on every `active` entry; readiness/autonomy policies on approvals.
+
+> **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
+> templates (technical/12's example has always carried it). The retrospective phase now has **two**
+> stages — the facilitator's report and the Librarian's curation of the proposals it produced — and
+> both run with the task in `retro`. The alternative would have been moving the task back to
+> `active`, which `retro` deliberately has no edge to: a merged task never goes back to work.
 
 ### Run
 `created → starting → running → (completed | failed | cancelled | budget_exceeded | timed_out | stalled)`. `running` emits `run.output` stream events (not stored in the domain log; stored in the transcript store, see 03) and heartbeats; `stalled` after no output for `stall_timeout` (default 5 min, research/01).
@@ -57,6 +63,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 
 ### KnowledgeProposal
 `scored → (discarded | queued | auto_applied) → (applied | rejected)`.
+
+> **Read at WP-18b, which built the machine.** There is no state between "a human said yes" and "a
+> commit carries it", and that is deliberate rather than an omission: **`queued` with `decided_at`
+> set is the approved state**, `auto_applied` is the same fact decided by BD-018's policy instead of
+> by a person, and both become `applied` when a commit carries them (`applied_commit_sha`). A sixth
+> status would have meant a migration, a new label in three enums and a state the UI would have to
+> learn, for a fact two existing columns already carry. `discarded` is written rather than skipped —
+> technical/07's "below `discard_below` → dropped (audit only)" is an audit only if the drop is
+> visible.
 
 ## Event catalogue
 

@@ -63,7 +63,7 @@ export const ROLE_PROMPT_VERSIONS = {
   reviewer: '1',
   acceptance_tester: '1',
   facilitator: '1',
-  librarian: '1',
+  librarian: '2',
   discovery: '1',
 } as const satisfies Record<AgentRole, string>;
 

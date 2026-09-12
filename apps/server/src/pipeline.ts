@@ -52,6 +52,7 @@ import type {
   IntegrationAuditLog,
   Jobs,
   Logger,
+  PipelineIntegrationsPort,
   PipelineRuntime,
   PlatformToolPort,
   ProjectSettings,
@@ -419,6 +420,15 @@ export const createProjectSettingsPort = (pool: pg.Pool): ProjectSettingsPort =>
 export interface ComposedPipeline {
   readonly runtime: PipelineRuntime;
   /**
+   * The binding loader this process composed, for the one other thing that calls a provider on a
+   * project's behalf: the Librarian's knowledge commit (WP-18b).
+   *
+   * Exposed rather than rebuilt, so that both go through the same `IntegrationActionExecutor` — one
+   * idempotency store, one rate-limit budget, one audit log per account (the same argument
+   * `runtime.ts` makes for building the stack once).
+   */
+  readonly integrations: PipelineIntegrationsPort;
+  /**
    * What this process could not compose for an agent run, by name, or empty when it composed one.
    *
    * Returned rather than only logged so `/readyz`'s neighbours and the e2e tier can read the same
@@ -622,6 +632,7 @@ export const composePipeline = async (
 
   return {
     runtime,
+    integrations,
     platformTools,
     agentMissing: agent.runner === null ? agent.missing : [],
     stop: async () => {

@@ -288,15 +288,19 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
  * that nobody has to reassemble it from five docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 1` knowledge index `+ 2` HTTP
- * `+ 1` maintenance = **13**, against `.env.example`'s `APP_DB_POOL_MAX=14`. The *shape* is
- * **`2N + 11`** since WP-18a registered the `knowledge.index` worker, and the changes behind it are
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 4` knowledge workers `+ 2` HTTP
+ * `+ 1` maintenance = **16**, against `.env.example`'s `APP_DB_POOL_MAX=17`. The *shape* is
+ * **`2N + 14`** since WP-18b registered the Librarian's three beside WP-18a's index worker, and the
+ * changes behind it are
  * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
  * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
  * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
  * `2N + 9`, which agreed with the old one at N=1 (both 11). WP-15c then added a **fourth** flat
  * job worker (`pipeline.intake.reconcile`), making it `2N + 10`, and WP-18a added the knowledge
- * index worker: `2N + 11` — 13 at N=1, and **19 at N=4** where `3N + 8` would have been 20.
+ * index worker: `2N + 11` — 13 at N=1. WP-18b added the Librarian's three
+ * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`): **`2N + 14`** — 16 at N=1, and
+ * **22 at N=4** where `3N + 8` would have been 20. The shape crossing over at high concurrency is
+ * the honest consequence of flat workers: they do not scale with dispatch, and they are real.
  */
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
@@ -330,7 +334,7 @@ export const POOL_RESERVATIONS = {
    */
   pipeline: 4,
   /**
-   * The knowledge index job — **one connection**, and one worker (WP-18a).
+   * The knowledge workers — **one connection each, four of them** (WP-18a, recounted at WP-18b).
    *
    * `knowledge.index` is singleton per project and runs one at a time in this process
    * (`createKnowledgeIndexRuntime`). It holds a connection for its write transaction — the whole
@@ -338,12 +342,21 @@ export const POOL_RESERVATIONS = {
    * the part that takes time is the `git` fetch and the tree read, which happen **before** the
    * transaction opens, so no connection is held across a clone.
    *
-   * Counted under `worker` like the pipeline's four, and unconditionally: the job is registered even
-   * when `APP_KNOWLEDGE_MIRROR_ROOT` is unset, because the refusal it then reports is the thing that
-   * names the missing variable. A reservation that shrank with a setting would be a floor an
-   * operator could lower by accident.
+   * **WP-18b added three more**, all at concurrency 1 and all composed by the same
+   * `apps/server/src/knowledge.ts`: `knowledge.proposals` (curate one Librarian artifact),
+   * `knowledge.apply` (the knowledge commit and its merge request) and `knowledge.hygiene` (the
+   * nightly pass). Each holds one connection for its own write transaction, and the apply job's two
+   * provider calls happen **outside** it — `integrations.forProject` and the executor both refuse to
+   * run inside a transaction — so each is a flat term rather than a per-dispatch one, exactly like
+   * the pipeline's four.
+   *
+   * Counted under `worker`, and unconditionally: the index job is registered even when
+   * `APP_KNOWLEDGE_MIRROR_ROOT` is unset, because the refusal it then reports is the thing that
+   * names the missing variable, and the librarian queues are started by every process that composes
+   * a pipeline. A reservation that shrank with a setting would be a floor an operator could lower by
+   * accident.
    */
-  knowledge: 1,
+  knowledge: 4,
   /**
    * The audit write a **dispatch** nests inside the handler's transaction — **zero since WP-15d**,
    * and this constant is the receipt.

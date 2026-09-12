@@ -8,8 +8,9 @@
  *
  * ## Which command a stage entry becomes
  *
- * product/04's task states are not one per stage: most stages are `active`, and four of them are
- * their own state (`ready_for_merge`, `merged`, `retro`, `done`). The mapping is by stage id,
+ * product/04's task states are not one per stage: most stages are `active`, and five of them are
+ * their own state (`ready_for_merge`, `merged`, `retro` — which both `retrospective` and
+ * `librarian` run in — and `done`). The mapping is by stage id,
  * which is why those four ids are reserved in `BUILTIN_STAGE_IDS` — a template that renames
  * `ready_for_merge` gets a task that stays `active` through the human wait, and the board would
  * show it as running.
@@ -31,6 +32,7 @@ import {
   enterStage,
   escalateTask,
   IllegalTransitionError,
+  LIBRARIAN_STAGE,
   MERGED_GATE_STAGE,
   markReadyForMerge,
   READY_FOR_MERGE_STAGE,
@@ -38,6 +40,7 @@ import {
   recordMerge,
   returnToStage,
   stageOf,
+  startLibrarianCuration,
   startRetrospective,
 } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
@@ -80,6 +83,11 @@ const enterCommand = (
       return recordMerge;
     case RETROSPECTIVE_STAGE:
       return startRetrospective;
+    case LIBRARIAN_STAGE:
+      // WP-18b: the second stage of the retrospective phase. It keeps the task in `retro` — the
+      // default `enterStage` would set `active`, which `retro` has no edge to, so every task would
+      // escalate one stage short of `done`.
+      return startLibrarianCuration;
     default:
       return null;
   }

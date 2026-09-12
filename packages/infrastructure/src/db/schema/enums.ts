@@ -102,6 +102,7 @@ export const artifactTypeEnum = pgEnum('artifact_type', [
   'ReviewVerdict',
   'AcceptanceVerdict',
   'RetroReport',
+  'LibrarianProposals',
   'ShadowReport',
   'ReadinessReport',
   'DiscoveryDraft',

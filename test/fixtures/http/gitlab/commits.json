@@ -1,0 +1,49 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/repository/commits",
+      "status": 201,
+      "body": {
+        "id": "ed899a2f4b50b4370feeea94676502b42383c746",
+        "short_id": "ed899a2f4b5",
+        "title": "docs(knowledge): apply 1 knowledge proposal",
+        "author_name": "Agentic Bot",
+        "author_email": "agentic-bot@example.test",
+        "committer_name": "Agentic Bot",
+        "committer_email": "agentic-bot@example.test",
+        "created_at": "2026-09-12T09:26:24.000+00:00",
+        "message": "docs(knowledge): apply 1 knowledge proposal\n\nAgentic-Source: task ACME-1 run 00000000-0000-4000-8000-000000000001\n",
+        "parent_ids": ["ae1d9fb46aa2b07ee9836d49862ec4e2c46fbbba"],
+        "committed_date": "2026-09-12T09:26:24.000+00:00",
+        "authored_date": "2026-09-12T09:26:24.000+00:00",
+        "stats": {
+          "additions": 2,
+          "deletions": 0,
+          "total": 2
+        },
+        "status": null,
+        "web_url": "https://gitlab.example.test/acme/api/-/commit/ed899a2f4b50b4370feeea94676502b42383c746"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/commits/",
+        "retrieved": "2026-09-12",
+        "kind": "documented"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/projects/acme%2Fapi/repository/commits",
+      "status": 400,
+      "body": {
+        "message": "A file with this name already exists"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/commits/",
+        "retrieved": "2026-09-12",
+        "kind": "inferred",
+        "note": "The commits page documents the `create` action and the `400 Bad Request` status in its status table, and does **not** publish this error body. The message text is the one GitLab's repository-files API is widely observed to return for the same mistake; what the contract suite actually asserts is the *classification* (400 -> invalid_request), which holds whatever the body says. Labelled `inferred` rather than `documented` because a reader must be able to tell which half of this file came from the page."
+      }
+    }
+  ]
+}

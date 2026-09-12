@@ -24,6 +24,25 @@
 | Events | `GET /events?topics=org,project:<id>,task:<id>,run:<id>` (SSE), `POST /events/subscriptions` (add/remove topics for the connection id) |
 | Ops | `GET /healthz`, `GET /readyz`, `GET /metrics` (Prometheus; optional basic auth), `GET /api/version` |
 
+> **Four of the Knowledge row's eight endpoints are served since WP-18b**, and the other four are
+> not, which is worth stating because the row reads as one surface. Served: `GET …/kb/tree`, `GET …/kb/doc?path=`,
+> `GET …/kb/proposals` and `POST …/kb/proposals/:pid/{approve,reject,edit}`. Not served, and each
+> for a different reason: `PUT …/kb/doc` is a human writing a page, which needs the same commit path
+> the Librarian uses plus an editor the SPA does not have; `GET …/kb/search` duplicates the
+> `kb_search` platform tool over HTTP and nothing calls it; `GET …/kb/health` has rows to read
+> (`kb_health_reports`, migration 0018) and no screen; `POST …/kb/bootstrap` is product/18's history
+> bootstrap, which is its own work package. `apps/server/src/routes/client-census.test.ts` is the
+> list that is kept true — it compares the client's calls against the router in both directions.
+>
+> **The two reads answer from the index, not from git.** `kb/tree` is the pages the platform has
+> indexed at `kb_index_state.commit_sha` and `kb/doc` is a document's chunks re-joined, sanitised at
+> parse (technical/07). A page committed since the last index run is not there.
+>
+> **The knowledge guards run at `preValidation`, not `preHandler`** — Fastify validates before
+> `preHandler`, so a route with a required query parameter or a non-uuid path segment would answer
+> an anonymous caller `400` describing its own shape instead of `401`. Every other guarded route
+> takes only uuids and never noticed.
+
 ## SSE contract
 `event: <type>` from the domain/transcript catalogue; `id: <topic>:<seq>`; `data: JSON`; `retry: 1000`; `: ping` every 20 s; on shutdown `event: shutdown`. Reconnect: `Last-Event-ID` per topic → replay from `events`/`run_messages` (transcript topic replays `run_messages` rows and coalesced partial blocks); if the requested seq is older than the buffer/retention, `event: reset` → client refetches. Partial text deltas are forwarded (coalesced ≥ 50 ms) only for runs with active subscribers; the transcript topic can request `?partials=0`.
 

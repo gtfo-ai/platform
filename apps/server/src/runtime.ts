@@ -51,11 +51,12 @@ import {
 } from '@platform/infrastructure';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
+import { agentRunEnvironment } from './agent.js';
 import { buildApp } from './app.js';
 import { createAuth } from './auth/better-auth.js';
 import { bootstrapAdministrator } from './auth/bootstrap.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
-import { composeKnowledgeIndexing } from './knowledge.js';
+import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
 import {
@@ -339,6 +340,15 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           pool: database.pool,
           eventing,
           jobs: jobsRuntime.jobs,
+          // The pipeline's own loader and the environment a run is given, so a knowledge commit
+          // goes through the one executor this process composed and a proposal repeating the model
+          // credential is redacted before it reaches a row or a commit (WP-18b).
+          integrations: pipeline.integrations,
+          runEnvironment: agentRunEnvironment({
+            providerMode: config.providerMode,
+            modelApiKey: config.modelApiKey,
+          }),
+          timezone: config.timezone,
           secretKey: config.secretKey,
           registry: (stack as NonNullable<typeof stack>).registry,
           mirrorRoot: config.knowledgeMirrorRoot,
@@ -388,6 +398,27 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       }
       stopCallbacks.unshift({ name: 'eventing', stop: eventing.stop });
     }
+
+    /**
+     * The Librarian's commands for the API half (WP-18b).
+     *
+     * Composed for every process that serves the API, worker or not: reading the proposal queue and
+     * recording a maintainer's decision need the pool and nothing else, and `decide.ts` takes the
+     * nullable `Jobs` on purpose — with one, the commit happens now; without one, the decision is
+     * recorded and the nightly hygiene pass applies it.
+     */
+    const knowledgeCommands = capabilities.api
+      ? createKnowledgeCommands({
+          pool: database.pool,
+          eventing,
+          jobs,
+          runEnvironment: agentRunEnvironment({
+            providerMode: config.providerMode,
+            modelApiKey: config.modelApiKey,
+          }),
+          logger: loggerPort,
+        })
+      : null;
 
     const auth = createAuth({ pool: database.pool, config });
     const hub = new SseHub({
@@ -482,6 +513,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       auth,
       hub,
       webhooks,
+      knowledge: knowledgeCommands,
       version: buildInfo(env),
       readiness: createReadinessCheck({
         database: database.db,

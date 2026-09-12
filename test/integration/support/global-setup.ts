@@ -28,8 +28,32 @@ export default async function setup(project: TestProject): Promise<() => Promise
       .withDatabase('platform_test')
       .withUsername('platform_test')
       .withPassword('platform_test')
-      // The suite is throwaway: durability costs wall-clock and buys nothing.
-      .withCommand(['postgres', '-c', 'fsync=off', '-c', 'full_page_writes=off'])
+      .withCommand([
+        'postgres',
+        // The suite is throwaway: durability costs wall-clock and buys nothing.
+        '-c',
+        'fsync=off',
+        '-c',
+        'full_page_writes=off',
+        /**
+         * **300, because the e2e tier's demand is the product's pool floor times the number of
+         * instances vitest runs at once** — and the floor grows with the product.
+         *
+         * The default is 100. At WP-18b the floor for `ROLE=all` at dispatch concurrency 1 became
+         * **16** (`requiredPoolConnections`: the Librarian's three job workers joined WP-18a's
+         * index worker), and a single e2e file may start two whole instances while a dozen files
+         * run in parallel. The symptom when it is short is not a slow test: it is
+         * `error: sorry, too many clients already` inside an unrelated file — measured on this tree,
+         * in `sse.e2e.test.ts`, the first time the tier ran with the librarian instances in it.
+         *
+         * This is the **harness following the product**, not a workaround: a connection ceiling
+         * that was chosen when a process needed 11 connections is not a statement about a process
+         * that needs 16. A test container's backends are cheap; a red tier that names somebody
+         * else's file is not.
+         */
+        '-c',
+        'max_connections=300',
+      ])
       .start();
   } catch (error) {
     throw new Error(

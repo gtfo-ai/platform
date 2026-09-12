@@ -111,6 +111,24 @@ const RETRO = {
   proposals: [],
 };
 
+/** What the Librarian reports (WP-18b). The harness stores it; the curation is its own test. */
+const LIBRARIAN = {
+  proposals: [
+    {
+      action: 'add',
+      kind: 'technical',
+      type: 'lesson',
+      target_path: 'lessons/L-2026-06-01-totals.md',
+      delta: '# sum the model\n',
+      evidence: ['https://git.example.test/acme/api/-/merge_requests/7'],
+      significance: 0.4,
+      reason: 'nothing covers it',
+    },
+  ],
+  health: [],
+  summary: 'one page',
+};
+
 const completedRun = (structuredOutput: unknown) =>
   ({ status: 'completed', terminalReason: 'success', structuredOutput }) as const;
 
@@ -122,6 +140,7 @@ const happyRuns = (iid = 7) => ({
   code_review: completedRun(REVIEW('approve')),
   business_review: completedRun(ACCEPTANCE('approve')),
   retrospective: completedRun(RETRO),
+  librarian: completedRun(LIBRARIAN),
 });
 
 const harnessWith = (options: HarnessOptions = {}): PipelineHarness =>
@@ -258,6 +277,7 @@ describe('a feature ticket through the whole loop', () => {
       'ready_for_merge',
       'merged_gate',
       'retrospective',
+      'librarian',
     ]);
   });
 

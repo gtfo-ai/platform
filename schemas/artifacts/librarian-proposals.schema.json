@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LibrarianProposals data",
+  "description": "Structured output of the stage that produces a LibrarianProposals artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "update",
+              "deprecate",
+              "no-op"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "business",
+              "technical",
+              "process"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "lesson",
+              "pitfall",
+              "rule",
+              "decision",
+              "skill-draft",
+              "doc-update"
+            ]
+          },
+          "target_path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "delta": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          },
+          "significance": {
+            "$ref": "#/$defs/UnitInterval"
+          },
+          "reason": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "required": [
+          "action",
+          "kind",
+          "type",
+          "target_path",
+          "delta",
+          "evidence",
+          "significance",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "health": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "expired",
+              "dangling",
+              "duplicate",
+              "contradiction",
+              "oversized"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/PathPattern"
+          },
+          "detail": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "required": [
+          "kind",
+          "path",
+          "detail"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "proposals",
+    "health",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "UnitInterval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

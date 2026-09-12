@@ -144,6 +144,48 @@ export const workspaceStatusSchema = z.enum([
   'destroyed',
 ]);
 
+/**
+ * The proposal vocabulary, defined once (technical/03's `knowledge_proposal_*` enums).
+ *
+ * Three of these had two spellings until WP-18b — one inside `knowledgeProposalRecordSchema` and
+ * one inside the retrospective's draft — and a third was about to be added for the Librarian's own
+ * artifact. A vocabulary with three definitions is a vocabulary that drifts on the next value
+ * (standing rule 41), and the database has exactly one enum for each.
+ */
+export const knowledgeProposalSourceSchema = z.enum([
+  'task',
+  'run',
+  'feedback',
+  'bootstrap',
+  'human',
+]);
+
+export const knowledgeProposalKindSchema = z.enum(['business', 'technical', 'process']);
+
+export const knowledgeProposalTypeSchema = z.enum([
+  'lesson',
+  'pitfall',
+  'rule',
+  'decision',
+  'skill-draft',
+  'doc-update',
+]);
+
+/**
+ * Longest knowledge page the platform stores or commits, in **bytes of UTF-8**.
+ *
+ * It bounds two producers that used to be bounded differently, which is why it lives here rather
+ * than in the domain: a **model's** proposal, capped by the curator (`curateProposals`), and a
+ * **maintainer's** `edit`, which reaches the same row, the same commit and every later context pack
+ * through `POST …/kb/proposals/:id/edit` and used to be capped by nothing but the HTTP body limit.
+ *
+ * `decideKbProposalRequestSchema` applies it as a **character** count, which is the cheap outer
+ * boundary — a string that passes it is at most this many code units — and
+ * `decideKnowledgeProposal` applies it again in **bytes**, which is the unit the curator uses, so
+ * the two paths cannot disagree about the same page. For ASCII the two are the same number.
+ */
+export const MAX_PROPOSAL_DELTA_BYTES = 64 * 1024;
+
 /** KnowledgeProposal state machine (technical/02). */
 export const knowledgeProposalStatusSchema = z.enum([
   'scored',
@@ -195,7 +237,15 @@ export const autonomyLevelSchema = z.enum(['observe', 'assist', 'supervised', 'a
 /** Reasoning effort per stage (BD-013, technical/12 `stages.*.effort`). */
 export const effortSchema = z.enum(['low', 'medium', 'high']);
 
-/** Artifact types (technical/02 Artifact aggregate). */
+/**
+ * Artifact types (technical/02 Artifact aggregate).
+ *
+ * `LibrarianProposals` was added at WP-18b and is the one type technical/12's table did not list:
+ * that document's own `pipeline.yml` example carries a `librarian` stage with **no** `produces`,
+ * and a stage that produces nothing has nowhere to put what it decided — the run's structured
+ * output is validated against the artifact schema and then dropped. technical/12 is amended with
+ * the type rather than the code being written around the omission (standing rule 8).
+ */
 export const artifactTypeSchema = z.enum([
   'RefinedSpec',
   'RootCauseAnalysis',
@@ -204,6 +254,7 @@ export const artifactTypeSchema = z.enum([
   'ReviewVerdict',
   'AcceptanceVerdict',
   'RetroReport',
+  'LibrarianProposals',
   'ShadowReport',
   'ReadinessReport',
   'DiscoveryDraft',
@@ -399,6 +450,9 @@ export type ApprovalKind = z.infer<typeof approvalKindSchema>;
 export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
 export type WorkspaceStatus = z.infer<typeof workspaceStatusSchema>;
 export type KnowledgeProposalStatus = z.infer<typeof knowledgeProposalStatusSchema>;
+export type KnowledgeProposalSource = z.infer<typeof knowledgeProposalSourceSchema>;
+export type KnowledgeProposalKind = z.infer<typeof knowledgeProposalKindSchema>;
+export type KnowledgeProposalType = z.infer<typeof knowledgeProposalTypeSchema>;
 export type UserRole = z.infer<typeof userRoleSchema>;
 export type AgentRole = z.infer<typeof agentRoleSchema>;
 export type IntegrationType = z.infer<typeof integrationTypeSchema>;

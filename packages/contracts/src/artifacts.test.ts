@@ -131,6 +131,28 @@ const DATA: Record<ArtifactType, unknown> = {
       },
     ],
   },
+  LibrarianProposals: {
+    proposals: [
+      {
+        action: 'update',
+        kind: 'technical',
+        type: 'lesson',
+        target_path: 'lessons/L-2026-09-09-advisory-locks.md',
+        delta: '---\ntype: lesson\n---\n\nTake advisory locks inside the transaction.\n',
+        evidence: [mr.url],
+        significance: 0.7,
+        reason: 'lessons/L-2026-09-09-advisory-locks.md already covers locking and is now wrong',
+      },
+    ],
+    health: [
+      {
+        kind: 'expired',
+        path: 'lessons/L-2025-01-01-old.md',
+        detail: 'expires: 2025-06-01 has passed and nothing re-confirmed it',
+      },
+    ],
+    summary: 'One update, one expired page.',
+  },
   ShadowReport: {
     ticket: 'PROJ-123',
     human_mr: mr,

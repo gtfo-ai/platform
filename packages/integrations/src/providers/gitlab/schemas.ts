@@ -14,6 +14,7 @@
  *  - pipelines:      <https://docs.gitlab.com/api/pipelines/>
  *  - jobs:           <https://docs.gitlab.com/api/jobs/>
  *  - branches:       <https://docs.gitlab.com/api/branches/>
+ *  - commits:        <https://docs.gitlab.com/api/commits/>
  *  - projects:       <https://docs.gitlab.com/api/projects/>
  *  - protected branches: <https://docs.gitlab.com/api/protected_branches/>
  *  - project access tokens: <https://docs.gitlab.com/api/project_access_tokens/>
@@ -209,6 +210,21 @@ export const gitlabBranchSchema = z.object({
     title: z.string().nullish(),
     committed_date: z.string().nullish(),
   }),
+});
+
+/**
+ * One commit, as `POST /projects/:id/repository/commits` answers (WP-18b).
+ *
+ * `id` is the sha the platform records on the proposal; `web_url` is what a maintainer follows. The
+ * rest of the documented object — `stats`, `parent_ids`, the author/committer pairs — is not read
+ * here, and an unread field is a field this adapter cannot get wrong.
+ */
+export const gitlabCommitSchema = z.object({
+  id: z.string(),
+  short_id: z.string().nullish(),
+  title: z.string().nullish(),
+  message: z.string().nullish(),
+  web_url: z.string().nullish(),
 });
 
 export const gitlabProjectSchema = z.object({

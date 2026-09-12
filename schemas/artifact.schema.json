@@ -896,23 +896,10 @@
                 "type": "object",
                 "properties": {
                   "kind": {
-                    "type": "string",
-                    "enum": [
-                      "business",
-                      "technical",
-                      "process"
-                    ]
+                    "$ref": "#/$defs/anon_ac146fff"
                   },
                   "type": {
-                    "type": "string",
-                    "enum": [
-                      "lesson",
-                      "pitfall",
-                      "rule",
-                      "decision",
-                      "skill-draft",
-                      "doc-update"
-                    ]
+                    "$ref": "#/$defs/anon_2ab70f90"
                   },
                   "target_path": {
                     "$ref": "#/$defs/PathPattern"
@@ -948,6 +935,140 @@
             "human_corrections",
             "cost_summary",
             "proposals"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "LibrarianProposals"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "proposals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "add",
+                      "update",
+                      "deprecate",
+                      "no-op"
+                    ]
+                  },
+                  "kind": {
+                    "$ref": "#/$defs/anon_ac146fff"
+                  },
+                  "type": {
+                    "$ref": "#/$defs/anon_2ab70f90"
+                  },
+                  "target_path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "delta": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/NonEmptyString"
+                    }
+                  },
+                  "significance": {
+                    "$ref": "#/$defs/UnitInterval"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "action",
+                  "kind",
+                  "type",
+                  "target_path",
+                  "delta",
+                  "evidence",
+                  "significance",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "health": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "expired",
+                      "dangling",
+                      "duplicate",
+                      "contradiction",
+                      "oversized"
+                    ]
+                  },
+                  "path": {
+                    "$ref": "#/$defs/PathPattern"
+                  },
+                  "detail": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path",
+                  "detail"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "proposals",
+            "health",
+            "summary"
           ],
           "additionalProperties": false
         }
@@ -1600,8 +1721,27 @@
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
     },
+    "anon_2ab70f90": {
+      "type": "string",
+      "enum": [
+        "lesson",
+        "pitfall",
+        "rule",
+        "decision",
+        "skill-draft",
+        "doc-update"
+      ]
+    },
     "anon_4682db72": {
       "type": "string"
+    },
+    "anon_ac146fff": {
+      "type": "string",
+      "enum": [
+        "business",
+        "technical",
+        "process"
+      ]
     }
   }
 }

@@ -85,13 +85,14 @@ describe('a feature ticket, end to end', () => {
 
     const finished = await pipeline.settle('done', (task) => task.state === 'done');
     expect(finished.template).toBe('feature');
-    // Five agent stages at 0.40 USD each, on the row a human would read.
-    expect(Number(finished.cost_actual)).toBeCloseTo(2.4, 6);
+    // Six agent stages at 0.40 USD each, on the row a human would read: the feature five, the
+    // retrospective, and the librarian WP-18b put back into the tail.
+    expect(Number(finished.cost_actual)).toBeCloseTo(2.8, 6);
 
     const types = (await pipeline.events()).map((event) => event.type);
     expect(types.filter((type) => type === 'task.created')).toHaveLength(1);
-    expect(types.filter((type) => type === 'run.created')).toHaveLength(6);
-    expect(types.filter((type) => type === 'artifact.created')).toHaveLength(6);
+    expect(types.filter((type) => type === 'run.created')).toHaveLength(7);
+    expect(types.filter((type) => type === 'artifact.created')).toHaveLength(7);
     expect(types).toContain('task.completed');
     expect(types).not.toContain('task.escalated');
 
@@ -102,6 +103,7 @@ describe('a feature ticket, end to end', () => {
       'code_review',
       'business_review',
       'retrospective',
+      'librarian',
     ]);
   });
 
@@ -185,6 +187,7 @@ describe('a feature ticket, end to end', () => {
       'ready_for_merge',
       'merged_gate',
       'retrospective',
+      'librarian',
     ]);
   });
 });
@@ -280,8 +283,8 @@ describe('a bug ticket, end to end', () => {
     await pipeline.publish([merged(pipeline)]);
 
     const finished = await pipeline.settle('done', (task) => task.state === 'done');
-    // Six agent stages: the feature five plus investigation.
-    expect(Number(finished.cost_actual)).toBeCloseTo(2.8, 6);
+    // Seven agent stages: the feature five plus investigation, the retrospective and the librarian.
+    expect(Number(finished.cost_actual)).toBeCloseTo(3.2, 6);
     expect(pipeline.specs.map((spec) => spec.stage)).toEqual([
       'refinement',
       'investigation',
@@ -290,6 +293,7 @@ describe('a bug ticket, end to end', () => {
       'code_review',
       'business_review',
       'retrospective',
+      'librarian',
     ]);
   });
 });

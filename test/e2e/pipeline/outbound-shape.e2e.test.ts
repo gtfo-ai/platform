@@ -13,11 +13,15 @@
  * transaction / no transaction / transaction shape buys — or it sits in `event_dispatch` until the
  * provider answers, which is the defect, stated as a boolean rather than as a millisecond count.
  *
- * `APP_DB_POOL_MAX` is the **shipped default** here, not the harness's 16, because a measurement
- * quoted as evidence has to reproduce from the values a deployment actually runs (standing rule
- * 39).
+ * `APP_DB_POOL_MAX` is the **shipped default** here, not the harness's larger value, because a
+ * measurement quoted as evidence has to reproduce from the values a deployment actually runs
+ * (standing rule 39). It is **read from `DATABASE_CONFIG_DEFAULTS`** rather than written out: this
+ * line said `13` until WP-18b raised the floor, and a restatement of a constant is the shape
+ * PROGRESS backlog 22 is about — it failed here as an `UndersizedPoolError` in a test whose subject
+ * is the dispatcher.
  */
 import { JOB_QUEUES } from '@platform/application';
+import { db } from '@platform/infrastructure';
 import { afterEach, describe, expect, it } from 'vitest';
 import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
@@ -67,9 +71,9 @@ describe('while a provider call the pipeline made is still in flight', () => {
         entered?.();
         await answered;
       },
-      // The shipped default (`.env.example`), so the number this test produces is a number about a
-      // deployment rather than about the harness.
-      env: { APP_DB_POOL_MAX: '13' },
+      // The shipped default, asked of the constant rather than repeated, so the number this test
+      // produces is a number about a deployment rather than about the harness.
+      env: { APP_DB_POOL_MAX: String(db.DATABASE_CONFIG_DEFAULTS.poolMax) },
     });
     harness = pipeline;
 

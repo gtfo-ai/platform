@@ -25,15 +25,21 @@ import {
   FIXTURE_VAULT,
   vaultRelativePath,
 } from '@platform/application';
+import type { Id } from '@platform/contracts';
 import { extractQueryTerms, parseKbDocument } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runKnowledgeProposalsContract } from '../../contract/support/knowledge-proposals-suite.js';
 import { runKnowledgeStoreContract } from '../../contract/support/knowledge-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 
 let database: MigratedDatabase;
 let projectId: string;
+/** A second project, so the proposal suite's "per project" cases have something to be wrong about. */
+let otherProjectId: string;
+/** A real `users` row: `kb_proposals.decided_by` has a foreign key to it. */
+let userId: string;
 
 const termsOf = (text: string): readonly string[] => extractQueryTerms(text);
 
@@ -56,6 +62,16 @@ beforeAll(async () => {
       [org.rows[0]?.id],
     );
     projectId = project.rows[0]?.id as string;
+    const other = await client.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'other', 'Other', 'https://git.example.test/acme/other.git') returning id`,
+      [org.rows[0]?.id],
+    );
+    otherProjectId = other.rows[0]?.id as string;
+    const user = await client.query<{ id: string }>(
+      "insert into users (email, name) values ('librarian@example.test', 'Maintainer') returning id",
+    );
+    userId = user.rows[0]?.id as string;
   } finally {
     await client.end();
   }
@@ -75,6 +91,80 @@ runKnowledgeStoreContract({
       tx: { adapter: 'postgres', client } as unknown as Transaction,
       projectId,
       cleanup: async () => {
+        await client.query('rollback');
+        await client.end();
+      },
+    };
+  },
+});
+
+/**
+ * The same `KnowledgeProposalStore` contract the in-memory double runs, against the SQL (WP-18b).
+ *
+ * The case that needs a database rather than a double is `listAwaitingApply`: the predicate is a
+ * `where` clause here and a TypeScript function there, and the suite runs the function over the
+ * rows and demands this store return exactly what it selects (standing rule 41).
+ *
+ * The health seeding is **rows**, not a stub: `readHealthInputs` is three queries over
+ * `kb_documents`, `kb_links` and `kb_index_state`, so seeding it any other way would assert the
+ * harness instead of the adapter.
+ */
+runKnowledgeProposalsContract({
+  name: 'postgres',
+  create: async () => {
+    const client = await connect();
+    await client.query('begin');
+    const tx = { adapter: 'postgres', client } as unknown as Transaction;
+    return {
+      store: new knowledge.PostgresProposalStore(client),
+      tx,
+      projectId: projectId as Id,
+      otherProjectId: otherProjectId as Id,
+      userId: userId as Id,
+      seedHealth: async (project, inputs) => {
+        if (inputs.commitSha !== null) {
+          await client.query(
+            `insert into kb_index_state (project_id, commit_sha, fts_built_at)
+             values ($1, $2, now())
+             on conflict (project_id) do update set commit_sha = excluded.commit_sha`,
+            [project, inputs.commitSha],
+          );
+        }
+        const ids = new Map<string, string>();
+        for (const document of inputs.documents) {
+          const inserted = await client.query<{ id: string }>(
+            `insert into kb_documents (project_id, path, expires, frontmatter, tokens)
+             values ($1, $2, $3::date, $4::jsonb, $5) returning id`,
+            [
+              project,
+              document.path,
+              document.expires,
+              JSON.stringify(document.frontmatterId === null ? {} : { id: document.frontmatterId }),
+              document.tokens,
+            ],
+          );
+          ids.set(document.path, inserted.rows[0]?.id as string);
+        }
+        for (const link of inputs.danglingLinks) {
+          await client.query(
+            `insert into kb_links (from_document_id, to_path, kind) values ($1, $2, 'wikilink')`,
+            [ids.get(link.fromPath), link.toPath],
+          );
+        }
+      },
+      readHealthReports: async (project) => {
+        const { rows } = await client.query<{ documents: number; findings: unknown }>(
+          'select documents, findings from kb_health_reports where project_id = $1 order by created_at',
+          [project],
+        );
+        return rows.map((row) => ({
+          documents: Number(row.documents),
+          findings: Array.isArray(row.findings) ? row.findings.length : 0,
+        }));
+      },
+      cleanup: async () => {
+        // Everything this suite wrote goes away with the transaction, which is also the half the
+        // in-memory double cannot demonstrate.
         await client.query('rollback');
         await client.end();
       },
