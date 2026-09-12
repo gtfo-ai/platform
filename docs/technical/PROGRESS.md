@@ -9,32 +9,41 @@
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Session 5 so far.** `main` is at **`8100c50`** (WP-19). CI, every run read as `completed` and never as
-`in_progress` (rule 84): `9b1187a` (`34688812021` success), `c6f38ca` (`34689127671` success), `19da103`
-(`34692412614` success), `38f3d82` (`34692908462` **failure** — the flake below), `58503b5` (`34696889564`
-success, the ci-fix), `8100c50` (`34699845359` success). **The docs commit after `8100c50` has its own
-run; the next session resolves it from `gh run list` before starting.** Clean
-tree, no worktrees, no open branches. Verified in the orchestrator's own shell before every push
-(`PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e`, and `PASS: verify:ui` for WP-15h, each
-exit 0).
+**Session 5 so far.** `main` is at **`d337173`** (WP-22's ci-fix). CI, every run read as `completed` and
+never as `in_progress` (rule 84): `9b1187a` (`34688812021` success), `c6f38ca` (`34689127671` success),
+`19da103` (`34692412614` success), `38f3d82` (`34692908462` **failure** — the flake below), `58503b5`
+(`34696889564` success, the ci-fix), `8100c50` (`34699845359` success), `14191fc` (`34700092538`
+success), `2fa285c` (WP-22: `image` `34708614552` and `base-image` `34708614542` success, `ci`
+`34708614539` **failure** — the DNS check below), `d337173` (`ci` `34709029809` and `image`
+`34709029816` success). **The docs commit after `d337173` has its own run; the next session resolves it
+from `gh run list` before starting.** Clean tree, no worktrees, no open branches. Verified in the
+orchestrator's own shell before every push (`PASS: verify`, `PASS: verify:integration`,
+`PASS: verify:e2e`, and `PASS: verify:ui` / `PASS: verify:web-e2e` where `apps/web` or its dependencies
+changed, each exit 0). **The machine got a vote tonight** (rule 66): a background poll of mine was killed
+by the harness for low memory while the user's own containers held most of 36 GB; `memory_pressure`
+then reported 52 % free, so it was a spike — but no agent or tier was started until it was read.
 
-**CI is RED on `2fa285c` (WP-22, run `34708614539`) and the fix is in progress.** The `image` and
-`base-image` workflows (`34708614552`, `34708614542`) **succeeded** — the five images build and publish on
-amd64 and arm64 — and every `ci` job but `e2e-fake-claude` is green; that job failed in the new step
-*"the run shim works in the image it ships in"* with **6/7 checks passed**: the SDK `query()` through the
-real shim in the real image, the hardened container, both volume sub-path cases and the teardown case all
-**passed on Linux**; the one failure is the embedded-DNS check, `nslookup` of the bare peer name answered
-`SERVFAIL` for `agentic-runlet-check-peer.<azure-search-suffix>.internal.cloudapp.net` — rule **71**'s
-third environment defect exactly, closed for the e2e at the WP-14 ci-fix and kept in this script because
-it had never run on CI before WP-22 added it. A ci-fix to the check is with the WP-22 implementer. Read as
-`completed failure`, not inferred.
+**CI went RED on `2fa285c` (WP-22, `ci` run `34708614539`) and is GREEN again at `d337173`
+(`34709029809`, read as `completed success`).** The `image` and `base-image` workflows on `2fa285c`
+**succeeded** — the five images build and publish on amd64 and arm64 — and every `ci` job but
+`e2e-fake-claude` was green; that job failed in the new step *"the run shim works in the image it ships
+in"* with **6/7 checks passed**: the SDK `query()` through the real shim in the real image, the hardened
+container, both volume sub-path cases and the teardown case all **passed on Linux**; the one failure was
+the embedded-DNS check, `nslookup` of the bare peer name answering `SERVFAIL` for
+`agentic-runlet-check-peer.<azure-search-suffix>.internal.cloudapp.net` — rule **71**'s third environment
+defect exactly, closed for the e2e at the WP-14 ci-fix and kept in this script because it had never run on
+CI before WP-22 added it. The ci-fix (`getent hosts`, asserting the **address** rather than an exit code; a
+non-existent name still fails, so the check is not weakened) landed at `d337173`. **The first CI run of a
+script that had only ever run locally is the first honest measurement of it** — rule 71 in its sharpest
+form yet: the script had passed 7/7 on this machine for two sessions.
 
-**Three work packages closed in session 5 so far** — backlog 28 (the e2e teardown flake, now standing
+**Four work packages closed in session 5 so far** — backlog 28 (the e2e teardown flake, now standing
 rule 85), **WP-15h part 1** (the read API and the `run:<id>` topic), **WP-19** (the cost ledger; every
-run the platform produces is now cost-accounted) — plus a ci-fix for a second harness flake, an architect
-ruling (TD-026) for WP-18, and backlog entries 30–32, Q63–Q65. **Next**: **WP-22** (brief drafted in the
-orchestrator's scratchpad, to be re-derived from the row if lost), then WP-18 (TD-026), WP-14a, WP-21,
-WP-23, then M2.
+run the platform produces is now cost-accounted), **WP-22** (five images, compose, and the real provider
+tested against the real images on Linux; rule 86) — plus two ci-fixes for harness flakes, an architect
+ruling (TD-026) for WP-18, TD-018 amended as built, and backlog entries 30–34, Q63–Q65. **Next**:
+**WP-18a** (brief drafted in the orchestrator's scratchpad, to be re-derived from the WP-18 row and TD-026
+if lost), then WP-18b, WP-15h part 2, WP-14a, WP-21, WP-23, then M2.
 
 **CI went RED on `38f3d82` (run `34692908462`, a docs-only commit) and is GREEN again at `58503b5`
 (run `34696889564`, read as `completed success`).** Ten jobs were green; `integration` failed with **every
@@ -71,13 +80,12 @@ local run because an untracked file is invisible to `git ls-files` (backlog **10
 closed for this census, still open for `nul:check`).
 
 **Next, in the order the refiner set** (it checked the dependencies; the orchestrator's own order had not) —
-**(1) WP-15h and (2) WP-19 are DONE**, see the rows. (3) **WP-22** — images and compose — is **in review**
-(round 1: four majors, none in the shim change, which was judged sound); backlog **7**'s three obligations
-are discharged and its `User nobody` claim **falsified by measurement**, backlog **27**'s criterion is met
-by CI **building** the commit's images (a missing image throws, never skips), and backlog **0b** is
-re-filed: its capability half closed at WP-14, its volume half refused against TD-025 §2 and TD-021, an
-orphan-directory sweep remains. (4) **WP-18a** — the git-backed vault and the indexer job under **TD-026**
-(brief drafted; the row is split, part b is the librarian pipeline). Then **WP-15h part 2** (the seven reads the census attributes to it), WP-14a, WP-21, WP-23; then
+**(1) WP-15h, (2) WP-19 and (3) WP-22 are DONE**, see the rows (WP-22: three rounds and a ci-fix; backlog
+**7**'s three obligations discharged and its `User nobody` claim **falsified by measurement**, backlog
+**27** resolved on Linux by CI, backlog **0b** re-filed: its capability half closed at WP-14, its volume
+half refused against TD-025 §2 and TD-021, an orphan-directory sweep remains). (4) **WP-18a** — the
+git-backed vault and the indexer job under **TD-026** (brief drafted; the WP-18 row is split, part b is
+the librarian pipeline). Then **WP-15h part 2** (the seven reads the census attributes to it), WP-14a, WP-21, WP-23; then
 M2 (WP-24–33); then M3.
 
 **The session 4 note follows, kept for its evidence; where it names a head or a next step, this note wins.**
@@ -2614,7 +2622,19 @@ four indexed path classes with no working tree.
 **Depends on / owner.** **WP-18** owns it; no other row does. WP-15g's criteria are all about a *run*, so
 it neither discharges this nor is blocked by it.
 
-### 27. **The real `attach` handshake is exercised only against stand-in images, and nothing makes the shim start late — so the fix WP-15g shipped is unguarded exactly where the real image changes the timing** (TODO — the assertable half is now a criterion on **WP-22**)
+### 27. **The real `attach` handshake is exercised only against stand-in images, and nothing makes the shim start late — so the fix WP-15g shipped is unguarded exactly where the real image changes the timing** (**RESOLVED** at `2fa285c`, WP-22, judged on Linux by CI `34709029809`)
+
+> **RESOLVED, session 5.** Both measurements this entry asked for are taken. (1) The existing e2e attach
+> case does **not** kill the one-look mutant — with `#waitForControlSocket` shortened to a single look it
+> passed (6913 ms), certifying the happy path and not the wait; the new case *"attaches to a workspace
+> whose socket appears only after attach"* forces the ordering (remove the socket, `attach`, `docker
+> restart`) and fails by name. (2) The local tier and the shim: the shim **refused to start** on this
+> machine's bind-backed control volume because `chmod 0600` on a socket answers `EINVAL` on virtiofs,
+> which is why WP-15g's `PASS: verify:e2e (83)` and the recorded EINVAL could both be true — the old
+> stand-in booted the shim slowly enough that `attach` inspected a container still starting; the real
+> image exposed it, and the shim now checks the property (`0700` run directory, this uid) instead of the
+> call. The stand-ins are gone from `test/e2e/workspace/docker-workspace.e2e.test.ts`; CI builds the
+> commit's images and a missing one throws rather than skips.
 
 **What is wrong, and one claim corrected first.** The resume note and WP-15g's reviewer both say *"the
 contract suite runs the real provider only behind a daemon and the absent `platform-runtime` image — the
@@ -2946,7 +2966,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, estimates, **and the backfill** | WP-04 | no | DONE | `8100c50` | **3 review rounds + a pre-merge case.** **Four tables that had existed since 0004/0007 got their first writer** (`cost_entries`, `run_model_usage`, `cost_rollup_daily`, `budget_windows`); migration **0017**. The ledger **totals to the invoice**: per-model rows from the provider's breakdown, the rounding residual attributed to the run's own model and reported rather than smoothed, a property test over any breakdown (BD-011). **Rule 16 honoured**: a missing `total_cost_usd` is priced from `price_list` and labelled `is_estimate`; an unpriced model writes **no** ledger row and is named in the log, its tokens still recorded. The model id is the only producer string stored, bounded 128 and **refused** past it. Budgets are a **read at admission** in the stage executor, not a `budget.exhausted` handler; windows are implicit in their start instant, so TD-004's `budget.window.reset` queue is deliberately not started. **The backfill uses `handler_executions` rather than bypassing it**: `replayEvents` claims `(position, handler)` exactly as the dispatcher does, so a handler registered later is served, a second pass skips, and a throwing handler stops the pass with `lastPosition` as the resume point. **Rule 82 audited first**: `FakeClaudeRunner` reports `modelUsage: []`, so the per-model criterion runs the real runner over the fake CLI whose scripted `result` reports **two** models. `run.finished`, `run.failed`, `artifact.created` are `handled`, held by a test that reads the set **off the handlers**. **Q65** filed and implemented. **The price job fetches nothing** — no verified feed, no credential; it closes superseded windows and names uncostable models. Round 1's major: the budgets route was the one untested module and its `spent_usd` came from a string-keyed join reporting **0** on any mismatch — a plausible number; fixed by an e2e reading the endpoint, and a window-blind mutant that **survived the first fix** dies now. Round 2's major was **the orchestrator's** (the ledger said TD-005's counts were unedited after I had edited them — rule 83 on my own writing); its minors found the budgets read **and the admission guard** throwing 500 on the very timezone the ledger fails open for — one `resolveBudgetTimezone` now serves all three — and a port method with no production caller, deleted because its loader writes under `for update`. Round 3's survived mutant: the guard half had no regression case; added pre-merge, calibrated with a planted-throw canary. Rule **77** refined: a copied tree resolves `@platform/*` back to the original through `node_modules` symlinks. Left behind: `tasks.cost_estimated` has no writer (a `local`-mode task calls an estimate an actual — backlog 18's territory), nothing consumes the estimate (WP-28), no price feed, two biome infos in test fixtures. |
 | WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `c744904` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evalua | WP-16, WP-17, WP-20 | no | TODO | — | |
-| WP-22 | Docker images (base, runtime, launcher, product), Compose (profiles `l | WP-14 | no | TODO | — | |
+| WP-22 | Docker images (base, runtime, egress, launcher, product), Compose with a `compose.local.yml` override, `image.yml`, `base-image.yml`, size checks, attestations — **and the tier that runs the real provider against the real images** | WP-14 | no | DONE | `2fa285c` + ci-fix `d337173` | **3 review rounds + a pre-merge round + one ci-fix.** CI is the tier of record and it was read as `completed`: `2fa285c` — `image` `34708614552` and `base-image` `34708614542` **success** (the five images build and publish on amd64 and arm64), `ci` `34708614539` **failure** on one check of seven in the container script (rule 71's third environment defect, the cloud runner's DNS search list, in a script that had never run on CI); `d337173` — `ci` `34709029809` and `image` `34709029816` **success**. Five Dockerfiles; `compose.yml` with the socket behind `docker-socket-proxy` on an internal network the launcher alone joins (from the app container: `DOCKER_HOST` empty, no socket, the proxy unreachable — measured); `migrate` on the same entrypoint as `pnpm db:migrate`; no healthcheck gates on `/readyz`; `git` and the `knowledge` volume for TD-026; `scripts/build-images.mjs` as the one place that knows which file makes which image and its **unpacked** budget. **The stand-ins are gone**: `test/e2e/workspace/docker-workspace.e2e.test.ts` runs against `platform-runtime` and `platform-egress` with `runtimeSourceDir` unset and no `egressCommand`; a missing image **throws** naming the build command; CI **builds the commit's own images** (the row amended). **Backlog 27's mutant, both ways**: a one-look `#waitForControlSocket` left the pre-existing attach case green (6913 ms — the happy path, not the wait) and the new case *"attaches to a workspace whose socket appears only after attach"* fails by name, the ordering forced. **The real image found what the stand-in hid**: `chmod 0600` on a socket in a bind-backed volume answers `EINVAL` on virtiofs, so the shim exited after creating it; replaced by a property check (`<ctl>/<run-id>` is `0700` owned by this uid, which denies what the mode did), refusing on a wider mode, another uid, a missing or symlinked directory, re-throwing any other `chmod` error — judged sound by two reviewers. **Backlog 7 discharged, one claim falsified**: tinyproxy 1.11.2 starts and serves as uid 1000 with `cap_drop ALL` and `User nobody` present; the lines removed because the process does not honour them; and round 1 found that prediction **copied into a docblock as a measurement** — standing rule **86**. The runlet is bundled to one file; sidecar liveness is asserted at `create` and caught the alpine stand-in in `scripts/runlet-launcher-check.mjs`. **Found by deploying**: `@platform/prompts` declared no dependencies and crash-looped the product image (a census over `git ls-files` now holds every workspace package, including side-effect and dynamic imports); the launcher exited 0 in a restart loop on an unref'd timer (its test passed with the defect present until round 2); **220 anonymous volumes per e2e run** from `alpine/git`'s `VOLUME /git` with `v=false`, now removed with the container, the harness's own `rm -f` too (the orchestrator's +1 volume, attributed); build metadata was step env `docker build` never forwarded, so every image would have reported `0.0.0-dev` — the script now asserts the built image's `Config.Env`; `docker image inspect` reported ~4× under `docker images` on the containerd store, so the budget names the quantity it bounds; the backup sidecar pinned PostgreSQL 17 tooling against an 18 database (`pg_dump` version mismatch, measured) — pinned to 18 by digest with the majors compared off the file. **Compose's `local` profile could not express "this service instead of that"** (two `app` services on one port, measured) — a `compose.local.yml` override now, TD-018 amended, `test/e2e/compose/compose-config.e2e.test.ts` holds the service set under every setting. **Backlog 0b refused with the measurement** (`CAP_DAC_OVERRIDE` gone since WP-14; a per-run volume contradicts TD-025 §2 and TD-021). `docker compose up` measured here: 17 migrations, `/readyz` ok on all four checks, launcher up. Signing needs no credential (`actions/attest-build-provenance` over OIDC; no SBOM, stated). Left behind: backlog **33** (nothing serves the SPA though the bundle is in the image), **34** (the SDK's executable-path mismatch and a 217 MB binary), the orphan-directory sweep in 0b, `acli` unpinnable, 46 biome infos (`useLiteralKeys`) in scripts and tests. |
 | WP-23 | Docs | WP-22 | yes | TODO | — | |
 
 ## Milestone M2 — trust
