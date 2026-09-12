@@ -249,8 +249,27 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
   }
 };
 
+export interface DockerFixtureOptions {
+  /**
+   * Bind the control volume onto a host directory, so **this** process can read the token and the
+   * socket path (the default, and what every e2e here needs).
+   *
+   * `false` creates a plain named volume instead, which is what production deploys and the only kind
+   * the run shim can use on macOS: the shim `chmod 0600`s its control socket after binding it, and
+   * `chmod` on a socket inside a bind-backed volume answers **EINVAL** on Docker Desktop's file
+   * sharing — measured by `scripts/runlet-launcher-check.mjs`, whose run container exited 1 with
+   * `EINVAL: invalid argument, chmod '/ctl/ctl.sock'` until the volume stopped being bind-backed. The
+   * refusal is correct (a socket whose mode the platform could not set is a socket whose access
+   * control it cannot state), so the *harness* is what has to change. A caller that passes `false`
+   * cannot read `controlRoot` from its own filesystem and must reach the volume through a container.
+   */
+  readonly controlVolumeBind?: boolean;
+}
+
 /** Builds everything one e2e file needs, and a cleanup that removes all of it. */
-export const startDockerFixture = async (): Promise<DockerFixture> => {
+export const startDockerFixture = async (
+  options: DockerFixtureOptions = {},
+): Promise<DockerFixture> => {
   // The record the provider is given, and the only place these tags are written down.
   const providerImages = {
     runtime: RUNTIME_IMAGE,
@@ -304,19 +323,23 @@ export const startDockerFixture = async (): Promise<DockerFixture> => {
   // process cannot read; the local driver's bind options give both. Measured on Docker 29.7.2 —
   // the sub-path mount still isolates one run's directory, and a second `volume create` of the
   // same name is idempotent, which is what lets the provider's own `ensureVolume` run afterwards.
-  await docker([
-    'volume',
-    'create',
-    '--driver',
-    'local',
-    '--opt',
-    'type=none',
-    '--opt',
-    `device=${controlRoot}`,
-    '--opt',
-    'o=bind',
-    controlVolume,
-  ]);
+  await docker(
+    options.controlVolumeBind === false
+      ? ['volume', 'create', controlVolume]
+      : [
+          'volume',
+          'create',
+          '--driver',
+          'local',
+          '--opt',
+          'type=none',
+          '--opt',
+          `device=${controlRoot}`,
+          '--opt',
+          'o=bind',
+          controlVolume,
+        ],
+  );
   await startRepoContainer(repoContainer, network);
 
   const engine = new RecordingDockerEngine({ socketPath: '/var/run/docker.sock' });

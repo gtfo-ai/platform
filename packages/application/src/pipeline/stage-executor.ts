@@ -68,7 +68,12 @@ import {
 } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { ClaudeRunner, RunOutcome, RunSpec } from '../ports/runner.js';
+import {
+  type ClaudeRunner,
+  isRetryableStartFailure,
+  type RunOutcome,
+  type RunSpec,
+} from '../ports/runner.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { ProjectSettings } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
@@ -121,7 +126,24 @@ export type StageExecutionOutcome =
   /** A budget stopped it; the task is `paused` and a human may raise the cap. */
   | { readonly kind: 'paused'; readonly reason: string }
   /** The run ended without a usable result; the pipeline escalates on the event. */
-  | { readonly kind: 'failed'; readonly runId: Id; readonly reason: string };
+  | { readonly kind: 'failed'; readonly runId: Id; readonly reason: string }
+  /**
+   * The run could not be **started** for a transport reason and the task is untouched: the caller
+   * re-enqueues the stage (Q59(a), WP-15g).
+   *
+   * Distinct from `failed` because the task is still `active` at this stage on this attempt — only
+   * the `runs` row was failed — so the caller owes it a wake-up. {@link StageExecutor} deliberately
+   * does not enqueue one itself: it holds no `Jobs`, and the queue policy (`stately`, the singleton
+   * key, the delay) belongs to `pipeline/jobs.ts`, which already owns the same shape for a gate that
+   * answers "not yet".
+   */
+  | {
+      readonly kind: 'retry';
+      readonly runId: Id;
+      readonly reason: string;
+      /** Start attempts spent so far, this failure included. Bounded by {@link MAX_RUN_START_ATTEMPTS}. */
+      readonly startAttempts: number;
+    };
 
 export interface StageExecutorOptions {
   readonly unitOfWork: UnitOfWork;
@@ -148,7 +170,26 @@ export interface StageExecutionJob {
   readonly projectId: Id;
   readonly stage: Slug;
   readonly attempt: number;
+  /**
+   * How many times a run of this stage has failed to **start** for a retryable reason (Q59(a)).
+   *
+   * On the job rather than in memory, for the same reason `gate_checks` is: the process that retries
+   * may not be the process that failed, and a counter a restart forgets is an unbounded retry.
+   * Absent is zero — the ordinary first attempt.
+   */
+  readonly startAttempts?: number;
 }
+
+/**
+ * How many times a stage's run may fail to *start* for a transport reason before the task is
+ * escalated (Q59(a)).
+ *
+ * Three, with {@link RUN_START_RETRY_MS} between them: about a minute of flapping absorbed without
+ * telling anybody, and a launcher that is genuinely down parks the task about a minute later rather
+ * than never. The two numbers are the whole bound, and they are here rather than in the caller so
+ * that "what stops an unbounded retry" has one answer.
+ */
+export const MAX_RUN_START_ATTEMPTS = 3;
 
 export interface StageExecutor {
   execute(job: StageExecutionJob): Promise<StageExecutionOutcome>;
@@ -402,13 +443,28 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // is unchanged and still refuses rather than fabricating a `RunOutcome`: what changed is
         // that its refusal now has somewhere to land.
         //
-        // The cost, stated: a *transient* start failure escalates on the first attempt instead of
-        // being retried by the job. That is the direction that tells somebody, and the platform has
-        // `retry-stage` for the case where retrying was all it needed (product/04).
+        // **WP-15g splits that cost in two** (Q59(a)). A *transport* failure — the runner could not
+        // reach the workspace's control socket — is retried a bounded number of times before it
+        // escalates, because escalation happens on the first failure and a transport that flaps
+        // would otherwise park one task and need one human per flap. Everything else still
+        // escalates immediately, which is the fail-closed default: a failure shape nobody has
+        // classified tells somebody rather than spinning. `retry-stage` remains the human's answer
+        // either way (product/04).
         stopReasons.forget(prepared.spec.runId);
+        const startAttempts = (job.startAttempts ?? 0) + 1;
+        const retryable = isRetryableStartFailure(error) && startAttempts < MAX_RUN_START_ATTEMPTS;
         logger.error(
-          { err: error, task_id: job.taskId, stage: job.stage, run_id: prepared.run.id },
-          'the runner could not start this stage; the run is failed and the task escalated',
+          {
+            err: error,
+            task_id: job.taskId,
+            stage: job.stage,
+            run_id: prepared.run.id,
+            start_attempts: startAttempts,
+            retryable,
+          },
+          retryable
+            ? 'the runner could not start this stage; the run is failed and the stage will be retried'
+            : 'the runner could not start this stage; the run is failed and the task escalated',
         );
         return unitOfWork.transaction(async (scope) =>
           recordUnstarted(scope, {
@@ -420,6 +476,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             // (`run.failed`) and into the escalation's blocker brief, both of which TD-012 covers
             // and neither of which passes a redactor here. The message is in the log line above.
             errorName: error instanceof Error ? error.name : 'unknown error',
+            startAttempts,
+            retryable,
           }),
         );
       }
@@ -690,13 +748,20 @@ const escalateOnRun = async (
 };
 
 /**
- * A run that was created and never started: fail the run, escalate the task, in one transaction.
+ * A run that was created and never started: fail the run, and escalate the task unless the failure
+ * is worth another attempt.
  *
  * Deliberately **not** routed through `record`: that function reads a `RunOutcome`, and there is
  * none — fabricating one would make the pipeline transition on a verdict for a run that was never
  * attempted, which is the fail-open direction standing rule 20 names and which
  * `apps/server/src/pipeline.ts` refuses at the runner. The run really exists (transaction 1 wrote
  * it) and really failed to start, so `run.failed` is the honest record of it.
+ *
+ * **On the retryable path the run is still failed and the task is left alone** (Q59(a)). Both halves
+ * matter: a `runs` row left `running` for a run nobody will start is the defect WP-15c closed, and a
+ * task moved out of `active` could not be woken by the re-enqueue the caller is about to make. So
+ * each flap costs exactly one failed `runs` row, which is what makes a flapping transport visible
+ * without a human.
  */
 const recordUnstarted = async (
   scope: TransactionScope,
@@ -705,6 +770,9 @@ const recordUnstarted = async (
     readonly run: Run;
     readonly options: StageExecutorOptions;
     readonly errorName: string;
+    readonly startAttempts: number;
+    /** `true` leaves the task where it is; the caller re-enqueues the stage. */
+    readonly retryable: boolean;
   },
 ): Promise<StageExecutionOutcome> => {
   const { job, run, options, errorName } = input;
@@ -713,7 +781,9 @@ const recordUnstarted = async (
     return { kind: 'skipped', reason: 'the task was deleted before its run could start' };
   }
   const context = options.context(job.taskId);
-  const reason = `the run could not be started (${errorName})`;
+  const reason = input.retryable
+    ? `the run could not be started (${errorName}); attempt ${input.startAttempts} of ${MAX_RUN_START_ATTEMPTS}`
+    : `the run could not be started (${errorName})`;
   const failed = failRun(
     run,
     {
@@ -735,6 +805,14 @@ const recordUnstarted = async (
     cost: NO_COST,
     wallMs: 0,
   });
+  if (input.retryable) {
+    // The task is untouched — still `active`, still at this stage, still on this attempt — so the
+    // re-enqueue the caller makes finds exactly the state `revalidate` admits. Nothing is written
+    // about the task at all: `recordStageExited` would record an exit from a stage the task has not
+    // left, and the stage's convergence signature reads those rows.
+    await scope.events.append(failed.events);
+    return { kind: 'retry', runId: run.id, reason, startAttempts: input.startAttempts };
+  }
   const escalated = escalate(stored, context, job.stage, reason);
   await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
   await options.store.tasks.recordStageExited(scope.tx, {

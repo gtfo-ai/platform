@@ -132,6 +132,18 @@ const RESERVED_ENV_PREFIXES = [
   'NODE_OPTIONS',
 ];
 
+/**
+ * How long `attach` waits for the shim to create its control socket, and how often it looks.
+ *
+ * Thirty seconds because the shim's boot is a container start plus a Node start, which is a second on
+ * a warm machine and was measured at four on a cold one (`runlet-container-check.mjs` uses a 60 s
+ * bound for the same wait because it also pulls images). It is a wall-clock bound on somebody else's
+ * process, so it is stated here rather than argued at the call site (standing rule 2: the number is
+ * hardware, the behaviour is not).
+ */
+const CONTROL_SOCKET_TIMEOUT_MS = 30_000;
+const CONTROL_SOCKET_POLL_MS = 50;
+
 /** 32 hex characters, as `runlet/token.ts` says the launcher mints. */
 export const mintRunToken = (): string => randomBytes(16).toString('hex');
 
@@ -154,6 +166,15 @@ export interface DockerWorkspaceProviderOptions {
   /** `process.getuid()` in production; a number in tests. Q51: it must be 1000. */
   readonly runnerUid: number;
   readonly mintToken?: () => string;
+  /**
+   * How long `attach` waits for the shim's control socket. Defaults to
+   * {@link CONTROL_SOCKET_TIMEOUT_MS}.
+   *
+   * A seam, not a knob: a test must be able to reach the timeout without waiting thirty seconds on a
+   * two-core runner (standing rule 2 — a wall-clock assertion is a hardware assertion). Nothing in
+   * production passes it.
+   */
+  readonly controlSocketTimeoutMs?: number;
   readonly now?: () => Date;
   /** Ceiling on an export archive read into memory. */
   readonly maxExportBytes?: number;
@@ -218,6 +239,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #egressNetwork: string;
   readonly #logger: Logger;
   readonly #mintToken: () => string;
+  readonly #controlSocketTimeoutMs: number;
   readonly #now: () => Date;
   readonly #maxExportBytes: number;
   /** One mirror is one directory; two fetches into it race. Serialised per project. */
@@ -235,6 +257,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#egressNetwork = options.egressNetwork;
     this.#logger = options.logger ?? silentLogger;
     this.#mintToken = options.mintToken ?? mintRunToken;
+    this.#controlSocketTimeoutMs = options.controlSocketTimeoutMs ?? CONTROL_SOCKET_TIMEOUT_MS;
     this.#now = options.now ?? (() => new Date());
     this.#maxExportBytes = options.maxExportBytes ?? 128 * MIB;
   }
@@ -718,6 +741,26 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
   // ── Attach, kill, destroy ──────────────────────────────────────────────────
 
+  /**
+   * The control-socket coordinates, once there is something to connect to.
+   *
+   * **The wait is not belt-and-braces; without it the first run of every task fails** (WP-15g,
+   * measured by `scripts/runlet-launcher-check.mjs` before it existed). `create` returns when the
+   * container has *started*, and the shim inside it then has to boot Node and `listen()` — so a
+   * runner that connects immediately gets `connect ENOENT` on a perfectly healthy workspace, the SDK
+   * reports "Failed to spawn Claude Code process", and the run ends `failed` 8 ms in. The container
+   * check and WP-14's e2e both poll for the socket themselves, which is exactly the sort of knowledge
+   * that lives in the tests and not in the product until something drives the product.
+   *
+   * It is a **filesystem** poll on the control volume the launcher already mounts, not a daemon call:
+   * TD-025 §2's channel is a file, and its existence is the one fact that says the shim is ready. The
+   * `inspectContainer` probe above it stays, and what it buys is stated narrowly because the first
+   * version of this sentence over-claimed: it answers "was the container already dead when `attach`
+   * was called", **once, before** the wait. A container that exits *during* the wait is still waited
+   * out and then reported as a socket that never appeared — which is the retryable code either way, so
+   * the cost is one 30 s attempt and not a wrong verdict. Re-inspecting on timeout would sharpen the
+   * message and add a daemon call to a failure path; it is deliberately not done.
+   */
   async attach(handle: WorkspaceHandle): Promise<WorkspaceAttachment> {
     const inspect = await this.#engine.inspectContainer(handle.containerId);
     if (!inspect.State.Running) {
@@ -727,11 +770,37 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       });
     }
     const token = await this.#readToken(handle.runId);
-    return {
-      socketPath: controlSocketPath(this.#controlRoot, handle.runId),
-      token,
-      workdir: WORKSPACE_WORKDIR,
-    };
+    const socketPath = controlSocketPath(this.#controlRoot, handle.runId);
+    await this.#waitForControlSocket(handle.runId, socketPath);
+    return { socketPath, token, workdir: WORKSPACE_WORKDIR };
+  }
+
+  /**
+   * Waits for the shim's socket, bounded.
+   *
+   * `workspace_failed` rather than `not_found` on the timeout, and the distinction is load-bearing:
+   * `classifyProvisionFailure` (WP-15g) treats it as **retryable**, which is right — a shim that is
+   * slow to boot is a condition that passes, and the stage's bounded start retry is what absorbs it.
+   */
+  async #waitForControlSocket(runId: string, socketPath: string): Promise<void> {
+    const { stat } = await import('node:fs/promises');
+    const deadline = Date.now() + this.#controlSocketTimeoutMs;
+    for (;;) {
+      const listening = await stat(socketPath)
+        .then((entry) => entry.isSocket())
+        .catch(() => false);
+      if (listening) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        throw new WorkspaceError(
+          'workspace_failed',
+          `the run shim did not create its control socket within ${this.#controlSocketTimeoutMs} ms`,
+          { runId, detail: socketPath },
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, CONTROL_SOCKET_POLL_MS));
+    }
   }
 
   /**

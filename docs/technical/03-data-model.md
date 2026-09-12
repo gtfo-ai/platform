@@ -60,6 +60,13 @@
 - Rule: one row per completed SDK message (assistant, user/tool-result, system, result) plus one coalesced `stream_block` row per content block with `first_delta_at/last_delta_at` in payload; partial deltas are never stored individually. Payloads > 1 MB go to `blobs`.
 - `blobs(id, sha256, size, media_type, storage enum(db|file|s3), locator text, data bytea null, created_at)`.
 - `redaction_log(run_id, seq, rule_id, created_at)` append-only.
+  - **`run_messages.seq` is zero-based (amended at WP-15g).** `@platform/contracts`' `sequenceSchema`
+    says so for `events.stream_seq`, `run_messages.seq` and the SSE per-topic ids alike, and the
+    runner's first transcript entry of every run is `seq: 0`. `0006_transcripts.sql` shipped
+    `check (seq >= 1)` against that, and nothing found out for ten work packages because no production
+    code wrote a row until WP-15g's `createPostgresTranscriptSink`. Migration **0016** replaces the
+    constraint with `seq >= 0` and states why translating at the sink instead would have made the
+    stored `seq` and the SSE cursor for one entry differ by one.
 
 ### Cost and governance
 - `cost_entries(id, run_id, task_id, project_id, stage, model, input_tokens, output_tokens, cache_write_5m, cache_write_1h, cache_read, usd numeric(12,6), is_estimate bool, price_list_id, created_at)` — append-only ledger (one per run per model).

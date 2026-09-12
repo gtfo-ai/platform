@@ -21,6 +21,15 @@ const recordingLogger = (): { logger: Logger; lines: { fields: LogFields; messag
   return { logger: { debug: push, info: push, warn: push, error: push }, lines };
 };
 
+/**
+ * `DOCKER_HOST` has no default since WP-15g — an absent one is a startup error, because it used to
+ * answer `/var/run/docker.sock` and that is the unfiltered daemon TD-021 deploys a proxy to remove
+ * (standing rules 55 and 18). Every case below therefore sets it; the refusal itself is
+ * `apps/launcher/src/config.test.ts` › "is required, with no default: absent and blank are startup
+ * errors, not the host socket", and the last case here proves this composition root inherits it.
+ */
+const DAEMON = { DOCKER_HOST: 'tcp://docker-socket-proxy:2375' };
+
 let runtime: LauncherRuntime | null = null;
 
 afterEach(() => {
@@ -31,7 +40,7 @@ afterEach(() => {
 describe('buildLauncher', () => {
   it('builds a launcher from the environment and arms the retention sweep', () => {
     const { logger } = recordingLogger();
-    runtime = buildLauncher({ env: {}, credentials, uid: 1000, logger });
+    runtime = buildLauncher({ env: DAEMON, credentials, uid: 1000, logger });
     expect(runtime.config.controlRoot).toBe('/run/agentic/ctl');
     expect(runtime.provider).toBeDefined();
     // `stop()` is what a graceful shutdown calls; calling it twice must be safe.
@@ -46,14 +55,14 @@ describe('buildLauncher', () => {
    */
   it('refuses to start on any uid but 1000, naming both numbers', () => {
     expect(() =>
-      buildLauncher({ env: {}, credentials, uid: 0, logger: recordingLogger().logger }),
+      buildLauncher({ env: DAEMON, credentials, uid: 0, logger: recordingLogger().logger }),
     ).toThrow(/must run as uid 1000.*this process is uid 0/s);
   });
 
   it('warns loudly when run containers mount the repository instead of an image', () => {
     const { logger, lines } = recordingLogger();
     runtime = buildLauncher({
-      env: { APP_WORKSPACE_RUNTIME_SOURCE_DIR: '/srv/repo' },
+      env: { ...DAEMON, APP_WORKSPACE_RUNTIME_SOURCE_DIR: '/srv/repo' },
       credentials,
       uid: 1000,
       logger,
@@ -67,7 +76,7 @@ describe('buildLauncher', () => {
 
   it('says nothing about a bind mount when there is none', () => {
     const { logger, lines } = recordingLogger();
-    runtime = buildLauncher({ env: {}, credentials, uid: 1000, logger });
+    runtime = buildLauncher({ env: DAEMON, credentials, uid: 1000, logger });
     expect(lines.map((line) => line.message).join('\n')).not.toContain('platform-runtime image');
   });
 
@@ -80,5 +89,13 @@ describe('buildLauncher', () => {
         logger: recordingLogger().logger,
       }),
     ).toThrow(/unix:\/\/\/path or tcp:\/\/host:port/);
+  });
+
+  it('refuses an absent DOCKER_HOST here too, where the engine is actually built', () => {
+    // The parser's refusal reaches the composition root: nothing between them re-introduces a
+    // default, which is the half a unit test of `parseDockerHost` alone cannot state.
+    expect(() =>
+      buildLauncher({ env: {}, credentials, uid: 1000, logger: recordingLogger().logger }),
+    ).toThrow(/DOCKER_HOST is required/);
   });
 });

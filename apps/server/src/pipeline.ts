@@ -19,14 +19,19 @@
  * 31), and a required field only proves it was *supplied* (rule 35) — so the e2e tier now asserts
  * the `integration_actions` rows **this** function's adapter wrote.
  *
- * **`ClaudeRunner` is still missing and is named rather than defaulted.** WP-12 built the runner and
- * WP-14 the launcher, and there is no transport between them: `apps/launcher` is its own container
- * (TD-021) and the RPC surface is **Q52**, deliberately unbuilt. {@link unavailableClaudeRunner} is
- * what a process gets instead, and it is a **refusal**, not a default: `start()` throws
- * {@link RunnerUnavailableError} naming Q52, so an agent stage fails loudly in its own job. It
- * deliberately does not fabricate a failed `RunOutcome` — that would make the pipeline record
- * `run.failed` and transition on a verdict for a run that never happened, which is the fail-*open*
- * direction (standing rule 20).
+ * **The agent runner is composed when it *can* be, and refuses by name when it cannot** (WP-15g,
+ * Q59(b)). `composeAgentRunner` (`./agent.ts`) builds the real `createClaudeRunner` — the adapter
+ * over the SDK's own `query()` — with the production transcript sink, the unattended approvals port
+ * and a per-run injected-secret redactor, over a {@link PipelineComposition.workspaces} provisioner.
+ * That provisioner is **absent by default**, because reaching a run container needs the
+ * `platform-launcher` container and this build has no transport to it (Q52) — and TD-021's WP-15g
+ * amendment forbids *this* process from holding a Docker client, so it may not simply build one.
+ *
+ * When it is absent the process gets {@link unavailableClaudeRunner}, which is a **refusal**, not a
+ * default: `start()` throws {@link RunnerUnavailableError}, so an agent stage fails loudly in its own
+ * job and `stage-executor.ts` escalates the task. It deliberately does not fabricate a failed
+ * `RunOutcome` — that would make the pipeline record `run.failed` and transition on a verdict for a
+ * run that never happened, which is the fail-*open* direction (standing rule 20).
  *
  * The rest of the pipeline — intake, gates, status mapping, the workpad, every outbound provider
  * call — runs, and every one of those calls is now audited. That is why the pipeline is composed
@@ -66,7 +71,11 @@ import {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
-import type { eventing as eventingAdapters, jobs as jobsAdapters } from '@platform/infrastructure';
+import type {
+  eventing as eventingAdapters,
+  jobs as jobsAdapters,
+  runner as runnerAdapters,
+} from '@platform/infrastructure';
 import {
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
@@ -83,6 +92,7 @@ import {
 } from '@platform/integrations';
 import { ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
+import { agentRunEnvironment, composeAgentRunner } from './agent.js';
 import { composePlatformTools } from './platform-tools.js';
 
 /** Thrown by {@link unavailableClaudeRunner}: this build has no transport to the launcher (Q52). */
@@ -91,24 +101,33 @@ export class RunnerUnavailableError extends Error {
 
   constructor(stage: string | null) {
     super(
-      `no ClaudeRunner is composed in this build, so stage ${JSON.stringify(stage ?? 'unknown')} cannot run an agent: apps/launcher is a separate container (TD-021) and the runner-to-launcher transport is Q52, deliberately unbuilt. Every other part of the pipeline runs and is audited; pass StartRuntimeOptions.pipeline.runner to supply one.`,
+      `no ClaudeRunner is composed in this process, so stage ${JSON.stringify(stage ?? 'unknown')} cannot run an agent. It is a configuration state, not a missing feature: a run needs a workspace provisioner, which needs the platform-launcher container (Q52's transport), and TD-021 forbids this process from holding a Docker client of its own. The startup log names which piece is missing. Every other part of the pipeline runs and is audited.`,
     );
   }
 }
 
 /**
- * The runner a process gets when nothing supplies one.
+ * The runner a process gets when its configuration cannot produce one.
  *
  * A **refusal**, not a null object: `start()` throws, so the stage ends with a named error instead
  * of the pipeline being handed a fabricated outcome it would transition on.
  *
- * **Where that throw lands is WP-15c's answer to the question WP-15b left** (Q52, and Q59 in
- * `docs/OPEN-QUESTIONS.md`): until this work package it landed nowhere — transaction 1 had already
- * created the `runs` row, so the run stayed `running` for ever and the task sat at a stage nothing
- * would move, with the failure visible only in pg-boss. `stage-executor.ts` now catches it, fails
- * the run it created and escalates the task to `needs_human`. A task parked on a throwing job
- * therefore needs **no state of its own**: the state that means *a human must act* already exists,
- * and a new one would be a third spelling of "stuck" that no template, query or screen knows.
+ * **It stays, and it is conditional on configuration rather than on the build** — Q59(b), decided on
+ * WP-15g. A process with a workspace provisioner (and, in `api` mode, a model credential) composes
+ * the real runner; a process without one composes this and logs which piece is missing, and still
+ * runs the gates, the status mapping, the workpad and every outbound provider call. Refusing to
+ * compose the pipeline at all would be louder and would stop the part of the loop that works without
+ * an agent.
+ *
+ * **Where the throw lands is WP-15c's answer to the question WP-15b left** (Q59): until that work
+ * package it landed nowhere — transaction 1 had already created the `runs` row, so the run stayed
+ * `running` for ever and the task sat at a stage nothing would move, with the failure visible only in
+ * pg-boss. `stage-executor.ts` now catches it, fails the run it created and escalates the task to
+ * `needs_human`. A task parked on a throwing job therefore needs **no state of its own**: the state
+ * that means *a human must act* already exists, and a new one would be a third spelling of "stuck"
+ * that no template, query or screen knows. Since WP-15g that catch also asks whether the failure was
+ * a *transport* one and retries a bounded number of times if it was (Q59(a)) — this error is not:
+ * a missing collaborator is terminal, because the next attempt would find it missing too.
  */
 export const unavailableClaudeRunner = (): ClaudeRunner => ({
   start: (spec) => {
@@ -134,6 +153,24 @@ export interface PipelineComposition {
    * tools with no consumer, which is precisely the shape PROGRESS backlog 11 is about.
    */
   readonly runner?: (tools: PlatformToolPort) => ClaudeRunner;
+  /**
+   * The run workspace provisioner (WP-15g): what turns a `RunSpec` into a process the SDK can spawn
+   * and a workspace that is freed on every ending.
+   *
+   * **This is the seam that decides whether a process runs agents at all**, and it is absent in every
+   * production path today: provisioning needs the `platform-launcher` container, the transport to it
+   * is Q52, and TD-021's WP-15g amendment forbids this process from constructing a Docker client
+   * instead. Absent therefore composes {@link unavailableClaudeRunner} and logs which piece is
+   * missing (Q59(b)).
+   *
+   * It is also the seam the e2e tier uses, and that is the point rather than a convenience: a
+   * provisioner whose `spawn` is WP-12's fake CLI leaves **everything else** — the real
+   * `createClaudeRunner`, the real SDK `query()`, the real transcript sink, the real redactor — as
+   * production code, so the tier can assert that the ticket's own words reached the bytes the CLI
+   * received. {@link PipelineComposition.runner} cannot: it replaces the runner itself, which is
+   * exactly the assertion `FakeClaudeRunner` can never fail (standing rule 82).
+   */
+  readonly workspaces?: runnerAdapters.RunWorkspaceProvisioner;
   /**
    * Wraps the `Jobs` the pipeline enqueues through — a **labelled seam**, and the only caller is
    * the e2e tier (WP-15c).
@@ -174,6 +211,16 @@ export interface ComposePipelineOptions {
   readonly intakeReconcileIntervalMs: number;
   /** Built once per process by {@link composeIntegrationStack}; the ingress shares it. */
   readonly stack: IntegrationStack;
+  /**
+   * What a run is given of the model provider (BD-004, TD-021 phase 1): the provider mode, the model
+   * credential that becomes a `RunSpec.env` entry named in `secretEnvNames`, and the `local`-mode
+   * binary path. Read from `ServerConfig` by the composition root.
+   */
+  readonly agent: {
+    readonly providerMode: 'api' | 'local';
+    readonly modelApiKey: string | null;
+    readonly claudeBinary: string | null;
+  };
   readonly logger: Logger;
 }
 
@@ -366,6 +413,13 @@ export const createProjectSettingsPort = (pool: pg.Pool): ProjectSettingsPort =>
 export interface ComposedPipeline {
   readonly runtime: PipelineRuntime;
   /**
+   * What this process could not compose for an agent run, by name, or empty when it composed one.
+   *
+   * Returned rather than only logged so `/readyz`'s neighbours and the e2e tier can read the same
+   * answer the log line carries; `runtime.ts` is what warns on it.
+   */
+  readonly agentMissing: readonly string[];
+  /**
    * The nine in-process MCP tools this process composed, exposed so a caller can see what a run
    * would be given. `kb_search` is real; the other eight refuse and say why
    * (`./platform-tools.ts`).
@@ -416,6 +470,23 @@ export const composePipeline = async (
   const settings = createProjectSettingsPort(options.pool);
   const platformTools = composePlatformTools({ pool: options.pool, logger: options.logger });
 
+  /**
+   * The agent runner (WP-15g), and the one line that decides whether this process runs agents.
+   *
+   * `composition.runner` stays ahead of it: it is the older seam and six e2e files drive the pipeline
+   * through `FakeClaudeRunner` with it. Everything else goes through `composeAgentRunner`, whose
+   * refusal is a *named* list rather than a boolean.
+   */
+  const agent = composeAgentRunner({
+    pool: options.pool,
+    provisioner: composition.workspaces,
+    tools: platformTools,
+    providerMode: options.agent.providerMode,
+    modelApiKey: options.agent.modelApiKey,
+    logger: options.logger,
+  });
+  const runEnvironment = agentRunEnvironment(options.agent);
+
   const runtime = createPipelineRuntime({
     store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
     settings,
@@ -427,9 +498,25 @@ export const composePipeline = async (
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
     execution: {
-      runner: composition.runner?.(platformTools) ?? unavailableClaudeRunner(),
+      runner: composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
       planner: createStageRunPlanner({
+        /**
+         * Where the *planner* thinks the workspace is.
+         *
+         * It is a placeholder and it is overwritten: a run executes inside the container, whose
+         * checkout is at `/work/repo` (TD-021), and `createWorkspaceClaudeRunner` replaces this with
+         * the provisioned `workdir` before the spec reaches the SDK. It cannot be computed here,
+         * because the answer belongs to the workspace and there is none until a run starts. Kept as
+         * a task-derived path rather than a constant so that a spec read in isolation — a test, an
+         * audit row — still says which task it belonged to.
+         */
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+        // BD-004 and TD-021 phase 1: the mode decides whether `claudeCodePath` is honoured at all,
+        // and the key travels as a named secret so TD-012 step 1 covers it in this run's transcript.
+        providerMode: options.agent.providerMode,
+        claudeCodePath: options.agent.claudeBinary,
+        env: runEnvironment.env,
+        secretEnvNames: runEnvironment.secretEnvNames,
         // The shipped defaults. A project's own `prompts/<stage>.md` override needs the default
         // branch read WP-18 wires, so it is absent rather than half-read (product/13).
         prompts: ROLE_PROMPTS,
@@ -498,6 +585,7 @@ export const composePipeline = async (
   return {
     runtime,
     platformTools,
+    agentMissing: agent.runner === null ? agent.missing : [],
     stop: async () => {
       if (reconciler !== null) {
         await reconciler.stop();

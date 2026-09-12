@@ -12,10 +12,17 @@
  *
  * `kb_search` is wired to the PostgreSQL knowledge store. The other eight need collaborators this
  * build does not have — the Question aggregate's HTTP surface and a waiter for the human's answer,
- * the transcript sink, the task read model, and `IntegrationActionExecutor` reached from inside a
- * live run rather than from the `pipeline.outbound` job (WP-15d). Each is therefore a **named
- * refusal**, exactly like `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same
- * reason: a null object that returns `{}` is a tool the model believes it used.
+ * the task read model, and `IntegrationActionExecutor` reached from inside a live run rather than from
+ * the `pipeline.outbound` job (WP-15d). Each is therefore a **named refusal**, exactly like
+ * `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same reason: a null object that
+ * returns `{}` is a tool the model believes it used.
+ *
+ * **The transcript sink is no longer one of them** (WP-15g, and this correction is standing rule 83:
+ * closing a gap falsifies the sentence nearest it). `createPostgresTranscriptSink` exists and
+ * `agent.ts` composes it, so `report_progress` still refuses **for a different reason** — the sink is
+ * reached by the *runner*, which writes what the SDK produced, and nothing routes a tool call into it;
+ * a `report_progress` row is a `TranscriptEvent` kind the contract does not have. That is a decision
+ * for whoever gives the progress feed a shape, not a missing adapter.
  *
  * A refusal is also the only honest state to be in while **no run exists at all** (Q52). When the
  * launcher transport lands, each of these becomes an implementation in the same place, and the
@@ -65,7 +72,7 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, 'kb_search'>, string>> 
   notify_human:
     'notifications need the SSE hub bound to a live run, which needs the launcher transport (Q52)',
   report_progress:
-    'progress reporting writes a transcript row, which needs the run transcript sink of a live run (Q52)',
+    'progress reporting writes a transcript row, and the run transcript sink now exists (WP-15g) — what is missing is a shape for it: the sink is the runner’s, it writes what the SDK produced, and `TranscriptEvent` has no kind for a tool-reported progress line',
   get_task_context:
     'the task read model is not exposed to a run yet; the prompt already carries the ticket, the artifacts and the return feedback as delimited data',
   add_ticket_comment:

@@ -17,5 +17,6 @@ export * from './hardening.js';
 export * from './names.js';
 export * from './provider.js';
 export * from './retention.js';
+export * from './spec.js';
 export * from './tar.js';
 export * from './testing.js';

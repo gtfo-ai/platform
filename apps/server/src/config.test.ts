@@ -127,6 +127,51 @@ describe('loadServerConfig', () => {
   });
 });
 
+/**
+ * The three fields WP-15g added, and the rule-18 claim their docblocks make.
+ *
+ * A claim in a comment is not evidence it holds (standing rule 3), and this one is about a credential:
+ * *an empty credential is not a credential* (rule 18). The absent case and the empty case must not be
+ * spelled the same way either — an empty `ANTHROPIC_API_KEY` would otherwise build a redactor over
+ * `''`, which `exactSecretRedactor` refuses at `MIN_SECRET_LENGTH`, and hand the CLI a key that fails
+ * authentication for a reason nobody can trace back to configuration.
+ */
+describe('the agent run’s provider configuration', () => {
+  it('defaults to api mode with no credential and no binary', () => {
+    const config = load();
+    expect(config.providerMode).toBe('api');
+    // `null`, not `''`: the runner composition asks "is there a credential", and empty is not one.
+    expect(config.modelApiKey).toBeNull();
+    expect(config.claudeBinary).toBeNull();
+  });
+
+  it('reads a blank or whitespace-only credential as absent rather than as empty', () => {
+    expect(load({ ANTHROPIC_API_KEY: '' }).modelApiKey).toBeNull();
+    expect(load({ ANTHROPIC_API_KEY: '   ' }).modelApiKey).toBeNull();
+    expect(load({ APP_CLAUDE_BINARY: '' }).claudeBinary).toBeNull();
+  });
+
+  it('refuses a credential too short to be one, naming the variable', () => {
+    // Not clamped and not accepted: `min(8)` is the same floor the redactor applies, so a value this
+    // short could not be redacted out of a transcript even if it did authenticate.
+    expect(() => load({ ANTHROPIC_API_KEY: 'short' })).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('reads the credential from its _FILE variant, and drops the editor’s newline', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wp15g-config-'));
+    const file = join(directory, 'anthropic');
+    writeFileSync(file, 'FAKE-anthropic-key-not-a-real-secret-000\n');
+    expect(load({ ANTHROPIC_API_KEY_FILE: file }).modelApiKey).toBe(
+      'FAKE-anthropic-key-not-a-real-secret-000',
+    );
+  });
+
+  it('refuses a provider mode that is not one of BD-004’s two', () => {
+    expect(() => load({ APP_PROVIDER_MODE: 'bedrock' })).toThrow(/APP_PROVIDER_MODE/);
+    expect(load({ APP_PROVIDER_MODE: 'local' }).providerMode).toBe('local');
+  });
+});
+
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
     const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });

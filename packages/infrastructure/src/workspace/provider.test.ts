@@ -1,4 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { WORKSPACE_LABELS, type WorkspaceHandle } from '@platform/application';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -16,6 +17,8 @@ let provider: DockerWorkspaceProvider;
 let controlRoot: string;
 let workDir: string;
 let archives: Map<string, Buffer>;
+/** Control sockets this file opened, closed in `afterEach` so no listener outlives its case. */
+const listeners: Server[] = [];
 
 const exportArchive = (): Buffer =>
   writeTar([
@@ -29,6 +32,32 @@ const exportArchive = (): Buffer =>
       ]).toString('binary'),
     },
   ]);
+
+/**
+ * The same provider with a different control-socket bound.
+ *
+ * A seam, not a knob: the shipped bound is 30 s, and a test that waited it out would be asserting the
+ * hardware (standing rule 2). Nothing in production passes it.
+ */
+const providerWithSocketTimeout = (controlSocketTimeoutMs: number): DockerWorkspaceProvider =>
+  new DockerWorkspaceProvider({
+    engine: new DockerEngine({ socketPath: daemon.socketPath }),
+    images: {
+      runtime: 'platform-runtime:test',
+      egress: 'tinyproxy:test',
+      git: 'git:test',
+      runtimeSourceDir: null,
+    },
+    controlVolume: 'ctl',
+    controlRoot,
+    cacheVolume: 'repo-cache',
+    helperNetwork: 'platform',
+    egressNetwork: 'platform',
+    runnerUid: 1000,
+    mintToken: () => TOKEN,
+    now: () => new Date('2026-09-10T12:00:00.000Z'),
+    controlSocketTimeoutMs,
+  });
 
 const startDaemon = async (
   script?: (container: { name: string }) => { exitCode: number; logs: string },
@@ -71,16 +100,32 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await daemon.stop();
+  for (const server of listeners.splice(0)) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
   await rm(workDir, { recursive: true, force: true });
 });
 
+/**
+ * Everything the *shim* does on the control volume, which in this tier is a real directory: write the
+ * token (the prepare helper's job) and **listen** on the socket.
+ *
+ * The socket is real rather than a plain file: `attach` waits for one since WP-15g, and it asks
+ * `stat().isSocket()` — a `writeFile` would pass a check for existence and not this one, which is the
+ * difference between "the shim has booted" and "something made a file". Measured: without it, `attach`
+ * waits out its whole timeout.
+ */
 const created = async (): Promise<WorkspaceHandle> => {
   const spec = workspaceSpecFixture();
   const handle = await provider.create(spec);
-  // The prepare helper writes the token file inside the container; the runner reads it through the
-  // same volume, which in this tier is a real directory.
   await mkdir(path.join(controlRoot, spec.runId), { recursive: true });
   await writeFile(path.join(controlRoot, spec.runId, 'token'), `${TOKEN}\n`);
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(path.join(controlRoot, spec.runId, 'ctl.sock'), resolve);
+  });
+  listeners.push(server);
   return handle;
 };
 
@@ -289,6 +334,64 @@ describe('attach', () => {
   it('refuses when the token is not on the control volume', async () => {
     const handle = await provider.create(workspaceSpecFixture());
     await expect(provider.attach(handle)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  /**
+   * **The half the timeout case cannot state** (standing rule 42, found by WP-15g's review round 1):
+   * that the wait *waits*.
+   *
+   * Every other success case here opens the socket **before** `attach` is called, so shortening the
+   * loop to a single look — `const deadline = Date.now() - 1`, behaviourally the pre-WP-15g code —
+   * left `provider.test.ts` at 37/37. Only the timeout direction was asserted, on the very branch
+   * whose absence was the live defect. So here the shim boots **late**, which is what it really does:
+   * `create` returns when the container has *started* and the shim inside it then has to boot Node and
+   * `listen()`.
+   *
+   * The numbers, because one of them is wall-clock: the socket appears after 120 ms against a 2 s
+   * bound polled every 50 ms — a 16x margin, and the assertion is that `attach` **resolves**, never how
+   * long it took (standing rule 2). Measured on this machine at load 6: the resolve lands in ~150 ms.
+   */
+  it('waits for a shim that starts listening after attach was called', async () => {
+    provider = providerWithSocketTimeout(2_000);
+    const spec = workspaceSpecFixture();
+    const handle = await provider.create(spec);
+    await mkdir(path.join(controlRoot, spec.runId), { recursive: true });
+    await writeFile(path.join(controlRoot, spec.runId, 'token'), `${TOKEN}\n`);
+    const socketPath = path.join(controlRoot, spec.runId, 'ctl.sock');
+
+    const server = createServer();
+    listeners.push(server);
+    const listening = new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      setTimeout(() => server.listen(socketPath, resolve), 120);
+    });
+
+    const attachment = await provider.attach(handle);
+    await listening;
+    expect(attachment).toEqual({ socketPath, token: TOKEN, workdir: '/work/repo' });
+  });
+
+  /**
+   * The other side of the same boundary: a shim that never listens is reported rather than waited on
+   * for ever.
+   *
+   * `workspace_failed` rather than `not_found`, because `classifyProvisionFailure` reads the code and
+   * a shim that is slow to boot is the **retryable** case — Q59(a)'s bounded start retry is what
+   * absorbs it, which is also why the defect this wait closes costs one failed `runs` row and 30 s per
+   * task rather than a lost task.
+   */
+  it('waits for the shim’s control socket and reports a shim that never listened', async () => {
+    provider = providerWithSocketTimeout(50);
+    const spec = workspaceSpecFixture();
+    const handle = await provider.create(spec);
+    await mkdir(path.join(controlRoot, spec.runId), { recursive: true });
+    await writeFile(path.join(controlRoot, spec.runId, 'token'), `${TOKEN}\n`);
+    // A plain file at the socket's path is not a socket, and the check asks which it is.
+    await writeFile(path.join(controlRoot, spec.runId, 'ctl.sock'), '');
+    await expect(provider.attach(handle)).rejects.toMatchObject({
+      code: 'workspace_failed',
+      detail: path.join(controlRoot, spec.runId, 'ctl.sock'),
+    });
   });
 });
 

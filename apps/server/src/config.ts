@@ -17,6 +17,7 @@
  */
 import process from 'node:process';
 import { CONNECTIONS_PER_DISPATCH } from '@platform/application';
+import { providerModeSchema } from '@platform/contracts';
 import { db, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
 import { ROLES, roleCapabilities } from './role.js';
@@ -51,6 +52,9 @@ const SOURCE_VARIABLE: Record<string, string> = {
   shutdownTimeoutMs: 'APP_SHUTDOWN_TIMEOUT_MS',
   bodyLimitBytes: 'APP_HTTP_BODY_LIMIT_BYTES',
   trustProxy: 'APP_TRUST_PROXY',
+  providerMode: 'APP_PROVIDER_MODE',
+  modelApiKey: 'ANTHROPIC_API_KEY',
+  claudeBinary: 'APP_CLAUDE_BINARY',
 };
 
 /**
@@ -155,6 +159,41 @@ const serverConfigFields = z.strictObject({
    */
   intakeReconcileIntervalMs: z.union([z.literal(0), z.int().min(1_000).max(3_600_000)]),
 
+  /**
+   * BD-004: `api` talks to Anthropic, `local` runs the operator's own `claude` binary.
+   *
+   * It reaches a run through `RunSpec.providerMode`, which decides one thing in the adapter
+   * (`runner/options.ts`): `pathToClaudeCodeExecutable` is only honoured in `local` mode, so an
+   * operator who set `APP_CLAUDE_BINARY` in `api` mode gets the bundled binary and no warning. Read
+   * here so a composition root does not have to guess.
+   */
+  providerMode: providerModeSchema,
+  /**
+   * `ANTHROPIC_API_KEY` — the model credential. Optional *here*, and refused as empty.
+   *
+   * Optional because most processes run no agent: `ROLE=api` serves HTTP, and until a launcher is
+   * configured no process composes a runner at all (Q52). It is required by the thing that actually
+   * needs it — `composeAgentRunner` refuses to compose a runner in `api` mode without one and logs
+   * which piece is missing, the same shape every other absent collaborator gets — rather than by this
+   * schema, because a config-level requirement would stop an API container that was never going to
+   * run a model.
+   *
+   * TD-021 phase 1 puts it in the run's own environment ("in env, documented") and phase 2 injects it
+   * at the egress proxy so it is never in the container at all. It is therefore a `RunSpec.env` entry
+   * whose name is in `secretEnvNames`, which is what builds TD-012 step 1's redactor for the run: the
+   * exact value is replaced in **every** transcript entry, error and stored artifact the run produces.
+   * `null` is legitimate — `local` mode, or a process that runs no agent — and is the one case that
+   * must not be spelled the same way as empty (standing rule 18): an empty string here would produce
+   * a redactor over `''`, which `exactSecretRedactor` refuses at `MIN_SECRET_LENGTH`, and a CLI with
+   * an empty key would fail with an authentication error nobody can trace to configuration.
+   */
+  modelApiKey: z
+    .string()
+    .min(8, 'must be a real API key; an empty value is not a credential (standing rule 18)')
+    .nullable(),
+  /** `pathToClaudeCodeExecutable` in `local` mode (BD-004); null uses the bundled binary. */
+  claudeBinary: z.string().min(1).nullable(),
+
   argon2: argon2ConfigSchema,
   database: db.databaseConfigSchema,
   dispatch: eventing.dispatchConfigSchema,
@@ -205,6 +244,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   shutdownTimeoutMs: 30_000,
   bodyLimitBytes: 1_048_576,
   trustProxy: false,
+  providerMode: 'api',
   intakeReconcileIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
@@ -427,6 +467,9 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
       SERVER_CONFIG_DEFAULTS.bodyLimitBytes,
     ),
     trustProxy: booleanFromEnv(env.APP_TRUST_PROXY, SERVER_CONFIG_DEFAULTS.trustProxy),
+    providerMode: env.APP_PROVIDER_MODE?.trim() || SERVER_CONFIG_DEFAULTS.providerMode,
+    modelApiKey: nullableString(readSecret('ANTHROPIC_API_KEY', env)),
+    claudeBinary: nullableString(env.APP_CLAUDE_BINARY),
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,

@@ -46,6 +46,14 @@ export interface StageExecuteData {
   readonly attempt: number;
   /** How many times a gate has answered "not yet"; absent for an agent stage. */
   readonly gate_checks?: number;
+  /**
+   * How many times this stage's run failed to **start** for a transport reason (Q59(a), WP-15g).
+   *
+   * Absent for the ordinary first wake-up. It rides the payload rather than living in the executor
+   * because the process that retries may not be the one that failed, and a counter a restart forgets
+   * is an unbounded retry — the same reasoning as `gate_checks` two lines up.
+   */
+  readonly start_attempts?: number;
   readonly [key: string]: unknown;
 }
 
@@ -147,6 +155,17 @@ export const declarePipelineQueues = async (jobs: Jobs): Promise<void> => {
  */
 export const GATE_RECHECK_MS = 30_000;
 
+/**
+ * How long a stage waits before trying to *start* a run again after a transport failure (Q59(a)).
+ *
+ * The same thirty seconds as {@link GATE_RECHECK_MS}, and for the same reason: a re-enqueue with no
+ * delay spins through {@link MAX_RUN_START_ATTEMPTS} in milliseconds and escalates the task before
+ * the launcher it is waiting for has finished restarting. Three attempts at this delay is the whole
+ * bound — about a minute of flapping absorbed, and a launcher that is down parks the task about a
+ * minute later instead of never.
+ */
+export const RUN_START_RETRY_MS = 30_000;
+
 export const enqueueStage = async (
   jobs: Jobs,
   job: StageExecutionJob & { readonly gateChecks?: number; readonly startAfter?: Date },
@@ -161,6 +180,7 @@ export const enqueueStage = async (
       stage: job.stage,
       attempt: job.attempt,
       ...(job.gateChecks === undefined ? {} : { gate_checks: job.gateChecks }),
+      ...(job.startAttempts === undefined ? {} : { start_attempts: job.startAttempts }),
     },
   });
 };
@@ -210,6 +230,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       projectId: job.data.project_id,
       stage: job.data.stage,
       attempt: job.data.attempt,
+      ...(job.data.start_attempts === undefined ? {} : { startAttempts: job.data.start_attempts }),
     };
 
     // The task travels out of the transaction beside the stage it resolved, because the next step
@@ -257,6 +278,25 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        */
       await ensureTicketSnapshot(options, admitted.stored);
       const outcome = await options.executor.execute(request);
+      /**
+       * **A run that could not be *started* for a transport reason is re-enqueued here** (Q59(a)).
+       *
+       * The executor failed the `runs` row and left the task exactly where it was, so this is the
+       * wake-up that owes it another attempt. It is an `enqueue` and not a `throw`: throwing would
+       * hand the job to pg-boss's own retry policy, whose count this payload cannot see and whose
+       * exhaustion is a dead letter no screen shows — which is the failure WP-15c closed. The bound
+       * travels in the payload, and the escalation at the end of it is the executor's.
+       *
+       * `stately` frees the queued slot the moment this job starts, so this enqueue is admitted;
+       * the delay is what stops it from becoming a spin.
+       */
+      if (outcome.kind === 'retry') {
+        await enqueueStage(options.jobs, {
+          ...request,
+          startAttempts: outcome.startAttempts,
+          startAfter: new Date(Date.parse(options.clock.now()) + RUN_START_RETRY_MS),
+        });
+      }
       logger.info(
         { task_id: request.taskId, stage: request.stage, outcome: outcome.kind },
         'stage executed',

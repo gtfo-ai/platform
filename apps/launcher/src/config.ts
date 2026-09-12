@@ -73,10 +73,31 @@ export class LauncherConfigError extends Error {
  * point is that exactly one component reaches the daemon, and "the launcher quietly talked to a
  * different daemon than the operator meant" is the failure that has no symptom until a container
  * appears somewhere unexpected.
+ *
+ * ## Absent is a startup error, and it used to be the host socket
+ *
+ * Until WP-15g an unset (or blank) `DOCKER_HOST` returned `/var/run/docker.sock` — reproduced from
+ * `readLauncherConfig({})` with nothing set at all. So *absence of configuration granted the
+ * unfiltered daemon that TD-021 deploys `docker-socket-proxy` to remove*: an operator who forgot
+ * the variable got the most privileged arrangement the decision forbids, silently, and the only
+ * symptom would be a container created through an unfiltered API. That is standing rule **55**'s
+ * shape — a guard whose default is the thing it exists to prevent — and standing rule **18**'s: an
+ * unset value must not produce the permissive result. TD-021's WP-15g amendment requires the
+ * refusal; `.env.example` already documented it.
+ *
+ * The cost is stated: a launcher started with no `DOCKER_HOST` no longer starts. That is the point —
+ * one line in a compose file (or `unix:///var/run/docker.sock` written out, which is then a
+ * *decision* somebody made) against a daemon nobody chose.
  */
 export const parseDockerHost = (value: string | undefined): EngineAddressConfig => {
-  const raw =
-    value === undefined || value.trim().length === 0 ? 'unix:///var/run/docker.sock' : value.trim();
+  if (value === undefined || value.trim().length === 0) {
+    throw new LauncherConfigError(
+      'DOCKER_HOST is required and has no default: it must be unix:///path or tcp://host:port. ' +
+        'TD-021 puts docker-socket-proxy in front of the daemon and this is the only component ' +
+        'that may reach either, so an absent value must not silently select the host socket.',
+    );
+  }
+  const raw = value.trim();
   if (raw.startsWith('unix://')) {
     const socketPath = raw.slice('unix://'.length);
     if (socketPath.length === 0 || !socketPath.startsWith('/')) {

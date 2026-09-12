@@ -430,3 +430,49 @@ export interface ClaudeRunner {
    */
   start(spec: RunSpec): RunHandle;
 }
+
+/**
+ * A run that could not be started — and whether starting it again could work (Q59(a), WP-15g).
+ *
+ * ## Why the distinction is on the *error* and not in a task state
+ *
+ * WP-15c gave a throwing `start` an ending: the run it had already created is failed and the task is
+ * escalated to `needs_human`, in one transaction, because `escalateTask` already means *a human must
+ * act* and a third spelling of "stuck" would be a state no query, template or screen knows (Q59).
+ * That is right for a **terminal** failure and wrong for a **transport** one: the runner reaches its
+ * workspace over a Unix socket on a shared volume (TD-025 §2), and a launcher restarting, a control
+ * directory not yet mounted or a handshake timing out is a condition that is over in seconds — while
+ * escalation happens on the *first* failure, so a transport that flaps would park one task per flap
+ * and need a human per flap.
+ *
+ * So the runner says which kind it was, and `stage-executor.ts` decides what to do with it:
+ * `retryable` re-enqueues the stage's job a bounded number of times
+ * (`MAX_RUN_START_ATTEMPTS`, `RUN_START_RETRY_MS`) and escalates when the budget is spent, so *one
+ * flap does not escalate a task and an unbounded retry does not hide a dead launcher*. Anything
+ * that is not a `RunStartError` — a programming error, a bad spec, a refusal — is terminal, which
+ * is the fail-closed default: a new failure shape escalates to a human rather than spinning.
+ *
+ * **The message never reaches stored state.** A runner's error may quote a provider, a URL or a
+ * credential and the executor holds no redactor, so only the class name and the retry count are
+ * written (`events.payload`, the blocker brief); the message goes to the log line beside them.
+ */
+export class RunStartError extends Error {
+  override readonly name = 'RunStartError';
+  /** `true` when the same spec could start on a later attempt: a transport fault, not a refusal. */
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { readonly retryable: boolean; readonly cause?: unknown }) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.retryable = options.retryable;
+  }
+}
+
+/**
+ * Is this failure worth another attempt?
+ *
+ * A predicate rather than an `instanceof` at the call site, because "not a `RunStartError`" must
+ * answer **false** — the fail-closed direction — and a call site that wrote the check itself would
+ * eventually write it the other way round.
+ */
+export const isRetryableStartFailure = (error: unknown): boolean =>
+  error instanceof RunStartError && error.retryable;

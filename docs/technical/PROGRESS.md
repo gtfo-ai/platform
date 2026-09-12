@@ -4878,7 +4878,136 @@ which is exactly what (b) would have deleted. **Added**: an integration assertio
 **legacy-token** delivery's stored `inbox.headers` does not contain `webhook_secret_token` and that the row's
 `redaction_count >= 1` — a live invariant, where a key-only count would read 0 for ever.
 
+### WP-15g — the agent is composed, and what composing it found
+
+**What is composed where.** `apps/server/src/agent.ts` is the production `ClaudeRunner`:
+`composeAgentRunner` builds `createWorkspaceClaudeRunner` over `createClaudeRunner` with the
+production transcript sink, an unattended approvals port and a **per-run** TD-012 step-1 redactor,
+and `pipeline.ts` registers it. It is **configuration-conditional** (Q59(b)): the two things it needs
+are a `RunWorkspaceProvisioner` and, in `api` mode, `ANTHROPIC_API_KEY`; absent, the process composes
+`unavailableClaudeRunner` and `runtime.ts` logs the **named** list of what is missing. No production
+path supplies a provisioner, because that needs the `platform-launcher` container (Q52's transport)
+and **TD-021's amendment forbids this process from holding a Docker client instead** — enforced off
+disk by `apps/launcher/src/docker-access.test.ts`.
+
+**Three of the four missing collaborators are built; the fourth is a refusal by name.**
+`createPostgresTranscriptSink` (the first thing in this repository to write `run_messages`),
+`buildWorkspaceSpec` (the first production `WorkspaceSpec`), the per-run injected-secret redactor —
+and `unattendedToolApprovals`, which **denies** with a reason the model is shown, because BD-025's
+unattended default is deny and this build has nowhere to ask (the Question surface is unbuilt).
+
+**Decisions and assumptions, each of which a reviewer should be able to disagree with.**
+
+1. **`WorkspaceProvider.attach` stays on the provider.** TD-021's amendment says the runner obtains
+   the attachment *locally*; the honest reading in this build is that it obtains it from the launcher
+   that created the run and then touches no daemon — which is what the provisioner shape gives. A
+   `readLocalAttachment(controlRoot, runId)` for a **split** deployment was deliberately not written:
+   it would have no caller until Q52's transport exists, and a collaborator with no caller is the
+   shape standing rule 31 is about. The contract case *"refuses to attach after the workspace has been
+   killed"* also depends on the daemon probe, so removing it needed a replacement nobody asked for.
+2. **`attach` now waits for the control socket, and that closed a live defect.** Measured by the new
+   check before it existed: `create` returns when the container has *started*, the shim then boots
+   Node and `listen()`s, and a runner that connects immediately gets `connect ENOENT` on a healthy
+   workspace, 8 ms in, reported as `Failed to spawn Claude Code process`. **The consequence, sized
+   honestly** (review round 1 corrected an overstatement here): with Q59(a) in place each occurrence
+   costs **one failed `runs` row and one 30 s retry per task**, absorbed by the bounded start retry —
+   not a lost task. Without the wait *and* without Q59(a) it would have been the first run of every
+   task. The wait is a filesystem poll on the volume the launcher already mounts (30 s bound, 50 ms
+   poll), it throws `workspace_failed` — which `classifyProvisionFailure` calls **retryable** — and it
+   is what makes the ruling's *"the connect is a better liveness check than an inspect that races it"*
+   true rather than aspirational. **Both directions are asserted**, which round 1 found they were not:
+   shortening the loop to one look left 37/37 green, so
+   `packages/infrastructure/src/workspace/provider.test.ts` › *"waits for a shim that starts listening
+   after attach was called"* now drives a shim that boots **late**, and that mutant dies by name
+   (calibrated: unmutated 38/38).
+3. **`buildWorkspaceSpec` lives in `packages/infrastructure/src/workspace/`, not in `application`.**
+   Its input is a `RunSpec` and the one `RunSpec` fixture this repository has is in infrastructure, so
+   putting the pure function in the application ring would have meant a second fixture — the drift the
+   first one exists to prevent. Nothing in `application` calls it; every caller is a composition root.
+4. **BD-025's narrow-never-widen rule holds by construction, and that is filed as Q62.** There is no
+   workspace section in `.agentic/config.yml`, so a project can say nothing about limits, runtime,
+   egress, retention or `readOnly`; a merge function nothing feeds would be untested. Q62 asks whether
+   to keep it that way and names the two fields that would be safe to make project-narrowable.
+5. **`ROLE=runner` is a worker** (criterion 7). The flag it used to set gated nothing, and gating the
+   agent runner on a **role** would be a lottery: pg-boss hands `stage.execute` to any subscribed
+   worker, so `ROLE=worker` beside `ROLE=runner` would give half the agent stages to a process that
+   composes no runner. Whether a process runs agents is therefore decided by configuration and never
+   by `ROLE`. The `runner` capability flag is deleted rather than left decorative; `ROLE=runner` is no
+   longer idle, so it now also gets the worker's pool floor, which is a correctness gain.
+6. **Migration 0016.** `run_messages` shipped `check (seq >= 1)` at WP-06 against a producer whose
+   first entry is `seq: 0`; nothing found out for ten work packages because nothing wrote a row. The
+   contracts and the producer win, the constraint becomes `>= 0`, and the alternative (translating at
+   the sink) is rejected in the migration's own text because it would make the stored `seq` and the
+   SSE cursor for one entry differ by one.
+7. **Q59(a)'s bound**: `MAX_RUN_START_ATTEMPTS = 3` at `RUN_START_RETRY_MS = 30_000`, carried in the
+   `stage.execute` payload as `start_attempts` the way `gate_checks` already rides one — because the
+   process that retries may not be the one that failed. A retryable failure **fails the run it
+   created** and leaves the task untouched, so a flap costs one visible `runs` row and never a row left
+   `running`.
+8. **The prompt measurement the row asked for, and it corrected the guess.** With
+   `@anthropic-ai/claude-agent-sdk@0.3.267` **both** halves travel on **stdin** and neither is in argv:
+   the user prompt as `{"type":"user",…}` frames, and `systemPromptAppend` inside the `initialize`
+   *control request* as `request.appendSystemPrompt`. The argv carries only options
+   (`--output-format`, `--model`, `--json-schema`, `--tools`, `--managed-settings`). Both directions
+   are asserted, because a later reader looking for the role prompt in argv would find nothing and
+   conclude the prompt was empty.
+
+**Two platform measurements that decided the shape of criterion 2's check**, and neither is a product
+defect: (a) a Unix socket created inside the Docker VM **cannot be connected to from a macOS host** —
+the host `stat`s the socket on a bind-backed volume and gets `ECONNREFUSED`; (b) the run shim
+**refuses to start** on a bind-backed control volume, because it `chmod 0600`s its socket after binding
+and `chmod` on a socket there answers `EINVAL` (`ws-<run>` exited 1 with
+`EINVAL: invalid argument, chmod '/ctl/ctl.sock'`). The refusal is correct — a socket whose mode the
+platform could not set is a socket whose access control it cannot state — so the *harness* changed:
+`startDockerFixture({ controlVolumeBind: false })` makes a plain named volume, and
+`scripts/runlet-launcher-check.mjs` runs the launcher **and** the runner inside one container
+(`runlet-launcher-inner.mjs`), which is TD-021's own deployment and Q52's "compose it in-process for
+now". Verdict on this machine: `PASS: runlet-launcher-check (7/7 checks)`.
+
+**Verdicts, from the final tree.** `PASS: verify` (4606 passed | 14 skipped), `PASS: verify:integration`
+(215), `PASS: verify:e2e` (83), `PASS: verify:ui` (245), `PASS: verify:web-e2e` (33), and
+`PASS: runlet-launcher-check (7/7 checks)` — the last one is not a `verify` target and needs
+`DOCKER_HOST` and a daemon. `verify:commits` has nothing to check: the implementer made no commit.
+
+**Stale sentences this work package falsified and could not fix itself** (standing rule 83 — the
+implementer may not edit `CLAUDE.md`, and the Resume note is the orchestrator's):
+
+- `CLAUDE.md:115` — *"One collaborator still has no production adapter — a `ClaudeRunner` (no launcher
+  transport, Q52) — so `startRuntime` composes `unavailableClaudeRunner`, which **throws**"*. The
+  adapter exists; what is absent is the **provisioner**, and the refusal is now conditional on
+  configuration. The same paragraph should name `apps/server/src/agent.ts` and
+  `docker-access.test.ts`.
+- The **Resume note** (`:20`, `:37`) — *"In production `unavailableClaudeRunner()` **throws**"* is still
+  true of a process with no launcher configuration and false as a statement about the build; and
+  *"Next, in order. (1) A row for Q52"* is done.
+- `PROGRESS:3915` — *"**`ClaudeRunner`** needs a workspace, and the runner→launcher transport is
+  **Q52**, deliberately unbuilt"* is now only the transport half.
+- Backlog **24** (`:2001`, `:2034`) — *"the pipeline composes no `WorkspaceProvider`"*: WP-14a's third
+  tier can now be reached through the same provisioner seam the e2e uses, without Q52.
+
 ## Discovered work (not in plan)
+- **The SSE half of the transcript is not composed** (WP-15g). `RunTranscriptSink`'s docblock says an
+  entry goes to `run_messages` *plus* the `run:<id>` SSE topic; nothing bridges that topic to `SseHub`
+  and nothing reads the rows back. It cannot be a `NOTIFY` payload — broadcasts are capped at 7 000
+  bytes and carry hints — so it has to be a read-back from the rows WP-15g finally writes, and it needs
+  a read API `apps/server/src/queries/` does not have. Belongs with the work package that renders a
+  live run.
+- **`run_messages.blob_id` is never set: a payload over 1 MB is stored whole** (WP-15g). technical/03
+  says payloads over 1 MB go to `blobs`; the sink writes the document as-is. It is bounded in practice
+  by `toolOutputMaxChars` (10 000 characters head and tail per tool result) and by the SDK's own
+  message sizes, so it is a gap rather than a leak — but a single very large assistant message would
+  land in one row.
+- **A launcher built from the environment cannot set the egress sidecar's command** (WP-15g).
+  `WorkspaceImages.egressCommand` exists on the provider and `readLauncherConfig` has no variable for
+  it, so a launcher built from env starts the sidecar with the image's default `CMD`. Correct for
+  WP-22's real `platform-egress` (tinyproxy's entrypoint is the proxy) and wrong for any stand-in
+  image, which exits immediately and leaves the workspace with `HTTPS_PROXY` pointing at a dead
+  container. Found while writing `runlet-launcher-check.mjs`, which does not depend on the sidecar.
+- **The 14-day retention for a paused or taken-over workspace is never applied** (WP-15g).
+  `buildWorkspaceSpec` sets `keepUntil` to three days because at create time nothing knows how the
+  task will end, and nothing extends it afterwards — technical/05 §5's "14 days for paused/taken-over"
+  is unimplemented. It belongs with the export/take-over path, which is where the other half of the
+  sentence lives.
 
 - **A one-way digest for the inbound delivery key.** Round 4 reconciled the redact-vs-refuse split and
   filed the option that has neither cost: hash the key instead of redacting it, so distinctness survives and

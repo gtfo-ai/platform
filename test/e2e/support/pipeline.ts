@@ -57,6 +57,12 @@ import {
 } from '@platform/integrations';
 import pg from 'pg';
 import type { MigratedDatabase } from '../../integration/support/migrated.js';
+import {
+  type AgentRunCapture,
+  PLANTED_MODEL_KEY,
+  scriptedWorkspaces,
+  type WorkspaceRelease,
+} from './agent-workspace.js';
 import { type Instance, startInstance } from './instance.js';
 
 export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001' as Id;
@@ -210,7 +216,31 @@ export interface PipelineE2E {
   }): Promise<{ readonly status: number; readonly body: unknown }>;
   /** Every `inbox` row, for the dedup assertions. */
   inbox(): Promise<readonly { provider: string; delivery_id: string; verified: boolean }[]>;
+  /**
+   * One entry per run the instance actually started, with the scripted CLI it drove — empty unless
+   * {@link StartPipelineOptions.agent} is `real-over-fake-cli`.
+   *
+   * `cli.stdin` is "every frame the SDK wrote to stdin, parsed" and `cli.spawnOptions` is what the
+   * SDK passed the spawn: between them they are the **bytes the CLI received**, which is the only
+   * place a claim about the prompt can be falsified.
+   */
+  readonly agentRuns: readonly AgentRunCapture[];
+  /** How each run's workspace was released, in order. Empty in `fake-runner` mode. */
+  readonly workspaceReleases: readonly WorkspaceRelease[];
+  /** Every `run_messages` row the production sink wrote, in order. */
+  transcript(): Promise<readonly TranscriptRow[]>;
   stop(): Promise<void>;
+}
+
+/** One `run_messages` row, as the e2e reads it back. */
+export interface TranscriptRow {
+  readonly run_id: string;
+  readonly seq: number;
+  readonly kind: string;
+  readonly payload: JsonObject;
+  readonly search_text: string | null;
+  readonly redaction_count: number;
+  readonly size_bytes: number;
 }
 
 export interface StartPipelineOptions {
@@ -285,6 +315,24 @@ export interface StartPipelineOptions {
    * microsecond boundary is not.
    */
   readonly jobs?: (jobs: Jobs) => Jobs;
+  /**
+   * Which runner the instance composes (WP-15g).
+   *
+   * `fake-runner` (the default, and what six e2e files use) passes `PipelineComposition.runner` and
+   * drives `FakeClaudeRunner`, which picks its scenario from `spec.stage` and never reads the prompt.
+   * `real-over-fake-cli` passes a **workspace provisioner** instead, so the instance composes the
+   * *production* `createClaudeRunner` — the real SDK `query()`, the real control protocol, the real
+   * `run_messages` sink, the real per-run redactor — and the only double is the scripted CLI process
+   * (`./agent-workspace.ts`). It is the only mode in which an assertion about the prompt can fail
+   * (standing rule 82), and it is also the mode that needs a model credential, which the harness
+   * plants.
+   *
+   * `none` passes **neither** seam and no credential, which is the state every production process is
+   * in today (Q52): the instance composes `unavailableClaudeRunner`, logs which piece is missing, and
+   * still runs intake, the gates, the status mapping, the workpad and every outbound provider call.
+   * It is Q59(b)'s acceptance case.
+   */
+  readonly agent?: 'fake-runner' | 'real-over-fake-cli' | 'none';
   /**
    * Start against a database another instance already used, and do not seed it again.
    *
@@ -532,6 +580,28 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
     ]);
 
+  /**
+   * The `real-over-fake-cli` half (WP-15g): a provisioner whose process is a scripted CLI, and the
+   * production runner above it.
+   *
+   * Built unconditionally so the closure is one shape, and only *passed* in that mode — passing both
+   * seams would let `composition.runner` win and the mode would silently be the old one.
+   */
+  const scripted = scriptedWorkspaces(
+    (stage) => {
+      const scenario = scenarios[stage];
+      if (scenario === undefined) {
+        throw new Error(`no scenario for stage "${stage}"`);
+      }
+      return scenario;
+    },
+    (spec) => {
+      specs.push(spec);
+    },
+  );
+  const realRunner = options.agent === 'real-over-fake-cli';
+  const noRunner = options.agent === 'none';
+
   const instance = await startInstance({
     label: options.label ?? 'pipeline',
     ...(options.reuse === undefined ? {} : { database: options.reuse.database }),
@@ -542,10 +612,18 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
       // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`).
       APP_DB_POOL_MAX: '16',
+      // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
+      // planted rather than absent precisely so the redaction assertions have something to look for.
+      ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),
       ...options.env,
     },
     // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
-    pipeline: { runner, registry, ...(options.jobs === undefined ? {} : { jobs: options.jobs }) },
+    pipeline: {
+      registry,
+      ...(realRunner ? { workspaces: scripted.provisioner } : {}),
+      ...(realRunner || noRunner ? {} : { runner }),
+      ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
+    },
   });
 
   const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
@@ -595,6 +673,15 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     projectId,
     userId,
     specs,
+    agentRuns: scripted.runs,
+    workspaceReleases: scripted.releases,
+    transcript: async () => {
+      const { rows } = await pool.query<TranscriptRow>(
+        `select run_id, seq, kind, payload, search_text, redaction_count, size_bytes
+           from run_messages order by created_at, seq`,
+      );
+      return rows;
+    },
     kbSearches: async () => Promise.all(kbSearchCalls),
     auditRows: async () => {
       const { rows } = await pool.query<IntegrationActionRow>(

@@ -256,14 +256,27 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           // Non-null on this branch by construction: `capabilities.worker` is what got us here and
           // it is one of the two conditions the stack is built under.
           stack: stack as NonNullable<typeof stack>,
+          agent: {
+            providerMode: config.providerMode,
+            modelApiKey: config.modelApiKey,
+            claudeBinary: config.claudeBinary,
+          },
           logger: loggerPort,
         });
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });
-        if (options.pipeline?.runner === undefined) {
-          // Named rather than defaulted: `unavailableClaudeRunner` refuses, it does not pretend.
+        /**
+         * **Which piece is missing, by name** (WP-15g, Q59(b)).
+         *
+         * `composePipeline` answers with a list rather than a boolean, so this warning names the
+         * thing an operator has to supply instead of restating that something is absent. A process
+         * with no launcher configuration is a legitimate deployment — it runs the gates, the status
+         * mapping, the workpad and every outbound provider call — so it warns rather than refusing to
+         * start, and an agent stage that reaches it fails in its own job and escalates the task.
+         */
+        if (pipeline.agentMissing.length > 0) {
           logger.warn(
-            { missing: ['ClaudeRunner (Q52: no runner/launcher transport)'] },
-            'the pipeline is composed without an agent runner: gates, status mapping, the workpad and every outbound provider call run and are audited, and a stage that needs an agent fails naming Q52',
+            { missing: pipeline.agentMissing },
+            'the pipeline is composed without an agent runner: everything except an agent stage runs and is audited, and a stage that needs an agent fails its run and escalates its task',
           );
         }
       }

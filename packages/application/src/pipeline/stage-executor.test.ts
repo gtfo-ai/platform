@@ -8,12 +8,19 @@
 import type { DomainEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { RunStartError } from '../ports/runner.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
-import { COST_UNREPORTED, runBudgetUsd, taskBudgetExhausted } from './stage-executor.js';
+import { RUN_START_RETRY_MS } from './jobs.js';
+import {
+  COST_UNREPORTED,
+  MAX_RUN_START_ATTEMPTS,
+  runBudgetUsd,
+  taskBudgetExhausted,
+} from './stage-executor.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 
@@ -269,5 +276,102 @@ describe('a run that could not be started', () => {
     expect(serialised).toContain('RunnerUnavailableError');
     expect(serialised).not.toContain('FAKE-PLANTED-secret-0123456789');
     expect(serialised).not.toContain('no ClaudeRunner is composed');
+  });
+});
+
+/**
+ * **A start that failed for a *transport* reason** — Q59(a), decided on WP-15g.
+ *
+ * The section above is the terminal case and is unchanged. This is the other half: the runner reaches
+ * its workspace over a Unix socket on a shared volume (TD-025 §2), so a launcher restarting is a
+ * condition that is over in seconds — while escalation happens on the *first* failure, so a flapping
+ * transport would park one task and need one human per flap.
+ *
+ * Both directions are asserted, because "it retries" and "the retry is bounded" are different claims
+ * and a build with only the first is a build that hides a dead launcher (standing rule 42).
+ */
+describe('a run whose start failed for a transport reason', () => {
+  const transportFailure = () =>
+    new RunStartError(
+      'the run shim did not answer on /run/agentic/ctl/<run>/ctl.sock — FAKE-PLANTED-secret-0123456789',
+      { retryable: true },
+    );
+
+  const harnessThatFlaps = (): PipelineHarness =>
+    harnessWith({
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          throwsOnStart: transportFailure(),
+        },
+      },
+    });
+
+  it('leaves the task at its stage and re-enqueues the stage on a timer', async () => {
+    const harness = harnessThatFlaps();
+    await harness.publish([ticketMatched()]);
+
+    // Still running, still at refinement, still on attempt 1: exactly the state `revalidate` admits,
+    // which is what makes the re-enqueue below a wake-up rather than a no-op.
+    expect(taskOf(harness).task.state).toBe('active');
+    expect(taskOf(harness).task.currentStage).toBe('refinement');
+    expect(escalationOf(harness)).toBeUndefined();
+    // The run really was created, so its failure is recorded rather than left `running` (WP-15c).
+    expect(harness.types()).toContain('run.failed');
+
+    const queued = harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute');
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.data).toMatchObject({ stage: 'refinement', start_attempts: 1 });
+    // A delay, not a spin: `drain` ran every job whose timer had come and this one had not.
+    expect(queued[0]?.startAfter?.getTime()).toBe(harness.clock.epochMs + RUN_START_RETRY_MS);
+  });
+
+  it('escalates once the attempts are spent, and not before', async () => {
+    const harness = harnessThatFlaps();
+    await harness.publish([ticketMatched()]);
+
+    const attempts: string[] = [taskOf(harness).task.state];
+    for (let round = 0; round < MAX_RUN_START_ATTEMPTS; round += 1) {
+      harness.clock.advance(RUN_START_RETRY_MS);
+      await harness.drain();
+      attempts.push(taskOf(harness).task.state);
+    }
+
+    // Two retries after the first failure, then the third failure escalates: the bound is
+    // `MAX_RUN_START_ATTEMPTS`, and the states show it rather than a single end assertion (rule 10).
+    expect(attempts).toEqual(['active', 'active', 'needs_human', 'needs_human']);
+    expect(escalationOf(harness)?.payload.reason).toContain('could not be started');
+    // One failed `runs` row per flap — the signal an operator reads, and the reason the bound exists.
+    expect(harness.types().filter((type) => type === 'run.failed')).toHaveLength(
+      MAX_RUN_START_ATTEMPTS,
+    );
+    // Nothing is queued after the escalation: an unbounded retry would hide the dead launcher.
+    expect(
+      harness.jobs.enqueued.filter((request) => request.queue === 'stage.execute'),
+    ).toHaveLength(0);
+  });
+
+  it('treats a failure it cannot classify as terminal, and carries no message into the log', async () => {
+    // The fail-closed default: only a `RunStartError` with `retryable: true` retries. A plain error
+    // — a programming fault, a bad spec — escalates on the first failure.
+    const harness = harnessWith({
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          throwsOnStart: new RunStartError('the launcher refused this spec', { retryable: false }),
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+
+    const flapping = harnessThatFlaps();
+    await flapping.publish([ticketMatched()]);
+    const serialised = JSON.stringify(flapping.events());
+    expect(serialised).toContain('RunStartError');
+    expect(serialised).not.toContain('FAKE-PLANTED-secret-0123456789');
+    expect(serialised).not.toContain('ctl.sock');
   });
 });

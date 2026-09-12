@@ -65,3 +65,32 @@ platform's layout, not about intent). A test read **off disk** — the shape of
 `workspace.DockerEngine` is constructed in **exactly one** file and `DOCKER_HOST` is read in **exactly
 one**, both under `apps/launcher/src/`. That is a checkable claim about this repository's own sources rather
 than a hope about a deployment. WP-22 asserts the container half over the compose file.
+
+### Amendment note (WP-15g, as built)
+
+The amendment above says *"`attach` is obtained **locally** by the runner from the control volume it already
+mounts"*. **As built, `attach` stays on `DockerWorkspaceProvider`**, and the reason is recorded here rather
+than left as a contradiction, because docs win over code and this record is the thing a future session will
+trust.
+
+**The rule is unchanged and is what matters**: no process that composes the pipeline or serves `/webhooks/*`
+constructs a Docker client. WP-15g's reviewer verified that it holds **structurally at the repository level**
+rather than by configuration — `apps/server` takes a `RunWorkspaceProvisioner` (`spawn` + `workdir` +
+`release`) and never a `WorkspaceProvider`, and `apps/launcher/src/docker-access.test.ts` is a **positive
+census** over `git ls-files`: one `workspace.DockerEngine` constructor file and one shipped `DOCKER_HOST`
+reader, both under `apps/launcher/src/`. An intent-to-added `apps/server/src/zz-mutant-engine.ts` kills both
+claims by name. The census's own docblock admits what it cannot see — the aliased form
+`const E = workspace.DockerEngine; new E({…})` passes — which is a named gap rather than a hidden one
+(rules 44, 48).
+
+**Why the mechanism moved.** A runner-side `readLocalAttachment` would have had **no caller** until Q52's
+transport exists, and *"built, composed by nothing"* is the defect this project spent WP-15a, WP-15c, WP-17
+and WP-15f unwinding — `createPipelineRuntime` was composed only by a test harness through twenty-three work
+packages (PROGRESS backlog 11 is the general shape). The function is about fifteen lines of filesystem work
+and gets written the day the transport needs it, which is the same day it acquires a caller.
+
+**What this leaves open, stated so nobody reads silence as completeness.** The **deployment** half —
+a compose file that binds the socket into the launcher container only — is **WP-22**'s, and the amendment
+above assigns it there. And **no test tier exercises the real `DockerWorkspaceProvider.attach`**: the
+contract suite runs the real provider only behind a daemon and an absent `platform-runtime` image, so the
+control-socket readiness handshake stays mutation-blind until WP-22 (PROGRESS, WP-15g's refiner note).

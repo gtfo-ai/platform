@@ -156,6 +156,20 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 ## Streaming and steering
 
 - `includePartialMessages: true`; every `SDKMessage`/`StreamEvent` is appended to the transcript store with a monotonic sequence and published to the UI channel (08). Compaction boundaries and subagent nesting are first-class transcript entries.
+
+> **Amended at WP-15g — what "the transcript store" is, and what half of this line is still a plan.**
+> The writer is `createPostgresTranscriptSink` (`packages/infrastructure/src/runner/`), composed by
+> `apps/server/src/agent.ts`, and it is the **first** thing in this repository that ever wrote a
+> `run_messages` row: the table has existed since `0006_transcripts.sql` (WP-06) and until WP-15g the
+> only sink in the tree was in-memory, which is why nobody found that the table's own
+> `check (seq >= 1)` contradicted a producer whose first entry is `seq: 0` — migration **0016** fixes
+> the constraint and carries the reasoning for which side won. The row stores the whole
+> `TranscriptEvent` as `payload` so a reader can parse it back with `transcriptEventSchema`, with
+> `kind`/`subtype`/`tool_use_id`/`tool_name`/`search_text` beside it as indexes into that document.
+> **"published to the UI channel" is not composed yet**: nothing bridges the `run:<id>` topic to
+> `SseHub`, and it cannot be a `NOTIFY` payload (broadcasts are capped at 7 000 bytes and carry
+> hints), so the frames a client renders have to be read back from these rows — which is what having
+> rows finally makes possible.
 - **Steer:** the run's input is an async queue; a `run.steered` command pushes an `SDKUserMessage` (author recorded). **Pause/cancel:** `interrupt()`; cancel then ends the run with `cancelled`. **Tighten:** `applyFlagSettings` to reduce permissions after untrusted input if a policy requires (future).
 - Heartbeat: last output timestamp; `stalled` after `stallTimeoutMs` → interrupt, mark stalled, pipeline retries once with failure context (research/01 Symphony).
 - Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the SDK `stderr` callback and the run log; the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
