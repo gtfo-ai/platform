@@ -4,6 +4,34 @@
 
 ## Resume note
 
+> **Session 5 — 2026-09-12.** Read this, then the **"Blocker briefs needing a human"** (one, WP-17's evals),
+> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-five rules**, each
+> with its evidence, each paid for with a review round. Then continue the loop in
+> `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
+
+**Session 5 so far.** `main` is at **`9b1187a`**, **green on GitHub** (`34688812021`, all jobs, read as
+`completed success` — not `in_progress`, rule 84). Clean tree, no worktrees, no open branches. Verified in
+the orchestrator's own shell at `0ba3baf` (`PASS: verify`, exit 0) and at `9b1187a` before the push
+(`PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e`, each exit 0).
+
+**Backlog 28 is RESOLVED at `9b1187a`**, first in the order a refiner argued for: CI's `e2e-fake-claude`
+had died on `5b01f73` with every test passing, on an uncaught `57P01` during teardown. The mechanism is in
+"WP notes — session 5" and in standing rule **85**: `pg-pool`'s `end()` resolves before the removed clients'
+sockets close, and no pool in the repository had an `error` listener. One review round (APPROVE with a
+rule-1 minor: ten harness pools were guarded *silently*, kinder than production — fixed) plus **one rejected
+push**: the new census flagged its own file the moment it was tracked (rule 59), having been green in every
+local run because an untracked file is invisible to `git ls-files` (backlog **10**'s hole, second instance —
+closed for this census, still open for `nul:check`).
+
+**Next, in the order the refiner set** (it checked the dependencies; the orchestrator's own order had not):
+(1) **WP-15h** — the client-vs-routes census and the run read API; no daemon; it is what makes WP-15g
+visible. (2) **WP-19** — cost ledger and rollups; fully unblocked, no Docker, no credential. (3) **WP-22** —
+images and compose, when the machine is free; read backlog **7**'s two measured obligations and backlog
+**27**'s criterion (a skip counts as a failure) first. (4) **WP-18** after an architect ruling on backlog
+**26**; then WP-14a, WP-21, WP-23; then M2 (WP-24–33); then M3.
+
+**The session 4 note follows, kept for its evidence; where it names a head or a next step, this note wins.**
+
 > **Session 4 — 2026-09-11/12.** Read this, then the **"Blocker briefs needing a human"** (there is one now),
 > then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-four rules**, each
 > with its evidence, each paid for with a review round. Then continue the loop in
@@ -96,6 +124,29 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+85. **A `close()` that has resolved is a claim about the library's bookkeeping, not about the socket — and
+   the guard you wrote today is green only until the file it lives in is tracked.** Two lessons from one
+   repair, backlog 28. First: CI's `e2e-fake-claude` died on `5b01f73` with every test passing because
+   `pg-pool`'s `end()` resolves when its client array is empty while `_remove` calls `client.end()`
+   **without awaiting it** (`pg-pool@3.14.0`, re-derived by the reviewer against `node_modules`), so
+   `database.close()` returned with a socket still attached and `drop … with (force)` on the next line
+   terminated it; the FATAL reached `pool.emit('error')` and **no pool in the repository had a listener**,
+   which an `EventEmitter` turns into a process death. The ledger's hypothesis was right about the
+   mechanism and wrong about the leak's shape — after `runtime.stop()` **no** backend remains, measured —
+   so nothing was forgotten and nothing could have been found by review: *"closed" meant the library had
+   stopped counting, not that the kernel had.* Ask what a resolved `end()`/`close()` actually promises
+   before dropping what it was attached to, and give every emitter an `error` listener whose asymmetry is
+   stated (production reports and serves; the harness absorbs **exactly** `57P01` and re-throws the rest).
+   Second, and the one that cost a rejected push: the census written to refuse a third pool site **flagged
+   its own file** the moment `git add` made it tracked — its docblock, written for a reviewer's nit,
+   contained the spelling the regex hunts — and every local run before that (implementer, reviewer,
+   orchestrator, three targets each) was green because an untracked file is invisible to `git ls-files`.
+   Rule **59** and backlog **10**'s hole, together, in a guard written the same day the ledger described
+   both. The census now walks `git ls-files --others --exclude-standard` too, with a case that plants a
+   tracked, an untracked and an ignored file and expects exactly the first two; `nul:check` still has the
+   gap. **When you ship a guard over the tree, run it once with your new files tracked, and once with a
+   planted file untracked** — the pre-push hook is the first thing that sees the tree the way CI will.
 
 84. **`in_progress` is not a verdict, and the moment you read it is the moment you must decide when to read
    it again.** WP-15g's commit `5b01f73` was **red on GitHub** — `e2e-fake-claude` failed — and the
@@ -967,7 +1018,22 @@ run plus the teardown dropping `CAP_DAC_OVERRIDE` — the capability is the *evi
 a fix that keeps it has not landed — and the **owner** is **WP-22**, which builds the compose file and the
 images and is the first place the volume layout is written down rather than constructed in a test.
 
-### 28. **CI's e2e job was red on the commit this session merged, and every test in it had passed** (TODO — **no work package owns it**)
+### 28. **CI's e2e job was red on the commit this session merged, and every test in it had passed** (**RESOLVED** at `9b1187a`, session 5, CI `34688812021` green — kept for its evidence; the measured mechanism is under "WP notes — session 5" and in standing rule **85**)
+
+> **RESOLVED, session 5.** The hypothesis below was right about the mechanism and wrong about the shape of
+> the leak: after `runtime.stop()` **no** backend remains (measured against `pg_stat_activity`), so nothing
+> was forgotten — `pg-pool`'s `end()` resolves once its client array is empty, and `_remove` calls
+> `client.end()` **without awaiting it** (`pg-pool@3.14.0`, re-derived by the reviewer), so
+> `database.close()` returns with a socket still attached and `drop … with (force)` on the next line
+> terminates it; the FATAL reaches `pool.emit('error')`, and **no pool in the repository had a listener**.
+> Closed in two places with different rules: the production pool reports and keeps serving (a failover
+> against an idle pooled connection would have taken `apps/server` down — a production defect the flake
+> exposed), the harness absorbs **exactly** `57P01` and re-throws everything else, the ten integration pools
+> built through `createDatabasePool` carry a strict logger with the same asymmetry, and a census in
+> `packages/infrastructure/src/db/pool-errors.test.ts` refuses a third construction site over tracked
+> **and** untracked files. Asserted from both sides on a real database; mutants re-derived by the reviewer
+> on copies. Local runs never reproduced the race; the first green Linux run after the fix is
+> `34688812021`, which is the first honest measurement (rule 71), not proof the class is gone.
 
 **What is wrong.** The e2e tier can fail its job on an **unhandled** PostgreSQL error raised after every
 test has reported green, and vitest says in the same breath that such a run may contain false positives.
@@ -1947,9 +2013,15 @@ undermines nothing today — `sweep.failed` is read in one place outside `outbox
 uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
 *trusting* `SweepReport`.
 
-### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO)
+### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO — **second instance at session 5**, closed for one census and still open here)
 **What is wrong.** The guard's scope is `git ls-files` (CLAUDE.md says so), so a **new** source file
 carrying a literal NUL passes `verify` until it is staged.
+
+> **Second instance, session 5 (rule 85).** The pool census written for backlog 28 was green in every local
+> run of three agents and turned red in the pre-push hook, because its own file — matching its own regex —
+> was untracked until the commit. That census now walks `git ls-files --others --exclude-standard` as well,
+> with the decision stated in its docblock and a case planting a tracked, an untracked and an ignored file.
+> `nul:check` is unchanged and this entry stays open; the shape of the fix is now in the tree to copy.
 
 **Evidence.** WP-16's implementer wrote literal NULs into two brand-new files — `knowledge/globs.ts`,
 where a NUL is the *right* sentinel and CLAUDE.md asks for the escape `\0`, and `kb-search.test.ts`,
