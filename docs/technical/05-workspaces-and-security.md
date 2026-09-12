@@ -41,3 +41,44 @@ One Unix socket per run on the `ctl` volume: runner ↔ shim frames for spawn/st
 
 ## Kubernetes later
 `WorkspaceProvider` implemented with Jobs or `agent-sandbox` claims, NetworkPolicy + Cilium FQDN policies, exec/attach WebSocket for the spawn hook, session store adapter for cross-node resume.
+
+## Amendment (WP-22, 2026-09-12) — the images exist, and two residuals they exposed
+
+**The run container has no host mount.** §2's `platform-runtime` image is
+`docker/runtime.Dockerfile`: the `claude` CLI pinned to the SDK version the platform runs (both come
+out of one `pnpm install --frozen-lockfile`, so they cannot drift), the six agent CLIs, and the
+bundled `agentic-runlet` as the entrypoint — one file with no runtime dependencies, held to that by
+`scripts/assert-runlet-bundle.mjs` during the image build. With it, `WorkspaceImages.runtimeSourceDir`
+is `null` and the create body carries **no binds at all**, which
+`test/e2e/workspace/docker-workspace.e2e.test.ts` now asserts against the daemon's own record rather
+than against the argument vector. Until WP-22 that same case asserted the opposite — one bind, the
+repository at `/repo` — which is what "the one hole" in `hardening.ts` meant.
+
+**The egress sidecar is tinyproxy, and the allow-list is now demonstrated rather than modelled.**
+`platform-egress` (`docker/egress.Dockerfile`, tinyproxy 1.11.2 pinned) runs as uid 1000 with
+`cap_drop ALL` and a read-only rootfs, and the e2e drives a request through it from inside the run
+container: the allowed host answers 200 and a host that is not on the list is refused 403, where
+both names are the **same container on the same address**. The rendered configuration lost its
+`User nobody`/`Group nobody` lines — not because they broke it (measured: with them present the real
+image starts and serves), but because the process does not honour them, which makes them a claim
+nothing enforces.
+
+**Residual 1: a filesystem that will not set a socket's mode.** The shim `chmod 0600`s its control
+socket after `listen`. On Docker Desktop for macOS with the control volume bind-backed onto a host
+directory (virtiofs), `chmod` answers `EINVAL` and the mode cannot be set at creation either — with
+`umask(0o177)` the guest still reports `0666` while the host reports `0755`. A fatal refusal there
+means the shim cannot start in the one arrangement a developer runs the real images in. It now
+checks the **property** instead of the call: `<ctl>/<run-id>` is `0700` owned by the shim's uid (the
+launcher creates it that way), and a Unix socket cannot be connected to without search permission on
+every directory in its path, so the directory denies exactly the set the `0600` would. When the
+directory does **not** carry that property the shim still refuses, naming both facts. Linux is
+unaffected — `chmod` succeeds and the branch is never taken.
+
+**Residual 2: the SDK computes the executable's path on the platform side.** `Options.pathToClaudeCodeExecutable`
+is `null` outside `local` mode, so the SDK resolves its own bundled binary, checks it exists **in the
+platform process' filesystem**, and hands that path to `spawnClaudeCodeProcess` — which the shim then
+executes *inside* the run container, where the path is the image's `/usr/local/bin/claude` and not
+the platform's `node_modules` path. No tier has run a real agent through the real image (WP-15g
+scoped that out and no criterion here needs it), so this is recorded rather than fixed: the fix is a
+`RunSpec.claudeCodePath` the workspace spec sets to the run image's path. PROGRESS carries it as
+discovered work.

@@ -1,7 +1,7 @@
 import type { LogFields, Logger } from '@platform/application';
-import type { workspace } from '@platform/infrastructure';
+import { runner, type workspace } from '@platform/infrastructure';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildLauncher, type LauncherRuntime } from './runtime.js';
+import { buildLauncher, type LauncherRuntime, launcherClock } from './runtime.js';
 
 const credentials: workspace.RunCredentialSource = {
   async mint() {
@@ -69,15 +69,60 @@ describe('buildLauncher', () => {
     });
     // The hole `hardening.ts` names. It is not a production configuration and the log says so, so
     // an operator who set it by copying a CI compose file finds out at startup.
-    expect(lines.map((line) => line.message).join('\n')).toContain(
-      'platform-runtime image does not exist yet',
-    );
+    expect(lines.map((line) => line.message).join('\n')).toContain('development configuration');
   });
 
   it('says nothing about a bind mount when there is none', () => {
     const { logger, lines } = recordingLogger();
     runtime = buildLauncher({ env: DAEMON, credentials, uid: 1000, logger });
-    expect(lines.map((line) => line.message).join('\n')).not.toContain('platform-runtime image');
+    expect(lines.map((line) => line.message).join('\n')).not.toContain('development configuration');
+  });
+
+  /**
+   * The timer that keeps the container alive (WP-22).
+   *
+   * `runner.systemClock` unrefs every timer it arms, which is right for `apps/server` and fatal
+   * here: the launcher has no server, no socket and no queue worker, so the retention sweep is the
+   * only handle it owns. Measured in the composed container — `launcher started`, exit 0, and
+   * `restart: unless-stopped` looping it about once a second, with no error anywhere and a sweep
+   * that never ran.
+   *
+   * **The first version of this case asserted nothing about `launcherClock`**: it read `hasRef()`
+   * off a plain `setTimeout` it had created itself, and never looked at the handle the clock
+   * returned — so it passed with `.unref()` restored, which is standing rule 3 in a test whose
+   * docblock claimed "both directions". A timer's ref state is only observable through the handle,
+   * and a `RunnerClock` returns a cancel function rather than the handle, so the only way to read
+   * it is to intercept the call. Both clocks are measured the same way, in one place.
+   */
+  const armAndCapture = (clock: typeof launcherClock): NodeJS.Timeout => {
+    let handle: NodeJS.Timeout | null = null;
+    const original = globalThis.setTimeout;
+    // @ts-expect-error — capturing the handle the clock creates is the only way to read its ref.
+    globalThis.setTimeout = (...args: Parameters<typeof setTimeout>) => {
+      handle = original(...args);
+      return handle;
+    };
+    let cancel: () => void;
+    try {
+      cancel = clock.setTimer(60_000, () => undefined);
+    } finally {
+      globalThis.setTimeout = original;
+    }
+    cancel();
+    if (handle === null) {
+      throw new Error('the clock did not call setTimeout, so there is no handle to read');
+    }
+    return handle;
+  };
+
+  it('arms its sweep with a timer that holds the event loop, unlike the runner clock', () => {
+    // The handle the *clock* made, not one this test made: with `.unref()` back in `launcherClock`
+    // this line fails, which is the whole point of the case.
+    expect(armAndCapture(launcherClock).hasRef()).toBe(true);
+    // The one it is not: `systemClock` unrefs, and a launcher composed on it exits as soon as
+    // `main()` returns. Reading both through the same helper is what makes the contrast evidence
+    // rather than two unrelated assertions.
+    expect(armAndCapture(runner.systemClock).hasRef()).toBe(false);
   });
 
   it('refuses a DOCKER_HOST it does not understand rather than falling back', () => {

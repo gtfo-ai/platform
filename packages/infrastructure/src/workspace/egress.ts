@@ -18,24 +18,37 @@
  * and `xgitlab.example.com` separate exact matching from substring matching, and `gitlabXexample.com`
  * separates an escaped dot from an unescaped one.
  *
- * ## What these tests do *not* prove — and one place the configuration is known to be wrong
+ * ## What the unit test proves, and what the daemon proved (WP-22)
  *
- * That tinyproxy applies the file this way. The test compiles the rendered pattern with
- * JavaScript's own regular expressions, which is a **model** of tinyproxy's POSIX ERE, and a model
- * is not the binary. Every directive below is **inferred from tinyproxy's documentation, not
- * measured against it**: no test in this repository has ever started the daemon. The binary
- * arrives with the `platform-runtime`/egress image in WP-22, which is the work package that can run
- * a request through it; `docs/TODO.md` carries that as a verification item. What the e2e here
- * *does* demonstrate is the property underneath — that the workspace has no route off its run
- * network at all, so a sidecar that denied nothing would still be the only path out.
+ * The unit test compiles the rendered pattern with JavaScript's own regular expressions, which is
+ * a **model** of tinyproxy's POSIX ERE, and a model is not the binary. Until WP-22 that was all
+ * there was: no test in this repository had ever started the daemon. The binary is now
+ * `platform-egress` (`docker/egress.Dockerfile`, tinyproxy 1.11.2 pinned), and
+ * `test/e2e/workspace/docker-workspace.e2e.test.ts` runs a **request through it** from inside the
+ * run container — an allowed host answers 200, a host that is not on the list is refused 403 —
+ * under exactly the flags `sidecarCreateBody` sets: uid 1000, `CapDrop: ['ALL']`, read-only rootfs.
  *
- * A known consequence of that gap, found by reading rather than by running (WP-14 review round 1):
- * `User nobody`/`Group nobody` below asks tinyproxy to drop privileges, while `sidecarCreateBody`
- * starts the container as uid 1000 with `CapDrop: ['ALL']` — and a process with no `CAP_SETUID`
- * cannot setuid, so **the real image would not start with this file as written**. It is left as
- * WP-22's, at the moment the binary first runs, rather than guessed at now: the fix is a line in
- * the config or a capability on the container, and only a running image can say which. `docs/TODO.md`
- * carries it.
+ * ## `User nobody` is gone, and the reason it was expected to matter turned out to be wrong
+ *
+ * WP-14's review found by reading — not by running — that `User nobody`/`Group nobody` asks
+ * tinyproxy to drop privileges while `sidecarCreateBody` starts the container as uid 1000 with
+ * every capability dropped, and predicted that **"the real image would not start with this file as
+ * written"** (PROGRESS backlog 7). Measured against the real image at WP-22, that prediction is
+ * **false**: with both lines present tinyproxy 1.11.2 starts, stays up as uid 1000, serves a
+ * proxied request to an allowed host (200) and refuses a filtered one (403, *"Proxying refused on
+ * filtered domain"*). It does not even warn. Standing rule 27 again — *measure a prescribed fix
+ * before applying it*.
+ *
+ * They are removed anyway, for the reason that survives the measurement rather than the one that
+ * did not: the process does **not** honour them, so they are a claim about this container that
+ * nothing enforces (standing rule 3), and they are a trap for the day somebody starts the sidecar
+ * as root, when the directive would suddenly bind and move the proxy off the uid the rest of the
+ * design assumes. The uid is the create body's to state, and it states it.
+ *
+ * `FilterExtended On` is likewise replaced by `FilterType ere`, which is the same setting under the
+ * spelling the pinned binary wants: with the old one it logs *"line 11: deprecated option
+ * FilterExtended, use FilterType"*, and the anchoring this whole module rests on is an **ERE**
+ * property, so it is not a directive to leave on a deprecation path.
  */
 import { egressHostSchema, type WorkspaceEgress, WorkspaceError } from '@platform/application';
 
@@ -90,8 +103,8 @@ export const renderEgressConfig = (egress: WorkspaceEgress): RenderedEgressConfi
   }
   const config = [
     '# Rendered per run by the launcher (technical/05). Do not edit: it is recreated every run.',
-    'User nobody',
-    'Group nobody',
+    // No `User`/`Group`: the container already runs as uid 1000 (`sidecarCreateBody`) and the
+    // directive is the create body's job, not this file's. See the measurement in the docblock.
     'Listen 0.0.0.0',
     `Port ${EGRESS_PORT}`,
     'Timeout 600',
@@ -100,7 +113,8 @@ export const renderEgressConfig = (egress: WorkspaceEgress): RenderedEgressConfi
     'DisableViaHeader Yes',
     `Filter "${EGRESS_CONFIG_MOUNT}/filter"`,
     'FilterURLs Off',
-    'FilterExtended On',
+    // `FilterExtended On` under the spelling tinyproxy 1.11 asks for; the old one warns.
+    'FilterType ere',
     'FilterCaseSensitive Off',
     'FilterDefaultDeny Yes',
     ...ports.map((port) => `ConnectPort ${port}`),

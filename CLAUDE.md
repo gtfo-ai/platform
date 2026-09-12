@@ -27,7 +27,7 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
 - `pnpm nul:check` fails when a tracked source file contains a literal NUL byte (a step of `verify:static`, which CI's lint job runs).
 - `pnpm conflict:check` fails when a tracked file carries merge debris — a conflict marker or a `.orig`/`.rej` artefact (a step of `verify:static`, which CI's lint job runs, **and** a pre-push hook job, because CI's verdict arrives after the push).
 - `pnpm secrets:scan` runs gitleaks over the working tree; the pre-commit hook scans the staged diff.
-- `docker compose up` for a full instance; `COMPOSE_PROFILES=local` for the local provider mode (lands with WP-22).
+- `docker compose up --build` for a full instance (`compose.yml`; `db`, `migrate`, `app`, `docker-socket-proxy`, `launcher`, and `db-backup` under the `backup` profile); `docker compose -f compose.yml -f compose.local.yml up` for the local provider mode (an override file, not a profile: a compose service without `profiles` always runs, so a second `app-local` service behind one started *both*). `node scripts/build-images.mjs [base|runtime|egress|platform|launcher] [--size-check]` builds the images from `docker/*.Dockerfile` — including the two no compose service runs, `platform-runtime` and `platform-egress`, which the launcher creates per run and which `test/e2e/workspace/docker-workspace.e2e.test.ts` needs on the daemon.
 
 ## Conventions
 - TypeScript strict, ESM, Node 24 (`engines: >=24`); zod for all boundaries; pino for logs (never `console.log` in server code); errors are typed, never swallowed.

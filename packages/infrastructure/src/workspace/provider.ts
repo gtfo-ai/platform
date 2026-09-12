@@ -532,6 +532,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         }),
       );
       await this.#engine.startContainer(made.container);
+      await this.#assertSidecarAlive(spec, made.sidecar);
 
       return {
         runId: spec.runId,
@@ -550,6 +551,54 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       await this.#teardown(spec.runId, made, spec.limits.stopGraceSeconds);
       throw error;
     }
+  }
+
+  /**
+   * The sidecar is still running when `create` returns, or the run does not start (WP-22).
+   *
+   * The workspace's `HTTPS_PROXY` points at a container name on an `internal: true` network. If
+   * that container is not there, the run does not fail: it succeeds at everything that needs no
+   * network and then hangs or errors on the first fetch the agent makes, with nothing in the
+   * launcher's log saying why — the proxy is the *only* route out, so its absence looks like the
+   * internet being broken.
+   *
+   * PROGRESS backlog 7 recorded the trigger and asked for this rather than for a knob:
+   * `readLauncherConfig` has `APP_WORKSPACE_EGRESS_IMAGE` and **no companion for a command**
+   * (`WorkspaceImages.egressCommand`), because in production `platform-egress`'s entrypoint *is*
+   * tinyproxy. The moment an operator points that variable at a stand-in — an `alpine` with no
+   * command, the shape this repository's own e2e used for two work packages — the container exits
+   * immediately and the workspace is left aimed at a dead name. A configuration check could not
+   * have caught it: the image is a string, and whether its entrypoint stays up is a fact about the
+   * image, not about the string.
+   *
+   * **What this checks is narrow, and narrow on purpose.** It asks the daemon, once, whether the
+   * sidecar is running at the moment the run container has been created and started — which is
+   * several hundred milliseconds of real work after `docker start` returned for the sidecar, and
+   * therefore long past the point at which an image with no long-lived process has exited. It is
+   * not a health check and not a poll: a sidecar that dies during the run is `kill`/`destroy`'s
+   * problem, and a wall-clock wait here would be a hardware assertion (standing rule 2). The
+   * failure is `workspace_failed`, which `classifyProvisionFailure` treats as retryable, and
+   * `create`'s own `catch` tears the whole run down — so a broken sidecar leaves nothing behind.
+   */
+  async #assertSidecarAlive(spec: WorkspaceSpec, sidecar: string | null): Promise<void> {
+    if (sidecar === null) {
+      return;
+    }
+    const inspect = await this.#engine.inspectContainer(sidecar).catch(() => null);
+    if (inspect !== null && inspect.State.Running) {
+      return;
+    }
+    const state =
+      inspect === null
+        ? 'gone'
+        : `${inspect.State.Status} (exit ${String(inspect.State.ExitCode)})`;
+    const logs = await this.#engine.containerLogs(sidecar, 5).catch(() => '');
+    throw new WorkspaceError(
+      'workspace_failed',
+      `the egress sidecar is ${state} after create, so the workspace's HTTPS_PROXY points at a ` +
+        `container that is not running (image ${this.#images.egress})`,
+      { runId: spec.runId, detail: logs.trim().split('\n').slice(-2).join(' | ').slice(0, 400) },
+    );
   }
 
   async #ensureVolume(name: string): Promise<void> {

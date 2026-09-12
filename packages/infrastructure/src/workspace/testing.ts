@@ -63,8 +63,19 @@ interface FakeCreateBody {
 }
 
 export interface FakeDaemonOptions {
-  /** Decides a helper's outcome from its name and script. Default: exit 0, no output. */
-  readonly script?: (container: FakeContainer) => { exitCode: number; logs: string };
+  /**
+   * Decides a container's outcome from its name and script. Default: exit 0, no output.
+   *
+   * `exited: true` makes `POST /start` leave the container **exited** rather than running, which is
+   * what an image with no long-lived process does — the shape that leaves a run aimed at a dead
+   * egress sidecar (PROGRESS backlog 7). Without it the fake could only model containers that stay
+   * up, which is kinder than the daemon (standing rule 1).
+   */
+  readonly script?: (container: FakeContainer) => {
+    exitCode: number;
+    logs: string;
+    exited?: boolean;
+  };
   /** `containerName:path` → the tar `GET /archive` answers with. */
   readonly archives?: Map<string, Buffer>;
   /**
@@ -78,6 +89,8 @@ export interface FakeDaemonOptions {
 export interface RecordedRequest {
   readonly method: string;
   readonly path: string;
+  /** The raw query string, because two of the daemon's flags live there and change behaviour. */
+  readonly query: string;
   readonly body: unknown;
 }
 
@@ -180,7 +193,7 @@ export class FakeDockerDaemon {
         return;
       }
     }
-    this.requests.push({ method, path: pathname, body });
+    this.requests.push({ method, path: pathname, query, body });
 
     const failure = this.#options.fail?.get(`${method} ${pathname}`);
     if (failure !== undefined) {
@@ -304,7 +317,7 @@ export class FakeDockerDaemon {
         return;
       }
       const outcome = this.#options.script?.(container) ?? { exitCode: 0, logs: '' };
-      container.state = 'running';
+      container.state = outcome.exited === true ? 'exited' : 'running';
       container.exitCode = outcome.exitCode;
       container.logs = outcome.logs;
       send(204, undefined);

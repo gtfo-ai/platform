@@ -19,13 +19,14 @@
  * at `/work/repo`, and the host that is unreachable from the workspace is reachable from a
  * container on the other network.
  *
- * ## What this file does not show, stated at each site
+ * ## The images are the real ones (WP-22)
  *
- * The `platform-runtime` and `platform-egress` images are WP-22's and do not exist; the stand-ins
- * and their consequences are in `test/e2e/support/docker-workspace.ts`. The most important
- * consequence: **tinyproxy filters nothing here**, so what is demonstrated about egress is the
- * *topology* — the workspace's network is `internal: true` and has no route off it, and the
- * sidecar is the only container of a run attached to two networks.
+ * The run container is `platform-runtime` and the sidecar is `platform-egress`, so this file no
+ * longer reasons about stand-ins: there is **no `/repo` bind mount** (the shim is the image's
+ * entrypoint), and tinyproxy really filters — "the workspace can reach the allowed host through the
+ * proxy and not the one next to it on the same address" is asserted below rather than deferred.
+ * `test/e2e/support/docker-workspace.ts` says how the images are obtained, and a missing one fails
+ * the suite instead of skipping it.
  */
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -36,14 +37,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runWorkspaceProviderContractSuite } from '../../contract/support/workspace/provider-suite.js';
 import {
   ALPINE_IMAGE,
+  controlSocketExists,
   type DockerFixture,
   docker,
   exportPath,
   plantInWorkspace,
   probeUnderRunContainerConfig,
   REPO_ROOT,
+  RUNTIME_IMAGE,
   relaxControlDirectoryForHost,
+  removeControlSocket,
   startDockerFixture,
+  startEgressTarget,
 } from '../support/docker-workspace.js';
 
 let fixture: DockerFixture;
@@ -513,8 +518,8 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
     const sidecar = (await fixture.engine.inspectContainer(
       handle.sidecarContainerId ?? '',
     )) as unknown as { NetworkSettings: { Networks: Record<string, unknown> } };
-    // One container on two networks *is* the network policy. The stand-in image runs `sleep`
-    // rather than tinyproxy (support file), so nothing here shows a request being filtered.
+    // One container on two networks *is* the network policy. What the proxy on it does with a
+    // request is the `egress policy` block below, against the real tinyproxy.
     expect(Object.keys(sidecar.NetworkSettings.Networks)).toHaveLength(2);
     const runContainer = (await fixture.engine.inspectContainer(handle.containerId)) as unknown as {
       NetworkSettings: { Networks: Record<string, unknown> };
@@ -522,19 +527,27 @@ describe('the hardening flags, as the daemon recorded them and as the kernel enf
     expect(Object.keys(runContainer.NetworkSettings.Networks)).toHaveLength(1);
   });
 
+  /**
+   * technical/05, in the daemon's own record: **no** host path in a run container.
+   *
+   * Until WP-22 this case asserted the opposite — exactly one bind, the repository read-only at
+   * `/repo` — because the shim had to be started from TypeScript source and `hardening.ts` named
+   * that as its single hole. With `platform-runtime` the shim is the image's entrypoint,
+   * `WorkspaceImages.runtimeSourceDir` is `null`, and the hole is closed rather than documented.
+   */
   it('mounts no host path into the run container', async () => {
     const inspect = (await fixture.engine.inspectContainer(handle.containerId)) as unknown as {
       Mounts: { Type: string; Source: string; Destination: string; RW: boolean }[];
     };
-    const binds = inspect.Mounts.filter((mount) => mount.Type === 'bind');
-    // Exactly one, and it is the named hole: the repository, read-only, because the
-    // `platform-runtime` image does not exist yet (WP-22). Every other mount is a named volume.
-    expect(binds).toHaveLength(1);
-    expect(binds[0]).toMatchObject({ Destination: '/repo', RW: false });
-    // Docker Desktop rewrites a bind source to `/host_mnt/<path>`; on Linux it is the path
-    // verbatim. Measured, not assumed — the first run of this file reported the prefix.
-    expect(binds[0]?.Source.endsWith(REPO_ROOT)).toBe(true);
+    expect(inspect.Mounts.filter((mount) => mount.Type === 'bind')).toEqual([]);
     expect(inspect.Mounts.some((mount) => mount.Source.includes('docker.sock'))).toBe(false);
+    // Paired with the positive, so an empty `Mounts` could not pass this (standing rule 42): the
+    // three named volumes are still there.
+    expect(inspect.Mounts.map((mount) => mount.Destination).sort()).toEqual([
+      '/cache',
+      '/ctl',
+      '/work',
+    ]);
   });
 });
 
@@ -734,7 +747,7 @@ describe('teardown ends the pid namespace (WP-13 obligation 3)', () => {
       const gone = await docker(['inspect', orphanId], { allowFailure: true });
       expect(gone.ok).toBe(false);
     } finally {
-      await docker(['rm', '-f', orphanId], { allowFailure: true });
+      await docker(['rm', '-f', '-v', orphanId], { allowFailure: true });
       await fixture.provider.destroy(handle);
     }
   }, 300_000);
@@ -779,6 +792,102 @@ describe('retention', () => {
       await fixture.provider.destroy(handle);
     }
   }, 180_000);
+});
+
+/**
+ * The readiness handshake, against the real provider and the real image (WP-22, PROGRESS backlog 27).
+ *
+ * **What was unguarded.** `attach` waits for the shim's control socket (`#waitForControlSocket`,
+ * `provider.ts`), and without that wait the first run of every task failed: `create` returns when the
+ * container has *started*, the shim then has to boot and `listen()`, and a runner that connects
+ * immediately gets `connect ENOENT` on a healthy workspace — measured at WP-15g, 8 ms in, reported as
+ * "Failed to spawn Claude Code process". The unit half is calibrated with a fake engine. The e2e half
+ * was not, and the honest measurement (taken at WP-22, before this case existed) is that it could not
+ * be: with `create` then `relaxControlDirectoryForHost` then `attach`, that middle step is a whole
+ * `docker run`, so the socket is always already there and shortening the wait to a single look left
+ * the file **green**.
+ *
+ * **Why the real image makes it sharper rather than softer.** The stand-in booted the shim with
+ * `node --import ts-source-resolver /repo/apps/runlet/src/index.ts`, which loads the whole
+ * `@platform/infrastructure` barrel; `platform-runtime` runs a 349 kB bundle. The gap between
+ * "container started" and "socket listening" is a different quantity, and it is smaller — so a test
+ * that waited for the race to happen would be flakier here, not less.
+ *
+ * **So the ordering is forced rather than waited for** (standing rule 76). The socket is removed while
+ * the container keeps running, which nothing can undo — the only thing that creates it is a shim
+ * starting, and this one has already started — then `attach` is called, then the absence is
+ * *observed*, and only then is the container restarted so a second shim listens. Every look `attach`
+ * takes before that restart sees nothing, which is what makes the one-look mutant fail by name while
+ * the unmutated wait passes.
+ */
+describe('attach waits for a shim that starts listening after it was called', () => {
+  it('attaches to a workspace whose socket appears only after attach', async () => {
+    const { handle } = await startRun();
+    try {
+      await relaxControlDirectoryForHost(fixture, handle.runId);
+      // The shim has listened at least once by now, and this is the state no shim can leave behind:
+      // socket gone, container up.
+      await removeControlSocket(fixture, handle.runId);
+      expect(await controlSocketExists(fixture, handle.runId)).toBe(false);
+
+      const attaching = fixture.provider.attach(handle);
+      // Sampled *after* `attach` was called: every look it has taken so far saw nothing. Without
+      // this line the case would be asserting a race; with it, the ordering is a recorded fact.
+      expect(await controlSocketExists(fixture, handle.runId)).toBe(false);
+
+      await docker(['restart', `ws-${handle.runId}`]);
+      const attachment = await attaching;
+      expect(attachment.socketPath.endsWith(`${handle.runId}/ctl.sock`)).toBe(true);
+      expect(attachment.workdir).toBe('/work/repo');
+      expect(await controlSocketExists(fixture, handle.runId)).toBe(true);
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 240_000);
+});
+
+/**
+ * The egress policy, through the real sidecar (WP-22's criterion).
+ *
+ * Every earlier statement about egress in this file is about *topology*: the run network is
+ * `internal: true`, the sidecar is the only container on two networks, the workspace has no default
+ * route. None of it showed a request being filtered, because the sidecar was `alpine` running
+ * `sleep`. This is the other half — `platform-egress` running tinyproxy under exactly the flags
+ * `sidecarCreateBody` sets (uid 1000, `CapDrop: ['ALL']`, read-only rootfs) with the allow-list
+ * `renderEgressConfig` wrote.
+ *
+ * The discriminating part is that both names are **the same container on the same address**
+ * (`startEgressTarget`), so a 403 for one of them cannot be "the host was unreachable": it is the
+ * filter, and nothing else (standing rule 43). The positive is what makes the negative mean something
+ * (rule 42) — a proxy that refused everything would pass the refusal assertion on its own.
+ */
+describe('egress policy', () => {
+  it('proxies the allowed host and refuses the one beside it', async () => {
+    const allowed = `allowed-${Math.random().toString(36).slice(2, 8)}`;
+    const denied = `denied-${Math.random().toString(36).slice(2, 8)}`;
+    const target = await startEgressTarget(fixture, allowed, denied);
+    const { handle } = await startRun({ egress: { hosts: [allowed], connectPorts: [443] } });
+    try {
+      const proxy = `http://egress-${handle.runId}:8888`;
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        // Two requests that differ only in the host, through the proxy the run container's own
+        // HTTPS_PROXY names, then the body of the allowed one.
+        `curl -s -o /dev/null -w "allowed=%{http_code}\\n" --max-time 20 -x ${proxy} http://${allowed}:${target.port}/; ` +
+          `curl -s -o /dev/null -w "denied=%{http_code}\\n" --max-time 20 -x ${proxy} http://${denied}:${target.port}/; ` +
+          `curl -s --max-time 20 -x ${proxy} http://${allowed}:${target.port}/`,
+        { image: RUNTIME_IMAGE },
+      );
+      expect(probe.output).toContain('allowed=200');
+      expect(probe.output).toContain('denied=403');
+      // And the body came from the server behind the proxy, not from tinyproxy's own error page.
+      expect(probe.output).toContain('EGRESS-TARGET-OK');
+    } finally {
+      await fixture.provider.destroy(handle);
+      await target.stop();
+    }
+  }, 240_000);
 });
 
 describe('create is atomic', () => {
@@ -850,7 +959,9 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
       },
       cleanup: async () => {
         if (created !== null) {
-          await docker(['rm', '-f', `ws-${created}`, `egress-${created}`], { allowFailure: true });
+          await docker(['rm', '-f', '-v', `ws-${created}`, `egress-${created}`], {
+            allowFailure: true,
+          });
           await docker(['network', 'rm', `run-${created}`], { allowFailure: true });
           await docker(['volume', 'rm', '-f', `ws-${created}`, `egress-${created}`], {
             allowFailure: true,

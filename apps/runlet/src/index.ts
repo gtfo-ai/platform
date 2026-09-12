@@ -3,7 +3,7 @@
  * `agentic-runlet` — the entrypoint of the run container (TD-025 §1).
  *
  * A composition root and nothing else: it reads the environment, builds the shim from
- * `@platform/infrastructure`'s `runlet` module and maps the process' own signals onto it. Every
+ * `@platform/infrastructure/runlet` and maps the process' own signals onto it. Every
  * decision it could get wrong lives in that module, where the unit tier can reach it; what is left
  * here is `process.exit` and argv, which is why this file is excluded from coverage the way
  * `apps/server/src/migrate.ts` is — and why the contract tier runs *this file* as a real process
@@ -15,12 +15,24 @@
  *   `agentic-runlet` (or `serve`)  listen on the control and credential sockets, own one child.
  *   `agentic-runlet credential get`  the workspace's git credential helper (technical/05).
  *
- * WP-22 packages this: TD-025 wants a single file with no runtime dependencies in the
- * `platform-runtime` image, so the entry is bundled (zod and the frame codec travel with it) rather
- * than shipped beside a `node_modules`. Nothing in this file assumes either arrangement.
+ * **WP-22 packages this, and the import above is part of the packaging.** TD-025 §1 wants a single
+ * file with no runtime dependencies in the `platform-runtime` image: `pnpm --filter @platform/runlet
+ * run build` bundles this entry to `dist/agentic-runlet.mjs` (zod and the frame codec travel with
+ * it), and `docker/runtime.Dockerfile` copies that one file in as `/usr/local/bin/agentic-runlet`.
+ * The narrow `@platform/infrastructure/runlet` subpath is what makes that bundle small and honest —
+ * the package **root** barrel reaches `pg`, `pg-boss`, the Agent SDK and (through
+ * `runlet/testing.ts`) `vitest`, none of which belongs in a run container. See
+ * `packages/infrastructure/src/runlet/entry.ts`. Nothing in this file assumes either arrangement:
+ * it runs the same from source under `scripts/ts-source-resolver.mjs`.
  */
 import process from 'node:process';
-import { runlet, runner } from '@platform/infrastructure';
+import {
+  createRunletLogger,
+  createRunletShim,
+  readRunletConfig,
+  runCredentialHelper,
+  systemClock,
+} from '@platform/infrastructure/runlet';
 
 const readStdin = async (): Promise<string> => {
   const chunks: Buffer[] = [];
@@ -36,7 +48,7 @@ const credentialMode = async (argv: readonly string[]): Promise<void> => {
     // No socket, no credential. Silence is what git reads as "this helper has nothing".
     return;
   }
-  const output = await runlet.runCredentialHelper({
+  const output = await runCredentialHelper({
     argv,
     stdin: argv[0] === 'get' ? await readStdin() : '',
     socketPath,
@@ -51,13 +63,13 @@ const FORCE_EXIT_MS = 10_000;
 
 const serveMode = async (): Promise<void> => {
   let forceExit: NodeJS.Timeout | null = null;
-  const config = runlet.readRunletConfig(process.env);
-  const logger = runlet.createRunletLogger({ level: config.logLevel });
-  const shim = runlet.createRunletShim({
+  const config = readRunletConfig(process.env);
+  const logger = createRunletLogger({ level: config.logLevel });
+  const shim = createRunletShim({
     controlSocketPath: config.controlSocketPath,
     credentialSocketPath: config.credentialSocketPath,
     token: config.token,
-    clock: runner.systemClock,
+    clock: systemClock,
     logger,
     childUid: config.childUid,
     childGid: config.childGid,

@@ -341,10 +341,26 @@ export class DockerEngine {
     );
   }
 
+  /**
+   * Removes a container **and the anonymous volumes it owns** (`v=true`).
+   *
+   * `v=false` was a leak, measured at WP-22: `alpine/git` — the image every helper container runs —
+   * declares `VOLUME /git`, so the daemon creates an anonymous volume for each of the five or six
+   * helpers a run uses, and `v=false` left every one of them behind for ever. One `verify:e2e` run
+   * produced **220** empty anonymous volumes on the developer machine this was found on; nothing
+   * sweeps them, because standing rule 60's sweep matches labels and an anonymous volume has none.
+   *
+   * `v=true` removes **only** anonymous volumes — the daemon never removes a named one this way,
+   * which is what makes this safe for the volumes this adapter actually cares about: `ws-<run>`,
+   * `egress-<run>`, the control volume and the cache are all named and all created explicitly, and
+   * the workspace volume in particular is *meant* to outlive its container (technical/05 §5's
+   * retention). Asserted in both directions in `engine.test.ts`, because a flag that removed too
+   * much and a flag that removed nothing look identical from the passing side.
+   */
   async removeContainer(id: string): Promise<void> {
     await this.#expect(
       'DELETE',
-      `/containers/${encodeURIComponent(id)}?force=true&v=false`,
+      `/containers/${encodeURIComponent(id)}?force=true&v=true`,
       [204, 404],
     );
   }

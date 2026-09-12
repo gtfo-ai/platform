@@ -216,11 +216,47 @@ Recorded here because a reviewer of TD-025 will want to know where the code went
   shim's own docblock at `killChild` states the guarantee at this width so no later reader takes the
   broader one.
 
+## Re-run against the real image (WP-22, 2026-09-12)
+
+Everything above was measured with the shim started from **TypeScript source** in `node:24-alpine`
+with this repository bind-mounted read-only at `/repo` — the arrangement technical/05 forbids a run
+container, and the only one available before `platform-runtime` existed. That image exists now
+(`docker/runtime.Dockerfile`), and the same seven checks were re-run against it:
+
+| | |
+|---|---|
+| Host | macOS 15 (darwin 25.6.0), arm64 |
+| Docker | client/server **29.7.2**, API **1.55**, `linux/arm64` |
+| Shim image | **`platform-runtime:dev`** — `claude` 2.1.267, `agentic-runlet` as the entrypoint, **no `/repo` mount** |
+| Driver image | `node:24-alpine` with `/repo` (the *runner's* side, which is the platform and may have it) |
+| Command | `RUNLET_CHECK_RUNTIME_IMAGE=platform-runtime:dev node scripts/runlet-container-check.mjs` — **7/7 passed**, 7.8 s |
+
+What the re-run changes about the evidence, and what it does not:
+
+- **check 5 is now the real packaging.** `an SDK query() completes through the shim in a hardened
+  container` ran with the shim being the image's bundled `/usr/local/bin/agentic-runlet` (349 kB, no
+  `node_modules`) rather than a TypeScript entry loading the whole `@platform/infrastructure` barrel
+  — which, before the bundle, pulled `pg`, `pg-boss`, the Agent SDK and `vitest` into a run
+  container. The shim logged `{"command":"/ctl/fake-claude-cli","cwd":"/tmp","pid":18,…}` and the
+  run completed `{"ok":true,"result":"the shim carried this"}`;
+- **the fake CLI moved onto the control volume.** With no `/repo` in the run container there is
+  nowhere else to put an executable both sides can name, and both sides must name it identically
+  because the SDK checks `existsSync` on the executable **on the runner's side** before handing the
+  command to `spawnClaudeCodeProcess`. The driver therefore mounts the run's sub-directory at `/ctl`
+  as well as the whole volume at `/run/agentic/ctl`;
+- **it still does not run the real `claude`.** The binary is in the image and answers `--version`
+  (2.1.267, matching the SDK the platform runs), but check 5 spawns the fake CLI, because a real one
+  needs a model credential this repository does not have. That is the same boundary WP-13 drew.
+
+The check keeps both arrangements: with `RUNLET_CHECK_RUNTIME_IMAGE` unset it behaves exactly as it
+did at WP-13, which is what a developer changing the shim wants.
+
 ## Reproducing
 
 ```
 node scripts/runlet-container-check.mjs          # 7 checks, ~40 s, needs a Docker daemon
 node scripts/runlet-container-check.mjs --keep   # leaves the volume and containers for inspection
+RUNLET_CHECK_RUNTIME_IMAGE=platform-runtime:dev node scripts/runlet-container-check.mjs
 ```
 It is deliberately not a `verify` target: `verify`'s steps are CI's steps
 (`scripts/verify-targets.ts`), and CI's lint and unit jobs have no daemon.

@@ -44,7 +44,7 @@
 import process from 'node:process';
 import './ts-source-resolver.mjs';
 
-const { startDockerFixture, RUNTIME_IMAGE, ALPINE_IMAGE, GIT_IMAGE, REPO_ROOT, docker } =
+const { startDockerFixture, RUNTIME_IMAGE, EGRESS_IMAGE, GIT_IMAGE, REPO_ROOT, docker } =
   await import(new URL('../test/e2e/support/docker-workspace.ts', import.meta.url).href);
 
 const RUN_ID = '9f3a1c2e-0000-4000-8000-00000000f00d';
@@ -99,7 +99,10 @@ try {
       '-e',
       `CHECK_RUNTIME_IMAGE=${RUNTIME_IMAGE}`,
       '-e',
-      `CHECK_EGRESS_IMAGE=${ALPINE_IMAGE}`,
+      // `platform-egress`, not a stand-in: since WP-22 `create` refuses a run whose sidecar is not
+      // running when it returns, and an image with no long-lived process exits immediately — which
+      // is the failure this check would otherwise report as "the control socket was never reached".
+      `CHECK_EGRESS_IMAGE=${EGRESS_IMAGE}`,
       '-e',
       `CHECK_GIT_IMAGE=${GIT_IMAGE}`,
       // The path the **host** must mount into every run container, so it is the host's path even
@@ -126,8 +129,13 @@ try {
       `${fixture.controlVolume}:/run/agentic/ctl`,
       '-w',
       REPO_ROOT,
-      RUNTIME_IMAGE,
+      // **`--entrypoint node`**, because `RUNTIME_IMAGE` is `platform-runtime` since WP-22 and its
+      // entrypoint is the run shim: without this the container starts `agentic-runlet node …` and
+      // answers `unknown mode "node"`. This container is the *platform* side — launcher and runner
+      // in one process — and only borrows the image for its Node runtime and its checkout mount.
+      '--entrypoint',
       'node',
+      RUNTIME_IMAGE,
       `${REPO_ROOT}/scripts/runlet-launcher-inner.mjs`,
     ],
     { allowFailure: true },

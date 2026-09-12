@@ -58,6 +58,29 @@ describe('Docker engine client', () => {
     expect(daemon.created).toEqual([]);
   });
 
+  /**
+   * The query string, both halves (WP-22).
+   *
+   * `v=false` leaked: `alpine/git` declares `VOLUME /git`, so every helper container the provider
+   * runs owns an anonymous volume the daemon then kept for ever — 220 of them from one `verify:e2e`
+   * run, invisible to any label sweep. `v=true` removes anonymous volumes and **never** a named
+   * one, which is the property that makes it safe here: `ws-<run>` is named and is meant to outlive
+   * its container (technical/05 §5).
+   *
+   * Asserted on the request the daemon received rather than on a constant, and in both directions —
+   * `force=true` has to survive the change, because without it a still-running container answers
+   * 409 and `destroy` stops being idempotent.
+   */
+  it('removes a container with its anonymous volumes, and forces', async () => {
+    const id = await engine.createContainer('c', { Image: 'x' });
+    await engine.removeContainer(id);
+    const removal = daemon.requests.find(
+      (recorded) => recorded.method === 'DELETE' && recorded.path.startsWith('/containers/'),
+    );
+    expect(removal?.query).toContain('v=true');
+    expect(removal?.query).toContain('force=true');
+  });
+
   it('sends the create body as JSON, so the daemon sees what the hardening built', async () => {
     await engine.createContainer('c', { Image: 'x', HostConfig: { CapDrop: ['ALL'] } });
     const create = daemon.requests.find((recorded) => recorded.path === '/containers/create');

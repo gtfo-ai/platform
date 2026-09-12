@@ -5,8 +5,8 @@
  * a test — the same split `apps/server` uses for `runtime.ts` and `main.ts`, and the reason
  * `index.ts` is the only file here excluded from coverage.
  */
-import type { Logger } from '@platform/application';
-import { runner, workspace } from '@platform/infrastructure';
+import type { Logger, RunnerClock } from '@platform/application';
+import { workspace } from '@platform/infrastructure';
 import { type LauncherConfig, readLauncherConfig } from './config.js';
 import { asLoggerPort, createLauncherLogger } from './logging.js';
 import { LauncherService } from './service.js';
@@ -45,6 +45,34 @@ export interface BuildLauncherOptions {
  * connecting to it. So a launcher on the wrong uid still fails at startup, with both numbers
  * named, before anything has been created.
  */
+/**
+ * The launcher's clock — `systemClock` **without** the `unref`, and that is what keeps the
+ * container alive (WP-22).
+ *
+ * `runner.systemClock` unrefs every timer it arms, deliberately: in `apps/server` the deadlines are
+ * a run's stall detector and its wall clock, and a pending one must never be the reason a process
+ * that is otherwise finished stays up. The launcher is the opposite shape. It has **no** server, no
+ * socket and no queue worker — Q52's transport is unbuilt — so the retention sweep's timer is the
+ * only handle it owns, and with that timer unrefed `main()` returns, the event loop empties, and the
+ * process exits 0 having done nothing.
+ *
+ * Measured at WP-22 against the composed container, which is the only place it can be seen: the
+ * launcher logged `launcher started` and exited, and `restart: unless-stopped` looped it about once
+ * a second — a crash-loop with no error in it, and a retention sweep that never ran. The same code
+ * in the unit tier is green, because a test process has its own reasons to stay alive.
+ *
+ * So the sweep keeps the process up, which is also the honest statement of what this container is
+ * for today. `service.stop()` cancels it, so SIGTERM still ends the process rather than waiting out
+ * the interval.
+ */
+export const launcherClock: RunnerClock = {
+  now: () => Date.now(),
+  setTimer: (delayMs, callback) => {
+    const handle = setTimeout(callback, delayMs);
+    return () => clearTimeout(handle);
+  },
+};
+
 export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime => {
   const config = readLauncherConfig(options.env);
   const logger = options.logger ?? asLoggerPort(createLauncherLogger({ level: config.logLevel }));
@@ -68,7 +96,7 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
   const service = new LauncherService({
     provider,
     broker: new workspace.RunCredentialBroker(options.credentials, logger),
-    clock: runner.systemClock,
+    clock: launcherClock,
     logger,
     exportDir: config.exportDir,
     retentionSweepMs: config.retentionSweepMs,
@@ -76,8 +104,9 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
   if (config.images.runtimeSourceDir !== null) {
     logger.warn(
       { source_dir: config.images.runtimeSourceDir },
-      'run containers mount the repository read-only because the platform-runtime image does not ' +
-        'exist yet (WP-22); this is not a production configuration',
+      'run containers mount the repository read-only from APP_WORKSPACE_RUNTIME_SOURCE_DIR; the ' +
+        'platform-runtime image needs no such mount and technical/05 forbids one, so this is a ' +
+        'development configuration',
     );
   }
   service.startRetentionSweep();

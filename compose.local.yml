@@ -1,0 +1,32 @@
+# BD-004's `local` provider mode, as an **override** of `compose.yml`.
+#
+#   docker compose -f compose.yml -f compose.local.yml up --build
+#
+# It changes the `app` service that already exists rather than adding a second one. That is not a
+# style choice: compose profiles have no "instead of" — a service without `profiles` always runs, so
+# a second `app-local` service behind `profiles: ['local']` gave *two* containers publishing
+# `${APP_PORT}:8080` the moment the profile was enabled, and the second could not bind. Measured
+# with `docker compose config --services`, and now asserted by
+# `test/e2e/compose/compose-config.e2e.test.ts` under both arrangements.
+#
+# ## What local mode is here, and what it is not
+#
+# It is the **platform** authenticating as a Claude Code subscription instead of with an API key:
+# `APP_PROVIDER_MODE=local` and `CLAUDE_CODE_OAUTH_TOKEN`, which `loadServerConfig` requires
+# together (an empty token with `local` is a startup error, not an anonymous run).
+#
+# It deliberately does **not** mount `${CLAUDE_BINARY}` and `${CLAUDE_CONFIG_DIR}` from the host, as
+# technical/11's sketch of this file imagined. The CLI does not run in this container: it runs in
+# the per-run `platform-runtime` container, which technical/05 forbids giving any host mount, and
+# the launcher has no variable that would add one. So the binary stays the run image's, pinned to
+# the SDK version the platform runs, and what changes here is only the credential the platform uses.
+
+services:
+  app:
+    environment:
+      APP_PROVIDER_MODE: local
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN for local mode}
+      # `api` mode's credential is meaningless here and would be a second secret in the container
+      # for nothing; blanking it is what makes "which mode is this instance in" answerable from the
+      # environment rather than from two variables that disagree.
+      ANTHROPIC_API_KEY: ''

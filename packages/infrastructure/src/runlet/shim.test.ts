@@ -12,11 +12,13 @@
  *    something structural ("the pid disappears", "the marker exists"), which is the shape the
  *    ci-fix entry argues for.
  */
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { type LogFields, silentLogger } from '@platform/application';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { manualClock } from '../runner/clock.js';
 import {
+  assertControlDirectoryProtects,
   createRunletShim,
   type RunletShim,
   type RunletShimOptions,
@@ -876,5 +878,126 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     runner.send(spawnFrame('process.exit(0)'));
     await runner.next('exit');
     await expect(connectProbe(harness.volume.credentialSocketPath)).rejects.toThrow();
+  });
+});
+
+/**
+ * The fallback for a filesystem that will not `chmod` a socket (WP-22).
+ *
+ * The branch exists because Docker Desktop's virtiofs answers `EINVAL` to `chmod` on a Unix socket
+ * — measured; the module docblock has the numbers — which made the shim refuse to start on the one
+ * arrangement a developer runs the real images in. The property the `0600` buys is "nothing but
+ * this uid can open it", and a `0700` directory owned by this process denies the same set, so the
+ * fallback checks the property rather than the call.
+ *
+ * Asserted in both directions, because a fallback that accepted anything and a fallback that is
+ * never reached look identical from the passing side (standing rule 42): the same failure with a
+ * directory that does **not** protect the socket is still refused, and the message names what it
+ * found.
+ */
+describe('the run shim: the socket mode a filesystem refuses to set', () => {
+  const cause = Object.assign(new Error("EINVAL: invalid argument, chmod '/ctl/ctl.sock'"), {
+    code: 'EINVAL',
+  });
+
+  it('accepts a 0700 directory owned by this process as the protection instead', async () => {
+    const volume = await createControlVolume();
+    try {
+      const warnings: { fields: LogFields; message: string }[] = [];
+      await chmod(volume.dir, 0o700);
+      await expect(
+        assertControlDirectoryProtects(volume.controlSocketPath, cause, {
+          debug: () => undefined,
+          info: () => undefined,
+          warn: (fields, message) => warnings.push({ fields, message }),
+          error: () => undefined,
+        }),
+      ).resolves.toBeUndefined();
+      // The residual is logged rather than swallowed: an operator reading the run's log learns which
+      // guarantee is carried by the directory instead of by the socket.
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.message).toContain('0700 owner-only directory');
+      expect(warnings[0]?.fields['directory_mode']).toBe('700');
+    } finally {
+      await volume.cleanup();
+    }
+  });
+
+  it.each([
+    ['a group-readable directory', 0o750],
+    ['a world-traversable directory', 0o755],
+    ['a directory anyone may write into', 0o777],
+  ])('still refuses when the directory does not protect it either: %s', async (_name, mode) => {
+    const volume = await createControlVolume();
+    try {
+      await chmod(volume.dir, mode);
+      await expect(
+        assertControlDirectoryProtects(volume.controlSocketPath, cause, silentLogger),
+      ).rejects.toThrow(/does not protect it either: mode 7[0-7][0-7]/);
+    } finally {
+      await volume.cleanup();
+    }
+  });
+
+  /**
+   * The directory is owned by **this** process, not merely `0700` (standing rule 42).
+   *
+   * A `0700` directory owned by somebody else denies this process, so the socket inside it is not
+   * reachable by the runner either — and the mode alone cannot tell the two apart. Every other case
+   * here varies the mode, which would leave the owner half of the condition asserted by nothing.
+   */
+  it('refuses a 0700 directory owned by another uid, and names both numbers', async () => {
+    const volume = await createControlVolume();
+    const owner = process.getuid?.() ?? -1;
+    const spy = vi.spyOn(process, 'getuid').mockReturnValue(owner + 1);
+    try {
+      await chmod(volume.dir, 0o700);
+      await expect(
+        assertControlDirectoryProtects(volume.controlSocketPath, cause, silentLogger),
+      ).rejects.toThrow(new RegExp(`owner ${owner}, this process ${owner + 1}`));
+    } finally {
+      spy.mockRestore();
+      await volume.cleanup();
+    }
+  });
+
+  /**
+   * A `chmod` that failed for a reason the directory says nothing about still refuses.
+   *
+   * The first version of this fallback caught *every* error, which would have turned `EPERM` — this
+   * process does not own the socket it just created — into a warning and a start. The fallback is
+   * for a filesystem that cannot represent the mode, and nothing else.
+   */
+  it.each([
+    ['EPERM', 'the socket belongs to somebody else'],
+    ['ENOENT', 'the socket is gone'],
+    ['EIO', 'the filesystem failed'],
+  ])('re-throws a %s rather than treating it as an unsupported operation', async (code) => {
+    const volume = await createControlVolume();
+    try {
+      // The directory *does* protect it, so only the error code decides the outcome.
+      await chmod(volume.dir, 0o700);
+      await expect(
+        assertControlDirectoryProtects(
+          volume.controlSocketPath,
+          Object.assign(new Error(`${code}: something else`), { code }),
+          silentLogger,
+        ),
+      ).rejects.toThrow(new RegExp(`^${code}: something else$`));
+    } finally {
+      await volume.cleanup();
+    }
+  });
+
+  it('names the chmod failure it started from, so the log is not two mysteries', async () => {
+    const volume = await createControlVolume();
+    try {
+      await chmod(volume.dir, 0o755);
+      await expect(
+        assertControlDirectoryProtects(volume.controlSocketPath, cause, silentLogger),
+      ).rejects.toThrow(/EINVAL: invalid argument/);
+    } finally {
+      await volume.cleanup();
+    }
   });
 });

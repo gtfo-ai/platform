@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * `platform-launcher` — the process entrypoint (TD-021, `ROLE=launcher`).
+ * `platform-launcher` — the process entrypoint (TD-021, `docker/launcher.Dockerfile`).
+ *
+ * **Not** a `ROLE` of the product image: `apps/server/src/role.ts` has `all | api | worker |
+ * runner | indexer` and never had a `launcher`, and TD-021's WP-15g amendment says why the
+ * separation has to be a *container* rather than a role — `ROLE=all` is the shipped default, so a
+ * role would put the Docker socket beside the platform's only unauthenticated endpoint.
  *
  * A composition root and nothing else: environment in, signals mapped, `process.exit` out. Every
  * decision it could get wrong is in `runtime.ts`, where the unit tier can reach it — which is why

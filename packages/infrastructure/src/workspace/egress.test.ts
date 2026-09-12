@@ -61,7 +61,33 @@ describe('rendered tinyproxy configuration', () => {
   it('denies by default and matches the host rather than the URL', () => {
     expect(rendered.config).toContain('FilterDefaultDeny Yes');
     expect(rendered.config).toContain('FilterURLs Off');
-    expect(rendered.config).toContain('FilterExtended On');
+    // The spelling the pinned binary wants. `FilterExtended On` is the same setting and still
+    // works, but tinyproxy 1.11.2 answers it with `line 11: deprecated option FilterExtended, use
+    // FilterType` — measured against `platform-egress` — and the anchoring the filter file relies
+    // on is an ERE property, so it is not a directive to leave on a deprecation path.
+    expect(rendered.config).toContain('FilterType ere');
+    expect(rendered.config).not.toContain('FilterExtended');
+  });
+
+  /**
+   * The uid is the create body's statement, not this file's — and the prediction that made this an
+   * obligation was wrong.
+   *
+   * WP-14's review found by reading that `User nobody`/`Group nobody` asks tinyproxy to setuid
+   * while `sidecarCreateBody` starts the container as uid 1000 with `CapDrop: ['ALL']`, and
+   * concluded the real image *"would not start with this file as written"* (PROGRESS backlog 7).
+   * **Measured at WP-22 against `platform-egress` (tinyproxy 1.11.2), with both lines present:** it
+   * starts, stays up as uid 1000, proxies to an allowed host (200) and refuses a filtered one
+   * (403). The lines are removed because the process does not honour them — a claim about this
+   * container that nothing enforces (standing rule 3) and a trap the day somebody starts the
+   * sidecar as root — not because they broke it.
+   *
+   * The behaviour itself is asserted where a binary can answer: the request through the real
+   * sidecar in `test/e2e/workspace/docker-workspace.e2e.test.ts`.
+   */
+  it('states no user or group, because the container already runs as uid 1000', () => {
+    expect(rendered.config).not.toMatch(/^User /m);
+    expect(rendered.config).not.toMatch(/^Group /m);
   });
 
   it('bounds the ports CONNECT may name', () => {

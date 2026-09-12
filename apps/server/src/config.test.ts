@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -176,7 +176,9 @@ describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
     const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });
     // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
-    // the pipeline's three job workers, HTTP and maintenance.
+    // the pipeline's job workers, HTTP and maintenance. Every term is symbolic on purpose: the
+    // count of pipeline workers belongs to `POOL_RESERVATIONS`, and this comment saying "three"
+    // while the constant said four is PROGRESS backlog 22's seventh site.
     expect(requiredPoolConnections(config)).toBe(
       5 +
         POOL_RESERVATIONS.jobs +
@@ -223,10 +225,46 @@ describe('pool sizing', () => {
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 
-  it('accepts the documented default pool for the default concurrency', () => {
-    // .env.example ships APP_DB_POOL_MAX=14 and APP_DISPATCH_MAX_CONCURRENCY=1; if this ever fails,
-    // the shipped defaults no longer start.
-    expect(() => load()).not.toThrow();
+  /**
+   * The value `.env.example` ships, read out of the file (PROGRESS backlog 22).
+   *
+   * The test this replaces commented *".env.example ships APP_DB_POOL_MAX=14"* and then called
+   * `load()` with nothing — which exercises the **code** default (13), so the sentence about the
+   * file was decoration and the two shipped defaults for one knob were free to disagree. They did:
+   * 13 in `packages/infrastructure/src/db/config.ts` and 14 in `.env.example`, with nothing holding
+   * the second. `git grep` over `*.ts`/`*.mjs` found four files mentioning `.env.example` and none
+   * reading it.
+   *
+   * So this reads the file. It deliberately adds **no** prose about the arithmetic — that is the
+   * defect, not the remedy; the floor is `requiredPoolConnections`, and both shipped values are
+   * compared against it rather than against a number written down an eighth time.
+   */
+  const envExampleValue = (name: string): string => {
+    const text = readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8');
+    const line = text.split('\n').find((entry) => entry.startsWith(`${name}=`));
+    if (line === undefined) {
+      throw new Error(`.env.example does not set ${name}`);
+    }
+    return line.slice(name.length + 1).trim();
+  };
+
+  it('starts on the pool size .env.example documents, and that value is at or above the floor', () => {
+    const documented = envExampleValue('APP_DB_POOL_MAX');
+    const concurrency = envExampleValue('APP_DISPATCH_MAX_CONCURRENCY');
+    const config = load({ APP_DB_POOL_MAX: documented, APP_DISPATCH_MAX_CONCURRENCY: concurrency });
+    expect(config.database.poolMax).toBe(Number(documented));
+    expect(Number(documented)).toBeGreaterThanOrEqual(requiredPoolConnections(config));
+  });
+
+  it('starts on the code default too, so the two shipped values cannot drift apart unnoticed', () => {
+    // The other half: `load()` with nothing set goes through `db.loadDatabaseConfig`'s own default,
+    // which is a *second* value for the same knob. Both must clear the floor; when one stops
+    // doing so, this names which.
+    const config = load();
+    expect(config.database.poolMax).toBeGreaterThanOrEqual(requiredPoolConnections(config));
+    expect(Number(envExampleValue('APP_DB_POOL_MAX'))).toBeGreaterThanOrEqual(
+      config.database.poolMax,
+    );
   });
 });
 

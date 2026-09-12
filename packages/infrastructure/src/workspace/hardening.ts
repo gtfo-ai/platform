@@ -8,20 +8,24 @@
  * inside it: a write outside the workspace, a capability-requiring syscall, `NoNewPrivs` as the
  * kernel reports it, and a route off the run network.
  *
- * ## The one hole, named
+ * ## The one hole, closed at WP-22 and kept as a development escape hatch
  *
  * TD-021's run container is the `platform-runtime` image: the Claude binary, git, the CLIs, and
- * the bundled run shim as its entrypoint. **That image is WP-22's and does not exist yet.** Until
- * it does, a run container can only be a stock image with the repository's sources mounted so the
- * shim can be started from TypeScript — which is what WP-13's `runlet-container-check.mjs` does,
- * and it is a bind mount from the host, the one thing technical/05 says a run container never has.
+ * the bundled run shim as its entrypoint. **That image now exists** (`docker/runtime.Dockerfile`),
+ * so the production shape is the shipped one: {@link WorkspaceImages.runtimeSourceDir} is `null`,
+ * the create body has **no** binds at all, and the shim starts from the image's own entrypoint.
+ * `hardening.test.ts` asserts the empty bind list from the create body, and
+ * `test/e2e/workspace/docker-workspace.e2e.test.ts` asserts it again from the daemon's own record
+ * of a container created from that image.
  *
- * So it is a *named* hole rather than a general knob: {@link WorkspaceImages.runtimeSourceDir}, set
- * from the launcher's own environment (`APP_WORKSPACE_RUNTIME_SOURCE_DIR`, never from project
- * config, which BD-025 only lets narrow), mounted read-only at a fixed `/repo`, and accepted only
- * if it is an absolute path, its own `realpath`, and a checkout of this repository — see
- * {@link assertSafeBindSource}. With it unset — the production shape — the create body has **no**
- * binds at all, and `hardening.test.ts` asserts that rather than trusting it.
+ * Before it existed, a run container could only be a stock image with the repository's sources
+ * mounted so the shim could be started from TypeScript — a bind mount from the host, the one thing
+ * technical/05 says a run container never has. That arrangement is still reachable, because a
+ * developer changing the shim wants it without an image rebuild, and it is a *named* hole rather
+ * than a general knob: {@link WorkspaceImages.runtimeSourceDir}, set from the launcher's own
+ * environment (`APP_WORKSPACE_RUNTIME_SOURCE_DIR`, never from project config, which BD-025 only
+ * lets narrow), mounted read-only at a fixed `/repo`, and accepted only if it is an absolute path,
+ * its own `realpath`, and a checkout of this repository — see {@link assertSafeBindSource}.
  */
 import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -51,23 +55,26 @@ export const RUNTIME_SOURCE_MOUNT = '/repo';
 export const WORKSPACE_MARKER = 'pnpm-workspace.yaml';
 
 export interface WorkspaceImages {
-  /** The run container's image. `platform-runtime` in production (WP-22). */
+  /** The run container's image. `platform-runtime` (`docker/runtime.Dockerfile`) in production. */
   readonly runtime: string;
   /** The egress sidecar's image (tinyproxy). */
   readonly egress: string;
   /**
    * The sidecar's command, when the image's own entrypoint is not the proxy.
    *
-   * Empty in production: `platform-egress`'s entrypoint *is* tinyproxy. It exists for the same
-   * reason {@link WorkspaceImages.runtimeSourceDir} does — that image is WP-22's and does not
-   * exist yet, so the e2e runs a stand-in that has to be told to stay alive. WP-22 removes it.
+   * Empty in production and in every tier since WP-22: `platform-egress`'s entrypoint *is*
+   * tinyproxy (`docker/egress.Dockerfile`). It is kept for a stand-in image, and the failure that
+   * shape used to cause silently — a sidecar that exits immediately, leaving the workspace's
+   * `HTTPS_PROXY` aimed at a dead container — is now refused at create time rather than by a
+   * variable nobody sets (PROGRESS backlog 7).
    */
   readonly egressCommand?: readonly string[];
   /** A git-bearing image for the mirror, clone and export helpers. */
   readonly git: string;
   /**
-   * WP-22 removes this. Absolute host path of the repository, mounted read-only at `/repo` so the
-   * run shim can be started from source until the `platform-runtime` image exists.
+   * Absolute host path of the repository, mounted read-only at `/repo` so the run shim can be
+   * started from source instead of from the image. `null` everywhere the platform ships, including
+   * every test tier since WP-22; see the docblock's "one hole".
    */
   readonly runtimeSourceDir: string | null;
 }
@@ -157,8 +164,9 @@ export interface BindSourceChecks {
  *
  * It is a guard against an **operator's** mistake, not against an attacker: the value comes from
  * the launcher's own environment, and anyone who can set it can also run the launcher. It bounds
- * the blast radius of a mis-set variable — the class of accident WP-22 removes entirely by shipping
- * an image that needs no bind at all.
+ * the blast radius of a mis-set variable — the class of accident the shipped `platform-runtime`
+ * image removes entirely by needing no bind at all (WP-22), leaving this for the developer who
+ * deliberately sets the variable.
  *
  * It is **not** proof that the directory is *this* checkout, or that the checkout is trustworthy: a
  * `pnpm-workspace.yaml` is a file anyone can create, so a hostile operator can still satisfy it.

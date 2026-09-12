@@ -45,7 +45,7 @@ if (scenario) {
   const child = spawn({
     command: cli,
     args: ['--scenario', scenario, '--pid-file', '/tmp/child.pid'],
-    cwd: '/repo',
+    cwd: process.env['RUNLET_CHILD_CWD'] ?? '/repo',
     env: { PATH: process.env['PATH'] ?? '/usr/local/bin:/usr/bin:/bin' },
     signal: new AbortController().signal,
   });
@@ -73,7 +73,7 @@ async function drive() {
           onStderr: (chunk) => stderrLines.push(chunk),
         }),
         pathToClaudeCodeExecutable: cli,
-        cwd: '/repo',
+        cwd: process.env['RUNLET_CHILD_CWD'] ?? '/repo',
         env: { PATH: process.env['PATH'] ?? '/usr/local/bin:/usr/bin:/bin' },
       },
     })) {

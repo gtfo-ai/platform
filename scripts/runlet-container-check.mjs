@@ -38,6 +38,30 @@ const RUN_ID = 'run-x';
 const TOKEN = 'run-token-container-check-0000000';
 const IMAGE = process.env['RUNLET_CHECK_IMAGE'] ?? 'node:24-alpine';
 const ALPINE = process.env['RUNLET_CHECK_ALPINE'] ?? 'alpine:3.21';
+/**
+ * The **real** run image, when there is one (WP-22).
+ *
+ * With it set, the shim container is `platform-runtime` started from its own entrypoint with **no
+ * `/repo` bind mount** — the arrangement technical/05 requires of a run container and the one this
+ * script could not produce before the image existed. Two things follow, and they are the whole of
+ * the difference:
+ *
+ *  - the fake CLI cannot come from the repository, because the repository is not mounted. It is
+ *    copied onto the control volume instead, and the driver container mounts that volume's run
+ *    sub-directory at `/ctl` as well as the whole volume at `/run/agentic/ctl`, so
+ *    `/ctl/fake-claude-cli` is the same path on both sides — which matters because the SDK checks
+ *    `existsSync` on the executable **on the runner's side** before handing the command to
+ *    `spawnClaudeCodeProcess`;
+ *  - the child's `cwd` is `/tmp` rather than `/repo`, for the same reason.
+ *
+ * Unset, everything below behaves exactly as it did at WP-13: `node:24-alpine` plus `/repo`.
+ */
+const RUNTIME_IMAGE = process.env['RUNLET_CHECK_RUNTIME_IMAGE'] ?? null;
+const SHIM_IMAGE = RUNTIME_IMAGE ?? IMAGE;
+/** Where the fake CLI lives, as **both** containers see it. */
+const FAKE_CLI =
+  RUNTIME_IMAGE === null ? '/repo/test/fixtures/runlet/fake-claude-cli' : '/ctl/fake-claude-cli';
+const CHILD_CWD = RUNTIME_IMAGE === null ? '/repo' : '/tmp';
 
 /** The hardening flags of technical/05 § "Hardening flags (per run container)". */
 const HARDENING = [
@@ -102,7 +126,7 @@ const waitForContainerExit = async (name, timeoutMs = 60_000) => {
 
 const cleanup = async () => {
   for (const name of [SHIM, PEER]) {
-    await docker(['rm', '-f', name], { allowFailure: true });
+    await docker(['rm', '-f', '-v', name], { allowFailure: true });
   }
   await docker(['volume', 'rm', VOLUME], { allowFailure: true });
   await docker(['network', 'rm', NETWORK], { allowFailure: true });
@@ -115,12 +139,20 @@ const prepareVolume = async () => {
     '--rm',
     '-v',
     `${VOLUME}:/ctl`,
+    // The repository, read-only, so the fake CLI can be copied onto the volume. This is the
+    // *preparation* container — the launcher's `#prepare` equivalent — and never the run
+    // container, which is the one technical/05 forbids a host mount.
+    '-v',
+    `${REPO}:/repo:ro`,
     ALPINE,
     'sh',
     '-c',
     `mkdir -p /ctl/${RUN_ID} /ctl/other-run && printf %s '${TOKEN}' > /ctl/${RUN_ID}/token && ` +
-      `printf %s 'another run' > /ctl/other-run/secret && chown -R 1000:1000 /ctl/${RUN_ID} && ` +
-      `chmod 600 /ctl/${RUN_ID}/token`,
+      `printf %s 'another run' > /ctl/other-run/secret && ` +
+      'cp /repo/test/fixtures/runlet/fake-claude-cli /ctl/' +
+      `${RUN_ID}/fake-claude-cli && chmod 755 /ctl/${RUN_ID}/fake-claude-cli && ` +
+      `chown -R 1000:1000 /ctl/${RUN_ID} && ` +
+      `chmod 700 /ctl/${RUN_ID} && chmod 600 /ctl/${RUN_ID}/token`,
   ]);
 };
 
@@ -190,7 +222,7 @@ const checkInternalNetwork = async () => {
     externalFailed && noDefaultRoute,
     `external lookup SERVFAILs: ${externalFailed}; default routes: ${lines[2]}`,
   );
-  await docker(['rm', '-f', PEER], { allowFailure: true });
+  await docker(['rm', '-f', '-v', PEER], { allowFailure: true });
 };
 
 const startShimContainer = async (extraEnv = []) =>
@@ -200,8 +232,9 @@ const startShimContainer = async (extraEnv = []) =>
     '--name',
     SHIM,
     ...HARDENING,
-    '-v',
-    `${REPO}:/repo:ro`,
+    // The whole difference between the two arrangements: with the real image there is no host
+    // mount and no command, because the shim **is** the image's entrypoint.
+    ...(RUNTIME_IMAGE === null ? ['-v', `${REPO}:/repo:ro`] : []),
     '--mount',
     `type=volume,source=${VOLUME},target=/ctl,volume-subpath=${RUN_ID}`,
     '-e',
@@ -214,12 +247,16 @@ const startShimContainer = async (extraEnv = []) =>
     'HOME=/tmp',
     ...extraEnv,
     '-w',
-    '/repo',
-    IMAGE,
-    'node',
-    '--import',
-    '/repo/scripts/ts-source-resolver.mjs',
-    '/repo/apps/runlet/src/index.ts',
+    CHILD_CWD,
+    SHIM_IMAGE,
+    ...(RUNTIME_IMAGE === null
+      ? [
+          'node',
+          '--import',
+          '/repo/scripts/ts-source-resolver.mjs',
+          '/repo/apps/runlet/src/index.ts',
+        ]
+      : []),
   ]);
 
 const waitForSocket = async (timeoutMs = 60_000) => {
@@ -249,7 +286,7 @@ const waitForSocket = async (timeoutMs = 60_000) => {
 };
 
 const checkHardenedQuery = async () => {
-  await docker(['rm', '-f', SHIM], { allowFailure: true });
+  await docker(['rm', '-f', '-v', SHIM], { allowFailure: true });
   await startShimContainer();
   const listening = await waitForSocket();
   if (!listening) {
@@ -279,11 +316,18 @@ const checkHardenedQuery = async () => {
       '-e',
       `RUNLET_TOKEN=${TOKEN}`,
       '-e',
-      'RUNLET_FAKE_CLI=/repo/test/fixtures/runlet/fake-claude-cli',
+      `RUNLET_FAKE_CLI=${FAKE_CLI}`,
+      '-e',
+      `RUNLET_CHILD_CWD=${CHILD_CWD}`,
       '-v',
       `${REPO}:/repo:ro`,
       '-v',
       `${VOLUME}:/run/agentic/ctl`,
+      // The run's own sub-directory, at the path the *shim* sees it, so the executable the SDK
+      // checks for on this side is the one the shim will execute on the other.
+      ...(RUNTIME_IMAGE === null
+        ? []
+        : ['--mount', `type=volume,source=${VOLUME},target=/ctl,volume-subpath=${RUN_ID}`]),
       '-w',
       '/repo',
       IMAGE,
@@ -316,7 +360,7 @@ const shimLogs = async () => {
 };
 
 const checkKillOnDisconnect = async () => {
-  await docker(['rm', '-f', SHIM], { allowFailure: true });
+  await docker(['rm', '-f', '-v', SHIM], { allowFailure: true });
   await startShimContainer(['-e', 'RUNLET_KILL_GRACE_MS=500']);
   if (!(await waitForSocket())) {
     record('kill on disconnect', false, await shimLogs());
@@ -343,13 +387,18 @@ const checkKillOnDisconnect = async () => {
       '-e',
       `RUNLET_TOKEN=${TOKEN}`,
       '-e',
-      'RUNLET_FAKE_CLI=/repo/test/fixtures/runlet/fake-claude-cli',
+      `RUNLET_FAKE_CLI=${FAKE_CLI}`,
+      '-e',
+      `RUNLET_CHILD_CWD=${CHILD_CWD}`,
       '-e',
       'RUNLET_SCENARIO=ignore-term',
       '-v',
       `${REPO}:/repo:ro`,
       '-v',
       `${VOLUME}:/run/agentic/ctl`,
+      ...(RUNTIME_IMAGE === null
+        ? []
+        : ['--mount', `type=volume,source=${VOLUME},target=/ctl,volume-subpath=${RUN_ID}`]),
       '-w',
       '/repo',
       IMAGE,
@@ -379,7 +428,10 @@ const main = async () => {
     '-f',
     '{{.Server.Version}} (API {{.Server.APIVersion}})',
   ]);
-  process.stdout.write(`docker server ${version.stdout}\nimages: ${IMAGE}, ${ALPINE}\n\n`);
+  process.stdout.write(
+    `docker server ${version.stdout}\nimages: shim=${SHIM_IMAGE}, driver=${IMAGE}, ${ALPINE}\n` +
+      `fake cli: ${FAKE_CLI} (cwd ${CHILD_CWD})\n\n`,
+  );
   await cleanup();
   await prepareVolume();
   await checkSubpath();

@@ -111,9 +111,13 @@ export default defineConfig({
           exclude: excludeEverywhere,
           // The e2e tier runs whole `apps/server` instances against a real PostgreSQL 18, so it
           // needs the same container the integration tier uses. technical/10 describes this tier as
-          // running against `docker compose` (app + db); the compose file lands with WP-22, and
-          // until it does, "the app in this process against a real database" is the same coverage
-          // without a second image to build on every run.
+          // running against `docker compose` (app + db), and `compose.yml` exists — but the tier
+          // deliberately does **not** use it: Testcontainers gives the same coverage ("the app in
+          // this process against a real database") without building the product image on every run,
+          // and it is the database this tier needs rather than the packaging. What *is* asserted
+          // against the real images lives in the tier too — `test/e2e/workspace/` drives
+          // `platform-runtime` and `platform-egress` through the real provider, and
+          // `test/e2e/compose/` reads the compose file itself.
           globalSetup: ['test/integration/support/global-setup.ts'],
           testTimeout: 180_000,
           hookTimeout: 180_000,

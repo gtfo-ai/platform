@@ -5,7 +5,7 @@
 ## Resume note
 
 > **Session 5 — 2026-09-12.** Read this, then the **"Blocker briefs needing a human"** (one, WP-17's evals),
-> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-five rules**, each
+> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-six rules**, each
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
@@ -60,11 +60,13 @@ local run because an untracked file is invisible to `git ls-files` (backlog **10
 closed for this census, still open for `nul:check`).
 
 **Next, in the order the refiner set** (it checked the dependencies; the orchestrator's own order had not) —
-**(1) WP-15h and (2) WP-19 are DONE**, see the rows. (3) **WP-22** — images and compose, when the machine is
-free; read backlog **7**'s three measured obligations, backlog **27**'s criterion (a skip counts as a
-failure), backlog **0b** (per-run control volume, owner WP-22) and **TD-026** (git and a mirror volume in
-the platform image) first. (4) **WP-18** — its ruling is taken (**TD-026**); its row is rewritten with the
-criteria. Then **WP-15h part 2** (the seven reads the census attributes to it), WP-14a, WP-21, WP-23; then
+**(1) WP-15h and (2) WP-19 are DONE**, see the rows. (3) **WP-22** — images and compose — is **in review**
+(round 1: four majors, none in the shim change, which was judged sound); backlog **7**'s three obligations
+are discharged and its `User nobody` claim **falsified by measurement**, backlog **27**'s criterion is met
+by CI **building** the commit's images (a missing image throws, never skips), and backlog **0b** is
+re-filed: its capability half closed at WP-14, its volume half refused against TD-025 §2 and TD-021, an
+orphan-directory sweep remains. (4) **WP-18a** — the git-backed vault and the indexer job under **TD-026**
+(brief drafted; the row is split, part b is the librarian pipeline). Then **WP-15h part 2** (the seven reads the census attributes to it), WP-14a, WP-21, WP-23; then
 M2 (WP-24–33); then M3.
 
 **The session 4 note follows, kept for its evidence; where it names a head or a next step, this note wins.**
@@ -161,6 +163,22 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+86. **A prediction copied into the tree becomes an observation, and the tree is where nobody re-derives it.**
+   Backlog 7 predicted, from documentation, that tinyproxy could not start as uid 1000 with `cap_drop ALL`
+   and `User nobody` in its config — *"will not start the real image as written"*. WP-22's implementer
+   wrote that prediction into `docker/egress.Dockerfile`'s docblock **as a measurement**, quoting an
+   error line (`tinyproxy: Unable to change to user "nobody"`, exit 1) that nothing had ever printed — and
+   in the same change measured the opposite (tinyproxy 1.11.2 starts, serves 200 to an allowed host and
+   403 to a filtered one, with the lines present), corrected the ledger, `egress.ts`, its test and TODO,
+   and left the docblock contradicting all four. The round-1 reviewer re-derived it and found the
+   docblock false; the implementer's own words: *"backlog 7's prediction quoted as an observation — my
+   fabrication"*. Rule 39 says a quoted figure must reproduce; rule 81 says re-derive the cause; this is
+   the step before both: **a sentence in a source docblock is read as something that happened on this
+   tree, so a ledger's hypothesis may not be copied there until it has** — write *"predicted, not
+   measured"* or write the measurement, never the prediction in the measurement's voice. The ledger
+   labels its hypotheses (rule 39) precisely so that a later reader can tell them apart; copying one
+   without the label strips the one word that made it honest.
 
 85. **A `close()` that has resolved is a claim about the library's bookkeeping, not about the socket — and
    the guard you wrote today is green only until the file it lives in is tracked.** Two lessons from one
@@ -1051,8 +1069,41 @@ ci-fix notes. First green run: **`34580312845`**, all eleven jobs. Left behind b
   (`stage-executor.ts:385,388,447`); and `handler_executions.error` / `event_dispatch.error`
   (`event-bus.ts:486` → `recordFailure:309`).
 
-### 0b. **A per-run control volume** — the fix the ci-fix routed around (TODO, not a ci-fix)
-An agent can lock its own control directory only because `#prepare` chowns it to uid 1000 on a **shared**
+### 0b. **No sweep reclaims an orphaned control *directory*** — what is left of "a per-run control volume" after WP-22 (TODO; the capability half is **CLOSED**, the volume half is **REFUSED**, the sweep is open)
+**Read the status before the history.** This entry was written as *"a per-run control volume — the fix the
+ci-fix routed around"*, and WP-22, which it named as owner, answered it in three parts (refiner, session 5;
+the full measurement is under "WP-22 — images and compose"). Kept in one place rather than split, because
+the evidence below is what a reader needs to judge all three.
+
+**1. The capability half is CLOSED, at WP-14, before this entry's owner ever picked it up.** The entry calls
+`CAP_DAC_OVERRIDE` *"the evidence the shape is wrong"*; WP-14's two-helper teardown
+(`#removeControlDirectory`) removed it. Verified read-only here: `grep -rn DAC_OVERRIDE` over the tree finds
+**three comments and no capability** — `packages/infrastructure/src/workspace/provider.ts:421,979,981` — plus
+the e2e cases that assert its absence. Every capability set the provider builds is `[]` or `['CHOWN']`
+(`packages/infrastructure/src/workspace/hardening.ts:281,332`). So the evidence this entry rested on is gone.
+
+**2. The volume half is REFUSED by WP-22, with two decisions named.** A **per-run** control volume
+contradicts TD-025 § 2, which gives the runner a *static* mount of the whole `ctl` volume precisely so that
+nothing has to mount a volume per run; and it contradicts TD-021's WP-15g amendment, which forbids the
+process that composes the pipeline from holding a Docker client — a per-run volume needs either a dynamic
+mount from the runner (a Docker client in the server) or the out-of-process transport that does not exist
+(Q52). A future session that wants the per-run volume back has to move one of those two decisions first,
+and should say which.
+
+**3. What is actually live is one level down: the shared `ctl` volume is labelled `role=shared` and is
+visible; a *directory* inside it is not.** `purgeExpired` lists **volumes** by `role=workspace` and never
+looks inside `ctl`, so a run whose `destroy` left step 1 or step 2 of `#removeControlDirectory` unfinished
+leaves either a live run token or an empty `0700` directory behind for ever. The provider's own docblock
+states it; what is missing is the sweep. **What it costs to leave**: an unbounded set of directories in a
+volume nothing enumerates, and — in the step-1 case — a run token outliving its run, which is the half that
+matters for BD-002 rather than for disk. **What done looks like**: `purgeExpired` lists the `ctl` volume's
+directories beside the volumes it already lists, removes one whose run is gone using the same two-helper
+removal, and reports it — asserted in both directions, because a sweep that found nothing and a sweep that
+looked at nothing are spelled the same (rule 18). **Depends on**: nothing. **Owner**: no work package —
+whoever next touches `purgeExpired`; WP-22 filed it as discovered work rather than doing it, because it is a
+change to the launcher's sweep and not to the image layout that row owns.
+
+**Original entry, for the record.** An agent can lock its own control directory only because `#prepare` chowns it to uid 1000 on a **shared**
 volume, which is why teardown needs `CAP_DAC_OVERRIDE` to reclaim it at all. A **per-run** control volume
 needs no capability, and it is visible to the label sweep rather than invisible to it (rule 60). Both the
 reviewer and the implementer reached this independently; it was held out of the ci-fix deliberately because
@@ -1209,6 +1260,35 @@ from the routes (`apps/server/src/app.ts:241`), so it can be the server's half b
 **Depends on / owner.** **None today**, and that is the finding: WP-06 built the server skeleton, WP-20 built
 the screens, and no row owned the surface between them. Now **WP-15h**, which depends on WP-06, WP-15g and
 WP-20 (all landed) and is blocked by neither Q52 nor WP-22 — it is Node and Postgres work, no daemon.
+
+### 33. **Nothing serves the SPA, and since WP-22 the bundle is in the image** (TODO — **no work package owned serving it**; the same shape as entry 29, one layer out)
+**What is wrong.** technical/09 and `apps/web/vite.config.ts` both say the app process serves the built
+bundle; no route does. So a `docker compose up` instance ships the SPA and answers 404 for it.
+
+**Evidence** (WP-22 implementer, session 5, discovered work). technical/09:6 reads *"Served as a static
+bundle by the app process with SPA fallback; same origin as the API and SSE"*, and `apps/web/vite.config.ts`
+says in production `apps/server` serves `dist/`. There is **no `@fastify/static`, no `sendFile`, and the only
+`setNotFoundHandler` answers JSON**. `docker/app.Dockerfile` builds `apps/web` and copies it to
+`/app/apps/web/dist`, so the **packaging half is done** and the serving half is a route plus a fallback rule.
+No `APP_WEB_ROOT` was added: a variable nothing reads is rule 31's shape.
+
+**What it costs to leave.** WP-22's own criterion is *"a working instance"*, and the product's entire user
+surface is unreachable on one. It also makes WP-23's dogfood criterion — a stranger installing in under an
+hour — unmeetable, because the stranger has nothing to look at. Same-origin is not a nicety: the SSE client
+and the API client both assume it, so any stop-gap that serves the bundle from a second origin re-opens auth
+and CORS questions the design closed.
+
+**What done looks like.** One static route plus a fallback, and the fallback is **allow-list shaped, not
+deny-list shaped** (rule 55): it must decide which paths are the client's without enumerating API prefixes to
+exclude, because a future `/api/*` or `/webhooks/*` route added by someone who never reads the fallback must
+not silently start returning `index.html`. Asserted by an unknown client path answering the shell, an unknown
+`/api/*` path still answering JSON 404, and `/events` unaffected.
+
+**Depends on / owner.** **None today** — that is the finding again, and it is entry 29's shape one layer out:
+WP-20 built the bundle, WP-22 packaged it, and no row owned the process that hands it to a browser. WP-23 is
+documentation and cannot own a route. **Recommendation: it belongs to WP-15h part 2**, which is open, already
+owns `apps/server/src/routes/` and already carries the client-route census — a sentence has been added to
+that row. The fallback rule is an engineering decision, not a product one; it needs no open question.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -2585,6 +2665,39 @@ covered" claim should name the run id, as the evidence above does.
 **Depends on / owner.** The images are **WP-22**'s and the criterion is on its row. The mutation measurement
 is owned by nobody and needs no image.
 
+### 34. **The SDK computes the CLI's path on the platform side and the shim executes it in the container, so the first real agent run in the real image execs a path that is not there** (TODO — latent, **no work package owns it**; found by WP-22)
+**What is wrong.** `Options.pathToClaudeCodeExecutable` is `null` outside `local` mode, so the SDK resolves
+its **own bundled** binary and passes that path as the spawn command; the run container's binary is
+`/usr/local/bin/claude`. The two are different paths on two different filesystems, and nothing compares them.
+
+**Evidence** (WP-22 implementer, session 5, discovered work; read from the SDK bundle rather than run). The
+`existsSync` check that would have caught it is on the branch that spawns **locally** — the shape is
+`if (spawnClaudeCodeProcess) … else spawnLocalProcess` — so the override path does **not** validate the path
+here. Consequence, stated as it was measured: the mismatch surfaces as an **exec failure inside the
+container**, not as a clear error on the platform side. **Nothing has run a real agent through the real
+image**: WP-15g scoped it out, and no WP-22 criterion needs it.
+
+**Is it a defect or a gap?** A defect, but a **latent** one with a named trigger: it fires on the first run
+that composes a real `RunWorkspaceProvisioner` against `platform-runtime`. Today the provisioner is absent by
+default and `unavailableClaudeRunner` throws first, so nothing can reach it — which is exactly why it will be
+found by whoever is debugging their first container run, at the worst moment.
+
+**What done looks like.** One field: the workspace spec sets `claudeCodePath` to the run image's path, and a
+case asserts the **bytes the CLI received** rather than the spec (rule 82) — the same discipline WP-15g's
+criterion 1 used. **A wrong path must fail by name on the platform side**, not as a container exec error,
+because the whole cost of this finding is the diagnosis rather than the fix.
+
+**Whoever takes it also gets a 217 MB saving, and it is a second decision rather than a freebie.** If the
+platform side never needs the binary, `@anthropic-ai/claude-agent-sdk-linux-*` can leave the product and
+launcher images — the difference between **1.1 GB and ~900 MB**, against WP-22's measured product image of
+**1.1 GB**. Do not drop the dependency before the path fix is proved by a real run: removing it makes the
+current (broken) default fail differently rather than better.
+
+**Depends on / owner.** **None** — WP-15g composed the runner and scoped the real image out, WP-22 built the
+image and scoped the runner out, and the seam between them is this entry. It needs a daemon and the real
+images, so it cannot be a `verify` target; it belongs beside WP-14's docker workspace e2e or
+`scripts/runlet-launcher-check.mjs`, whichever the taker is already running.
+
 ### 30. **A leaked `pg.Client` still ends the process on a forced drop, and nothing refuses a leak** (TODO — the half of backlog **28** that a census cannot cover)
 **What is wrong.** Backlog 28 closed the **pool** half: every pool comes from one of two factories, both
 attach an `error` listener, and a census refuses a third construction site. A bare `pg.Client` sits outside
@@ -2699,10 +2812,33 @@ resolves the binary from the repository root rather than from `$PWD`.
   failing job *names* until it is closed, and `gates.test.ts:167` pins that so closing it is deliberate.
 - **Q56** — a custom stage cannot return, because no bounded loop counts it. Recommendation filed (refuse
   loudly); the reviewer agreed with rejecting "borrow `ci_fix`'s budget".
-- **WP-22 owes two measured things**: `renderEgressConfig` writes `User nobody` while the sidecar runs uid
-  1000 with `cap_drop ALL`, so tinyproxy cannot setuid and the rendered config **will not start the real
-  image as written**; and `apps/runlet` must be bundled to one file with
-  `scripts/runlet-container-check.mjs` re-run against the real image.
+- ~~**WP-22 owes two measured things**~~ — **both discharged at WP-22, and the first claim was falsified**
+  (refiner, session 5; rule 39 — a wrong claim attached to a true obligation).
+  ~~`renderEgressConfig` writes `User nobody` while the sidecar runs uid 1000 with `cap_drop ALL`, so
+  tinyproxy cannot setuid and the rendered config **will not start the real image as written**~~ —
+  **measured against tinyproxy 1.11.2, as uid 1000 with `cap_drop ALL` and both lines present: it starts,
+  stays up, proxies to an allowed host (200), refuses a filtered one (403, "Proxying refused on filtered
+  domain"), and does not even warn.** The prediction was made by reading the documentation, not by running
+  the binary. **The lines were removed anyway, for the reason that survives** (rule 3): the process does not
+  honour them, so they are a claim about this container that nothing enforces, and a trap for the day
+  somebody starts the sidecar as root. `FilterExtended On` became `FilterType ere` — the same setting under
+  the spelling the pinned binary asks for. The **second** obligation is done: `apps/runlet` is bundled to one
+  file and the shim in the image is the bundle (349 kB, no `node_modules`), and the container check was
+  re-run against the real image — `docs/research/12-run-shim-verification.md:230-239` records
+  `RUNLET_CHECK_RUNTIME_IMAGE=platform-runtime:dev node scripts/runlet-container-check.mjs` at **7/7
+  passed, 7.8 s**. Full measurement under "WP-22 — images and compose".
+- **Nit (WP-22, one line).** `imageTagsOf` in the e2e support file derives what to `docker pull` from the
+  provider's image record and pulls nothing today, because `platform-*` tags are refused there with the build
+  command. A future `WorkspaceImages` field that is a string but not a tag would be **pulled rather than
+  rejected**; the comment at the filter says so and nothing enforces it. Cost of leaving it: a test tier that
+  silently reaches a registry. Trigger: a new field on that record.
+- **Nit (WP-22, one line): the class behind the `@platform/prompts` crash is one step wider than its guard.**
+  The instance is **closed** — `packages/prompts` declared no dependencies and imported `@platform/contracts`,
+  which resolved through the root in a developer checkout and was `ERR_MODULE_NOT_FOUND` under
+  `pnpm install --prod` in the product image — and `scripts/workspace-deps.test.ts` is the class guard. What
+  it does not cover is **third-party** specifiers (`zod`, `pino`), which resolve from the root in every
+  arrangement this repository ships today; an undeclared one behaves exactly like `@platform/contracts` did.
+  Trigger: publishing a package, or a stricter `node_modules` layout. Nothing is wrong today.
 - **`retentionDecision` keeps an unlabelled volume for ever by design** (rule 60), and one `verify:e2e` run
   produces exactly one unlabelled `ws-<uuid>`. The e2e sweep was fixed; the production half is a decision
   (a reserved prefix, or an orphan report), not a code change to make quietly.
@@ -2719,7 +2855,29 @@ resolves the binary from the repository root rather than from `$PWD`.
     (M2, "steer + take-over/hand-back (export, resume instructions)") — the extra eleven days exist for the
     export path, so the extension belongs with the code that knows a task was taken over, and a create-time
     guess cannot know it. Trigger today: nothing, because no path pauses or hands over a run yet.
-- **WP-22 owes a third, smaller thing** (WP-15g's discovered work; refiner, session 4). `readLauncherConfig`
+  - **A second instance of the same rule-60 class, one level down, and this one is CLOSED** (WP-22; refiner,
+    session 5). The bullet above is about the *named* `ws-<uuid>` volume a sweep can see and chooses to keep.
+    `alpine/git` declares `VOLUME /git`, so every helper container a run makes owned an **anonymous** volume
+    that no label sweep could ever see, and `DockerEngine.removeContainer` sent `v=false`. Measured: one
+    `verify:e2e` run left **220** empty anonymous volumes on this machine; **6** leaked per e2e case before
+    the fix and **0** after; the 227 created that session were removed and the machine's volume count
+    returned to the 18 563 it started at. `v=true` removes anonymous volumes and **never** a named one,
+    which is what makes it safe beside `ws-<run>`'s retention; `docker/egress.Dockerfile` carries no
+    `VOLUME` for the same reason.
+    **Hypothesis, not a finding — one leak shape may remain.** The orchestrator observed this machine's
+    anonymous-volume count rise by **one** across its own `verify:e2e` run *after* the fix. It is
+    unattributed: nobody has named the container that owns it, and the count was read from a machine that
+    had other work on it. **Needs measurement** (rule 66, not run here): count anonymous volumes before and
+    after a single `verify:e2e` run on an otherwise idle daemon, and if the rise reproduces, name the image
+    whose `VOLUME` produced it before changing anything.
+- ~~**WP-22 owes a third, smaller thing**~~ — **discharged at WP-22 by the create-time check, which is the
+  half this bullet called the better fix** (refiner, session 5). `create` refuses a run whose egress sidecar
+  is not running after create, and it caught the exact stand-in predicted here: `runlet-launcher-check.mjs`
+  was passing `alpine:3.21` with no command, and the refusal named it — *"the egress sidecar is exited
+  (exit 0) after create, so the workspace's HTTPS_PROXY points at a container that is not running (image
+  alpine:3.21)"*. The script now passes `platform-egress` and reports `PASS: runlet-launcher-check` at 7/7.
+  No companion **variable** was added, deliberately (rule 31): nothing would read one. Original bullet:
+  `readLauncherConfig`
   has **no variable** for `WorkspaceImages.egressCommand` (declared `hardening.ts:65`, used as `?? []` at
   `packages/infrastructure/src/workspace/provider.ts:684`; the env list is `apps/launcher/src/config.ts:21-31`,
   which has `APP_WORKSPACE_EGRESS_IMAGE` and no companion command), so a launcher built from the environment
@@ -6851,6 +7009,241 @@ branch degrades a prompt rather than hiding an operator error.
 
 ## WP notes — session 5 (decisions, assumptions, reviewer findings)
 
+### WP-22 — images and compose
+
+**What exists now.** Five Dockerfiles (`docker/{base,runtime,egress,app,launcher}.Dockerfile`), one
+`compose.yml`, `scripts/build-images.mjs` as the only place that knows which file makes which image
+and what each may weigh, `.github/workflows/{image,base-image}.yml`, and the workspace e2e running
+against the **real** `platform-runtime` and `platform-egress` with `runtimeSourceDir` unset and no
+`egressCommand`. Measured sizes: base **547 MB**, runtime **1.32 GB**, egress **13.2 MB**, product
+**1.1 GB**, launcher **966 MB**.
+
+**The rule 27 instance, first, because it is the one a reader should not miss.** Backlog 7 says the
+rendered egress config *"will not start the real image as written"* — `User nobody` against
+`cap_drop ALL`. **Measured against tinyproxy 1.11.2 with both lines present: it starts, stays up as
+uid 1000, proxies to an allowed host (200) and refuses a filtered one (403, "Proxying refused on
+filtered domain"), and does not even warn.** The prediction was made by reading the documentation.
+The lines are removed anyway, for the reason that survives: the process does not honour them, so
+they are a claim about this container that nothing enforces (rule 3), and a trap for the day
+somebody starts the sidecar as root. `FilterExtended On` became `FilterType ere` — the same setting
+under the spelling the pinned binary asks for (`deprecated option FilterExtended, use FilterType`).
+
+**Backlog 27's mutant measurement, answered both before and after.** With `#waitForControlSocket`
+shortened to a single look (`if (true as boolean)`, on the tree, reverted with the Edit tool — rule
+77): the **pre-existing** e2e case *"attaches to a running workspace with a control socket and a
+token"* **passed** (6913 ms) and *"refuses to attach after the workspace has been killed"* passed —
+so that tier certified the happy path and not the wait. The new case *"attaches to a workspace whose
+socket appears only after attach"* **failed by name**, and passes unmutated. It forces the ordering
+rather than waiting for it (rule 76): remove the socket while the container runs — nothing can
+recreate it, because the only thing that creates it is a shim starting and this one has already
+started — call `attach`, *observe* the absence from a container, then `docker restart` so a second
+shim listens.
+
+**The shim could not start on this machine with the real image, and that is backlog 27's second
+question answered.** `chmod 0600` on a Unix socket in a bind-backed volume answers `EINVAL` on
+Docker Desktop's virtiofs; the mode cannot be set at creation either (with `umask(0o177)` the guest
+reports `0666` while the host reports `0755`, so it is synthesised rather than stored). The shim
+exited 1 **after** creating the socket, so `#waitForControlSocket` saw a socket file and `attach`
+failed on the *container* being `exited`. The old stand-in hid it by being slow: booting the shim
+through the TypeScript resolver took seconds, so `attach` inspected a container that was still
+starting. The fix checks the **property** instead of the call —
+`assertControlDirectoryProtects`: `<ctl>/<run-id>` is `0700` owned by this uid (the launcher creates
+it that way) and a Unix socket cannot be connected to without search permission on every directory
+in its path, so the directory denies exactly the set the `0600` would. It **still refuses** when the
+directory does not carry that property, naming both facts, and `shim.test.ts` asserts both
+directions. Linux is unaffected.
+
+**Two defects a deployment found that no tier could.**
+
+1. **`@platform/prompts` imported `@platform/contracts` and declared no dependencies at all.** In a
+   developer checkout it resolves through the *root*'s `devDependencies`; in the product image
+   (`pnpm install --prod`) it is `ERR_MODULE_NOT_FOUND … imported from
+   /app/packages/prompts/src/index.ts`, and the container crash-looped on an image whose every other
+   layer was right. Declared, and the class is closed by `scripts/workspace-deps.test.ts` — a census
+   over `git ls-files` (tracked **and** untracked, rule 85) that reproduces the original by name when
+   the declaration is removed.
+2. **The launcher container could not stay up.** `systemClock.setTimer` unrefs, deliberately, and the
+   launcher has no server, no socket and no queue worker — so the retention sweep's timer was the
+   only handle it owned, `main()` returned, and the process exited 0. `restart: unless-stopped`
+   looped it about once a second with no error anywhere and a sweep that never ran. `launcherClock`
+   (the same clock without the unref) is now what holds it; `runtime.test.ts` asserts `hasRef()` in
+   both directions.
+
+**A volume leak with two halves, and round 1 fixed one of them.** `alpine/git` declares
+`VOLUME /git`, so every container made from it owns an anonymous volume, and a removal that does not
+ask for `v` leaves it — invisible to any label sweep, because an anonymous volume carries no labels
+(rule 60's shape one level down). One `verify:e2e` run left **220** of them on this machine.
+`DockerEngine.removeContainer` now sends `v=true`, which removes anonymous volumes and **never** a
+named one — `runlet-launcher-check`'s *"the workspace volume outlives the run, per retention —
+kept"* is the empirical proof of the second half.
+
+**Round 1 stopped there, and the reviewer caught the rest**: the *harness's* own `docker rm -f`
+(the fixture cleanup, the egress target, the container check's containers) omitted `-v`, so one
+volume per run survived — which is what the orchestrator's +1 was, `alpine/git`'s `/git` and not
+testcontainers' postgres as this note first guessed. Both sides now pass `-v`. Measured across the
+full target: **18 564 volumes before `verify:e2e`, 18 564 after** (0 leaked, where round 1's run left
+1); per case, 6 → 0. `docker/egress.Dockerfile` carries no `VOLUME` for the same reason.
+
+**The launcher is no longer on the `default` network** (round 2): it has the daemon and no reason to
+reach `db` or `app` — no database connection, no transport to the platform (Q52) — so it joins
+`docker-proxy` and `run-egress` only. It stays on `run-egress` for a mechanical reason worth knowing:
+compose drops a network no service joins, and the launcher attaches every run's sidecar and helpers
+to that network **by name** without creating it, so an unjoined declaration would fail the first run
+with `network not found`.
+
+**What `docker compose up` was measured to do** (all four services, on this machine, ports moved to
+18080 because 8080 was taken): `db` healthy → `migrate` applied **17 migrations and exited 0** →
+`app` healthy with `/healthz` 200, `/api/version` 200 and `/readyz` **ok on all four checks**
+(database, migrations, queue, dispatch) → `launcher` up, one line, no restart loop. The socket
+boundary was asserted rather than claimed: from the launcher, `GET /containers/json` 200,
+`/images/json` 200, `/info` 200, `/secrets` **403**, `POST /build` **403**, `/nodes` **403**; from
+the app, `DOCKER_HOST` empty, no `/var/run/docker.sock`, and the proxy **unreachable** (connection
+refused, `000`). One residual worth knowing before reading `EXEC: 0` as a guarantee: with
+`CONTAINERS=1` and `POST=1` the proxy admits **`POST /containers/<id>/exec` (201)** — an exec
+*instance* can be created — while `POST /exec/<id>/start` and `GET /exec/<id>/json` are **403**, so
+it can never be run or read. That is recorded in the compose file at the line.
+
+**Decisions taken here, each also in technical/11's amendment.**
+- **The product image runs the TypeScript sources**, not a `dist/`: `node --import
+  ./scripts/ts-source-resolver.mjs apps/server/src/main.ts`, and `migrate` is the same entrypoint
+  with `migrate.ts`. There is no build step for the server rings; this keeps one code path, so the
+  bytes CI tested are the bytes the image runs. `apps/web` **is** built by Vite into
+  `/app/apps/web/dist`.
+- **The six agent CLIs moved from `platform-base` to `platform-runtime`.** With them in the base it
+  is 1.0 GB and the product image cannot meet technical/11's own ≤ 1 GB check, while the run
+  container — the only thing that uses them (`AgentTooling.cli` is "what an agent may be handed
+  inside a run") — would carry the platform's server dependencies.
+- **The size check is per image**, each about a third above what it measures, because one number
+  cannot hold an image with a 217 MB `claude` binary in it.
+- **An override file for local mode, not a profile** — corrected in round 2, and the correction is
+  the interesting part. `COMPOSE_PROFILES=local` with a second `app-local` service *adds* a service:
+  compose starts every service that has no `profiles` key, so both ran and both published
+  `${APP_PORT}:8080`, the second failing to bind (`docker compose config --services`). Compose has no
+  "instead of". Local mode is `-f compose.yml -f compose.local.yml`, which is technical/11's original
+  layout, and `test/e2e/compose/compose-config.e2e.test.ts` asserts the service set and the port
+  publishers under the default, the override, an enabled `local` profile and `backup` — the first
+  version of that test pinned `COMPOSE_PROFILES=''` and could not see a profile-gated service at all,
+  which re-introducing `app-local` proved by leaving it green. It does **not** mount a host `claude`
+  binary, because the CLI runs in the run container and technical/05 forbids a host mount there.
+- **The `ctl` volume is not mounted into `app`.** It holds every live run's token, `apps/server`
+  composes no provisioner in this build, and the service that gains the mount is the one that gains
+  Q52's transport.
+- **`agentic-repo-cache` is not declared in compose** (the launcher creates it, and compose drops an
+  unused declaration), so `docker compose down -v` leaves it. Said in the file.
+- **Signing needed no credential.** `gh secret list` is empty and there are no environments, so
+  rather than a blocker brief this is `actions/attest-build-provenance` over the workflow's OIDC
+  identity. **No SBOM attestation**: BuildKit can only attach one when *it* pushes, and these images
+  are pushed by `docker push` after a plain build so one script builds everywhere. Stated in
+  technical/11 rather than claimed.
+
+**Refused, with the measurement — backlog 0b's per-run control volume.** Its stated evidence is gone:
+the `CAP_DAC_OVERRIDE` the entry calls "the evidence the shape is wrong" was already removed at WP-14
+(the two-helper teardown, `#removeControlDirectory`), and `grep -rn DAC_OVERRIDE` over the tree finds
+three comments and no capability. What is left of the entry is the volume, and a **per-run** control
+volume contradicts two decisions at once: TD-025 §2 gives the runner a *static* mount of the whole
+`ctl` volume precisely so nothing has to mount a volume per run, and TD-021's WP-15g amendment
+forbids the process that composes the pipeline from holding a Docker client — so a per-run volume
+would need either a dynamic mount from the runner (a Docker client in the server) or a second
+transport that does not exist (Q52). The rule-60 half is *not* the volume: the shared `ctl` volume is
+labelled `role=shared` and visible; what no sweep sees is a **directory** inside it, which is stated
+at `#removeControlDirectory` and is a different fix (an orphan-directory sweep in `purgeExpired`).
+Filed as discovered work rather than done, because it is a change to the launcher's sweep and not to
+the image layout this row owns.
+
+**Assumptions, stated because the docs did not decide them.**
+- `base-image.yml` **builds and does not push**: publishing from a schedule would put an image in the
+  registry that no commit produced. What the weekly run buys is the signal that a pin has rotted.
+- `image.yml` merges per-architecture **tags** rather than digests, because five images' digests
+  would otherwise be passed between jobs; the arm64 half runs on `ubuntu-24.04-arm`, which this
+  repository has never used — the first CI run is the measurement (rules 71, 84).
+- CI's `e2e-fake-claude` job **builds** `platform-runtime` and `platform-egress` rather than pulling a
+  published tag. The row asks for "a tag the e2e job pulls" so that no case skips; building the
+  commit's own images is strictly stronger (it tests *this* commit) and needs no registry round trip,
+  and the no-skip half is enforced where it belongs: `ensureImages` throws, naming
+  `node scripts/build-images.mjs runtime egress`, when a `platform-*` image is absent.
+- `acli` is the one CLI that cannot be version-pinned — Atlassian publishes a `latest` path only. It
+  is behind an `ACLI_URL` build argument, the version in the image today is **1.3.36-stable**, and
+  `docs/TODO.md` carries it.
+
+**The sidecar check caught the shape it was written for, in a script rather than in a test.**
+`scripts/runlet-launcher-check.mjs` passed `alpine:3.21` as the egress image with no command — the
+exact stand-in backlog 7 describes — and `create` refused the run with *"the egress sidecar is
+exited (exit 0) after create, so the workspace's HTTPS_PROXY points at a container that is not
+running (image alpine:3.21)"*. The script now passes `platform-egress`, and **7/7 checks pass**
+against it (`PASS: runlet-launcher-check`), including "the workspace volume outlives the run, per
+retention — kept", which is also the empirical proof that `v=true` removes anonymous volumes and
+never a named one. Its outer container needed `--entrypoint node`, because `RUNTIME_IMAGE` is now an
+image whose entrypoint is the shim: without it the container answered `unknown mode "node"`. That
+container is the platform side and only borrows the image for a Node runtime.
+
+**Round 2: four things review found that measurement had not, three of them mine to have measured.**
+
+1. **A false measurement in the tree, written by me.** `docker/egress.Dockerfile`'s docblock quoted
+   `tinyproxy: Unable to change to user "nobody"` *(exit 1, before the listener exists)* as observed.
+   It never was: it is the prediction from backlog 7, and my own run three paragraphs above says the
+   opposite. Every other site — this note, `egress.ts`, `egress.test.ts`, `docs/TODO.md` — carried
+   the measured result, so the one file that mattered to a reader of the image was the one that
+   lied. Rewritten to the measurement. Rule 39's mirror: a *false* measurement beside four true ones
+   is not caught by re-reading the true ones.
+2. **`docker build` does not forward the environment to an `ARG`.** `image.yml` exported
+   `APP_VERSION`/`APP_COMMIT`/`APP_BUILT_AT` as step env and the script passed only `BASE_IMAGE`, so
+   every published image would have reported `0.0.0-dev`, `commit: null` at `GET /api/version` — the
+   defect is silent by construction, because the image builds, runs and serves. The script passes
+   them as build arguments now and **asserts the artefact**: after a versioned build it reads
+   `Config.Env` and fails naming what did not land. Measured both ways —
+   `APP_VERSION=1.2.3-test … node scripts/build-images.mjs platform` puts
+   `APP_VERSION=1.2.3-test`, `APP_COMMIT=abc1234deadbeef` and `APP_BUILT_AT=…` in the image, and the
+   same guard over an image whose Dockerfile declares no such `ARG` fails with
+   `FAIL: platform-egress:dev did not take APP_VERSION` (exit 1).
+3. **The size check measured a different quantity from the one the budgets were derived from.**
+   `docker image inspect --format '{{.Size}}'` answers **130 357 549** for a `platform-base` that
+   `docker images` calls **547MB**: on a containerd image store that field is the *compressed
+   content*, i.e. the pull size. So every ceiling was loose by about 4×. `docker save … | wc -c` was
+   tried as the review suggested and is **the same quantity here** (130 378 240 B) — it exports the
+   blobs as stored — so it is not the store-independent measure it looks like. The script now reads
+   `docker images --format '{{.Size}}'`, the unpacked total both stores report, states which quantity
+   the budgets bound, and refuses a string it cannot parse. Today's numbers, unpacked (compressed):
+   base 547MB (130 MB), runtime 1.32GB (328 MB), egress 13.2MB (4 MB).
+4. **The fallback caught more than it was for.** `assertControlDirectoryProtects` was reached from a
+   bare `.catch`, so any `chmod` failure — `EPERM`, `ENOENT`, `EIO` — would have been answered by the
+   directory's mode. It now handles `EINVAL`/`ENOTSUP`/`EOPNOTSUPP` and re-throws the rest, and the
+   `stat.uid !== uid` half of the condition has a case of its own (it had none: every case varied the
+   mode).
+
+**Round 3: two of them are guards that could not fail, which is the recurring shape of this row.**
+
+1. **The backup service could never have backed anything up.** `db-backup` was pinned to
+   `prodrigestivill/postgres-backup-local:17` against `postgres:18`, and `pg_dump` refuses a server
+   newer than itself: *"aborting because of server version mismatch / server version: 18.6; pg_dump
+   version: 17.6"*, measured by the reviewer against that exact digest. A nightly job that fails
+   identically every night, into a log nobody reads, beside a file claiming it "writes a compressed
+   dump per schedule". Now `:18` (`pg_dump --version` → **18.0** at the pinned digest), and the two
+   majors are **compared off the file** by `compose-config.e2e.test.ts` rather than listed anywhere,
+   so a bump of one without the other fails with `expected '17' to be '18'` (measured, on a copy).
+2. **The case guarding the un-`unref`ed sweep timer passed with the defect present.** It read
+   `hasRef()` off a plain `setTimeout` it had created itself and never looked at the handle
+   `launcherClock` returned, while its own docblock said "both directions" — rule 3 inside a test.
+   A `RunnerClock` hands back a cancel function, not the handle, so the only way to read the ref is
+   to intercept `globalThis.setTimeout`; both clocks now go through one helper that does. Calibrated
+   with the Edit tool in place and reverted: `.unref()` restored fails it by name
+   (`expected false to be true`).
+3. **The dependency census saw one of three import spellings.** `from '…'` only, so a side-effect
+   `import '@platform/x';` and a dynamic `await import('@platform/x')` — the two forms a package
+   reaches for when it wants something it has not declared — were invisible to the guard written for
+   exactly that class (rule 48's shape). All three now, each planted on an untracked probe file in
+   `packages/domain/src/` and each caught by name; the spellings it still cannot see are listed in
+   its docblock.
+4. **`build-images.mjs` ended with a stack instead of its verdict line** when a size could not be
+   read. Caught, and the run prints `FAIL: … built, but its size could not be read: …` plus the
+   `FAIL: build-images` line (measured on a copy with the format string broken).
+
+**What is proved on Linux CI versus only here (rule 71).** Everything above was measured on macOS
+against Docker Desktop 29.7.2, `linux/arm64`. Three things this machine cannot answer: whether the
+amd64 images build at all (only arm64 was built), whether `ubuntu-24.04-arm` runners are available to
+this repository, and the uid/permission behaviour of the control volume on a Linux runner — where the
+bind is a real filesystem, `chmod` on a socket succeeds, and the directory-mode fallback is never
+taken. The first green `image.yml` and `e2e-fake-claude` runs are the first honest measurements.
+
 ### Backlog 28 — the e2e teardown 57P01, measured and closed
 
 **The hypothesis was right about the mechanism and wrong about the shape of the leak.** Entry 28
@@ -7393,6 +7786,46 @@ onto itself because `price_list` is `unique (model_id, effective_from)`, so `lea
 row's own instant — the guarantee is the index's, not the statement's.
 
 ## Discovered work — session 5 (not in plan)
+- **Nothing serves the SPA, and the bundle is now in the image** (WP-22 — **refined into backlog 33**, and a
+  sentence on **WP-15h**'s row owns it). technical/09 says the
+  bundle is "served as a static bundle by the app process with SPA fallback; same origin as the API
+  and SSE", and `apps/web/vite.config.ts` says "in production `apps/server` serves `dist/`". No
+  route does: there is no `@fastify/static`, no `sendFile`, and the only `setNotFoundHandler` answers
+  JSON. `docker/app.Dockerfile` builds `apps/web` and copies it to `/app/apps/web/dist`, so the
+  packaging half is done and the serving half is a route plus a fallback rule — deliberately **not**
+  taken here, because the fallback has to decide which paths are the client's without a deny-list of
+  API prefixes (rule 55), and that decision belongs with the screens rather than with the image. No
+  `APP_WEB_ROOT` was added: a variable nothing reads is rule 31's shape.
+- **The SDK computes the CLI's path on the platform side and the shim executes it in the container**
+  (WP-22 — **refined into backlog 34**, which no work package owns).
+  `Options.pathToClaudeCodeExecutable` is `null` outside `local` mode, so the SDK resolves
+  its own bundled binary and passes that path as `spawn{command}`; the run container's binary is
+  `/usr/local/bin/claude`. Read from the SDK bundle: the `existsSync` check is on the branch that
+  spawns locally (`if (spawnClaudeCodeProcess) … else spawnLocalProcess`), so the override path does
+  **not** validate it here — which means the mismatch surfaces as an exec failure inside the
+  container rather than as a clear error. Nothing has run a real agent through the real image (WP-15g
+  scoped it out, and no criterion here needs it). The fix is one field: the workspace spec setting
+  `claudeCodePath` to the run image's path. **Whoever takes it also gets a 217 MB saving**: if the
+  platform side never needs the binary, `@anthropic-ai/claude-agent-sdk-linux-*` can leave the
+  product and launcher images, which is the difference between 1.1 GB and ~900 MB.
+- **No sweep reclaims an orphaned control *directory*** (WP-22, the live half of backlog 0b).
+  `purgeExpired` lists **volumes** by `role=workspace` and never looks inside the `ctl` volume, so a
+  run whose `destroy` left step 1 or step 2 of `#removeControlDirectory` unfinished leaves either a
+  run token or an empty `0700` directory behind for ever. The provider's own docblock states it; what
+  is missing is the sweep. Owner: whoever next touches `purgeExpired` — it is a directory listing
+  beside the volume listing, plus the same two-helper removal.
+- **`packages/prompts` had no `dependencies` at all and imported one** (WP-22 — the open *class* is a nit in
+  backlog **7**) — **closed in this
+  change**, with `scripts/workspace-deps.test.ts` as the class guard. Left here because the *general*
+  form is one step wider than what the test covers: third-party specifiers (`zod`, `pino`) are
+  resolved from the root today in every arrangement this repository ships, so an undeclared one would
+  behave exactly like `@platform/contracts` did the day a package is published or a stricter
+  `node_modules` layout is used.
+- **`imageTagsOf` in the e2e support file now pulls nothing and could pull a registry image by
+  accident** (WP-22, small — **carried as a nit in backlog 7**). It derives the tags to `docker pull` from the provider's image record,
+  and `platform-*` tags are refused there with the build command. A future `WorkspaceImages` field
+  that is a string but not a tag would be pulled rather than rejected; the comment at the filter says
+  so, and nothing enforces it.
 - **The cost ledger records the *result* of a timezone substitution and never the substitution**
   (WP-19 review round 1). When `organizations.timezone` is a value `assertTimeZone` refuses, the
   ledger charges in UTC and warns; `cost_rollup_daily.day` and `budget_windows.window_start` carry the

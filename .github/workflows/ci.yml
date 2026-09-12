@@ -154,11 +154,28 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The two images the workspace e2e runs the real provider against
+      # (`test/e2e/workspace/docker-workspace.e2e.test.ts`): `platform-runtime`
+      # as the run container, `platform-egress` as the sidecar. They are built
+      # here rather than pulled, so the tier tests **this commit's** images —
+      # and a missing image fails the suite rather than skipping a case, which
+      # is WP-22's criterion (PROGRESS backlog 27).
+      # No `--size-check` here: the budgets are `image.yml`'s job, and measuring an unpacked image
+      # size costs this tier nothing it needs.
+      - name: build the run images this tier needs
+        run: node scripts/build-images.mjs runtime egress
+      # TD-025's Docker verification, against the image that ships the shim
+      # rather than against a bind-mounted checkout. Not a `verify` target: it
+      # needs a daemon, which only this job has.
+      - name: the run shim works in the image it ships in
+        env:
+          # Without this the check falls back to WP-13's arrangement — `node:24-alpine` with the
+          # repository bind-mounted at `/repo` — which is the thing the image exists to replace.
+          RUNLET_CHECK_RUNTIME_IMAGE: platform-runtime:dev
+        run: node scripts/runlet-container-check.mjs
       # Starts whole `apps/server` instances against the same Testcontainers
-      # PostgreSQL 18 the integration tier uses. technical/10 describes this
-      # tier as running against `docker compose` (app + db); the compose file
-      # lands with WP-22, and the app container joins it then. The fake Claude
-      # runner joins with WP-12.
+      # PostgreSQL 18 the integration tier uses, and runs the workspace tier
+      # against the real daemon.
       - run: pnpm run -s verify:e2e
 
   secret-scan:

@@ -16,7 +16,9 @@ Self-hosted, open-source platform that runs Claude Code agents through a real-li
 
 ## Commands
 - `pnpm install` · `pnpm dev` (server + web with fake Claude runner) · `pnpm test` (unit + contract) · `pnpm test:integration` (Testcontainers) · `pnpm test:e2e` · `pnpm lint` · `pnpm typecheck` · `pnpm schemas` · `pnpm eval` (promptfoo, needs `llm-ci` key)
-- `docker compose up` for a full instance; `COMPOSE_PROFILES=local` for the local provider mode.
+- `docker compose up --build` for a full instance; `docker compose -f compose.yml -f compose.local.yml up`
+  for the local provider mode — an override file, not a profile (a compose service without `profiles`
+  always runs, so a second `app-local` service behind one started *both*). Matches `CLAUDE.md`.
 
 ## Conventions
 - TypeScript strict, ESM, Node 24; zod for all boundaries; pino for logs (never `console.log` in server code); errors are typed, never swallowed.

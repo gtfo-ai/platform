@@ -1,0 +1,41 @@
+# What never reaches a build context (WP-22).
+#
+# The context is the repository root for every image in docker/, so this file decides how much is
+# sent to the daemon and — more importantly — what *cannot* end up in a layer by accident. Two of
+# the entries are security rather than speed: `.env` holds real values on a developer's machine
+# (BD-002), and `.git` carries every value the repository ever had, including one deleted in a
+# later commit.
+#
+# `node_modules` is excluded and re-created inside the image: a host install is the wrong platform
+# (`@node-rs/argon2` and the Agent SDK ship per-OS, per-arch binaries) and would silently produce
+# an image that cannot start.
+#
+# Anchored to the context root with a leading `/` where a root match is meant, for the same reason
+# `.gitignore` is (CLAUDE.md): an unanchored pattern matches at any depth, and `dist` unanchored
+# would drop `apps/web/dist`, which one stage builds and the next copies.
+
+.git
+.github
+node_modules
+**/node_modules
+
+# Secrets and local state, never in a layer.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated output that a stage rebuilds anyway; excluded so a stale host build cannot be copied.
+/apps/web/dist
+/apps/runlet/dist
+/coverage
+/playwright-report
+/test-results
+**/*.tsbuildinfo
+
+# Developer and agent scratch space.
+/.claude
+/.vscode
+/.idea
+.DS_Store

@@ -1,0 +1,166 @@
+name: image
+
+# technical/11 § Workflows. Builds every image this repository ships, on **native** runners for both
+# architectures, merges them into one manifest list per image, and attests what it published.
+#
+# Three things are deliberate.
+#
+# **The build itself is `scripts/build-images.mjs`, not YAML.** That script knows which Dockerfile
+# makes which image, what each is built `FROM`, and what each may weigh. A second copy of that in a
+# workflow is a second list to keep true (standing rule 7), and the one in the script is also what a
+# developer and the e2e tier run.
+#
+# **A pull request builds and never pushes.** It is the same build, with the size check, so a
+# Dockerfile that cannot build or an image that grew past its budget fails the pull request — and
+# nothing reaches a registry from an unreviewed branch.
+#
+# **Signing needs no secret.** `actions/attest-build-provenance` uses the workflow's OIDC identity
+# against Sigstore's public instance, so this repository — which has no secrets at all — can still
+# publish a verifiable provenance attestation. `gh attestation verify oci://<image> --repo <repo>`
+# is what an operator runs.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Build metadata the image reports at `GET /api/version` (`runtime.ts` § buildInfo).
+      # Derived from the ref rather than from `git describe`, which needs a full clone to answer.
+      - id: meta
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-edge+${short}"
+          fi
+          {
+            echo "version=${version}"
+            echo "commit=${GITHUB_SHA}"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "short=${short}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Every image, base first, each held to its own budget. `--size-check` is what technical/11
+      # asks for; the budgets, the quantity they bound and their derivation are in the script.
+      #
+      # The three variables are read by the script and passed on as **build arguments**: `docker
+      # build` does not forward the environment to an `ARG`, so an earlier version of this step
+      # published images that reported `0.0.0-dev` and `commit: null` at `GET /api/version`. The
+      # script now refuses a build whose image did not take them.
+      - name: build and size-check every image
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+          APP_COMMIT: ${{ steps.meta.outputs.commit }}
+          APP_BUILT_AT: ${{ steps.meta.outputs.built_at }}
+        run: node scripts/build-images.mjs --tag ci --size-check
+
+      - name: log in to the registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One per-architecture tag per image; the manifest lists are merged in the next job. A digest
+      # would be tidier, but the tag is what `imagetools create` can take without passing a value
+      # between jobs for every one of five images.
+      - name: push the per-architecture images
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          for image in platform-base platform-runtime platform-egress platform platform-launcher; do
+            target="${REGISTRY}/${owner}/${image}:sha-${{ steps.meta.outputs.short }}-${{ matrix.arch }}"
+            docker tag "${image}:ci" "${target}"
+            docker push "${target}"
+          done
+
+  merge:
+    name: manifest list (${{ matrix.image }})
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [platform-base, platform-runtime, platform-egress, platform, platform-launcher]
+    steps:
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `X.Y.Z`, `X.Y`, `X`, `latest` on a tag; `edge` and `sha-<7>` on main (technical/11).
+      - id: merge
+        run: |
+          set -euo pipefail
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          repo="${REGISTRY}/${owner}/${{ matrix.image }}"
+          short="${GITHUB_SHA::7}"
+          tags="sha-${short}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            tags="${tags} ${version} ${version%.*} ${version%%.*} latest"
+          else
+            tags="${tags} edge"
+          fi
+          refs=""
+          for tag in ${tags}; do refs="${refs} -t ${repo}:${tag}"; done
+          # shellcheck disable=SC2086
+          docker buildx imagetools create ${refs} \
+            "${repo}:sha-${short}-amd64" "${repo}:sha-${short}-arm64"
+          digest=$(docker buildx imagetools inspect "${repo}:sha-${short}" \
+            --format '{{ json .Manifest.Digest }}' | tr -d '"')
+          {
+            echo "repo=${repo}"
+            echo "digest=${digest}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The digest is the manifest list's, which is what a `docker pull` of any tag above resolves
+      # to. No secret is involved: the identity is the workflow's OIDC token (see the header).
+      - name: attest the provenance of the published image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.merge.outputs.repo }}
+          subject-digest: ${{ steps.merge.outputs.digest }}
+          push-to-registry: true

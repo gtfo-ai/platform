@@ -220,6 +220,10 @@ importers:
       '@platform/infrastructure':
         specifier: workspace:*
         version: link:../../packages/infrastructure
+    devDependencies:
+      vite:
+        specifier: 8.2.2
+        version: 8.2.2(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
 
   apps/server:
     dependencies:
@@ -416,7 +420,11 @@ importers:
         specifier: 4.5.4
         version: 4.5.4
 
-  packages/prompts: {}
+  packages/prompts:
+    dependencies:
+      '@platform/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 

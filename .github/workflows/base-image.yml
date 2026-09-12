@@ -1,0 +1,56 @@
+name: base-image
+
+# technical/11 § Workflows: "rebuild base with pinned CLIs", weekly.
+#
+# BD-020 splits the images so a code change does not rebuild the tool layer — and the other half of
+# that trade is that the tool layer then ages on its own schedule. This workflow is that schedule:
+# it rebuilds `platform-base` and `platform-runtime` (the two images whose content is other
+# people's software) so a Debian security update or a new CLI release reaches an instance without a
+# commit.
+#
+# **It builds and does not push.** Pushing from a schedule would publish an image no commit
+# produced, and `image.yml` — which runs on every push to `main` and every tag — is the only thing
+# that writes to the registry. What this run buys is the *signal*: a pinned download that has
+# disappeared, a base whose `apt-get` no longer resolves, or a CLI whose new release fails its own
+# `--version` smoke test becomes a red workflow the same week rather than a failed release later.
+# The remedy is a commit that moves the pin, which then publishes through `image.yml`.
+#
+# It runs on `docker/base.Dockerfile` and `docker/runtime.Dockerfile` changes too, so a pin bump is
+# checked by the same job that would have caught it a week later.
+
+on:
+  schedule:
+    # Mondays, 04:17 UTC. Off the hour on purpose: a scheduled job on the hour queues behind
+    # everyone else's.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'docker/base.Dockerfile'
+      - 'docker/runtime.Dockerfile'
+      - 'scripts/build-images.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: base-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: rebuild the tool layer (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Both images: `platform-runtime` is where the six agent CLIs and the `claude` binary live, so
+      # a build of `platform-base` alone would check the smaller half of the tool layer.
+      - run: node scripts/build-images.mjs base runtime --size-check

@@ -16,9 +16,15 @@
       "default": "./src/index.ts"
     }
   },
+  "scripts": {
+    "build": "vite build"
+  },
   "dependencies": {
     "@platform/application": "workspace:*",
     "@platform/contracts": "workspace:*",
     "@platform/infrastructure": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "8.2.2"
   }
 }

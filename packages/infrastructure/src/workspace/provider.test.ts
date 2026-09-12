@@ -305,6 +305,40 @@ describe('create', () => {
     expect(failure?.detail).toContain('[REDACTED:integration:run_credential_0]');
   });
 
+  /**
+   * PROGRESS backlog 7's third obligation, as a behaviour rather than as a knob.
+   *
+   * The launcher has `APP_WORKSPACE_EGRESS_IMAGE` and no companion for a *command*, because in
+   * production `platform-egress`'s entrypoint is tinyproxy. Point that variable at a stand-in with
+   * no long-lived process and the sidecar exits the moment it starts; the run then succeeds at
+   * everything that needs no network and fails on the agent's first fetch, with nothing saying why,
+   * because `HTTPS_PROXY` names the container that just died.
+   *
+   * Both directions, because an assertion that a create fails proves nothing about *which* create
+   * (standing rule 42): the sidecar that stays up is the happy path every other case here exercises,
+   * and this one differs from it in exactly one fact the daemon reports.
+   */
+  it('refuses the run when the egress sidecar exited as soon as it started', async () => {
+    await daemon.stop();
+    await startDaemon((container) =>
+      container.name.startsWith('egress-')
+        ? { exitCode: 3, logs: 'tinyproxy: could not read config file\n', exited: true }
+        : { exitCode: 0, logs: '' },
+    );
+    const failure = await provider
+      .create(workspaceSpecFixture())
+      .then(() => null)
+      .catch((error: unknown) => error as { code: string; message: string; detail: string | null });
+    expect(failure?.code).toBe('workspace_failed');
+    expect(failure?.message).toContain('egress sidecar is exited (exit 3)');
+    // The image is named, because the operator who mis-set the variable is reading this line.
+    expect(failure?.message).toContain('tinyproxy:test');
+    expect(failure?.detail).toContain('could not read config file');
+    // And `create` is still all-or-nothing: the run container it had already started is gone.
+    expect(daemon.created.filter((container) => container.state === 'running')).toEqual([]);
+    expect(daemon.created.map((container) => container.name)).toEqual([]);
+  });
+
   it('has nothing to redact, and still reports, when the helper carries no credential', async () => {
     await daemon.stop();
     await startDaemon(() => ({ exitCode: 1, logs: 'fatal: repository not found\n' }));

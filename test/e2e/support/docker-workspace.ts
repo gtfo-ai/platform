@@ -2,27 +2,29 @@
  * The Docker half of WP-14's e2e: a fixture repository in a container, and a real
  * `DockerWorkspaceProvider` pointed at the daemon.
  *
- * ## What is real here and what is a stand-in
+ * ## What is real here (WP-22: the two stand-ins are gone)
  *
  * Real: the daemon, the networks, the volumes, the `volume-subpath` mount, the hardening flags as
  * the daemon records them, the mirror fetched over the network from another container, the clone,
- * the export and the retention sweep.
+ * the export and the retention sweep — **and now the two images the run is made of**:
  *
- * **Stand-ins, because WP-22 owns the images and they do not exist yet:**
+ *  - the run container is `platform-runtime` (`docker/runtime.Dockerfile`), so
+ *    `WorkspaceImages.runtimeSourceDir` is `null`, the create body carries **no bind mount at all**
+ *    — technical/05 forbids one in a run container — and the shim is the image's own entrypoint
+ *    rather than `node --import ts-source-resolver` over a `/repo` mount. Until WP-22 it was
+ *    `node:24-alpine` plus that mount, which is what `hardening.ts` named as its single hole;
+ *  - the egress sidecar is `platform-egress` (tinyproxy 1.11.2) with **no `egressCommand`**, so it
+ *    runs the image's own entrypoint the way production does. It is no longer a `sleep` that
+ *    demonstrates only the *topology*: `egress-policy.e2e` drives a request through it from inside
+ *    the run container and asserts the allowed host answers and an unlisted one is refused.
  *
- *  - the run container's image is `node:24-alpine` with the repository bind-mounted read-only at
- *    `/repo`, and the shim started from TypeScript source — the arrangement WP-13's
- *    `scripts/runlet-container-check.mjs` uses, and the one `hardening.ts` names as its single
- *    hole. A `platform-runtime` image would need no bind mount at all;
- *  - the egress sidecar's image is `alpine:3.21` running `sleep`, because `platform-egress`
- *    (tinyproxy) does not exist. **So this file demonstrates the sidecar's *topology* — one
- *    container on two networks, the workspace on one `internal: true` network with no route off
- *    it — and never that tinyproxy filters anything.** The rendered allow-list is unit-tested
- *    against a model of POSIX ERE (`egress.test.ts`), which is a different kind of evidence, and
- *    `docs/TODO.md` carries the item.
+ * ## These images are local, so they are never pulled
  *
- * Both stand-ins are named at the assertion that depends on them, so a reader never has to come
- * back here to find out what was actually shown.
+ * `ensureImages` pulls a tag it does not have. There is no registry to pull `platform-runtime:dev`
+ * from, and a `docker pull` failure twenty seconds into a suite names a registry rather than the
+ * thing to do about it — so a missing `platform-*` image fails immediately with the command that
+ * builds it. **Not skipped**: WP-22's row says a case that skips when the image is absent is a
+ * failure, because a suite that quietly tests nothing is what the images exist to stop.
  */
 import { execFile } from 'node:child_process';
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -48,9 +50,13 @@ export const REPO_ROOT = path.resolve(
  * whose daemon is always clean, always gets the current one. Pinning by digest belongs with the
  * real images (WP-22 owns them); until then the two environments can differ and this says so.
  */
-export const RUNTIME_IMAGE = process.env['WORKSPACE_E2E_RUNTIME_IMAGE'] ?? 'node:24-alpine';
+export const RUNTIME_IMAGE = process.env['WORKSPACE_E2E_RUNTIME_IMAGE'] ?? 'platform-runtime:dev';
+export const EGRESS_IMAGE = process.env['WORKSPACE_E2E_EGRESS_IMAGE'] ?? 'platform-egress:dev';
 export const ALPINE_IMAGE = process.env['WORKSPACE_E2E_ALPINE_IMAGE'] ?? 'alpine:3.21';
 export const GIT_IMAGE = process.env['WORKSPACE_E2E_GIT_IMAGE'] ?? 'alpine/git:v2.49.1';
+
+/** How the two images above are built, quoted verbatim in the failure when one is missing. */
+export const BUILD_IMAGES_COMMAND = 'node scripts/build-images.mjs runtime egress';
 
 const VCS = `g${'it'}`;
 
@@ -171,6 +177,14 @@ const ensureImages = async (images: readonly string[]): Promise<void> => {
     if (present.ok) {
       continue;
     }
+    if (image.startsWith('platform-')) {
+      // This repository builds it; no registry has it. Fail here, naming the command, rather than
+      // letting `docker pull` fail with "pull access denied" — and never skip (WP-22's row).
+      throw new Error(
+        `the image ${image} is not on this daemon and is built rather than pulled: run ` +
+          `\`${BUILD_IMAGES_COMMAND}\` first (CI's e2e-fake-claude job does).`,
+      );
+    }
     // Not `allowFailure`: a fixture that cannot obtain its images must fail with the pull's own
     // message, not with a 404 twenty seconds later that names a container instead of an image.
     await docker(['pull', image]);
@@ -273,10 +287,12 @@ export const startDockerFixture = async (
   // The record the provider is given, and the only place these tags are written down.
   const providerImages = {
     runtime: RUNTIME_IMAGE,
-    egress: ALPINE_IMAGE,
-    egressCommand: ['sleep', '600'],
+    egress: EGRESS_IMAGE,
+    // No `egressCommand` and no `runtimeSourceDir`: production's shape, and WP-22's criterion. The
+    // first means the sidecar runs tinyproxy because that is the image's entrypoint; the second
+    // means the run container has no host mount at all.
     git: GIT_IMAGE,
-    runtimeSourceDir: REPO_ROOT,
+    runtimeSourceDir: null,
   };
   // First, before anything creates a container: every image it will be created from, whether it is
   // reached through the CLI (which pulls) or through the engine (which does not).
@@ -385,19 +401,24 @@ export const startDockerFixture = async (
     images,
     warnings,
     cleanup: async () => {
+      // **`-v` on every `rm`**, for the same reason `DockerEngine.removeContainer` sends `v=true`:
+      // `alpine/git` declares `VOLUME /git`, so a container made from it owns an anonymous volume
+      // the daemon keeps unless the removal asks for it. The engine's half fixed the provider's
+      // containers; this is the harness's own, and it is what was left of the "one volume per
+      // `verify:e2e` run" the orchestrator measured after WP-22's first round.
       const containers = await docker(['ps', '-aq', '--filter', `network=${network}`], {
         allowFailure: true,
       });
       for (const id of containers.stdout.split('\n').filter((line) => line.length > 0)) {
-        await docker(['rm', '-f', id], { allowFailure: true });
+        await docker(['rm', '-f', '-v', id], { allowFailure: true });
       }
-      await docker(['rm', '-f', repoContainer], { allowFailure: true });
+      await docker(['rm', '-f', '-v', repoContainer], { allowFailure: true });
       for (const label of ['com.agentic.run']) {
         const owned = await docker(['ps', '-aq', '--filter', `label=${label}`], {
           allowFailure: true,
         });
         for (const id of owned.stdout.split('\n').filter((line) => line.length > 0)) {
-          await docker(['rm', '-f', id], { allowFailure: true });
+          await docker(['rm', '-f', '-v', id], { allowFailure: true });
         }
       }
       // Networks and volumes the provider made, by label. A `run-<id>` network can outlive its
@@ -480,7 +501,14 @@ export const probeUnderRunContainerConfig = async (
   engine: workspace.DockerEngine,
   containerId: string,
   script: string,
-  overrides: { user?: string; capAdd?: readonly string[]; dnsOptions?: readonly string[] } = {},
+  overrides: {
+    user?: string;
+    capAdd?: readonly string[];
+    dnsOptions?: readonly string[];
+    /** `alpine:3.21` by default; the egress case needs `curl`, which only the run image has. */
+    image?: string;
+    env?: readonly string[];
+  } = {},
 ): Promise<{ exitCode: number; output: string }> => {
   const inspect = await engine.inspectContainer(containerId);
   const hostConfig = { ...(inspect.HostConfig as Record<string, unknown>) };
@@ -492,9 +520,10 @@ export const probeUnderRunContainerConfig = async (
   }
   const name = `agentic-e2e-probe-${uniqueSuffix()}`;
   const id = await engine.createContainer(name, {
-    Image: ALPINE_IMAGE,
+    Image: overrides.image ?? ALPINE_IMAGE,
     Entrypoint: ['/bin/sh', '-c'],
     Cmd: [script],
+    Env: overrides.env ?? [],
     User: overrides.user ?? inspect.Config.User ?? '',
     WorkingDir: '/',
     Tty: false,
@@ -583,4 +612,92 @@ export const relaxControlDirectoryForHost = async (
     ],
     { allowFailure: true },
   );
+};
+
+/**
+ * Removes one run's control socket from inside a container.
+ *
+ * The host process cannot: unlinking needs write permission on `<ctl>/<run-id>`, which the launcher
+ * creates `0700` owned by uid 1000, and on a Linux runner this process is 1001. It is the setup for
+ * the readiness case — with the socket gone and the shim already past its own `listen`, nothing can
+ * recreate it until the container restarts, which is what makes that case's ordering a fact rather
+ * than a race.
+ */
+export const removeControlSocket = async (fixture: DockerFixture, runId: string): Promise<void> => {
+  await docker([
+    'run',
+    '--rm',
+    '--user',
+    '0:0',
+    '--network',
+    'none',
+    '-v',
+    `${fixture.controlVolume}:/ctl`,
+    ALPINE_IMAGE,
+    'sh',
+    '-c',
+    `rm -f /ctl/${runId}/ctl.sock`,
+  ]);
+};
+
+/** Whether one run's control socket exists, asked from inside a container for the same reason. */
+export const controlSocketExists = async (
+  fixture: DockerFixture,
+  runId: string,
+): Promise<boolean> => {
+  const probe = await docker([
+    'run',
+    '--rm',
+    '--user',
+    '0:0',
+    '--network',
+    'none',
+    '-v',
+    `${fixture.controlVolume}:/ctl`,
+    ALPINE_IMAGE,
+    'sh',
+    '-c',
+    `test -S /ctl/${runId}/ctl.sock && echo yes || echo no`,
+  ]);
+  return probe.stdout === 'yes';
+};
+
+/**
+ * An HTTP server on the fixture network under **two** names, for the egress case.
+ *
+ * One container, two aliases: the allowed name and the refused one resolve to the same address and
+ * the same server, so the refusal can only come from the proxy's filter. A second container would
+ * have left "the other host was unreachable" as an explanation for the 403 (standing rule 43).
+ */
+export const startEgressTarget = async (
+  fixture: DockerFixture,
+  allowedAlias: string,
+  deniedAlias: string,
+): Promise<{ name: string; port: number; stop: () => Promise<void> }> => {
+  const name = `agentic-e2e-http-${uniqueSuffix()}`;
+  const port = 8080;
+  await docker([
+    'run',
+    '-d',
+    '--name',
+    name,
+    '--network',
+    fixture.network,
+    '--network-alias',
+    allowedAlias,
+    '--network-alias',
+    deniedAlias,
+    '--entrypoint',
+    'node',
+    RUNTIME_IMAGE,
+    '-e',
+    `require('node:http').createServer((_q, s) => s.end('EGRESS-TARGET-OK')).listen(${port})`,
+  ]);
+  return {
+    name,
+    port,
+    stop: async () => {
+      await docker(['rm', '-f', '-v', name], { allowFailure: true });
+    },
+  };
 };

@@ -58,6 +58,8 @@ import { type ChildProcess, spawn as spawnChildProcess } from 'node:child_proces
 import { randomUUID } from 'node:crypto';
 import { chmod, lstat } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
+import path from 'node:path';
+import process from 'node:process';
 import type { Readable } from 'node:stream';
 import { type Logger, type RunnerClock, silentLogger } from '@platform/application';
 import type { RunletFatalReason, RunletFrame } from '@platform/contracts';
@@ -65,6 +67,82 @@ import { RUNLET_PROTOCOL_VERSION } from '@platform/contracts';
 import { createFrameConnection, type FrameConnection } from './connection.js';
 import { type DecodedFrame, MAX_FRAME_PAYLOAD_BYTES, RunletProtocolError } from './framing.js';
 import { tokensMatch, validateRunToken } from './token.js';
+
+/**
+ * The fallback when `chmod` on the control socket is not supported, and why it is not a weakening.
+ *
+ * The shim sets the socket to `0600` after `listen`, and until WP-22 a failure there was fatal. That
+ * is right on every filesystem the platform deploys on, and it makes the shim **refuse to start at
+ * all** on one it is developed on: measured on Docker Desktop 4.x for macOS, with the control volume
+ * bind-backed onto a host directory (virtiofs),
+ *
+ *   fs.chmod('/ctl/ctl.sock', 0o600)  →  EINVAL: invalid argument, chmod '/ctl/ctl.sock'
+ *
+ * and the mode cannot be set at creation either — with `umask(0o177)` the guest still reports the
+ * socket `0666` while the host reports `0755`, so the mode on that filesystem is synthesised rather
+ * than stored. The socket file itself appears, the shim then exits 1, and the run container is
+ * `exited` before the runner attaches. (Before the `platform-runtime` image this was invisible: the
+ * stand-in booted the shim through the TypeScript resolver, which took seconds, so `attach`
+ * inspected a container that was still starting and polled until the socket file appeared — a
+ * failure hidden by being slower than the test.)
+ *
+ * **What the `0600` buys, and what replaces it here.** The property is "nothing but this uid (and
+ * root) can open the control socket". The socket's own mode is one way to get it; the *directory* is
+ * the other, and the launcher already creates `<ctl>/<run-id>` as `0700` owned by uid 1000
+ * (`DockerWorkspaceProvider.#prepare`) — a Unix socket cannot be connected to without search
+ * permission on every directory in its path, so a `0700` directory owned by this process denies
+ * exactly the same set. Directory modes *are* honoured on that filesystem; only the socket's is not.
+ *
+ * So when `chmod` fails, the shim checks the property directly instead of the mechanism, and
+ * **still refuses** when the directory does not carry it. It is narrower than the old branch rather
+ * than kinder: the old code asserted a call succeeded, this asserts the access control exists.
+ *
+ * The residual, stated: on a filesystem that cannot chmod a socket, the socket's own mode is
+ * whatever that filesystem invents, so a *second* process running as this uid inside this container
+ * could open it — which is true of the `0600` case too, because it is the same uid. What changes is
+ * nothing about the run container's isolation and everything about whether the shim starts.
+ */
+/**
+ * The two `chmod` failures this fallback answers, and nothing else.
+ *
+ * `EINVAL` is what virtiofs returns for a socket (measured above); `ENOTSUP` is what a filesystem
+ * that declines the operation outright returns. Anything else — `EPERM` (this process does not own
+ * the socket it just created), `ENOENT` (it is gone), `EIO` — is a condition the directory's mode
+ * says nothing about, so it is re-thrown rather than absorbed: a `catch` that swallows every error
+ * turns a narrow fallback into "start anyway", which is the shape standing rule 18 is about.
+ */
+const UNSUPPORTED_CHMOD = new Set(['EINVAL', 'ENOTSUP', 'EOPNOTSUPP']);
+
+export const assertControlDirectoryProtects = async (
+  socketPath: string,
+  cause: unknown,
+  logger: Logger,
+): Promise<void> => {
+  const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+  if (code === undefined || !UNSUPPORTED_CHMOD.has(code)) {
+    throw cause;
+  }
+  const directory = path.dirname(socketPath);
+  const stat = await lstat(directory).catch(() => null);
+  const mode = stat === null ? null : stat.mode & 0o777;
+  const uid = process.getuid?.() ?? -1;
+  if (stat === null || mode !== 0o700 || stat.uid !== uid) {
+    throw new RunletProtocolError(
+      `cannot set ${socketPath} to 0600 (${(cause as Error | undefined)?.message ?? 'unknown'}) ` +
+        `and ${directory} does not protect it either: mode ${mode === null ? 'unknown' : mode.toString(8)}, ` +
+        `owner ${stat === null ? 'unknown' : String(stat.uid)}, this process ${String(uid)}`,
+    );
+  }
+  logger.warn(
+    {
+      control_socket: socketPath,
+      directory,
+      directory_mode: mode.toString(8),
+      reason: (cause as Error | undefined)?.message ?? 'unknown',
+    },
+    'the control socket could not be chmod 0600; its 0700 owner-only directory is what denies everyone else',
+  );
+};
 
 /** What `spawn` is allowed to start, injected so a test can watch the arguments without a fork. */
 export type SpawnChild = (
@@ -706,23 +784,25 @@ export const createRunletShim = (options: RunletShimOptions): RunletShim => {
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
-  const listen = async (server: Server, path: string): Promise<void> => {
+  const listen = async (server: Server, socketPath: string): Promise<void> => {
     // Refusing an existing path rather than unlinking it: a socket already there means another shim
     // believes it owns this run, and taking it over silently is how two shims share one child.
-    const existing = await lstat(path).catch(() => null);
+    const existing = await lstat(socketPath).catch(() => null);
     if (existing !== null) {
-      throw new RunletProtocolError(`${path} already exists; refusing to take over a run`);
+      throw new RunletProtocolError(`${socketPath} already exists; refusing to take over a run`);
     }
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
-      server.listen(path, () => {
+      server.listen(socketPath, () => {
         server.off('error', reject);
         resolve();
       });
     });
     // 0600: the runner reaches this socket as the same uid (WP-14 wires the run container and the
     // runner container to one uid); nothing else on the volume may open it.
-    await chmod(path, 0o600);
+    await chmod(socketPath, 0o600).catch(async (cause: unknown) => {
+      await assertControlDirectoryProtects(socketPath, cause, logger);
+    });
   };
 
   return {

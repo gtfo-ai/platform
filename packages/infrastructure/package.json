@@ -11,6 +11,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./runlet": {
+      "types": "./src/runlet/entry.ts",
+      "default": "./src/runlet/entry.ts"
     }
   },
   "dependencies": {

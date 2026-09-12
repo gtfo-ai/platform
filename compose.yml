@@ -1,0 +1,280 @@
+# A complete instance (BD-020: "a single `docker compose` starts a complete instance").
+#
+#   cp .env.example .env && $EDITOR .env      # APP_SECRET_KEY at minimum
+#   docker compose up --build
+#
+#   docker compose -f compose.yml -f compose.local.yml up --build    # BD-004's local mode
+#
+# Images are `platform*:${PLATFORM_TAG:-dev}`. With a tag that a registry has, `docker compose up`
+# pulls; from a checkout, `--build` builds. `platform-runtime` and `platform-egress` appear in no
+# service here **on purpose**: the launcher creates them per run, so compose never starts one —
+# `node scripts/build-images.mjs` is what builds them, and `.github/workflows/image.yml` what
+# publishes them.
+#
+# **Local mode is an override file, not a profile, and that is a correction.** WP-22 first shipped a
+# second `app-local` service under `profiles: ['local']`, which is not what a profile does: a service
+# **without** `profiles` always runs, so `COMPOSE_PROFILES=local` started *both* — two containers
+# publishing `${APP_PORT}:8080`, the second failing to bind. Compose has no "instead of" for
+# profiles. An override file changes the service that already exists, which is what technical/11's
+# layout said in the first place, and `test/e2e/compose/compose-config.e2e.test.ts` asserts the
+# service list and the port publishers under both arrangements rather than trusting this paragraph.
+# The `backup` profile is a genuine profile: `db-backup` is an *addition*, not a replacement.
+#
+# ## What is deliberate rather than incidental
+#
+# **The socket lives in one container, and it is not the platform's** (TD-021, and its WP-15g
+# amendment: "No process that composes the pipeline or serves `/webhooks/*` may construct a Docker
+# client"). `docker-socket-proxy` is the only service with the socket bound; it exposes a filtered
+# Engine API on an `internal: true` network that only `launcher` joins. The `app` service — which
+# serves the API, the SSE stream and the unauthenticated `/webhooks/*` endpoint — has no socket, no
+# `DOCKER_HOST` and no route to the proxy. That arrangement, not a `ROLE`, is what bounds the blast
+# radius of an RCE in the API process.
+#
+# **`depends_on` never gates on `/readyz`** (TD-023's amendment). On `ROLE=all` readiness is 503
+# until a pipeline can be composed, which is honest and intended, so a `service_healthy` condition
+# against it would hold the whole instance down. `db` is gated on `pg_isready` and `app` on the
+# migration having completed. No service here declares a `healthcheck` over the app: the product
+# image carries one (`docker/app.Dockerfile`, `curl /healthz`), which is the liveness probe, and
+# nothing in this file gates on it.
+#
+# **`migrate` runs the same entrypoint `pnpm db:migrate` does** (TD-011: forward-only SQL under an
+# advisory lock). It is a one-shot service, and `app` waits for it to exit 0.
+#
+# **The control volume is not mounted into `app`.** TD-025 §2 gives the *runner* a static mount of
+# the whole `ctl` volume, and that volume holds every live run's token. `apps/server` composes no
+# workspace provisioner in this build (Q59(b): it logs which piece is missing and runs everything
+# except an agent stage), so mounting it here would hand the container with the HTTP surface a
+# credential it has no code to use. The service that gains the mount is the one that gains the
+# transport (Q52).
+
+name: agentic
+
+x-platform-image: &platform-image
+  image: platform:${PLATFORM_TAG:-dev}
+  build:
+    context: .
+    dockerfile: docker/app.Dockerfile
+    args:
+      BASE_IMAGE: platform-base:${PLATFORM_TAG:-dev}
+      APP_VERSION: ${APP_VERSION:-}
+      APP_COMMIT: ${APP_COMMIT:-}
+      APP_BUILT_AT: ${APP_BUILT_AT:-}
+
+services:
+  db:
+    image: postgres:18@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      # The data directory is a sub-directory of the volume rather than its root: a volume root is
+      # `root:root` and initdb refuses a directory it does not own, and `lost+found` on a mounted
+      # filesystem makes "the directory is empty" false.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    <<: *platform-image
+    command: ['apps/server/src/migrate.ts']
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env — see .env.example}
+      APP_DB_PARTITION_MONTHS_AHEAD: ${APP_DB_PARTITION_MONTHS_AHEAD:-3}
+      APP_TRANSCRIPT_RETENTION_DAYS: ${APP_TRANSCRIPT_RETENTION_DAYS:-}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  app:
+    <<: *platform-image
+    environment:
+      ROLE: ${ROLE:-all}
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env — see .env.example}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+      APP_PROVIDER_MODE: ${APP_PROVIDER_MODE:-api}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-}
+      APP_BOOTSTRAP_ADMIN_NAME: ${APP_BOOTSTRAP_ADMIN_NAME:-Administrator}
+      APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
+      APP_ALLOW_SIGNUP: ${APP_ALLOW_SIGNUP:-false}
+      # TD-026: the knowledge indexer's per-project bare mirrors live on a volume this container
+      # owns and fetches into itself with `git`, never the launcher's `repo-cache`.
+      APP_KNOWLEDGE_MIRROR_ROOT: /var/lib/app/knowledge
+      APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - knowledge:/var/lib/app/knowledge
+      - exports:/var/lib/app/exports
+    ports:
+      - '${APP_PORT:-8080}:8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # TD-021's filter in front of the daemon: `CONTAINERS`, `NETWORKS`, `VOLUMES`, `IMAGES` and
+  # `POST`; `EXEC`, `BUILD` and `SECRETS` off. Everything not listed defaults to denied in this
+  # image, which is why the list is written out rather than trimmed.
+  #
+  # **What `EXEC: 0` does and does not buy, measured against this arrangement** (WP-22), because a
+  # reader will otherwise take it as "no exec": with `CONTAINERS=1` and `POST=1` the proxy admits
+  # `POST /containers/<id>/exec` — **201**, an exec *instance* is created — while
+  # `POST /exec/<id>/start` and `GET /exec/<id>/json` are **403**. So a compromised launcher can
+  # create an exec it can never run or read. Verified in the same run: `/containers/json` 200,
+  # `/images/json` 200, `/info` 200, `/secrets` 403, `POST /build` 403, `/nodes` 403.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      IMAGES: 1
+      INFO: 1
+      POST: 1
+      EXEC: 0
+      BUILD: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      AUTH: 0
+      DISTRIBUTION: 0
+      SESSION: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy
+    restart: unless-stopped
+
+  launcher:
+    image: platform-launcher:${PLATFORM_TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/launcher.Dockerfile
+      args:
+        BASE_IMAGE: platform-base:${PLATFORM_TAG:-dev}
+        APP_VERSION: ${APP_VERSION:-}
+        APP_COMMIT: ${APP_COMMIT:-}
+        APP_BUILT_AT: ${APP_BUILT_AT:-}
+    environment:
+      # Absent is a startup error and there is no default (TD-021's WP-15g amendment); this is the
+      # proxy above, never the socket. A `unix:///var/run/docker.sock` here would also need the
+      # socket bound into this container, which is the arrangement the proxy exists to remove.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      APP_WORKSPACE_CONTROL_VOLUME: ${APP_WORKSPACE_CONTROL_VOLUME:-agentic-ctl}
+      APP_WORKSPACE_CONTROL_ROOT: /run/agentic/ctl
+      APP_WORKSPACE_CACHE_VOLUME: ${APP_WORKSPACE_CACHE_VOLUME:-agentic-repo-cache}
+      APP_WORKSPACE_RUNTIME_IMAGE: platform-runtime:${PLATFORM_TAG:-dev}
+      APP_WORKSPACE_EGRESS_IMAGE: platform-egress:${PLATFORM_TAG:-dev}
+      APP_WORKSPACE_GIT_IMAGE: ${APP_WORKSPACE_GIT_IMAGE:-alpine/git:v2.49.1}
+      # The two networks the launcher attaches run objects to: the helpers that must reach the git
+      # host, and the sidecar's route out. Both are `agentic-run-egress` below, which is a normal
+      # bridge network — the run container itself is on a per-run `internal: true` network with no
+      # route off it, and the sidecar is the only container bridging the two.
+      APP_WORKSPACE_HELPER_NETWORK: agentic-run-egress
+      APP_WORKSPACE_EGRESS_NETWORK: agentic-run-egress
+      APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # TD-025 §2: one `ctl` volume for the instance, one sub-directory per run. The launcher
+      # creates and chowns each sub-directory through a helper container; this mount is what lets
+      # it read a run's token back and wait for the shim's socket.
+      - ctl:/run/agentic/ctl
+      - exports:/var/lib/app/exports
+    # **Not `default`.** This is the one process with a route to the daemon, and it has no reason to
+    # reach `db` or `app`: it holds no database connection and there is no transport between it and
+    # the platform (Q52). It joins `run-egress` so that **compose creates it** — the launcher
+    # attaches a run's helpers and its egress sidecar to that network by name and never creates one,
+    # so a network compose dropped as unused would fail the first run with `network not found`.
+    networks:
+      - docker-proxy
+      - run-egress
+    depends_on:
+      - docker-socket-proxy
+    # No healthcheck: this process has no HTTP surface at all (`apps/launcher/src/index.ts` is a
+    # composition root and a signal handler), so the only thing a check could assert is that pid 1
+    # is alive, which is what the container's own state already says. A check that cannot fail is
+    # worse than none (standing rule 3).
+    restart: unless-stopped
+
+  # technical/11 § Compose. Writes a compressed dump per schedule to its own volume; `pg_dump`
+  # before an upgrade is the documented path either way (technical/11 § Release).
+  #
+  # **Its major must equal `db`'s, and this pin was wrong.** `pg_dump` refuses a server newer than
+  # itself, so the `:17` image WP-22 first pinned could never dump the `postgres:18` above —
+  # measured against that exact digest: `pg_dump: error: aborting because of server version
+  # mismatch / server version: 18.6; pg_dump version: 17.6`. A backup service that cannot back up
+  # fails the same way every night, into a log nobody reads, and the file said it "writes a
+  # compressed dump per schedule". At this digest `pg_dump --version` is **18.0**, and
+  # `test/e2e/compose/compose-config.e2e.test.ts` reads both majors off this file and refuses a
+  # bump that moves one without the other.
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:18@sha256:f70742ebe42b2277689b028d1fd15aa80f77cffa01da163cc9f85a6ff1866e7f
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      SCHEDULE: ${BACKUP_SCHEDULE:-@daily}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      BACKUP_KEEP_WEEKS: ${BACKUP_KEEP_WEEKS:-4}
+      BACKUP_KEEP_MONTHS: ${BACKUP_KEEP_MONTHS:-6}
+    volumes:
+      - backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ['backup']
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  backups:
+  # Take-over export tarballs. Shared between the launcher (which writes them) and the app (which
+  # serves them), which is why it is a named volume rather than a directory in either image.
+  exports:
+  # TD-026's platform-side bare mirrors. Not the launcher's `repo-cache`: different owner, different
+  # refresh point, different failure mode, and the decision record says why merging them is refused.
+  knowledge:
+  # TD-025 §2's control volume, named explicitly so the launcher's `APP_WORKSPACE_CONTROL_VOLUME`
+  # names the object the daemon knows — a compose project prefix would make `agentic-ctl` into
+  # `agentic_agentic-ctl`.
+  #
+  # `repo-cache` (TD-021's per-project bare mirrors) is **not** declared here, and that is a fact
+  # worth knowing at `down -v` time: the launcher creates it itself (`#ensureVolume`) because it
+  # mounts it only into helper containers, never into its own filesystem, so compose would drop an
+  # unused declaration anyway. Removing an instance therefore leaves `agentic-repo-cache` behind;
+  # `docker volume rm agentic-repo-cache` is the rest of `docker compose down -v`.
+  ctl:
+    name: ${APP_WORKSPACE_CONTROL_VOLUME:-agentic-ctl}
+
+networks:
+  default:
+    name: agentic
+  # The network a run's egress sidecar is attached to besides its own `internal: true` one, and the
+  # network the mirror and export helpers use to reach the git host.
+  run-egress:
+    name: agentic-run-egress
+  # Only `launcher` and `docker-socket-proxy` join this, and it has no route anywhere else.
+  docker-proxy:
+    internal: true
