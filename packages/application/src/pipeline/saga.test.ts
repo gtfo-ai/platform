@@ -8,7 +8,9 @@
  */
 import type { DomainEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
+import { readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import {
   createPipelineHarness,
@@ -950,5 +952,178 @@ describe('when the merge request is closed instead of merged', () => {
       }),
     ]);
     expect(taskOf(harness).task.state).toBe('needs_human');
+  });
+});
+
+/**
+ * **WP-15f: the first agent stage is given the ticket's own words.**
+ *
+ * Every case here starts from a `ticket.matched` **appended directly**, with no inbox row behind
+ * it — which is the *manual* start's shape (`POST /api/projects/:id/tasks`, and
+ * `pipeline.intake.reconcile`), and the same code path a webhook-started task takes. The webhook
+ * half is `test/e2e/pipeline/webhook-ingress.e2e.test.ts`.
+ *
+ * Asserted against the **assembled prompt** and the **stored row**, never through the runner:
+ * `FakeClaudeRunner` and this harness's runner both pick their scenario from `spec.stage` and
+ * neither reads a prompt, so an assertion routed through one asserts nothing (standing rule 82).
+ */
+describe('the ticket’s own words (WP-15f)', () => {
+  const TITLE = 'rollback sessions after a failed migration';
+  const BODY = 'When a migration fails halfway the session table keeps the half-written rows.';
+
+  const ticketDouble = (calls: { count: number }, failFirst = 0) => ({
+    readTicket: async (ref: { provider: string; key: string; url: string }) => {
+      calls.count += 1;
+      if (calls.count <= failFirst) {
+        throw new Error('the ticket system is unreachable');
+      }
+      return {
+        ref,
+        issue_type: 'Bug',
+        title: TITLE,
+        description: BODY,
+        status: 'To Do',
+        priority: 'High',
+        labels: [],
+        comments: [
+          {
+            id: 'c1',
+            author: {
+              provider: 'fake-jira',
+              external_id: 'u1',
+              email: null,
+              display_name: 'Dana',
+              verified: true,
+            },
+            body: 'it only reproduces when the migration is interrupted',
+            created_at: '2026-06-01T09:00:00.000Z',
+            updated_at: null,
+            marker_id: null,
+            url: null,
+          },
+        ],
+        links: [],
+        epic: null,
+        siblings: [],
+        attachments_text: [],
+        assignee: null,
+        reporter: null,
+        updated_at: '2026-06-02T09:00:00.000Z',
+      };
+    },
+  });
+
+  const ticketBlockOf = (userPrompt: string) => {
+    const block = readDataBlocks(userPrompt).blocks.find((entry) => entry.kind === 'ticket');
+    expect(block).toBeDefined();
+    return block as NonNullable<typeof block>;
+  };
+
+  it('stores the snapshot at intake and puts it in the first stage’s prompt', async () => {
+    const calls = { count: 0 };
+    const harness = harnessWith({ taskManagement: ticketDouble(calls) });
+    await harness.publish([ticketMatched()]);
+
+    const stored = taskOf(harness);
+    expect(stored.ticketSnapshot?.title).toBe(TITLE);
+    expect(stored.ticketSnapshot?.comment_count).toBe(1);
+    expect(stored.ticketSnapshotAt).not.toBeNull();
+
+    /**
+     * **Intake read it, not the stage** — the two halves are otherwise indistinguishable from the
+     * final row (standing rule 68), and the audit is what tells them apart: `read_ticket` is made
+     * before the task row exists, so its `taskId` is `null`. It also pins the half of the criterion
+     * a row cannot show — that the call went through `IntegrationActionExecutor` like every other
+     * provider call, rather than straight at the port.
+     */
+    const audited = harness.audit.entriesFor('read_ticket');
+    expect(audited).toHaveLength(1);
+    expect(audited[0]?.taskId).toBeNull();
+    expect(audited[0]?.status).toBe('ok');
+    expect(audited[0]?.mutating).toBe(false);
+
+    const first = harness.specs[0];
+    expect(first?.stage).toBe('refinement');
+    const block = ticketBlockOf(first?.userPrompt ?? '');
+    expect(block.attributes.text).toBe('read');
+    expect(block.body).toContain(TITLE);
+    expect(block.body).toContain('the session table keeps the half-written rows');
+    expect(block.body).toContain('it only reproduces when the migration is interrupted');
+  });
+
+  /**
+   * The self-healing half, and the reason the fetch is in two places rather than one.
+   *
+   * Intake's read fails — Jira is down for that second — and the task is created anyway
+   * (standing rule 20: the ticket is *why* the task exists). The `stage.execute` job reads it
+   * before the first agent stage runs, so the criterion still holds.
+   */
+  it('starts the task when intake cannot read the ticket, and reads it at the stage', async () => {
+    const calls = { count: 0 };
+    const harness = harnessWith({ taskManagement: ticketDouble(calls, 1) });
+    await harness.publish([ticketMatched()]);
+
+    expect(calls.count).toBeGreaterThan(1);
+    expect(taskOf(harness).ticketSnapshot?.title).toBe(TITLE);
+    expect(ticketBlockOf(harness.specs[0]?.userPrompt ?? '').body).toContain(TITLE);
+    // The audit tells the two reads apart: the intake one has no task yet and failed; the one that
+    // succeeded was made from the stage job, against a task that exists.
+    const audited = harness.audit.entriesFor('read_ticket');
+    expect(audited.map((entry) => entry.status)).toEqual(['failed', 'ok']);
+    expect(audited[0]?.taskId).toBeNull();
+    expect(audited[1]?.taskId).toBe(taskOf(harness).task.id);
+  });
+
+  /**
+   * The no-op check, asserted by a **count** rather than by an outcome: every later stage finds a
+   * snapshot and makes no provider call. Deleting the `ticketSnapshot !== null` guard in
+   * `ensureTicketSnapshot` turns 1 into one per agent stage and this dies.
+   */
+  it('reads the ticket once per task, however many stages run', async () => {
+    const calls = { count: 0 };
+    const harness = harnessWith({ taskManagement: ticketDouble(calls) });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    // Six agent stages ran; one read happened.
+    expect(harness.specs.length).toBeGreaterThan(1);
+    expect(calls.count).toBe(1);
+  });
+
+  /**
+   * A ticket the platform could never read is **not** spelled as a ticket with no title
+   * (standing rule 18), and it does not stop the task.
+   */
+  it('runs the task and says the ticket was not read when the provider never answers', async () => {
+    const calls = { count: 0 };
+    const harness = harnessWith({ taskManagement: ticketDouble(calls, 99) });
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).ticketSnapshot).toBeNull();
+    expect(taskOf(harness).ticketSnapshotAt).toBeNull();
+    const block = ticketBlockOf(harness.specs[0]?.userPrompt ?? '');
+    expect(block.attributes.text).toBe('unread');
+    expect(block.body).not.toContain('title:');
+  });
+
+  it('keeps a credential somebody pasted into the ticket out of the stored row', async () => {
+    const SECRET = 'glpat-notarealtokenatall';
+    const calls = { count: 0 };
+    const double = ticketDouble(calls);
+    const harness = harnessWith({
+      taskManagement: {
+        readTicket: async (ref: never) => ({
+          ...(await double.readTicket(ref)),
+          description: `${BODY} use ${SECRET} to reproduce`,
+        }),
+      },
+      ticketRedactor: exactSecretRedactor([{ name: 'fake_jira_token', value: SECRET }]),
+    });
+    await harness.publish([ticketMatched()]);
+
+    const snapshot = taskOf(harness).ticketSnapshot;
+    expect(snapshot?.description).not.toContain(SECRET);
+    expect(snapshot?.redaction_count).toBe(1);
+    expect(harness.specs[0]?.userPrompt).not.toContain(SECRET);
   });
 });

@@ -32,7 +32,14 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ClaudeRunner, Jobs, PlatformToolPort, RunSpec } from '@platform/application';
-import type { DomainEvent, Id, JsonObject, JsonValue, TranscriptEvent } from '@platform/contracts';
+import type {
+  DomainEvent,
+  Id,
+  JsonObject,
+  JsonValue,
+  TicketSnapshot,
+  TranscriptEvent,
+} from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
   eventing as eventingAdapters,
@@ -92,6 +99,9 @@ export interface TaskSnapshot {
   readonly iteration_counters: Record<string, number>;
   readonly stage_attempts: Record<string, number>;
   readonly template: string;
+  /** `tasks.ticket_snapshot` — the ticket's own words, or null when the platform never read it. */
+  readonly ticket_snapshot: TicketSnapshot | null;
+  readonly ticket_snapshot_at: Date | null;
 }
 
 /** What the harness seeded before the scenarios are built. */
@@ -565,7 +575,8 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   const task = async (): Promise<TaskSnapshot> => {
     const { rows } = await pool.query<TaskSnapshot>(
-      `select id, state, current_stage, cost_actual, iteration_counters, stage_attempts, template
+      `select id, state, current_stage, cost_actual, iteration_counters, stage_attempts, template,
+              ticket_snapshot, ticket_snapshot_at
          from tasks order by created_at limit 1`,
     );
     const row = rows[0];

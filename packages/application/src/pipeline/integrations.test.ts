@@ -32,6 +32,7 @@ import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
 import type { IntegrationActionExecutor } from '../integrations/action-executor.js';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { GitProviderPort } from '../ports/integrations/git-provider.js';
 import type { TaskManagementPort } from '../ports/integrations/task-management.js';
 import type { PipelineIntegrations } from './integrations.js';
@@ -84,6 +85,7 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   'gates.ts': 1,
   'jobs.ts': 1,
   'saga.ts': 1,
+  'ticket-snapshot.ts': 1,
   'workpad.ts': 2,
 };
 
@@ -156,6 +158,7 @@ const integrationsDouble = (): PipelineIntegrations => ({
       transition: async () => ({ changed: true, from: 'To Do', to: 'In Progress' }),
     } as unknown as TaskManagementPort,
     ref: { integrationId: PROJECT, provider: 'fake-jira', type: 'task_management' },
+    redactor: exactSecretRedactor([]),
   },
 });
 

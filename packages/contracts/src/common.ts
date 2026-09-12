@@ -300,6 +300,62 @@ export const workpadRefSchema = z.strictObject({
   url: urlSchema.nullish(),
 });
 
+// ── The ticket's own words ───────────────────────────────────────────────────
+
+/**
+ * One comment of {@link ticketSnapshotSchema}. `author` and `body` are untrusted (BD-022).
+ *
+ * `author` is a display name and never an address: a snapshot exists to give an agent the thread,
+ * not to give it somebody's email. `truncated` is **per comment**, because a thread where one
+ * comment was cut and nineteen were not is a different fact from a thread that was shortened.
+ *
+ * `created_at` is nullable although the port's `ticketCommentSchema` requires one: a snapshot is
+ * built out of whatever a provider actually returned, and the alternative to "the platform could
+ * not read this timestamp" is inventing one, which reads as a fact.
+ */
+export const ticketSnapshotCommentSchema = z.strictObject({
+  id: z.string(),
+  author: z.string(),
+  created_at: isoDateTimeSchema.nullable(),
+  body: z.string(),
+  truncated: z.boolean(),
+});
+
+/**
+ * `tasks.ticket_snapshot` — the ticket's own words, as the platform read them once (WP-15f).
+ *
+ * The platform stored `ticket_provider`/`ticket_key`/`ticket_url` and nothing else until this
+ * schema existed, so the first agent stage was asked to refine a ticket nobody had opened
+ * (PROGRESS backlog 23, Q61). This is that text: **untrusted external data** (BD-022) like
+ * `inbox.payload` and `kb_chunks`, stored redacted, bounded at the write, and dying with the task
+ * by the row it sits on.
+ *
+ * Three fields carry the ticket and the rest carry what happened to it, because a snapshot that
+ * cannot say what it dropped is a snapshot a reader has to trust:
+ *
+ *  - `truncated` is true when **anything** was cut — a field, a comment, or a comment that did not
+ *    make the newest-N window — and `comment_count` is what the provider returned before the
+ *    window, so `comments.length < comment_count` says how many;
+ *  - `redaction_count` is what the binding's redactor replaced, counted over the text as it was
+ *    **read** rather than as it is stored (the cut happens after), which is the `inbox`
+ *    precedent: a redactor that stopped working must be visible rather than silent;
+ *  - `ticket_updated_at` is the provider's own `updated_at` for the ticket, which is the only
+ *    thing that can tell a later reader the snapshot is behind — the platform has no
+ *    `ticket.updated` event (Q61 (b)).
+ *
+ * An **absent** snapshot (`null` on the row) means the platform has not read the ticket: a failed
+ * or not-yet-made fetch is never spelled as a ticket with an empty description (standing rule 18).
+ */
+export const ticketSnapshotSchema = z.strictObject({
+  title: z.string(),
+  description: z.string(),
+  comments: z.array(ticketSnapshotCommentSchema),
+  truncated: z.boolean(),
+  comment_count: z.int().nonnegative(),
+  redaction_count: z.int().nonnegative(),
+  ticket_updated_at: isoDateTimeSchema.nullable(),
+});
+
 // ── Usage and cost ───────────────────────────────────────────────────────────
 
 /** Token usage split by cache kind, as stored on `runs` and `cost_entries` (technical/03). */
@@ -357,6 +413,8 @@ export type Actor = z.infer<typeof actorSchema>;
 export type TicketRef = z.infer<typeof ticketRefSchema>;
 export type MergeRequestRef = z.infer<typeof mergeRequestRefSchema>;
 export type WorkpadRef = z.infer<typeof workpadRefSchema>;
+export type TicketSnapshotComment = z.infer<typeof ticketSnapshotCommentSchema>;
+export type TicketSnapshot = z.infer<typeof ticketSnapshotSchema>;
 export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 export type RunCost = z.infer<typeof runCostSchema>;

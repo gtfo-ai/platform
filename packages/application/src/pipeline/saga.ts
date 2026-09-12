@@ -29,7 +29,13 @@
  * result for a commit the task has moved past is not a failure; treating it as one would park a
  * task for a human every time somebody re-ran an old pipeline.
  */
-import { type DomainEvent, type Id, type Slug, ticketRefSchema } from '@platform/contracts';
+import {
+  type DomainEvent,
+  type Id,
+  type IsoDateTime,
+  type Slug,
+  ticketRefSchema,
+} from '@platform/contracts';
 import type { CommandContext, PipelineSignal } from '@platform/domain';
 import {
   compilePipeline,
@@ -56,7 +62,7 @@ import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import type { PipelineIntegrationsPort } from './integrations.js';
+import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import {
   enqueueOutbound,
@@ -68,6 +74,7 @@ import type { ProjectSettingsPort } from './settings.js';
 import { templateForIssueType } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
 import { PIPELINE_ACTOR } from './store.js';
+import { readTicketSnapshot } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 import { reviewFindingSignature } from './verdicts.js';
 import { statusMappingHandler, workpadHandler } from './workpad.js';
@@ -267,7 +274,33 @@ export const runIntakeCheck = async (
   }
 
   const settings = await options.settings.forProject(projectId);
-  const unprotected = await unprotectedDefaultBranch(options, projectId);
+  // One resolution for both reads of this job. Outside a run, so the call's scope holds no minted
+  // credential (Q55, `noRunScopedSecrets`); outside every transaction, which
+  // `integrationsForProject` refuses to be otherwise.
+  const integrations = await integrationsForProject(
+    options.integrations,
+    projectId,
+    noRunScopedSecrets(),
+  );
+  const unprotected = await unprotectedDefaultBranch(integrations, projectId);
+  /**
+   * **The ticket's own words, read once, before the task exists** (WP-15f, Q61).
+   *
+   * Here rather than in a duty of its own, because this is the only point that is *ordered* with
+   * respect to the first agent stage: the transaction below both creates the task and enqueues the
+   * stage, so a snapshot fetched after it would race the prompt it exists to fill.
+   * `ticket-snapshot.ts` has the full ordering argument.
+   *
+   * It answers `null` rather than throwing for every reason a ticket's text can be unavailable, so
+   * a task still starts when Jira is down — the ticket is *why* the task exists, and refusing to
+   * create it would turn a provider outage into lost work (standing rule 20). The next agent stage
+   * reads it (`ensureTicketSnapshot`), so the failure is recoverable rather than permanent.
+   */
+  const ticketSnapshot = await readTicketSnapshot(
+    options,
+    { projectId, taskId: null, ticket },
+    integrations,
+  );
 
   const work = await options.unitOfWork.transaction(async (scope) => {
     const existing = await options.store.tasks.findByTicket(scope.tx, {
@@ -302,6 +335,8 @@ export const runIntakeCheck = async (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      ticketSnapshot,
+      ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
     };
     await options.store.tasks.insert(scope.tx, stored);
 
@@ -358,17 +393,16 @@ export const runIntakeCheck = async (
  * `null` when the branch is protected, when there is no git binding, or when nobody can tell.
  *
  * Called from the job and never from a handler: `integrationsForProject` refuses inside a
- * transaction, so a future caller that tries gets an error rather than a held connection.
+ * transaction, so a future caller that tries gets an error rather than a held connection. The
+ * bindings are resolved by the caller and passed in, because the intake check now makes two
+ * provider reads — this one and the ticket's own text (WP-15f) — and resolving twice would decrypt
+ * the project's credentials twice for one job.
  */
 const unprotectedDefaultBranch = async (
-  options: PipelineSagaOptions,
+  integrations: PipelineIntegrations,
   projectId: Id,
 ): Promise<string | null> => {
-  // Outside a run: the branch check happens before a workspace exists, so there is no minted
-  // credential for the redactor to hold (Q55, `noRunScopedSecrets`).
-  const reads = gitReads(
-    await integrationsForProject(options.integrations, projectId, noRunScopedSecrets()),
-  );
+  const reads = gitReads(integrations);
   // No task exists yet — the row is written by the transaction this read precedes — so the audit
   // row names the project and the action, and the ticket key is in the payload the caller passes.
   const callContext = { projectId, taskId: null };

@@ -19,6 +19,7 @@ import type {
   BindingRepository,
   GitProviderPort,
   ProjectBinding,
+  SecretRedactor,
   SecretStore,
 } from '@platform/application';
 import {
@@ -88,6 +89,8 @@ interface LoaderOptions {
   readonly secrets?: Readonly<Record<string, string>> | Error;
   /** Replaces the shipped registry; only the forgetful-provider case uses it. */
   readonly registrations?: readonly AnyProviderRegistration[];
+  /** TD-012 step 2, as the composition root passes it (WP-15f). */
+  readonly platformRedactor?: SecretRedactor;
 }
 
 const loaderFor = (options: LoaderOptions = {}) => {
@@ -106,6 +109,9 @@ const loaderFor = (options: LoaderOptions = {}) => {
         : createIntegrationRegistry(options.registrations),
     executor: actions,
     gitProjectPath: async () => 'acme/api',
+    ...(options.platformRedactor === undefined
+      ? {}
+      : { platformRedactor: options.platformRedactor }),
   });
 };
 
@@ -279,5 +285,92 @@ describe('a task-management binding that loads', () => {
       provider: 'jira-cloud',
       type: 'task_management',
     });
+  });
+
+  /**
+   * **The binding hands out the redactor it was built with, and TD-012 step 2 is in it** (WP-15f,
+   * review round 1).
+   *
+   * The redactor on `TaskManagementBinding` is what bounds `tasks.ticket_snapshot` — the second
+   * place the platform stores provider **text**, after `inbox`. Before this option existed the two
+   * sinks of one provider call were treated oppositely: the executor holds a `patternRedactor` and
+   * redacted the audit row, while the snapshot beside it kept a pasted credential verbatim and
+   * rendered it into every prompt. `createInboundIntegrationLoader` takes the same option for the
+   * same reason, three lines of composition away.
+   *
+   * The double here is a `SecretRedactor` rather than the shipped `patternRedactor()`, because this
+   * ring may not import `@platform/infrastructure` (biome's ring overrides say so). What it asserts
+   * is the **composition** — that the option reaches the binding and is applied *after* the
+   * binding's own — and `apps/server/src/pipeline.ts` is where the shipped rules are passed;
+   * `test/e2e/pipeline/webhook-ingress.e2e.test.ts` drives that composition with a planted token.
+   */
+  it('composes the platform’s own redactor into the one the binding hands out', async () => {
+    const platformRedactor: SecretRedactor = {
+      redactText: (text) =>
+        text.includes('PLANTED-PATTERN')
+          ? { value: text.replaceAll('PLANTED-PATTERN', '[REDACTED pattern]'), count: 1 }
+          : { value: text, count: 0 },
+      redactJson: (value) => ({ value, count: 0 }),
+    };
+    const integrations = await loaderFor({
+      bindings: [
+        {
+          bindingId: '00000000-0000-4000-8000-00000000d003' as Id,
+          integrationId: '00000000-0000-4000-8000-00000000a002' as Id,
+          type: 'task_management',
+          provider: 'jira-cloud',
+          name: 'acme jira',
+          config: {
+            site_url: 'https://acme-example.atlassian.net',
+            user_email: 'bot@example.test',
+          },
+          secretIds: [],
+        },
+      ],
+      secrets: { api_token: 'FAKE-jira-token-0001' },
+      platformRedactor,
+    }).forProject(PROJECT, outsideARun);
+
+    const redactor = integrations.taskManagement?.redactor;
+    expect(redactor).toBeDefined();
+    // The platform's rules…
+    expect(redactor?.redactText('see PLANTED-PATTERN here')).toEqual({
+      value: 'see [REDACTED pattern] here',
+      count: 1,
+    });
+    // …composed **after** the binding's own, which still fires (standing rule 42: both halves).
+    const both = redactor?.redactText('FAKE-jira-token-0001 and PLANTED-PATTERN');
+    expect(both?.value).not.toContain('FAKE-jira-token-0001');
+    expect(both?.value).not.toContain('PLANTED-PATTERN');
+    expect(both?.count).toBe(2);
+  });
+
+  it('applies only the binding’s own redactor when no platform one is supplied', async () => {
+    // The visible default, named rather than silent: the binding's redactor is never absent, so
+    // the absent case here is *narrower* redaction and not *no* redaction (standing rule 31).
+    const integrations = await loaderFor({
+      bindings: [
+        {
+          bindingId: '00000000-0000-4000-8000-00000000d003' as Id,
+          integrationId: '00000000-0000-4000-8000-00000000a002' as Id,
+          type: 'task_management',
+          provider: 'jira-cloud',
+          name: 'acme jira',
+          config: {
+            site_url: 'https://acme-example.atlassian.net',
+            user_email: 'bot@example.test',
+          },
+          secretIds: [],
+        },
+      ],
+      secrets: { api_token: 'FAKE-jira-token-0001' },
+    }).forProject(PROJECT, outsideARun);
+
+    const redacted = integrations.taskManagement?.redactor.redactText(
+      'FAKE-jira-token-0001 and PLANTED-PATTERN',
+    );
+    expect(redacted?.value).not.toContain('FAKE-jira-token-0001');
+    expect(redacted?.value).toContain('PLANTED-PATTERN');
+    expect(redacted?.count).toBe(1);
   });
 });

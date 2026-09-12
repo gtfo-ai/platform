@@ -81,9 +81,14 @@ import type {
   PipelineIntegrations,
   PipelineIntegrationsPort,
   ProjectBinding,
+  SecretRedactor,
   SecretStore,
 } from '@platform/application';
-import { bindingSecretRedactor, composeSecretRedactors } from '@platform/application';
+import {
+  bindingSecretRedactor,
+  composeSecretRedactors,
+  noSecretsRedactor,
+} from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js';
 
@@ -119,17 +124,42 @@ export interface PipelineIntegrationsLoaderOptions {
    * root resolves it from there rather than this file inventing a second home for it.
    */
   readonly gitProjectPath: (projectId: Id) => Promise<string>;
+  /**
+   * The platform's own redactor, composed **after** the binding's exact-match one — TD-012 step 2.
+   *
+   * The same option `createInboundIntegrationLoader` takes, for the same reason and now for a
+   * second sink. WP-15c passes `patternRedactor()` there because the delivery is written to
+   * `inbox(headers, payload)`; WP-15f created the other place the platform stores provider **text**
+   * — `tasks.ticket_snapshot`, which is read into every prompt (and which a task DTO will serve
+   * once one carries it; none does today) — and
+   * without this the two sinks of *one* provider call were treated oppositely: a `glpat-…` pasted
+   * into a ticket description was pattern-redacted in the `integration_actions` row (the executor
+   * holds its own `patternRedactor`) and stored verbatim beside it.
+   *
+   * Optional in the type and *named* rather than defaulted at every call site, like the inbound
+   * loader's: the composition root passes `patternRedactor()`, and a caller that really means
+   * "nothing but this binding's own secrets" passes {@link noSecretsRedactor} in full. It is not a
+   * silent no-op (standing rule 31), and the visible default is the binding's own redactor, which
+   * is never absent.
+   */
+  readonly platformRedactor?: SecretRedactor;
 }
 
 /** `<provider>:<integrationId>:<field>` — unique per binding, so two accounts cannot collide. */
 const secretName = (binding: ProjectBinding, field: string): string =>
   `${binding.provider}:${binding.integrationId}:${field}`;
 
+/** A built adapter and the redactor it was built with (WP-15f). */
+interface Built<TType extends IntegrationType> {
+  readonly port: IntegrationPortByType[TType];
+  readonly redactor: SecretRedactor;
+}
+
 const only = <T>(
   projectId: Id,
   type: IntegrationType,
-  candidates: readonly { binding: ProjectBinding; port: T }[],
-): { binding: ProjectBinding; port: T } | null => {
+  candidates: readonly { binding: ProjectBinding; built: T }[],
+): { binding: ProjectBinding; built: T } | null => {
   if (candidates.length === 0) {
     return null;
   }
@@ -149,12 +179,13 @@ const only = <T>(
 export const createPipelineIntegrationsLoader = (
   options: PipelineIntegrationsLoaderOptions,
 ): PipelineIntegrationsPort => {
+  const platformRedactor = options.platformRedactor ?? noSecretsRedactor();
   const build = async <TType extends IntegrationType>(
     projectId: Id,
     binding: ProjectBinding,
     type: TType,
     scope: IntegrationCallScope,
-  ): Promise<IntegrationPortByType[TType]> => {
+  ): Promise<Built<TType>> => {
     let registration: ReturnType<IntegrationRegistry['get']>;
     try {
       registration = options.registry.get(type, binding.provider);
@@ -188,6 +219,7 @@ export const createPipelineIntegrationsLoader = (
     const redactor = composeSecretRedactors(
       bindingSecretRedactor(injected),
       bindingSecretRedactor(scope.runScopedSecrets),
+      platformRedactor,
     );
 
     const parsed = registration.configSchema.safeParse({ ...binding.config, ...secrets });
@@ -204,12 +236,18 @@ export const createPipelineIntegrationsLoader = (
     }
 
     try {
-      return registration.create({
-        integrationId: binding.integrationId,
-        config: parsed.data,
-        secrets,
+      return {
+        port: registration.create({
+          integrationId: binding.integrationId,
+          config: parsed.data,
+          secrets,
+          redactor,
+        }) as IntegrationPortByType[TType],
+        // Handed out beside the port because the one caller that stores provider **text** needs it
+        // and the executor's redactor is a different one (`TaskManagementBinding.redactor`,
+        // WP-15f): step 1 of TD-012 belongs to the binding, step 2 to the process.
         redactor,
-      }) as IntegrationPortByType[TType];
+      };
     } catch (cause) {
       throw new BindingLoadError(
         projectId,
@@ -229,13 +267,13 @@ export const createPipelineIntegrationsLoader = (
 
       const gitCandidates = [];
       for (const binding of bindings.filter((row) => row.type === 'git')) {
-        gitCandidates.push({ binding, port: await build(projectId, binding, 'git', scope) });
+        gitCandidates.push({ binding, built: await build(projectId, binding, 'git', scope) });
       }
       const ticketCandidates = [];
       for (const binding of bindings.filter((row) => row.type === 'task_management')) {
         ticketCandidates.push({
           binding,
-          port: await build(projectId, binding, 'task_management', scope),
+          built: await build(projectId, binding, 'task_management', scope),
         });
       }
 
@@ -248,14 +286,18 @@ export const createPipelineIntegrationsLoader = (
           git === null
             ? null
             : {
-                port: git.port,
-                ref: git.port.ref,
+                port: git.built.port,
+                ref: git.built.port.ref,
                 project: await options.gitProjectPath(projectId),
               },
         taskManagement:
           taskManagement === null
             ? null
-            : { port: taskManagement.port, ref: taskManagement.port.ref },
+            : {
+                port: taskManagement.built.port,
+                ref: taskManagement.built.port.ref,
+                redactor: taskManagement.built.redactor,
+              },
       };
     },
   };

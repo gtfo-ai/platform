@@ -95,9 +95,18 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   `createPipelineRuntime`), and `integrations.ts` refuses both to resolve a project's bindings and to make
   the call. Two consequences to know before touching it: **ordering between the status mapping (110) and
   the workpad (120) is now the queue's, not TD-005's**, so a test that asserts both waits for both; and a
-  write made from that job uses a **narrow** repository method (`tasks.saveWorkpad`), because a whole-row
+  write made from that job uses a **narrow** repository method (`tasks.saveWorkpad`,
+  `tasks.saveTicketSnapshot`), because a whole-row
   `save` from a job that runs beside the stage executor is a lost update — measured, at 0.40 USD of a
   task's recorded spend.
+  **The prompt gets the ticket's own words** (WP-15f): `packages/application/src/pipeline/ticket-snapshot.ts`
+  reads the ticket once through `readTicket`, bounds and redacts it and stores it as `tasks.ticket_snapshot`
+  (migration 0015) — at **intake**, inside the `intake_check` duty's call phase, and again from the
+  `stage.execute` job when a task has none. It is deliberately **not** a fourth `pipeline.outbound` duty,
+  and the module's docblock carries the ordering argument that decided it: intake enqueues the first stage
+  on the line after its commit, so a duty woken by `task.created` would race the prompt it exists to fill.
+  `ticket_snapshot` is the third place the platform stores untrusted external text, after `inbox` and
+  `kb_chunks`; the byte budget and its derivation are stated at the caps.
   **`apps/server/src/pipeline.ts` is the production composition** (WP-15a): a project's bindings are read
   from `bindings`/`integrations` and their credentials decrypted from `secrets` by
   `packages/integrations/src/bindings/loader.ts`, which builds the adapters **per call** so the redactor can

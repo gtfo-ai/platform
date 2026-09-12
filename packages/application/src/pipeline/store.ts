@@ -36,6 +36,7 @@ import type {
   Slug,
   TaskMode,
   TicketRef,
+  TicketSnapshot,
   TokenUsage,
   WorkpadRef,
 } from '@platform/contracts';
@@ -56,6 +57,18 @@ export interface StoredTask {
   /** Sum of the runs' reported cost, in USD (`tasks.cost_actual`). */
   readonly costActualUsd: number;
   readonly estimateUsd: number | null;
+  /**
+   * The ticket's own words as the platform read them once (WP-15f, migration 0015).
+   *
+   * `null` means **the platform has not read this ticket** — a fetch that failed, a project with no
+   * task-management binding, or a task created before the column existed. It is never how a ticket
+   * with an empty description is spelled: that is a snapshot whose `description` is `''` (standing
+   * rule 18). `packages/application/src/pipeline/ticket-snapshot.ts` owns the bounds, the
+   * redaction and both writers.
+   */
+  readonly ticketSnapshot: TicketSnapshot | null;
+  /** When {@link ticketSnapshot} was read; `null` exactly when it is (`tasks_ticket_snapshot_at_paired`). */
+  readonly ticketSnapshotAt: IsoDateTime | null;
 }
 
 export interface TaskRepository {
@@ -95,6 +108,28 @@ export interface TaskRepository {
    * silently stops being written.
    */
   saveWorkpad(tx: Transaction, taskId: Id, workpad: WorkpadRef): Promise<void>;
+  /**
+   * Writes **only** `ticket_snapshot` and `ticket_snapshot_at` — the second writer outside the
+   * pipeline's own ordering (WP-15f).
+   *
+   * Same argument as {@link saveWorkpad}, one work package later: the backfill runs in the
+   * `stage.execute` job beside the stage executor's transactions, so a whole-row `save` from there
+   * would put back the cost, the state and the stage as they were when the job started. That is
+   * PROGRESS backlog entry 18, measured at 0.40 USD of a task's recorded spend, and a narrow write
+   * is how a new writer joins without becoming its next instance.
+   *
+   * The two columns move together because migration 0015's
+   * `tasks_ticket_snapshot_at_paired` check says they must: a snapshot with no read time cannot say
+   * how old it is, and a read time with no snapshot claims a read that produced nothing.
+   *
+   * @throws when the task does not exist, like `save` and `saveWorkpad`.
+   */
+  saveTicketSnapshot(
+    tx: Transaction,
+    taskId: Id,
+    snapshot: TicketSnapshot,
+    readAt: IsoDateTime,
+  ): Promise<void>;
   /** WIP counting (BD-010); `countsAsActive` / `countsInPipeline` decide which states count. */
   counts(
     tx: Transaction,

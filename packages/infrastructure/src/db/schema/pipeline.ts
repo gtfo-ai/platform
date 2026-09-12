@@ -10,6 +10,7 @@ import type {
   JsonObject,
   JsonValue,
   MergeRequestRef,
+  TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
 import { sql } from 'drizzle-orm';
@@ -64,6 +65,9 @@ export const tasks = pgTable('tasks', {
   requestedByUserId: uuid('requested_by_user_id'),
   requestedByIdentity: jsonb('requested_by_identity').$type<ExternalIdentity>(),
   templateSnapshot: jsonb('template_snapshot').$type<JsonObject>(),
+  /** The ticket's own words, bounded and redacted at the write (WP-15f, migration 0015). */
+  ticketSnapshot: jsonb('ticket_snapshot').$type<TicketSnapshot>(),
+  ticketSnapshotAt: timestamp('ticket_snapshot_at', { withTimezone: true }),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

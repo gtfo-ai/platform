@@ -12,7 +12,7 @@
  * rollback means anything.
  */
 import type { PipelineStore, StoredTask, Transaction } from '@platform/application';
-import type { Id } from '@platform/contracts';
+import type { Id, IsoDateTime } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -81,6 +81,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      ticketSnapshot: null,
+      ticketSnapshotAt: null,
       ...overrides,
     });
 
@@ -183,6 +185,102 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(loaded?.costActualUsd).toBeCloseTo(4.25, 6);
         expect(loaded?.task.state).toBe('active');
         expect(loaded?.task.currentStage).toBe('implementation');
+      });
+
+      /**
+       * WP-15f's write, held to the same property `saveWorkpad` is held to — and the assertion is
+       * on a **derived total**, never on the column that was written (standing rule 79).
+       *
+       * `ticket_snapshot` is written from the `stage.execute` job, which runs beside the stage
+       * executor's own transactions. A whole-row `save` from there is PROGRESS backlog 18: it put a
+       * task's `cost_actual` back to 2.40 where 2.80 was owed, and the only reason anybody noticed
+       * was an assertion that summed a total.
+       */
+      it('writes the ticket snapshot without writing anything else, so a concurrent cost survives', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const stale = await store.tasks.load(tx, stored.task.id);
+        // Somebody else moves the task on, exactly as the stage executor does.
+        await store.tasks.save(tx, {
+          ...(stale as NonNullable<typeof stale>),
+          task: { ...stored.task, state: 'active', currentStage: 'implementation' },
+          costActualUsd: 4.25,
+        });
+        await store.tasks.saveTicketSnapshot(
+          tx,
+          stored.task.id,
+          {
+            title: 'rollback sessions after a failed migration',
+            description: 'the session table keeps the half-written rows',
+            comments: [],
+            truncated: false,
+            comment_count: 0,
+            redaction_count: 0,
+            ticket_updated_at: '2026-06-02T09:00:00.000Z',
+          },
+          '2026-06-02T09:05:00.000Z' as IsoDateTime,
+        );
+
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.ticketSnapshot?.title).toBe('rollback sessions after a failed migration');
+        expect(loaded?.ticketSnapshotAt).toBe('2026-06-02T09:05:00.000Z');
+        // The derived total, and the two columns WP-15d watched go stale with it.
+        expect(loaded?.costActualUsd).toBeCloseTo(4.25, 6);
+        expect(loaded?.task.state).toBe('active');
+        expect(loaded?.task.currentStage).toBe('implementation');
+      });
+
+      it('round-trips a ticket snapshot written by the insert that created the task', async () => {
+        // Intake's path: the snapshot is part of the row from the moment it exists, so there is no
+        // window for a concurrent writer to lose it (WP-15f).
+        const stored = task({
+          ticketSnapshot: {
+            title: 'rollback sessions after a failed migration',
+            description: '',
+            comments: [
+              {
+                id: 'c1',
+                author: 'Dana',
+                created_at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+                body: 'only on an interrupted migration',
+                truncated: true,
+              },
+            ],
+            truncated: true,
+            comment_count: 9,
+            redaction_count: 2,
+            ticket_updated_at: null,
+          },
+          ticketSnapshotAt: '2026-06-01T09:10:00.000Z' as IsoDateTime,
+        });
+        await store.tasks.insert(tx, stored);
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.ticketSnapshot).toEqual(stored.ticketSnapshot);
+        expect(loaded?.ticketSnapshotAt).toBe('2026-06-01T09:10:00.000Z');
+        // A task nobody read the ticket for is spelled `null`, never an empty snapshot.
+        const unread = task();
+        await store.tasks.insert(tx, unread);
+        expect((await store.tasks.load(tx, unread.task.id))?.ticketSnapshot).toBeNull();
+        expect((await store.tasks.load(tx, unread.task.id))?.ticketSnapshotAt).toBeNull();
+      });
+
+      it('refuses a ticket snapshot for a task it has never seen', async () => {
+        await expect(
+          store.tasks.saveTicketSnapshot(
+            tx,
+            nextId(),
+            {
+              title: 'nobody',
+              description: '',
+              comments: [],
+              truncated: false,
+              comment_count: 0,
+              redaction_count: 0,
+              ticket_updated_at: null,
+            },
+            '2026-06-02T09:05:00.000Z' as IsoDateTime,
+          ),
+        ).rejects.toThrow();
       });
 
       it('refuses a workpad for a task it has never seen', async () => {

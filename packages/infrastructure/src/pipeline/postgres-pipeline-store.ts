@@ -41,6 +41,7 @@ import type {
   PipelineTemplate,
   Slug,
   TaskState,
+  TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
@@ -81,6 +82,8 @@ interface TaskRow extends Record<string, unknown> {
   iteration_counters: IterationCounters;
   cost_actual: string;
   estimate_usd: string | null;
+  ticket_snapshot: TicketSnapshot | null;
+  ticket_snapshot_at: Date | null;
   created_at: Date;
   sequence: string | number | null;
 }
@@ -88,7 +91,7 @@ interface TaskRow extends Record<string, unknown> {
 const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.template,
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
-    t.estimate_usd, t.created_at,
+    t.estimate_usd, t.ticket_snapshot, t.ticket_snapshot_at, t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
 
@@ -123,6 +126,8 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   workpad: row.workpad_ref,
   costActualUsd: usd(row.cost_actual),
   estimateUsd: row.estimate_usd === null ? null : usd(row.estimate_usd),
+  ticketSnapshot: row.ticket_snapshot,
+  ticketSnapshotAt: iso(row.ticket_snapshot_at),
 });
 
 /**
@@ -228,9 +233,9 @@ export const createPostgresPipelineStore = (
         `insert into tasks (id, project_id, ticket_provider, ticket_key, ticket_url, template, mode,
                             state, current_stage, priority, template_snapshot, branch, mr_ref,
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
-                            cost_actual, estimate_usd)
+                            cost_actual, estimate_usd, ticket_snapshot, ticket_snapshot_at)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
-                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19)`,
+                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20::jsonb, $21)`,
         [
           task.id,
           task.projectId,
@@ -251,8 +256,26 @@ export const createPostgresPipelineStore = (
           JSON.stringify(task.iterationCounters),
           stored.costActualUsd,
           stored.estimateUsd,
+          // Intake writes the ticket's text here rather than through a later update, so the row
+          // exists with it and there is no window for a concurrent writer to lose (WP-15f).
+          stored.ticketSnapshot === null ? null : JSON.stringify(stored.ticketSnapshot),
+          stored.ticketSnapshotAt,
         ],
       );
+    },
+
+    saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
+      // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
+      // job beside the stage executor's transactions, and a whole-row write from there is a lost
+      // update of everything it did not read (PROGRESS backlog 18).
+      const result = await sqlOf(tx).query(
+        `update tasks set ticket_snapshot = $2::jsonb, ticket_snapshot_at = $3, updated_at = now()
+          where id = $1`,
+        [taskId, JSON.stringify(snapshot), readAt],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
     },
 
     saveWorkpad: async (tx, taskId, workpad) => {

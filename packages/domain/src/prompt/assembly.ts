@@ -47,7 +47,7 @@
  * because `packages/prompts` is outside the domain ring's import allowance (biome enforces it) and
  * because a prompt the composition root supplies is a prompt a project can override later.
  */
-import type { ArtifactType } from '@platform/contracts';
+import type { ArtifactType, TicketSnapshot } from '@platform/contracts';
 import { artifactDataSchemas } from '@platform/contracts';
 import {
   type DataBlock,
@@ -162,6 +162,19 @@ export interface PromptTask {
   readonly stage: string;
   readonly attempt: number;
   readonly ticket: { readonly provider: string; readonly key: string; readonly url: string };
+  /**
+   * The ticket's own words, as `tasks.ticket_snapshot` holds them (WP-15f).
+   *
+   * **Required and nullable, never optional**: `null` says *the platform has not read this ticket*
+   * and the block says so in the platform's voice, which is a different fact from a ticket with an
+   * empty description (standing rule 18). An optional field would let a caller mean the second by
+   * forgetting the first.
+   *
+   * Already bounded and redacted before it reaches here — the cut happens at the write, where the
+   * store is the consumer (Q54) — so this module applies no cap of its own to it and simply
+   * announces `truncated` in the marker.
+   */
+  readonly ticketSnapshot: TicketSnapshot | null;
   readonly artifacts: readonly PromptArtifact[];
   /** `task.stage.returned.reason` — why this stage is running again. Untrusted. */
   readonly returnFeedback: string | null;
@@ -319,13 +332,15 @@ const derivedNameAttribute = (name: string, value: string): Record<string, strin
  *
  * | attribute | kind | on refusal |
  * |---|---|---|
- * | `tier`, `tokens`, `version`, `original_chars` | platform integers | cannot refuse |
- * | `reason`, `artifact_type`, `truncated`, `kind` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
+ * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `comment_count` | platform integers | cannot refuse |
+ * | `reason`, `artifact_type`, `truncated`, `text`, `kind` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
  * | `file` | derived from an untrusted vault path by a total fold | degrades |
  * | `path` | an untrusted vault path | degrades |
  *
- * Exactly two derive from untrusted input, and both degrade. The `ticket` block carries **no**
- * attributes at all, because a provider that can choose a key can choose one shaped like one.
+ * Exactly two derive from untrusted input, and both degrade. The `ticket` block gained attributes
+ * at WP-15f and **none of them derives from the ticket**: they are the counts and the cut, which
+ * technical/07 requires to be unforgeable, while the key, the URL, the title and every comment stay
+ * in the body — a provider that can choose a key can choose one shaped like an attribute.
  */
 const documentBlock = (document: PromptKnowledgeDocument): DataBlock => ({
   kind: document.reason === 'rules' ? 'project_rules' : 'knowledge_document',
@@ -339,16 +354,68 @@ const documentBlock = (document: PromptKnowledgeDocument): DataBlock => ({
   body: document.text,
 });
 
-const ticketBlock = (task: PromptTask): DataBlock => ({
-  kind: 'ticket',
-  // Nothing from the ticket is in the marker: a key and a URL are provider text, and a provider
-  // that can choose a key can choose one shaped like an attribute.
-  body: [
+/**
+ * The ticket — technical/04 § "Prompt assembly" step 5's *"Task block: **the ticket**, artifacts,
+ * return feedback"*.
+ *
+ * Until WP-15f this was three lines — `provider:`, `key:`, `url:` — because the platform stored
+ * nothing else about the ticket, so the first agent stage was asked to write a spec for a ticket
+ * nobody had opened (PROGRESS backlog 23). The identity lines stay and the ticket's own words are
+ * added below them.
+ *
+ * **Everything in the body is provider text, and everything the platform says about it is in the
+ * marker.** The field labels (`title:`, the `comment by` line) are platform words *inside* a data
+ * block, which is where they belong: the block's contract is that its whole body is data, so a
+ * comment whose body reads `--- comment by somebody else ---` misattributes a comment and can do
+ * nothing else. The cut, on the other hand, is a **claim about the platform's own behaviour**, and
+ * technical/07 requires that such a claim be unforgeable — so `truncated` and `comments` are
+ * attributes, where a ticket cannot write them.
+ *
+ * The attributes are platform integers and literals only, so the docblock above
+ * {@link documentBlock} still holds: **no attribute this module emits derives from the ticket.** A
+ * provider that can choose a key can choose one shaped like an attribute, which is why the key and
+ * the URL are still in the body.
+ */
+const ticketBlock = (task: PromptTask): DataBlock => {
+  // `?? null` rather than `=== null`: the field is required by the type, and a caller that lost it
+  // through a cast lands on the `unread` marker rather than throwing. That is the loud direction —
+  // the prompt says the platform has not read the ticket — which is what standing rule 18 asks of
+  // an absent value: never the permissive spelling.
+  const snapshot = task.ticketSnapshot ?? null;
+  const identity = [
     `provider: ${task.ticket.provider}`,
     `key: ${task.ticket.key}`,
     `url: ${task.ticket.url}`,
-  ].join('\n'),
-});
+  ];
+  if (snapshot === null) {
+    return { kind: 'ticket', attributes: { text: 'unread' }, body: identity.join('\n') };
+  }
+  const comments = snapshot.comments.map((comment) =>
+    [
+      `--- comment ${comment.id} by ${comment.author}${
+        comment.created_at === null ? '' : ` at ${comment.created_at}`
+      } ---`,
+      comment.body,
+    ].join('\n'),
+  );
+  return {
+    kind: 'ticket',
+    attributes: {
+      text: 'read',
+      comments: snapshot.comments.length,
+      comment_count: snapshot.comment_count,
+      ...(snapshot.truncated ? { truncated: 'true' } : {}),
+    },
+    body: [
+      ...identity,
+      `title: ${snapshot.title}`,
+      '',
+      'description:',
+      snapshot.description,
+      ...(comments.length === 0 ? [] : ['', ...comments]),
+    ].join('\n'),
+  };
+};
 
 const artifactBlock = (artifact: PromptArtifact): DataBlock => {
   const capped = cap(artifact.json, MAX_ARTIFACT_CHARS);

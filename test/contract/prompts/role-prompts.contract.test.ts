@@ -47,6 +47,7 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
       stage: 'refinement',
       attempt: 1,
       ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
+      ticketSnapshot: null,
       artifacts: [],
       returnFeedback: null,
     },

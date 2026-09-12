@@ -395,6 +395,10 @@ export const composePipeline = async (
     }),
     registry,
     executor,
+    // TD-012 step 2, beside each binding's own exact-match redactor — the same line
+    // `composeWebhookIngress` passes, and now for the second sink: WP-15f writes the ticket's text
+    // to `tasks.ticket_snapshot`, which is read into every prompt. No task DTO serves it yet.
+    platformRedactor: redactionAdapters.patternRedactor(),
     gitProjectPath: async (projectId) => {
       const { rows } = await options.pool.query<{ repo_url: string }>(
         'select repo_url from projects where id = $1',

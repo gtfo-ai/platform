@@ -5723,3 +5723,157 @@ mutation was reverted. That one had to be **in place** rather than on a copy —
 the domain parser and the application planner, which a copied module cannot reach — so it was done
 with the Edit tool, immediately reverted, and `git diff HEAD` was checked to confirm the only
 remaining change to that file is a docblock line.
+
+### WP-15f — the ticket's own words, and the fourth duty that could not hold the criterion
+
+**The shape.** The platform reads the ticket **once per task** through `TaskManagementPort.readTicket`,
+bounds and redacts the answer, and stores it as `tasks.ticket_snapshot` + `ticket_snapshot_at`
+(migration **0015**). `packages/application/src/pipeline/ticket-snapshot.ts` is the whole of it —
+`boundTicketSnapshot` (pure), `readTicketSnapshot` (the call), `ensureTicketSnapshot` (the backfill).
+`ticketBlock` (`packages/domain/src/prompt/assembly.ts`) renders it inside the `kind="ticket"` data block
+and `taskTextOf` (`planner.ts`) puts the title and description at the **front** of the retrieval query.
+
+**Two call sites, not a fourth `pipeline.outbound` duty — and the reason is an ordering read off the
+code, not a preference.** Q61 (3) and the plan row both propose a fourth duty beside
+`intake_check`/`workpad`/`status`. Measured against the row's own acceptance criterion — *"the assembled
+prompt at the **first** agent stage contains the ticket's title and description"* — a fourth duty
+**cannot hold it**: `runIntakeCheck` creates the task and calls `enqueueStage` on the line after the
+commit, while a duty woken by a handler of `task.created` can only start after the outbox *sweeps* that
+event, and would then have to resolve the project's bindings (a `bindings` read, a `secrets` read, an
+envelope decryption) and complete a provider round trip before the stage worker reaches `planner.plan`.
+Nothing orders those. So the fetch happens at the two points that **are** ordered with respect to the
+prompt, and the property the clause exists to buy is kept by both — outside every transaction, through
+`IntegrationActionExecutor`, refused mechanically by `assertOutsideTransaction` if that changes:
+
+1. **`intake_check`**, which *is* a `pipeline.outbound` duty, in its call phase beside the
+   branch-protection read. The snapshot goes into the `insert` that creates the task.
+2. **The `stage.execute` job**, before an agent stage, when the task has no snapshot — the self-healing
+   half, and the implementable part of Q61 (b).
+
+**The lost-update trap is avoided rather than survived** (backlog 18, standing rule 79). Intake writes at
+`insert`, where no other writer exists yet; the backfill uses the narrow `tasks.saveTicketSnapshot` (two
+columns), whose **signature** makes it incapable of writing anything else. There is **no new `tasks.save`
+call site**, and `save`'s own column list does not include `ticket_snapshot`, so the twenty existing sites
+cannot clobber it either. The contract case asserts a **derived total**: a concurrent `save` writing
+`cost_actual` 4.25, then a snapshot write, then `cost_actual` is still 4.25 and the state and stage are
+still the ones the other writer set.
+
+**The byte budget, derived rather than proposed.** Q61 offered 1 KiB / 64 KiB / 20 × 4 KiB and said the
+numbers were a proposal. These come from three figures already in the repository —
+`DEFAULT_CONTEXT_BUDGET_TOKENS` 12 000, `BYTES_PER_TOKEN` 4 (and the ~2.5 characters/token vendor datum
+its docblock cites), and `MAX_ARTIFACT_CHARS` 20 000, the cap the same prompt already applies to one
+prior artifact — under one rule: **the ticket is one document in the task block, so it is bounded like
+one.** Title **512** characters, description **20 000** (= `MAX_ARTIFACT_CHARS`), the newest **20**
+comments at **1 000** each plus **128** for the provider's comment id and **128** for the author's
+display name. Characters, not bytes, because the two neighbouring caps are in characters and a byte cut
+can split a surrogate pair. Worst case, **produced by a test rather than quoted** (rule 39):
+`TICKET_SNAPSHOT_MAX_TEXT_CHARS` = **45 632** characters, ≤ **182 528** bytes of UTF-8 — a **292×**
+reduction on Q54's measured 53 284 565 — and **11 408** estimated tokens for ASCII, which is **additive
+to** the 12 000-token pack budget rather than inside it (the ticket block and the knowledge documents are
+separate regions of one user prompt), so the claim is that the ticket can equal the knowledge base and
+never dwarf it. Every cap is a cut with a marker, never a refusal.
+
+**The three sub-decisions, as settled.** **(a) Comments in**, the newest 20, oldest-first for reading and
+newest-first for selection; the platform's own workpad comment is skipped (`marker_id` is non-null
+exactly when the platform wrote it), because feeding an agent the stage checklist the platform rendered
+about this task is noise. **(b) Freshness: the settled answer is not implementable in this build, and the
+implementable half ships.** Q61 (b) asks for a re-read *"when the snapshot predates the task's last
+provider signal"* — **that quantity does not exist here**: the only provider signals about a ticket are
+`ticket.comment.added` and `ticket.status.changed`, both declared `unconsumed`
+(`events/consumption.ts:89-90`), both carrying a **nullish** `task_id`, and both appended to the
+*project* stream (`integrations/inbound.ts:180`), so nothing on a task row or in a task-scoped query can
+answer it. Producing it means a new consumer for those two types — WP-24's and WP-31's work, and exactly
+the change-by-implication Q61 (b) refuses for `ticket.updated` — or an unbounded project-stream scan with
+no port for it. So the re-read at stage start fires when the snapshot is **absent**, and the residual is
+stated at the line and here: **a description a human edits after intake is invisible to the platform**,
+and closing it needs the `ticket.updated` normalisation that question rules out. **(c) Retention:** the
+snapshot dies with the task by the row it sits on, is readable by anyone who can read the task, there is
+**no config knob**, and technical/03's `tasks` line now names it as untrusted stored external text beside
+the sentence `inbox` already has.
+
+**Redaction — both steps of TD-012, after review round 1 corrected the filing that said otherwise.**
+Through the redactor on `TaskManagementBinding`, filled by `bindings/loader.ts` with the exact instance
+the adapter was built with: step 1 (this binding's credentials plus the call's run-scoped ones, Q55)
+**composed with step 2**, the gitleaks-derived patterns, which `createPipelineIntegrationsLoader` now
+takes as `platformRedactor` exactly as `createInboundIntegrationLoader` has since WP-15c, and which
+`apps/server/src/pipeline.ts` passes on the line beside the one it already passed for `inbox`. Round 1's
+first draft filed this as discovered work on a **false comparison** — it claimed step 2 reached neither
+sink, when `inbox` has had it all along, so *one provider call* had two sinks treated oppositely: a
+`glpat-…` pasted into a ticket body was pattern-redacted in `integration_actions` (the executor holds its
+own `patternRedactor`, and it redacts the audit row rather than the result it returns) and stored
+**verbatim** in `tasks.ticket_snapshot`, then rendered into every prompt — and into whatever task DTO
+first carries the field, which none does today.
+Redact **then** cut — an exact-match redactor cannot find a secret a cap has halved, which is
+`inbound.ts`'s argument — so `redaction_count` is over the text as **read** rather than as stored, and a
+cut can only ever land inside a placeholder.
+
+**Assumptions.** The snapshot stores title, description and comments and **not** `labels`, `status`,
+`epic`, `siblings` or `attachments_text`, although `readTicket` returns them: Q61 names the first three
+and every extra field is another thing to bound. The snapshot is **not** exposed in an API DTO — Q61 (c)
+says it is readable by anyone who can read the task, which is a statement about access control rather
+than a requirement to add a field here, and the board's own missing title is Q48.
+
+**Mutation checks** (copy recipe, rule 77; canary first — `MAX_TICKET_TITLE_CHARS` 512 → 511 was reported
+as a named kill before any real mutant was believed). Each landed (verified by re-reading the file) and
+each died by name: the `ensureTicketSnapshot` already-read guard → *"reads the ticket once per task,
+however many stages run"*; cut-before-redact → *"finds a credential past the description cap, because it
+redacts before it cuts"*; `readTicketSnapshot`'s fail-open catch → two saga cases; `ticketBlock` back to
+identity-only → **8** cases across three files; an unread ticket marked `text="read"` → two; a
+`saveTicketSnapshot` that writes a column it was not given → the contract case; `taskTextOf` back to the
+ticket key alone → two; intake not writing the snapshot at `insert` → two; the stage-start backfill
+removed → one. The two fetch sites are told apart by the **audit row**, not by the final state: the
+intake read carries `taskId: null` because the task does not exist yet, the backfill's carries the id.
+
+### WP-15f — review round 1: the `catch` that disarmed WP-15d's guard, and a filing built on a false comparison
+
+Both of the round's **majors** were mine to own, and both were invisible to every tier.
+
+**1. One `catch` doing two jobs.** `readTicketSnapshot` swallowed `TransactionOpenError` along with
+every provider failure, on **both** call sites — intake's `read()` is inside the same `try`. The
+reviewer probed it: `withOpenTransaction(() => readTicketSnapshot(…))` answered
+`{"threw": false, "value": null}`. So WP-15d's guard was **disarmed exactly where this work package
+added two new provider calls**, my own docblock and the ledger both claimed it was "refused
+mechanically", and a later move of either call inside a transaction would have held a pooled
+connection across a provider round trip *and* silently dropped the ticket text. `open-transaction.ts`
+is explicit that there is "no retry, no fallback and no configuration that makes it right", so the
+refusal is now rethrown and the provider-failure fallback beside it is unchanged. Two named tests hold
+it — the door (`integrationsForProject`) and the call (`read`) are separate refusals and each is
+asserted from both sides (rule 42) — and re-disarming the rethrow kills both.
+
+**2. The step-2 filing rested on a false comparison, and the gap was live.** The first draft filed
+"TD-012 step 2 reaches neither sink" as discovered work. `inbox` **does** get step 2
+(`apps/server/src/pipeline.ts`'s `composeWebhookIngress`, since WP-15c), so the true statement is far
+worse: *one* provider call had two sinks treated oppositely. Fixed rather than filed, and it was as
+cheap as the sibling suggested — `platformRedactor?: SecretRedactor` on
+`PipelineIntegrationsLoaderOptions`, composed after the binding's own, and one line in the composition
+root. Held at three levels: the loader composition (both directions — the platform rule fires, and the
+binding's still does), and the **production** composition through the ingress e2e, which plants an
+obviously fake `glpat-…` in `TICKETS`' description and asserts a placeholder in
+`tasks.ticket_snapshot`. Deleting the `platformRedactor:` line fails that e2e by name with
+`expected 'The footer sums the visible rows rath…' not to contain 'glpat-'`.
+
+**3–5, the smaller ones.** Migration 0015 stated the worst case as **162 048** bytes, omitting the
+20 × (128 + 128) id and author caps — corrected to **182 528**, and the file is uncommitted and applied
+to nothing but throwaway test databases, so it is edited rather than renumbered (fourth wrong number or
+cause in two work packages; rule 81). `jobs.ts` claimed the ordinary path cost "one already-loaded
+field" while `ensureTicketSnapshot` opened a **second transaction per agent stage** to re-read the row
+the handler had just discarded — the code now matches the sentence (the task is handed in), and a named
+test drives it with a `UnitOfWork` and a store that throw if entered. The memory store's whole-row
+`save` writes `ticketSnapshot`/`ticketSnapshotAt` where the SQL `save` does not; it is the stricter
+direction and is now **divergence 5** in that fake's register.
+
+**One number to be exact about wherever it appears:** the 11 408-token worst case is **additive to the
+pack, not inside it** — the ticket block and the 12 000-token knowledge budget are separate regions of
+the same user prompt. 95 % of a budget and 95 % on top of one read very differently.
+
+**Round 2's three comment-only findings, and the one worth carrying.** The `TaskManagementBinding.redactor`
+docblock still said step 2 was *not* applied and cited a "Discovered work" entry the same round had
+deleted — **a wrong cause created by the fix**, which is the fifth across WP-17 and WP-15f (rule 81) and
+the most instructive: closing a gap turns every sentence that described the gap into a false one, so the
+sweep is rules 63 and 49 together — *when you close a gap, grep for the sentences that documented it*. The
+grep found four more sites saying `ticket_snapshot` is *"served through the API"*, which no task DTO does
+today (`loader.ts`, `apps/server/src/pipeline.ts`, the ingress e2e, and this ledger); all now say "will",
+and exposing it is Q48's neighbourhood rather than a thing this row did. And `readTicketSnapshot` fails
+open on `BindingLoadError` too — defensible under rule 20 and now **enumerated** at the line with the
+asymmetry stated: the same misconfiguration fails `runIntakeCheck`'s branch check loudly, so the quiet
+branch degrades a prompt rather than hiding an operator error.

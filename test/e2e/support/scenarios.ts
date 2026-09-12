@@ -117,9 +117,35 @@ export const bugScenarios = (world: SeededWorld) => ({
   investigation: { structuredOutput: ROOT_CAUSE },
 });
 
-/** The tickets the fake provider knows; the workpad is a comment on one of them. */
+/**
+ * The tickets the fake provider knows; the workpad is a comment on one of them.
+ *
+ * `description` is here since WP-15f: the platform reads the ticket once at intake and stores a
+ * bounded snapshot on the task, so a ticket with no body would make the e2e assert the *unread*
+ * shape rather than the one the work package exists for.
+ */
 export const TICKETS = [
-  { key: 'ACME-1', title: 'Show the totals in the invoice footer', issueType: 'Story' },
+  {
+    key: 'ACME-1',
+    title: 'Show the totals in the invoice footer',
+    issueType: 'Story',
+    /**
+     * The trailing token is **planted, obviously fake, and load-bearing** (WP-15f review round 1).
+     *
+     * It matches the `gitlab-token` rule of TD-012 step 2, so the ingress e2e can assert that the
+     * shipped `patternRedactor()` really reaches `tasks.ticket_snapshot` through
+     * `apps/server/src/pipeline.ts`'s own composition — the sink this work package created, which
+     * the executor's own redactor does *not* cover (it redacts the audit row, not the result).
+     * Named for what it is rather than for what it should satisfy (standing rule 45).
+     */
+    description:
+      'The footer sums the visible rows rather than all of them. Reproduce with glpat-notarealtokenatall.',
+  },
   { key: 'ACME-2', title: 'Show the totals in the invoice footer', issueType: 'Story' },
-  { key: 'ACME-9', title: 'The invoice footer sums the wrong rows', issueType: 'Bug' },
+  {
+    key: 'ACME-9',
+    title: 'The invoice footer sums the wrong rows',
+    issueType: 'Bug',
+    description: 'A three-line invoice with one row hidden shows the wrong total.',
+  },
 ];

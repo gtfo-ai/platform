@@ -35,6 +35,7 @@ import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
+import { ensureTicketSnapshot } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 
 /** `stage.execute` payload — snake_case, like every other payload on the wire. */
@@ -211,15 +212,23 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       attempt: job.data.attempt,
     };
 
-    const stage = await options.unitOfWork.transaction(async (scope) => {
+    // The task travels out of the transaction beside the stage it resolved, because the next step
+    // needs it: `ensureTicketSnapshot` asks one question of the row this load already has, and
+    // re-loading it would be a second transaction per agent stage for a field in hand (WP-15f,
+    // review round 1).
+    const admitted = await options.unitOfWork.transaction(async (scope) => {
       const stored = await options.store.tasks.load(scope.tx, request.taskId);
       if (stored === null || stored.task.currentStage !== request.stage) {
         return null;
       }
-      return stageOf(compilePipeline(stored.task.template, stored.template), request.stage);
+      return {
+        stage: stageOf(compilePipeline(stored.task.template, stored.template), request.stage),
+        stored,
+      };
     });
 
-    if (stage === null) {
+    const stage = admitted?.stage ?? null;
+    if (admitted === null || stage === null) {
       logger.debug(
         { task_id: request.taskId, stage: request.stage },
         'stage job found nothing to do',
@@ -228,6 +237,25 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
     }
 
     if (stage.kind === 'agent') {
+      /**
+       * **The ticket's own words, if this task still has none** (WP-15f).
+       *
+       * Here, between the transactions and before the executor, because this is the last moment
+       * that is ordered with respect to the prompt: `planner.plan` reads `StoredTask` and
+       * `assemblePrompt` renders it. It is the self-healing half: a task whose intake fetch failed,
+       * one created before migration 0015, or one whose project gained a task-management binding
+       * afterwards gets the text here instead.
+       *
+       * The task is handed in rather than re-loaded, so the ordinary path really is **one
+       * already-loaded field** — the sentence used to say that while the function opened a second
+       * transaction per agent stage to re-read the row this handler had just discarded.
+       *
+       * It never throws for a provider failure and never fails the stage: a run without the ticket
+       * text is worse than one with it and far better than none (standing rule 20). A
+       * `TransactionOpenError` **does** come out, because that is a programming error rather than a
+       * provider being down.
+       */
+      await ensureTicketSnapshot(options, admitted.stored);
       const outcome = await options.executor.execute(request);
       logger.info(
         { task_id: request.taskId, stage: request.stage, outcome: outcome.kind },

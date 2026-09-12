@@ -39,8 +39,9 @@ import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime
 import type { ProjectSettings } from '../pipeline/settings.js';
 import { defaultProjectSettings, staticProjectSettings } from '../pipeline/settings.js';
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { GitProviderPort } from '../ports/integrations/git-provider.js';
-import type { TaskManagementPort } from '../ports/integrations/task-management.js';
+import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
 import type { EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
@@ -188,6 +189,8 @@ export interface HarnessOptions {
   readonly runs?: Readonly<Record<string, ScriptedRun>>;
   readonly git?: Partial<GitProviderPort> | null;
   readonly taskManagement?: Partial<TaskManagementPort> | null;
+  /** The binding's redactor, for a test that plants a secret in a ticket (WP-15f). */
+  readonly ticketRedactor?: SecretRedactor;
   readonly reviewCommentWindowMs?: number;
   /**
    * The knowledge index the planner's context pack is built from.
@@ -260,6 +263,34 @@ const stubTaskManagement = (
           type: 'task_management',
         },
         capabilities: () => ({}),
+        /**
+         * A ticket with words in it, so the harness exercises the WP-15f path by default.
+         *
+         * **Divergence, stated (standing rule 1):** every key answers the same ticket, where the
+         * real adapter answers `not_found` for one nobody created — stricter is the safe direction
+         * and this is the kind one, deliberately: the harness's tests are about the pipeline's
+         * transitions, and a `readTicket` that threw would make every one of them exercise the
+         * fetch's *failure* path instead. A test that wants the failure overrides `readTicket`, and
+         * the real refusal is asserted against `FakeTaskManagement` (which does answer
+         * `not_found`) in `ticket-snapshot.test.ts`.
+         */
+        readTicket: async (ref: TicketRefInput) => ({
+          ref,
+          issue_type: 'Story',
+          title: 'Show the totals in the invoice footer',
+          description: 'The footer sums the visible rows rather than all of them.',
+          status: 'To Do',
+          priority: null,
+          labels: [],
+          comments: [],
+          links: [],
+          epic: null,
+          siblings: [],
+          attachments_text: [],
+          assignee: null,
+          reporter: null,
+          updated_at: '2026-06-01T09:00:00.000Z',
+        }),
         upsertWorkpad: async () => ({
           provider: 'fake-jira',
           ticket_key: 'ACME-1',
@@ -323,7 +354,17 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     taskManagement:
       taskManagementPort === null
         ? null
-        : { port: taskManagementPort, ref: taskManagementPort.ref },
+        : {
+            port: taskManagementPort,
+            ref: taskManagementPort.ref,
+            // The binding's own redactor (WP-15f). A harness has no binding, so an empty exact
+            // redactor is the honest double: it counts nothing and replaces nothing, which is what
+            // a binding with no credentials would do. The behaviour that matters — a planted
+            // secret never reaching `tasks.ticket_snapshot` — is asserted against a real one in
+            // `ticket-snapshot.test.ts`, because a test whose redactor is disarmed proves nothing
+            // (standing rules 31 and 35).
+            redactor: options.ticketRedactor ?? exactSecretRedactor([]),
+          },
   };
 
   const settings: ProjectSettings = defaultProjectSettings(projectId, {

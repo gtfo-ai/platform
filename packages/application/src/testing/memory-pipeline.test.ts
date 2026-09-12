@@ -44,6 +44,8 @@ const task = (id: string, key = 'ACME-1'): StoredTask => ({
   workpad: null,
   costActualUsd: 0,
   estimateUsd: null,
+  ticketSnapshot: null,
+  ticketSnapshotAt: null,
 });
 
 describe('the divergence register', () => {

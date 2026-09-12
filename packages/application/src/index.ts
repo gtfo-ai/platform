@@ -53,6 +53,7 @@ export * from './pipeline/settings.js';
 export * from './pipeline/stage-executor.js';
 export * from './pipeline/stop-reasons.js';
 export * from './pipeline/store.js';
+export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';
 export * from './pipeline/verdicts.js';
 export * from './pipeline/workpad.js';

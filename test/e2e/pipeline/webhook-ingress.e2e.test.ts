@@ -81,6 +81,33 @@ describe('a signed webhook delivery', () => {
     );
     expect(waiting.template).toBe('feature');
 
+    /**
+     * **WP-15f: the platform read the ticket, over the production path.**
+     *
+     * The row is the end of the chain the rest of this file walks — signed delivery, binding
+     * loader, `inbox`, `ticket.matched`, the `intake_check` outbound job — and the read is the one
+     * thing in it that reaches back *out* to the provider through `IntegrationActionExecutor`.
+     * Asserted on the stored row rather than through the runner, which never reads a prompt
+     * (standing rule 82); the assembled prompt itself is asserted in the unit and contract tiers.
+     */
+    expect(waiting.ticket_snapshot?.title).toBe('Show the totals in the invoice footer');
+    expect(waiting.ticket_snapshot?.description).toContain('sums the visible rows');
+    expect(waiting.ticket_snapshot?.truncated).toBe(false);
+    expect(waiting.ticket_snapshot_at).not.toBeNull();
+
+    /**
+     * **TD-012 step 2 reaches the sink this work package created.**
+     *
+     * `TICKETS` plants a `glpat-…`-shaped token in the ticket body, and the only thing between it
+     * and a prompt is `platformRedactor: patternRedactor()` on `createPipelineIntegrationsLoader`
+     * in `apps/server/src/pipeline.ts` — the line the sibling `composeWebhookIngress` has had since
+     * WP-15c for `inbox`. Removing it leaves the token in `tasks.ticket_snapshot` and in every
+     * prompt built from it — and in whatever task DTO first carries the field, which none does yet.
+     */
+    expect(waiting.ticket_snapshot?.description).not.toContain('glpat-');
+    expect(waiting.ticket_snapshot?.description).toContain('[REDACTED sha256:');
+    expect(waiting.ticket_snapshot?.redaction_count).toBe(1);
+
     // BD-007: the platform never merges, so the last step is a human's. It is `publish`ed rather
     // than delivered, because the merge is a **git** event and the git binding of this harness is
     // the fake provider, which has no webhook half — the ingress criterion is about the ticket that

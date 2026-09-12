@@ -34,6 +34,7 @@ import type {
   IntegrationActionExecutor,
 } from '../integrations/action-executor.js';
 import type { InjectedSecret } from '../integrations/redaction.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { IntegrationRef } from '../ports/integrations/common.js';
 import type {
   Discussion,
@@ -45,6 +46,7 @@ import type {
 import type {
   CommentRef,
   TaskManagementPort,
+  Ticket,
   TicketRefInput,
   TransitionResult,
 } from '../ports/integrations/task-management.js';
@@ -59,6 +61,29 @@ export interface GitBinding {
 export interface TaskManagementBinding {
   readonly port: TaskManagementPort;
   readonly ref: IntegrationRef;
+  /**
+   * The redactor this binding's adapter was built with — **both steps of TD-012**, in order.
+   *
+   * It is here because of one caller: the ticket snapshot is provider **text the platform stores**
+   * (WP-15f), and the executor redacts the audit row rather than the result it hands back
+   * (`action-executor.ts` returns `outcome.result` unredacted, standing rule 31's note). So the
+   * one place that writes provider text into a row of its own needs the redactor the adapter
+   * holds, and Q61 says so in as many words: *"redaction goes through the binding's redactor with
+   * a `redaction_count`, which is the `inbox` precedent"*.
+   *
+   * **What is in it.** `bindings/loader.ts` composes step 1 — this binding's resolved credentials
+   * and the call's run-scoped ones (Q55) — with the `platformRedactor` the composition root hands
+   * it, which in production is step 2, the gitleaks-derived pattern rules. Binding first, platform
+   * last, the order `composeSecretRedactors` reduces in. A loader given no `platformRedactor`
+   * applies step 1 alone: narrower redaction, never none.
+   *
+   * **This paragraph used to say the opposite**, and the sentence was made false by the fix rather
+   * than written wrong — closing a gap turns every sentence that described it into a lie (rules 63
+   * and 49). Round 1 shipped the snapshot with step 1 only and filed step 2 as discovered work on a
+   * false comparison: `inbox` has had step 2 since WP-15c, so one provider call had two sinks
+   * treated oppositely. Round 2 closed it; this is the sibling sentence that had to move with it.
+   */
+  readonly redactor: SecretRedactor;
 }
 
 export interface PipelineIntegrations {
@@ -306,6 +331,34 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       { project: git.project },
       context,
       async () => git.port.getDefaultBranchHead(git.project),
+    );
+  },
+});
+
+/**
+ * The reads the pipeline makes against the task-management provider.
+ *
+ * One member today, and it is the one `readTicket` had no production caller for until WP-15f. It
+ * is a **read**, so it is performed in every mode (technical/06: a shadow task needs its context)
+ * and carries no idempotency plan — replaying a read costs a request, not a comment.
+ *
+ * `null` for a project with no task-management binding, like every other member here: a project
+ * whose Jira integration was removed runs its pipeline without the ticket's text rather than
+ * failing every stage (standing rule 20).
+ */
+export const ticketReads = (integrations: PipelineIntegrations) => ({
+  ticket: async (ticket: TicketRefInput, context: CallContext): Promise<Ticket | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      binding.ref,
+      'read_ticket',
+      { ticket_key: ticket.key },
+      context,
+      async () => binding.port.readTicket(ticket),
     );
   },
 });

@@ -12,6 +12,7 @@
  * | 1 | `insert` throws on a duplicate `(project, ticket_key, mode)`; PostgreSQL raises a unique-violation the caller sees as an error too. | **same** | The unique index is `tasks_project_id_ticket_key_mode`; both refuse. Asserted by the shared suite's `refuses a second task for the same ticket`. |
  * | 2 | `save` throws when the task was never inserted; the SQL `update` would affect zero rows and say nothing. | **stricter** | A save that writes nothing is how a state machine silently stops advancing. The SQL implementation therefore checks `rowCount` and throws the same error, which is the only reason the two agree. Asserted by `refuses to save a task it has never seen`. |
  * | 3 | Everything is returned by structural clone, so a caller mutating what it read cannot change the store. Postgres cannot be mutated that way either. | **stricter** | A shared object graph makes a test pass for the wrong reason: the aggregate is immutable by design, and a fake that hands out live references would hide a mutation. |
+ * | 5 | The whole-row `save` writes `ticketSnapshot`/`ticketSnapshotAt`; the SQL `save` does not name those two columns at all (WP-15f). | **stricter** | A whole-row write in the fake therefore *can* clobber a snapshot a concurrent writer set, where PostgreSQL cannot — so a `save` that should have been the narrow `saveTicketSnapshot` fails here and would pass there, which is the direction rule 1 asks for. The narrow write's own property is asserted for both by the shared suite's `writes the ticket snapshot without writing anything else, so a concurrent cost survives`, which is on a derived total rather than on the column (standing rule 79). |
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  */
 import type { ArtifactType, Id, Slug } from '@platform/contracts';
@@ -117,6 +118,14 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
       // Only this field, like the SQL `update tasks set workpad_ref = …`: a whole-row write from
       // the outbound job would put back whatever the stage executor had just changed (WP-15d).
       tasks.set(taskId, clone({ ...current, workpad }));
+    },
+    saveTicketSnapshot: async (_tx, taskId, ticketSnapshot, readAt) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Two columns, like the SQL: the backfill runs beside the stage executor (WP-15f).
+      tasks.set(taskId, clone({ ...current, ticketSnapshot, ticketSnapshotAt: readAt }));
     },
     counts: async (_tx, projectId) => {
       const owned = [...tasks.values()].filter((stored) => stored.task.projectId === projectId);

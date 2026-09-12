@@ -186,9 +186,28 @@ const latestArtifacts = (artifacts: readonly StoredArtifact[]): readonly StoredA
  * query costs: nothing rejects one, and with this planner the first junk query that costs anything
  * has arrived. The remedy needs a corpus-derived signal and a corpus that can falsify it
  * (backlog 16); it is deliberately not invented here.
+ *
+ * ## The title comes first, and that is the whole of WP-15f's half of this function
+ *
+ * Until WP-15f the first line was the ticket **key** and there was nothing else at the first agent
+ * stage, so `extractQueryTerms('ACME-1')` returned `["acme"]` — one term, against technical/07:11's
+ * *"task text (ticket + spec)"*. The title and the description now lead, because
+ * `extractQueryTerms` keeps first-seen terms when `MAX_QUERY_TERMS` truncates and its own docblock
+ * says why: *"the terms kept are the ones nearest the start of the ticket, which is where a title
+ * sits"*. The comments are **not** here: they are the largest and least-signal part of a snapshot,
+ * and a thread that has drifted onto something else would take the query with it.
+ *
+ * **The residual, measured rather than implied** (PROGRESS backlog 12): a term is split at
+ * anything that is not a letter, a number or an underscore, so an invisible character inside a word
+ * splits it — `extractQueryTerms('sess​ions rollback')` is `["sess", "ions", "rollback"]`. A
+ * title carrying a zero-width character is therefore still retrievable by its *other* words and not
+ * by that one. Nothing here edits the text to fix it; an indexer that silently rewrote a document's
+ * words would be a knowledge base nobody could trust (`data-block.ts` gives the same answer).
  */
 export const taskTextOf = (request: StageRunRequest): string =>
   [
+    request.task.ticketSnapshot?.title ?? '',
+    request.task.ticketSnapshot?.description ?? '',
     request.task.task.ticket.key,
     ...latestArtifacts(request.artifacts).map((artifact) => JSON.stringify(artifact.data)),
     request.returnFeedback ?? '',
@@ -288,6 +307,10 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           stage: stage.id,
           attempt: request.attempt,
           ticket: task.task.ticket,
+          // WP-15f: the ticket's own words, or `null` when the platform has not read it. The row
+          // is the only source — nothing here fetches, because a provider call in the run's
+          // critical path is what Q61 (1) rejected.
+          ticketSnapshot: task.ticketSnapshot,
           artifacts: latestArtifacts(request.artifacts).map((artifact) => ({
             type: artifact.type,
             version: artifact.version,
