@@ -168,6 +168,12 @@ describe('the librarian stage, over a merged ticket', () => {
     }
 
     // ── the commit ───────────────────────────────────────────────────────────
+    //
+    // No wait here, and that is the same rule the other case learned: `startMerged` already waited
+    // for the **row** to reach `applied`, which the apply pass writes *after* the provider call and
+    // after the executor's audit row. Everything this block reads — the commit, the audit row — is
+    // therefore already written. Waiting on the commit and asserting the row is the ordering that
+    // fails; waiting on the row and asserting the commit is the one that cannot.
     expect(pipeline.git.commits).toHaveLength(1);
     const commit = pipeline.git.commits[0];
     expect(commit?.branch.startsWith('agentic/knowledge/')).toBe(true);
@@ -255,16 +261,35 @@ describe('the librarian stage, over a merged ticket', () => {
     );
     expect(decided.status, JSON.stringify(decided.body)).toBe(200);
 
-    await pipeline.waitFor(
-      'the approved proposal to be committed',
-      async () => pipeline.git.commits.length > before,
+    /**
+     * **Wait on the row, not on the commit** — standing rule 50, paid for by CI run `34722271238`,
+     * which failed here on a **docs-only** commit while the same job was green on the code one.
+     *
+     * `knowledge.apply` calls the provider and writes `status = 'applied'` **afterwards**, in a
+     * transaction of its own, so `pipeline.git.commits.length > before` becomes true a moment
+     * before the row moves — and the assertion two lines later fell into that window. The rate was
+     * the only random thing about it (rule 76): the ordering is fixed, the gap is one transaction
+     * wide, and a loaded runner is all it takes.
+     *
+     * The row reaching `applied` is the **last** thing the pass does and it implies the commit, so
+     * this is both the stronger wait and the one the assertions below are about. Nothing here is
+     * weakened: every assertion the old ordering made is still made, plus the sha tie that the old
+     * ordering could not make because it read the row before the writer had put one on it.
+     */
+    await pipeline.waitFor('the approved proposal to be applied', async () =>
+      (await pipeline.proposals()).some(
+        (row) => row.target_path === QUEUED_PATH && row.status === 'applied',
+      ),
     );
-    const second = pipeline.git.commits.at(-1);
-    expect(second?.files.map((file) => file.path)).toEqual([QUEUED_PATH]);
-    expect(second?.branch).not.toBe(pipeline.git.commits[0]?.branch);
     const applied = (await pipeline.proposals()).find((row) => row.target_path === QUEUED_PATH);
     expect(applied?.status).toBe('applied');
     expect(applied?.decided_by).not.toBeNull();
+
+    const second = pipeline.git.commits.at(-1);
+    expect(pipeline.git.commits.length).toBe(before + 1);
+    expect(second?.files.map((file) => file.path)).toEqual([QUEUED_PATH]);
+    expect(second?.branch).not.toBe(pipeline.git.commits[0]?.branch);
+    expect(applied?.applied_commit_sha).toBe(second?.sha);
 
     // ── and a rejection writes nothing to git ────────────────────────────────
     const noise = page.items.find((item) => item.status === 'discarded');

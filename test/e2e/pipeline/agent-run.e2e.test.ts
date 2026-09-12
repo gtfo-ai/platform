@@ -242,6 +242,14 @@ describe('an instance with no launcher configuration', () => {
       const seen = pipeline.tickets.peek('ACME-1');
       return seen?.comments[0]?.body.includes('ACME-1') === true && seen?.status === 'In Progress';
     });
+    // The audit row is written by the executor **after** the provider call returns (BD-003, in a
+    // transaction of its own), so a workpad visible on the ticket does not mean the row exists yet —
+    // the window the librarian e2e fell into on CI run `34722271238` (rule 50: bound the line you
+    // assert, not one that precedes it). `every(status === 'ok')` is true of an empty set as well,
+    // so this wait is what makes the two assertions below a measurement rather than a coincidence.
+    await pipeline.waitFor('the workpad call to be audited', async () =>
+      (await pipeline.auditRows()).some((row) => row.action === 'upsert_workpad'),
+    );
     const audited = await pipeline.auditRows();
     expect(audited.length).toBeGreaterThan(0);
     expect(audited.every((row) => row.status === 'ok')).toBe(true);
