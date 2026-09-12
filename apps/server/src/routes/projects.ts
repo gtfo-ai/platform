@@ -1,22 +1,29 @@
 /**
- * `GET /api/projects/:project_id/config` — the effective configuration with per-key provenance
- * (technical/08, technical/12 § "Effective configuration").
+ * The project-scoped reads: `GET /api/projects/:project_id/config` — the effective configuration
+ * with per-key provenance (technical/08, technical/12 § "Effective configuration") — and
+ * `GET /api/projects/:project_id/budgets`, the budgets projection WP-19 writes.
  *
- * One project-scoped route, for the same reason `routes/org.ts` has two organisation-scoped ones:
- * project scoping is a property of the RBAC middleware that only a real project-scoped request can
- * demonstrate. This one reads the columns migration 0003 already created (`projects.config`,
- * `config_source`, `config_hash`), so it needs nothing that does not exist yet.
+ * Project scoping is a property of the RBAC middleware that only a real project-scoped request can
+ * demonstrate, and both routes carry the same guard. The config one reads the columns migration
+ * 0003 already created (`projects.config`, `config_source`, `config_hash`); the budgets one reads
+ * `budgets` joined to the `budget_windows` projection the cost ledger folds spend into.
  *
  * Writing the configuration, exporting it to the repository and recomputing the merge from the
  * repository's `.agentic/config.yml` are WP-15's; `packages/domain`'s `mergeEffectiveConfig` is
  * already there for it.
  */
-import { agenticConfigSchema, effectiveConfigResponseSchema } from '@platform/contracts';
+import {
+  agenticConfigSchema,
+  budgetsResponseSchema,
+  effectiveConfigResponseSchema,
+  type IsoDateTime,
+} from '@platform/contracts';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
+import { findProjectTimezone, listProjectBudgets } from '../queries/cost-queries.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectConfig, findProjectRole } from '../queries/identity-queries.js';
 
@@ -77,6 +84,46 @@ export const registerProjectRoutes = async (
         hash: row.configHash ?? 'unconfigured',
         computed_at: row.updatedAt.toISOString(),
       };
+    },
+  );
+
+  typed.get(
+    '/api/projects/:project_id/budgets',
+    {
+      preHandler: requirePermission(guard, 'project.read', {
+        project: (request) => (request.params as { project_id: string }).project_id,
+      }),
+      schema: {
+        summary: 'Budgets applying to this project, with the spend of the current window',
+        tags: ['projects'],
+        params: projectParamsSchema,
+        response: { 200: budgetsResponseSchema },
+      },
+    },
+    async (request) => {
+      const projectId = request.params.project_id;
+      const zone = await findProjectTimezone(options.database, projectId);
+      if (zone === undefined) {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      if (zone.substituted) {
+        // The same state the ledger charges in UTC and warns about; a read answers with the window
+        // it actually used rather than a 500 (`findProjectTimezone` says why).
+        request.log.warn(
+          { project_id: projectId, fallback: zone.timezone },
+          'the organisation timezone is not an IANA zone this runtime can use; budget windows are read in UTC',
+        );
+      }
+      // Q12: the organisation's zone decides where the window boundary falls. `new Date()` is the
+      // read's own instant — a budget window is "now", and the caller does not get to choose which
+      // window it is shown.
+      const items = await listProjectBudgets(
+        options.database,
+        projectId,
+        new Date().toISOString() as IsoDateTime,
+        zone.timezone,
+      );
+      return { items: [...items] };
     },
   );
 };

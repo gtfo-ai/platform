@@ -164,7 +164,14 @@ export const runModelUsage = pgTable(
     cacheWrite5m: bigint('cache_write_5m', { mode: 'number' }).notNull().default(0),
     cacheWrite1h: bigint('cache_write_1h', { mode: 'number' }).notNull().default(0),
     cacheRead: bigint('cache_read', { mode: 'number' }).notNull().default(0),
-    usdEstimated: numeric('usd_estimated', { precision: 12, scale: 6 }).notNull().default('0'),
+    /**
+     * Both nullable since migration 0017 (WP-19), and the pair is the one `runs` already carries:
+     * `usd_reported` is the provider's per-model number and `usd_estimated` the price table's.
+     * `null` is "nobody reported / no price row covered this model", which a `0` would spell the
+     * same way as a free run (standing rule 18).
+     */
+    usdEstimated: numeric('usd_estimated', { precision: 12, scale: 6 }),
+    usdReported: numeric('usd_reported', { precision: 12, scale: 6 }),
   },
   (table) => [primaryKey({ columns: [table.runId, table.model] })],
 );

@@ -45,9 +45,9 @@ The needed schema is ~4 tables; the only TS event-store library with a Postgres 
 > consumers" column is the normative statement of intent, with `—` meaning *declared unconsumed*.
 > Read literally it marks **49 of 50** types consumed, because it describes the consumers the
 > finished product has — the Slack band, the UI band, the cost ledger, the audit projection. A
-> composed `apps/server` registers handlers for **21**. A table transcribed from the column would
+> composed `apps/server` registers handlers for **24** (21 before WP-19 added the cost ledger's three). A table transcribed from the column would
 > therefore stop the outbox worker in every build that exists today, so the shipped table records
-> **what this build consumes** and diverges from the column on **28 rows**, each naming the work
+> **what this build consumes** and diverges from the column on **25 rows** (28 before WP-19), each naming the work
 > package that closes it. That inverts the direction of the guarantee — a declaration derived from
 > the implementation rather than one the implementation must meet — and it is accepted on the
 > condition that the gate cannot be satisfied by a handler that does no work, which is why the

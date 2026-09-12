@@ -59,6 +59,8 @@ import type {
   WebhookIngress,
 } from '@platform/application';
 import {
+  costHandlers,
+  createBudgetGuard,
   createContextPackAssembler,
   createIntegrationActionExecutor,
   createPipelineRuntime,
@@ -77,6 +79,7 @@ import type {
   runner as runnerAdapters,
 } from '@platform/infrastructure';
 import {
+  cost as costAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
   pipeline as pipelineAdapters,
@@ -468,6 +471,16 @@ export const composePipeline = async (
 
   const stopReasons = createRunStopReasons();
   const settings = createProjectSettingsPort(options.pool);
+  /**
+   * The cost ledger (WP-19), composed here so that a process which registers the pipeline registers
+   * it too: `EVENT_CONSUMPTION` declares `run.finished`, `run.failed` and `artifact.created`
+   * handled, and `sweepReadiness` refuses to sweep a process that cannot handle them.
+   *
+   * It borrows no connection of its own — both handlers run inside the dispatcher's handler
+   * transaction — and the budget guard it hands the stage executor is read inside the executor's
+   * own admission transaction, so `POOL_RESERVATIONS` is unchanged.
+   */
+  const costStore = costAdapters.createPostgresCostStore();
   const platformTools = composePlatformTools({ pool: options.pool, logger: options.logger });
 
   /**
@@ -540,6 +553,9 @@ export const composePipeline = async (
         logger: options.logger,
       }),
       stopReasons,
+      // BD-010's org and project budgets, read from the projection the ledger writes. A deployment
+      // with no `budgets` rows is unaffected: `applicable` matches nothing and nothing blocks.
+      budgets: createBudgetGuard({ store: costStore }),
       context: (correlationId) => ({
         ids,
         actor: { kind: 'system', component: 'pipeline' },
@@ -551,6 +567,19 @@ export const composePipeline = async (
   });
 
   for (const handler of runtime.handlers) {
+    options.eventing.bus.register(handler);
+  }
+  for (const handler of costHandlers({
+    store: costStore,
+    context: (correlationId, causeEventId) => ({
+      ids,
+      actor: { kind: 'system', component: 'cost-ledger' },
+      clock: { now: nowIso },
+      correlationId,
+      causeEventId,
+    }),
+    logger: options.logger,
+  })) {
     options.eventing.bus.register(handler);
   }
   await runtime.start();

@@ -46,6 +46,7 @@ import type {
   EventAppender,
   EventStore,
   PendingDispatchRequest,
+  ReadRangeRequest,
   ReadStreamOptions,
   StoredEvent,
 } from '../ports/event-store.js';
@@ -196,6 +197,7 @@ export class MemoryEventing implements UnitOfWork {
         this.#readStream(streamType, streamId, options),
       nextStreamSequence: async (streamType, streamId) => this.#lastSeq(streamType, streamId) + 1,
       readAt: async (position) => toStoredEvent(this.#events.find((r) => r.position === position)),
+      readRange: async (request) => this.#readRange(request),
       readPendingDispatch: async (request) => this.#readPendingDispatch(request),
       countPendingDispatch: async () => this.#queue.size,
       read: async (position) =>
@@ -267,6 +269,25 @@ export class MemoryEventing implements UnitOfWork {
       causeEventPosition: row.causeEventPosition,
       event: row.event,
     }));
+  }
+
+  /** A window of the log, from the log itself — never from the queue (see the port's docblock). */
+  #readRange(request: ReadRangeRequest): readonly StoredEvent[] {
+    const types = request.types === undefined ? null : new Set<string>(request.types);
+    return this.#events
+      .filter(
+        (row) =>
+          row.position > request.fromPosition &&
+          (request.toPosition === undefined || row.position <= request.toPosition) &&
+          (types === null || types.has(row.event.type)),
+      )
+      .sort((a, b) => a.position - b.position)
+      .slice(0, request.limit)
+      .map((row) => ({
+        position: row.position,
+        causeEventPosition: row.causeEventPosition,
+        event: row.event,
+      }));
   }
 
   /**

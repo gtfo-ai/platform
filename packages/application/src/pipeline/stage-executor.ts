@@ -66,6 +66,7 @@ import {
   startRun,
   toQuestionRecord,
 } from '@platform/domain';
+import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
@@ -155,6 +156,16 @@ export interface StageExecutorOptions {
   /** A fresh `CommandContext` per command: ids, clock and the pipeline's system actor. */
   readonly context: (correlationId: Id) => CommandContext;
   readonly settings: (projectId: Id) => Promise<ProjectSettings>;
+  /**
+   * The organisation and project budgets (BD-010, WP-19), asked inside the admission transaction.
+   *
+   * **Absent is `noBudgetGuard`**, which never blocks: a deployment that has no `budgets` rows
+   * behaves exactly as it did before this port existed, and a test that asserts a task is *not*
+   * paused must therefore say which guard it composed (standing rule 10). The task scope is not
+   * here — it is {@link taskBudgetExhausted} against the project's configuration, which is where
+   * product/09's "$50 default, per template" lives.
+   */
+  readonly budgets?: BudgetGuard;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -284,6 +295,19 @@ const revalidate = (
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
   const { unitOfWork, store, runner, planner, stopReasons } = options;
   const logger = options.logger ?? silentLogger;
+  const budgets = options.budgets ?? noBudgetGuard;
+
+  /** `Paused: budget` — product/09's answer to a cap, whichever scope reached it. */
+  const pause = async (
+    scope: TransactionScope,
+    stored: StoredTask,
+    reason: string,
+  ): Promise<Admission> => {
+    const decision = pauseTask(stored.task, { reason: 'budget' }, options.context(stored.task.id));
+    await store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+    await scope.events.append(decision.events);
+    return { kind: 'paused', reason };
+  };
 
   /** Transaction 1a: may this job run at all, and what does the planner need to plan it? */
   const admit = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Admission> =>
@@ -294,15 +318,33 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       const { task } = stored;
 
       if (taskBudgetExhausted(stored, settings, job.stage)) {
-        const decision = pauseTask(task, { reason: 'budget' }, options.context(task.id));
-        await store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
-        await scope.events.append(decision.events);
-        return {
-          kind: 'paused',
-          reason:
-            `the task has spent ${stored.costActualUsd} USD of its ${settings.taskBudgetUsd} USD cap ` +
+        return pause(
+          scope,
+          stored,
+          `the task has spent ${stored.costActualUsd} USD of its ${settings.taskBudgetUsd} USD cap ` +
             `and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
-        };
+        );
+      }
+
+      /**
+       * BD-010: an organisation or project budget "prevents *new* runs; running runs finish".
+       *
+       * Asked here because this is the only moment the question has an answer — a handler on
+       * `budget.exhausted` would have to guess which tasks are about to start a run. The spend it
+       * reads is the ledger's own `budget_windows` projection (WP-19).
+       */
+      const blocker = await budgets.blockingFor(
+        scope.tx,
+        task.projectId,
+        options.context(task.id).clock.now(),
+      );
+      if (blocker !== null) {
+        return pause(
+          scope,
+          stored,
+          `the ${blocker.scope} budget for this ${blocker.window} is exhausted: ` +
+            `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}`,
+        );
       }
       return {
         kind: 'admitted',

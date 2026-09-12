@@ -29,6 +29,10 @@ export * from './code-map/graph.js';
 export * from './code-map/render.js';
 // Configuration
 export * from './config/effective-config.js';
+// Cost: pricing token usage, deriving the ledger rows of a finished run, estimating a task (WP-19)
+export * from './cost/estimate.js';
+export * from './cost/ledger.js';
+export * from './cost/pricing.js';
 export * from './errors.js';
 export * from './events.js';
 export * from './ids.js';

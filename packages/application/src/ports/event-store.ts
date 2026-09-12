@@ -12,7 +12,7 @@
  * that *tried* to lock `event_streams` would get `42501`, because the application role holds
  * SELECT only there (migration 0005). A mismatch surfaces as `StreamConflictError`.
  */
-import type { DomainEvent, Id, StreamType } from '@platform/contracts';
+import type { DomainEvent, DomainEventType, Id, StreamType } from '@platform/contracts';
 
 /** One row of `events`, with its envelope parsed back into a catalogue event. */
 export interface StoredEvent {
@@ -50,6 +50,25 @@ export interface ReadStreamOptions {
   readonly limit?: number;
 }
 
+/**
+ * A window of the log, in position order — the read a **backfill** is built on (WP-19).
+ *
+ * `events` is append-only (TD-005 `REVOKE DELETE`), so a handler registered after the fact can be
+ * served from the log itself; what it needs and the dispatcher's two queries do not provide is a
+ * forward scan bounded by position and filtered by type. `fromPosition` is **exclusive** so a caller
+ * can page with the last position it saw, which is the only cursor the log guarantees is unique.
+ */
+export interface ReadRangeRequest {
+  /** Exclusive lower bound; 0 starts at the beginning of the log. */
+  readonly fromPosition: number;
+  /** Inclusive upper bound; absent reads to the end. */
+  readonly toPosition?: number;
+  /** Catalogue types to return; absent returns every type. */
+  readonly types?: readonly DomainEventType[];
+  /** Highest number of events to return. */
+  readonly limit: number;
+}
+
 export interface PendingDispatchRequest {
   /** Highest number of events to return. One per stream at most, see below. */
   readonly limit: number;
@@ -73,6 +92,14 @@ export interface EventStore {
   nextStreamSequence(streamType: StreamType, streamId: Id): Promise<number>;
 
   readAt(position: number): Promise<StoredEvent | null>;
+
+  /**
+   * A window of the log in position order (see {@link ReadRangeRequest}).
+   *
+   * It reads `events` and **not** `event_dispatch`: an event whose dispatch completed has no queue
+   * row left, and those are exactly the events a backfill exists for.
+   */
+  readRange(request: ReadRangeRequest): Promise<readonly StoredEvent[]>;
 
   /** Events whose dispatch is due, earliest-pending-per-stream first, in position order. */
   readPendingDispatch(request: PendingDispatchRequest): Promise<readonly StoredEvent[]>;

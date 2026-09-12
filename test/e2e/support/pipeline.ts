@@ -103,6 +103,9 @@ export interface TaskSnapshot {
   readonly state: string;
   readonly current_stage: string | null;
   readonly cost_actual: string;
+  /** `tasks.size` and `tasks.estimate_usd` — written by the cost estimate at refinement (WP-19). */
+  readonly size: string | null;
+  readonly estimate_usd: string | null;
   readonly iteration_counters: Record<string, number>;
   readonly stage_attempts: Record<string, number>;
   readonly template: string;
@@ -230,7 +233,76 @@ export interface PipelineE2E {
   readonly workspaceReleases: readonly WorkspaceRelease[];
   /** Every `run_messages` row the production sink wrote, in order. */
   transcript(): Promise<readonly TranscriptRow[]>;
+  /**
+   * What the cost ledger wrote (WP-19), read back out of the database.
+   *
+   * Read from the tables rather than from a recorder, for the same reason `auditRows` is: nothing
+   * in this tier supplies a `CostStore`, so an assertion on these rows is an assertion about the
+   * adapter `apps/server` composed for itself.
+   */
+  costRows(): Promise<CostRows>;
+  /**
+   * Inserts a `budgets` row (WP-19), so a test can watch BD-010's "no new runs" take effect.
+   *
+   * A row rather than a setting: the org and project scopes are enforced from the `budget_windows`
+   * projection the ledger writes, and the point of the assertion is that the *projection* stops a
+   * run — which a configured cap could not demonstrate.
+   */
+  seedBudget(input: {
+    readonly scope: 'org' | 'project';
+    readonly window: 'day' | 'month';
+    readonly limitUsd: number;
+    readonly spentUsd?: number;
+    readonly windowStart?: string;
+  }): Promise<string>;
+  /**
+   * A `budget_windows` row for a budget that already exists — a **past** window, so a reader can be
+   * held to picking the right one rather than any row of that budget.
+   */
+  seedBudgetWindow(input: {
+    readonly budgetId: string;
+    readonly windowStart: string;
+    readonly spentUsd: number;
+  }): Promise<void>;
+  /** `organizations.timezone`, for the reads that have to survive one this runtime cannot use. */
+  setOrganisationTimezone(timezone: string): Promise<void>;
   stop(): Promise<void>;
+}
+
+/** The ledger's four tables, as the e2e reads them back. */
+export interface CostRows {
+  readonly entries: readonly {
+    run_id: string;
+    task_id: string;
+    stage: string;
+    model: string;
+    usd: number;
+    is_estimate: boolean;
+  }[];
+  readonly rollups: readonly {
+    template: string;
+    stage: string;
+    model: string;
+    day: string;
+    mode: string;
+    runs: number;
+    usd: number;
+    wall_ms: number;
+    turns: number;
+  }[];
+  readonly modelUsage: readonly {
+    run_id: string;
+    model: string;
+    input_tokens: number;
+    usd_reported: number | null;
+    usd_estimated: number | null;
+  }[];
+  readonly windows: readonly {
+    budget_id: string;
+    window_start: string;
+    spent_usd: number;
+    notified_pct: number[];
+  }[];
 }
 
 /** One `run_messages` row, as the e2e reads it back. */
@@ -666,8 +738,8 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   const task = async (): Promise<TaskSnapshot> => {
     const { rows } = await pool.query<TaskSnapshot>(
-      `select id, state, current_stage, cost_actual, iteration_counters, stage_attempts, template,
-              ticket_snapshot, ticket_snapshot_at
+      `select id, state, current_stage, cost_actual, size, estimate_usd, iteration_counters,
+              stage_attempts, template, ticket_snapshot, ticket_snapshot_at
          from tasks order by created_at limit 1`,
     );
     const row = rows[0];
@@ -694,6 +766,67 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
            from run_messages order by created_at, seq`,
       );
       return rows;
+    },
+    costRows: async () => {
+      const entries = await pool.query<CostRows['entries'][number]>(
+        `select run_id, task_id, stage, model, usd::float8 as usd, is_estimate
+           from cost_entries order by created_at, id`,
+      );
+      const rollups = await pool.query<CostRows['rollups'][number]>(
+        `select template, stage, model, day::text as day, mode::text as mode, runs,
+                usd::float8 as usd, wall_ms::int as wall_ms, turns
+           from cost_rollup_daily order by day, template, stage, model, mode`,
+      );
+      const modelUsage = await pool.query<CostRows['modelUsage'][number]>(
+        `select run_id, model, input_tokens::int as input_tokens,
+                usd_reported::float8 as usd_reported, usd_estimated::float8 as usd_estimated
+           from run_model_usage order by run_id, model`,
+      );
+      const windows = await pool.query<CostRows['windows'][number]>(
+        `select budget_id, to_char(window_start at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                  as window_start,
+                spent_usd::float8 as spent_usd, notified_pct
+           from budget_windows order by budget_id, window_start`,
+      );
+      return {
+        entries: entries.rows,
+        rollups: rollups.rows,
+        modelUsage: modelUsage.rows,
+        windows: windows.rows,
+      };
+    },
+    seedBudget: async (input) => {
+      const inserted = await pool.query<{ id: string }>(
+        `insert into budgets (scope, scope_id, "window", limit_usd, notify_pct)
+         values ($1, $2, $3, $4, '{50,80}') returning id`,
+        [input.scope, input.scope === 'org' ? null : projectId, input.window, input.limitUsd],
+      );
+      const budgetId = inserted.rows[0]?.id as string;
+      if (input.spentUsd !== undefined) {
+        await pool.query(
+          `insert into budget_windows (budget_id, window_start, spent_usd) values ($1, $2, $3)`,
+          [
+            budgetId,
+            input.windowStart ?? new Date().toISOString().slice(0, 8) + '01T00:00:00Z',
+            input.spentUsd,
+          ],
+        );
+      }
+      return budgetId;
+    },
+    seedBudgetWindow: async (input) => {
+      await pool.query(
+        `insert into budget_windows (budget_id, window_start, spent_usd) values ($1, $2, $3)
+           on conflict (budget_id, window_start) do update set spent_usd = excluded.spent_usd`,
+        [input.budgetId, input.windowStart, input.spentUsd],
+      );
+    },
+    setOrganisationTimezone: async (timezone) => {
+      await pool.query(
+        `update organizations set timezone = $1
+          where id = (select org_id from projects where id = $2)`,
+        [timezone, projectId],
+      );
     },
     kbSearches: async () => Promise.all(kbSearchCalls),
     auditRows: async () => {

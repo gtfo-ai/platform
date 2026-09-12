@@ -226,7 +226,10 @@ const modelUsageFor = async (
       cache_write_5m_tokens: row.cacheWrite5m,
       cache_write_1h_tokens: row.cacheWrite1h,
       cache_read_tokens: row.cacheRead,
-      usd: usd(row.usdEstimated),
+      // The same rule the run-level cost uses (`usd_reported ?? usd_estimated`), one level down —
+      // migration 0017 gave `run_model_usage` the pair. The DTO has no spelling for "unknown", so a
+      // model with neither number reads as 0 here while the row keeps both as null.
+      usd: usd(row.usdReported ?? row.usdEstimated),
     });
     byRun.set(row.runId, list);
   }

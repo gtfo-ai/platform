@@ -151,6 +151,25 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   (`revalidate`). `apps/server/src/platform-tools.ts` is the production `PlatformToolPort` —
   `kb_search` is real and the other eight **refuse by name**, which is why
   `PipelineComposition.runner` is a factory over the tools rather than a runner.
+- **What a run costs, and what a budget stops** (WP-19): the ledger is
+  `packages/application/src/cost/` — one handler on `run.finished`/`run.failed` at TD-005 priority 10
+  writing `cost_entries`, `run_model_usage`, `cost_rollup_daily` and `budget_windows` in the handler's
+  own transaction, so a redelivery cannot double-charge. Three rules decide what a row says. The
+  entries **sum to the provider's run total** (BD-011: reported cost is truth), with the per-model
+  rounding residual attributed to the run's own model rather than dropped. A cost the producer did not
+  report is **priced from `price_list` and labelled an estimate**, and a model with no price row gets
+  *no* ledger row and a named log line — never a zero, which would read as a free run (rule 16); the
+  same applies to WP-12's `cost_unreported`, which is a fault and not an overspend. The **model id is
+  the only producer string the ledger stores**, bounded at 128 characters and refused past it, because
+  truncating it would merge two models onto one key. Org and project budgets stop a *new* run through a
+  **read at admission** (`cost/guard.ts`, asked by the stage executor), not through a handler on
+  `budget.exhausted` — those events are notifications and stay declared unconsumed; the **task** cap
+  stays the executor's own check against project configuration. A window is identified by its start
+  instant in the organisation's timezone, so a rollover needs no job. `events/replay.ts` is the
+  **backfill**: it reads a range of the append-only `events` table (never `event_dispatch`, whose row a
+  completed dispatch deleted) and claims `(position, handler)` in `handler_executions` exactly as the
+  dispatcher does, which is what lets a handler registered today be served events swept last month, and
+  makes a second pass a no-op.
 - Runner and hooks: `docs/technical/04-agent-runtime.md`; isolation: `docs/technical/05-workspaces-and-security.md`. The run shim `agentic-runlet` (TD-025) is `packages/infrastructure/src/runlet/` — frame protocol in `@platform/contracts`, shim, runner-side `SpawnedProcess`, credential helper — with `apps/runlet` as its entrypoint and nothing else; `node scripts/runlet-container-check.mjs` is its Docker verification (not a `verify` target: it needs a daemon), written up in `docs/research/12-run-shim-verification.md`.
 - Data: `docs/technical/03-data-model.md`. UI: `docs/technical/09-ui-architecture.md`; the SPA's composition root is `apps/web/src/app/app.tsx`, the client half of the SSE contract is `apps/web/src/realtime/client.ts`, and the untrusted-text rules are `apps/web/src/ui/untrusted-text.ts`. Work plan: `docs/technical/13-implementation-plan.md`.
 - Open questions: `docs/OPEN-QUESTIONS.md`; verification backlog: `docs/TODO.md`.

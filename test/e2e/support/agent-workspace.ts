@@ -73,7 +73,20 @@ const SESSION = 'fake-session-e2e';
  * The assistant turn **echoes the run's own model credential**, which is the leak this tier exists to
  * catch: a model repeating its environment into its answer is the ordinary way a credential reaches a
  * transcript, and the row it produces is what TD-012 step 1 has to have redacted.
+ *
+ * The `result` reports **two** models (WP-19): the run's own, and {@link SUBAGENT_MODEL} for the
+ * share a sub-agent spent. A single-model result would leave the cost ledger's per-model split — the
+ * branch that has to total back to the invoice — unexercised in every tier that runs a real runner,
+ * which is standing rule 68's shape: a behaviour parameterised over a set needs a fixture that
+ * carries more than one member of it. The two `costUSD` values sum to `total_cost_usd`, so the run's
+ * recorded cost is unchanged and no other test's arithmetic moves.
  */
+
+/** The model a sub-agent uses in the scripted result; cheap and different from the run's own. */
+export const SUBAGENT_MODEL = 'claude-haiku-4-5';
+
+/** What the sub-agent's share of a run costs in the script. */
+export const SUBAGENT_COST_USD = 0.05;
 export const fakeCliScriptFor = (
   spec: RunSpec,
   scenario: { readonly structuredOutput: unknown; readonly costUsd?: number },
@@ -149,12 +162,22 @@ export const fakeCliScriptFor = (
         },
         modelUsage: {
           [spec.model]: {
-            inputTokens: 1200,
-            outputTokens: 400,
+            inputTokens: 1000,
+            outputTokens: 350,
             cacheReadInputTokens: 0,
             cacheCreationInputTokens: 0,
             webSearchRequests: 0,
-            costUSD: cost,
+            costUSD: Math.round((cost - SUBAGENT_COST_USD) * 1_000_000) / 1_000_000,
+            contextWindow: 200_000,
+            maxOutputTokens: 64_000,
+          },
+          [SUBAGENT_MODEL]: {
+            inputTokens: 200,
+            outputTokens: 50,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: SUBAGENT_COST_USD,
             contextWindow: 200_000,
             maxOutputTokens: 64_000,
           },

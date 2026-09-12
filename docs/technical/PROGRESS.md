@@ -13,8 +13,26 @@
 and never as `in_progress` (rule 84): `9b1187a` (`34688812021`), `c6f38ca` (`34689127671`), `19da103`
 (`34692412614`). Clean tree, no worktrees, no open branches. Verified in the orchestrator's own shell before
 every push (`PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e`, and `PASS: verify:ui` for
-WP-15h, each exit 0). **The docs commit after `19da103` has its own run; the next session resolves it from
-`gh run list` before starting.**
+WP-15h, each exit 0).
+
+**CI went RED on `38f3d82` (run `34692908462`, a docs-only commit) and is GREEN again at `58503b5`
+(run `34696889564`, read as `completed success`).** Ten jobs were green; `integration` failed with **every
+test passing** (`22 passed (22)`, `231 passed (231)`) on an **unhandled rejection** — `error: stream
+task/01890000-0000-7000-8000-000000000017 is at sequence 2, cannot append 1`, `code: '23505'`, raised by
+`events_enforce_stream_seq()`, out of `test/integration/db/event-log.integration.test.ts` › *"serialises
+concurrent appends to one stream: one commits, the other is rejected ($name)"* — backlog **28**'s shape (a verdict
+worth less than it reads) with a different mechanism. **Measured, and the hypothesis was right about the
+class and wrong about the detail**: no second rejection was involved; the test attached its handler **one
+`await` late** — it started the losing query, awaited the winner's `commit`, and only then awaited the
+loser's rejection, and the commit is precisely what unblocks the loser, so its `23505` settled inside that
+await with nobody listening. The ci-fix (one file, approved with WP-19's review) hands both queries to an
+outcome-capturing helper on the line that starts them, runs **both** interleavings every time on two
+streams, asserts which side was rejected and that the other committed, and **forces** the dangerous
+order rather than waiting for it (rule 76); the reviewer re-derived the mutant and it reproduces CI's
+failure by name. The file had been untouched since WP-15c and green on the ten CI runs between — the
+rate was the only random thing about it. Residual (reviewer nit): the forcing helper reads V8 promise
+state through `util.inspect`, with its first read asserted `<pending>` so a format change fails loudly;
+`v8.promiseHooks.onSettled` is the documented (experimental) alternative if it ever does.
 
 **WP-15h part 1 is DONE at `19da103`** (row in M1). **Backlog 26 is DECIDED** by an architect ruling —
 **TD-026**, a git-backed `VaultSource` over a bare mirror the platform owns — recorded under "Architect
@@ -284,6 +302,17 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    the constant three lines away — and the reviewer found **two more** stale restatements after the merge,
    which is backlog **22**. A file that appears unwritable is a claim about the *tool you used*, not about
    the file.
+
+   **Refined a second time at WP-19 (session 5), and it is the copy that lies this time.** A whole-tree copy
+   made for a mutation still resolves every `@platform/*` import **back to the original tree** through the
+   workspace symlinks in `node_modules`, so a mutant planted in the copy of a *package* file is never the
+   code the copied *test* imports — the suite runs the unmutated original and reports the mutant as
+   survived, or, worse, the calibration passes for a reason that has nothing to do with the copy. The round-2
+   reviewer caught it only with a **planted `throw` canary** that should have failed and did not; every
+   figure it reported afterwards came from a copy re-linked with `pnpm install --ignore-scripts
+   --frozen-lockfile`. Rule 21's canary is therefore not optional for a copy either: *plant a throw in the
+   copy and watch it fire before believing any mutant on it* — the `cp` recipe above is calibrated for a
+   file the test imports **relatively**, and silently wrong for one it imports by package name.
 
 76. **A flake's *rate* can be the only random thing about it — the defect underneath may be fully
    deterministic, and then "it passes four times in five" is the most misleading evidence you have.**
@@ -7055,7 +7084,344 @@ not a sleep (rule 2). The both-direction secret assertion is
 frames — without the run’s secret", and it is asserted **twice on two paths**: on the HTTP page
 (placeholder present, plaintext absent) and on the SSE frame, which never touches the projection.
 
+### WP-19 — the cost ledger, and the three tables that had never held a row
+
+**What was built.** A `cost.ledger` handler on `run.finished` / `run.failed` at TD-005 priority 10
+(technical/02's own number), writing `cost_entries`, `run_model_usage`, `cost_rollup_daily` and
+`budget_windows` in the handler's own transaction; a `cost.estimate` handler on `artifact.created`
+that writes `tasks.size` and `tasks.estimate_usd` when a `RefinedSpec` lands; a budget guard the
+stage executor asks at admission; `events/replay.ts`, the backfill; the price-table maintenance cron;
+`GET /api/projects/:id/budgets`; migration **0017**. Four of those tables existed since 0004/0007 and
+**had never had a writer**.
+
+**Decisions and assumptions, each with its reason.**
+
+1. **The ledger totals to the invoice.** The provider reports a run total *and* a per-model
+   breakdown, rounded independently. `ledgerEntriesForRun` uses the per-model numbers and attributes
+   the residual to the **primary** entry (the run's own model), so `sum(cost_entries.usd)` is the
+   number an invoice can be reconciled against (BD-011: "provider-reported cost is truth"), and
+   `residualUsd` reports how much moved rather than smoothing it away. A property test asserts the
+   sum for any breakdown.
+2. **`runs`, `wall_ms` and `turns` land on one entry per run**, the token and USD columns on every
+   entry. That is what makes `sum(entries.usd) = sum(rollup.usd)` *and* keeps a two-model run from
+   counting as two runs.
+3. **A missing cost is priced, not zeroed** (standing rule 16, and WP-12's obligation on this row).
+   `cost.is_estimate` (BD-004 `local` mode) and a `cost_unreported` run — tokens, no usable
+   `total_cost_usd` — both go down the price-table path and are labelled `is_estimate`. A model with
+   **no price row** produces *no ledger row* and is named in the log; its tokens are still recorded in
+   `run_model_usage` with `usd_estimated: null`, because usage is a measurement and pricing is an
+   interpretation of it.
+4. **The model id is the only producer string the ledger stores, and it is bounded at 128 characters
+   and refused past it** — not truncated, because truncation is many-to-one and would collapse two
+   models onto one ledger key and one rollup row.
+5. **Org and project budgets are enforced by a *read at admission*, not by a handler on
+   `budget.exhausted`.** A handler would have to enumerate every task that might start a run next,
+   which is a different set at every moment. `cost/guard.ts` carries the argument; the three budget
+   events stay declared `unconsumed` with their real consumers named (Slack WP-10, UI WP-20).
+6. **The task scope stays where WP-15 put it** — `taskBudgetExhausted` against the project's
+   configuration. A task-scoped `budgets` row is projected but not enforced: one question with two
+   answers is worse than one answer in the wrong place. Stated in `guard.ts` and in technical/03.
+7. **Budget windows are implicit.** A window is identified by its start instant, so a charge after
+   the boundary folds into a fresh row with fresh `notified_pct` and no job has to have run. TD-004's
+   `budget.window.reset` queue is therefore **not** started in this build and nothing emits
+   `budget.reset` (recorded in `cost/window.ts` and in the consumption table).
+8. **One calendar.** The rollup's `day` and the budget window both use the organisation's timezone
+   (BD-010, Q12), read once per event. A zone `assertTimeZone` refuses is **failed open** to UTC with
+   a named warning, because a handler that threw would park the run stream and stop charging every
+   project for one organisation's misconfiguration (rule 20's shape).
+9. **`exhaustedNotified` is derived, not stored**: `recordSpend` emits `budget.exhausted` the first
+   time `spent >= limit`, and that event commits with the `spent_usd` it was computed from, so a
+   stored spend at or over the limit *is* the state in which it was emitted. The one case the
+   derivation differs from a flag is a human raising the cap, which should announce again
+   (product/09).
+10. **The estimate model is Q65**, filed with its recommendation and implemented: per-size weights
+    `S:1 M:2 L:4 XL:8`, project history then organisation history, and `null` rather than a default.
+    Written once per task, so `estimateAccuracy` compares an expectation against an outcome.
+11. **The price job fetches nothing.** There is no verified machine-readable price feed in this build
+    and no credential for one; a job that scraped a page and wrote `price_list` would write money
+    into the ledger's inputs from an unvalidated source, and a wrong price is a plausible number in
+    every reconciliation afterwards. It closes superseded price windows (which technical/03 requires
+    and an operator forgets) and **names the models the ledger could not cost**, which nothing else
+    surfaces.
+
+**The backfill, and how it relates to `handler_executions`.** It is a **distinct read-and-apply**, not
+a re-dispatch: `EventBus.dispatch` refuses an event whose `event_dispatch` row a completed dispatch
+deleted (backlog 20), so the queue can never serve a handler registered afterwards. `replayEvents`
+reads `events` — append-only, TD-005 `REVOKE DELETE` — and runs the given handlers, each claiming
+`(position, handler)` in `handler_executions` **exactly as the dispatcher does**. It does not bypass
+that table; it *uses* it, and that works precisely because a new handler has no row at any position
+while the `$dispatch` marker is a different handler name that `claim` never consults. A second pass
+skips everything; an event the dispatcher already gave the ledger is skipped too. It writes no
+`$dispatch` marker and completes no queue row — a marker written twice would claim a completeness the
+pass does not have. A handler that throws **stops the pass** and `lastPosition` is the resume point:
+a backfill that skipped what it could not apply would report success over a ledger with holes in it.
+
+**What the fake runner emits, checked before asserting on it (standing rule 82).** The e2e harness's
+`FakeClaudeRunner` scenario reports `usage` (1200/400), `cost.usd` 0.40 and **`modelUsage: []`** — so
+that composition can reconcile entries against rollups and is *structurally incapable* of showing a
+per-model row. The per-model criterion therefore uses `agent: 'real-over-fake-cli'`, where the
+production runner reads a real `result` line through the production `normaliseModelUsage`; the
+scripted CLI now reports **two** models (the run's own plus a sub-agent at 0.05 USD, summing to the
+same `total_cost_usd`), because a single-model fixture would leave the split branch untested in every
+tier that runs a real runner (rule 68).
+
+**The consumption flip, held by a named test.** `run.finished`, `run.failed` and `artifact.created`
+are `handled`; `consumption.test.ts` now has *"has no type left unconsumed that the cost ledger itself
+handles (WP-19)"*, which reads the set **off the handlers** rather than from a list written in the
+test — the mechanical half of backlog 1's ask, and four lines for the next consumer to copy. The
+sibling case that asserted "exactly what the pipeline registers" now composes both registrations,
+because this build has two.
+
+**Sentences the fix falsified, and what was done with them** (rule 83): `docs/TODO.md`'s backfill item
+is closed with the residual named (queue-depth alerting still has no owner); technical/02's *"differs
+from this column on 28 rows"* is now **25**; technical/03 gained the 0017 amendment and a "who writes
+what" note; `consumption.ts`'s docblock and its `unconsumed` comments were rewritten (`config.changed`
+and the two `integration.action.*` rows no longer name WP-19 — the audit and health projections
+technical/03 attributes to it are **not** on its plan row and have no work package). **One the
+implementer could not make:** `TD-005-event-store-and-dispatch.md:50` also said *"diverges from the column
+on **28 rows**"* and *"registers handlers for **21**"* — the numbers are now **25** and **24**, and an
+implementer may not edit a decision record. **Applied by the orchestrator in the same change** (both
+lines now carry the new number with the old one in parentheses); the round-2 reviewer verified the
+counts against `consumption.ts`. Round 2 also found that this paragraph and the discovered-work bullet
+below still described the edit as open after it had been made — the ledger contradicting its own tree,
+rule 83 on the orchestrator's writing — and both are corrected here.
+
+**Assumption a reviewer should check first:** `cost_entries.created_at` is the database's `now()`,
+not the run's end. The rollup's `day` *is* the run's end (the event's `occurred_at`), so a run that
+finishes at 23:59:59 and is charged at 00:00:01 lands in yesterday's rollup and today's partition.
+That is deliberate — the rollup answers "what did the 11th cost" and the partition answers "when was
+this row written" — but it is the kind of split that reads as a bug if nobody says it out loud.
+
+### ci-fix — the event-log concurrency test's escaped rejection
+
+**Hypothesis one was right about the class and wrong about the detail, and the detail is the fix.**
+The resume note guessed *"the loser's promise rejects after the assertion has already consumed a
+different rejection"*. There is no second rejection. The whole mechanism is one window:
+
+```ts
+const blocked = second.query(append(stream, 1)); // promise created — nothing attached
+await first.query('commit');                     // ← the loser's 23505 lands in here
+await expect(blocked).rejects.toMatchObject(…);  // handler attached, one await too late
+```
+
+Releasing the `event_streams` row lock is *what makes the rejection arrive inside that await*: the
+commit is the event that unblocks the loser, so the two answers come back on two sockets within
+microseconds of each other, and whichever the event loop reads first decides whether the job is
+green. Node reports the loser as an `unhandledRejection`; vitest turns it into an unhandled error;
+the job is **red with every test passing** — CI `34692908462`, `22 passed (22)`, `231 passed (231)`,
+`FAIL: verify:integration`, on a docs-only commit.
+
+**Reproduced before it was fixed** (rule 27), on a throwaway copy of the file: the old shape plus a
+wait that lets the loser settle *before anything looks at it* gives, byte for byte, CI's output —
+`error: stream task/…017 is at sequence 2, cannot append 1`, the same `pg/lib/client.js:694` frame,
+the same `where: 'PL/pgSQL function events_enforce_stream_seq() line 12 at RAISE'`, `1 passed`,
+`1 error`, exit 1.
+
+**The forcing mechanism, and why it is not a sleep** (rule 76). To make the interleaving
+deterministic the test has to know the loser has settled *without attaching a handler* — attaching
+one is the very thing under test. `util.inspect` reads V8's promise state instead of subscribing:
+measured on `node v25.1.0`, polling a rejected promise this way still fires `unhandledRejection`,
+and a later `.catch` produces `PromiseRejectionHandledWarning`, so nothing was subscribed. Renders
+at `depth: 0` are `Promise { <pending> }`, `Promise { <rejected> [Error] }` and a bare
+`Promise { [Object] }` when fulfilled — "not pending" is the only usable test for settled. **None of
+this is documented** (nodejs.org/api/util.html describes neither the rendering nor the
+non-subscription), and it was measured on **one** runtime: this machine is v25.1.0 and `.nvmrc` pins
+CI to 24, which could not be measured here (`/opt/homebrew/opt/node@24/bin/node` reports v25.1.0).
+So `settleUnobserved` **asserts its first read is `<pending>`** — its caller reaches it one statement
+after issuing the query, so the promise cannot have settled yet — and a Node that renders pending
+some other way fails there by name instead of silently degrading the wait to no wait at all.
+
+**The fix.** Both queries are handed to `outcomeOf` on the line that starts them, which maps them
+onto `{kind:'fulfilled'}` / `{kind:'rejected', code, where}`; the test then *reads* outcomes instead
+of racing promises. `Promise.allSettled` closes the same hole; the helper exists so the assertion can
+say **which** side was rejected and which committed (rule 10). Both interleavings run every time
+(rule 68) on streams `…017` and `…018`: the order CI's green runs took (commit observed first) and
+the order it died on (rejection settles while nothing is looking). The product property is
+**strengthened**, not weakened: `where` is now asserted to contain `events_enforce_stream_seq`, so
+the test says the trigger refused the append rather than "something with SQLSTATE 23505" did, and
+each case still ends on `assertOnlyTheWinnerLanded` — one row, `last_seq = 1`, stream still
+appendable at 2.
+
+**Mutation, on a copy** (rule 77). Calibrated unmutated: 9/9 green. Mutant — the creation-time
+handler removed, everything else kept: `9 passed`, **`1 error`**, exit 1, the unhandled rejection
+naming stream `…018`, i.e. the forced case and no other. Second mutant — the old shape *and* the
+forcing removed, which is exactly the code that was on `main`: **3/3 green locally, zero unhandled
+rejections**. That pair is the point of rule 76 here: the defect is fully deterministic given the
+order, and the only random thing about it was whether this machine ever produced the order. Local
+green never had a chance of catching it (rule 71); Linux CI is the tier of record.
+
+**Rule 49 sweep.** Every `.rejects.` assertion in the integration and e2e tiers — **37 sites across
+14 files** — takes its promise *inline* inside `expect(…)`, so the handler attaches in the same
+synchronous turn; the one exception was `event-log.integration.test.ts:134`, the file that failed.
+The concurrency-flavoured neighbours were read rather than grepped past:
+`events/dispatcher.integration.test.ts` uses `Promise.all` (attaches at creation) and
+`integrations/audit-log.integration.test.ts`'s "racing" case is deliberately staged rather than
+concurrent. **Two near-siblings were found and deliberately left alone**:
+`test/e2e/server/sse.e2e.test.ts:254,291` hold `instance.runtime.stop()` across other awaits. They
+cannot produce this class on a passing run — the promise is expected to *resolve*, and the awaits
+in between are what the test is asserting — but if `stop()` ever rejects there, the failure would
+surface as an unhandled error instead of a clean one. Filed under discovered work; changing them
+would touch the e2e tier for no defect.
+
+**Assumption recorded**: "either losing order" is read as *the order in which the loser's rejection
+settles relative to the winner's commit being observed*, not as *which connection loses* — the
+winner is whoever takes the row lock first, so swapping the clients tests nothing new.
+
+#### WP-19 — review round 1 (REQUEST_CHANGES): the one untested module was the one the census had just certified
+
+**The major, and the measurement that came out of fixing it.** `GET /api/projects/:id/budgets` was
+the only module in the diff nothing imported in any tier — while `ADMITTED_GAPS` no longer listed it,
+so `client-census.test.ts` now *certified* a route whose body nothing asserted (rules 35/44/10). Its
+failure mode is the worst kind: `spent_usd` comes from a `Map` keyed
+`` `${budgetId}@${windowStart}` `` and a key that does not match reports **0**, which renders as a
+budget nobody has spent against.
+
+The fix is in `test/e2e/cost/ledger.e2e.test.ts`, and the **first version of it was not enough** —
+worth recording, because it is standing rule 42 failing in a way that reads as covered. Round one of
+the test seeded a stale 2020 window row on the charged budget and asserted the served number equalled
+the ledger's. Two mutations on a copy of `cost-queries.ts`:
+
+| mutation | first version | after |
+|---|---|---|
+| key never matches (`String(date)` instead of `toISOString()`) | **died** — `expected +0 to be close to 2` | died |
+| key drops the window entirely (join on the budget alone) | **survived** | **died** — `expected 999 to be +0` |
+
+The second survived because `new Map(rows.map(…))` keeps the **last** entry for a duplicate key, the
+query has no `ORDER BY`, and the last row happened to be the right one. So the test was asserting
+"some row of this budget" and passing for the wrong reason. What kills it is the *other side*: a
+second budget added **after** the spend, with an old window row of its own — its current window has
+no row at all, so the only correct answer is `0` and a window-blind reader answers `999`. It is a
+`day` budget because `budgets_scope_scope_id_window_key` admits one row per
+`(scope, scope_id, window)`. The 404 branch of `findProjectTimezone` is asserted in the same case.
+
+**Three minors, each a claim rather than a behaviour.**
+
+1. *Decision 8's fail-open was asserted only by its effect.* The warning is now asserted **by name**
+   with its fields, and the negative case is scoped to the zone (a bare "no warnings" assertion would
+   have been asserting the wrong silence — the harness seeds no price row, so the unpriced-model
+   warning fires legitimately). The residual is stated at `usableTimezone` and filed: **no row records
+   that a substitution happened**, so a reconciliation that finds an unexpected day has the log and
+   nothing else. A column would fix it and is not worth a migration for a state an operator creates by
+   typing an offset into a setting `assertTimeZone` rejects everywhere else.
+2. *`cost/estimate.ts` claimed "a task whose size the platform already knows is left alone entirely".*
+   False: the guard is `estimateUsd !== null`, so a task with a **size and no estimate** — the
+   project's first task, which had no history — is re-read and re-written on a second `RefinedSpec`.
+   The behaviour is right (that round is the first chance to give it a number, and the newer spec's
+   size is the one a reader should see); the sentence was wrong, and both directions are now pinned by
+   `estimate.test.ts`.
+3. *Migration 0017's comment overstates its unique key.* `(run_id, model, created_at)` was described
+   as catching "a replay within the same microsecond, which is exactly what a double-fired backfill
+   is". It is not: `created_at` defaults to `now()`, which in PostgreSQL is the **transaction's** start,
+   so two backfill passes in two transactions write two different timestamps and the constraint never
+   fires. What makes a second pass a no-op is `handler_executions`, per the replay's own design. The
+   constraint's real value is a duplicate **inside one transaction**. technical/03 now says that;
+   the migration is applied and forward-only, so its comment is left and carried here for the next
+   migration to correct at the line.
+
+#### WP-19 — review round 2 (REQUEST_CHANGES): one bad character in a settings field, three different failures
+
+**The state decision 8 exists for reached three callers and only one of them handled it.** An
+`organizations.timezone` that `assertTimeZone` refuses — a fixed offset, which ES2024 `Intl` accepts
+and DST arithmetic cannot use — makes `budgetWindowStart` **throw**. The ledger caught that and failed
+open to UTC with a named warning; the *guard* and the *budgets read* did not, so the same row would
+have failed a `stage.execute` job into its retry loop and answered **500** on the dashboard built to
+show the misconfiguration. The substitution is now one function, `resolveBudgetTimezone`
+(`cost/window.ts`), and each caller reports it in its own register: the ledger logs by name, the route
+logs and serves the substituted window, the guard simply does not block on a calendar it could not
+compute. Asserted end to end — the e2e sets the org zone to `+02:00` and the read still answers 200
+with the UTC window; mutating `findProjectTimezone` back to the raw column turns that case red
+(`expected 500 to be 200`). Standing rule 9's shape: an obligation three paths can discharge needs one
+arbiter, and rule 20's, because the failure was *closed* where the product wants open.
+
+**`BudgetRepository.listForProject` is deleted rather than wired up.** Its docblock claimed it served
+`GET /api/projects/:id/budgets`; the route reads through `cost-queries.ts`, so its only caller was the
+contract suite and the scope filter existed twice (rules 31/44/63). Deleting it is the right half of
+the choice because the store's loader **writes**: `applicable` inserts the window row and takes it
+`for update`, which is what serialises two runs charging one budget and is exactly what a `GET` must
+not do. So the store is the charge path, the projection is the read path, and that is now stated at
+both ends instead of being a duplication nobody had named.
+
+**The duplicate-model caveat is closed by construction rather than written down.** A derivation with
+two entries for one `(run_id, model)` would be deduplicated by `cost_entries`' unique key and
+**summed** into the rollup, so `sum(entries) = sum(rollups)` — the property this work package is
+measured by — would be false for that run. `foldByModel` now folds before pricing: usage adds, a
+reported cost adds, and two absent costs stay absent (never `0 + n`, which would read as a reported
+zero). Unreachable from `normaliseModelUsage` today, which builds from `Object.entries`; "today" is a
+fact about one caller and the invariant is a fact about the ledger (rule 44).
+
+**And the new route now has its own 401 case**, per route rather than per surface — WP-15h's shape, and
+the failure it catches (an endpoint added without `requirePermission`) is invisible to every
+authenticated assertion beside it.
+
+**On the reviewer's mutation-copy warning, checked rather than assumed:** none of this work package's
+mutation results came from a copied tree. Every mutant was written **in place** in the working tree
+(python/Edit write, `diff` against a backup to prove it landed, restore and `diff -q` to prove it was
+gone), so a symlinked `node_modules` resolving `@platform/*` back to the original sources cannot
+apply — the mutant *is* the original source while it runs. The one mutant that survived
+(`cost-queries.ts` keyed on the budget alone, round 1) was proved live by the same `diff` **and** by
+its eventual death against the strengthened test, which is the canary the reviewer's recipe adds
+separately.
+
+#### WP-19 — review round 3 (APPROVE with one minor): the guard half was dead code a mutant restored
+
+`resolveBudgetTimezone` reached three callers in round 2 and only two of them were **tested**. The
+reviewer mutated the guard's call back to the raw column on a canaried copy and it survived the whole
+unit+contract tier: no tier admitted a stage under a fixed-offset org zone, because
+`ledger.e2e.test.ts` sets one only *after* the task has settled. `guard.test.ts` now has
+*"substitutes UTC for a zone it cannot compute in, rather than throwing"*, and it is a **behaviour**
+case rather than a "does not throw" one — the row is charged at the UTC month start, so only a guard
+that read that window finds it. Re-derived here in place: a planted `throw` canary fails 10 of 11
+cases (the module is reached), the raw-column mutant then fails **one, by name**, and the restore is
+green. Rule 3's whole point, one work package later: the fix and the test that proves it are two
+deliverables, and fixing three call sites made the third *feel* covered.
+
+Two residuals stated at their lines rather than fixed: `appendEntries`' `do nothing` is asymmetric
+with `applyRollups`' fold and is the backstop rather than the guarantee (the guarantee is
+`foldByModel`, in the derivation); and the price job's window-closing update cannot close a window
+onto itself because `price_list` is `unique (model_id, effective_from)`, so `lead()` never returns a
+row's own instant — the guarantee is the index's, not the statement's.
+
 ## Discovered work — session 5 (not in plan)
+- **The cost ledger records the *result* of a timezone substitution and never the substitution**
+  (WP-19 review round 1). When `organizations.timezone` is a value `assertTimeZone` refuses, the
+  ledger charges in UTC and warns; `cost_rollup_daily.day` and `budget_windows.window_start` carry the
+  day, not the calendar that produced it, so the only evidence is a log line — and a log is not an
+  audit record (BD-003). A column on the rollup (the zone actually used) would close it; it is one
+  migration for a state an operator has to type by hand into a setting every other reader rejects.
+- **Migration `0017_cost_ledger.sql`'s comment on `cost_entries_run_model_unique` is wrong and the
+  file is applied** (WP-19 review round 1). It says the key catches "a replay within the same
+  microsecond … which is exactly what a double-fired backfill is"; `now()` is the transaction's start,
+  so two passes in two transactions never collide on it. The correct statement — the key catches a
+  duplicate *inside one transaction*, and cross-transaction idempotency is `handler_executions` — is
+  in technical/03. Whoever writes the next migration touching `cost_entries` should carry it into a
+  comment at the line.
+- ~~**TD-005's amendment carries two numbers WP-19 moved, and an implementer may not edit a decision
+  record**~~ (WP-19) — **CLOSED in the same change by the orchestrator**:
+  `docs/decisions/technical/TD-005-event-store-and-dispatch.md:48-50` now reads **24** handlers (21
+  before WP-19) and **25** divergent rows (28 before). Both re-derived from `consumption.ts` (50 types,
+  24 handled, 26 unconsumed, of which the column marks one — `knowledge.index.rebuilt` — unconsumed
+  too) and verified by the round-2 reviewer. technical/02's copy of the same figure was corrected by
+  the implementer.
+- **`tasks.cost_estimated` has no writer and now has a near-namesake that does** (WP-19).
+  `estimate_usd` is the estimate *before* the spend and is written by `cost.estimate`;
+  `cost_estimated` is technical/03's running total of estimated cost for a task whose runs were
+  priced rather than invoiced (BD-004 `local` mode), and nothing accumulates it — `tasks.cost_actual`
+  takes every run's `cost.usd` whether or not `is_estimate` is set. So a `local`-mode deployment's
+  task row calls an estimate an actual. The fix is either a second accumulator or a documented
+  decision that `cost_actual` means "what the ledger counted, labelled per entry"; it is a
+  `tasks.save` question, which is backlog 18's territory.
+- **Nothing consumes the estimate** (WP-19, Q65's last paragraph).
+  `requiresBudgetApproval(preset, estimateUsd)` exists in `packages/domain/src/policies/autonomy.ts`
+  and has no caller, so an expensive task is never routed to a budget approval. WP-19 produces the
+  number; the gate belongs with the autonomy work (BD-027, product/18).
+- **`budget.window.reset` is a queue name with no job** (WP-19). Windows roll over implicitly, so
+  correctness does not need it; what nobody gets without it is the `budget.reset` event technical/02
+  publishes, which is a notification rather than a projection. Stated in `cost/window.ts`.
+- **The price-table maintenance job cannot fetch a price, and the platform has no verified feed**
+  (WP-19). Migration 0009's rows cite a documentation page a human read (research/04 § 3) and
+  `fast_input`/`fast_output` are still null with a comment naming WP-19 for filling them. Whoever
+  wants automated pricing needs a source decision first: a vendor endpoint the platform may call, a
+  credential for it, and a rule for what happens when it disagrees with the stored row.
 - **`runs` is written with eleven of its ~30 columns, and nobody had noticed because nothing read the
   row back** (WP-15h). `RunRepository.insert` names `id, task_id, project_id, task_stage_id, role,
   mode, attempt, model, effort, prompt_version, status`; `system_prompt`, `user_prompt`,
@@ -7090,3 +7456,13 @@ frames — without the run’s secret", and it is asserted **twice on two paths*
   nothing refuses a leak. Twelve bare-client sites in `test/` rely on a `finally`/`afterAll` that a
   future edit could drop. A census like the pool one would need to prove "every client is ended",
   which is a dataflow question rather than a grep, so it is filed rather than done.
+- **Two e2e promises are held across awaits with no handler attached at creation** (ci-fix, event-log
+  escaped rejection). `test/e2e/server/sse.e2e.test.ts:254` and `:291` start `instance.runtime.stop()`
+  and await it several lines later, which is the *shape* the event-log test died of, with a different
+  risk: `stop()` is expected to resolve, so a passing run cannot go red from it, but a `stop()` that
+  rejects would arrive as an unhandled error rather than as this test's failure. Left alone — the
+  awaits in between *are* the assertion (the shutdown frame, then `/readyz` during shutdown), so the
+  repair is an `outcomeOf`-style capture rather than a re-order, and it would touch the e2e tier for
+  no observed defect. **Nothing refuses the shape**: the sweep that found these three sites was a
+  grep, and a guard would have to tell "promise held across an await" from "promise awaited", which
+  biome's rules do not express.

@@ -31,6 +31,7 @@ import {
   type HandlerRef,
   PartitionWindowError,
   type PendingDispatchRequest,
+  type ReadRangeRequest,
   type ReadStreamOptions,
   type RetryBackoff,
   type StoredEvent,
@@ -95,6 +96,36 @@ export class PostgresEventStore implements EventStore, HandlerExecutionReader {
     );
     const row = rows[0];
     return row === undefined ? null : toStoredEvent(row);
+  }
+
+  /**
+   * A window of the log, from `events` itself.
+   *
+   * Deliberately **not** a join onto `event_dispatch`: a backfill exists precisely for events whose
+   * dispatch already completed, and those have no queue row left. The partition pruning that
+   * `readPendingDispatch` gets from `occurred_at` is unavailable here — a position range says
+   * nothing about a month — so this scans the partitions and is a maintenance read, not a hot path.
+   */
+  async readRange(request: ReadRangeRequest): Promise<readonly StoredEvent[]> {
+    const values: unknown[] = [request.fromPosition, request.limit];
+    const bounds: string[] = ['position > $1'];
+    if (request.toPosition !== undefined) {
+      values.push(request.toPosition);
+      bounds.push(`position <= $${values.length}`);
+    }
+    if (request.types !== undefined) {
+      values.push([...request.types]);
+      bounds.push(`type = any($${values.length}::text[])`);
+    }
+    const { rows } = await this.#sql.query<EventRow>(
+      `select ${eventColumns()}
+         from events
+        where ${bounds.join(' and ')}
+        order by position
+        limit $2`,
+      values,
+    );
+    return rows.map(toStoredEvent);
   }
 
   /**

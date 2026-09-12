@@ -26,6 +26,8 @@ import type {
 import { agentRoleSchema } from '@platform/contracts';
 import type { RolePromptDefinition } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
+import { createBudgetGuard } from '../cost/guard.js';
+import { costHandlers } from '../cost/runtime.js';
 import { EventBus } from '../events/event-bus.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -46,6 +48,7 @@ import type { EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
+import { createMemoryCostStore, type MemoryCostStore } from './memory-cost.js';
 import { MemoryEventing } from './memory-eventing.js';
 import {
   createMemoryAuditLog,
@@ -58,6 +61,9 @@ import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pi
 
 /** Enough for the longest template plus every bounded loop; a runaway pipeline passes it. */
 const MAX_DISPATCHES = 500;
+
+/** The one organisation the harness has; `cost_rollup_daily` is keyed by one (technical/03). */
+export const HARNESS_ORG_ID = '00000000-0000-4000-8000-00000000e001' as Id;
 
 /** A clock a test moves by hand; ISO-8601 because that is what the domain speaks. */
 export interface TestClock {
@@ -201,6 +207,15 @@ export interface HarnessOptions {
    * `harness.knowledge` through the indexer before it publishes.
    */
   readonly knowledge?: MemoryKnowledgeStore;
+  /**
+   * Compose the cost ledger too (WP-19): register `costHandlers` on the bus and give the stage
+   * executor a real {@link createBudgetGuard} over this store.
+   *
+   * Off by default, so every pipeline test written before the ledger existed keeps the handler set
+   * it was written against. When it is on, the store answers `runContext` out of **this harness's
+   * own** `runs` and `tasks` rows, so a ledger test charges the runs the pipeline really made.
+   */
+  readonly cost?: boolean;
 }
 
 export interface PipelineHarness {
@@ -216,6 +231,8 @@ export interface PipelineHarness {
   readonly integrations: PipelineIntegrations;
   /** The store the planner's context-pack assembler reads; seed it to get a non-empty pack. */
   readonly knowledge: MemoryKnowledgeStore;
+  /** The ledger's store when `cost: true` was asked for, and `null` otherwise. */
+  readonly cost: MemoryCostStore | null;
   readonly audit: ReturnType<typeof createMemoryAuditLog>;
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** Every spec the runner was started with, in order. */
@@ -336,6 +353,34 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // adapter, never kinder (standing rule 1), and one with **no** store would be kinder.
   const idempotency = createMemoryIdempotencyStore();
   const scripts = new Map<string, ScriptedRun>(Object.entries(options.runs ?? {}));
+  /**
+   * The ledger's store, reading this harness's own `runs` and `tasks` (WP-19).
+   *
+   * The organisation id is the harness's one constant: the in-memory pipeline store has no
+   * `organizations` table, and every rollup row needs one.
+   */
+  const cost =
+    options.cost === true
+      ? createMemoryCostStore({
+          runs: async (tx, runId) => {
+            const run = await store.runs.load(tx, runId);
+            if (run === null) {
+              return null;
+            }
+            const task = await store.tasks.load(tx, run.taskId);
+            return {
+              runId: run.id,
+              taskId: run.taskId,
+              projectId: run.projectId,
+              orgId: HARNESS_ORG_ID,
+              template: task?.task.template ?? 'feature',
+              stage: run.stage,
+              model: run.model,
+              startedAt: run.createdAt,
+            };
+          },
+        })
+      : null;
   const specs: RunSpec[] = [];
 
   const gitPort = stubGit(options.git);
@@ -417,6 +462,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         clock: { now: () => clock.now() },
       }),
       stopReasons,
+      ...(cost === null ? {} : { budgets: createBudgetGuard({ store: cost }) }),
       context: (correlationId) => ({
         ids,
         actor: { kind: 'system', component: 'pipeline' },
@@ -429,6 +475,21 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
 
   for (const handler of runtime.handlers) {
     bus.register(handler);
+  }
+
+  if (cost !== null) {
+    for (const handler of costHandlers({
+      store: cost,
+      context: (correlationId, causeEventId) => ({
+        ids,
+        actor: { kind: 'system', component: 'cost-ledger' },
+        clock: { now: () => clock.now() },
+        correlationId,
+        causeEventId,
+      }),
+    })) {
+      bus.register(handler);
+    }
   }
 
   const dispatchPending = async (): Promise<number> => {
@@ -542,6 +603,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     settings,
     integrations,
     knowledge,
+    cost,
     audit,
     idempotency,
     specs,

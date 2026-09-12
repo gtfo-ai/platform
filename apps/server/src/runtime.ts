@@ -15,7 +15,9 @@
  *    puts them somewhere no log aggregator looks.
  * 6. **Partition maintenance** (`registerPartitionMaintenance`). WP-03 built the daily cron and
  *    WP-05 the registration; until this call existed, nothing ran it, and a long-lived instance
- *    would eventually insert into a month with no partition. Its worker joins the shutdown.
+ *    would eventually insert into a month with no partition. Its worker joins the shutdown. The
+ *    **price-table** maintenance (WP-19) is registered beside it, for the same reason: a schedule
+ *    the process owns rather than a step of a ticket's journey.
  * 7. **Outbox worker**, then **auth**, **SSE hub**, **HTTP**.
  *
  * ## Shutdown order (TD-002)
@@ -42,6 +44,7 @@
 import type { Jobs, Logger, WebhookIngress } from '@platform/application';
 import { sweepReadiness } from '@platform/application';
 import {
+  cost as costAdapters,
   db as dbAdapters,
   eventing as eventingAdapters,
   jobs as jobsAdapters,
@@ -241,6 +244,36 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       stopCallbacks.unshift({
         name: 'partition-maintenance',
         stop: async () => maintenance.stop(),
+      });
+
+      /**
+       * The price table's own maintenance (WP-19, BD-011 "the price table must be maintained").
+       *
+       * Beside the partition cron rather than inside `composePipeline`, for the same reason: it is
+       * a schedule the **process** owns, not a step of a ticket's journey. It fetches nothing —
+       * there is no verified price feed in this build — it closes superseded price windows and
+       * names the models the ledger ran and could not cost, which is the only place that signal
+       * surfaces (`packages/infrastructure/src/cost/price-list-maintenance.ts`).
+       */
+      const priceMaintenance = await costAdapters.registerPriceListMaintenance(jobsRuntime.jobs, {
+        db: database.pool,
+        timezone: config.timezone,
+        onResult: (result) => {
+          logger.info(
+            {
+              closed: result.closed,
+              unpriced_models: result.unpricedModels,
+              unpriced_rows: result.unpricedRows,
+            },
+            result.unpricedRows > 0
+              ? 'price list maintenance ran, and the ledger has runs it cannot cost: add a price_list row for the models named here'
+              : 'price list maintenance ran',
+          );
+        },
+      });
+      stopCallbacks.unshift({
+        name: 'price-list-maintenance',
+        stop: async () => priceMaintenance.stop(),
       });
 
       // Before `worker.start()`, and that ordering is the point: the first sweep dispatches to

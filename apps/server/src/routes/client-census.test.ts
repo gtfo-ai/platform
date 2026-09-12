@@ -69,7 +69,6 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   '/api/integrations/{}/setup-guide': 'WP-15h, later iteration — the integrations screen',
   '/api/projects': 'WP-15h, later iteration — the projects screen',
   '/api/projects/{}/readiness': 'WP-15h, later iteration — the project screen',
-  '/api/projects/{}/budgets': 'WP-19 — cost ledger and budget rollups',
   '/api/projects/{}/tasks': 'WP-15h, later iteration — the task list',
   '/api/projects/{}/kb/tree': 'WP-18 — the librarian and the knowledge index',
   '/api/projects/{}/kb/doc': 'WP-18 — the librarian and the knowledge index',

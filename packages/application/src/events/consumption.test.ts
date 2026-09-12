@@ -13,6 +13,8 @@
  */
 import { DOMAIN_EVENT_TYPES, type DomainEventType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { costHandlers } from '../cost/runtime.js';
+import { createMemoryCostStore } from '../testing/memory-cost.js';
 import { createPipelineHarness } from '../testing/pipeline-harness.js';
 import { EVENT_CONSUMPTION, HANDLED_EVENT_TYPES, sweepReadiness } from './consumption.js';
 import type { EventHandler } from './handler.js';
@@ -158,20 +160,35 @@ describe('sweepReadiness', () => {
  * definition of done is where the question gets asked. A mechanical version would have to read the
  * plan's status column, which is a guard reading a document nobody validates.
  */
-describe('the declared table against the composed pipeline', () => {
+describe('the declared table against the composed registrations', () => {
+  /**
+   * Every handler this build registers, from **both** composition functions.
+   *
+   * It was the pipeline alone until WP-19; the cost ledger is the second, and a reader who assumes
+   * one registration will under-count by three types (standing rule 83 — closing a gap falsifies the
+   * sentence that described it).
+   */
+  const composedHandlers = () => [
+    ...createPipelineHarness({ runs: {} }).runtime.handlers,
+    ...costHandlers({
+      store: createMemoryCostStore(),
+      context: () => {
+        throw new Error('the consumption test never runs a handler');
+      },
+    }),
+  ];
+
   it('has a real handler for every type it declares handled', () => {
-    const harness = createPipelineHarness({ runs: {} });
     const registry = new HandlerRegistry();
-    for (const handler of harness.runtime.handlers) {
+    for (const handler of composedHandlers()) {
       registry.register(handler);
     }
     expect(sweepReadiness(registry)).toEqual({ ready: true, missing: [] });
   });
 
-  it('declares handled exactly what the pipeline registers, so neither side drifts', () => {
-    const harness = createPipelineHarness({ runs: {} });
+  it('declares handled exactly what this build registers, so neither side drifts', () => {
     const registered = new Set<DomainEventType>();
-    for (const handler of harness.runtime.handlers) {
+    for (const handler of composedHandlers()) {
       if (handler.eventTypes === 'all') {
         continue;
       }
@@ -179,9 +196,34 @@ describe('the declared table against the composed pipeline', () => {
         registered.add(type);
       }
     }
-    // Both directions: a type the pipeline handles but the table calls unconsumed would let a
-    // partial consumer sweep; a type the table calls handled that nothing registers would stop every
-    // sweep. The pipeline is this build's only registration, so the two sets are equal.
+    // Both directions: a type something handles but the table calls unconsumed would let a partial
+    // consumer sweep; a type the table calls handled that nothing registers would stop every sweep.
     expect([...registered].sort()).toEqual([...HANDLED_EVENT_TYPES].sort());
+  });
+
+  /**
+   * **The assertion PROGRESS backlog 1 asks the flipping work package to make.**
+   *
+   * The table is derived from the implementation, so a row that stays `unconsumed` after its
+   * consumer ships re-opens the hole silently — and guarding that direction globally would need a
+   * list of landed work packages, which is rule 7's shape. The cheap, mechanical half is this: the
+   * work package that registers a handler asserts that **every type its own handlers declare** is
+   * `handled`, with the set read off the handlers rather than written out here. WP-19 is the first
+   * to owe it; the next consumer copies these four lines.
+   */
+  it('has no type left unconsumed that the cost ledger itself handles (WP-19)', () => {
+    const owned = costHandlers({
+      store: createMemoryCostStore(),
+      context: () => {
+        throw new Error('the consumption test never runs a handler');
+      },
+    }).flatMap((handler) => (handler.eventTypes === 'all' ? [] : [...handler.eventTypes]));
+    expect(owned.length).toBeGreaterThan(0);
+    for (const type of owned) {
+      expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
+        type,
+        consumption: 'handled',
+      });
+    }
   });
 });

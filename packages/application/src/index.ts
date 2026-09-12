@@ -18,9 +18,18 @@
  * `WorkspaceProvider` port (TD-021), which the pipeline asks for an isolated workspace per run.
  * WP-16 added the knowledge ports (`VaultSource`, `KnowledgeStore`, `SymbolExtractor`,
  * `CodeMapStore`), the indexer, the context-pack assembler, the `kb_search` tool and the code
- * mapper — technical/07, TD-008, TD-010.
+ * mapper — technical/07, TD-008, TD-010. WP-19 added the cost ledger, the budgets projection and
+ * the task estimate (`cost/`), plus `events/replay.ts` — the backfill that serves a handler
+ * registered after the events it needs were already dispatched.
  */
 
+// The cost ledger, its budgets projection and the task estimate (WP-19, BD-010, BD-011)
+export * from './cost/estimate.js';
+export * from './cost/guard.js';
+export * from './cost/ledger.js';
+export * from './cost/ports.js';
+export * from './cost/runtime.js';
+export * from './cost/window.js';
 // Event dispatch (TD-005)
 export * from './errors.js';
 export * from './events/consumption.js';
@@ -28,6 +37,7 @@ export * from './events/event-bus.js';
 export * from './events/handler.js';
 export * from './events/open-transaction.js';
 export * from './events/outbox.js';
+export * from './events/replay.js';
 // Outbound integration actions (technical/06, WP-07)
 export * from './integrations/action-executor.js';
 export * from './integrations/inbound.js';
@@ -85,6 +95,7 @@ export * from './scheduling/zoned-time.js';
 // Test doubles (technical/10: fakes are first-class code)
 export * from './testing/fixture-vault.js';
 export * from './testing/fixtures.js';
+export * from './testing/memory-cost.js';
 export * from './testing/memory-eventing.js';
 export * from './testing/memory-integrations.js';
 export * from './testing/memory-knowledge.js';

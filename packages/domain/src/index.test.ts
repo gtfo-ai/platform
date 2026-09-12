@@ -37,6 +37,10 @@ describe('@platform/domain', () => {
       'assemblePrompt',
       'renderDataBlock',
       'readDataBlocks',
+      'priceUsage',
+      'ledgerEntriesForRun',
+      'rollupDeltasFor',
+      'estimateTaskCostUsd',
     ]) {
       expect(domain, name).toHaveProperty(name);
     }

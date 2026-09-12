@@ -16,16 +16,18 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [x] Docker embedded DNS behaviour on `internal: true` networks (residual DNS channel) — done at WP-13: container names resolve through 127.0.0.11, external names SERVFAIL and there is no default route (Docker 29.7.2; `research/12`).
 - [ ] **Session-store resume after a runner restart** — carried into WP-15 from WP-13 and **still open**.
 - [ ] **Two measurements about the real `DockerWorkspaceProvider.attach`, neither run yet** — WP-22, and cheap. (a) Does the e2e attach case kill the handshake mutant? Shorten `#waitForControlSocket` (`packages/infrastructure/src/workspace/provider.ts:785`) to a single look and run only `test/e2e/workspace/docker-workspace.e2e.test.ts`; if it stays green, that tier certifies the happy path and not the wait, and the unit case is the only calibrated guard. (b) Do this machine's local `verify:e2e` runs include that file's 40 cases at all? WP-15g measured the shim **refusing** to start on a bind-backed control volume (`EINVAL … chmod '/ctl/ctl.sock'`) and that is this fixture's default, yet the same run reported `PASS: verify:e2e (83)` — the two cannot both be complete. Evidence and the CI run ids are in PROGRESS backlog entry **27**.
-- [ ] **A re-dispatch/backfill tool, and `run.finished` / `run.failed` are being swept meanwhile — WP-19
-  cannot ship its cost ledger without it.** WP-15a's `EVENT_CONSUMPTION` declares both types
-  `unconsumed` because nothing registers a handler, and the outbox sweep therefore **completes** them:
-  the `event_dispatch` row is deleted and the `$dispatch` marker makes a later re-dispatch a no-op
-  (TD-005's WP-15a amendment). The loss is bounded and recoverable — `runFinishedEvent` carries
-  `usage`, `model_usage`, `cost`, `num_turns` and `wall_ms`, and `events` is append-only — but WP-19's
-  ledger will be **empty for every run that happened before it shipped** unless it also replays the
-  log. So WP-19 owes two things: flip both rows to `handled`, and build the backfill that reads a
-  range of `events` and feeds a newly registered handler. Queue-depth alerting on
-  `event_dispatch_pending` belongs with it.
+- [x] **A re-dispatch/backfill tool, and `run.finished` / `run.failed` were being swept meanwhile** —
+  **done at WP-19.** Both rows are `handled` (the cost ledger registers for them, and for
+  `artifact.created`), and the backfill is `packages/application/src/events/replay.ts`: it reads a
+  range of the append-only `events` table — never `event_dispatch`, whose row a completed dispatch
+  has deleted — and runs the given handlers over it, claiming `(position, handler)` in
+  `handler_executions` exactly as the dispatcher does, so a newly registered handler runs once and a
+  second pass skips everything. Asserted in both the unit tier and, against a real dispatcher and a
+  real database, in `test/integration/cost/ledger-backfill.integration.test.ts`.
+      **Still open, and carried rather than closed:** queue-depth alerting on
+      `event_dispatch_pending`. The gauge exists (`apps/server/src/metrics.ts` registers it from
+      `countPendingDispatch`); nothing alerts on it, which is an operations concern with no work
+      package.
       The interpreter exists now, and the shape of the answer is visible: a `stage.execute` job that fires
       for a stage whose previous run ended `failed` could resume the session (`RunSpec.resumeSessionId`,
       TD-007's mirror) instead of starting a fresh one. WP-15 does neither — a run that ends without a

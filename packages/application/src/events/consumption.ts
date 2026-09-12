@@ -27,8 +27,9 @@
  * technical/02's "Core consumers" column is the normative source and the amendment makes it so, with
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
- * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **21**
- * of them, all from the pipeline. A table transcribed from the column would therefore stop the outbox
+ * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **24**
+ * of them — 21 from the pipeline and 3 from the cost ledger (WP-19). A table transcribed from the
+ * column would therefore stop the outbox
  * worker in every build that exists today, including the one whose e2e walks a ticket to
  * `task.completed` — the acceptance criterion this work package is for.
  *
@@ -38,10 +39,13 @@
  * event type cannot be added without answering the question (the keys are held to
  * `DOMAIN_EVENT_TYPES`). What it does not do is pretend the product's future consumers exist.
  *
- * **The entry to look at first** is `run.finished` / `run.failed`: technical/02 gives them a cost
- * ledger at priority 10, WP-19 builds it, and nothing registers it — so a `run.finished` swept today
- * is a cost entry that will never be written. That is a real, declared loss and not a silent one, and
- * it is why the backlog carries a backfill tool as the thing WP-19 needs before it ships.
+ * **`run.finished` / `run.failed` were the entry to look at first, and WP-19 closed them.** From
+ * WP-15a until that work package they were declared `unconsumed` while technical/02 gave them a cost
+ * ledger at priority 10, so every `run.finished` the sweep completed was a cost entry nobody would
+ * ever write. The ledger now registers for both (`cost/ledger.ts`) and `artifact.created` joins them
+ * for the task estimate. The events swept in between are recovered by `events/replay.ts`, which reads
+ * a range of the append-only log into a newly registered handler — the backfill the backlog required
+ * before this table could be flipped.
  */
 import type { DomainEventType } from '@platform/contracts';
 import type { HandlerRegistry } from './handler.js';
@@ -85,6 +89,12 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'mr.closed': 'handled',
   'mr.review.comment': 'handled',
 
+  // ── The cost ledger (WP-19), registered by `costHandlers` ────────────────────
+  'run.finished': 'handled',
+  'run.failed': 'handled',
+  /** The estimate at refinement reads the `RefinedSpec`'s size (product/09). */
+  'artifact.created': 'handled',
+
   // ── Declared unconsumed in this build, with the work package that changes it ──
   'ticket.comment.added': 'unconsumed', // WP-31 ask-the-task; feedback intake is WP-24's.
   'ticket.status.changed': 'unconsumed', // Task sync, WP-24 (review-only mode reads it first).
@@ -92,27 +102,30 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'task.handed_back': 'unconsumed', // WP-27.
   'run.created': 'unconsumed', // UI band, WP-20's realtime projection.
   'run.started': 'unconsumed', // UI band, WP-20.
-  'run.finished': 'unconsumed', // **Cost ledger, WP-19.** See the docblock: a real declared loss.
-  'run.failed': 'unconsumed', // WP-19, as above.
   'run.steered': 'unconsumed', // WP-27 steer.
-  'artifact.created': 'unconsumed', // Workpad reads artifacts directly; the UI band is WP-20's.
   'workspace.provisioned': 'unconsumed', // UI band, WP-20.
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.
   'mr.opened': 'unconsumed', // The pipeline learns its MR from `ImplementationNotes` (WP-15); stats is WP-41.
   'mr.updated': 'unconsumed', // WP-41 statistics.
-  'budget.threshold.reached': 'unconsumed', // Budget projection and scheduler, WP-19.
-  'budget.exhausted': 'unconsumed', // WP-19.
-  'budget.reset': 'unconsumed', // WP-19.
+  // WP-19 *emits* these three from the budgets projection; technical/02's consumers are a
+  // notification (Slack, WP-10) and the UI band (WP-20). What stops a new run is a **read** of
+  // `budget_windows` at stage admission (`cost/guard.ts` says why), not a handler here.
+  'budget.threshold.reached': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
+  'budget.exhausted': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
+  'budget.reset': 'unconsumed', // WP-20. Nothing emits it in this build either (`cost/window.ts`).
   'feedback.received': 'unconsumed', // Feedback intake agent, WP-24.
   'knowledge.proposal.created': 'unconsumed', // Librarian, WP-18.
   'knowledge.proposal.applied': 'unconsumed', // WP-18.
   'knowledge.proposal.rejected': 'unconsumed', // WP-18.
   'knowledge.index.rebuilt': 'unconsumed', // `—` in technical/02: unconsumed by design, not by omission.
   'readiness.evaluated': 'unconsumed', // Policy suggestions, WP-21.
-  'config.changed': 'unconsumed', // Audit projection and effective-config rebuild, WP-19/WP-21.
-  'integration.action.performed': 'unconsumed', // Audit and health projections, WP-19.
-  'integration.action.failed': 'unconsumed', // WP-19.
+  'config.changed': 'unconsumed', // Audit projection and effective-config rebuild, WP-21.
+  // technical/03 attributes an audit and a health projection to "WP-19", and WP-19's plan row does
+  // not carry them: it is the cost ledger, the rollups, the budgets, the price job, the estimates
+  // and the backfill. They have no work package, which is why no number is named here.
+  'integration.action.performed': 'unconsumed', // Audit and health projections; unowned.
+  'integration.action.failed': 'unconsumed', // As above.
   'shadow.report.created': 'unconsumed', // WP-34 shadow mode.
 };
 

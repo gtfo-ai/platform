@@ -10,9 +10,11 @@
  * `IntegrationAuditLog` and `IdempotencyStore` (`integrations/`), which is what lets a composition
  * root start the pipeline without a caller supplying an audit sink. WP-16 added the knowledge base's adapters (`knowledge/`): the
  * `kb_*` index and the `code_files`/`code_maps` caches on PostgreSQL, the filesystem vault reader,
- * and the universal-ctags symbol extractor. Later work packages add the rest.
+ * and the universal-ctags symbol extractor. WP-19 added the cost ledger's `CostStore` and the
+ * price-table maintenance job (`cost/`). Later work packages add the rest.
  */
 export * as broadcast from './broadcast/index.js';
+export * as cost from './cost/index.js';
 export * as db from './db/index.js';
 export * as eventing from './events/index.js';
 export * as integrations from './integrations/index.js';
