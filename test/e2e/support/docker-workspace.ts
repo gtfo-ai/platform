@@ -495,7 +495,9 @@ export const startDockerFixture = async (
  * `HostConfig` is not built here: it is read back from `docker inspect` of the live run container,
  * so what is being tested is the daemon's record of the workspace, not a string this repository
  * wrote. Only the image and the command differ — `alpine:3.21` for busybox's `id`, `wget` and
- * `nslookup`, which `node:24-alpine` also has but with fewer of them.
+ * `getent`. (`nslookup` is deliberately *not* among them: it queries `<name>.<search-domain>` as
+ * well, which an internal network cannot answer, and that cost this repository six red pushes —
+ * see the DNS case's comment in `docker-workspace.e2e.test.ts`.)
  */
 export const probeUnderRunContainerConfig = async (
   engine: workspace.DockerEngine,

@@ -18,6 +18,17 @@ tree, no worktrees, no open branches. Verified in the orchestrator's own shell b
 (`PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e`, and `PASS: verify:ui` for WP-15h, each
 exit 0).
 
+**CI is RED on `2fa285c` (WP-22, run `34708614539`) and the fix is in progress.** The `image` and
+`base-image` workflows (`34708614552`, `34708614542`) **succeeded** — the five images build and publish on
+amd64 and arm64 — and every `ci` job but `e2e-fake-claude` is green; that job failed in the new step
+*"the run shim works in the image it ships in"* with **6/7 checks passed**: the SDK `query()` through the
+real shim in the real image, the hardened container, both volume sub-path cases and the teardown case all
+**passed on Linux**; the one failure is the embedded-DNS check, `nslookup` of the bare peer name answered
+`SERVFAIL` for `agentic-runlet-check-peer.<azure-search-suffix>.internal.cloudapp.net` — rule **71**'s
+third environment defect exactly, closed for the e2e at the WP-14 ci-fix and kept in this script because
+it had never run on CI before WP-22 added it. A ci-fix to the check is with the WP-22 implementer. Read as
+`completed failure`, not inferred.
+
 **Three work packages closed in session 5 so far** — backlog 28 (the e2e teardown flake, now standing
 rule 85), **WP-15h part 1** (the read API and the `run:<id>` topic), **WP-19** (the cost ledger; every
 run the platform produces is now cost-accounted) — plus a ci-fix for a second harness flake, an architect
@@ -7236,6 +7247,17 @@ container is the platform side and only borrows the image for a Node runtime.
 4. **`build-images.mjs` ended with a stack instead of its verdict line** when a size could not be
    read. Caught, and the run prints `FAIL: … built, but its size could not be read: …` plus the
    `FAIL: build-images` line (measured on a copy with the format string broken).
+
+**CI was the first honest measurement of `runlet-container-check.mjs`, and it found one thing
+(rule 71).** The script had only ever run on developer machines; the first CI run of it failed 6/7 on
+*"embedded DNS resolves a container by name on an internal network"* — `SERVFAIL` for
+`agentic-runlet-check-peer.<id>.<region>.cloudapp.net` — which is the **same** environment defect the
+WP-14 ci-fix closed for the workspace e2e (a cloud runner's host has a `search` line, a laptop does
+not, busybox `nslookup` queries the suffixed name too, and an `internal` network has no route
+upstream). Everything else passed on Linux against the real image, including the SDK `query()`
+through the shim. The probe now uses `getent hosts` and asserts the **address** — calibrated by
+looking up a name that does not exist (rc 2, 6/7) — and rule 49's sweep found this script *was* the
+sibling nobody grepped for at WP-14; there are no others.
 
 **What is proved on Linux CI versus only here (rule 71).** Everything above was measured on macOS
 against Docker Desktop 29.7.2, `linux/arm64`. Three things this machine cannot answer: whether the

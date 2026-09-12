@@ -192,6 +192,29 @@ const checkSubpath = async () => {
   );
 };
 
+/**
+ * Embedded DNS on an `internal` network — with `getent hosts`, never `nslookup`.
+ *
+ * **CI was the first honest measurement of this script** (standing rule 71). It had run only on
+ * developer machines until WP-22 put it in `ci.yml`, and it failed there on this check alone,
+ * 6/7, with the peer resolving perfectly well:
+ *
+ *   ** server can't find agentic-runlet-check-peer.<id>.<region>.cloudapp.net: SERVFAIL
+ *
+ * Busybox `nslookup` also queries `<name>.<search-domain>`; the embedded resolver forwards that
+ * upstream; an `internal` network has no route upstream; and the whole invocation exits 1 while
+ * the bare name resolves. **A developer machine has no `search` line in `resolv.conf`; a cloud
+ * runner's host does, and Docker copies it into every container.** That is the same environment
+ * defect the WP-14 ci-fix closed for the workspace e2e's `nslookup egress-<run>` — and this script
+ * kept the old shape because nothing had ever run it where the defect exists (standing rule 49:
+ * when you fix a probe, grep for its siblings; this one was the sibling nobody grepped for).
+ *
+ * So: `getent hosts`, which answers from the bare name, and the **address** is asserted rather than
+ * only the status — an exit code alone cannot distinguish "did not resolve" from "some other query
+ * in the same process did not" (rule 56). The negative keeps its meaning: `example.com` is a name
+ * that *would* resolve if this network had a route off it, so its failure is about the network
+ * rather than about the name, and it is paired with the default-route count.
+ */
 const checkInternalNetwork = async () => {
   await docker(['network', 'create', '--internal', NETWORK]);
   await docker(['run', '-d', '--name', PEER, '--network', NETWORK, ALPINE, 'sleep', '120']);
@@ -200,27 +223,42 @@ const checkInternalNetwork = async () => {
     '--rm',
     '--network',
     NETWORK,
+    // The upstream query is dropped rather than refused on an internal network, so it costs a full
+    // resolver timeout; one second and one attempt keep the check quick and change neither answer.
+    '--dns-option',
+    'timeout:1',
+    '--dns-option',
+    'attempts:1',
     ALPINE,
     'sh',
     '-c',
-    `nslookup ${PEER} >/tmp/a 2>&1; echo "peer=$?"; nslookup example.com >/tmp/b 2>&1; ` +
+    [
+      `getent hosts ${PEER} | head -1 | sed 's/^/peer=/'`,
+      `getent hosts ${PEER} >/dev/null 2>&1; echo "peer_rc=$?"`,
+      'getent hosts example.com >/dev/null 2>&1; echo "upstream_rc=$?"',
       // busybox `ip route show default` does not honour the selector — it prints the link route
       // too, and a `wc -l` over it reads 1 where the answer is 0. Match the line instead.
-      'grep -c SERVFAIL /tmp/b; ip route | grep -c "^default"; cat /tmp/a',
+      'echo "default_routes=$(ip route | grep -c \'^default\')"',
+    ].join('\n'),
   ]);
-  const lines = probe.stdout.split('\n');
-  const peerResolved = lines[0] === 'peer=0';
-  const externalFailed = Number(lines[1] ?? 0) > 0;
-  const noDefaultRoute = Number(lines[2] ?? 1) === 0;
+  const field = (name) =>
+    probe.stdout
+      .split('\n')
+      .find((line) => line.startsWith(`${name}=`))
+      ?.slice(name.length + 1) ?? '';
+  const peerAddress = field('peer');
+  const peerResolved = field('peer_rc') === '0' && /^\d+\.\d+\.\d+\.\d+\s/.test(peerAddress);
+  const externalFailed = field('upstream_rc') !== '0';
+  const noDefaultRoute = field('default_routes') === '0';
   record(
     'embedded DNS resolves a container by name on an internal network',
     peerResolved,
-    lines.slice(3).join(' ').trim() || probe.stdout,
+    `getent hosts ${PEER} → ${peerAddress || '(nothing)'} (rc ${field('peer_rc')})`,
   );
   record(
     'an internal network resolves nothing external and has no default route',
     externalFailed && noDefaultRoute,
-    `external lookup SERVFAILs: ${externalFailed}; default routes: ${lines[2]}`,
+    `example.com rc: ${field('upstream_rc')}; default routes: ${field('default_routes')}`,
   );
   await docker(['rm', '-f', '-v', PEER], { allowFailure: true });
 };
