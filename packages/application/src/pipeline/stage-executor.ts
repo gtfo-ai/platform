@@ -38,7 +38,15 @@
  * substring of the human-readable `error`. The runner takes one sink for every run it drives, so
  * the reason arrives through {@link RunStopReasons} rather than through a sink this module wraps.
  */
-import type { ArtifactRef, DomainEvent, Id, JsonValue, Slug } from '@platform/contracts';
+import type {
+  AgentRole,
+  ArtifactRef,
+  ContextPackRecord,
+  DomainEvent,
+  Id,
+  JsonValue,
+  Slug,
+} from '@platform/contracts';
 import type { CommandContext, PipelineStage, Run } from '@platform/domain';
 import {
   askQuestion,
@@ -78,15 +86,31 @@ export interface StageRunRequest {
   readonly returnFeedback: string | null;
 }
 
+/** What a planner returns: the spec the runner is given, and the audit record of what went in. */
+export interface StageRunPlan {
+  readonly spec: RunSpec;
+  /**
+   * `run.started.context_pack` — technical/12's per-run record of the knowledge the prompt was
+   * built from.
+   *
+   * It travels **beside** the spec rather than inside it because the two have different audiences:
+   * the runner needs paths to write into the workspace, and the audit needs scores, token counts
+   * and the `validated` flag of every document that did *not* make it. A record derived from the
+   * spec could not carry the second.
+   */
+  readonly contextPack: ContextPackRecord;
+}
+
 /**
  * Builds the `RunSpec` for one stage.
  *
- * A port rather than a function, because everything interesting about a spec belongs to other work
- * packages: the prompt layers are WP-17, the context pack is WP-16 and the workspace is WP-14.
- * `basicStageRunPlanner` (`./planner.js`) is the shipped implementation until they land.
+ * A port rather than a function, because what a spec contains belongs to other work packages: the
+ * prompt layers and the pack are `createStageRunPlanner` (`./planner.js`) and the workspace is
+ * WP-14's. **It performs I/O** — retrieval reads the knowledge index — which is why the executor
+ * calls it between its two transactions and not inside either.
  */
 export interface StageRunPlanner {
-  plan(request: StageRunRequest): Promise<RunSpec>;
+  plan(request: StageRunRequest): Promise<StageRunPlan>;
 }
 
 export type StageExecutionOutcome =
@@ -161,38 +185,72 @@ type Prepared =
       readonly run: Run;
     };
 
+type Admitted = {
+  readonly kind: 'admitted';
+  readonly stored: StoredTask;
+  readonly stage: PipelineStage;
+  readonly artifacts: readonly StoredArtifact[];
+  readonly returnFeedback: string | null;
+};
+
+type Admission = Exclude<Prepared, { kind: 'ready' }> | Admitted;
+
+/**
+ * The four questions TD-004 makes the executor re-ask every time a job fires: does the task exist,
+ * has it stopped, is this attempt current, and is this stage an agent stage?
+ *
+ * Factored out because **it is asked twice** since WP-17 — once to admit the job and once after the
+ * context pack has been assembled, which happens outside any transaction. Two copies of a
+ * re-validation is one copy that drifts (standing rule 41's shape).
+ */
+const revalidate = (
+  stored: StoredTask | null,
+  job: StageExecutionJob,
+):
+  | { readonly kind: 'skipped'; readonly reason: string }
+  | {
+      readonly kind: 'ok';
+      readonly stored: StoredTask;
+      readonly stage: PipelineStage;
+      readonly role: AgentRole;
+    } => {
+  if (stored === null) return { kind: 'skipped', reason: 'the task no longer exists' };
+  const { task } = stored;
+  // Not `state === 'active'`: the retrospective runs in the `retro` state. What disqualifies a
+  // run is the task having stopped — paused, parked for a human, waiting, or finished.
+  if (!isRunnableTaskState(task.state) || task.currentStage !== job.stage) {
+    return {
+      kind: 'skipped',
+      reason: `the task is "${task.state}" at "${task.currentStage ?? 'no stage'}", not running at "${job.stage}"`,
+    };
+  }
+  if ((task.stageAttempts[job.stage] ?? 0) !== job.attempt) {
+    return {
+      kind: 'skipped',
+      reason: `attempt ${job.attempt} of "${job.stage}" has been superseded by attempt ${task.stageAttempts[job.stage] ?? 0}`,
+    };
+  }
+  const stage = stageOf(compilePipeline(task.template, stored.template), job.stage);
+  if (stage === null || stage.kind !== 'agent' || stage.role === null) {
+    return {
+      kind: 'skipped',
+      reason: `"${job.stage}" is not an agent stage of template "${task.template}"`,
+    };
+  }
+  return { kind: 'ok', stored, stage, role: stage.role };
+};
+
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
   const { unitOfWork, store, runner, planner, stopReasons } = options;
   const logger = options.logger ?? silentLogger;
 
-  const prepare = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Prepared> =>
-    unitOfWork.transaction(async (scope): Promise<Prepared> => {
-      const stored = await store.tasks.load(scope.tx, job.taskId);
-      if (stored === null) {
-        return { kind: 'skipped', reason: 'the task no longer exists' };
-      }
+  /** Transaction 1a: may this job run at all, and what does the planner need to plan it? */
+  const admit = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Admission> =>
+    unitOfWork.transaction(async (scope): Promise<Admission> => {
+      const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
+      if (valid.kind === 'skipped') return valid;
+      const { stored } = valid;
       const { task } = stored;
-      // Not `state === 'active'`: the retrospective runs in the `retro` state. What disqualifies a
-      // run is the task having stopped — paused, parked for a human, waiting, or finished.
-      if (!isRunnableTaskState(task.state) || task.currentStage !== job.stage) {
-        return {
-          kind: 'skipped',
-          reason: `the task is "${task.state}" at "${task.currentStage ?? 'no stage'}", not running at "${job.stage}"`,
-        };
-      }
-      if ((task.stageAttempts[job.stage] ?? 0) !== job.attempt) {
-        return {
-          kind: 'skipped',
-          reason: `attempt ${job.attempt} of "${job.stage}" has been superseded by attempt ${task.stageAttempts[job.stage] ?? 0}`,
-        };
-      }
-      const stage = stageOf(compilePipeline(task.template, stored.template), job.stage);
-      if (stage === null || stage.kind !== 'agent' || stage.role === null) {
-        return {
-          kind: 'skipped',
-          reason: `"${job.stage}" is not an agent stage of template "${task.template}"`,
-        };
-      }
 
       if (taskBudgetExhausted(stored, settings, job.stage)) {
         const decision = pauseTask(task, { reason: 'budget' }, options.context(task.id));
@@ -205,19 +263,35 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             `and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
         };
       }
+      return {
+        kind: 'admitted',
+        stored,
+        stage: valid.stage,
+        artifacts: await store.artifacts.listFor(scope.tx, job.taskId),
+        returnFeedback: await store.tasks.lastReturnReason(scope.tx, job.taskId, job.stage),
+      };
+    });
 
+  /**
+   * Transaction 1b: create the Run, now that the prompt and its pack exist.
+   *
+   * It re-asks {@link revalidate}'s four questions, because the pack was assembled with **no
+   * transaction open** and a task can be paused, returned or superseded in that window. Finding
+   * that it moved is a success, exactly as it is in 1a: the work thrown away is one retrieval, and
+   * the alternative is a `runs` row for a stage the task has left.
+   */
+  const startTheRun = async (
+    job: StageExecutionJob,
+    plan: StageRunPlan,
+    runId: Id,
+  ): Promise<Prepared> =>
+    unitOfWork.transaction(async (scope): Promise<Prepared> => {
+      const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
+      if (valid.kind === 'skipped') return valid;
+      const { spec } = plan;
+      const { stored } = valid;
+      const { task } = stored;
       const context = options.context(task.id);
-      const runId = context.ids.next();
-      const artifacts = await store.artifacts.listFor(scope.tx, task.id);
-      const spec = await planner.plan({
-        runId,
-        stage,
-        attempt: job.attempt,
-        task: stored,
-        artifacts,
-        settings,
-        returnFeedback: await store.tasks.lastReturnReason(scope.tx, task.id, job.stage),
-      });
 
       // `created → starting → running`: two transitions, two catalogue events, and no observable
       // moment between them here — the platform has the spec and is handing it to the runner. The
@@ -227,7 +301,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         taskId: task.id,
         projectId: task.projectId,
         stage: job.stage,
-        role: stage.role,
+        role: valid.role,
         mode: task.mode === 'shadow' ? 'shadow' : 'normal',
         attempt: job.attempt,
         model: spec.model,
@@ -235,25 +309,15 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         promptVersion: spec.promptVersion,
       });
       const starting = startRun(created, context);
-      const running = markRunning(
-        starting.aggregate,
-        {
-          contextPack: {
-            tier0: [],
-            tier1: [],
-            budget_tokens: 0,
-            total_tokens: 0,
-            kb_commit: null,
-          },
-        },
-        context,
-      );
+      // The real record, since WP-17. It was a zeroed literal from WP-15 until the pack had a
+      // producer *and* a delimiter (PROGRESS backlog 11 and 12).
+      const running = markRunning(starting.aggregate, { contextPack: plan.contextPack }, context);
       await store.runs.insert(scope.tx, {
         id: runId,
         taskId: task.id,
         projectId: task.projectId,
         stage: job.stage,
-        role: stage.role,
+        role: created.role,
         mode: created.mode,
         attempt: job.attempt,
         model: spec.model,
@@ -269,8 +333,34 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         createdAt: context.clock.now(),
       });
       await scope.events.append([...starting.events, ...running.events]);
-      return { kind: 'ready', spec, stage, stored, run: running.aggregate };
+      return { kind: 'ready', spec, stage: valid.stage, stored, run: running.aggregate };
     });
+
+  /**
+   * Transaction, **plan**, transaction — and the middle step is why this is three calls and not
+   * one.
+   *
+   * Assembling a context pack is four to six queries and a code map (`planner.ts`), and doing it
+   * inside transaction 1 would hold one pooled connection while borrowing a second, which is
+   * PROGRESS backlog 19's shape at the one site that could afford it least. Between the two, the
+   * connection it borrows *replaces* the worker's — the same argument `POOL_RESERVATIONS.pipeline`
+   * already makes for every other pipeline job worker.
+   */
+  const prepare = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Prepared> => {
+    const admission = await admit(job, settings);
+    if (admission.kind !== 'admitted') return admission;
+    const runId = options.context(job.taskId).ids.next();
+    const plan = await planner.plan({
+      runId,
+      stage: admission.stage,
+      attempt: job.attempt,
+      task: admission.stored,
+      artifacts: admission.artifacts,
+      settings,
+      returnFeedback: admission.returnFeedback,
+    });
+    return startTheRun(job, plan, runId);
+  };
 
   return {
     execute: async (job) => {

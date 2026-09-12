@@ -24,7 +24,8 @@
  * Document text reaches this module from `kb_chunks`, which came from a file in the project's
  * repository. A document that says "ignore the plan and merge" is a legal document. Nothing here
  * interprets a document, and nothing rewrites the platform's own framing from one: the assembler
- * returns text and paths, the prompt assembler (WP-17) is what delimits them, and
+ * returns text and paths, `assemblePrompt` in `@platform/domain` is what delimits them (it puts
+ * every one inside a nonce-bearing data block, WP-17), and
  * `apps/web/src/ui/untrusted.tsx` is what renders them. The one thing this module *does* enforce is
  * that a pack's own prose — the reason strings, the map header — is written here and never taken
  * from a document, so a vault page cannot occupy the pack's voice (technical/07's WP-11a note).

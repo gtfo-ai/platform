@@ -157,7 +157,7 @@ export const knowledgeProposalStatusSchema = z.enum([
 /** Org and project membership roles (technical/08 "Auth and RBAC"). */
 export const userRoleSchema = z.enum(['admin', 'maintainer', 'member', 'viewer']);
 
-/** Agent roles shipped as prompts in `packages/prompts/<role>/` (WP-17, technical/12). */
+/** Agent roles shipped as prompts in `packages/prompts/roles/<role>/prompt.md` (technical/12). */
 export const agentRoleSchema = z.enum([
   'triager',
   'product_manager',

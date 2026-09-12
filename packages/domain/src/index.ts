@@ -50,5 +50,12 @@ export * from './policies/budgets.js';
 export * from './policies/command-policy.js';
 export * from './policies/iteration-limits.js';
 export * from './policies/wip.js';
+// Prompt assembly and the data-block contract for untrusted text (WP-17, BD-022)
+export * from './prompt/assembly.js';
+export * from './prompt/data-block.js';
+export * from './prompt/read-data-blocks.js';
+// A test fixture, exported for the same reason `FIXTURE_VAULT` is: four tiers assert over the same
+// set of hostile constructs, and a second copy of the set is a set that drifts (rule 68).
+export * from './testing/hostile-text.js';
 
 export const packageId = '@platform/domain' as const;

@@ -73,7 +73,15 @@ describe('token budget respected — measured on the fixture vault at the shippe
     // Produced, not quoted. If the fixture vault, the chunker or the estimator changes, this number
     // moves and the change is deliberate rather than silent.
     expect(pack.record.budget_tokens).toBe(12_000);
-    expect(pack.record.total_tokens).toBe(10_552);
+    // **10 552 at WP-16, 10 556 since WP-17**: `estimateTokens` counts UTF-8 bytes rather than
+    // JavaScript characters (PROGRESS backlog 14), so a non-ASCII character now costs what it
+    // weighs. The whole +4 is **em dashes** — `index.md` carries six `U+2014` (+12 bytes, +3
+    // tokens) and `D-0001-postgres-sessions.md` one (+2 bytes, +1 token). Measured, because
+    // WP-17's first comment here blamed the `U+FFFD` of the hostile document and that is false:
+    // **the hostile document is not in this pack at all** and the pack contains no `U+FFFD`
+    // (rule 39 — a quoted cause must reproduce from the shipped defaults, or the next reviewer
+    // mis-diagnoses a genuine move).
+    expect(pack.record.total_tokens).toBe(10_556);
     // …and the same figure is produced against a real PostgreSQL by
     // `test/integration/knowledge/context-pack.integration.test.ts`, which is what stops this
     // number being a property of the in-memory double alone.
@@ -91,13 +99,23 @@ describe('token budget respected — measured on the fixture vault at the shippe
     const { store, projectId } = await indexedFixtureVault();
     const everything = store.snapshot(projectId);
     const vaultTokens = everything.reduce((total, document) => total + document.tokens, 0);
-    expect(vaultTokens).toBe(19_100);
+    // **19 100 at WP-16, 19 124 now**, and the two causes are separate. **+8** is the estimator's
+    // unit, and the attribution is the whole vault rather than the pack's share: `index.md` (six
+    // `U+2014`, +3), `D-0001-postgres-sessions.md` (one, +1), `D-0002-token-format.md` (one, whose
+    // +2 bytes round to **+0** tokens — it is a deprecated page, so it is in the vault and never in
+    // a pack), and the hostile document's eight `U+FFFD` (+4). **+16** more is WP-17's review round
+    // 1 planting a line of zero-width characters in that hostile document, so the assertion about
+    // them could fail (rule 3). Round 2's review re-derived the second number by re-indexing
+    // without the planted line: 19 124 → 19 108, and neither pack figure moved.
+    expect(vaultTokens).toBe(19_124);
     expect(vaultTokens).toBeGreaterThan(DEFAULT_CONTEXT_BUDGET_TOKENS);
   });
 
   it('refuses documents by name once the budget binds, rather than overspending', async () => {
     const pack = await packOver({ budgetTokens: 2_000 });
-    expect(pack.record.total_tokens).toBe(438);
+    // 438 at WP-16. The +4 is the same two em-dashed documents as above — `index.md` is tier 0 and
+    // `D-0001` is the one tier-1 page a 2 000-token budget still admits.
+    expect(pack.record.total_tokens).toBe(442);
     expect(pack.record.total_tokens).toBeLessThanOrEqual(2_000);
     expect(pack.assembly.droppedForBudget.length).toBeGreaterThan(0);
     expect(pack.assembly.outcome).toBe('within_budget');
@@ -323,7 +341,7 @@ describe('a hostile document in the pack', () => {
     expect(document).toBeDefined();
   });
 
-  it('carries its hostile *words* into the pack unchanged, which WP-17 delimits', async () => {
+  it('carries its hostile *words* into the pack unchanged, which the prompt delimits', async () => {
     const { store, projectId } = await indexedFixtureVault();
     const [document] = await store.loadDocuments(projectId, [FIXTURE_HOSTILE_PATH]);
     const chunks = await store.loadChunks(document?.id as Id);

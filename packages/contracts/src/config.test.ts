@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agenticConfigSchema,
   commandPolicySchema,
+  MAX_CONTEXT_BUDGET_TOKENS,
   pipelineLimitsSchema,
   policiesConfigSchema,
   riskClassSchema,
@@ -225,5 +226,24 @@ describe('config sub-schemas', () => {
         agenticConfigSchema.safeParse({ version: 1, project: { [secret]: 'x' } }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe('context_budget_tokens', () => {
+  const withBudget = (value: number) =>
+    agenticConfigSchema.safeParse({ ...DOC_EXAMPLE, project: { context_budget_tokens: value } });
+
+  it('accepts a budget up to the smallest model context window', () => {
+    expect(withBudget(MAX_CONTEXT_BUDGET_TOKENS).success).toBe(true);
+    expect(withBudget(12_000).success).toBe(true);
+    expect(withBudget(0).success).toBe(true);
+  });
+
+  it('refuses a budget above it, at the boundary rather than at the assembler (backlog 13)', () => {
+    // Asserted from **both** sides (standing rule 42): a schema that refused everything would pass
+    // this case and fail the one above.
+    expect(withBudget(MAX_CONTEXT_BUDGET_TOKENS + 1).success).toBe(false);
+    expect(withBudget(10_000_000).success).toBe(false);
+    expect(withBudget(-1).success).toBe(false);
   });
 });

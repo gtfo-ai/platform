@@ -22,7 +22,8 @@
  * words would be a knowledge base nobody could trust to say what the file says — a page about XSS
  * could not contain the string it is about. They pass through byte-identical, and the defence is
  * structural and belongs to the two rings that have one: the prompt's delimiters (technical/04
- * § "Prompt assembly", WP-17) and the web app's text-node rendering
+ * § "Prompt assembly"; `packages/domain/src/prompt/data-block.ts`) and the web app's text-node
+ * rendering
  * (`apps/web/src/ui/untrusted.tsx`, whose guard fails the build on a markup sink). A test in
  * `document.test.ts` asserts this text survives unchanged, so the deferral is a checked claim
  * rather than an omission.

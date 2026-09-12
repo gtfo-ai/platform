@@ -16,16 +16,25 @@
  *
  * The clock is a value the test moves. Nothing here reads `Date.now()` (standing rule 2).
  */
-import type { DomainEvent, Id, IsoDateTime, PipelineTemplate } from '@platform/contracts';
+import type {
+  AgentRole,
+  DomainEvent,
+  Id,
+  IsoDateTime,
+  PipelineTemplate,
+} from '@platform/contracts';
+import { agentRoleSchema } from '@platform/contracts';
+import type { RolePromptDefinition } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { EventBus } from '../events/event-bus.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import type { TaskCommandDependencies } from '../pipeline/commands.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
-import { basicStageRunPlanner } from '../pipeline/planner.js';
+import { createStageRunPlanner } from '../pipeline/planner.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
 import { defaultProjectSettings, staticProjectSettings } from '../pipeline/settings.js';
@@ -34,6 +43,7 @@ import type { GitProviderPort } from '../ports/integrations/git-provider.js';
 import type { TaskManagementPort } from '../ports/integrations/task-management.js';
 import type { EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
 import { MemoryEventing } from './memory-eventing.js';
 import {
@@ -41,6 +51,8 @@ import {
   createMemoryIdempotencyStore,
   createVirtualTimer,
 } from './memory-integrations.js';
+import type { MemoryKnowledgeStore } from './memory-knowledge.js';
+import { memoryKnowledgeStore } from './memory-knowledge.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pipeline.js';
 
 /** Enough for the longest template plus every bounded loop; a runaway pipeline passes it. */
@@ -177,6 +189,15 @@ export interface HarnessOptions {
   readonly git?: Partial<GitProviderPort> | null;
   readonly taskManagement?: Partial<TaskManagementPort> | null;
   readonly reviewCommentWindowMs?: number;
+  /**
+   * The knowledge index the planner's context pack is built from.
+   *
+   * Absent means an **unindexed** project, which is what a harness without a vault honestly is:
+   * `ContextPackResult` answers `not_indexed` and the prompt says so, rather than claiming the
+   * project has no knowledge (WP-16's three-outcome rule). A test that wants a real pack seeds
+   * `harness.knowledge` through the indexer before it publishes.
+   */
+  readonly knowledge?: MemoryKnowledgeStore;
 }
 
 export interface PipelineHarness {
@@ -190,6 +211,8 @@ export interface PipelineHarness {
   readonly projectId: Id;
   readonly settings: ProjectSettings;
   readonly integrations: PipelineIntegrations;
+  /** The store the planner's context-pack assembler reads; seed it to get a non-empty pack. */
+  readonly knowledge: MemoryKnowledgeStore;
   readonly audit: ReturnType<typeof createMemoryAuditLog>;
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** Every spec the runner was started with, in order. */
@@ -247,6 +270,26 @@ const stubTaskManagement = (
         ...overrides,
       } as unknown as TaskManagementPort);
 
+/**
+ * A role prompt per role, for the harness.
+ *
+ * A **double**, and the divergence is stated (standing rule 1): it is one sentence where the
+ * shipped prompt in `@platform/prompts` is a page, because the application ring may not import that
+ * package. The direction is harmless for what these tests assert — the pipeline's transitions do
+ * not read the prompt — and `test/contract/prompts/role-prompts.contract.test.ts` is what drives
+ * the **real** prompts through the real assembler.
+ */
+const harnessRolePrompts = (): Readonly<Record<AgentRole, RolePromptDefinition>> =>
+  Object.fromEntries(
+    agentRoleSchema.options.map((role) => [
+      role,
+      { role, version: 'harness', text: `You are the ${role}. This is the harness's prompt.` },
+    ]),
+  ) as Readonly<Record<AgentRole, RolePromptDefinition>>;
+
+/** A UUID from the harness's id source, as the 32 hex characters the data-block nonce must be. */
+const nonceFor = (id: Id): string => id.replaceAll('-', '').padEnd(32, '0').slice(0, 32);
+
 export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHarness => {
   const projectId = options.projectId ?? '00000000-0000-4000-8000-0000000000p1'.replace('p', 'b');
   const clock = testClock();
@@ -256,6 +299,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const store = createMemoryPipelineStore();
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();
+  const knowledge = options.knowledge ?? memoryKnowledgeStore({ now: () => clock.now() });
   // Composed like production's (`apps/server/src/pipeline.ts` builds the PostgreSQL one), so the
   // pipeline's ticket writes are replayable in this tier too: a fake may be stricter than the real
   // adapter, never kinder (standing rule 1), and one with **no** store would be kinder.
@@ -322,7 +366,15 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       : { reviewCommentWindowMs: options.reviewCommentWindowMs }),
     execution: {
       runner: wrapRunner(runner, scripts, () => clock, sink),
-      planner: basicStageRunPlanner({ workspacePath: (taskId) => `/workspaces/${taskId}` }),
+      planner: createStageRunPlanner({
+        workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+        prompts: harnessRolePrompts(),
+        // Deterministic and distinct per run: a constant would make the delimiter predictable, and
+        // the executor's own ids are already the harness's one source of "unique".
+        nonce: { next: () => nonceFor(ids.next()) },
+        contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
+        clock: { now: () => clock.now() },
+      }),
       stopReasons,
       context: (correlationId) => ({
         ids,
@@ -448,6 +500,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     projectId,
     settings,
     integrations,
+    knowledge,
     audit,
     idempotency,
     specs,

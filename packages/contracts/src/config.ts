@@ -36,6 +36,29 @@ import { customStageSchema } from './pipeline.js';
 
 // ── project ──────────────────────────────────────────────────────────────────
 
+/**
+ * The ceiling on one run's context-pack budget.
+ *
+ * PROGRESS backlog 13: `tokenCountSchema` is `z.int().nonnegative()`, so a project could configure
+ * a budget of any size and pay for the pack that filled it on **every stage run**. The bound is at
+ * the boundary rather than in the assembler because a configuration that cannot be satisfied should
+ * be refused where it is written, not silently clamped where it is spent.
+ *
+ * 200 000 is the smallest context window in the current Claude line-up — Haiku 4.5; Opus 5, Sonnet 5
+ * and Fable 5.1 are 1 M ([models overview](https://platform.claude.com/docs/en/models/overview),
+ * retrieved 2026-09-12). A pack larger than the **whole** window cannot fit whatever model a stage
+ * is routed to, and the pack is only layers 4–5 of six. So this refuses the configurations that are
+ * impossible rather than the ones that are merely expensive; the budget that a *sensible* operator
+ * sets is a different question and product/05's 12 000 default is the platform's answer to it.
+ *
+ * `tokenCountSchema` itself is deliberately left unbounded: it also types `runs.input_tokens` and
+ * the transcript's compaction counts, which are *reports* of what happened rather than *requests*,
+ * and a reported number that exceeds a bound is a number to record, not to reject (rule 20).
+ */
+export const MAX_CONTEXT_BUDGET_TOKENS = 200_000;
+
+export const contextBudgetTokensSchema = tokenCountSchema.max(MAX_CONTEXT_BUDGET_TOKENS);
+
 export const projectConfigSchema = z.strictObject({
   knowledge_dir: pathPatternSchema.optional(),
   /**
@@ -43,8 +66,10 @@ export const projectConfigSchema = z.strictObject({
    * 12k"; technical/07 step 4). Added to the schema at WP-16, with technical/12's example file
    * amended in the same change — product/05 called it a project setting and technical/12's
    * `.agentic/config.yml` had no key for it.
+   *
+   * Bounded at {@link MAX_CONTEXT_BUDGET_TOKENS} since WP-17 (PROGRESS backlog 13).
    */
-  context_budget_tokens: tokenCountSchema.optional(),
+  context_budget_tokens: contextBudgetTokensSchema.optional(),
   /** `auto` follows the ticket's language (BD-016). */
   communication_language: z.union([z.literal('auto'), languageTagSchema]).optional(),
   commit_convention: z.enum(['conventional', 'none']).optional(),

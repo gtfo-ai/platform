@@ -147,7 +147,11 @@ describe('pack composition against PostgreSQL', () => {
     // Pinned separately from the in-memory figure. Measured equal on this corpus — the two
     // rankers admit the same tier 1 here — and kept as its own literal so that the day they
     // diverge, the failing test names which store moved.
-    expect(pack.record.total_tokens).toBe(10_552);
+    // 10 552 at WP-16; WP-17's estimator counts UTF-8 bytes (PROGRESS backlog 14). The +4 is
+    // entirely **em dashes** — six `U+2014` in `index.md` and one in `D-0001-postgres-sessions.md`.
+    // It is *not* the hostile document, which this pack does not contain; WP-17's first comment
+    // said it was, and rule 39 is why that had to be measured rather than assumed.
+    expect(pack.record.total_tokens).toBe(10_556);
   });
 
   it('makes the same four documents tier 0', async () => {

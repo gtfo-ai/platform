@@ -5140,3 +5140,270 @@ same jobs seam, because a starved machine satisfies a sleep without running anyt
 - **`apps/server/src/app.test.ts` drives `buildApp` with `webhooks: null`**, so the route is absent
   there. A test tier that could compose an ingress without a database would be able to assert the
   route's raw-body parser directly; today only the e2e can.
+
+### WP-17 — the delimiter first, then the pack; and the eval half that cannot run
+
+**Order, because it was the one non-negotiable.** Backlog 12 asked that the `contextPack` wiring of
+backlog 11 not ship before the delimiter, *"or the window opens for the length of a work package"*.
+It did not: `packages/domain/src/prompt/data-block.ts` and `assembly.ts` are the first two files of
+this change, and `createStageRunPlanner` passes a non-empty pack only through `assemblePrompt`. There
+is no commit in this work package in which a pack reaches a prompt undelimited.
+
+#### The contract
+
+A block is `<untrusted-data-<nonce> kind="…" …>` … `</untrusted-data-<nonce>>` with **32 hex
+characters drawn at random per prompt**. Three properties, each with a named test:
+
+1. **The body is byte-identical.** Nothing is stripped, escaped or re-encoded — so there is nothing
+   for a later transform to undo, which is `apps/web/src/ui/untrusted.tsx`'s answer to the same
+   question. The difference a prompt forces is that there is no React text node, so the contract is a
+   delimiter **plus a rule about the marker**.
+2. **Nothing untrusted reaches a marker.** The tag is a constant, the nonce is `[0-9a-f]{32}`, and an
+   attribute value outside `A–Z a–z 0–9 . _ - /` is **refused**, never escaped or truncated. A vault
+   name derived from a vault path — `path` **and**, since round 1's first finding, its sibling
+   `file` — is an attribute only when it matches that alphabet and is short enough; otherwise the
+   marker carries `<name>_omitted="too_long"` or `"unsafe_characters"`, the two degrade
+   independently, and a document that loses both cannot be cited at all (the header says so).
+   Refusing the whole run for a badly named file would be a vault page's veto over a task.
+3. **A truncation the platform applies is announced in the marker** (`truncated="true"`,
+   `original_chars="…"`), never as a line inside the body — technical/07's forgeable-marker
+   paragraph, closed at the place it says it closes.
+
+**Why a nonce and not the `<ticket>` of technical/04 step 5.** A fixed tag is closed by any body that
+contains it. The two ways out are escaping the body — which breaks property 1 and leaves an encoder
+whose correctness nobody can see — or making the close marker unguessable. The doc is amended
+(technical/04 § "Prompt assembly") rather than contradicted.
+
+**The residual, stated at the line and not implied.** This is a guarantee about the **structural
+parse**, which is the only thing a string can guarantee. A model that ignores the stated rule and
+treats a visually convincing `</untrusted-data-0000…>` as a terminator is not protected by any
+delimiter scheme, escaping included; what the nonce buys is that the correct reading is always
+*derivable from the prompt*. Measuring the model's compliance is exactly what the eval cases exist
+for, and that is the half no credential in this repository can run.
+
+#### The hostile document, per construct, measured rather than assumed
+
+The brief said all six flow byte-identical to the prompt. **Two do not, and that is correct.**
+`sanitiseDocumentText` replaces C0/C1 controls, DEL and the bidi overrides with `U+FFFD` and counts
+them (measured on this build: `removed = 1` for ESC, BEL, `U+202E`, `U+2066`).
+
+| Construct | What the assembled prompt contains |
+|---|---|
+| `Ignore all previous instructions…` | verbatim, inside a `knowledge_document` block |
+| `<system>…</system>` | verbatim, inside the block |
+| `<img src=x onerror=…>` | verbatim, inside the block |
+| `javascript:window.__pwned=true` | verbatim, inside the block |
+| ANSI `ESC[31m` | **`U+FFFD`[31m** — the escape replaced at parse, the word intact |
+| `U+202E` | **`U+FFFD`** — replaced at parse |
+
+`packages/application/src/pipeline/planner.test.ts` asserts each of the six against
+`spec.userPrompt` after the real parser, the real retrieval and the real assembler, and asserts the
+platform's voice contains none of them.
+
+**The four zero-width characters** (`U+200B`, `U+FEFF`, `U+2060`, `U+00AD`): measured here for the
+first time. All four pass the sanitiser untouched (`removed = 0`), reach the block body
+byte-identical, and **buy nothing on either side of the contract** — a spoofed marker still has to
+carry a nonce the author cannot predict, and a zero-width character *inside* a nonce makes it fail
+`NONCE_PATTERN` for the reader exactly as it fails it for the writer. Both directions are asserted
+(`data-block.test.ts` › *"does not let a zero-width character inside a marker close the block"* and
+*"does not let the nonce spliced with a zero-width character close the block"*). **The second place
+backlog 12 names is confirmed open**: `extractQueryTerms('sess<U+200B>ions rollback')` returns
+`["sess","ions","rollback"]`, so a term split by an invisible character is unmatchable. It is an
+indexing-side question, it is not WP-17's, and it is in the discovered work below.
+
+#### Mutation checks (rule 77's recipe: a copy, calibrated first)
+
+`cp` into `packages/domain/src/prompt/zzmutant/`, mutate the copy, run a copy of the tests, delete
+both. Calibration: unmutated **62/62 passed, exit 0**; a planted `DATA_BLOCK_TAG` typo reported
+**1 failed, exit 1**. Every guard died:
+
+| Mutation | Result | Killed by |
+|---|---|---|
+| attribute-value guard → `return` | 12 failed | *refuses `<name>` as an attribute value rather than escaping it* (×10) |
+| nonce-shape guard → `return` | 5 failed | *refuses a nonce that is too short / upper case / not hex / …* |
+| `body.includes(nonce)` deleted | 1 failed | *refuses a body that already contains the nonce* |
+| `nonceIsUsable` collision check deleted | 3 failed | …and *recovers when a later nonce is usable* |
+| `assertPlatformVoice` → no-op | 1 failed | *refuses a stage id, a role name or a role version outside the platform alphabet* |
+| unsafe vault path always in the marker | 1 failed | *drops a vault path that is not in the platform alphabet* |
+| marker loses the nonce (fixed tag) | 23 failed | the whole spoof and round-trip set |
+| truncation attribute dropped | 1 failed | *announces its own truncation in the marker* |
+| `kbSearch` turned into a refusal (`apps/server/src/platform-tools.test.ts`, same recipe) | 1 failed | *does not refuse kb_search — it reaches the store, which is what fails here* |
+
+#### The neighbours
+
+- **Backlog 13 — done.** `contextBudgetTokensSchema = tokenCountSchema.max(200_000)` in
+  `packages/contracts/src/config.ts`, at the boundary rather than at the assembler. 200 000 is the
+  smallest context window in the current Claude line-up (Haiku 4.5; the others are 1 M —
+  <https://platform.claude.com/docs/en/models/overview>, retrieved 2026-09-12), so it refuses the
+  configurations that are *impossible* rather than the ones that are merely expensive.
+  `tokenCountSchema` itself stays unbounded: it also types `runs.input_tokens`, which is a **report**
+  and not a request (rule 20).
+- **Backlog 14 — the unit was wrong, and that is now fixed; the ratio is not, and that is now
+  stated.** `estimateTokens` is `ceil(utf8ByteLength(t) / 4)` where it was `ceil(t.length / 4)`.
+  A byte-level BPE splits the UTF-8 encoding, so a three-byte script was being counted at a third of
+  its weight: the measured corner, 48 000 CJK characters, moves from **12 000** (exactly the shipped
+  default budget) to **36 000**, and every ASCII figure in the repository is unchanged. The **ratio**
+  is still a hypothesis and is now labelled one at the line: Anthropic's own documentation gives
+  *"1M tokens is roughly … 2.5M Unicode characters on the current tokenizer"*, i.e. ~2.5 characters
+  per token for mixed prose against this estimator's 4 bytes — so it can still under-estimate, and
+  closing that needs a real tokeniser rather than another constant. The property backlog 14 asked
+  for exists: `tokens.test.ts` › *"is exactly the stated ratio over UTF-8 bytes"* fails for any
+  divisor but the shipped one and for any unit but bytes, which the two previous properties did not.
+- **Backlog 15 / Q58 — not taken, and the trigger it named has now arrived.** A junk query still
+  fills the budget; nothing here rejects one. The line is noted where it now costs something
+  in `planner.ts`, at `taskTextOf`. It was not calibrated on the fixture vault, because backlog 16 says
+  that vault cannot falsify a precision fix.
+
+#### Decisions and assumptions
+
+- **`StageRunPlanner.plan` returns `{ spec, contextPack }`.** The audit record carries scores, token
+  counts and the `validated` flag of documents that did **not** make it; a record derived from the
+  spec could not carry the second.
+- **The executor is now transaction / plan / transaction.** Assembling a pack is four to six queries;
+  doing it inside transaction 1 would hold one pooled connection while borrowing a second, which is
+  backlog 19's shape at the site that could afford it least. The plan happens **between** two
+  transactions, so the connection it borrows *replaces* the worker's — the same argument
+  `POOL_RESERVATIONS.pipeline` already makes, and **no change to the pool arithmetic**. The cost is
+  that the four re-validation questions are asked twice (`revalidate`, one function, two callers):
+  a task can be paused, returned or superseded while its pack is being assembled, and finding that
+  out is a *success* exactly as it is in transaction 1a.
+- **`nonce`, `prompts` and `contextPacks` are required planner options, never defaulted** (rule 31).
+  A default nonce would make the marker predictable, which is the one property the contract rests on.
+- **Layer 3 is not concatenated into the system prompt.** `.agentic/rules/*.md` arrive as tier-0 pack
+  documents with `kind="project_rules"`; BD-025 makes them configuration the platform trusts to come
+  from the default branch, not platform voice. Amended in technical/04.
+- **`packages/prompts` ships markdown read from disk at import**, because promptfoo takes a prompt
+  file and product/13's project override is "replace `prompts/<stage>.md`". Read **eagerly**, so a
+  missing prompt is a boot failure of the process rather than a failure of the first run that needs
+  that role.
+- **No per-role `schema.json` (a deviation from TD-016).** `schemas/artifacts/*.schema.json` is
+  already generated from the one zod definition and checked by `schemas:check`; a second copy per
+  role is a second corpus to drift (rule 41). A case names its `artifact_type`.
+- **`cases.json`, not `cases.yaml` (the second deviation from TD-016).** promptfoo accepts JSON, and
+  this repository has no YAML parser; adding one so a test can validate a file nothing can execute is
+  cost with no benefit.
+- **The production `PlatformToolPort` implements one tool and refuses eight, by name.**
+  `apps/server/src/platform-tools.ts`: `kb_search` is real; `ask_human`, `notify_human`,
+  `report_progress`, `get_task_context` and the four mutating ones throw
+  `PlatformToolUnavailableError` naming what is missing — the `unavailableClaudeRunner` precedent
+  beside it, and for the same reason (a null object returning `{}` is a tool the model believes it
+  used).
+- **`PipelineComposition.runner` is now a factory over the tools**, `(tools) => ClaudeRunner`. It is
+  the only way the port reaches a run, and passing a ready-made runner would have left the tools with
+  no consumer — which is the shape backlog 11 is about.
+
+#### The eval blocker — exactly what a human must provide
+
+`pnpm eval` exists and **exits 1**, naming both gaps; `scripts/eval.test.ts` holds it to that,
+including the rule-18 half (an *empty* `ANTHROPIC_API_KEY` is reported missing, a non-empty one is
+not). Nothing is stubbed and no target went green on it.
+
+1. **Add the dependency:** `pnpm add -Dw promptfoo`. TD-016 names it; it is not in the tree.
+2. **Provide a model credential**, one of:
+   - **locally**: `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) in the shell that runs
+     `pnpm eval`;
+   - **in CI**: a repository **environment** named `llm-ci` (13-implementation-plan.md names it for
+     WP-33) carrying an `ANTHROPIC_API_KEY` secret, referenced by the `prompts/**` PR job of TD-016.
+     `gh secret list` is empty today and the repository has **no environments at all**.
+3. **Then runnable:** `pnpm eval` (all ten roles) or `pnpm eval --roles=reviewer`. It builds
+   promptfoo's input into a temp directory from the checked-in `cases.json`, `prompt.md` and
+   `PLATFORM_PROMPT`, so layer 1 has exactly one copy in the repository.
+4. **Budget:** TD-016's `EVAL_MAX_USD` is not wired, because nothing can spend yet. Whoever supplies
+   the credential should wire it in the same change; 36 cases × 10 roles at Haiku-graded rubrics is
+   the order of a few dollars per full run, **unmeasured**.
+
+What is *not* blocked and is checked in: the 36 cases, their assertions, the promptfoo base config,
+and `packages/prompts/src/evals.test.ts`, which fails when a case reads a field the artifact schema
+does not have. That test measures **drift between a case and a schema**, and nothing about whether a
+model would satisfy the case (rule 3: it is labelled with what it measures).
+
+#### What this work package did **not** do, and why
+
+**The ten platform skills of product/13 are not shipped.** They are on WP-17's plan row and I
+declined them, for the reason WP-16 declined wiring `KnowledgeIndexer`: *nothing can mount them.*
+`RunSpec.skills` is a **filter** over skills the CLI discovers from the workspace's
+`.claude/skills` (verified in the installed SDK: `skills?: string[] | 'all'`, "Names match the
+SKILL.md `name` / directory name"), and technical/04's decision is to copy the platform's skills
+into `.claude/skills/_platform/` **at provisioning**. The pipeline composes no `WorkspaceProvider`
+and no `ClaudeRunner` (Q52), so ten markdown files would be data nothing reads — which is the exact
+shape of backlog 11, the defect this work package exists to close. Shipping them belongs with the
+provisioning step that mounts them. `loki/provider.ts`'s `skill: null` note is updated to say so
+rather than to point at this work package.
+
+#### Discovered work (WP-17)
+
+- **The platform stores no ticket title or body, so retrieval has almost nothing to query with.**
+  `tasks` has `ticket_provider/key/url` and nothing else (migration 0004), and `ticket.matched`
+  carries no title either. technical/07 step 2 says the query is built from "task text (ticket +
+  spec)"; at the **first** agent stage there is no spec, so the query is the ticket key — one term.
+  `taskTextOf` uses the key plus every prior artifact's JSON, which is the best available, and the
+  pack at `refinement` is therefore tier-0 plus whatever one keyword finds. This is bigger than
+  WP-17 and is written up under **FOR THE REFINER** in the implementer's report.
+- **A zero-width character splits a term in `extractQueryTerms`** (measured: `sess<U+200B>ions` →
+  `["sess","ions"]`), so a vault page carrying one has a term no query can match. Backlog 12's second
+  place, confirmed; it is an indexer/query question, not a delimiter one.
+- **`repoPaths` has no production source.** There is no checkout at plan time, so
+  `StageRunPlannerOptions.headPaths` is absent in `apps/server` and a knowledge document carrying a
+  `paths:` glob is recorded `validated: false` and never admitted. It is logged once per run rather
+  than defaulted silently; WP-18 supplies it when it wires the indexer to a checkout.
+- **Nothing writes the pack's files into `.agentic-run/context/`.** `RunSpec.contextPack` names paths
+  the workspace provisioner would create, and the pipeline does not compose `WorkspaceProvider` (Q52's
+  neighbourhood). Both tiers are therefore **inlined in full** in the prompt, which is what the budget
+  already accounts for (`assembleContextPack` charges tier 1 its whole token count). When provisioning
+  lands, tier 1 can become a path reference plus a summary.
+- **Two vault paths can fold onto one workspace name.** `workspaceNameFor` collapses every run of
+  non-alphanumerics to `_`, so `a/b.md` and `a-b.md` collide. Pre-existing (WP-16); it matters more
+  now that the name is what a model cites by.
+- **`packages/prompts` reads `prompt.md` relative to `import.meta.url`.** A `tsc` emit that copies
+  only `.js` would ship a package with no prompts — a packaging obligation for **WP-22**.
+- **The eight refusing platform tools.** Each needs a collaborator this build lacks; they are named
+  individually in `apps/server/src/platform-tools.ts` so the next work package can take them one at a
+  time rather than "implement the tools".
+
+#### WP-17 — review round 1 (REQUEST_CHANGES): three fixes
+
+**1. A long vault path vetoed every run on the project.** `path` degraded and its sibling `file` did
+not, which made the module's own stated principle — *"refusing the whole run for a badly named file
+would be a vault page's veto over a task"* — true of one attribute and false of the other.
+`workspaceNameFor` folds a path's *characters* into the marker alphabet but not its *length*, and
+nothing upstream bounds a vault path. Re-measured through the real `workspaceNameFor` and the real
+`assemblePrompt`: a **463**-character vault path folds to **486** and renders; `.agentic/knowledge/`
+plus a 255-character directory and a 255-character filename is **533** — a path any filesystem
+permits — folds to **556**, and **threw** `UnsafeMarkerValueError` on `file`. That throw fails
+`plan()`, fails the run and escalates the task to `needs_human`, so one deeply nested KB page stopped
+the pipeline for the whole project.
+
+The fix is `markerValueRefusal` in `data-block.ts` plus `derivedNameAttribute` in `assembly.ts`: the
+two attributes **derived from a vault path** degrade to `<name>_omitted="too_long"` or
+`"unsafe_characters"`, independently of each other, and the block stays closed with its text intact.
+**The guard is not weakened** — `assertSafeValue` still throws; the assembler stops handing it a
+value it already knows will be refused, and `assertPlatformVoice` still throws for the role, the
+version and the stage id, which are the platform's own values. Rule 68's audit over the *set* of
+attributes is now a table in `documentBlock`'s docblock: `tier`/`tokens`/`version`/`original_chars`
+are platform integers, `reason`/`artifact_type`/`truncated`/`kind` are platform vocabulary and
+**throw**, `file` and `path` are the only two derived from untrusted input and both degrade, and the
+`ticket` block carries no attributes at all. **No third asymmetry.** Mutations (copy, calibrated
+66/66): `file` back to raw → *drops an over-long file instead of failing the run* dies; the whole
+degradation off → three named tests die.
+
+**2. The stated cause of the moved pinned figures was wrong.** The comment blamed the `U+FFFD` of
+the hostile document. Reproduced from the shipped defaults through the real assembler: **the hostile
+document is not in the pack at all and the pack contains no `U+FFFD`.** The whole pack delta is **em
+dashes** — `index.md` carries six `U+2014` (+12 bytes, +3 tokens) and `D-0001-postgres-sessions.md`
+one (+2 bytes, +1 token) — which is both `10 552 → 10 556` and `438 → 442`. Only the **vault** total
+involves the hostile page: `19 100 → 19 108` is +4 em dashes and +4 from its eight `U+FFFD`, and it
+is now **19 124** because fix 3 planted a line in that document. Corrected at all three sites. Rule
+39, and the concrete cost of leaving it: a future reviewer told the cause is the hostile document
+would mis-diagnose a genuine move.
+
+**3. A vacuous assertion.** *"carries the zero-width characters through untouched"* asserted only
+that the platform voice contained no `U+200B` — and the fixture vault contained none either, so it
+would have passed an implementation that stripped them (rule 3 meeting rule 45: the property was in
+the test's name and nowhere in the corpus). `FIXTURE_ZERO_WIDTH` is now a line of
+`hostile-document.md`, and the test asserts both halves: all four characters arrive in a block
+byte-identical, and none reaches the platform's voice. **Proved non-vacuous by mutation**: widening
+`sanitise.ts`'s `UNSAFE` class to include the four made it fail (`1 failed | 11 passed`), and the
+mutation was reverted. That one had to be **in place** rather than on a copy — the assertion spans
+the domain parser and the application planner, which a copied module cannot reach — so it was done
+with the Edit tool, immediately reverted, and `git diff HEAD` was checked to confirm the only
+remaining change to that file is a docblock line.

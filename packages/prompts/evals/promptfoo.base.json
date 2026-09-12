@@ -1,0 +1,27 @@
+{
+  "$comment": "TD-016's promptfoo configuration, minus the per-role parts that scripts/eval.mjs fills in from roles/<role>/evals/cases.json. It is checked in as the statement of how the evals would run; nothing in this repository can run them today (no promptfoo dependency, no llm-ci environment, no ANTHROPIC_API_KEY) and `pnpm eval` says so loudly rather than exiting 0 having run nothing. The blocker brief is in docs/technical/PROGRESS.md under WP-17.",
+  "providers": [
+    {
+      "id": "anthropic:claude-agent-sdk",
+      "label": "agent-sdk",
+      "config": {
+        "setting_sources": ["project"],
+        "permission_mode": "default",
+        "max_turns": 6,
+        "output_format": "json",
+        "$comment": "BD-004: the provider's local-session mode is never used here. The credential is ANTHROPIC_API_KEY from the llm-ci environment, and nothing else in this file names one."
+      }
+    }
+  ],
+  "defaultTest": {
+    "options": {
+      "provider": "anthropic:messages:claude-haiku-4-5",
+      "$comment": "The grader for `llm-rubric` only. TD-016: rubric grading is for prose quality, at low weight; every hard check is `is-json` or `javascript` and needs no model."
+    }
+  },
+  "commandLineOptions": {
+    "maxConcurrency": 2
+  },
+  "sharing": false,
+  "outputPath": null
+}

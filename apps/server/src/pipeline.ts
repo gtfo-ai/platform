@@ -48,15 +48,17 @@ import type {
   Jobs,
   Logger,
   PipelineRuntime,
+  PlatformToolPort,
   ProjectSettings,
   ProjectSettingsPort,
   WebhookIngress,
 } from '@platform/application';
 import {
-  basicStageRunPlanner,
+  createContextPackAssembler,
   createIntegrationActionExecutor,
   createPipelineRuntime,
   createRunStopReasons,
+  createStageRunPlanner,
   createWebhookIngress,
   defaultProjectSettings,
   startIntakeReconciliation,
@@ -67,6 +69,7 @@ import { SHIPPED_TEMPLATES } from '@platform/domain';
 import type { eventing as eventingAdapters, jobs as jobsAdapters } from '@platform/infrastructure';
 import {
   integrations as integrationAdapters,
+  knowledge as knowledgeAdapters,
   pipeline as pipelineAdapters,
   redaction as redactionAdapters,
   secrets as secretAdapters,
@@ -78,7 +81,9 @@ import {
   createPipelineProviderRegistry,
   type PipelineProviderRegistryOptions,
 } from '@platform/integrations';
+import { ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
+import { composePlatformTools } from './platform-tools.js';
 
 /** Thrown by {@link unavailableClaudeRunner}: this build has no transport to the launcher (Q52). */
 export class RunnerUnavailableError extends Error {
@@ -122,8 +127,13 @@ export interface PipelineComposition {
   /**
    * Replaces {@link unavailableClaudeRunner}. Absent is the state `main.ts` and `pnpm dev` are in
    * until Q52 is answered.
+   *
+   * A **factory over the platform tools**, not a runner, since WP-17: `createClaudeRunner` takes a
+   * `PlatformToolPort`, so the only way `kb_search` reaches a run is for whoever builds the runner
+   * to be handed the port this file composed. Passing a ready-made runner instead would leave the
+   * tools with no consumer, which is precisely the shape PROGRESS backlog 11 is about.
    */
-  readonly runner?: ClaudeRunner;
+  readonly runner?: (tools: PlatformToolPort) => ClaudeRunner;
   /**
    * Wraps the `Jobs` the pipeline enqueues through — a **labelled seam**, and the only caller is
    * the e2e tier (WP-15c).
@@ -355,6 +365,12 @@ export const createProjectSettingsPort = (pool: pg.Pool): ProjectSettingsPort =>
 
 export interface ComposedPipeline {
   readonly runtime: PipelineRuntime;
+  /**
+   * The nine in-process MCP tools this process composed, exposed so a caller can see what a run
+   * would be given. `kb_search` is real; the other eight refuse and say why
+   * (`./platform-tools.ts`).
+   */
+  readonly platformTools: PlatformToolPort;
   stop(): Promise<void>;
 }
 
@@ -394,6 +410,7 @@ export const composePipeline = async (
 
   const stopReasons = createRunStopReasons();
   const settings = createProjectSettingsPort(options.pool);
+  const platformTools = composePlatformTools({ pool: options.pool, logger: options.logger });
 
   const runtime = createPipelineRuntime({
     store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
@@ -406,9 +423,25 @@ export const composePipeline = async (
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
     execution: {
-      runner: composition.runner ?? unavailableClaudeRunner(),
-      planner: basicStageRunPlanner({
-        workspacePath: (taskId) => `/workspaces/${taskId}`,
+      runner: composition.runner?.(platformTools) ?? unavailableClaudeRunner(),
+      planner: createStageRunPlanner({
+        workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+        // The shipped defaults. A project's own `prompts/<stage>.md` override needs the default
+        // branch read WP-18 wires, so it is absent rather than half-read (product/13).
+        prompts: ROLE_PROMPTS,
+        /**
+         * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32
+         * hex characters `NONCE_PATTERN` requires; the delimiter contract rests on a document's
+         * author being unable to predict it, so this is the one collaborator here with no default
+         * (standing rule 31).
+         */
+        nonce: { next: () => randomUUID().replaceAll('-', '') },
+        contextPacks: createContextPackAssembler({
+          store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
+          logger: options.logger,
+        }),
+        clock: { now: nowIso },
+        logger: options.logger,
       }),
       stopReasons,
       context: (correlationId) => ({
@@ -460,6 +493,7 @@ export const composePipeline = async (
 
   return {
     runtime,
+    platformTools,
     stop: async () => {
       if (reconciler !== null) {
         await reconciler.stop();

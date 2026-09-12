@@ -34,6 +34,9 @@ describe('@platform/domain', () => {
       'sequentialIds',
       'buildEvent',
       'DomainError',
+      'assemblePrompt',
+      'renderDataBlock',
+      'readDataBlocks',
     ]) {
       expect(domain, name).toHaveProperty(name);
     }

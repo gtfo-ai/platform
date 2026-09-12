@@ -136,6 +136,9 @@ importers:
       '@platform/integrations':
         specifier: workspace:*
         version: link:packages/integrations
+      '@platform/prompts':
+        specifier: workspace:*
+        version: link:packages/prompts
       '@platform/server':
         specifier: workspace:*
         version: link:apps/server
@@ -250,6 +253,9 @@ importers:
       '@platform/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@platform/prompts':
+        specifier: workspace:*
+        version: link:../../packages/prompts
       '@prometheus-io/client':
         specifier: 0.16.1
         version: 0.16.1

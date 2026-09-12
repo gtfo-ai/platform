@@ -31,8 +31,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ClaudeRunner, Jobs, RunSpec } from '@platform/application';
-import type { DomainEvent, Id, JsonObject, TranscriptEvent } from '@platform/contracts';
+import type { ClaudeRunner, Jobs, PlatformToolPort, RunSpec } from '@platform/application';
+import type { DomainEvent, Id, JsonObject, JsonValue, TranscriptEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
   eventing as eventingAdapters,
@@ -112,6 +112,12 @@ export interface IntegrationActionRow {
   readonly payload: JsonObject;
 }
 
+/** One `kb_search` a run made through the production `PlatformToolPort`. */
+export interface KbSearchCall {
+  readonly stage: string;
+  readonly result: unknown;
+}
+
 export interface PipelineE2E {
   readonly instance: Instance;
   readonly world: SeededWorld;
@@ -121,6 +127,14 @@ export interface PipelineE2E {
   readonly projectId: Id;
   readonly userId: Id;
   readonly specs: readonly RunSpec[];
+  /**
+   * Every `kb_search` the runs made, awaited — see {@link StartPipelineOptions.kbSearchQuery}.
+   *
+   * A promise per call rather than a mutable array: the tool answer arrives after `start` returns,
+   * so an array read at assertion time is a race, and a race in a harness is a flake in every test
+   * that uses it (standing rule 76).
+   */
+  kbSearches(): Promise<readonly KbSearchCall[]>;
   /**
    * The `integration_actions` rows the **production** audit-log adapter wrote (WP-15b).
    *
@@ -238,6 +252,16 @@ export interface StartPipelineOptions {
    * happened *while the call was in flight* rather than about a duration (standing rule 2).
    */
   readonly gitReadLatency?: () => Promise<void>;
+  /**
+   * When set, every run whose role may call `kb_search` calls it once with this query, through the
+   * production `PlatformToolPort` the instance composed.
+   *
+   * The fake Claude runner does not call platform tools (divergence 6 of its register), so there is
+   * no other way to ask "is `kb_search` callable from a run?" of a **composed** instance — which is
+   * one of WP-17's acceptance criteria and the reason `PipelineComposition.runner` is a factory
+   * over the tools rather than a runner.
+   */
+  readonly kbSearchQuery?: string;
   /** Extra environment for the instance — `APP_DB_POOL_MAX` at the shipped default, say. */
   readonly env?: Readonly<Record<string, string>>;
   /**
@@ -426,12 +450,39 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       };
     },
   });
-  const runner: ClaudeRunner = {
+  /**
+   * Every `kb_search` the harness's runs made, through the **production** `PlatformToolPort`.
+   *
+   * The fake Claude runner does not call platform tools (its divergence 6), so the call is made
+   * here, from inside `start`, with the `PlatformToolContext` the real runner would build from the
+   * spec. That is what makes "`kb_search` is callable from a run" an assertion about the composition
+   * rather than about a unit: the port, the PostgreSQL knowledge store and the pool all come from
+   * `composePipeline`, and the only double is the thing standing in for the model.
+   */
+  const kbSearchCalls: Promise<KbSearchCall>[] = [];
+  const runner = (tools: PlatformToolPort): ClaudeRunner => ({
     start: (spec) => {
       specs.push(spec);
+      const query = options.kbSearchQuery;
+      if (query !== undefined && spec.platformTools.includes('kb_search')) {
+        kbSearchCalls.push(
+          tools
+            .kbSearch(
+              { query },
+              {
+                runId: spec.runId,
+                taskId: spec.taskId,
+                projectId: spec.projectId,
+                mode: spec.mode,
+                signal: new AbortController().signal,
+              },
+            )
+            .then((result: JsonValue) => ({ stage: spec.stage ?? '', result })),
+        );
+      }
       return fake.start(spec);
     },
-  };
+  });
 
   if (options.workpadDelayMs !== undefined) {
     const upsert = tickets.upsertWorkpad.bind(tickets);
@@ -533,6 +584,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     projectId,
     userId,
     specs,
+    kbSearches: async () => Promise.all(kbSearchCalls),
     auditRows: async () => {
       const { rows } = await pool.query<IntegrationActionRow>(
         `select action, status, project_id, task_id, redaction_count, attempts, payload

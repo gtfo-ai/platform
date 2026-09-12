@@ -192,9 +192,12 @@ export type LokiProvider = ObservabilityLogsPort;
  * platform means to hand an agent is a read-only token, and a spec that also named a basic-auth
  * pair would invite an operator to inject the binding's own account into a run container.
  *
- * `skill` is `null` rather than a path: `packages/prompts/` has no `skills/` directory yet (WP-17
- * owns prompts), and a `SkillRef` naming a directory that is not on disk is a promise the runner
- * cannot keep. Recorded as discovered work rather than written as a claim.
+ * `skill` is `null` rather than a path: `packages/prompts/` still has no `skills/` directory, and a
+ * `SkillRef` naming a directory that is not on disk is a promise the runner cannot keep. WP-17
+ * shipped the role prompts and **deliberately did not ship skills** — nothing mounts them
+ * (technical/04 copies them into the workspace at provisioning, which needs the workspace provider
+ * the pipeline does not compose), and the reasoning is in `PROGRESS.md` under WP-17. Recorded as
+ * discovered work rather than written as a claim.
  */
 export const LOKI_AGENT_TOOLING: AgentTooling = {
   cli: {

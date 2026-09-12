@@ -156,7 +156,7 @@ export const runSpecSchema = z.strictObject({
   providerMode: providerModeSchema,
   /** Hash of prompt layers 1–3 (technical/04 § "Prompt assembly"). */
   promptVersion: nonEmptyStringSchema,
-  /** Layers 1–3, already assembled by WP-15/WP-17; appended to the `claude_code` preset. */
+  /** Layers 1–3, already assembled by `assemblePrompt`; appended to the `claude_code` preset. */
   systemPromptAppend: nonEmptyStringSchema,
   /** Layers 4–6: the task block, the context pack and the output contract. */
   userPrompt: nonEmptyStringSchema,

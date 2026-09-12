@@ -26,6 +26,13 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > must not let integration text — a label, a tag, a log line, a ticket — occupy the pack's own
 > voice (BD-022). Closing it in the adapters instead would mean a second rule about provider-chosen
 > keys in the adapter ring, which already has one.
+>
+> **Closed at WP-17.** `assemblePrompt` (`packages/domain/src/prompt/`) puts every piece of
+> untrusted text — a knowledge document, a vault path, the ticket, a prior artifact, a return
+> feedback string — inside a nonce-bearing data block, and the platform's own truncation notice is
+> a **marker attribute** (`truncated="true"`) rather than a line in the body, which is the half this
+> paragraph asks for by name: a notice written inside the body is a notice a document can write for
+> itself. The contract and its residual are in technical/04 § "Prompt assembly".
 
 > **Round 2 correction: step 2 says "task *keywords*", and it is load-bearing.** WP-16 round 1
 > passed the whole task text to `websearch_to_tsquery`, which joins bare words with **AND** —
