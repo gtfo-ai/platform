@@ -49,20 +49,42 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       latency and the load stated (rule 64) — not run in this session (rule 66), and it is a
       **hypothesis**, not a finding. Now **WP-15d**, before or with WP-15c; PROGRESS backlog
       entry 17.
-- [ ] **The retrieval layer is built and no prompt uses it** — WP-16's counterpart of the line above.
-      `basicStageRunPlanner` passes `contextPack: []`, nothing composes a `PlatformToolPort` so `kb_search`
-      has no home, and `KnowledgeIndexer` is not a pg-boss job. Owners assigned: the first two to **WP-17**,
-      the job to **WP-18** after WP-15c. PROGRESS backlog entry 11.
-- [ ] **Untrusted context-pack text reaches the prompt with no delimiter** — technical/04 § "Prompt
-      assembly" delimits the *ticket* (step 5) and not the *pack* (step 4), and a hostile document flows
-      byte-identical from the vault to `pack.documents[].text`. BD-022; technical/07 says "this is where it
-      closes". **WP-17**, and it must land in or before the change that first passes a non-empty
-      `contextPack`. PROGRESS backlog entry 12.
+- [x] **The retrieval layer is built and no prompt uses it** — **two thirds done at `1497fe9` (WP-17)**:
+      `basicStageRunPlanner` no longer exists, a real pack reaches the prompt, and
+      `apps/server/src/platform-tools.ts` composes a production `PlatformToolPort` so `kb_search` is
+      callable from a run. **Still open**: `KnowledgeIndexer` is not a pg-boss job — **WP-18**, now
+      unblocked because WP-15c's ingress exists. PROGRESS backlog entry 11. *And the pack's usefulness is
+      a separate, open question — entry 23.*
+- [x] **Untrusted context-pack text reaches the prompt with no delimiter** — **CLOSED at `1497fe9`
+      (WP-17)**, and it landed in the **same change** as the wiring, which is what the requirement was.
+      `<untrusted-data-<nonce>>` blocks, nonce 32 hex per prompt, body byte-identical, nothing untrusted in
+      a marker (a value outside `SAFE_ATTRIBUTE_VALUE` is refused, and the degradation renders a closed set
+      of three platform literals). Correction to the claim above: a hostile document does **not** flow
+      byte-identical in every construct — the ANSI escape and the bidi override are each replaced by
+      `U+FFFD` and counted, 2 per construct, 4 over the whole document. PROGRESS backlog entry 12.
 - [ ] **`estimateTokens` can under-estimate, which is the direction that overflows a context window** —
-      `ceil(chars / 4)`; 48 000 CJK characters estimate to exactly the shipped 12 000 budget. The ratio
-      (2–4× real for CJK, ~1.6–2× for Czech) is a **hypothesis** and needs measurement against a real
-      tokeniser; `tokens.test.ts`'s "non-zero + monotone" properties are satisfied by an arbitrarily wrong
-      estimator, which is not a hypothesis. PROGRESS backlog entry 14.
+      **unit half CLOSED at `1497fe9` (WP-17)**: `ceil(utf8Bytes / 4)`, so 48 000 CJK characters go
+      12 000 → **36 000** and ASCII is unchanged, and the new property **fails** for an estimator with the
+      wrong ratio where "non-zero + monotone" could not. **Still open**: the ratio itself is a
+      **hypothesis**, now labelled with a vendor datum rather than measured against a real tokeniser.
+      PROGRESS backlog entry 14.
+- [ ] **The platform never reads the ticket's text, so the first agent stage is given a key and a URL.**
+      `tasks` stores `ticket_provider`/`ticket_key`/`ticket_url` (`0004`:6-8) and nothing else;
+      `ticketRefSchema` is `{provider, key, url}`; `ticket.matched` carries no title; and
+      `TaskManagementPort.readTicket` — which already returns `title`, `description`, `comments[]`,
+      `epic`, `siblings`, `attachments_text` (`task-management.ts:76-95,179`) — has **no production
+      caller**. Two consequences, both measured at WP-17 and confirmed by its reviewer: the prompt's
+      task block is three lines, `provider:`/`key:`/`url:` (`prompt/assembly.ts:342-351`), against
+      technical/04 step 5's *"Task block: **the ticket**…"*; and the first agent stage's retrieval
+      query is the ticket key alone — `extractQueryTerms('ACME-1') -> ["acme"]`,
+      `extractQueryTerms('PROJ-1234') -> ["proj","1234"]` — against technical/07:11's *"task text
+      (ticket + spec)"*. **The docs are right and the code is behind them.** Nothing can currently
+      fail because of it: `FakeClaudeRunner` picks its scenario from `spec.stage`
+      (`fake-claude-runner.ts:96`) and never reads the prompt. **It also changes what the two entries
+      below are worth doing**: this is a query that is too *narrow* and the one below is too *broad*,
+      and tuning relevance before this lands calibrates against a query distribution that does not
+      exist. Now **WP-15f**, with **Q61** as its product half (where ticket text is stored, with a
+      recommendation). PROGRESS backlog entry 23.
 - [ ] **A junk query still fills the whole context budget — retrieval has no precision floor.** A query of
       thirteen function words of four letters or more returns 10 documents at ranks 0.900/0.898/0.898/0.898
       and packs **10 707 of 12 000** tokens with six tier-1 documents, top score **0.718**, *above* a good
@@ -110,6 +132,17 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [ ] **`.agentic/workspace/setup` is not executed.** technical/05 §2 says the setup script is run from the default-branch snapshot when the workspace is created. WP-14 does not run it, deliberately: it needs the project's toolchain (so it belongs in the run container, not in a helper), it is untrusted repository content (BD-025), and the run container's entrypoint chain is `tini → agentic-runlet → claude`, which is **WP-22's** image. Two candidate homes, and the choice is a security decision rather than a packaging one: the image's entrypoint runs it *before* the shim listens (nothing on the platform side is watching yet), or the runner issues it as an ordinary `spawn` through the control socket before the agent's (**WP-15**, hooks and policy already in force). Filed as **Q53**.
 - [ ] **`pids_limit`, `stop_grace_period` and `cpus` are asserted from `docker inspect`, not demonstrated.** WP-14's e2e demonstrates the properties of `--read-only`, `--user`, `--cap-drop`, `no-new-privileges`, `--init`, `--memory` (read out of the container's own cgroup) and the internal network; for the other three it reads back what the daemon recorded. A fork bomb and a CPU-burn assertion on a two-core CI runner are hardware assertions (standing rule 2), and a `stop_grace_period` test waits 20 s by construction. Worth doing in **WP-22**'s image checks, where a slow deliberate test is affordable, and worth doing with a *lower bound* (`pids_limit` refuses the (n+1)th process, whatever the timing).
 - [ ] **The launcher has no network transport, so nothing yet composes it with the runner across two processes.** TD-021 deploys `ROLE=launcher` as its own container; WP-14 built the service as a plain object because there is no second process to talk to until **WP-22** has a compose file, and an unexercised RPC surface in front of the Docker socket is the wrong thing to write untested. Filed as **Q52**, with the recommendation implemented (in-process for now).
+
+- [ ] **Nothing mounts a platform skill, and the ten were correctly refused at WP-17.** The SDK's
+      `skills?: string[] | 'all'` (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`) is *"a
+      context filter, not a sandbox"*, matching the `SKILL.md` `name`/directory name, so `RunSpec.skills`
+      can only filter what the CLI discovers in the workspace; technical/04:35 puts them there at
+      **provisioning**, which the pipeline does not compose (Q52). `packages/prompts/` has no `skills/`
+      directory, GitLab's registration already names a path that does not exist
+      (`providers/gitlab/index.ts:40`), nothing reads `skillRefSchema`, and the planner sends
+      `skills: []` — which `options.ts:152` turns into *omitting* the option, and the SDK docblock says
+      an omitted option is **not** "skills off", so no filter is applied today (product/13 § "Reuse of
+      project skills", working as documented). Now **WP-14a**. PROGRESS backlog entry 24.
 
 ## Parking lot (not for v0.1; see product/14 roadmap)
 

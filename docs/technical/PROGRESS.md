@@ -4,68 +4,70 @@
 
 ## Resume note
 
-> **Session 4, in progress — 2026-09-11/12.** Read this, then the **"Open findings backlog"**, then
-> "Standing rules earned by evidence" — **seventy-nine rules**, each with its evidence, each paid for with a review
-> round. Then continue the loop in `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
+> **Session 4 — 2026-09-11/12.** Read this, then the **"Blocker briefs needing a human"** (there is one now),
+> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-two rules**, each
+> with its evidence, each paid for with a review round. Then continue the loop in
+> `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Twenty-eight work packages are DONE and pushed.** `main` is at **`38ea686`** (WP-15c), green on all six
-targets in the orchestrator's own shell and **green on GitHub** (`34651811392`, every job). No worktrees, no
-open branches, clean tree.
+**Twenty-nine work packages are DONE and pushed.** `main` is at **`1497fe9`** (WP-17), green on all six
+targets in the orchestrator's own shell and **green on GitHub** (`34660244619`). No worktrees, no open
+branches, clean tree.
 
-**What the platform can do.** A feature ticket and a bug ticket reach `task.completed` through an
-`apps/server` instance the e2e harness starts, with provider adapters built by a **production loader** from
-seeded `integrations`/`secrets`/`bindings` rows, every outbound call audited by a **real Postgres audit log**
-that `startRuntime()` composes with no caller able to supply one — and, since WP-15d, **no provider call
-made while a database transaction is open**, refused mechanically rather than by review habit. Retrieval
-over a knowledge vault and a code map exists, budgeted and measured.
+**M1 is NOT complete, and the reason is not the one this note expected to be writing.** The loop runs: a
+signed webhook delivery reaches a running `apps/server` instance, appends `ticket.matched`, and the task
+reaches `task.completed` with nothing seeded — `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing
+seeded and drives it to task.completed"*. Prompts are assembled, the context pack is real and delimited, and
+`kb_search` is callable from a run. **And the platform never reads the ticket's text.** `ticketBlock`
+(`assembly.ts:342-351`) is `provider`/`key`/`url`; `get_task_context` **refuses**
+(`platform-tools.ts:111`); the workspace has no path back to the platform; and `readTicket` has **zero
+production callers**. So the refinement stage is asked to write a spec for a ticket **nobody opened**, and
+retrieval's query at that stage is the ticket key alone — `extractQueryTerms('ACME-1')` → `["acme"]`, one
+term. That is **backlog 23**, with **Q61** for its product half and **WP-15f** for its acceptance.
 
-**Production starts a ticket now.** That sentence could not be written from WP-15a until WP-15c, and it is
-held by a named test rather than by a claim: `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded
-and drives it to task.completed"*. A signed provider delivery to a running `apps/server` instance appends
-`ticket.matched` and the task reaches `task.completed`, with **no seeded row**.
+**Nothing failed, and that is the finding under the finding.** `FakeClaudeRunner` picks its scenario from
+`spec.stage` and **never reads the prompt**, so no test in any tier can fail because the prompt is empty or
+the ticket was never opened. Standing rule **82**. *"M1 complete" was one green e2e away from being written
+about a loop that starts an agent on an identifier.*
 
-**What it still cannot do, and it is now one sentence rather than two.** *No prompt uses the retrieval
-layer* — `basicStageRunPlanner` still passes `contextPack: []`, nothing composes a production
-`PlatformToolPort`, and there is no delimiter contract for untrusted pack text. **WP-17** is that sentence.
-"M1 complete" is not the thing to write until it lands, and the honest statement in between is that the loop
-runs end to end on a ticket a human filed, with an empty context pack.
+**Next, in order.** (1) **WP-15f** — store and read the ticket's text (backlog 23, Q61); nothing downstream is
+worth tuning before it, and backlog **15**/Q58 is explicitly **not actionable** until it lands, because a
+relevance floor over `["acme"]` only removes documents. (2) **WP-18** (librarian, and it registers
+`KnowledgeIndexer`, unblocked now the ingress exists), **WP-19**, **WP-14a** (provisioning + the ten platform
+skills), **WP-21**, **WP-22**, **WP-23**. (3) M2 (WP-24–33). Backlog entries 8–24 hold the rest, each with the
+measurement that earned it.
 
-**Next, in order:** (1) **WP-17** — role prompts, artifact schemas, eval sets; it unblocks WP-18 and WP-21
-and owns the **prompt-delimiter contract** for untrusted pack text (BD-022), which must land **in or before**
-the change that first passes a non-empty `contextPack` (backlog 11, 12). Its live-model half is externally
-blocked; see below. (2) WP-18 (which also registers `KnowledgeIndexer`, now unblocked because WP-15c's
-ingress exists), WP-19, WP-21, WP-22, WP-23. (3) M2 (WP-24–33). Backlog entries 8–22 hold everything else,
-each with the measurement that earned it.
+**One gap nobody's row owns, stated here so it is not re-derived.** No plan row composes a production
+`ClaudeRunner` or `WorkspaceProvider`: **Q52 is a question**, WP-22 is images, and WP-14a is provisioning.
+This is `createPipelineRuntime`'s shape exactly — the thing that went twenty-three work packages composed only
+by a test harness — and it is the reason a task reaching an agent stage still stops in its job. Give it a row
+before it becomes another archaeology entry.
 
-**WP-17's eval half has no credential, checked at session start rather than discovered at implementation
-time.** `gh secret list` is empty, the repository has **no environments at all** — so no `llm-ci`, which
-`13-implementation-plan.md` names for WP-33 and which WP-17's *"promptfoo evals green on fixtures"* would
-need against a live model — the org secrets endpoint 403s for this account, `ANTHROPIC_API_KEY` is unset in
-the orchestrator's shell, and promptfoo is not yet a dependency. **This gets a blocker brief naming exactly
-what a human must provide, not a work package that quietly stubs its own acceptance test.** The offline half
-of WP-17 (the delimiter contract, the real `contextPack`, a production `PlatformToolPort`) does not depend on
-it and should proceed.
+**WP-17's evals are BLOCKED on a human**, checked at session start rather than discovered at implementation
+time: no repository secrets, **no environments at all** (so no `llm-ci`), org secrets 403 for this account,
+no `ANTHROPIC_API_KEY`. The full brief — including the three steps a human takes and why `pnpm eval` exits
+**1** rather than stubbing itself green — is under "Blocker briefs needing a human". Nothing else is blocked.
 
-**What a work package costs here, because it is the pattern to expect.** WP-15d closed backlog **17** and opened **18**, **19**,
-**20** and **21** — one of which (18, whole-row `tasks.save` lost updates, `cost_actual` **2.40** where 2.80
-was owed) is a silent data-corruption class that the move *created* and that only an assertion summing seven
-runs could see. Rule **79** is that lesson. A fix that moves a writer changes the premise of every other
-writer on the same row.
+**What a work package costs here, because it is the pattern to expect.** WP-15d closed backlog **17** and
+opened **18**, **19**, **20**, **21**; WP-15c closed **20** and the architect's own ruling opened the
+`X-Gitlab-Token` finding it was not asked about; WP-17 closed **13** and half of **14** and opened **23** and
+**24**. A work package that opens nothing has probably not looked.
 
 **Machine policy, not negotiable (rule 66).** Two kernel panics on 2026-09-10. 14 cores, Docker has 8, and
-**the user works on this machine while the session runs**. Cap at **two agents, one** while any holds Docker
-or the e2e tier (a refiner runs no tests and does not count). **Never generate synthetic load, for any
-measurement, for any reason** — WP-15d's before/after numbers were taken with a fake provider whose latency
-the test controls, which is the shape to copy. Remove a worktree the moment its branch merges. Check
-`uptime` and **wait for the machine** rather than piling on.
+**the user works on this machine while the session runs** — tonight's load ran 4–17. Cap at **two agents, one**
+while any holds Docker or the e2e tier (a refiner runs no tests and does not count). **Never generate
+synthetic load, for any measurement, for any reason** — WP-15d's before/after figures came from a fake
+provider whose latency the test controls, which is the shape to copy. Check `uptime` and **wait for the
+machine**; this session waited 130 s at load 17 rather than starting a tier.
 
 **Verification discipline, all of it earned.** Verify in your own shell before every review and after every
-merge, **and read `gh run list`** — `main` was red on GitHub for six consecutive pushes while the ledger said
-green, because five *local* targets were being read as the state of `main`. **Gate on the exit status, not
-on the line you printed** (rule 75). **Never `| tail` a run you may need to diagnose** — it destroyed the
-identity of two failures in one day. **Never verify while a mutating reviewer shares the tree** (rule 74).
-Quote the **verdict line**, never a test count (rule 61). And **mutate on a copy**: this environment reverts
-an in-place write to any Edit-touched file, and a mutant that never lands reads as *survived* (rule 77).
+merge, **and read `gh run list`**. **Gate on the exit status, not the line you printed** (rule 75) — `verify`
+was red in the orchestrator's shell twice tonight after reports that named only targeted files, both times
+the citation guard reading the whole checkout. **Never `| tail` a run you may need to diagnose.** **Never
+verify while a mutating reviewer shares the tree** (rule 74). Quote the **verdict line**, never a test count
+(rule 61). **Mutate on a copy** — the environment reverts an *out-of-band* write to any Edit-touched file, and
+the Edit tool's own writes persist (rule 77). And **the orchestrator's own writing is the least reviewed text
+here**: the pre-push hook rejected a status row tonight because I attributed a test to the wrong file (rule
+52).
 
 ## Environment (orchestrator shell, verified 2026-09-09)
 
@@ -85,6 +87,46 @@ an in-place write to any Edit-touched file, and a mutant that never lands reads 
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+82. **The fake that lets an acceptance test pass is the one that never reads the artefact the work package
+   exists to produce.** WP-17 shipped the prompt assembler, the delimiter contract and the real context
+   pack, and every tier was green — including an e2e that drives a ticket to `task.completed` through a
+   real `apps/server` instance. Then the refiner read one line: `FakeClaudeRunner` picks its scenario from
+   **`spec.stage`** (`:96`) and **never reads the prompt**. So no test in any tier can fail because a prompt
+   is empty, wrong, badly delimited, or contains a ticket the platform never opened — the loop is green on
+   an artefact nothing inspects. This is standing rule **1** (*a fake may be stricter than the real adapter,
+   never kinder*) in the most consequential place it has appeared: the divergence is not a status code or a
+   quota, it is **the entire input to the model**. And it is rule **4**'s instrument audit arriving too late
+   — the harness was audited for whether it could *reach* the state, never for whether it could *see* the
+   value. The transferable form: **when a work package's deliverable is an input to something the tests
+   fake, ask what the fake does with that input before believing any verdict about it.** Here the answer was
+   "nothing", and it is why "M1 complete" would have been written on a loop that starts an agent on an
+   identifier.
+
+81. **A wrong *cause* attached to a right *number* contradicts nothing, so only re-deriving the cause catches
+   it — and it happened three times in one work package.** Rule 39 is the mirror (*a wrong number attached to
+   a true finding is never the thing under scrutiny*); this is the dual and it is harder, because the figure
+   checks out and therefore nothing prompts the question. All three in WP-17: a comment blamed three moved
+   pinned pack figures on *"the `U+FFFD` the sanitiser writes over the hostile document's control
+   characters"* when the hostile document **is not in the pack at all** and the pack contains **zero**
+   `U+FFFD` — the delta was `U+2014` em dashes; a corrected version then attributed the vault's em-dash share
+   to *"the note above"* when a **third** document carries one and is not in that note; and the orchestrator's
+   own brief asserted all six hostile constructs flow byte-identical, copied in good faith from a backlog
+   entry, when **two do not**. Each figure was right every time. **Re-check the explanation, not the
+   arithmetic** — and a number that moved for a reason nobody re-derived is how a real regression hides
+   behind a plausible sentence.
+
+80. **"Nothing under `apps/web` changed" is not "nothing `apps/web` depends on changed", and the target you
+   skip on that reasoning is the one that finds it.** WP-17's implementer declined to re-run
+   `verify:web-e2e` in round 2 because no file under `apps/web` was touched. The verdict was right and the
+   reasoning was wrong: `apps/*` may import **any** `@platform/*` (`biome.json`'s ring overrides say so), and
+   `apps/web` imports `@platform/contracts`, which this work package changed — so the premise does not entail
+   the conclusion, and it happened to hold only because round 2's file set was domain, application and tests.
+   The sound form is *"nothing `apps/web` depends on changed"*, which is a question about the dependency
+   graph rather than about a directory. The orchestrator ran the target anyway and it passed; the reviewer
+   caught the reasoning, which is the part that generalises. Rules 6 and 34's shape at the level of an
+   inference rather than a list: **a skip is a claim, and a claim about a build is a claim about its
+   dependencies.**
 
 79. **Moving a writer across a concurrency boundary turns every whole-row `save` into a read-modify-write
    race — and the assertion that catches it is on a *derived total*, never on the field.** WP-15d moved the
@@ -755,7 +797,36 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 
 ## Blocker briefs needing a human
 
-(none)
+### 1. WP-17's evals cannot run: there is no model credential in this repository or on this machine
+
+**What is blocked.** WP-17's acceptance criterion *"promptfoo evals green on fixtures within budget"*, and
+WP-33 (*nightly real-LLM smoke + evals in CI*) entirely. **Nothing else** — WP-17 merged at `1497fe9` with
+its offline half complete, and the eval **cases** are checked in.
+
+**Checked at session start rather than discovered at implementation time** (orchestrator, 2026-09-11):
+`gh secret list` is **empty**; the repository has **no environments at all**, so no `llm-ci`, which
+`13-implementation-plan.md` names for WP-33; `gh secret list --org gtfo-ai` answers **HTTP 403** (*"must be an
+org admin or have the actions secrets fine-grained permission"*); `ANTHROPIC_API_KEY` and
+`CLAUDE_CODE_OAUTH_TOKEN` are unset in the orchestrator's shell; promptfoo is not a dependency. An
+`OPENAI_API_KEY` **is** set in the user's shell — it is the wrong vendor **and** the user's own credential for
+unrelated work, so it is not a substitute and was not touched.
+
+**Exactly what a human must provide**, in order:
+1. `pnpm add -Dw promptfoo`.
+2. A credential. **Locally**: `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) in the environment.
+   **In CI**: a repository **environment named `llm-ci`** carrying an `ANTHROPIC_API_KEY` secret — the name
+   is already what WP-33's plan row expects.
+3. Then `pnpm eval` (or `pnpm eval --roles=reviewer`) runs the **36 checked-in cases**.
+
+**What was deliberately not done, and why it matters.** `pnpm eval` **exits 1** naming both missing pieces
+rather than exiting 0 having run nothing, and `scripts/eval.test.ts` holds it there — including the case where
+the key is set but **empty**, which standing rule 18 exists for and which backlog entry **8** shows live in
+this repository today (a gitleaks scan of zero bytes printing `no leaks found`). A work package that stubs its
+own acceptance test is worse than one that names its blocker. `--check` prints `PASS: eval --check`, spelled
+**differently** from `PASS: eval`, and the test asserts the difference.
+
+**Residual.** `EVAL_MAX_USD` is unwired — nothing can spend until the credential exists, so the budget has
+nothing to bound yet. Whoever supplies the credential wires it in the same change.
 
 ## Open findings backlog — every loose end, with its source
 
@@ -882,6 +953,138 @@ direction that is guarded today and the *unsafe* one that is not, which is stand
 What done looks like is small and worth naming so it is not re-derived: the WP that flips a row to
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
+
+### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
+Placed here, above the concurrency findings and above the retrieval family it heads, because it is
+entry 1's sentence one layer further in: *the loop starts now, and what it starts on is a ticket
+identifier.* One cause; three symptoms; the two that are inside this repository's control are below.
+
+**What is wrong.** `tasks` stores `ticket_provider` / `ticket_key` / `ticket_url` and nothing else
+about the ticket, `ticketRefSchema` is `{provider, key, url}`, and `ticket.matched` carries no title.
+The port that *can* read a ticket already exists and returns everything that is missing —
+`TaskManagementPort.readTicket` (`packages/application/src/ports/integrations/task-management.ts:179`)
+yields a `Ticket` with `title`, `description`, `comments[]`, `links`, `epic`, `siblings` and
+`attachments_text` (`:76-95`) — and **nothing in the pipeline calls it**. So the two places built to
+consume the ticket's content are handed its identity instead: the retrieval query, and the prompt's
+own task block.
+
+**Evidence.** Quoted from the WP-17 review, which confirmed it end to end independently of the
+implementer that first reported it:
+
+> `tasks` has `ticket_provider/key/url` and nothing else (migration 0004 lines 6–8); `ticketRefSchema`
+> is `{provider, key, url}`; `ticket.matched` carries `rule/priority/issue_type/epic/links` and no
+> title. At the first agent stage `taskTextOf` is the ticket key alone, and:
+>
+> ```
+> extractQueryTerms('ACME-1')    -> ["acme"]
+> extractQueryTerms('PROJ-1234') -> ["proj","1234"]
+> ```
+>
+> WP-17 built a correct delimiter and a correct wire; what flows through it at `refinement` is **one
+> term**. That is a platform gap, not a WP-17 defect.
+
+and from the implementer, which met it first and named the remedy's shape:
+
+> technical/07 step 2 builds the query from "task text (ticket + spec)". At the **first** agent stage
+> there is no spec, so `taskTextOf` yields the ticket key alone. Every later stage gets the prior
+> artifacts' JSON. So the pack at `refinement` is tier-0 plus whatever one keyword finds, and **no
+> amount of ranking work changes that**. Needs a product decision about where ticket text is stored:
+> inbox payload? a provider fetch from the outbound job? a `tasks.ticket_title/body` column fed by
+> intake?
+
+**Four things read off disk while filing this** (grep and reading, no test run — rule 66), because
+they decide how big the finding is:
+
+- **The prompt's task block is three lines.** `ticketBlock` (`packages/domain/src/prompt/assembly.ts:342-351`)
+  builds the `kind="ticket"` data block's body as exactly `provider:`, `key:`, `url:`. So the second
+  symptom is larger than the first: **the agent is not shown the ticket either**, not merely the
+  retrieval that would find documents about it.
+- **Nothing can fetch it at run time either.** `get_task_context` — the platform tool whose whole job
+  this is — refuses by name in the production tool surface
+  (`apps/server/src/platform-tools.ts:111`), and technical/05 §2/§3 give the workspace no network
+  path to the platform and an allow-listed egress sidecar, so an agent cannot open the ticket URL
+  it is given.
+- **`readTicket` has no production caller.** 40 references in the tree; **0** under
+  `packages/application/src/pipeline/`, `apps/server/src/` or `packages/domain/src/` — the rest are
+  the port, the fake, and the contract suites.
+- **No test can fail because of any of this.** `FakeClaudeRunner` selects its scenario from
+  `spec.stage` (`packages/infrastructure/src/runner/fake-claude-runner.ts:96`) and never reads the
+  prompt, so the fake-Claude e2e is green on a prompt with no ticket in it. That is the fake behaving
+  correctly, and it is why this survived to WP-17.
+
+**Is it a defect, or is a document wrong?** The documents are right and the code is behind them, so
+**no decision record is amended**: technical/04 § "Prompt assembly" step 5 specifies *"Task block:
+**the ticket**, artifacts, return feedback, human comments…"*, technical/07:11 specifies the query
+input as *"task text (ticket + spec)"*, and product/13 § "Prompt architecture" layer 4 specifies
+*"ticket (delimited as data)"*. All three name content the platform does not hold. Note also that
+`extractQueryTerms`' own docblock (`packages/domain/src/knowledge/query.ts:59-62`) explains its
+first-seen ordering as *"the terms kept are the ones nearest the start of the ticket, **which is where
+a title sits**"* — the module was written against the input the doc describes and receives a key.
+
+**What it costs to leave.** The product's headline claim is that a ticket reaches a merge request
+without a human watching, and the first agent in that chain is asked to write a spec for a ticket it
+has never read. Every downstream artifact is derived from that spec, so the error is not bounded to
+one stage: it is the input of the whole pipeline. It also fails **silently and expensively** — the
+pack is well-formed, `run_context_pack` faithfully records the tokens spent on a pack assembled for a
+one-term query, and the audit is therefore an accurate record of the agent having been shown nothing.
+
+**What would make it urgent.** It is already live rather than latent — WP-17 shipped the wire and
+WP-15c made production start tickets — and the only reason nobody has *seen* it is that no production
+run reaches a real model (`unavailableClaudeRunner`, Q52). So the trigger is the first real-model run:
+the day a launcher transport exists, this is the first thing a human notices about the output, and it
+will be mistaken for a prompt-quality problem. Fix it **before** the first real-model run, not after.
+
+**What done looks like.** The first agent stage is given the ticket's own words:
+- the platform reads the ticket once per task through `readTicket`, via a **fourth
+  `pipeline.outbound` duty** beside `intake_check`/`workpad`/`status`
+  (`packages/application/src/pipeline/jobs.ts:69`) — WP-15d's shape, so the call is made outside every
+  transaction and goes through `IntegrationActionExecutor` like every other outbound call;
+- the text is stored **bounded and redacted**, written by a **narrow** repository method and never a
+  whole-row `tasks.save` — the snapshot writer is a job running beside the stage executor, which is
+  exactly entry **18**'s interleaving, and this work package must not create the twenty-first instance
+  of it;
+- `taskTextOf` (`packages/application/src/pipeline/planner.ts:190`) builds the query from title +
+  description (+ the artifacts it already adds), and `ticketBlock` renders title, description and
+  comments inside the existing data block — nothing about the delimiter contract changes, which is
+  the half WP-17 already got right;
+- asserted by a test that a `refinement` prompt for a ticket titled *"rollback sessions after a failed
+  migration"* contains those words inside a `kind="ticket"` block and that `extractQueryTerms` over the
+  same task yields more than one term. Neither assertion needs a model or a container.
+
+**The product half is real, and it is Q61** (filed with a recommendation strong enough to build from).
+Storing ticket text is not free and is not obviously the platform's to store: it is untrusted external
+text (BD-022), it goes stale the moment a human edits the ticket, `readTicket` is measured
+**unbounded** (Q54: one `readTicket` at **53,284,565 bytes** across 8 unbounded paths), and a stored
+copy is personal data in a place the retention rules have not considered. What is *not* a real
+objection, and is worth recording so it is not re-raised: the platform already stores untrusted
+external text in two places under a stated rule — `inbox.headers`/`payload` (redacted, migration 0014)
+and `kb_chunks` — so this is a new *instance*, not a new *kind*, of a thing already decided.
+
+**Where this sits against entries 15 and 16, stated rather than left to be noticed.** The three are
+one subject: **entry 15 is a query that is too broad** (thirteen function words fill 87 % of the
+budget), **this is a query that is too narrow** (one term), and **entry 16 says the instrument can
+measure neither**. The ordering consequence is the part that changes what someone should work on:
+**tuning relevance is premature until this lands.** A precision floor applied to `["acme"]` makes the
+pack emptier, not better; Q58 asks which ranking signal to add, and calibrating one needs the query
+distribution the platform will actually send, which today does not exist. Entry 15 currently reads as
+actionable and is not — a line has been added to it pointing here. Entry 15's own text also carries the
+assumption this measurement falsifies: *"the queries that reach it are `kb_search` calls written by a
+model and ticket text written by whoever files tickets"* — the second half is not true and cannot be
+until this entry closes.
+
+**Needs measurement** (rule 66, none run here): whether a title-plus-description query changes what the
+retrieval layer returns on anything but the fixture vault is **unknown and unmeasurable today** —
+entry 16 is the reason. This entry's own acceptance does not depend on it: "the ticket's words are in
+the prompt and in the query" is assertable without a corpus, and "the pack is better" is not.
+
+**Depends on.** WP-15c (landed, the intake path), WP-15d (landed, the outbound-job shape), WP-17
+(landed, the delimiter and the real pack), and **Q61** for the storage decision — which the
+recommendation answers, so the row is buildable without waiting. Owner: **WP-15f** in
+`13-implementation-plan.md`; **no row owned it before tonight**, and the three symptoms were spread
+across WP-16 (the query), WP-17 (the prompt) and WP-20 (the board card, Q48) with no row holding the
+cause. Related: entry **11** (the wire that now exists), entry **12** (its zero-width half becomes
+live the day ticket text reaches a query), entries **15**/**16** below, **Q48** (the same missing
+`title`, seen from the board), **Q54** (the byte bound this work package has to pick).
 
 ### 18. **Every other `tasks.save` is a whole-row write, and a concurrent writer silently puts stale state back** (TODO — now **WP-15e**)
 **What is wrong.** `TaskRepository.save` (`packages/application/src/pipeline/store.ts:80`) writes the
@@ -1176,17 +1379,20 @@ rather than a hypothesis.
 plan row mentions the settings port. Cheap enough to fold into WP-15c or WP-15e, whichever touches
 `apps/server/src/pipeline.ts` next.
 
-### 11. What WP-16 left behind — **the retrieval layer is built and no prompt uses it** (TODO)
+### 11. What WP-16 left behind — **the retrieval layer is built and no prompt uses it** (**two thirds RESOLVED** at `1497fe9`, WP-17)
 The same shape as entry 1, one layer up, and in the reviewer's sentence form. Three pieces, none of
-them WP-16's to fix, all three now with an owner in the plan:
+them WP-16's to fix, all three with an owner in the plan; **two of the three are closed**:
 
-- **`basicStageRunPlanner` still passes `contextPack: []`**, and `stage-executor.ts` still writes a
-  zeroed `ContextPackRecord`. The assembler, the store, `kb_search` and the code map all work and are
-  reached by nothing a run sees. **WP-17**, which owns prompt assembly.
-- **Nothing composes a `PlatformToolPort` in production, so `kb_search` has no home.** WP-12 defined
-  the port and its nine methods; the only implementations in the tree are `recordingTools` (a
-  fixture) and WP-16's `createKbSearchTool`, which is a function a composition root supplies.
-  `platform-mcp.ts` is ready and takes one. **WP-17**, which owns the run's tool surface.
+- ~~**`basicStageRunPlanner` still passes `contextPack: []`**~~ — **CLOSED at WP-17**. The symbol no
+  longer exists in the tree; `createStageRunPlanner` assembles a real pack and the
+  `ContextPackRecord` is not zeroed, asserted by
+  `test/e2e/pipeline/context-pack.e2e.test.ts` › *"is written to run.started, is not zeroed, and
+  reaches the prompt as delimited data"*. **What the pack contains is now the open question, not
+  whether one exists** — see entry **23**.
+- ~~**Nothing composes a `PlatformToolPort` in production**~~ — **CLOSED at WP-17**:
+  `apps/server/src/platform-tools.ts`, reached by a run through `PipelineComposition.runner`, which is
+  now `(tools) => ClaudeRunner`. `kb_search` is callable from a run and the same e2e drives it.
+  **`get_task_context` still refuses**, which is entry 23's evidence rather than this entry's.
 - **`KnowledgeIndexer` is not registered as a pg-boss job.** technical/07 specifies "singleton per
   project", triggered at task start and after every merge. Registering it needs a checkout to read,
   which needs the workspace provider, which needs the ingress entry 1 says does not exist — so
@@ -1248,6 +1454,17 @@ if Q58 is decided before WP-17 starts; otherwise it is a work package of its own
 block entry 12's delimiter, and that delimiter does not close this: a delimiter makes junk text safe,
 not absent.
 
+> **Added with entry 23, which changes what this one is worth doing next.** Entry **23** measured the
+> opposite defect on the same wire — the query at the first agent stage is **one term**
+> (`extractQueryTerms('ACME-1') -> ["acme"]`), because the platform stores no ticket text — so this
+> entry is *too broad* and that one is *too narrow*, with entry **16** saying the instrument can
+> falsify neither. **Do not tune relevance before entry 23 lands**: a precision floor over a one-term
+> query removes documents rather than noise, and Q58's answer has to be calibrated against the query
+> distribution the platform will really send, which does not exist yet. One sentence above is also
+> **now false** and is left in place rather than rewritten: *"the queries that reach it are
+> `kb_search` calls written by a model and ticket text written by whoever files tickets"* — no ticket
+> text reaches it, and none will until entry 23 closes.
+
 ### 12. **Untrusted context-pack text reaches the prompt with no delimiter, marker or count** (WP-17)
 **What is wrong.** technical/04 § "Prompt assembly" delimits the *task* block — step 5 is
 `<ticket>` … `</ticket>`, "all marked as data" — and says nothing of the kind about step 4, the
@@ -1290,6 +1507,29 @@ places it could matter are both WP-17's neighbourhood: a delimiter a document co
 zero-width character inside the marker, and a term no query can match because a zero-width character
 splits it in `to_tsvector`. *Needs measurement* (rule 66, not run here); a nit until one of the two is
 shown.
+
+> **One of the two is now shown** (added when entry **23** was filed, from the WP-17 round; measured
+> by the reporting agent, not re-run here — rule 66). The *query* half:
+>
+> ```
+> extractQueryTerms('sess<U+200B>ions rollback') -> ["sess","ions","rollback"]
+> ```
+>
+> A zero-width character splits a term, so `to_tsvector` indexes two fragments and **no query can
+> match the word** — a document, a lesson or a ticket carrying one is unfindable by its own subject,
+> and nothing reports it (`sanitised = 0`, by design). The two halves now separate, because the other
+> one is **closed rather than unshown — by WP-17's contract** — `SAFE_ATTRIBUTE_VALUE`
+> is `/^[A-Za-z0-9._\/-]{1,512}$/` (`packages/domain/src/prompt/data-block.ts:89`) and a value that
+> does not match is *refused* rather than escaped, with the module's own comment at `:121` naming
+> *"zero-width characters that are the whole point of the refusal"* — so only the query half
+> survives. **It stays small, and it is not a nit any more**: it is a correctness hole in retrieval with, today, no producer — the
+> query is a ticket key (entry **23**), so nothing untrusted reaches `to_tsvector` through a *query*
+> at all. **What makes it live is entry 23 landing**, which is when ticket titles start being
+> tokenised, and it is cheapest to fold into that work package: extend
+> `packages/domain/src/knowledge/sanitise.ts` to strip-and-count `U+200B`, `U+FEFF`, `U+2060`,
+> `U+00AD` on the indexing path **and** the query path, asserted by a test that plants one inside a
+> word and shows the document still retrievable by that word. Owner: **WP-15f** if it lands first,
+> otherwise whoever next touches `sanitise.ts`.
 
 ### 13. **`context_budget_tokens` has no ceiling** (WP-17, one line)
 `packages/contracts/src/common.ts:46` is `tokenCountSchema = z.int().nonnegative()`, and
@@ -1613,6 +1853,82 @@ reserved), not how many places restate it, so neither entry covers the other; an
 criterion already carries rule 63's *"with the count stated in the change rather than left to a
 reader to recount"*.
 
+### 24. **The ten platform skills were correctly refused at WP-17, and nothing mounts a skill** (TODO — now **WP-14a**)
+**What is wrong.** WP-17's plan row lists "platform skills" and the implementer did not build them.
+**The refusal is right and is recorded here so it is not re-litigated**, together with the SDK fact
+that makes it right — and with the half that *is* missing, which is a delivery path, not ten files.
+
+**Evidence** (WP-17's implementer, verified by the reviewer in `node_modules`). The SDK's
+`skills` option is a **filter over what the CLI discovers**, not a way to supply skills:
+
+> `@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109` — `skills?: string[] | 'all'`, documented as
+> *"This is a context filter, not a sandbox: unlisted skills are hidden from…"*, with names matching
+> the `SKILL.md` `name` / directory name.
+
+So `RunSpec.skills` (`packages/application/src/ports/runner.ts:190` → `packages/infrastructure/src/runner/options.ts:152-153`)
+can only name skills that are already on disk in the workspace, and technical/04:35 is where they get
+there: *"copy platform skills into the workspace `.claude/skills/_platform/` at provisioning so
+`settingSources: ['project']` discovers them"*. **Provisioning is `WorkspaceProvider.create`, and the
+pipeline composes no `WorkspaceProvider`** (Q52 — the launcher has no transport, and
+`unavailableClaudeRunner` throws). Ten `SKILL.md` files written now would be read by nothing, which is
+entry **11**'s exact shape and the defect this session spent itself unwinding. The reviewer's verdict,
+quoted: *"The refusal to ship the ten skills is correct — schedule them with provisioning."*
+
+**Read off disk while filing this** (grep, no test run — rule 66), because it shows the gap is already
+declared rather than merely planned:
+- `packages/prompts/` has `roles/` (ten role prompts, WP-17) and **no `skills/` directory**.
+- GitLab's registration already names one: `skill: { id: 'gitlab', path: 'packages/prompts/skills/gitlab' }`
+  (`packages/integrations/src/providers/gitlab/index.ts:40`) — **a path that does not exist**. Loki's is
+  honest about the same absence: `skill` is `null` with a docblock saying *"`packages/prompts/` still
+  has no `skills/` directory … deliberately did not ship skills — nothing mounts them"*
+  (`packages/integrations/src/providers/loki/provider.ts:195-197`).
+- **Nothing reads `SkillRef` anywhere.** `skillRefSchema` is declared
+  (`packages/application/src/ports/integrations/common.ts:254`) and there is no consumer of the
+  `.skill` field in the tree.
+- `createStageRunPlanner` sends `skills: []` (`packages/application/src/pipeline/planner.ts:333`), and
+  `options.ts:152` omits the SDK option entirely when the list is empty. Per the same docblock
+  (`sdk.d.ts:2089-2098`) *"omitted (default): no SDK auto-configuration. The CLI's own defaults still
+  apply, so this is **not** 'skills off'"* — so today the platform applies **no filter** and whatever
+  the project's own `.claude/skills` contains is enabled. That is **working as documented**, not a
+  defect: product/13 § "Reuse of project skills" says project skills are deliberately available. It is
+  worth knowing because the moment a per-role skill list exists it becomes a *restriction* on project
+  skills too, which is a product choice product/13's least-privilege table does not currently make.
+
+**What it costs to leave.** The ten skills are where the platform's provider know-how lives —
+`gitlab-mr`, `jira-ticket`, `loki-logs`, `sentry-issue`, `kb`, `ask-human`, `verify-work`,
+`mr-description`, `retro`, `file-followup-ticket` (product/13 § "Skills") — so without them every
+agent re-derives `glab`/`acli`/LogQL usage from its role prompt, which is precisely the token cost and
+the variance the skills exist to remove. Nothing is *broken* today; the cost is deferred capability,
+and the risk is the opposite one: writing them before a mount exists produces ten files nobody reads.
+
+**What would make it urgent.** The first real-model run (the same trigger as entry 23): a launcher
+transport (Q52) plus a composed `ClaudeRunner`. Until then a mounted skill would be mounted for nobody.
+
+**What done looks like.** Two tiers, so the row is not vacuous and does not wait on Q52 for all of it:
+1. the ten skills exist as `packages/prompts/skills/<name>/SKILL.md` with frontmatter whose `name`
+   matches the directory (the SDK matches on exactly that), GitLab's dangling `path` resolves, and the
+   provider `skill` refs are read by whatever does the copying rather than by nothing;
+2. provisioning copies them into the workspace's `.claude/skills/_platform/`, asserted **in a real
+   container** by the WP-14 docker workspace e2e that already exists
+   (`test/e2e/workspace/docker-workspace.e2e.test.ts`, `test/e2e/support/docker-workspace.ts`) — the
+   files are present, the project's own `.claude/skills` is untouched, and `RunSpec.skills` names them;
+3. and the acceptance that a run's model *lists* them is **explicitly out of scope** until a production
+   `ClaudeRunner` exists, stated so nobody writes a criterion no one can run.
+
+**Needs measurement** (rule 66, not run here): whether the WP-14 docker workspace e2e can host tier 2
+without a new fixture — it exists and provisions a real container, but nobody has checked what it
+asserts about workspace contents.
+
+**Depends on.** WP-14 (landed, provisioning), WP-17 (landed, the role prompts these sit beside).
+Owner: **WP-14a** in `13-implementation-plan.md`, carved off WP-14 rather than WP-17 or WP-22 because
+the deliverable is a **provisioning** step and WP-14 is the row that owns provisioning; WP-22 owns the
+image and the compose file, which is where the *layout* question would land if the copy turned out to
+belong in the image instead. **And the sentence that has no row at all, said plainly here because it is
+the same shape as WP-15a's**: *no plan row composes a production `ClaudeRunner` or `WorkspaceProvider`
+into `apps/server`.* Q52 is the transport **question**, not a work package; WP-22 builds images and
+compose, not the composition root. Until such a row exists, tier 3 above has nowhere to live and
+`apps/server` starts no pipeline runs at all.
+
 ### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
 **What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
 `createEventing` throw **`EventBus is not a constructor`** — `packages/infrastructure/src/events/index.ts:82`
@@ -1701,7 +2017,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15d | **Move the provider calls out of the handlers' transactions** — the shape under both of WP-15b's symptoms | WP-15b | no | DONE | `8ae121c` | 1 review round (APPROVE) + a pre-merge round for three false claims. **Backlog 17, closed.** The three sites now *decide* in the handler and *call* from a `pipeline.outbound` job enqueued through `afterCommit`; the refusal is a runtime fact — `events/open-transaction.ts` marks the handler path in `EventBus` and the job path in `createPipelineRuntime`, and `integrations.ts` refuses **both** to resolve a project's bindings and to make the call while a scope is open, so the next handler to try it fails a named test rather than a production pool. Deleting any one of the three refusals kills **exactly one** named test with the other two green — re-derived by the reviewer on copies, calibrated 3/3 unmutated (rules 21, 41). Door completeness checked over the **set**: all 7 direct `.port.*` calls in the repository sit inside the guarded `read`/`mutate` (rule 68). **The hypothesis is now a measurement**, at the shipped defaults and without generating load (rules 39, 64): N=10 concurrent intakes at 250 ms per git read delayed an unrelated event by **5 464 ms** before and **63 ms** after (load 4.1/6.0), and a read held open indefinitely stopped every other project's dispatch entirely before (20 s budget exhausted) and does not now — at `APP_DISPATCH_MAX_CONCURRENCY=1` the single dispatch slot was sitting inside `pipeline.intake` waiting on HTTP. Residual stated: the outbound worker is serial, so provider *throughput* is unchanged; what moved is that it no longer happens inside the dispatcher. `auditPerDispatch` is **0** — the receipt. The floor was **recomputed, not reverted**: `2×1+1+2+3+2+1 = 11`, the same number WP-15b reached by a different route (`2N+9` against `3N+8` — they agree at N=1 and diverge above it, 17 against 20 at N=4), so `APP_DB_POOL_MAX` stays **13** with two of slack; my instruction to revert it to 10 was refused with the arithmetic, correctly (rule 27, seventh instance). Moving the writes out **created** a lost update and found the class: backlog **18**. |
 | WP-15c | **Webhook ingress + the `inbox`, and the inbound redaction door** | WP-15b, WP-08, WP-09 | no | DONE | `38ea686` | 1 review round (APPROVE) + a pre-merge round, and **an architect ruling taken before the first `delivery_id` was written**. **Production can start a ticket.** `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded and drives it to task.completed"* — a signed delivery to a running `apps/server` instance, **no seeded row**. The ingress asks four questions in order (which binding · is it authentic · which delivery · what does it mean), `verify` runs over the bytes **as they arrived** and `normalise` runs **outside any transaction**; one transaction then writes the `inbox` row and appends its events. That is a **deliberate deviation from technical/06**, which had the work happen in a job and so could lose a delivery it had already recorded as performed — the doc is amended with the reason **and** with the sweep-shaped alternative it was weighed against (rule 8: amend the doc, then point at it). **The ruling is implemented, not merely recorded**, and its real finding is closed: `inbox(headers, payload)` had carried raw deliveries since `0005_events.sql:113`, TD-012's write list never named the table, and **GitLab's legacy scheme sends the binding's own webhook secret as plaintext in `X-Gitlab-Token`** — so migration **0014** adds `redaction_count` and `verified`, both columns are stored redacted *after* `verify` and *after* the key is computed, the verdict is **persisted** because a redacted payload cannot be re-verified, and an integration test reads the row back out of PostgreSQL and asserts the credential is not in it. `redaction_count` is the **summed** count over all three redactions, pinned exactly by `toBe(2)`/`toBe(3)`, so a headers-only count fails — the dead-signal failure the ruling named. **Backlog 20 discharged by the next work package after the one that created it**: a matched ticket with no task row is **re-emitted**, not merely detected — the reconciler appends a **new** `ticket.matched` and leaves `inbox(provider, delivery_id)` untouched, which is how it coexists with the replay criterion (dedup is about a *delivery*, recovery about a *task*); two tasks are impossible because `runIntakeCheck` re-reads `findByTicket` inside its write transaction; and the grace is **data-relative**, not a sleep (rule 2). **Q52 decided rather than deferred**: no fourth task state — a throwing runner `start` fails the run and escalates to `needs_human`, and the reviewer independently agreed, because only the error *class name* reaches `events.payload` and `RunnerUnavailableError` distinguishes *the platform is unfinished* from *this task needs a person*. Filed **Q59**; **Q60** for the rate limit this public endpoint does not yet have. Reviewer mutations on copies, calibrated 21/21 green first: `verify → accept` kills **three** named tests including `packages/application/src/integrations/inbound.test.ts` › *"verifies the bytes as they arrived, before anything is redacted"*; header `redactJson → identity` kills two; dropping the `!isNew` early return kills the racing-deduplication test. The insert **is** the arbiter (`on conflict (provider, delivery_id) do nothing` + `rowCount`, in the caller's transaction — no check-then-insert). `PROVIDER_DIRECTORIES` is `readdirSync` (rules 7, 68). **`verify` was red in the orchestrator's shell after the pre-merge round** — the citation guard caught an ambiguous `inbound.test.ts` basename across three tracked files (rule 59). The implementer's targeted files were green and its report was accurate about them; the **target** is a different question (rule 61). Left behind: **backlog 22**. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
-| WP-17 | Role prompts + artifact schemas + eval sets (product/13, TD-016) | WP-12, WP-16 | yes | TODO | — | Also owns WP-16's two unplaced pieces — the real `contextPack` and a production `PlatformToolPort` — and the **prompt-delimiter contract for untrusted pack text** (backlog 11, 12). The delimiter lands in or before the wiring, not after. Backlog 13 (budget ceiling) and 14 (estimator) are its neighbours. |
+| WP-17 | **Role prompts + the delimiter contract + the real context pack** | WP-12, WP-16 | yes | DONE | `1497fe9` | **2 review rounds (the second by fresh eyes on round 2's fixes) + a pre-merge round.** The delimiter landed **in the same change as the wiring**, which is what backlog 12 required: a block is `<untrusted-data-<nonce> kind="…">` … `</untrusted-data-<nonce>>`, nonce 32 hex from `randomUUID` drawn **per prompt**, and the rule inside it is that *every byte of the prompt is either text the platform wrote or is inside a block*. Body **byte-identical** — no sanitiser, nothing for a later transform to undo (`apps/web/src/ui/untrusted.tsx`'s answer to the same question). Nothing untrusted reaches a **marker**: a value outside `SAFE_ATTRIBUTE_VALUE` is **refused**, a body containing the nonce is refused after four draws, and the reviewer established the part that actually closes it — the degradation renders a **closed set of three platform literals**, so **no input renders attacker bytes in a marker**. Nothing persists the nonce (`runs.system_prompt`/`user_prompt` exist and nothing writes them). **The ledger was wrong and is corrected at the source**: two of the ten hostile constructs do *not* flow byte-identical — `sanitiseDocumentText` replaces each control/bidi character with one `U+FFFD` and counts it, **2 per construct** as written and **4** over `HOSTILE_TEXT` (backlog 12 amended). The four zero-width characters do arrive untouched and buy nothing **against the structural parse** — a spliced nonce fails `NONCE_PATTERN` for the reader too — which is one word narrower than the implementer first claimed, because the reader is a parse and the model is not. **Round 1 found a live veto**: a vault path past the marker alphabet **threw**, failing `plan()`, failing the run and escalating to `needs_human` — *one deeply nested KB page stopping every task on the project*, measured at 476 renders / 568 throws with `.agentic/knowledge/<255>/<255>` reaching 530. Both names derived from a vault path now degrade independently; the implementer audited the attribute **set** unprompted (rule 68) and found no third asymmetry, and the reviewer re-derived the set off the code rather than off its table. **Three wrong causes attached to correct numbers** in one work package (rule **81**), all three found by re-deriving the cause rather than re-checking the figure. **Backlog 13 closed** (`.max(200_000)`); **backlog 14's unit half closed** — `ceil(utf8Bytes/4)`, 48 000 CJK 12 000 → 36 000, ASCII unchanged, and the new property **fails** for a wrong ratio where the old two could not; the ratio stays a **hypothesis**, labelled with a vendor datum. Backlog 15/Q58 deliberately not taken. **The ten platform skills were refused and the refusal was upheld**: `skills?: string[] | 'all'` is *a context filter, not a sandbox* (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`), mounted at provisioning, which needs a `WorkspaceProvider` the pipeline does not compose — ten files nothing reads is backlog 11's shape. Now **WP-14a**. **Eval half externally BLOCKED** and nothing stubbed: `pnpm eval` exists and **exits 1** naming what is missing, and `scripts/eval.test.ts` holds it there including rule 18's empty-key case. See "Blocker briefs needing a human". Left behind: backlog **23**, which is why M1 is not complete. |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
 | WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, | WP-04 | no | TODO | — | |
 | WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `c744904` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
