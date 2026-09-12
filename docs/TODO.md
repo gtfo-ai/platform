@@ -103,6 +103,19 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       2026-09-11; BD-002's gate failing open, standing rule 18. CI's `secret scan` job is unaffected.
       **Needs measurement:** whether this session's agent worktrees took the container fallback or the host
       binary. PROGRESS backlog entry 8.
+- [ ] **The runlet conformance suite's 30 s waits are a hardware assertion, and one of them blocked a
+      push** — `waitForFile`/`waitFor` default to `timeoutMs = 30_000`
+      (`packages/infrastructure/src/runlet/conformance.contract.test.ts:69,83`) inside `verify`'s fully
+      parallel `contract` project. Measured 2026-09-12: the pre-push hook's unit+contract run **failed** at
+      load 12.63 (suite 41.35 s, `signal-report.pid never appeared` at 31,482 ms), the same file standalone
+      was green **3 runs of 3** at load 5.66, and the next push passed the same suite in 15.07 s at load
+      5.08. Second instance of the class whose first — `loki/index.test.ts`'s census — was closed at
+      `763dd6a` with a measured `{ timeout: 25_000 }`. **Needs verification** (read, do not infer): the
+      `contract` project sets no `testTimeout` and vitest 5 resolves the default to **5 s**, which
+      contradicts a helper deadline firing at 31.5 s, and the repair depends on which is true.
+      **Needs measurement:** the distribution of this file's six tests at the loads the fleet runs at —
+      not in this session, and **no synthetic load on this host** (rule 66). No work package owns it.
+      PROGRESS backlog entry 25.
 - [ ] SDK `sandbox.credentials` masking when passed via the SDK; srt proxy chaining — later (defence in depth).
 - [ ] GitLab project access tokens on self-managed Free tier; revoke latency — WP-09.
 - [ ] Redistribution terms for the Claude Code binary and `acli` inside a public image; fallback install-at-build from official repos or at first start — WP-22 (TD-018).

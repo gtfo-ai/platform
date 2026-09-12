@@ -5,42 +5,35 @@
 ## Resume note
 
 > **Session 4 — 2026-09-11/12.** Read this, then the **"Blocker briefs needing a human"** (there is one now),
-> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-two rules**, each
+> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-three rules**, each
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Twenty-nine work packages are DONE and pushed.** `main` is at **`1497fe9`** (WP-17), green on all six
-targets in the orchestrator's own shell and **green on GitHub** (`34660244619`). No worktrees, no open
-branches, clean tree.
+**Thirty work packages are DONE and pushed.** `main` is at **`b6793aa`** (WP-15f), green on all six targets
+in the orchestrator's own shell and **green on GitHub** (`34665646412`). No worktrees, no open branches,
+clean tree.
 
-**M1 is NOT complete, and the reason is not the one this note expected to be writing.** The loop runs: a
-signed webhook delivery reaches a running `apps/server` instance, appends `ticket.matched`, and the task
-reaches `task.completed` with nothing seeded — `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing
-seeded and drives it to task.completed"*. Prompts are assembled, the context pack is real and delimited, and
-`kb_search` is callable from a run. **And the platform never reads the ticket's text.** `ticketBlock`
-(`assembly.ts:342-351`) is `provider`/`key`/`url`; `get_task_context` **refuses**
-(`platform-tools.ts:111`); the workspace has no path back to the platform; and `readTicket` has **zero
-production callers**. So the refinement stage is asked to write a spec for a ticket **nobody opened**, and
-retrieval's query at that stage is the ticket key alone — `extractQueryTerms('ACME-1')` → `["acme"]`, one
-term. That is **backlog 23**, with **Q61** for its product half and **WP-15f** for its acceptance.
+**The loop is honest now, and it still does not run an agent.** A signed webhook delivery reaches a running
+`apps/server` instance, appends `ticket.matched`, creates a task, assembles a prompt that contains **the
+ticket's own title, description and comment thread** inside the untrusted-data delimiter, with a real
+retrieval pack beside it, and the task reaches `task.completed`. That last clause is the one to read
+carefully: it is true **through `FakeClaudeRunner`**. In production `unavailableClaudeRunner()` **throws**, so
+a real task reaching an agent stage stops there, loudly, in its own job.
 
-**Nothing failed, and that is the finding under the finding.** `FakeClaudeRunner` picks its scenario from
-`spec.stage` and **never reads the prompt**, so no test in any tier can fail because the prompt is empty or
-the ticket was never opened. Standing rule **82**. *"M1 complete" was one green e2e away from being written
-about a loop that starts an agent on an identifier.*
+**So the honest headline is one sentence: the pipeline is complete and the agent is not composed.** Backlog
+23 is closed — the platform reads the ticket — and what remains between here and a working product is
+**Q52**: no production `ClaudeRunner` and no `WorkspaceProvider` in the pipeline's composition. **No plan row
+owns it.** WP-22 is images, WP-14a is provisioning, Q52 is a *question*. This is `createPipelineRuntime`'s
+shape exactly — the gap that went twenty-three work packages composed only by a test harness — and it is the
+single most likely thing for a future session to re-derive from scratch. **Give it a row before it becomes
+another archaeology entry.**
 
-**Next, in order.** (1) **WP-15f** — store and read the ticket's text (backlog 23, Q61); nothing downstream is
-worth tuning before it, and backlog **15**/Q58 is explicitly **not actionable** until it lands, because a
-relevance floor over `["acme"]` only removes documents. (2) **WP-18** (librarian, and it registers
-`KnowledgeIndexer`, unblocked now the ingress exists), **WP-19**, **WP-14a** (provisioning + the ten platform
-skills), **WP-21**, **WP-22**, **WP-23**. (3) M2 (WP-24–33). Backlog entries 8–24 hold the rest, each with the
-measurement that earned it.
-
-**One gap nobody's row owns, stated here so it is not re-derived.** No plan row composes a production
-`ClaudeRunner` or `WorkspaceProvider`: **Q52 is a question**, WP-22 is images, and WP-14a is provisioning.
-This is `createPipelineRuntime`'s shape exactly — the thing that went twenty-three work packages composed only
-by a test harness — and it is the reason a task reaching an agent stage still stops in its job. Give it a row
-before it becomes another archaeology entry.
+**Next, in order.** (1) **A row for Q52** — compose a production `ClaudeRunner` and `WorkspaceProvider`;
+nothing downstream is a product without it. (2) **WP-18** (librarian, and it registers `KnowledgeIndexer`,
+unblocked now the ingress exists), **WP-19**, **WP-14a** (provisioning + the ten platform skills),
+**WP-21**, **WP-22**, **WP-23**. (3) M2 (WP-24–33). Backlog entries 8–25 hold the rest, each with the
+measurement that earned it. **Backlog 15/Q58 is explicitly not actionable yet** — it is about a query that
+is too *broad*, and until a corpus exists to measure precision on (entry 16) a floor only removes documents.
 
 **WP-17's evals are BLOCKED on a human**, checked at session start rather than discovered at implementation
 time: no repository secrets, **no environments at all** (so no `llm-ci`), org secrets 403 for this account,
@@ -87,6 +80,23 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+83. **Closing a gap falsifies every sentence that described it, and the sentence nearest the fix is the one
+   nobody re-reads.** WP-15f closed a live redaction gap — a credential in a ticket description was
+   pattern-redacted in the audit row of the same call and stored verbatim in `tasks.ticket_snapshot`, because
+   `inbox` got TD-012 step 2 and the pipeline loader had no equivalent. The fix was correct, verified by a
+   reviewer planting its own credential shapes (an Anthropic key, an RSA header, a database URL, an AWS key,
+   one of them straddling the 20 000-character cap) and finding none of them in the stored row. And the
+   docblock **on the very field that was fixed** still read *"step 2 is **not** applied to the stored
+   snapshot, and closing that is a composition change WP-15f deliberately did not make"*, citing a ledger
+   entry the same round had deleted. **The fix created the false claim**: a sentence describing an open gap
+   is true only while the gap is open, so the act of closing it is what makes the documentation wrong — and
+   the file you just edited is the last place you look for a claim about what the code does *not* do. It is
+   rule 63's shape (*an exclusivity claim is a statement about every other file*) turned inward, and rule
+   49's discipline is the remedy: **when you close a gap, grep for the sentences that documented it.** Told
+   to, the implementer found the stale phrase in **four** places rather than the two the review had named,
+   one of them in this ledger. Fifth instance of rule 81 in two work packages, and the only one
+   *manufactured* by a correct fix rather than inherited.
 
 82. **The fake that lets an acceptance test pass is the one that never reads the artefact the work package
    exists to produce.** WP-17 shipped the prompt assembler, the delimiter contract and the real context
@@ -1664,6 +1674,119 @@ raised the collision that round 3 reversed the key half for (rule 70); round 3 f
 "anywhere" scope claim false and it was narrowed with rule 20 as the reason. Merge, then delete the
 worktree the same minute (rule 66).
 
+### 25. **A hand-written wall-clock deadline inside the fully parallel contract tier — the second instance of one class, and this one blocked a push** (TODO — **no work package owns it**)
+**What is wrong.** The runlet conformance suite waits on a structural event with a hand-written 30 s
+deadline — `packages/infrastructure/src/runlet/conformance.contract.test.ts:69`
+(`waitForFile(file, timeoutMs = 30_000)`) and `:83` (`waitFor(what, ready, timeoutMs = 30_000)`) — while
+the file runs inside `verify`'s **fully parallel** `contract` project (`vitest.config.ts:87`), whose
+parallelism is set by whatever else the orchestrator happens to be running. The deadline is therefore a
+statement about the host's scheduler rather than about the shim (standing rule **2**), and it was never
+measured at the load the fleet runs at (rule **64**). It is **not** a defect in the shim and **not** a
+defect in the assertion: it is a good assertion with an unmeasured bound.
+
+**Evidence** (orchestrator, 2026-09-12, measured rather than reported by an agent). The pre-push hook
+rejected WP-15f's push, and the failure was not in WP-15f's code:
+
+```
+FAIL |contract| packages/infrastructure/src/runlet/conformance.contract.test.ts >
+  agentic-runlet conformance, against the real shim process >
+  relays a signal to the CLI and forwards its stderr          31482ms
+Error: /var/folders/.../rl-F5wjCN/signal-report.pid never appeared
+  at waitForFile (conformance.contract.test.ts:76:13)
+  at conformance.contract.test.ts:357:5
+```
+
+| condition | 1-min load average | result |
+|---|---|---|
+| pre-push hook's full parallel unit+contract (`pnpm run -s test`, `lefthook.yml:35`) | **12.63** | **FAIL**, suite 41.35 s |
+| the same file standalone, same commit | 5.66 | **3 runs of 3 green** (`Tests 6 passed` each) |
+| the next push attempt, the same suite | 5.08 | PASS, 15.07 s |
+
+41.35 s against 15.07 s for the identical suite, and a 30 s inner deadline that only misses under the
+heavier one.
+
+**Why this is one entry about a class, not a second entry about a file.** The sibling is already in this
+ledger under "Discovered work": `loki/index.test.ts`'s million-iteration census, which failed once inside a
+full `verify` and passed standalone. That *instance* was closed at `763dd6a` with `{ timeout: 25_000 }`
+(`packages/integrations/src/providers/loki/index.test.ts:198`) and the distribution written into its
+docblock (`:158-197`) — 1,103 ms alone at load 11; 2,824 / 1,754 / 1,634 ms inside a full run at load
+17/26/29; **failed** against the 5 s default at load ~57; 9,640 ms at load 96, *8.7x the first row for
+identical work*. The instance is closed and **the class is not**: nothing in the ledger says where a
+deadline over a parallel tier belongs, so the next one was written by hand too. A session that repairs one
+file and leaves the others has not repaired anything.
+
+**The sweep the class asks for** (rules 49 and 63; read-only grep, nothing run). **Five** hand-written
+literals, not two, and three of them govern this one suite:
+`conformance.contract.test.ts:69` and `:83` (30 s, contract tier), `runlet/testing.ts:229`
+(`waitForProcessGone`, 15 s — *called by the conformance suite*), `runlet/shim.test.ts:102` and `:120`
+(15 s, unit tier). Whatever the answer is, it is applied to all five, not to the one that fired.
+
+**Why it is worse than a slow test.** Rule **56** records that this exact assertion was *deliberately
+introduced*: `SpawnedProcess.kill()` returns `state.connection?.send(...) ?? false`, the previous test
+slept 300 ms and asserted `true`, and it failed on `main` at load 150 **with the child perfectly healthy**,
+blaming the child for a socket that was not up. The pid-file wait replaced it because it is a lower bound
+on something structural and names the right component. The file's own docblock states the discipline —
+*"no assertion in this file bounds a duration from above … lower bounds on something structural"*
+(`conformance.contract.test.ts:20-24`). **A repair that weakens that pointing has traded one rule-56 defect
+for another.**
+
+**A contradiction in the evidence that must be resolved before anyone picks a number.** The `contract`
+project sets **no** `testTimeout` (`vitest.config.ts:87-92`) and vitest 5.0.0 resolves
+`resolved.testTimeout ??= resolved.browser.enabled ? 15e3 : 5e3` for a non-browser project, so on paper the
+enclosing per-test budget is **5 s** — yet the observed failure is the helper's own 30 s deadline reported
+at **31,482 ms**, which can only happen if the effective budget is above 31 s. One of those two readings is
+wrong and nobody knows which. It decides the repair: if a 5 s enclosing budget really is in force, raising
+the helper's deadline only relabels the failure `Test timed out in 5000ms` and throws away exactly the
+component-pointing rule 56 paid for. **Needs verification** — by reading the resolved config, not by
+inferring it, and not in this session (rule 66).
+
+**What it costs to leave.** Not one red run. The pre-push hook is the gate that decides what reaches
+`origin` (`lefthook.yml:31-36`), and a gate that fails on a file the pusher did not touch teaches the
+pusher to `--no-verify` — which is precisely how `d1e7b69` put a whole merge conflict into `CLAUDE.md` and
+left it on `main` for an hour (`lefthook.yml:24-30`). *A guard that fires on legitimate work gets switched
+off* is the failure mode `conflict:check` was deliberately narrowed to avoid, and this is the same shape
+arriving at the hook rather than at the checker.
+
+**What "done" looks like.** A decision recorded **in the file** about which level owns the bound, plus the
+repair it implies:
+- the vitest-budget contradiction above resolved **first**;
+- if the answer is a **number**, it carries the load it was measured at (rule 64) and it is applied across
+  all five literals of the sweep. A generous number costs nothing here for the same reason the loki
+  docblock gives: these waits assert *structure* and never a duration, so the timeout is infrastructure and
+  not a performance guard, and a genuinely dead shim still fails at the speed it dies;
+- if the answer is the **harness** — the real-process suites get their own project, or their concurrency is
+  bounded — the file must still end up inside a `verify` target *and* inside the CI job that runs it
+  (`scripts/verify-targets.ts`, held to `.github/workflows/ci.yml` by `scripts/verify.test.ts`), because a
+  suite moved out of `verify` is a suite CI stops running: the WP-06→WP-10 `ignored:check` shape;
+- mutation-checked either way (rule 3): with the repair in place, a shim that genuinely never spawns must
+  still fail with a message naming the shim, not a bare timeout.
+
+**Recommendation, labelled as one** (my judgement; the measurement that would decide it cannot be taken
+here). Prefer the **harness-level** answer, with a documented generous bound as the cheap interim. The loki
+census is CPU-bound, deterministic and counts iterations, so a measured number is honest there; this file
+starts real `node` processes through the TS source resolver, a real Unix socket, an SDK `query()` and a
+child CLI, and what it waits for is **process scheduling** — the exact quantity the orchestrator's own
+parallelism moves by an order of magnitude (rule 66: a 14-core host, 10–14x oversubscription, load 137–196
+observed). A number sized at load 12 is wrong at load 137 and idle at load 5. The precedent is already in
+the same config file: `integration` and `e2e-fake-claude` carry their own `testTimeout` (120 s / 180 s) and
+a `globalSetup` **because they own real resources** (`vitest.config.ts:95-119`); a suite that spawns
+processes is the same kind of thing sitting in the wrong tier.
+
+**Needs measurement** (not run here, rule 66 — no test target, and no synthetic load on this host): the
+distribution of this file's six tests at the loads the fleet actually runs at, before any number is
+written. Load generation is *retracted* on this machine (rule 66 records two kernel panics), so the sample
+has to be collected from real runs — the pre-push hook already prints the suite's wall time on every push,
+which is a free sample if somebody starts recording it with the load.
+
+**Urgency — live, not latent.** It fired at load **12.63**, an ordinary two-agent session, not the 137 the
+panic note records; and every tier that grows lengthens the parallel run.
+
+**Owner. None, and this entry says so plainly.** WP-13 wrote the file and is DONE; no plan row owns *the
+timing bounds of a test tier*; `scripts/verify-targets.ts` owns the **list** of verification targets, not
+their budgets. Whoever next touches `packages/infrastructure/src/runlet/` takes it, and preferably before
+**WP-22**, which adds container work to the same suites. **Depends on** nothing but the verification and
+the measurement named above.
+
 ### 3. Citation guard — the oracle shares a shape with the parser it audits (rule 65)
 `scripts/citations.ts`: `CITATION_SITE` requires the backticked file token and `›` on the same **physical**
 line, exactly as the parser does, so a citation wrapped *between* those two is read by neither and the
@@ -2016,6 +2139,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15b | **Postgres `IntegrationAuditLog` + `IdempotencyStore` + migration 0013** | WP-15a | no | DONE | `31abfc6` | 1 review round. `startRuntime()` composes a real audit log with **no caller able to supply one** (the field is gone from `PipelineComposition`); the composed-log→no-op mutation fails the e2e with `expected 0 to be greater than 0`, so the dependency is **used**, not merely supplied (rule 35). `redaction_count` asserted in **both** directions (rule 42); counters `not null` with the **default dropped**, so an omitted one errors rather than recording a zero (rule 18). **FK on `integration_actions` dropped** — a log of external facts must not be gated on internal referential state; deferral cannot help because the audit transaction commits **before** the saga's. Zero readers today, so technical/03 carries the `LEFT JOIN` sentence the first one will need. Pool floor recomputed: only the audit connection is concurrency-proportional (both job workers call providers *outside* their transactions), poolMax 10 → 13, and the test asserts the **shape** (+6 for N 1→3) so a flat reservation fails. Round 1 found the idempotency invariant asserted by **nothing** on Postgres while the fake *was* held to it — rule 1 inverted. |
 | WP-15d | **Move the provider calls out of the handlers' transactions** — the shape under both of WP-15b's symptoms | WP-15b | no | DONE | `8ae121c` | 1 review round (APPROVE) + a pre-merge round for three false claims. **Backlog 17, closed.** The three sites now *decide* in the handler and *call* from a `pipeline.outbound` job enqueued through `afterCommit`; the refusal is a runtime fact — `events/open-transaction.ts` marks the handler path in `EventBus` and the job path in `createPipelineRuntime`, and `integrations.ts` refuses **both** to resolve a project's bindings and to make the call while a scope is open, so the next handler to try it fails a named test rather than a production pool. Deleting any one of the three refusals kills **exactly one** named test with the other two green — re-derived by the reviewer on copies, calibrated 3/3 unmutated (rules 21, 41). Door completeness checked over the **set**: all 7 direct `.port.*` calls in the repository sit inside the guarded `read`/`mutate` (rule 68). **The hypothesis is now a measurement**, at the shipped defaults and without generating load (rules 39, 64): N=10 concurrent intakes at 250 ms per git read delayed an unrelated event by **5 464 ms** before and **63 ms** after (load 4.1/6.0), and a read held open indefinitely stopped every other project's dispatch entirely before (20 s budget exhausted) and does not now — at `APP_DISPATCH_MAX_CONCURRENCY=1` the single dispatch slot was sitting inside `pipeline.intake` waiting on HTTP. Residual stated: the outbound worker is serial, so provider *throughput* is unchanged; what moved is that it no longer happens inside the dispatcher. `auditPerDispatch` is **0** — the receipt. The floor was **recomputed, not reverted**: `2×1+1+2+3+2+1 = 11`, the same number WP-15b reached by a different route (`2N+9` against `3N+8` — they agree at N=1 and diverge above it, 17 against 20 at N=4), so `APP_DB_POOL_MAX` stays **13** with two of slack; my instruction to revert it to 10 was refused with the arithmetic, correctly (rule 27, seventh instance). Moving the writes out **created** a lost update and found the class: backlog **18**. |
 | WP-15c | **Webhook ingress + the `inbox`, and the inbound redaction door** | WP-15b, WP-08, WP-09 | no | DONE | `38ea686` | 1 review round (APPROVE) + a pre-merge round, and **an architect ruling taken before the first `delivery_id` was written**. **Production can start a ticket.** `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded and drives it to task.completed"* — a signed delivery to a running `apps/server` instance, **no seeded row**. The ingress asks four questions in order (which binding · is it authentic · which delivery · what does it mean), `verify` runs over the bytes **as they arrived** and `normalise` runs **outside any transaction**; one transaction then writes the `inbox` row and appends its events. That is a **deliberate deviation from technical/06**, which had the work happen in a job and so could lose a delivery it had already recorded as performed — the doc is amended with the reason **and** with the sweep-shaped alternative it was weighed against (rule 8: amend the doc, then point at it). **The ruling is implemented, not merely recorded**, and its real finding is closed: `inbox(headers, payload)` had carried raw deliveries since `0005_events.sql:113`, TD-012's write list never named the table, and **GitLab's legacy scheme sends the binding's own webhook secret as plaintext in `X-Gitlab-Token`** — so migration **0014** adds `redaction_count` and `verified`, both columns are stored redacted *after* `verify` and *after* the key is computed, the verdict is **persisted** because a redacted payload cannot be re-verified, and an integration test reads the row back out of PostgreSQL and asserts the credential is not in it. `redaction_count` is the **summed** count over all three redactions, pinned exactly by `toBe(2)`/`toBe(3)`, so a headers-only count fails — the dead-signal failure the ruling named. **Backlog 20 discharged by the next work package after the one that created it**: a matched ticket with no task row is **re-emitted**, not merely detected — the reconciler appends a **new** `ticket.matched` and leaves `inbox(provider, delivery_id)` untouched, which is how it coexists with the replay criterion (dedup is about a *delivery*, recovery about a *task*); two tasks are impossible because `runIntakeCheck` re-reads `findByTicket` inside its write transaction; and the grace is **data-relative**, not a sleep (rule 2). **Q52 decided rather than deferred**: no fourth task state — a throwing runner `start` fails the run and escalates to `needs_human`, and the reviewer independently agreed, because only the error *class name* reaches `events.payload` and `RunnerUnavailableError` distinguishes *the platform is unfinished* from *this task needs a person*. Filed **Q59**; **Q60** for the rate limit this public endpoint does not yet have. Reviewer mutations on copies, calibrated 21/21 green first: `verify → accept` kills **three** named tests including `packages/application/src/integrations/inbound.test.ts` › *"verifies the bytes as they arrived, before anything is redacted"*; header `redactJson → identity` kills two; dropping the `!isNew` early return kills the racing-deduplication test. The insert **is** the arbiter (`on conflict (provider, delivery_id) do nothing` + `rowCount`, in the caller's transaction — no check-then-insert). `PROVIDER_DIRECTORIES` is `readdirSync` (rules 7, 68). **`verify` was red in the orchestrator's shell after the pre-merge round** — the citation guard caught an ambiguous `inbound.test.ts` basename across three tracked files (rule 59). The implementer's targeted files were green and its report was accurate about them; the **target** is a different question (rule 61). Left behind: **backlog 22**. |
+| WP-15f | **The ticket's own words** — the platform read no ticket text | WP-15c, WP-17 | no | DONE | `b6793aa` | **2 review rounds (the second by fresh eyes) + a comment round.** The finding that stopped "M1 complete" being written: `tasks` stored `ticket_provider`/`key`/`url` and nothing else, `ticketBlock` was those same three lines, `get_task_context` **refused**, and `readTicket` — which already returned `title`, `description`, `comments[]`, `epic`, `siblings`, `attachments_text` — had **zero production callers**. The refinement stage was asked to spec a ticket nobody opened and retrieval's query was `extractQueryTerms('ACME-1')` → `["acme"]`. `readTicket` is now called from **two ordered points**, both outside every transaction and through `IntegrationActionExecutor`: intake's call phase puts the snapshot in the `insert` that creates the task, `stage.execute` backfills when a row has none. **A fourth `pipeline.outbound` duty was measured and rejected** — Q61 recommended one, but `enqueueStage` runs on the line after the commit (`saga.ts:385-388`), so a duty woken by `task.created` waits for the outbox sweep, two reads, a decryption and a round trip, and *"the criterion would be held by luck"*. **It did not join backlog 18**: a narrow `tasks.saveTicketSnapshot`, **no new `save` site**, and `save`'s column list **omits** `ticket_snapshot`, so the twenty whole-row writers are structurally unable to clobber it; the contract case dies on the **derived cost total** (rule 79), `expected +0 to be close to 4.25`. **Budget derived, not inherited** (Q61's numbers were a stated proposal): title 512, description 20 000, newest 20 comments × 1 000 +128 id +128 author = **45 632** chars / **182 528** B / **11 408** tokens, **additive to** the 12 000 pack budget rather than inside it, **292×** under Q54's measured 53 284 565, and **produced by a test rather than quoted** (rule 39). **Two majors, both fixed rather than argued down.** A blanket `catch` swallowed `TransactionOpenError`, disarming WP-15d's guard on **both** call sites — probed `{"threw":false,"value":null}` where the docblock *and this ledger* claimed a refusal; it is terminal now at both refusal points, re-probed `{"threw":true,"ctor":"TransactionOpenError"}` twice, fail-open for a provider that is down unchanged. And a credential pasted into a description was pattern-redacted in the audit row of **the same call** and stored **verbatim**, because `inbox` gets TD-012 step 2 and the pipeline loader had no equivalent — **the filing misstated its own precedent**, and it was **closed** rather than re-filed: `platformRedactor` composed after the binding's own, held in **production** by the ingress e2e, and verified by a reviewer planting its **own** credential shapes, one straddling the cap. **The implementer refused two of my instructions and was right both times** (rule 27): sub-decision (b)'s *"last provider signal"* is not a quantity this build holds (`consumption.ts:89-90` both `unconsumed`, `events.ts:134,145` nullish `task_id`, `inbound.ts:180` project stream), so my brief demanded the consumer change it forbade in the same paragraph. Rule **83** was earned here. Left behind: backlog **25**. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | **Role prompts + the delimiter contract + the real context pack** | WP-12, WP-16 | yes | DONE | `1497fe9` | **2 review rounds (the second by fresh eyes on round 2's fixes) + a pre-merge round.** The delimiter landed **in the same change as the wiring**, which is what backlog 12 required: a block is `<untrusted-data-<nonce> kind="…">` … `</untrusted-data-<nonce>>`, nonce 32 hex from `randomUUID` drawn **per prompt**, and the rule inside it is that *every byte of the prompt is either text the platform wrote or is inside a block*. Body **byte-identical** — no sanitiser, nothing for a later transform to undo (`apps/web/src/ui/untrusted.tsx`'s answer to the same question). Nothing untrusted reaches a **marker**: a value outside `SAFE_ATTRIBUTE_VALUE` is **refused**, a body containing the nonce is refused after four draws, and the reviewer established the part that actually closes it — the degradation renders a **closed set of three platform literals**, so **no input renders attacker bytes in a marker**. Nothing persists the nonce (`runs.system_prompt`/`user_prompt` exist and nothing writes them). **The ledger was wrong and is corrected at the source**: two of the ten hostile constructs do *not* flow byte-identical — `sanitiseDocumentText` replaces each control/bidi character with one `U+FFFD` and counts it, **2 per construct** as written and **4** over `HOSTILE_TEXT` (backlog 12 amended). The four zero-width characters do arrive untouched and buy nothing **against the structural parse** — a spliced nonce fails `NONCE_PATTERN` for the reader too — which is one word narrower than the implementer first claimed, because the reader is a parse and the model is not. **Round 1 found a live veto**: a vault path past the marker alphabet **threw**, failing `plan()`, failing the run and escalating to `needs_human` — *one deeply nested KB page stopping every task on the project*, measured at 476 renders / 568 throws with `.agentic/knowledge/<255>/<255>` reaching 530. Both names derived from a vault path now degrade independently; the implementer audited the attribute **set** unprompted (rule 68) and found no third asymmetry, and the reviewer re-derived the set off the code rather than off its table. **Three wrong causes attached to correct numbers** in one work package (rule **81**), all three found by re-deriving the cause rather than re-checking the figure. **Backlog 13 closed** (`.max(200_000)`); **backlog 14's unit half closed** — `ceil(utf8Bytes/4)`, 48 000 CJK 12 000 → 36 000, ASCII unchanged, and the new property **fails** for a wrong ratio where the old two could not; the ratio stays a **hypothesis**, labelled with a vendor datum. Backlog 15/Q58 deliberately not taken. **The ten platform skills were refused and the refusal was upheld**: `skills?: string[] | 'all'` is *a context filter, not a sandbox* (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`), mounted at provisioning, which needs a `WorkspaceProvider` the pipeline does not compose — ten files nothing reads is backlog 11's shape. Now **WP-14a**. **Eval half externally BLOCKED** and nothing stubbed: `pnpm eval` exists and **exits 1** naming what is missing, and `scripts/eval.test.ts` holds it there including rule 18's empty-key case. See "Blocker briefs needing a human". Left behind: backlog **23**, which is why M1 is not complete. |
 | WP-18 | Librarian pipeline + proposals + apply policy + knowledge MR flow + ni | WP-16, WP-17, WP-15c | no | TODO | — | Also registers `KnowledgeIndexer` as the singleton-per-project pg-boss job technical/07 specifies; it needs a checkout, so it waits on WP-15c's ingress (backlog 11). |
