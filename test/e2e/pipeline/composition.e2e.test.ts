@@ -40,6 +40,7 @@ import {
   createMigratedDatabase,
   type MigratedDatabase,
 } from '../../integration/support/migrated.js';
+import { createTestPool } from '../../integration/support/postgres.js';
 import { type Instance, startInstance } from '../support/instance.js';
 import { type PipelineE2E, seedWorld, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
@@ -144,7 +145,7 @@ describe('an instance started with the pipeline disabled', () => {
     });
     logged = lines.join('').split('\n');
 
-    const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
+    const pool = createTestPool(instance.database.connectionString, { max: 4 });
     const inbound = eventingAdapters.createEventing({
       pool,
       connectionString: instance.database.connectionString,

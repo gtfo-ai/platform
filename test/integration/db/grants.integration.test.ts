@@ -11,7 +11,12 @@ import { db } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestDatabase, type TestDatabase, withClient } from '../support/postgres.js';
+import {
+  createTestDatabase,
+  strictPoolLogger,
+  type TestDatabase,
+  withClient,
+} from '../support/postgres.js';
 
 /** PostgreSQL's insufficient_privilege. */
 const INSUFFICIENT_PRIVILEGE = '42501';
@@ -317,14 +322,17 @@ describe('the runtime pool', () => {
   });
 
   it('hands out connections already switched to the application role', async () => {
-    const handle = db.createDatabasePool({
-      url: database.connectionString,
-      appRole: 'platform_app',
-      poolMax: 2,
-      connectionTimeoutMs: 5_000,
-      partitionMonthsAhead: 3,
-      transcriptRetentionDays: null,
-    });
+    const handle = db.createDatabasePool(
+      {
+        url: database.connectionString,
+        appRole: 'platform_app',
+        poolMax: 2,
+        connectionTimeoutMs: 5_000,
+        partitionMonthsAhead: 3,
+        transcriptRetentionDays: null,
+      },
+      strictPoolLogger,
+    );
 
     try {
       const who = await handle.pool.query<{ current_role: string }>('select current_role');
@@ -345,14 +353,17 @@ describe('the runtime pool', () => {
   });
 
   it('leaves the connection alone when no role is configured', async () => {
-    const handle = db.createDatabasePool({
-      url: database.connectionString,
-      appRole: '',
-      poolMax: 1,
-      connectionTimeoutMs: 5_000,
-      partitionMonthsAhead: 3,
-      transcriptRetentionDays: null,
-    });
+    const handle = db.createDatabasePool(
+      {
+        url: database.connectionString,
+        appRole: '',
+        poolMax: 1,
+        connectionTimeoutMs: 5_000,
+        partitionMonthsAhead: 3,
+        transcriptRetentionDays: null,
+      },
+      strictPoolLogger,
+    );
 
     try {
       const who = await handle.pool.query<{ current_role: string }>('select current_role');
@@ -364,14 +375,17 @@ describe('the runtime pool', () => {
 
   it('refuses a role name it would have to escape', () => {
     expect(() =>
-      db.createDatabasePool({
-        url: database.connectionString,
-        appRole: 'app"; drop database x; --',
-        poolMax: 1,
-        connectionTimeoutMs: 5_000,
-        partitionMonthsAhead: 3,
-        transcriptRetentionDays: null,
-      }),
+      db.createDatabasePool(
+        {
+          url: database.connectionString,
+          appRole: 'app"; drop database x; --',
+          poolMax: 1,
+          connectionTimeoutMs: 5_000,
+          partitionMonthsAhead: 3,
+          transcriptRetentionDays: null,
+        },
+        strictPoolLogger,
+      ),
     ).toThrow(/bare lower-case identifier/);
   });
 });

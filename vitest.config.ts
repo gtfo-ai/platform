@@ -145,7 +145,10 @@ export default defineConfig({
         '**/*.d.ts',
         // Thin I/O shells with no branch of their own: a `pg` pool built from validated config, and
         // the one-shot CLI that maps a report onto stdout. Both are exercised end to end by the
-        // `integration` tier, which runs a real PostgreSQL 18 and does not collect coverage.
+        // `integration` tier, which runs a real PostgreSQL 18 and does not collect coverage. The
+        // one decision the pool makes — what to do with an `'error'` event — deliberately lives in
+        // `pool-errors.ts`, which is *not* excluded, so the exclusion here stays a statement about
+        // wiring rather than a place a branch can hide.
         'packages/infrastructure/src/db/client.ts',
         'apps/server/src/migrate.ts',
         // The launcher's process entrypoint: environment in, signals mapped, `process.exit` out.

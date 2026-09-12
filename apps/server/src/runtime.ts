@@ -27,6 +27,12 @@
  * clean drain into a burst of connection errors. `stopCallbacks` is built with `unshift`, so the
  * reversal is structural rather than a list somebody has to keep in the right order by hand.
  *
+ * What `stop()` does **not** promise is that every socket is gone when it resolves: pg-pool fires
+ * its end callback as soon as its client list is empty, without waiting for the `client.end()`
+ * calls it just made. So a connection of this instance can still be attached for a few
+ * milliseconds afterwards, and receive a FATAL. That is why the pool carries an `'error'` listener
+ * (`packages/infrastructure/src/db/pool-errors.ts`); it cost a CI job before it did.
+ *
  * ## A note for whoever registers the first event handler here
  * A handler that captures the bus and calls the **public** `dispatch()` self-deadlocks at
  * `APP_DISPATCH_MAX_CONCURRENCY=1`: the outer dispatch holds the only slot, and the inner one waits
@@ -149,7 +155,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
     );
   }
 
-  const database = dbAdapters.createDatabasePool(config.database);
+  const database = dbAdapters.createDatabasePool(config.database, loggerPort);
 
   let shuttingDown = false;
   const stopCallbacks: { name: string; stop: () => Promise<void> }[] = [];

@@ -8,9 +8,10 @@
 import { EventBus, OutboxWorker, streamId, taskQueued } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { eventing } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 const STREAMS = 4;
 const EVENTS_PER_STREAM = 5;
@@ -21,8 +22,7 @@ describe('outbox worker (PostgreSQL)', () => {
 
   beforeAll(async () => {
     database = await createMigratedDatabase('outbox');
-    pool = new pg.Pool({
-      connectionString: database.connectionString,
+    pool = createTestPool(database.connectionString, {
       options: '-c role=platform_app',
       // Three workers dispatching at once need 2*3 connections plus their sweeps' reads.
       max: 12,
@@ -118,8 +118,7 @@ describe('outbox worker (PostgreSQL)', () => {
   it('a pool too small to hold a dispatch fails promptly instead of hanging', async () => {
     // The guard above cannot catch a pool the caller built by hand, so the driver has to fail on
     // its own: one connection, a short wait, and a dispatch that needs two.
-    const starved = new pg.Pool({
-      connectionString: database.connectionString,
+    const starved = createTestPool(database.connectionString, {
       options: '-c role=platform_app',
       max: 1,
       connectionTimeoutMillis: 500,

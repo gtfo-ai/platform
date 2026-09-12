@@ -15,9 +15,10 @@ import {
 } from '@platform/application';
 import type { DomainEvent } from '@platform/contracts';
 import { eventing } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 const APP_ROLE = 'platform_app';
 
@@ -30,8 +31,7 @@ describe('event store (PostgreSQL)', () => {
   beforeAll(async () => {
     database = await createMigratedDatabase('eventstore');
     // Every connection starts as the least-privilege role, exactly like the runtime pool.
-    pool = new pg.Pool({
-      connectionString: database.connectionString,
+    pool = createTestPool(database.connectionString, {
       options: `-c role=${APP_ROLE}`,
       // Appends only, no dispatch, so one connection each; three race in one test.
       max: 6,

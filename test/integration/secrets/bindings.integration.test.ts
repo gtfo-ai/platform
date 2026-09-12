@@ -24,9 +24,10 @@ import {
   createPipelineIntegrationsLoader,
   createPipelineProviderRegistry,
 } from '@platform/integrations';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 const KEY = secretAdapters.deriveSecretKey('not-a-real-app-secret-key-000000000000');
 
@@ -37,7 +38,7 @@ let orgId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('bindings');
-  pool = new pg.Pool({ connectionString: database.connectionString, max: 4 });
+  pool = createTestPool(database.connectionString, { max: 4 });
   const org = await pool.query<{ id: string }>(
     "insert into organizations (name) values ('bindings') returning id",
   );

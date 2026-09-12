@@ -8,16 +8,17 @@
  * the same options object the server actually starts with.
  */
 import { loadServerConfig, pendingAuthSchema } from '@platform/server';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let pool: pg.Pool;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('betterauth');
-  pool = new pg.Pool({ connectionString: database.connectionString });
+  pool = createTestPool(database.connectionString);
 }, 120_000);
 
 afterAll(async () => {

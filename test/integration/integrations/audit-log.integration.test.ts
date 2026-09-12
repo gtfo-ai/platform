@@ -34,7 +34,7 @@ import {
   eventing as eventingAdapters,
   integrations as integrationAdapters,
 } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   type AuditLogContractContext,
@@ -44,6 +44,7 @@ import {
   runIdempotencyStoreContract,
 } from '../../contract/support/integrations/audit-contract-suites.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 /** Obviously fake, and long enough for `MIN_SECRET_LENGTH`. */
 const PLANTED_CREDENTIAL = 'not-a-real-jira-token-0000000000';
@@ -68,7 +69,7 @@ const insertIntegration = async (orgId: string, name: string): Promise<Id> => {
 
 beforeAll(async () => {
   database = await createMigratedDatabase('audit-log');
-  pool = new pg.Pool({ connectionString: database.connectionString, max: 6 });
+  pool = createTestPool(database.connectionString, { max: 6 });
   eventing = eventingAdapters.createEventing({
     pool,
     connectionString: database.connectionString,

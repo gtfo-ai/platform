@@ -12,9 +12,10 @@
 import { EventBus, OutboxWorker, streamId, taskQueued } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { eventing } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 const APP_ROLE = 'platform_app';
 
@@ -26,8 +27,7 @@ describe('priority dispatcher (PostgreSQL)', () => {
 
   beforeAll(async () => {
     database = await createMigratedDatabase('dispatcher');
-    pool = new pg.Pool({
-      connectionString: database.connectionString,
+    pool = createTestPool(database.connectionString, {
       options: `-c role=${APP_ROLE}`,
       // The invariant, named rather than tuned around: a dispatch holds two connections at once,
       // this file runs up to four at a time, and the assertions read with a fifth — so 2*4+1.

@@ -6446,3 +6446,150 @@ and exposing it is Q48's neighbourhood rather than a thing this row did. And `re
 open on `BindingLoadError` too — defensible under rule 20 and now **enumerated** at the line with the
 asymmetry stated: the same misconfiguration fails `runIntakeCheck`'s branch check loudly, so the quiet
 branch degrades a prompt rather than hiding an operator error.
+
+## WP notes — session 5 (decisions, assumptions, reviewer findings)
+
+### Backlog 28 — the e2e teardown 57P01, measured and closed
+
+**The hypothesis was right about the mechanism and wrong about the shape of the leak.** Entry 28
+guessed that a client "is still connected at that moment". It is — but not because anybody forgot to
+close it. Three measurements, each a throwaway file run against the tier's own PostgreSQL 18
+container and then deleted:
+
+1. Start a `default-composition`-shaped instance, `await instance.runtime.stop()`, then ask
+   `pg_stat_activity` which backends are left on its database: **none**. So `stop()` is not leaking a
+   pool, and the losing order is **not** the file's `afterAll` against the global teardown.
+2. Hold an idle client in a pool and run `drop database … with (force)`: an **uncaught exception**,
+   `code 57P01`, with the dead `Client` hanging off the error as `err.client` — which is where CI's
+   serialized `database: 'default-composition_…'` and `port: 32769` came from. So the delivery path
+   is `pg_terminate_backend` → FATAL → pg-pool's `makeIdleListener` → `pool.emit('error')` → thrown,
+   because an `EventEmitter` throws an `'error'` nobody listens for. **No pool in this repository had
+   a listener.**
+3. The window itself: listen for pg-pool's `remove` event, then `await pool.end()`. The order is
+   `['end-resolved']` and only a tick later `['end-resolved', 'remove-event']`, with the removed
+   client's socket reporting `destroyed === false` at the moment `end()` resolved. `Pool._remove`
+   filters the client out of `_clients` and calls `client.end()` **without awaiting it**, and
+   `_pulseQueue` fires the end callback as soon as that array is empty.
+
+So: **`database.close()` returns while its sockets are still attached, and `database.drop()` runs on
+the next line.** Locally the admin connect inside `withAdminClient` is slower than the socket close,
+which is why it has never failed here; on a loaded Linux runner it is not. A bare `pg.Client` does
+**not** have this property — `client.end()` resolves on the connection's `end` event — so a client
+the caller closed is genuinely closed, and only pools needed fixing.
+
+**The fix is in two places with deliberately different rules.**
+
+- **Production** (`packages/infrastructure/src/db/pool-errors.ts`, wired at the single
+  `createDatabasePool` site and given `apps/server`'s pino logger). The listener **reports and keeps
+  serving**: a connection loss (`57P0x`, `08003/08006`, `ECONNRESET/EPIPE/ETIMEDOUT`) at `warn`,
+  anything else at `error` naming the code. This is also a production defect the CI flake exposed —
+  before it, a PostgreSQL failover or a `pg_terminate_backend` against an **idle** pooled connection
+  would have taken `apps/server` down. Two precedents decided the shape: pg-boss's `onError` and the
+  `LISTEN` connection's `onError` both log and continue.
+- **The harness** (`createTestPool` in `test/integration/support/postgres.ts`). It swallows
+  **exactly** `57P01` and **re-throws everything else**, because a harness that hides a database
+  error hides it from the only person who would have fixed it. The asymmetry is stated at both lines.
+
+**Asserted from both sides.** `test/integration/support/postgres.integration.test.ts` drops a real
+database with `(force)` while the pool holds a live idle client and asserts no uncaught exception
+reached the process **and** that the swallow branch ran on `57P01`; a sibling case shows the same
+listener re-throwing `42P01`; a third case runs the same drop against the pool `createDatabasePool`
+builds — the one that actually failed in CI — and asserts the `warn`. Rule 76: the interleaving is
+made certain (the client is still live) rather than waited for, so nothing here is rate-dependent.
+`packages/infrastructure/src/db/pool-errors.test.ts` pins the premise (an `EventEmitter` throws an
+unlistened `'error'`) and both classifier branches.
+
+**Mutation-checked on copies, calibrated first** (rules 3/21/62/77). Deleting the harness listener:
+the acceptance case fails on `expected [ …(1) ] to deeply equal []`, printing the identical `57P01`
+CI printed. Making `isConnectionLoss` always true: the unit case fails on the `error`-level branch.
+Planting a new unguarded `new pg.Pool` and marking it tracked: the census fails naming the file.
+All copies deleted; `git status` verified unchanged afterwards.
+
+**Rule 49 sweep — the siblings, counted.** Thirteen pool-construction sites existed: one production
+(`db/client.ts`) and **twelve** in the harness across ten files (`test/e2e/pipeline/composition`,
+`test/e2e/support/pipeline`, and eight integration files, `outbox` holding two). All twelve now go
+through `createTestPool`; the production one is guarded in place. Ten further pools come from
+`db.createDatabasePool` in `grants`/`pg-boss-jobs` — those files need a *production* pool, because
+one tests the factory and the other hands pg-boss the pool a runtime would — and review round 1 was
+right that "guarded by the same change" was too kind to them: the guard's default logger is
+`silentLogger`, so those ten would have swallowed **every** idle-client error without a trace, which
+is weaker than production (which logs) and weaker than `createTestPool` (which re-throws). They now
+pass `strictPoolLogger`, the harness's filter through the guard's only seam: the `warn` branch a
+connection loss takes is dropped, and the `error` branch a code nobody recognised takes **throws**.
+Asserted from both sides in `postgres.integration.test.ts`, and mutation-checked on a copy —
+replacing that `error` with `silentLogger`'s empty function fails the case on
+`expected [Function] to throw an error`. The harness drops a database in exactly **one** place (`postgres.ts`'s `drop()`); the only
+other `drop database` in a tracked file is a SQL-injection payload in `grants.integration.test.ts`.
+Four e2e files start an `apps/server` instance (`composition`, `auth`, `sse`, plus `support/pipeline`
+through `support/instance`) and all reach the runtime pool through the same factory. A new bare pool
+is now refused by the census in `pool-errors.test.ts`, which allows exactly the two factories — and
+whose docblock now lists what a text census **cannot** see (an aliased import, a pool built by
+another factory, a reflective construction, a pool a dependency opens for itself), so it reads as
+the floor against an accident that it is rather than as a proof.
+
+**The census failed its own rule twice, and both failures are the interesting part.**
+
+1. **Rule 59, on day one.** The docblock written for review round 1 — the one listing the spellings
+   the regex catches — *reproduced the matched form*, so the file became a pool site the moment it
+   was tracked. It now states the shape in words (the `new` operator, whitespace, an optional `pg.`
+   qualifier, the identifier, an opening parenthesis) and the planted fixture assembles its source
+   rather than writing it out. The positive proof lives in a test, not in a sentence.
+2. **Backlog entry 10's class, second instance.** Nothing caught (1) locally, because every run
+   before the orchestrator's commit read a set that did not contain the new files: the census swept
+   `git ls-files` only, and an untracked file is invisible to it — which is precisely entry 10's
+   finding about `nul:check`. It now sweeps `git ls-files` **and**
+   `git ls-files --others --exclude-standard`, on the one-line rule *an ignored file is not a source
+   file, and an untracked one is*. Asserted by a case that builds a throwaway repository with a
+   tracked, an untracked and an ignored pool file and expects exactly the first two, and checked
+   against the real checkout by planting an untracked unguarded pool, which the census named.
+   **`nul:check` still has the gap** — entry 10 is untouched here and remains open on its own terms.
+
+**Review round 1's other nit, worth keeping as a rule rather than a fix.** The positive loop in
+`pool-errors.test.ts` restated seven of the eight codes by hand and had already lost `ETIMEDOUT` —
+a second place to forget a code, two days old. It now iterates `CONNECTION_LOSS_CODES` itself (rule
+68), with a size floor and a `has('57P01')` so an emptied set cannot make the loop vacuous.
+
+**Not done here, and deliberately.** Review round 1 also asked for a line in `CLAUDE.md` § Conventions
+recording the two-factory rule beside the other enforced censuses. This implementer's operating
+instructions say in as many words that no agent message can authorise changing `CLAUDE.md`, so the
+sentences were handed to the orchestrator to apply rather than written here. It is the only item of
+the round left open. **Applied by the orchestrator** in the same commit: the bullet sits in
+`CLAUDE.md` § Conventions after the `.gitignore` anchoring rule.
+
+**Rule 83 — sentences the fix falsified, now true.** `DatabaseHandle.close`'s docblock and
+`apps/server/src/runtime.ts`'s shutdown-order paragraph both implied a shutdown that ends every
+socket; both now say what `end()` does not promise and why the listener exists.
+`test/e2e/support/instance.ts`'s `stop` says the drop deliberately does not wait for the drain and
+what carries the risk instead. `test/integration/support/postgres.ts`'s module docblock states what
+`with (force)` costs its callers. `vitest.config.ts`'s coverage-exclusion comment for `client.ts`
+said "no branch of their own" — still true, and it now says the one decision lives in the
+non-excluded `pool-errors.ts` rather than hiding behind the exclusion.
+
+**Decisions and assumptions.**
+- **No bounded drain before the drop.** Waiting for `pg_stat_activity` to empty would shrink the
+  window but not close it, and would add wall-clock to every one of the tier's database drops. The
+  listener is a guarantee; a wait is a smaller race.
+- **The harness swallows `57P01` only.** Residual, stated at the line: a forced drop that ever
+  surfaced as a bare `ECONNRESET` would fail the run instead of being absorbed. That is the
+  direction this should fail in, and the measured code is `57P01`.
+- **`pool.on('error')` is attached at the factory, not at call sites**, so "a pool without a
+  listener" is a thing the census refuses rather than a thing review has to notice.
+- **What the local run cannot show** (rules 69/71/84): the tier of record for this defect is Linux
+  CI. This machine has never reproduced the *race* — measurement 1 shows why — so a green
+  `verify:e2e` here is evidence that nothing regressed, not evidence that the flake is gone. What is
+  demonstrated locally is that the delivery path the flake used now ends in a listener, on both the
+  harness's pools and the production one.
+
+**One thing measured and deliberately not changed.** `PostgresBroadcast.close()` does not await an
+in-flight `#connect()`: a connection coming up while `close()` runs is ended by `#connect` itself a
+moment later, so `eventing.stop()` can also return before that socket is gone. It is harmless — the
+`NotificationClient` carries its own `error` listener and `#onConnectionLost` returns early once
+closed — and it is noted here so the next reader does not have to re-measure it.
+
+## Discovered work — session 5 (not in plan)
+- **`pg.Client` teardown is safe only because callers `await client.end()`** (backlog 28). Measured:
+  `Client.end()` resolves on the connection's `end` event, so a closed client is genuinely closed —
+  but a *leaked* one still takes the process down when its database is dropped with `(force)`, and
+  nothing refuses a leak. Twelve bare-client sites in `test/` rely on a `finally`/`afterAll` that a
+  future edit could drop. A census like the pool one would need to prove "every client is ended",
+  which is a dataflow question rather than a grep, so it is filed rather than done.

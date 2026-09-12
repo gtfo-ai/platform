@@ -25,9 +25,10 @@ import {
   eventing as eventingAdapters,
   pipeline as pipelineAdapters,
 } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let pool: pg.Pool;
@@ -106,7 +107,7 @@ const find = async (graceMinutes = 5): Promise<readonly UnstartedMatch[]> =>
 
 beforeAll(async () => {
   database = await createMigratedDatabase('intake-reconcile');
-  pool = new pg.Pool({ connectionString: database.connectionString, max: 6 });
+  pool = createTestPool(database.connectionString, { max: 6 });
   eventing = eventingAdapters.createEventing({
     pool,
     connectionString: database.connectionString,

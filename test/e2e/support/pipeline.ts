@@ -55,8 +55,9 @@ import {
   fakeGitRegistration,
   fakeTaskManagementRegistration,
 } from '@platform/integrations';
-import pg from 'pg';
+import type pg from 'pg';
 import type { MigratedDatabase } from '../../integration/support/migrated.js';
+import { createTestPool } from '../../integration/support/postgres.js';
 import {
   type AgentRunCapture,
   PLANTED_MODEL_KEY,
@@ -626,7 +627,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     },
   });
 
-  const pool = new pg.Pool({ connectionString: instance.database.connectionString, max: 4 });
+  const pool = createTestPool(instance.database.connectionString, { max: 4 });
   const { projectId, userId } =
     options.reuse === undefined
       ? await seedWorld(pool, options.config ?? {})

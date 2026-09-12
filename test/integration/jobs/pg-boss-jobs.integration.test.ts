@@ -15,7 +15,7 @@ import {
   runJobsContract,
 } from '../../contract/support/jobs-contract-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestDatabase, withClient } from '../support/postgres.js';
+import { createTestDatabase, strictPoolLogger, withClient } from '../support/postgres.js';
 
 const APP_ROLE = 'platform_app';
 const POLL_SECONDS = 0.5;
@@ -47,7 +47,7 @@ runJobsContract({
   name: 'pg-boss on PostgreSQL 18',
   create: async (): Promise<JobsContractContext> => {
     const database = await createMigratedDatabase('jobs');
-    const handle = db.createDatabasePool(poolConfig(database.connectionString));
+    const handle = db.createDatabasePool(poolConfig(database.connectionString), strictPoolLogger);
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       pollingIntervalSeconds: POLL_SECONDS,
@@ -109,7 +109,10 @@ describe('pg-boss adapter on the platform schema', () => {
     // runtime is built with migrate/createSchema off, so an application container that reaches a
     // database ahead of the migrate service must fail loudly instead of installing the schema.
     const empty = await createTestDatabase('jobs_unmigrated');
-    const handle = db.createDatabasePool({ ...poolConfig(empty.connectionString), appRole: '' });
+    const handle = db.createDatabasePool(
+      { ...poolConfig(empty.connectionString), appRole: '' },
+      strictPoolLogger,
+    );
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       onError: () => {},
@@ -124,7 +127,7 @@ describe('pg-boss adapter on the platform schema', () => {
   });
 
   it('runs the partition maintenance job WP-03 left for the scheduler', async () => {
-    const handle = db.createDatabasePool(poolConfig(database.connectionString));
+    const handle = db.createDatabasePool(poolConfig(database.connectionString), strictPoolLogger);
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       pollingIntervalSeconds: POLL_SECONDS,
@@ -219,7 +222,7 @@ describe('pg-boss adapter on the platform schema', () => {
     // shows up on the `error` channel, not as a rejected promise. The intervals are pushed down to
     // a second so the passes actually run inside the test rather than a minute after it.
     const errors: unknown[] = [];
-    const handle = db.createDatabasePool(poolConfig(database.connectionString));
+    const handle = db.createDatabasePool(poolConfig(database.connectionString), strictPoolLogger);
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       pollingIntervalSeconds: POLL_SECONDS,
@@ -243,7 +246,7 @@ describe('pg-boss adapter on the platform schema', () => {
   });
 
   it('stores a timer as a future start_after rather than sleeping in the process', async () => {
-    const handle = db.createDatabasePool(poolConfig(database.connectionString));
+    const handle = db.createDatabasePool(poolConfig(database.connectionString), strictPoolLogger);
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       schedule: false,
@@ -274,7 +277,7 @@ describe('pg-boss adapter on the platform schema', () => {
   });
 
   it('does not delay the leading coalesced job — it is a throttle, not a debounce', async () => {
-    const handle = db.createDatabasePool(poolConfig(database.connectionString));
+    const handle = db.createDatabasePool(poolConfig(database.connectionString), strictPoolLogger);
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       schedule: false,
@@ -350,7 +353,7 @@ describe('pg-boss adapter on the platform schema', () => {
   });
 
   it('coalesces on the slot grid the port documents', async () => {
-    const handle = db.createDatabasePool(poolConfig(database.connectionString));
+    const handle = db.createDatabasePool(poolConfig(database.connectionString), strictPoolLogger);
     const runtime = jobs.createPgBossJobs({
       database: jobs.asJobsDatabase(handle.pool),
       schedule: false,

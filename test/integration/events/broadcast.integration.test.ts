@@ -15,9 +15,10 @@ import {
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { broadcast as broadcastAdapter, eventing } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 describe('broadcast (PostgreSQL LISTEN/NOTIFY)', () => {
   let database: MigratedDatabase;
@@ -26,8 +27,7 @@ describe('broadcast (PostgreSQL LISTEN/NOTIFY)', () => {
 
   beforeAll(async () => {
     database = await createMigratedDatabase('broadcast');
-    pool = new pg.Pool({
-      connectionString: database.connectionString,
+    pool = createTestPool(database.connectionString, {
       options: '-c role=platform_app',
       max: 4,
     });

@@ -11,9 +11,11 @@
  * `SET ROLE` back to the login role. An operator who wants the stronger property gives the app a
  * dedicated login role that is a member of `platform_app` and owns nothing.
  */
+import { type Logger, silentLogger } from '@platform/application';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import type { DatabaseConfig } from './config.js';
+import { guardIdleClientErrors } from './pool-errors.js';
 import * as schema from './schema/index.js';
 
 export type Database = NodePgDatabase<typeof schema>;
@@ -21,13 +23,24 @@ export type Database = NodePgDatabase<typeof schema>;
 export interface DatabaseHandle {
   readonly pool: pg.Pool;
   readonly db: Database;
+  /**
+   * Ends the pool.
+   *
+   * It does **not** promise that every socket is closed when it resolves: pg-pool fires its end
+   * callback as soon as the client list is empty, without waiting for the `client.end()` calls it
+   * just made (measured in `pool-errors.ts`). That is why the pool carries an `'error'` listener —
+   * a FATAL can still arrive after this resolves, and with no listener it would be thrown.
+   */
   readonly close: () => Promise<void>;
 }
 
 /** Same shape PostgreSQL stores for an unquoted identifier; anything else is rejected, not escaped. */
 const BARE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
-export const createDatabasePool = (config: DatabaseConfig): DatabaseHandle => {
+export const createDatabasePool = (
+  config: DatabaseConfig,
+  logger: Logger = silentLogger,
+): DatabaseHandle => {
   if (config.appRole !== '' && !BARE_IDENTIFIER.test(config.appRole)) {
     throw new Error(`APP_DB_APP_ROLE must be a bare lower-case identifier, got ${config.appRole}`);
   }
@@ -40,12 +53,18 @@ export const createDatabasePool = (config: DatabaseConfig): DatabaseHandle => {
   // `connectionTimeoutMillis` is not tuning: without it `pg` waits for ever for a free connection,
   // so a pool too small for the work in flight hangs silently instead of failing. The dispatcher
   // holds two connections per concurrent dispatch, which makes that mistake easy to make.
-  const pool = new pg.Pool({
-    connectionString: config.url,
-    max: config.poolMax,
-    connectionTimeoutMillis: config.connectionTimeoutMs,
-    ...(config.appRole === '' ? {} : { options: `-c role=${config.appRole}` }),
-  });
+  // The `'error'` listener is attached here, at the only place this repository builds a pool, so
+  // that "a pool without one" is not a thing a reviewer has to notice. See `pool-errors.ts` for
+  // what that event is and why it is reported rather than re-thrown.
+  const pool = guardIdleClientErrors(
+    new pg.Pool({
+      connectionString: config.url,
+      max: config.poolMax,
+      connectionTimeoutMillis: config.connectionTimeoutMs,
+      ...(config.appRole === '' ? {} : { options: `-c role=${config.appRole}` }),
+    }),
+    logger,
+  );
 
   const db = drizzle(pool, { schema });
 

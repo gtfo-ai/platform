@@ -138,6 +138,16 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     runtime,
     baseUrl,
     database,
+    /**
+     * Stops the instance and, if it created the database, drops it.
+     *
+     * `runtime.stop()` returning is not a promise that every socket is closed — pg-pool resolves
+     * `end()` before the clients it removed have finished closing — so the `with (force)` in
+     * `drop()` lands on connections that may still be attached. Nothing here waits for them: the
+     * runtime pool carries an `'error'` listener for exactly that window
+     * (`packages/infrastructure/src/db/pool-errors.ts`), and a bounded drain on every teardown
+     * would buy nothing the listener does not already guarantee.
+     */
     stop: async () => {
       await runtime.stop();
       if (ownsDatabase) {

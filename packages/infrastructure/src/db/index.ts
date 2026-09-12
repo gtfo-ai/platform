@@ -9,4 +9,5 @@ export * from './config.js';
 export * from './migrations.js';
 export * from './migrator.js';
 export * from './partitions.js';
+export * from './pool-errors.js';
 export * as schema from './schema/index.js';

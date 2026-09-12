@@ -35,9 +35,10 @@ import {
   createIntegrationRegistry,
   gitlabProviderRegistration,
 } from '@platform/integrations';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestPool } from '../support/postgres.js';
 
 /** Obviously fake, and the value every assertion below looks for. */
 const GITLAB_TOKEN = 'glpat-FAKE-PLANTED-binding-token-0123456789';
@@ -101,7 +102,7 @@ const ingressFor = () =>
 
 beforeAll(async () => {
   database = await createMigratedDatabase('webhook-ingress');
-  pool = new pg.Pool({ connectionString: database.connectionString, max: 6 });
+  pool = createTestPool(database.connectionString, { max: 6 });
   eventing = eventingAdapters.createEventing({
     pool,
     connectionString: database.connectionString,
