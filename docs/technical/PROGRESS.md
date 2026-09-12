@@ -5,12 +5,21 @@
 ## Resume note
 
 > **Session 4 — 2026-09-11/12.** Read this, then the **"Blocker briefs needing a human"** (there is one now),
-> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-three rules**, each
+> then the **"Open findings backlog"**, then "Standing rules earned by evidence" — **eighty-four rules**, each
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Thirty-one work packages are DONE and pushed.** `main` is at **`5b01f73`** (WP-15g), green on all six
-targets in the orchestrator's own shell. No worktrees, no open branches, clean tree.
+**Thirty-one work packages are DONE and pushed.** `main` is at **`d6ebe2d`**, **green on GitHub**
+(`34671529213`). No worktrees, no open branches, clean tree.
+
+**And WP-15g's own commit `5b01f73` was RED on GitHub, which the orchestrator did not notice** — `e2e-fake-claude`
+failed while every test in it passed, then the next commit was green. Found by a **refiner**, not by the
+orchestrator, after the orchestrator had already written the row. The mechanism is in backlog **28**;
+the process failure is standing rule **84**: *`in_progress` is not a verdict.* I read `gh run list` three
+times for that push, saw `in_progress` or `pending` every time, and never returned — which is rule 69's
+failure (five local targets read as the state of `main`) in its new spelling, since here it was **one CI read
+taken at the wrong moment**. The six local targets were genuinely green in my own shell and that is exactly
+what made it feel finished.
 
 **The agent is composed. The loop runs a real runner, and what is left is a deployment.** `apps/server/src/agent.ts`
 composes `createWorkspaceClaudeRunner` over the real `createClaudeRunner`, with the production `run_messages`
@@ -87,6 +96,23 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+84. **`in_progress` is not a verdict, and the moment you read it is the moment you must decide when to read
+   it again.** WP-15g's commit `5b01f73` was **red on GitHub** — `e2e-fake-claude` failed — and the
+   orchestrator wrote its ledger row, its resume note and a summary without noticing. Not for want of
+   looking: `gh run list` was read **three times** across that push, and every read returned `in_progress`
+   or `pending`, because the run takes ~4 minutes and the orchestrator was doing ledger work in between. The
+   third read was followed by a *different* push, whose run went green, and the green line sat directly above
+   the red one in the listing. **A finding by the refiner, not by me, after the row was already written.**
+   Two sharp parts. First, rule **69** was recorded as *"five local targets were read as the state of
+   `main`"* — this is the same defect with the CI read **present but premature**, which is worse, because a
+   read that happened feels discharged. A poll that has not yet answered is not evidence; it is an
+   appointment. Second, the six local targets were **genuinely green in my own shell**, and that is what made
+   it feel finished — rule **61**'s shape at the level of a process step: *the more real evidence you are
+   holding, the less you notice the one piece you are missing.* The remedy is mechanical, not attentive:
+   after a push, either block on the run reaching `completed` or write the pending run id into the ledger so
+   the next iteration cannot start without resolving it. **Never write a row from a listing that says
+   `in_progress`.**
 
 83. **Closing a gap falsifies every sentence that described it, and the sentence nearest the fix is the one
    nobody re-reads.** WP-15f closed a live redaction gap — a credential in a ticket description was
@@ -941,6 +967,51 @@ run plus the teardown dropping `CAP_DAC_OVERRIDE` — the capability is the *evi
 a fix that keeps it has not landed — and the **owner** is **WP-22**, which builds the compose file and the
 images and is the first place the volume layout is written down rather than constructed in a test.
 
+### 28. **CI's e2e job was red on the commit this session merged, and every test in it had passed** (TODO — **no work package owns it**)
+
+**What is wrong.** The e2e tier can fail its job on an **unhandled** PostgreSQL error raised after every
+test has reported green, and vitest says in the same breath that such a run may contain false positives.
+So `main` carries a red CI run at the commit the ledger records as green on six targets, and the tier's
+verdict is worth slightly less than it reads until this is closed.
+
+**Evidence** (refiner, session 4 — `gh run view` only, no test run, rule 66). Run **`34671397340`**, head
+**`5b01f73`** (WP-15g's merge): ten jobs green, **`e2e-fake-claude` failed**. In the job's own words,
+`test/e2e/workspace/docker-workspace.e2e.test.ts (40 tests)` ✓ and every named case ✓, then:
+
+> `Vitest caught 1 unhandled error during the test run.` · `This might cause false positive tests. Resolve
+> unhandled errors to make sure your tests are not affected.` · `Uncaught Exception` · `error: terminating
+> connection due to administrator command` · `parseErrorMessage node_modules/.pnpm/pg-protocol@1.16.0/node_modules/pg-protocol/dist/parser.js:306:11`
+
+with `Serialized Error: { … severity: 'FATAL', code: '57P01', … database: 'default-composition_67463fbbdf674afb9421512635acd678', port: 32769 … }`,
+`This error originated in "test/e2e/pipeline/composition.e2e.test.ts"`, and then `FAIL: verify:e2e`. The
+**next** run, `34671529213` (`d6ebe2d`, docs only), passed the same job on the same code — so it is a race,
+not a breakage.
+
+**Hypothesis, labelled one** (rule 39). `test/integration/support/postgres.ts:78` drops each per-test
+database with `drop database if exists "<name>" with (force)`, which terminates every backend still
+attached; a client of the `default-composition` instance (started at
+`test/e2e/pipeline/composition.e2e.test.ts:76`, stopped in `afterAll` at `:52-55`) is still connected at
+that moment and carries no `error` listener, so `57P01` arrives as an uncaught exception. **Needs
+measurement** (not run here): which pool outlives `stop()` — the instance's own runtime pool, or a
+connection `stop()` returned before draining — and whether the losing order is `afterAll` against the
+global teardown.
+
+**What it costs to leave.** Two things, and the second is worse than a flake. (1) A push onto `main` whose
+gate is red while the session's own shell says green — rule 75's shape at the gate that has the last word,
+and the resume note's "green on all six targets" is true of the orchestrator's shell and false of CI for
+`5b01f73`. (2) Vitest's warning is literal: an unhandled error in a run **can** mask a failed assertion, so
+every `PASS: verify:e2e` taken while this is live certifies less than it appears to — including the ones
+WP-22's images will be verified by, since that tier is where they land.
+
+**What "done" looks like.** A `57P01` during teardown cannot reach the process as an uncaught exception:
+either the pool that owns the connection is drained before its database is dropped, or the teardown path
+attaches an `error` listener that swallows **exactly** `57P01` and says at the line why that is not
+swallowing a real failure. Asserted by a case that drops a database `with (force)` while a pool of the
+harness's own making holds an idle client, and that fails today. Re-running the job is not a close.
+
+**Depends on.** Nothing. **Owner: none** — no work package owns the e2e harness. Cheapest for whoever next
+touches `test/integration/support/postgres.ts`, and **before WP-22** leans on this tier for its images.
+
 ### 1. What WP-15a left behind — **production still does not start the pipeline** (TODO)
 The sentence a reader needs, in the reviewer's words: **"The pipeline is composed and production does not
 start it."** Three separate things, none of them WP-15a's to fix:
@@ -970,6 +1041,53 @@ direction that is guarded today and the *unsafe* one that is not, which is stand
 What done looks like is small and worth naming so it is not re-derived: the WP that flips a row to
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
+
+### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (TODO — now **WP-15h**; the SSE transcript bridge is one half of it)
+
+**What is wrong.** WP-20 shipped every screen and WP-15g now writes real `run_messages` rows, and **nothing
+joins them**: the server has no route that returns a run, a task, a transcript, an inbox, an agent, a budget
+or a KB document, and nothing publishes to the `run:<id>` SSE topic the hub already carries. WP-15g's
+discovered-work list names one half of this ("the SSE half of the transcript is not composed"); the cause is
+larger than that item, and stating it as the transcript's problem would schedule one endpoint out of sixteen.
+
+**Evidence** (refiner, session 4 — grep and `gh`, no test run, rule 66).
+- **The client's list**: `apps/web/src/api/endpoints.ts` calls **20** distinct `/api/*` paths, including
+  `/api/runs/${runId}/messages` (`:238`), `/api/runs/${runId}` (`:236`), `/api/runs/${runId}/prompt`
+  (`:243`), `/api/runs/${runId}/context-pack`, `/api/tasks/${taskId}` (`:235`), `/api/org/agents` (`:212`),
+  `/api/org/inbox` (`:213`), `/api/integrations` (`:214`), `/api/projects` (`:220`),
+  `/api/projects/${id}/tasks` (`:230`), `/api/projects/${id}/readiness` (`:226`),
+  `/api/projects/${id}/budgets` (`:228`), and three `kb/*` paths.
+- **The server's list**: **four** — `/api/version` (`apps/server/src/routes/ops.ts:137`), `/api/org/users`
+  (`org.ts:62`), `/api/org/audit` (`org.ts:75`), `/api/projects/:project_id/config` (`projects.ts:40`).
+  Seven `typed.get` registrations exist in `apps/server/src/routes/` in total, three of which are
+  `/healthz`, `/readyz` and `/metrics`; `/api/auth/*` is Better Auth's. `apps/server/src/queries/` holds
+  exactly one file, `identity-queries.ts`.
+- **The transcript half, specifically**: `RunTranscriptSink`'s docblock says an entry goes to *"`run_messages`
+  plus the `run:<id>` SSE topic (TD-007, technical/08)"*
+  (`packages/application/src/ports/runner.ts:256`), and `apps/server/src/sse/hub.ts:4-5` already lists
+  `run:<id>` among the topics a connection may watch — **nothing publishes one**. It cannot be a `NOTIFY`
+  payload (broadcasts are capped at 7 000 bytes and carry hints — WP-15g), so it is a read-back from the rows
+  WP-15g finally writes, which is why it needs the same read API.
+- **Why no tier caught it**: WP-20's acceptance criterion is *"Playwright e2e with fake SSE"*
+  (`13-implementation-plan.md`:48) and `pnpm test:web-e2e` runs "against the built bundle and a fake API/SSE
+  backend" (CLAUDE.md). The one tier that exercises the client's endpoint list answers it with a fake, and
+  **no check compares the two lists** — so sixteen missing routes are green in every target.
+
+**What it costs to leave.** The platform can now run an agent and store its transcript, and a user can see
+none of it: every screen except sign-in, version, the audit list and one config read answers 404 against a
+real server. It also hides a *live* property — WP-15g's transcript redaction is real and unreadable, so
+nothing but a test can show that a run's secret did not reach a screen.
+
+**What "done" looks like.** The plan row below. The part that prevents the recurrence rather than the
+instance: **a census that reads both lists off disk** — the client's paths from
+`apps/web/src/api/endpoints.ts`, the server's from its registered routes — and fails on a path the client
+names and the server does not serve, the shape `apps/launcher/src/docker-access.test.ts` and
+`packages/integrations/src/providers/delivery-key-redaction.test.ts` already use. `openapi.json` is generated
+from the routes (`apps/server/src/app.ts:241`), so it can be the server's half but never the client's.
+
+**Depends on / owner.** **None today**, and that is the finding: WP-06 built the server skeleton, WP-20 built
+the screens, and no row owned the surface between them. Now **WP-15h**, which depends on WP-06, WP-15g and
+WP-20 (all landed) and is blocked by neither Q52 nor WP-22 — it is Node and Postgres work, no daemon.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -1801,6 +1919,19 @@ recall check reports **nothing at all** — measured: suite 12 passed, sites 18,
 the site regex span a wrap (an oracle must over-approximate what it audits), or list the shared shape in
 the docblock's gap list, which currently omits it.
 
+**A third instance, session 4, and it is the *false positive* direction.** Q62's entry is one physical line
+of about 2 600 characters, and it carries a correct citation —
+`packages/infrastructure/src/workspace/spec.test.ts` › *"has no registry host, because discovery does not exist — so a run cannot install a package"* — followed later on the
+**same** line by an unrelated quoted phrase, `"one more registry host"`. The parser paired the file token with
+the wrong quote and reported *"no such test"*, reddening `verify` on a citation that was right. Fixed in the
+**prose** (the later phrase now uses emphasis rather than double quotes) rather than in the guard, because the
+guard was doing what it says. Worth recording because rule 58 and this entry both describe the *recall* hole
+— a citation the parser cannot see — and this is the **precision** hole: a citation it sees twice. A fix that
+spans a wrap (this entry's own recommendation) makes precision worse unless it also binds the quote to the
+nearest marker. It has now cost three interruptions in one session, all on documentation, none on code — **four**, counting
+the one this very paragraph caused by abbreviating the cited name with an ellipsis, which the guard correctly
+refuses: an abbreviated test name is not a test name.
+
 ### 4. WP-15 round 2's minors (one-line each, from the approving review)
 - `packages/application/src/pipeline/gates.test.ts:214-223` — the test **named** for the Q55 cut asserts the
   absence of the log *ref* (`'log:test:unit'`), not the log *body* (`'FAIL src/totals.test.ts'`, present in
@@ -2095,6 +2226,68 @@ four indexed path classes with no working tree.
 **Depends on / owner.** **WP-18** owns it; no other row does. WP-15g's criteria are all about a *run*, so
 it neither discharges this nor is blocked by it.
 
+### 27. **The real `attach` handshake is exercised only against stand-in images, and nothing makes the shim start late — so the fix WP-15g shipped is unguarded exactly where the real image changes the timing** (TODO — the assertable half is now a criterion on **WP-22**)
+
+**What is wrong, and one claim corrected first.** The resume note and WP-15g's reviewer both say *"the
+contract suite runs the real provider only behind a daemon and the absent `platform-runtime` image — the
+readiness handshake will stay mutation-blind until WP-22"*, which the ledger then shortened to "no test tier
+exercises the real `DockerWorkspaceProvider.attach`". **That shorter claim is false**, and the accurate gap
+is narrower and worth having stated precisely rather than re-derived.
+
+**Evidence** (refiner, session 4 — grep and `gh run view`, no test run, rule 66).
+- **A tier does exercise the real `attach`, and CI runs it.** In CI run `34671529213` (`d6ebe2d`) and
+  `34671397340` (`5b01f73`), job `e2e-fake-claude` on `ubuntu-latest` ran
+  `test/e2e/workspace/docker-workspace.e2e.test.ts (40 tests)` including
+  `DockerWorkspaceProvider — WorkspaceProvider contract (14)` › **"attaches to a running workspace with a
+  control socket and a token" (8495 ms)** and "refuses to attach after the workspace has been killed"
+  (6554 ms). The provider under those cases is the real `DockerWorkspaceProvider` against a real daemon
+  (`test/e2e/support/docker-workspace.ts:345`, a `RecordingDockerEngine` on `/var/run/docker.sock`).
+- **What it runs against is stand-ins**, and that is the honest gap: `RUNTIME_IMAGE = node:24-alpine`
+  (`test/e2e/support/docker-workspace.ts:51`) with this repository bind-mounted at `/repo` so the shim can be
+  started from TypeScript (`packages/infrastructure/src/workspace/provider.ts:697-705`), plus
+  `egress: alpine:3.21` with `egressCommand: ['sleep','600']` (`docker-workspace.ts:274-280`). The bind mount
+  is *"the one thing technical/05 says a run container never has"*, named as a hole in
+  `packages/infrastructure/src/workspace/hardening.ts:11-23`.
+- **The handshake and what it closed** (WP-15g, measured before the check existed): `create` returns when
+  the container has *started*, the shim then boots Node and `listen()`s, and a runner that connects
+  immediately gets `connect ENOENT` on a healthy workspace, **8 ms in**, reported as `Failed to spawn Claude
+  Code process`. With Q59(a) in place each occurrence costs **one failed `runs` row and one 30 s retry per
+  task**; without the wait *and* without Q59(a) it was the first run of every task. The wait is
+  `#waitForControlSocket` (`provider.ts:785`), called from `attach` at `:774`, bounded by
+  `CONTROL_SOCKET_TIMEOUT_MS = 30_000` at `CONTROL_SOCKET_POLL_MS = 50` (`:144-145`), throwing
+  `workspace_failed`, which `classifyProvisionFailure` treats as retryable.
+- **The unit half is calibrated and the e2e half is not.** `packages/infrastructure/src/workspace/provider.test.ts`
+  › *"waits for a shim that starts listening after attach was called"* drives a late-booting shim and kills
+  the mutant by name (unmutated 38/38; before that case existed, shortening the loop to one look left
+  **37/37 green**). **Needs measurement** (rule 66, not run here): whether the *e2e* attach case kills the
+  same mutant. In that file `create` → `relaxControlDirectoryForHost` → `attach` may already leave the socket
+  present by the time `attach` runs, in which case the case certifies the happy path and not the wait. One
+  mutation of `#waitForControlSocket` plus that one file answers it, and no image is needed to find out.
+
+**What it costs to leave.** The defect the handshake closed is a first-run failure per task, and its only
+calibrated guard is a unit test with a fake engine. WP-22 changes the timing in exactly the direction that
+matters: with the real `platform-runtime` image, `runtimeSourceDir` is unset, the shim starts from the
+image's own entrypoint rather than from `node --import ts-source-resolver` over a bind mount, and the gap
+between "container started" and "socket listening" is a different quantity — measured by nothing.
+
+**What "done" looks like.** Two things, and they are independent. (1) The measurement above, recorded here or
+on the row: does the existing e2e case kill the one-look mutant? (2) The criterion now on **WP-22**, which is
+where the real images arrive.
+
+**A second measurement this entry cannot resolve, and it is about the local tier rather than the code.**
+WP-15g measured that the shim **refuses to start** on a bind-backed control volume — it `chmod 0600`s its
+socket after binding and `chmod` on a socket there answers `EINVAL: invalid argument, chmod '/ctl/ctl.sock'`
+on this machine — and this fixture is bind-backed **by default** (`docker-workspace.ts:255-266`; only
+`scripts/runlet-launcher-check.mjs:76` passes `controlVolumeBind: false`). WP-15g also reports
+`PASS: verify:e2e (83)` from this machine. Those two statements cannot both be complete: either the local run
+does not include this file's 40 cases, or the shim does boot here and the EINVAL is narrower than recorded.
+**Needs measurement** (rule 66, not run here): which. Until it is answered, **Linux CI is the tier of record
+for the real provider**, not `verify:e2e` in the orchestrator's shell — and any future "the real `attach` is
+covered" claim should name the run id, as the evidence above does.
+
+**Depends on / owner.** The images are **WP-22**'s and the criterion is on its row. The mutation measurement
+is owned by nobody and needs no image.
+
 ### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
 **What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
 `createEventing` throw **`EventBus is not a constructor`** — `packages/infrastructure/src/events/index.ts:82`
@@ -2152,6 +2345,38 @@ resolves the binary from the repository root rather than from `$PWD`.
 - **`retentionDecision` keeps an unlabelled volume for ever by design** (rule 60), and one `verify:e2e` run
   produces exactly one unlabelled `ws-<uuid>`. The e2e sweep was fixed; the production half is a decision
   (a reserved prefix, or an orphan report), not a code change to make quietly.
+  - **The other half of the same sentence is unimplemented, and it is the opposite failure** (WP-15g's
+    discovered work; refiner, session 4 — no new number, because both halves are this one line's).
+    technical/05:10 reads *"keep the volume per retention (3 days default, **14 days for
+    paused/taken-over**)"*. `buildWorkspaceSpec` writes three days at create time, because at create time
+    nothing knows how the task will end (`packages/infrastructure/src/workspace/spec.ts:169,187`), and
+    **nothing extends it afterwards**: the label `com.agentic.keep_until` is written only at create
+    (`provider.ts:267-272`, `:507-528`) and only read by `retention.ts:48-60` — no path relabels a
+    volume. So the bullet above
+    over-retains (an unlabelled volume, for ever) and this one under-retains (a taken-over workspace, purged
+    on day 4 with the human's work in it); one function, two decisions, different owners. **Owner: WP-27**
+    (M2, "steer + take-over/hand-back (export, resume instructions)") — the extra eleven days exist for the
+    export path, so the extension belongs with the code that knows a task was taken over, and a create-time
+    guess cannot know it. Trigger today: nothing, because no path pauses or hands over a run yet.
+- **WP-22 owes a third, smaller thing** (WP-15g's discovered work; refiner, session 4). `readLauncherConfig`
+  has **no variable** for `WorkspaceImages.egressCommand` (declared `hardening.ts:65`, used as `?? []` at
+  `packages/infrastructure/src/workspace/provider.ts:684`; the env list is `apps/launcher/src/config.ts:21-31`,
+  which has `APP_WORKSPACE_EGRESS_IMAGE` and no companion command), so a launcher built from the environment
+  starts the sidecar with the image's default `CMD`. **This is correct in production and not a defect**:
+  `platform-egress`'s entrypoint *is* tinyproxy. It is wrong the moment an operator points
+  `APP_WORKSPACE_EGRESS_IMAGE` at a stand-in, which exits immediately and leaves the workspace with
+  `HTTPS_PROXY` aimed at a dead container and no message — the e2e passes `egressCommand: ['sleep','600']`
+  directly (`test/e2e/support/docker-workspace.ts:277`) because env cannot express it. One variable, or a
+  create-time check that the sidecar is still running after `create`; the second is the better fix and is a
+  criterion, not a knob.
+- **`run_messages.blob_id` is never set: a payload over 1 MB is stored whole** (WP-15g's discovered work).
+  technical/03:60 says *"Payloads > 1 MB go to `blobs`"*; `createPostgresTranscriptSink` writes the document
+  as-is (`packages/infrastructure/src/runner/postgres-transcript-sink.ts:162,181`). Bounded in practice by
+  `toolOutputMaxChars` (10 000 characters head and tail per tool result) and by the SDK's own message sizes,
+  so it is a **gap, not a leak**; the trigger is a single assistant message over a megabyte. Whoever writes
+  the transcript read API (backlog **29** / WP-15h) has to handle a non-null `blob_id` regardless, or state at
+  the line that it cannot occur — a reader written against a column that is null only by accident breaks on
+  the day the spill lands.
 - **Shadow mode has no e2e**, and **session resume after a runner restart** is unimplemented
   (`docs/TODO.md`).
 
