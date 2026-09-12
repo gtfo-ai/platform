@@ -8,6 +8,15 @@
  * here, so a rule added to the repository is indexed on the next run with no code change, and the
  * predicate the indexer's tests drive is the same one the adapter uses (rule 7).
  *
+ * ## It is not the adapter production composes — `git-vault.ts` is (WP-18a)
+ *
+ * This one takes "the absolute path of a checkout", and the platform process has none: a run's tree
+ * lives on `ws-<run>` inside a container and the launcher's mirror on `repo-cache`, neither of which
+ * the server mounts. TD-026 therefore gave the indexer a second `VaultSource` over a platform-side
+ * **bare mirror**, read with git plumbing, and that is what `apps/server/src/knowledge.ts` composes.
+ * This adapter stays as the reader for a tree that is genuinely on disk — a checkout a future
+ * take-over, import or test hands it — and the two are held to the same corpus by `FIXTURE_VAULT`.
+ *
  * ## `repoPaths` is the working tree, and the residual is stated
  *
  * `VaultSnapshot.repoPaths` is what validate-on-read checks a document's `paths:` against, and
@@ -15,8 +24,9 @@
  * present in the checkout, skipping `.git` — which is the same set in the situation the platform
  * actually produces, a fresh clone at the default branch with nothing untracked in it. In a *dirty*
  * tree the two differ by the untracked files, and the direction of that error is to **keep** a
- * document whose cited path exists only locally rather than to drop one. Asking git instead would
- * mean spawning a process from inside a read, which TD-025 keeps out of this ring.
+ * document whose cited path exists only locally rather than to drop one. The git-backed adapter has
+ * no such residual, because `ls-tree` answers with the paths tracked *at the commit* — which is the
+ * sharper reason it, and not this, is what the index job reads.
  *
  * ## Failure is `unavailable`, never an empty vault
  *

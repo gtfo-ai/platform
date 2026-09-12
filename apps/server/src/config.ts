@@ -53,6 +53,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   bodyLimitBytes: 'APP_HTTP_BODY_LIMIT_BYTES',
   trustProxy: 'APP_TRUST_PROXY',
   providerMode: 'APP_PROVIDER_MODE',
+  knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
   modelApiKey: 'ANTHROPIC_API_KEY',
   claudeBinary: 'APP_CLAUDE_BINARY',
 };
@@ -194,6 +195,29 @@ const serverConfigFields = z.strictObject({
   /** `pathToClaudeCodeExecutable` in `local` mode (BD-004); null uses the bundled binary. */
   claudeBinary: z.string().min(1).nullable(),
 
+  /**
+   * `APP_KNOWLEDGE_MIRROR_ROOT` — where the knowledge indexer keeps one bare mirror per project,
+   * cloned and fetched by this process with `git` (TD-026).
+   *
+   * **`null` has no default and must never acquire one.** Not the working directory, not a temp
+   * directory, not `./knowledge`: a path that appears by default is a mirror an operator did not
+   * ask for, on a filesystem that may not survive a restart, and an index built from it looks
+   * exactly like one built from the volume they meant to mount. Unset therefore composes a vault
+   * source that **refuses by name** (`knowledge.ts`), which is TD-026 decision 5 and standing rules
+   * 18, 31 and 55.
+   *
+   * Absolute because it is resolved against nothing: the adapter refuses a relative path rather
+   * than joining it to whatever the process' cwd happens to be.
+   */
+  knowledgeMirrorRoot: z
+    .string()
+    .min(1)
+    .refine(
+      (value) => value.startsWith('/'),
+      'must be an absolute path, e.g. /var/lib/app/knowledge: it names a data volume, not a place relative to the working directory',
+    )
+    .nullable(),
+
   argon2: argon2ConfigSchema,
   database: db.databaseConfigSchema,
   dispatch: eventing.dispatchConfigSchema,
@@ -263,15 +287,16 @@ export const SERVER_CONFIG_DEFAULTS = {
  * So the composition root adds its own floor on top, per workload it actually starts.
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
- * that nobody has to reassemble it from four docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 2` HTTP `+ 1` maintenance = **12**,
- * against `.env.example`'s `APP_DB_POOL_MAX=14`. The *shape* is **`2N + 10`**, and the two changes
- * behind it are worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
+ * that nobody has to reassemble it from five docblocks:
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 1` knowledge index `+ 2` HTTP
+ * `+ 1` maintenance = **13**, against `.env.example`'s `APP_DB_POOL_MAX=14`. The *shape* is
+ * **`2N + 11`** since WP-18a registered the `knowledge.index` worker, and the changes behind it are
+ * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
  * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
  * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
  * `2N + 9`, which agreed with the old one at N=1 (both 11). WP-15c then added a **fourth** flat
- * job worker (`pipeline.intake.reconcile`), so it is `2N + 10`: 12 at N=1, and **18 at N=4** where
- * `3N + 8` would have been 20.
+ * job worker (`pipeline.intake.reconcile`), making it `2N + 10`, and WP-18a added the knowledge
+ * index worker: `2N + 11` — 13 at N=1, and **19 at N=4** where `3N + 8` would have been 20.
  */
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
@@ -304,6 +329,21 @@ export const POOL_RESERVATIONS = {
    * inside it.
    */
   pipeline: 4,
+  /**
+   * The knowledge index job — **one connection**, and one worker (WP-18a).
+   *
+   * `knowledge.index` is singleton per project and runs one at a time in this process
+   * (`createKnowledgeIndexRuntime`). It holds a connection for its write transaction — the whole
+   * replacement of a project's `kb_documents`, `kb_chunks` and `kb_links` — and for nothing else:
+   * the part that takes time is the `git` fetch and the tree read, which happen **before** the
+   * transaction opens, so no connection is held across a clone.
+   *
+   * Counted under `worker` like the pipeline's four, and unconditionally: the job is registered even
+   * when `APP_KNOWLEDGE_MIRROR_ROOT` is unset, because the refusal it then reports is the thing that
+   * names the missing variable. A reservation that shrank with a setting would be a floor an
+   * operator could lower by accident.
+   */
+  knowledge: 1,
   /**
    * The audit write a **dispatch** nests inside the handler's transaction — **zero since WP-15d**,
    * and this constant is the receipt.
@@ -340,8 +380,16 @@ export const requiredPoolConnections = (config: ServerConfig): number => {
   const dispatcher = capabilities.worker ? perDispatch * config.dispatch.maxConcurrency + 1 : 0;
   const jobsReserve = capabilities.worker ? POOL_RESERVATIONS.jobs : 0;
   const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
+  const knowledgeReserve = capabilities.worker ? POOL_RESERVATIONS.knowledge : 0;
   const httpReserve = capabilities.api ? POOL_RESERVATIONS.http : 0;
-  return dispatcher + jobsReserve + pipelineReserve + httpReserve + POOL_RESERVATIONS.maintenance;
+  return (
+    dispatcher +
+    jobsReserve +
+    pipelineReserve +
+    knowledgeReserve +
+    httpReserve +
+    POOL_RESERVATIONS.maintenance
+  );
 };
 
 /** Thrown at boot rather than deadlocking later; see `requiredPoolConnections`. */
@@ -470,6 +518,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     providerMode: env.APP_PROVIDER_MODE?.trim() || SERVER_CONFIG_DEFAULTS.providerMode,
     modelApiKey: nullableString(readSecret('ANTHROPIC_API_KEY', env)),
     claudeBinary: nullableString(env.APP_CLAUDE_BINARY),
+    knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,

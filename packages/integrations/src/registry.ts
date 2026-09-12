@@ -71,6 +71,36 @@ export interface ProviderCreateInput {
   readonly redactor: SecretRedactor;
 }
 
+/**
+ * How a provider's **static** binding credential is presented to `git` over HTTPS (WP-18a, TD-026).
+ *
+ * The knowledge indexer fetches the project's repository into a platform-side bare mirror with the
+ * `git` binary, using the credential the operator configured on the binding — not a minted one:
+ * GitLab's `mint_credentials` is off by default, so a mint-only path would leave the default
+ * deployment with no credential at all. Which of a provider's secret fields is the git password is
+ * provider knowledge, so the provider declares it here rather than the indexer carrying a table of
+ * provider names (standing rule 7, BD-017: adding a provider touches no consumer).
+ *
+ * Absent means *this provider has no static git credential*, which is a refusal at the fetch, never
+ * an anonymous one (standing rules 16 and 18).
+ */
+export interface GitStaticCredential {
+  /**
+   * The `secretFields` entry holding the password. Checked against `secretFields` at registration:
+   * a field that is not declared secret would be stored unencrypted, and a field that does not
+   * exist would make the refusal look like an unconfigured binding.
+   */
+  readonly passwordField: string;
+  /**
+   * The username git sends beside it. A constant rather than a field, because providers that take
+   * a token as the password ignore it — GitLab: *"Use: Any non-blank value as a username. The
+   * project access token as the password"*
+   * (<https://docs.gitlab.com/user/project/settings/project_access_tokens/>, retrieved 2026-09-10,
+   * already cited in `providers/gitlab/credentials.ts`).
+   */
+  readonly username: string;
+}
+
 export interface ProviderRegistration<TType extends IntegrationType> {
   /** Stable slug: `jira-cloud`, `gitlab`, `slack`, `sentry`, `loki`. */
   readonly id: string;
@@ -84,6 +114,12 @@ export interface ProviderRegistration<TType extends IntegrationType> {
   readonly setupGuidePath: string;
   /** What an agent may be given inside a run, or `null` when the provider exposes nothing. */
   readonly agentTooling: AgentTooling | null;
+  /**
+   * For a `git` provider: which resolved secret `git` authenticates the mirror fetch with (TD-026).
+   * Absent — and always absent for a provider of another type — means the indexer has no credential
+   * for this binding and refuses rather than fetching anonymously.
+   */
+  readonly gitCredential?: GitStaticCredential;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 
@@ -133,6 +169,28 @@ export const createIntegrationRegistry = (
           registration.id,
           `secret field "${field}" does not exist in the config schema; it would be stored and ` +
             'rendered as plain configuration (BD-002)',
+        );
+      }
+    }
+    const gitCredential = registration.gitCredential;
+    if (gitCredential !== undefined) {
+      if (registration.type !== 'git') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `declares a git credential but is a "${registration.type}" provider; only a git binding is fetched with one (TD-026)`,
+        );
+      }
+      if (!registration.secretFields.includes(gitCredential.passwordField)) {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `git credential field "${gitCredential.passwordField}" is not in secretFields; the ` +
+            'knowledge indexer would fetch with a value stored as plain configuration (BD-002)',
+        );
+      }
+      if (gitCredential.username.trim() === '') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          'git credential username is blank; git sends it verbatim and a blank one fails the fetch',
         );
       }
     }

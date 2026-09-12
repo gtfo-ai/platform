@@ -392,9 +392,12 @@ export const repositoryPathOf = (repoUrl: string): string => {
  * technical/03 calls that column "effective configuration … per key, which layer of the precedence
  * chain produced it", so the merge technical/12 describes has already happened by the time a row
  * exists; this reads it rather than recomputing it. The templates are the shipped three: a
- * project's own `.agentic/pipeline.yml` is read from the default branch, which needs a workspace
- * (WP-16's context work), and a template a project declared but this process could not read would
- * park every task one stage short of `done` — so it is absent rather than guessed.
+ * project's own `.agentic/pipeline.yml` is read from the default branch, and a template a project
+ * declared but this process could not read would park every task one stage short of `done` — so it
+ * is absent rather than guessed. **Since WP-18a the missing piece is a caller, not a tree**: this
+ * process can read the default branch without a checkout (`knowledge.ts` composes a `VaultSource`
+ * over a bare mirror), but that read answers the four *indexed vault* paths and nothing else, and
+ * settling a project's pipeline from it is a work package of its own.
  */
 export const createProjectSettingsPort = (pool: pg.Pool): ProjectSettingsPort => ({
   forProject: async (projectId: Id): Promise<ProjectSettings> => {
@@ -535,8 +538,9 @@ export const composePipeline = async (
         claudeCodePath: options.agent.claudeBinary,
         env: runEnvironment.env,
         secretEnvNames: runEnvironment.secretEnvNames,
-        // The shipped defaults. A project's own `prompts/<stage>.md` override needs the default
-        // branch read WP-18 wires, so it is absent rather than half-read (product/13).
+        // The shipped defaults. A project's own `prompts/<stage>.md` override is still absent
+        // rather than half-read (product/13): WP-18a's default-branch read exists, but it returns
+        // the indexed vault paths, and a prompt override is not one of them.
         prompts: ROLE_PROMPTS,
         /**
          * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32

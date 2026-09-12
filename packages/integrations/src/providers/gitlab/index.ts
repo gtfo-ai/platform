@@ -77,6 +77,10 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   secretFields: [...gitlabSecretFields],
   setupGuidePath: 'packages/integrations/src/providers/gitlab/setup-guide.md',
   agentTooling: gitlabAgentTooling,
+  // TD-026: what the knowledge indexer's mirror fetch authenticates with. `oauth2` is the username
+  // `buildCloneUrl` already sends for a minted token, and GitLab accepts any non-blank one beside a
+  // project or personal access token (the citation is on `GitStaticCredential.username`).
+  gitCredential: { passwordField: 'token', username: 'oauth2' },
   create: (input) =>
     createGitLabProvider({
       integrationId: input.integrationId,

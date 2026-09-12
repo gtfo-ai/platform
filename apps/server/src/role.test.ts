@@ -19,11 +19,28 @@ describe('ROLE bootstrap', () => {
     expect(roleCapabilities('worker')).toMatchObject({ api: false, worker: true });
   });
 
-  it('says which workloads no work package has built yet, rather than pretending', () => {
-    // A container that looks healthy and does no work is the failure mode this avoids.
-    expect(roleCapabilities('indexer').unimplemented).toEqual([expect.stringContaining('WP-18')]);
-    expect(roleCapabilities('api').unimplemented).toEqual([]);
-    expect(roleCapabilities('worker').unimplemented).toEqual([]);
+  it('names no unbuilt workload for any role, now that the index job is registered', () => {
+    // It said `indexer (WP-18: the knowledge indexer job is not registered)` until WP-18a, which
+    // registered it. A container that looks healthy and does no work is the failure mode the field
+    // exists for, and the honest state of this build is that no role is in it.
+    for (const role of ROLES) {
+      expect(roleCapabilities(role).unimplemented).toEqual([]);
+    }
+    expect(JSON.stringify(roleCapabilities('indexer'))).not.toContain('WP-18');
+  });
+
+  /**
+   * WP-18a, and the same reasoning `runner` got at WP-15g: an index run happens in the
+   * `knowledge.index` job, which is a pg-boss queue the **worker** subscribes to, so a role that
+   * did not dispatch or work would take no index job — it would serve ops endpoints and wait.
+   */
+  it('treats ROLE=indexer as a worker', () => {
+    expect(roleCapabilities('indexer')).toEqual({
+      api: false,
+      worker: true,
+      indexer: true,
+      unimplemented: [],
+    });
   });
 
   /**
@@ -44,8 +61,9 @@ describe('ROLE bootstrap', () => {
     expect(JSON.stringify(roleCapabilities('runner'))).not.toContain('WP-12');
   });
 
-  it('reports the roles that have nothing to do in this build', () => {
-    expect(roleIsIdle('indexer')).toBe(true);
+  it('reports the roles that have nothing to do in this build — none of them, today', () => {
+    // Not idle since WP-18a: it runs the `knowledge.index` queue (and every other worker queue).
+    expect(roleIsIdle('indexer')).toBe(false);
     // Not idle since WP-15g: it dispatches events and runs every pipeline job queue.
     expect(roleIsIdle('runner')).toBe(false);
     expect(roleIsIdle('all')).toBe(false);

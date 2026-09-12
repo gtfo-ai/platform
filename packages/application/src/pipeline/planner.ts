@@ -132,8 +132,13 @@ export interface StageRunPlannerOptions {
    * Absent in this build and **said so out loud** rather than defaulted to `[]` in silence: there
    * is no checkout at plan time (the pipeline does not compose `WorkspaceProvider` yet), so a
    * knowledge document carrying a `paths:` glob is recorded `validated: false` and never admitted.
-   * That is visible in `run_context_pack` and logged once per run here. WP-18 supplies this when it
-   * wires the indexer to a checkout.
+   * That is visible in `run_context_pack` and logged once per run here.
+   *
+   * **Still absent after WP-18a, and the reason changed.** That work package gave the platform a
+   * default-branch read that needs no checkout — `VaultSource.read` over a bare mirror, whose
+   * `repoPaths` *is* the tracked set at the commit — so what is missing is no longer a tree but a
+   * caller: the planner would have to read the vault a second time, per run, to get it. Filed as
+   * discovered work rather than wired here.
    */
   readonly headPaths?: (projectId: Id) => Promise<readonly string[]>;
   /** `api` or `local` (BD-004); the composition root knows which one the instance runs. */

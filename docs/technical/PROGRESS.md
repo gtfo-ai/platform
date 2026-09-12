@@ -7827,7 +7827,216 @@ with `applyRollups`' fold and is the backstop rather than the guarantee (the gua
 onto itself because `price_list` is `unique (model_id, effective_from)`, so `lead()` never returns a
 row's own instant — the guarantee is the index's, not the statement's.
 
+### WP-18a — the git-backed vault and the indexer job
+
+**What exists now.** `createGitVaultSource` (`packages/infrastructure/src/knowledge/git-vault.ts`) —
+`rev-parse`, `ls-tree -r -l -z`, one `cat-file --batch`, `merge-base --is-ancestor`, no working tree;
+`createGitMirrorCredentials` (`packages/integrations/src/bindings/git-mirror.ts`) and the
+`gitCredential` declaration it reads off a `ProviderRegistration`; the `knowledge.index` job, its two
+trigger handlers and `createKnowledgeIndexRuntime`
+(`packages/application/src/knowledge/index-job.ts`); and `composeKnowledgeIndexing`
+(`apps/server/src/knowledge.ts`), registered by `runtime.ts` on every worker. The application ring's
+`VaultSource`/`VaultSnapshot` port is **unchanged**, as TD-026 requires. Nine integration cases assert
+the acceptance against `kb_documents`/`kb_chunks` rows after a real `git clone --mirror` from a real
+seeded remote, driven through real pg-boss.
+
+**The three answers the brief asked for by name.**
+
+*Which event each trigger listens to.* **`task.created`** for "task start" — emitted once by the
+intake saga before any stage runs, where `task.stage.entered` fires per stage and `task.queued` only
+when a task waits. For "after every merge", **both** events technical/07 names, and they carry
+different payloads on purpose: `mr.merged` enqueues **without** a commit and `default_branch.moved`
+**pins `new_head`**. The reason is in the contracts: `mrPayload` carries `mr.branch`, which is the
+*source* branch, and there is no target — so the platform cannot tell from an `mr.merged` whether the
+merge landed on the default branch, and pinning `merge_commit_sha` would make every feature-branch
+merge fail the ancestry guard and report `vault_unavailable`, which reads as a fault. Unpinned, such a
+merge finds the same commit and reports `unchanged` at the `kb_index_state` early exit. **That exit is
+cheap, not free, and my first note said "free" — the reviewer was right.** `KnowledgeIndexer` compares
+the commit *after* `vault.read` returns, so an unchanged run has already paid for the `remote update`,
+the `ls-tree` and the `cat-file --batch` of the whole vault; what it saves is the parse and the write
+transaction. Moving the comparison ahead of the read needs a head-only question the port does not
+have (a second method, on a port TD-026 left unchanged) and would skip the fetch that makes the answer
+current — which is the one thing the after-merge trigger exists for. Stated at the line instead.
+
+*How the fetch credential travels, and where its audit is.* Binding rows → `SecretStore` →
+`createGitMirrorCredentials` → `{username, password}` → **environment of one `git` subprocess**
+(`GIT_USER`/`GIT_PASS` plus a `GIT_CONFIG_*` credential helper, the launcher's own
+`#gitCredentialEnv` shape) → nowhere else. **There is no audit row, and that is decided rather than
+skipped**: technical/06 § "Outbound: actions" scopes `IntegrationActionExecutor` to *action calls* on
+a provider port — shadow mode, idempotency and rate limits are about mutations to a provider's state
+— and this is the git transport: no adapter, no API call, nothing changed on the far side, nothing to
+replay. The precedent is in this repository: the launcher's `updateMirror` fetches with a credential
+and writes no audit row either. What is recorded is the *run* — `knowledge.index.rebuilt` with the
+commit and the counts, and a refusal's reason string in the `IndexReport` and the log.
+
+*The singleton assertion on PostgreSQL, by name.*
+`test/integration/knowledge/git-vault-index.integration.test.ts` › *"collapses a burst of triggers
+onto one run, through pg-boss’s own singleton key"*: three `enqueueKnowledgeIndex` calls answer
+`enqueued, coalesced, coalesced`, one job runs, one `knowledge.index.rebuilt` row exists. **And the
+first version of that test was not evidence** — measured, not guessed: with `singletonKey` deleted
+from `enqueueKnowledgeIndex` it still passed, because pg-boss folds a burst onto the *null* key just
+as happily under `stately`. The key is only load-bearing **across** projects, so the test now also
+enqueues a second project's index while the first is queued and expects `enqueued`, and the in-memory
+half (`packages/infrastructure/src/jobs/knowledge-index.test.ts` › *"never lets one project’s index
+run block another’s"*) was rewritten to go through the same function for the same reason. That mutant
+now kills both.
+
+**`stately`, and the two policies it was chosen against.** "Singleton per project" is a phrase, not a
+policy. `singleton` caps only the *active* side, so five merges queue five identical runs. `exclusive`
+admits nothing while a job is live and therefore **loses** a merge that arrives a millisecond after a
+run started reading — that run's tree predates it and nothing comes back. `stately` keeps exactly one
+trailing job, and since a job is a wake-up that re-validates on fire (TD-004) the trailing run re-reads
+the branch head. Measured on the in-memory adapter: the criterion's assertion (*one in flight + two
+triggers → one further run*) fails by name under `singleton`, `exclusive` **and** `standard`, and
+passes only under `stately`.
+
+**Decisions a reviewer should check rather than assume.**
+
+- **A provider declares which of its secrets `git` authenticates with** (`ProviderRegistration.gitCredential`,
+  GitLab: `{passwordField: 'token', username: 'oauth2'}`, citation on the type). The alternative —
+  minting through `GitProviderPort.mintCredential` — was rejected on a fact: GitLab's
+  `mint_credentials` defaults to **false**, so a mint-only path leaves the default deployment with no
+  credential at all. Registration refuses a field that is not in `secretFields`, a blank username, and
+  the declaration on a non-git provider.
+- **The byte bound is an aggregate, not per document.** `ls-tree -l` carries each blob's size, so the
+  read refuses *before* buffering anything when the vault exceeds 64 MiB. A per-document cap would
+  make this adapter refuse a page `createFilesystemVaultSource` indexes, and TD-026 decision 9 is
+  explicit that the two must not disagree about the same repository.
+- **The fetch is skipped only when the pinned commit is already an ancestor of the default branch**,
+  not merely present. TD-026 says "already present"; present is not enough, because a sha can be in
+  the mirror as an MR head while the branch has not moved, and answering `unavailable` for a merge
+  commit the remote already has would turn the after-merge trigger into a refusal.
+- **The `git` child gets an allow-list environment**, not the platform process's own — which carries
+  `APP_SECRET_KEY` and `ANTHROPIC_API_KEY` — plus `GIT_TERMINAL_PROMPT=0`, without which a missing
+  credential becomes a prompt on a stdin nobody is attached to: an index job that hangs until its
+  lease expires rather than one that fails with a reason. **And the credential goes only to the two
+  commands that open a connection** (`clone`, `remote update`) — round 1 attached it to every child,
+  which put it in four more process environments for nothing *and* let the "the password really is
+  supplied" assertion pass off a local `rev-parse`. The positive half of that assertion now names a
+  network command, and a second case holds the plumbing reads to having no credential at all.
+- **Untrusted arguments are shape-checked before they are arguments.** A `commitSha` from a provider
+  event must match `^[0-9a-f]{7,64}$` (a value starting with `-` is an *option* to git), a branch name
+  a conservative pattern **plus an explicit `..` refusal** (round 1's docblock claimed the pattern
+  refused traversal "by construction" and it did not — `.` is in the class, so `a/../../HEAD` matched;
+  measured, git itself exits 128 on that ref, so the outcome was already `unavailable`, and what the
+  check buys is a refusal that is ours), and `projects.repo_url` an allow-list of `https?`/`file` —
+  because git's remote helpers include `ext::<command>`, which executes it. `file://` is admitted
+  deliberately: it is what lets the integration tier fetch from a real seeded remote. The allow-list
+  **excludes git's scp-style `git@host:path`**, which `egressHostOfRepoUrl` supports, so a project
+  written that way indexes to a permanent `vault_unavailable`; stated at the pattern and in
+  technical/12 rather than silently. The **mirror directory name** is checked too, before it is joined
+  to a path — unreachable today (`idSchema`, then a uuid cast), and rule 55 is about exactly that
+  reasoning: it is the one untrusted-shaped value in the read that becomes a path.
+- **`ROLE=indexer` became a worker** (`role.ts`), the same correction WP-15g made for `runner` and for
+  the same reason: pg-boss hands a job to any subscribed worker, so a role that did not dispatch would
+  take no index job. No role now reports an unimplemented workload; `roleIsIdle` is false for every
+  role, and the field and the warning are kept for the next role named before its work package.
+- **The pool floor is 13 at N=1, not 12.** The `knowledge.index` worker is a fifth job worker holding
+  one connection for its write transaction (the git fetch and the tree read happen *before* the
+  transaction opens, so no connection is held across a clone). `POOL_RESERVATIONS.knowledge = 1`,
+  shape `2N + 11`; `.env.example` keeps `APP_DB_POOL_MAX=14` (one of slack) and the e2e harness's
+  `12` had to become `13` — which is how the arithmetic was noticed.
+
+**Review round 1: APPROVE with five minors and three nits, all applied.** The two that changed
+behaviour rather than prose are the credential's scope (above) and the mirror-key check; the two that
+changed a false sentence are the `..` claim and *"`unchanged` is free"*; the rest are the scp-style
+note, Q63's residual moved to the line that creates the mirror, technical/07 gaining the audit and
+credential sentences, and one integration assertion that **could not fail** — `SECRET_MARKER`, the
+bytes *inside* a symlink's target, which git never reads (rule 43). That line now asserts the absent
+`kb_documents` row instead, and the case's discriminating assertion is on the target's *path*, which
+is what a mode-120000 read would actually store.
+
+**Measurements taken on this tree** (rule 86 — nothing below is a prediction). Five mutants on a copy
+of the adapter, calibrated unmutated at 24/24: reading mode `120000` kills *"reads the four indexed
+path classes"* and *"lists a symlink and a gitlink and reads neither"*; never refreshing kills 11;
+dropping the ancestry guard kills exactly one; putting the token in an `http.extraHeader` argument and
+writing it into the mirror's `config` each kill *"keeps the credential out of the argument vector and
+out of the mirror’s own config"*. In the integration tier, with the Edit tool and reverted: defaulting
+the mirror root instead of refusing kills *"refuses by name when no mirror root is configured"*,
+reading symlink blobs kills the rows-level symlink case, and removing the missing-vault warning kills
+the new e2e case in `composition.e2e.test.ts`. `git ls-tree -r -l -z` output format recorded from
+`git version 2.50.1`: `<mode> SP <type> SP <object> SP<padded size>TAB<path>`, NUL-separated, size `-`
+for a gitlink; `cat-file --batch` frames `<sha> SP blob SP <size>\n<bytes>\n` and answers
+`<request> SP missing` — both parsed by pure functions with their own tests.
+
+**Rule 83 — sentences the fix falsified, found by grep and corrected.** `filesystem-vault.ts`'s
+docblock (*"Asking git instead would mean spawning a process from inside a read, which TD-025 keeps out
+of this ring"* — the sibling now does exactly that, and `ctags.ts` already did); `role.ts`'s
+`PENDING_WORK_PACKAGE.indexer` and the two paragraphs around it; `planner.ts`'s `headPaths` (*"WP-18
+supplies this when it wires the indexer to a checkout"* — WP-18a wires it to a **mirror** and does
+**not** supply `headPaths`, so the sentence now says what is actually missing: a caller, not a tree);
+`apps/server/src/pipeline.ts` twice (the `.agentic/pipeline.yml` read *"needs a workspace"*, and the
+`prompts/<stage>.md` override *"needs the default branch read WP-18 wires"*); `docs/TODO.md`'s
+`git`-in-the-image item; technical/07's *"before WP-18 wires the job"*. Seven sites, five of them in
+code.
+
+**Q63 (the mirror disk budget), decided as "state it rather than half-build it".** Part (2)'s
+recommended **default** is what the code does — no ceiling, no eviction — reached by not building the
+knob. Part (1) cannot be done in this build: product/19 §20's storage gauge does not exist (nothing
+reports database bytes either), so there is no number for a mirror line to join; the note on Q63 says
+where the bytes are when someone builds it. Part (3) is TD-026's deferral and is in `docs/TODO.md`.
+The status note on the question also makes its last sentence **live** rather than hypothetical:
+`task.created` triggers an index for every project with a git binding, so the first task of each
+project clones its repository onto the platform's disk with nothing bounding the total.
+
+**Assumptions, stated because the docs did not settle them.** (a) TD-026 decision 5 says "no
+`VaultSource` is composed"; this composes `unavailableVaultSource`, a **refusal object** in the shape
+`unavailableClaudeRunner` already uses, because the criterion asks the *job* to name the missing
+variable and something has to carry that sentence. (b) A mirror root that does not exist is refused
+rather than created: a typo'd path would otherwise be created and filled, and an index built from it
+looks exactly like one built from the volume the operator meant. (c) The job's index-run report is
+logged, not persisted; `kb_index_state` has no column for the parser version or the last reason, and
+adding one is WP-18b's `kb_health_reports` work.
+
+**What this half does not do, and nobody should read as done.** No librarian pipeline, no proposals,
+no apply policy, no knowledge MR, no nightly hygiene (WP-18b). Nothing has indexed a project inside
+`platform-app`: *"the image has `git`"* and *"the indexer can use it there"* remain two claims, and
+`docs/TODO.md` says so. The adapter has never fetched from a real GitLab over HTTPS — every fetch in
+every tier is `file://` — so the credential helper's *effect* is untested even though its plumbing and
+its non-leakage are asserted; that is the same gap `docs/TODO.md`'s blobless-clone item lives in.
+
+**WP-18a — Needs measurement** (found by the review, and neither is a defect; both are claims this
+change asserts less strongly than it reads):
+
+1. **The in-flight half of the singleton criterion has never been asked of pg-boss.** *One active run
+   plus two triggers → one trailing run* is asserted only against the in-memory adapter
+   (`packages/infrastructure/src/jobs/knowledge-index.test.ts`), because the fake runs handlers inside
+   `drain` and can therefore enqueue *while a job is active*; the PostgreSQL case asserts the
+   **queued-side** fold (`enqueued, coalesced, coalesced`) and the per-project key. The pg-boss claim
+   is therefore **inferred** from the fake's divergence register, which says its only known `stately`
+   divergence is that it reuses `created` where pg-boss uses `retry` — i.e. stricter. To measure it
+   properly: a worker whose handler blocks on a promise the test resolves, two enqueues while it is
+   blocked, then count the runs.
+2. **A `file://` fetch never invokes the credential helper**, so every credential assertion in every
+   tier is about *plumbing* — the value is in the right environment and in no argv or config — and
+   none is about *effect*. Nothing has ever proved that git actually authenticates with it. Measuring
+   it needs a local authenticated HTTP remote (`git http-backend` behind a basic-auth server over
+   `http://`) and would also close the "never fetched from a real host" gap above at unit-tier cost.
+
 ## Discovered work — session 5 (not in plan)
+- **`headPaths` for validate-on-read now has a mechanism and no caller** (WP-18a). `createStageRunPlanner`
+  leaves `headPaths` absent, so every knowledge document carrying a `paths:` glob is recorded
+  `validated: false` and never admitted to a pack — the reason used to be "there is no checkout at plan
+  time", and after WP-18a that reason is gone: `VaultSource.read` answers `repoPaths` with the tracked
+  set at the commit, with no checkout. What is missing is a caller, and it is not free — it is a second
+  vault read per run, or a cache keyed by commit. Nobody owns it; the sentence in `planner.ts` now says
+  this instead of naming a work package that will not do it.
+- **A project's own `.agentic/pipeline.yml` and `prompts/<stage>.md` are still unread, for a new
+  reason** (WP-18a). `apps/server/src/pipeline.ts` passes the shipped templates and the shipped role
+  prompts because reading a project's own needed a checkout. The platform can now read the default
+  branch without one, but the vault source answers the four *indexed* paths and nothing else, so
+  serving these two would mean either widening what the adapter returns or a second read. Both are
+  decisions with consequences (a template a project declared and the platform could not read parks
+  every task one stage short of `done`), so neither was taken here.
+- **Nothing bounds the platform's mirror disk, and nothing reports it** (WP-18a, Q63's parts 1 and 2).
+  One bare mirror per project appears on the first index run and is never removed; product/19 §20's
+  storage gauge does not exist in this build, so there is no number an operator can look at either.
+  The note on Q63 states where the bytes are (`mirrorCacheKeyFor(projectId)` under
+  `APP_KNOWLEDGE_MIRROR_ROOT`, one `du` per directory). Owner: whoever builds the storage gauge.
+- **`ROLE=indexer` is a worker, not a narrower workload** (WP-18a, the same gap WP-15g recorded for
+  `runner`). A container that runs *only* the `knowledge.index` queue needs per-queue subscription,
+  which nothing in this build has: today `ROLE=indexer` subscribes to every worker queue, including
+  `stage.execute`. It is one entry, not two — whoever builds per-queue subscription gets both roles.
 - **Nothing serves the SPA, and the bundle is now in the image** (WP-22 — **refined into backlog 33**, and a
   sentence on **WP-15h**'s row owns it). technical/09 says the
   bundle is "served as a static bundle by the app process with SPA fallback; same origin as the API

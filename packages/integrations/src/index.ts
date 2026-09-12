@@ -20,6 +20,7 @@
  * nock replay mode (technical/10).
  */
 export * from './bindings/fake-registrations.js';
+export * from './bindings/git-mirror.js';
 export * from './bindings/inbound-loader.js';
 export * from './bindings/loader.js';
 export * from './bindings/shipped-registry.js';

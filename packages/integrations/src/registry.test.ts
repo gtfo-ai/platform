@@ -90,3 +90,69 @@ describe('createIntegrationRegistry', () => {
     expect(registry.list('git').map((entry) => entry.id)).toEqual(['alpha-git']);
   });
 });
+
+/**
+ * The git credential declaration TD-026 added (WP-18a).
+ *
+ * Same shape as the `secretFields` check above and for the same reason: the knowledge indexer
+ * fetches a project's repository with the value this names, so a field that is not a *secret* field
+ * would be a credential stored and rendered as ordinary configuration, and a typo would be
+ * indistinguishable from a binding nobody gave a token to.
+ */
+describe('a git provider’s static credential declaration', () => {
+  const gitRegistration = (gitCredential: unknown): AnyProviderRegistration =>
+    ({
+      ...registration(),
+      id: 'fake-git-provider',
+      type: 'git',
+      create: () => {
+        throw new Error('not built in this test');
+      },
+      gitCredential,
+    }) as AnyProviderRegistration;
+
+  it('accepts a field that is declared secret', () => {
+    const registry = createIntegrationRegistry([
+      gitRegistration({ passwordField: 'api_token', username: 'oauth2' }),
+    ]);
+    expect(registry.get('git', 'fake-git-provider').gitCredential).toEqual({
+      passwordField: 'api_token',
+      username: 'oauth2',
+    });
+  });
+
+  it('refuses a field that is not in secretFields', () => {
+    expect(() =>
+      createIntegrationRegistry([
+        gitRegistration({ passwordField: 'base_url', username: 'oauth2' }),
+      ]),
+    ).toThrow(/not in secretFields/);
+  });
+
+  it('refuses a blank username, which git would send verbatim', () => {
+    expect(() =>
+      createIntegrationRegistry([gitRegistration({ passwordField: 'api_token', username: ' ' })]),
+    ).toThrow(ProviderRegistrationError);
+  });
+
+  it('refuses the declaration on a provider that is not a git provider', () => {
+    expect(() =>
+      createIntegrationRegistry([
+        {
+          ...registration(),
+          gitCredential: { passwordField: 'api_token', username: 'oauth2' },
+        } as AnyProviderRegistration,
+      ]),
+    ).toThrow(/only a git binding/);
+  });
+
+  it('is what the shipped GitLab provider declares', async () => {
+    const { gitlabProviderRegistration } = await import('./providers/gitlab/index.js');
+    // The value production fetches with: GitLab takes any non-blank username beside a token.
+    expect(gitlabProviderRegistration.gitCredential).toEqual({
+      passwordField: 'token',
+      username: 'oauth2',
+    });
+    expect(gitlabProviderRegistration.secretFields).toContain('token');
+  });
+});

@@ -97,6 +97,22 @@ describe('an instance started the way main.ts starts one', () => {
     });
   });
 
+  /**
+   * WP-18a, criterion 7. This instance is started with **no** `APP_KNOWLEDGE_MIRROR_ROOT` — nothing
+   * in `startInstance`'s environment sets one — which is exactly the deployment TD-026 decision 5
+   * is about: no vault source is composed, the `knowledge.index` job is registered anyway, and the
+   * refusal it will report names the variable. The two halves of the criterion are here (a process
+   * that still answers `/readyz` ok, asserted above) and in
+   * `test/integration/knowledge/git-vault-index.integration.test.ts` (an existing index is not
+   * emptied), because only one of them needs a database with rows in it.
+   */
+  it('names the knowledge mirror root as the reason it composed no vault source', () => {
+    const missing = logged.find((line) => line.includes('without a vault source'));
+    expect(missing).toBeDefined();
+    expect(missing).toContain('APP_KNOWLEDGE_MIRROR_ROOT');
+    expect(missing).toContain('vault_unavailable');
+  });
+
   it('names the agent runner as the one collaborator it still has no adapter for', () => {
     // And **not** the audit log: this assertion is the mutation guard for the composition change.
     // If `composePipeline` went back to taking an `IntegrationAuditLog` from its caller, a process

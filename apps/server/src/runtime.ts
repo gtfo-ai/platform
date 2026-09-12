@@ -55,6 +55,7 @@ import { buildApp } from './app.js';
 import { createAuth } from './auth/better-auth.js';
 import { bootstrapAdministrator } from './auth/bootstrap.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
+import { composeKnowledgeIndexing } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
 import {
@@ -318,6 +319,39 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           logger.warn(
             { missing: pipeline.agentMissing },
             'the pipeline is composed without an agent runner: everything except an agent stage runs and is audited, and a stage that needs an agent fails its run and escalates its task',
+          );
+        }
+
+        /**
+         * The knowledge indexer's job and its two triggers (WP-18a, TD-026).
+         *
+         * Beside the pipeline rather than inside it: technical/07's index is a projection of the
+         * project's **default branch**, not a step of a ticket's journey, and its queue is the
+         * process's like the partition and price-list crons. It is composed **unconditionally** on a
+         * worker — a process with no `APP_KNOWLEDGE_MIRROR_ROOT` and a process with no `git` both
+         * get a vault source that refuses *by name*, which is what makes the job's report say which
+         * piece is missing instead of writing an empty index (TD-026 decision 5).
+         *
+         * Before `worker.start()` for the same reason the pipeline is: its handlers have to be on
+         * the bus before the first sweep dispatches to it.
+         */
+        const knowledge = await composeKnowledgeIndexing({
+          pool: database.pool,
+          eventing,
+          jobs: jobsRuntime.jobs,
+          secretKey: config.secretKey,
+          registry: (stack as NonNullable<typeof stack>).registry,
+          mirrorRoot: config.knowledgeMirrorRoot,
+          logger: loggerPort,
+        });
+        for (const handler of knowledge.handlers) {
+          eventing.bus.register(handler);
+        }
+        stopCallbacks.unshift({ name: 'knowledge-index', stop: knowledge.stop });
+        if (knowledge.missing.length > 0) {
+          logger.warn(
+            { missing: knowledge.missing },
+            'the knowledge index job is registered without a vault source: an index run will report vault_unavailable naming the missing piece, and an existing index is left untouched',
           );
         }
       }

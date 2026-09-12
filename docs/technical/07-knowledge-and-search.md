@@ -7,7 +7,7 @@
 - `KnowledgeIndexer` job (pg-boss, singleton per project): `git diff --name-only <last_indexed>..<head>` restricted to `knowledge_dir`, `.agentic/rules`, `CLAUDE.md`, `AGENTS.md` → parse frontmatter (schema in product/05) → split into chunks by heading (each chunk prefixed with `project / path / H1 > H2`) → upsert `kb_documents`, `kb_chunks`, `kb_links` → update `kb_index_state`. Full rebuild on demand or when the parser version changes.
 - Validation on index: frontmatter schema, dangling wikilinks, expired items, duplicated ids; results feed the KB health report.
 
-> **Where the tree the indexer reads comes from — decided at TD-026, before WP-18 wires the job.**
+> **Where the tree the indexer reads comes from — decided at TD-026, built at WP-18a.**
 > This section says the platform "reads it from the default branch" and never said *from what*. The
 > answer is a **platform-side bare mirror** of the project, one per project, cloned and fetched by the
 > platform process itself and read with `git ls-tree` and `git cat-file`: **no working tree is ever
@@ -29,6 +29,29 @@
 > extracts `git archive <sha>` from the same mirror into a scratch directory and must drop any symlink
 > whose target escapes it — `git archive` recreates one verbatim, measured in
 > `docs/research/13-bare-mirror-vault-read.md`.
+>
+> **Built at WP-18a**, with three things this section left open and the change had to decide.
+> The job is `knowledge.index`, `singletonKey: project:<id>` under pg-boss policy **`stately`** —
+> one active and one *queued* per project, so a burst folds onto one trailing run rather than
+> being dropped (`exclusive`) or queued N deep (`singleton`). "At task start" is **`task.created`**,
+> which is emitted once before any stage runs; `task.stage.entered` would fire per stage. And of
+> the two merge events, **`mr.merged` is enqueued without a commit** while
+> **`default_branch.moved` pins `new_head`**: an `mr.merged` payload names the *source* branch only,
+> so pinning its merge commit would make every feature-branch merge fail the ancestry guard and
+> report `vault_unavailable`, where an unpinned run simply finds the same commit and reports
+> `unchanged` — which is **cheap, not free**: the commit comparison happens after the vault read, so
+> such a run still pays for the fetch and the tree read and saves only the parse and the write.
+>
+> Two more decisions that live at the fetch rather than in the index. The fetch authenticates with
+> the project's **existing git binding credential**, passed as a credential-helper environment and
+> **never inside the URL** — so the mirror's own `config` cannot hold it — and a project with no git
+> binding, or one whose credential is empty, is a refusal rather than an anonymous fetch. And it
+> writes **no `integration_actions` row**: § "Outbound: actions" in technical/06 scopes
+> `IntegrationActionExecutor` to *action calls on a provider port* — shadow mode, idempotency and
+> rate limits are about mutations to a provider's state — while this is the git transport, which
+> mutates nothing and has nothing to replay (the launcher's own mirror update is audited the same
+> way, which is to say not at all). What is recorded is the run: `knowledge.index.rebuilt` with the
+> commit and the counts, and a refusal's reason on the index report and in the log.
 
 ## Retrieval for context packs (phase 1)
 Inputs: task text (ticket + spec), touched paths (from plan/diff when available), stage.

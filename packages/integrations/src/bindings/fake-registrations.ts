@@ -55,6 +55,10 @@ export const fakeGitRegistration = (
   secretFields: ['token'],
   setupGuidePath: 'packages/integrations/src/git/fake.ts',
   agentTooling: null,
+  // The same declaration the real git provider carries (TD-026), so a tier that fetches a mirror
+  // through this registration resolves its credential the way production does rather than through a
+  // shape only the fake has (standing rule 1).
+  gitCredential: { passwordField: 'token', username: 'agentic' },
   create: ({ secrets }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
     return options.port;

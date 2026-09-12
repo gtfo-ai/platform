@@ -12,10 +12,16 @@
  *   are how an orchestrator and Prometheus see a container at all, so a worker container that
  *   served nothing would be a container nothing could observe. The *API* surface — auth, `/api/*`,
  *   `/events` — is what `api` gates.
- * - **A role whose workload does not exist yet says so.** `indexer` is named by technical/01 and its
- *   job is not registered yet (WP-18). Rather than quietly starting a process that does nothing,
- *   `roleCapabilities` reports it as unimplemented and the composition root logs a warning naming the
- *   work package. A container that looks healthy and does no work is the failure mode this avoids.
+ * - **A role whose workload does not exist yet says so**, and `indexer` stopped being one at WP-18a.
+ *   Its job — `knowledge.index`, singleton per project — is registered by every process that
+ *   composes the worker half (`knowledge.ts`), for the reason `runner` is a worker: pg-boss hands a
+ *   job to **any** subscribed worker, so a capability that gated the index on a role name would
+ *   leave a `ROLE=worker` process taking index jobs it had composed nothing for. `ROLE=indexer` is
+ *   therefore a worker named for the workload an operator deploys it for, exactly like `runner`, and
+ *   a container that looks healthy while doing no work is no longer what this role produces. What is
+ *   still missing is **per-queue subscription** — a process that runs *only* index jobs — which
+ *   nothing in this build has and which is recorded as discovered work rather than implied by a
+ *   name.
  *
  * ## `runner` is the worker, and that is a statement about where a run happens (WP-15g)
  *
@@ -56,7 +62,14 @@ export interface RoleCapabilities {
    * whether a process can run an agent is its *configuration*, read in `agent.ts`.
    */
   readonly worker: boolean;
-  /** Build the knowledge index and code map (WP-16). */
+  /**
+   * Build the knowledge index and code map (WP-16, wired at WP-18a).
+   *
+   * Reported rather than gating: the index runs in the `knowledge.index` job, which is a worker
+   * queue, so what decides whether a process indexes is `worker` plus its *configuration*
+   * (`APP_KNOWLEDGE_MIRROR_ROOT` and the `git` binary, both named in the start-up log when absent)
+   * — never the role name. See this file's header.
+   */
   readonly indexer: boolean;
   /**
    * Work this role is supposed to do that no work package has built yet, as
@@ -72,36 +85,32 @@ const CAPABILITIES: Record<Role, Omit<RoleCapabilities, 'unimplemented'>> = {
   // A worker, named for the workload an operator deploys it for: a run happens in the
   // `stage.execute` job, which is the worker's queue (WP-15g).
   runner: { api: false, worker: true, indexer: false },
-  indexer: { api: false, worker: false, indexer: false },
+  // The same, for the `knowledge.index` job (WP-18a). It was `worker: false` while nothing
+  // registered that queue, which made the role a process that served ops endpoints and waited.
+  indexer: { api: false, worker: true, indexer: true },
 };
-
-/** Where each not-yet-built workload lands, so a warning can name it. */
-const PENDING_WORK_PACKAGE = {
-  indexer: 'indexer (WP-18: the knowledge indexer job is not registered)',
-} as const;
 
 export const isRole = (value: string): value is Role =>
   (ROLES as readonly string[]).includes(value);
 
-export const roleCapabilities = (role: Role): RoleCapabilities => {
-  const base = CAPABILITIES[role];
-  const unimplemented: string[] = [];
-  // `indexer` is the one capability nothing consumes: WP-16 built the indexer and WP-18 registers the
-  // job, so the role is reported as unimplemented rather than being given a flag that gates nothing —
-  // which is exactly what `runner` was until WP-15g.
-  if (role === 'indexer' || role === 'all') {
-    unimplemented.push(PENDING_WORK_PACKAGE.indexer);
-  }
-  return { ...base, unimplemented };
-};
+export const roleCapabilities = (role: Role): RoleCapabilities => ({
+  ...CAPABILITIES[role],
+  /**
+   * Empty for every role in this build — WP-18a registered the last workload a role named and could
+   * not run. The field stays: it is how the next role-named-before-its-work-package says so, and
+   * `runtime.ts` already logs it.
+   */
+  unimplemented: [],
+});
 
 /**
- * True when the role has nothing to do in this build. `ROLE=indexer` today starts a process that
- * serves ops endpoints and waits — worth a warning, not a refusal: an operator splitting roles
- * ahead of the features landing should be able to write the compose file once.
+ * True when the role has nothing to do in this build — **no role in it today**.
  *
- * `ROLE=runner` is **no longer** one of them: it is a worker, so it dispatches events, runs every
- * pipeline job queue and executes agent stages when its configuration allows.
+ * It is kept rather than deleted, and the warning with it: a role named ahead of its work package is
+ * how both `runner` (until WP-15g) and `indexer` (until WP-18a) started a process that served ops
+ * endpoints and waited, and an operator splitting roles ahead of the features landing should learn
+ * that from a log line rather than from an idle container. Both are workers now: they dispatch
+ * events and run the job queues their name is about.
  */
 export const roleIsIdle = (role: Role): boolean => {
   const capabilities = roleCapabilities(role);

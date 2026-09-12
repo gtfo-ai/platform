@@ -183,6 +183,7 @@ describe('pool sizing', () => {
       5 +
         POOL_RESERVATIONS.jobs +
         POOL_RESERVATIONS.pipeline +
+        POOL_RESERVATIONS.knowledge +
         POOL_RESERVATIONS.http +
         POOL_RESERVATIONS.maintenance,
     );
@@ -220,8 +221,9 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Twelve since WP-15c: the pipeline's fourth job worker is `pipeline.intake.reconcile`.
-    expect((thrown as UndersizedPoolError).required).toBe(12);
+    // Thirteen since WP-18a: twelve (the pipeline's fourth job worker, `pipeline.intake.reconcile`,
+    // made it that at WP-15c) plus the `knowledge.index` worker.
+    expect((thrown as UndersizedPoolError).required).toBe(13);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 

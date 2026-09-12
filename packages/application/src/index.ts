@@ -46,6 +46,7 @@ export * from './integrations/redaction.js';
 // The knowledge base (WP-16): indexer, context packs, `kb_search`, code map
 export * from './knowledge/code-mapper.js';
 export * from './knowledge/context-pack.js';
+export * from './knowledge/index-job.js';
 export * from './knowledge/indexer.js';
 export * from './knowledge/kb-search.js';
 export * from './knowledge/ports.js';
