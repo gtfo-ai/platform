@@ -30,6 +30,7 @@ import {
   type ResolvedCommandPolicy,
 } from '../policies/command-policy.js';
 import { DEFAULT_MAX_REVIEW_FINDINGS } from '../policies/review-only.js';
+import { DEFAULT_LINT_ISSUE_TYPES, DEFAULT_LINT_LABEL } from '../policies/ticket-lint.js';
 
 /** A configuration layer's values: `.agentic/config.yml` minus the file-format `version`. */
 export type ConfigValues = Omit<AgenticConfig, 'version'>;
@@ -109,7 +110,14 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
     block: [...DEFAULT_COMMAND_POLICY.block],
   },
   features: {
-    ticket_linter: { enabled: false },
+    // WP-25: `issue_types` is technical/12's own example list and `label` is product/19 § 17's
+    // offer line. Both are defaults for a project that turns the feature on and names neither; an
+    // **explicitly empty** `issue_types` still matches nothing (`ticketMatchesLintFilter`).
+    ticket_linter: {
+      enabled: false,
+      issue_types: [...DEFAULT_LINT_ISSUE_TYPES],
+      label: DEFAULT_LINT_LABEL,
+    },
     review_only: {
       enabled: false,
       trigger: 'label',

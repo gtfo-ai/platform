@@ -170,6 +170,8 @@ export interface TaskManagementCapabilities {
 /** Catalogue events a task-management delivery can produce (technical/02). */
 export type TaskManagementInboundEvent =
   | 'ticket.matched'
+  /** WP-25: a ticket the binding reads was created, whether or not it is for the agent. */
+  | 'ticket.created'
   | 'ticket.comment.added'
   | 'ticket.status.changed';
 

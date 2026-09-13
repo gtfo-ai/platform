@@ -274,6 +274,9 @@
               "items": {
                 "$ref": "#/$defs/NonEmptyString"
               }
+            },
+            "label": {
+              "$ref": "#/$defs/NonEmptyString"
             }
           },
           "additionalProperties": false

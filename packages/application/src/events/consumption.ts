@@ -27,8 +27,8 @@
  * technical/02's "Core consumers" column is the normative source and the amendment makes it so, with
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
- * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **24**
- * of them — 21 from the pipeline and 3 from the cost ledger (WP-19). A table transcribed from the
+ * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **25**
+ * of them — 22 from the pipeline and 3 from the cost ledger (WP-19). A table transcribed from the
  * column would therefore stop the outbox
  * worker in every build that exists today, including the one whose e2e walks a ticket to
  * `task.completed` — the acceptance criterion this work package is for.
@@ -100,6 +100,17 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    */
   'mr.opened': 'handled',
 
+  // ── The ticket readiness linter (WP-25), registered by `ticketLintHandlers` ──
+  /**
+   * A ticket was created in a project the binding reads — the linter's door (product/18).
+   *
+   * `handled` from the day the event exists: it is added by the work package that consumes it, so
+   * there is no window in which a sweeper completes a dispatch for a handler somebody is about to
+   * write. The handler decides in two indexed reads and enqueues; a project without the feature
+   * costs one `pipeline.outbound` job that settles with a reason.
+   */
+  'ticket.created': 'handled',
+
   // ── The cost ledger (WP-19), registered by `costHandlers` ────────────────────
   'run.finished': 'handled',
   'run.failed': 'handled',
@@ -147,6 +158,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'integration.action.performed': 'unconsumed', // Audit and health projections; unowned.
   'integration.action.failed': 'unconsumed', // As above.
   'task.review.observed': 'unconsumed', // WP-41 statistics: product/18's accepted-vs-dismissed.
+  // WP-41 statistics: product/18:60's "tickets improved after lint". The *other* half of that
+  // metric — "edited within 48 h" — needs a "this ticket changed" signal no normaliser produces
+  // today; `taskLintPostedEvent`'s docblock carries the measurement and the baseline it records.
+  'task.lint.posted': 'unconsumed',
   'shadow.report.created': 'unconsumed', // WP-34 shadow mode.
 };
 

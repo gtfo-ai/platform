@@ -198,6 +198,52 @@ export interface PromptNonceSource {
   next(): string;
 }
 
+/**
+ * A stage's narrower instruction, when the role's own prompt is broader than the stage — WP-25.
+ *
+ * The ticket readiness linter is *"a light Refinement pass"* (product/18): the same Product Manager
+ * role, the same `RefinedSpec`, a different job. That difference is **platform text**, so it belongs
+ * in the platform's own voice, and there are three places it could have gone. A second `prompt.md`
+ * beside the role's would mean a second eval corpus for one paragraph (TD-016's cases are per role).
+ * An append made by the planner *after* `assemblePrompt` would sit outside `promptVersion`, whose
+ * whole purpose is that an edit nobody declared is still visible in the audit. So it goes through
+ * the assembler, into the system prompt, beside the role's own brief.
+ *
+ * **It is a closed set of the platform's own literals, not a string parameter**, which is what makes
+ * *"every byte of the assembled prompt is either text the platform wrote or is inside a data block"*
+ * checkable here rather than promised by the caller: `StagePromptFocus` is the union of these
+ * values, so TypeScript refuses a sentence assembled from configuration, from a ticket or from a
+ * model's answer. `assertPlatformVoice` cannot do that job — its alphabet is for *marker attributes*
+ * and would refuse an ordinary English sentence.
+ *
+ * It is rendered into **layer 1–3** (`systemPromptOf`), so `promptVersion` digests it: editing the
+ * paragraph below moves the version every run of that stage records, which is the property that made
+ * this the right place rather than an append the planner makes afterwards.
+ */
+export const STAGE_PROMPT_FOCUS = {
+  ticket_lint: `**This run is a ticket readiness lint, not a delivery.** Nobody is waiting to
+implement what you write and no code will be changed because of it. The ticket below is one a human
+wrote and has *not* handed to the agent; your job is to say how ready it is and what a developer
+would have to ask before starting.
+
+Three things follow, and they are the whole of the narrowing:
+
+1. **Work from the ticket, not from the repository.** Do not explore the code; a lint is worth a
+   fraction of a refinement and reading a codebase is not what it buys. Use the project knowledge you
+   were given, and say what the ticket does not say.
+2. **The \`questions\` field is the deliverable.** Put the questions a developer would ask before
+   starting there — the specific ones this ticket leaves open, not a checklist. At most the first
+   five reach the ticket, so order them by what would block the work first, and mark those
+   \`blocking\`.
+3. **Fill the rest of the spec with what the ticket supports and nothing more.** Empty
+   \`acceptance_criteria\`, \`in_scope\` or \`out_of_scope\` are honest answers about an unready
+   ticket, and the platform reads them as such; inventing them would hide the gap this run exists to
+   report. Do not ask a human anything — this run has no watcher.`,
+} as const;
+
+/** The platform's own stage instructions; see {@link STAGE_PROMPT_FOCUS}. */
+export type StagePromptFocus = (typeof STAGE_PROMPT_FOCUS)[keyof typeof STAGE_PROMPT_FOCUS];
+
 export interface AssemblePromptInput {
   readonly nonce: PromptNonceSource;
   readonly role: RolePromptDefinition;
@@ -205,6 +251,15 @@ export interface AssemblePromptInput {
   readonly task: PromptTask;
   /** What this stage must return, or null for a stage that produces no artifact. */
   readonly artifactType: ArtifactType | null;
+  /**
+   * The stage's narrower instruction, or `null` for a stage whose role prompt is the whole brief.
+   *
+   * Required-and-nullable rather than optional, for the reason `PromptTask.ticketSnapshot` is: a
+   * caller that forgot it should have to say so. The sentence and the field disagreed until
+   * WP-25 round 2 — it shipped as `focus?:`, which is exactly the spelling this reasoning
+   * rejects.
+   */
+  readonly focus: StagePromptFocus | null;
 }
 
 export interface AssembledPrompt {
@@ -346,10 +401,21 @@ const assertPlatformVoice = (what: string, value: string): void => {
   if (!SAFE_ATTRIBUTE_VALUE.test(value)) throw new UnsafeMarkerValueError(what, value);
 };
 
-const systemPromptOf = (role: RolePromptDefinition): string => {
+/**
+ * Layers 1–3: the platform's prompt, the role's, and — when the stage has one — its narrower
+ * instruction.
+ *
+ * The **focus is here rather than in the user prompt**, and that is what makes it part of
+ * `promptVersion`: {@link promptVersionOf} digests this string, so an edit to
+ * {@link STAGE_PROMPT_FOCUS} that nobody declared still moves the version the audit records.
+ * Putting it in layers 4–6 would have left it outside the digest entirely, which is the property
+ * this placement exists for and is asserted in `assembly.test.ts`.
+ */
+const systemPromptOf = (role: RolePromptDefinition, focus: StagePromptFocus | null): string => {
   assertPlatformVoice('a role name', role.role);
   assertPlatformVoice('a role prompt version', role.version);
-  return `${PLATFORM_PROMPT}\n\n## Your role: ${role.role}\n\n${role.text.trim()}\n`;
+  const base = `${PLATFORM_PROMPT}\n\n## Your role: ${role.role}\n\n${role.text.trim()}\n`;
+  return focus === null ? base : `${base}\n## This stage\n\n${focus.trim()}\n`;
 };
 
 /**
@@ -640,7 +706,7 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
   const render = (block: DataBlock): string => renderDataBlock(nonce as string, block);
 
   assertPlatformVoice('a stage id', input.task.stage);
-  const systemPrompt = systemPromptOf(input.role);
+  const systemPrompt = systemPromptOf(input.role, input.focus ?? null);
   const userPrompt = [
     packHeader(input.pack),
     ...documentBlocks.map(render),

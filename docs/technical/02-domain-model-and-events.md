@@ -71,6 +71,14 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > same way discovery does; and both of the Reviewer's verdicts point at `done`, because product/18
 > requires the summary to *never block merge* and the interpreter reads a missing `return_to` as
 > "escalate". `packages/domain/src/pipeline/templates.ts` carries that argument.
+>
+> **A fourth uses it since WP-25**: the **ticket_lint** template of product/18's readiness linter —
+> `intake → ticket_lint → done`, the Product Manager alone on a ticket nobody handed to the agent.
+> Its stage is declared `advisory` (`agentStageSchema`), which is the one thing the other three did
+> not need: a `RefinedSpec` normally *decides* the transition, and the artifact a lint produces for
+> an unready ticket is exactly the one that would park the task on blocking questions (`decision:
+> ask`) or escalate it (`reject`). An advisory stage always advances, and the platform reads the
+> artifact afterwards to write the comment.
 
 ### Run
 `created → starting → running → (completed | failed | cancelled | budget_exceeded | timed_out | stalled)`. `running` emits `run.output` stream events (not stored in the domain log; stored in the transcript store, see 03) and heartbeats; `stalled` after no output for `stall_timeout` (default 5 min, research/01).
@@ -113,6 +121,7 @@ records the trade).
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|
 | `ticket.matched` | task-management adapter | ticket ref, rule, priority, type, epic, links | Intake (10) |
+| `ticket.created` | task-management adapter | ticket ref, issue type | Ticket readiness linter (10, WP-25) |
 | `ticket.comment.added` | adapter | ticket, comment id, author identity, text | Question answering (20), Feedback intake (30) |
 | `ticket.status.changed` | adapter | ticket, from, to, actor | Task sync (20) |
 | `task.created` | Intake | task, template, mode, estimate | Workpad (110), Slack notify (210), UI (220) |
@@ -129,6 +138,7 @@ records the trade).
 | `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110) |
 | `task.cancelled` / `task.completed` | Pipeline | task, outcome, totals | Ticket transition (110), Slack (210), stats (230) |
 | `task.review.observed` | Review-only (WP-24) | task, mr, head sha reviewed and now, threads posted/resolved/accepted/dismissed/unresolved | stats (230) |
+| `task.lint.posted` | Ticket readiness linter (WP-25) | task, ticket, score, missing elements, questions posted, the ticket's `updated_at` | stats (230) |
 | `run.created` | Runner | run, task, stage, role, mode, attempt, run key | UI (220) |
 | `run.started` | Runner | run, model, effort, prompt version, context pack | UI (220) |
 | `run.finished` / `run.failed` | Runner | run, status, usage, cost, exit reason | Cost ledger (10), stage executor (20), UI |

@@ -65,6 +65,7 @@ import {
   type StageExecutor,
   type StageExecutorOptions,
 } from './stage-executor.js';
+import { ticketLintHandlers } from './ticket-lint.js';
 
 export interface PipelineRuntimeOptions extends PipelineSagaOptions {
   readonly unitOfWork: UnitOfWork;
@@ -112,13 +113,19 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
 
   return {
     /**
-     * The saga's handlers, plus review-only mode's three (WP-24).
+     * The saga's handlers, plus review-only mode's three (WP-24) and the ticket linter's two
+     * (WP-25).
      *
-     * Registered here rather than inside `pipelineHandlers` because `review-only.ts` imports from
-     * `saga.ts` (`priorityRankOf`, `PipelineSagaOptions`), and the reverse import would close a
-     * module cycle — backlog 21's shape, which this repository has already paid for once.
+     * Registered here rather than inside `pipelineHandlers` because `review-only.ts` and
+     * `ticket-lint.ts` import from `saga.ts` (`priorityRankOf`, `PipelineSagaOptions`), and the
+     * reverse import would close a module cycle — backlog 21's shape, which this repository has
+     * already paid for once.
      */
-    handlers: [...pipelineHandlers(options), ...reviewOnlyHandlers(options)],
+    handlers: [
+      ...pipelineHandlers(options),
+      ...reviewOnlyHandlers(options),
+      ...ticketLintHandlers(options),
+    ],
     executor,
     start: async () => {
       await declarePipelineQueues(options.jobs);

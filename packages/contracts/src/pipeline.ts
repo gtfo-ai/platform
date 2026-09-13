@@ -81,6 +81,34 @@ export const agentStageSchema = z.strictObject({
   kind: z.literal('agent'),
   role: agentRoleSchema,
   enabled: z.boolean().optional(),
+  /**
+   * **This stage's artifact is read, not obeyed** — WP-25, the ticket readiness linter.
+   *
+   * An agent stage normally decides the next transition through its artifact's verdict channel: a
+   * `RefinedSpec` whose `decision` is `ask` parks the task on blocking questions, and `reject`
+   * escalates it. That is right for a stage of a delivery and wrong for a stage whose whole output
+   * is *advice about a ticket*: a lint's questions are the thing it posts, not a request for a human
+   * to answer on a task nobody is watching, and "this ticket should not be worked on" is a sentence
+   * for the comment rather than an escalation.
+   *
+   * So an advisory stage always **advances** on completion (`approve_to`, or the next stage), and
+   * the platform reads the artifact afterwards. The artifact is still produced, still validated and
+   * still stored; only the transition stops depending on what the model decided.
+   *
+   * Defaults to `false`, which is every other stage in every shipped template.
+   *
+   * **What it may be used for, and what it may not** (WP-25 round 2). It is for a stage whose whole
+   * output is *advice* — the shipped templates carry exactly one, the linter's, and
+   * `templates.test.ts` asserts that key-for-key. It is **not** a way to make a gating stage
+   * non-gating: `advisory: true` on `code_review` would turn a `ReviewReport` that rejects into an
+   * advance, which is the one verdict a delivery must obey. Nothing refuses that today because
+   * nothing reads a project's own `.agentic/pipeline.yml` — `createProjectSettingsPort` serves
+   * `SHIPPED_TEMPLATES` only — but this schema is published as
+   * `schemas/agentic-pipeline.schema.json`, so a loader written against it would accept the key on
+   * any stage. Whoever builds that read owes the refusal, and it belongs at the loader, where a
+   * project's template is checked against what a project is allowed to decide.
+   */
+  advisory: z.boolean().optional(),
   produces: artifactTypeSchema.optional(),
   requires: z.array(artifactTypeSchema).optional(),
   approve_to: stageIdSchema.optional(),

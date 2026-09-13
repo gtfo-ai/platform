@@ -58,6 +58,7 @@ runTaskManagementContract({
       knownAuthor: { providerUserId: 'user-1', email: 'dev@example.test' },
       emitComment: (text) =>
         port.emitCommentAdded({ ticketKey: 'FAKE-1', authorId: 'user-1', text }),
+      emitTicketCreated: () => port.emitTicketCreated({ ticketKey: 'FAKE-1' }),
       emitStatusChange: (to) =>
         port.emitStatusChanged({ ticketKey: 'FAKE-1', from: 'Ready for agent', to }),
       unhandled: {

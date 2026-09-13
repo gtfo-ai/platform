@@ -100,13 +100,20 @@ export interface PipelineOutboundData {
     /** WP-24, review-only mode: consider a human merge request, post a review, observe the outcome. */
     | 'review_only_check'
     | 'review_only_post'
-    | 'review_only_observe';
+    | 'review_only_observe'
+    /** WP-25, the ticket readiness linter: consider a new ticket, post the one comment. */
+    | 'ticket_lint_check'
+    | 'ticket_lint_post';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
   /** The event that caused the wake-up: the replay identity of a ticket write, and the cause id. */
   readonly cause_event_id: string;
-  /** `intake_check` only — `ticket.matched`'s payload, which no row holds until the task exists. */
+  /**
+   * `intake_check` and `ticket_lint_check` — the event's ticket, which no row holds until the task
+   * exists. The lint's task carries a *platform-issued* key, so this is the one place the duty
+   * learns the ticket's own (`ticket-lint.ts` § `lintTicketKeyFor`).
+   */
   readonly ticket?: {
     readonly provider: string;
     readonly key: string;

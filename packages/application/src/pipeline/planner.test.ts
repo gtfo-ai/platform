@@ -26,6 +26,7 @@ import {
   type RolePromptDefinition,
   readDataBlocks,
   SANITISED_MARKER,
+  SHIPPED_TEMPLATES,
   type SkillDefinition,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
@@ -38,11 +39,13 @@ import {
   commandBaselineFor,
   createStageRunPlanner,
   PLATFORM_TOOLS_BY_ROLE,
+  platformToolsFor,
   SKILLS_BY_ROLE,
   TOOLS_BY_ROLE,
   taskTextOf,
 } from './planner.js';
 import type { StageRunRequest } from './stage-executor.js';
+import { TICKET_LINT_STAGE } from './ticket-lint.js';
 
 /** The id `indexedFixtureVault` writes under — the same corpus every retrieval tier measures. */
 const PROJECT = '00000000-0000-4000-8000-00000000f1c7' as Id;
@@ -515,6 +518,89 @@ describe('the platform skills a stage is planned with', () => {
     expect(spec.promptVersion).toContain('+skills@');
     expect(spec.promptVersion).toMatch(/\+product_manager@1\+/);
     expect(spec.promptVersion.endsWith('+skills@none')).toBe(false);
+  });
+
+  /**
+   * PROGRESS backlog **57**: `runs.mode` answered `normal` for four of technical/04's seven modes,
+   * and the fix it asks for is *"a test that walks `SHIPPED_TEMPLATES` and asserts every agent
+   * stage's planned mode … so a template added later cannot quietly take `normal`"*.
+   *
+   * The walk is over the shipped templates rather than over a list here (standing rule 7). Three
+   * values are still unmapped and the table below **says so by naming them `normal`**, which is the
+   * honest form: `retro` and `librarian` are stages of the ticket templates rather than templates,
+   * and `discovery` is WP-21's — backlog 57 recommends taking those three together, and doing it
+   * here would be this work package deciding another one's column.
+   */
+  it('records what each shipped template’s run was for (PROGRESS backlog 57)', async () => {
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({
+        store: (await indexedFixtureVault()).store,
+        logger: silentLogger,
+      }),
+      clock: { now: () => NOW },
+    });
+    const modes: Record<string, string> = {};
+    for (const [template, definition] of Object.entries(SHIPPED_TEMPLATES)) {
+      for (const stage of definition.stages) {
+        if (stage.kind !== 'agent') {
+          continue;
+        }
+        const request = requestWith('a ticket about refunds');
+        const { spec } = await planner.plan({
+          ...request,
+          stage: stage as never,
+          task: { ...request.task, task: { ...request.task.task, template } },
+        } as StageRunRequest);
+        modes[`${template}.${stage.id}`] = spec.mode;
+      }
+    }
+    expect(modes).toEqual({
+      'feature.refinement': 'normal',
+      'feature.architecture': 'normal',
+      'feature.implementation': 'normal',
+      'feature.code_review': 'normal',
+      'feature.business_review': 'normal',
+      // Backlog 57's `retro` and `librarian`, still unmapped and shared by all three templates.
+      'feature.retrospective': 'normal',
+      'feature.librarian': 'normal',
+      'bug.refinement': 'normal',
+      'bug.investigation': 'normal',
+      'bug.architecture': 'normal',
+      'bug.implementation': 'normal',
+      'bug.code_review': 'normal',
+      'bug.business_review': 'normal',
+      'bug.retrospective': 'normal',
+      'bug.librarian': 'normal',
+      'chore.refinement': 'normal',
+      'chore.implementation': 'normal',
+      'chore.code_review': 'normal',
+      'chore.retrospective': 'normal',
+      'chore.librarian': 'normal',
+      // Backlog 57's `discovery`, WP-21's to map.
+      'discovery.discovery': 'normal',
+      'review_only.code_review': 'review_only',
+      // WP-25's, which this row owed.
+      'ticket_lint.ticket_lint': 'linter',
+    });
+  });
+
+  it('takes `ask_human` away from the lint stage and leaves the role’s other tools alone', async () => {
+    expect(platformToolsFor('product_manager', 'refinement')).toEqual(
+      PLATFORM_TOOLS_BY_ROLE.product_manager,
+    );
+    const narrowed = platformToolsFor('product_manager', TICKET_LINT_STAGE);
+    expect(narrowed).not.toContain('ask_human');
+    // A narrowing, never a widening: what is left is a subset of the role's own list.
+    for (const tool of narrowed) {
+      expect(PLATFORM_TOOLS_BY_ROLE.product_manager).toContain(tool);
+    }
+    expect(narrowed).toEqual(
+      PLATFORM_TOOLS_BY_ROLE.product_manager.filter((tool) => tool !== 'ask_human'),
+    );
   });
 
   it('refuses to build a planner whose catalogue cannot answer the table', () => {

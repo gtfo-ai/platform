@@ -446,6 +446,30 @@ const replayable = <T>(key: string): IdempotencyPlan<T> => ({
   decode: (stored) => stored as unknown as T,
 });
 
+/**
+ * The provider value a **platform-issued** ticket reference carries, and the one thing every ticket
+ * write refuses.
+ *
+ * Three kinds of task have no ticket at all — discovery (WP-21), review-only (WP-24) and the ticket
+ * readiness linter (WP-25) — and each carries `{provider: 'platform', key: '<something>!<id>'}` so
+ * that `unique (project_id, ticket_key, mode)` can make it idempotent. `tasks.ticket_*` is not
+ * nullable, so those rows reach the same handlers as every other task: the workpad render (TD-005
+ * priority 120) and the status mapping (110) both fire, and both used to call the provider with a
+ * key no provider issued.
+ *
+ * **It was refused by the provider, which is not the same as being refused** (standing rule 47). The
+ * fake answers `not_found` and Jira answers 404, so the audit row is a `failed` one, the job throws,
+ * pg-boss retries it and eventually dead-letters it — per discovery task and per review-only task,
+ * on every build since WP-21. Nothing leaked and nothing was written, so it read as working. Here it
+ * is a **decision**: a reference that names no ticket is not written to, the call is not made, and
+ * `null` is the same answer a project with no binding gets.
+ */
+export const PLATFORM_TICKET_PROVIDER = 'platform';
+
+/** Does this reference name a ticket a provider knows? See {@link PLATFORM_TICKET_PROVIDER}. */
+export const namesAProviderTicket = (ticket: TicketRefInput): boolean =>
+  ticket.provider !== PLATFORM_TICKET_PROVIDER;
+
 export const ticketWrites = (integrations: PipelineIntegrations) => ({
   /** BD-023's sticky comment: one per task, edited in place. */
   upsertWorkpad: async (
@@ -455,7 +479,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
     context: TicketWriteContext,
   ): Promise<CommentRef | null> => {
     const binding = integrations.taskManagement;
-    if (binding === null) {
+    if (binding === null || !namesAProviderTicket(ticket)) {
       return null;
     }
     return mutate(
@@ -478,6 +502,71 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
     );
   },
 
+  /**
+   * The ticket readiness linter's one comment — product/18, WP-25.
+   *
+   * `addComment` rather than `upsertWorkpad` because product/08 says *"a new comment every time —
+   * questions and linter output must notify"*: a workpad is edited in place and notifies nobody,
+   * and the whole value of a lint is that the ticket's author sees it.
+   *
+   * **The markdown is redacted here, at the call**, for the reason `reviewWrites.thread` states: it
+   * is a model's words on their way to a third party, the executor redacts what it *stores* rather
+   * than what it sends, and doing it at the call means a second caller cannot forget it. The
+   * redactor is the **task-management** binding's — TD-012 step 1 over that binding's own
+   * credentials, then step 2's patterns — and the residual is the one Q55 leaves everywhere outside
+   * a run: this job holds no run-scoped secret set. On this build a lint run mints none, for the
+   * same measured reason a review-only run does not (`TOOLS_BY_ROLE.product_manager` is
+   * `['Read','Glob','Grep']`, so `runIsReadOnly` is true and `RunCredentialBroker.issue` answers
+   * `null` without calling the source).
+   *
+   * `idempotencyKey` is the caller's and identifies *the lint*, not the wake-up: product/19 § 17
+   * says the comment is never re-posted, so a redelivery **and** a re-run of the stage must both
+   * replay (`lintCommentIdempotencyKey`).
+   */
+  lintComment: async (
+    ticket: TicketRefInput,
+    markdown: string,
+    context: CallContext & {
+      readonly mode: TaskMode;
+      readonly idempotencyKey: string;
+      /**
+       * The platform's own marker for this comment, in the provider's dialect (`marker_id` on the
+       * stored comment, `[agentic:marker:…]` on Jira).
+       *
+       * Two things come with it and both are wanted. A marked comment is recognisably the
+       * platform's, so `boundTicketSnapshot` skips it and a later stage is never shown the
+       * platform's own lint as if a human had written it; and the Jira adapter **looks for it before
+       * posting**, which is a third guard behind the idempotency key and the task key.
+       */
+      readonly markerId: string;
+    },
+  ): Promise<CommentRef | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const redacted = binding.redactor.redactText(markdown).value;
+    return mutate(
+      integrations,
+      binding.ref,
+      'add_comment',
+      // The ticket and the marker, never the body: `integration_actions.payload` wants what was
+      // touched rather than a copy of the comment (the rule `create_discussion` follows).
+      { ticket_key: ticket.key, marker_id: context.markerId },
+      context,
+      async () => binding.port.addComment(ticket, redacted, { markerId: context.markerId }),
+      () => ({
+        provider: ticket.provider,
+        ticket_key: ticket.key,
+        comment_id: 'would-have-lint',
+        url: null,
+        marker_id: context.markerId,
+      }),
+      (result) => ({ comment_id: result.comment_id }),
+      replayable<CommentRef>(context.idempotencyKey),
+    );
+  },
+
   /** product/04: "Map stage states to ticket statuses per project" (`status_mapping`). */
   transition: async (
     ticket: TicketRefInput,
@@ -485,7 +574,7 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
     context: TicketWriteContext,
   ): Promise<void> => {
     const binding = integrations.taskManagement;
-    if (binding === null) {
+    if (binding === null || !namesAProviderTicket(ticket)) {
       return;
     }
     await mutate(

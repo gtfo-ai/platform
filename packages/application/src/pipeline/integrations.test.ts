@@ -88,6 +88,8 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // task, the post before it writes the threads, the observation before it reads them back.
   'review-only.ts': 3,
   'saga.ts': 1,
+  // WP-25's two duties: the check before it creates the lint task, the post before it comments.
+  'ticket-lint.ts': 2,
   'ticket-snapshot.ts': 1,
   'workpad.ts': 2,
 };

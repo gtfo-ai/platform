@@ -175,10 +175,24 @@ const ticketMatchedBody = z.strictObject({
   rule: z.string().min(1),
 });
 
+/**
+ * A ticket was created (WP-25).
+ *
+ * The real adapters read the type and the labels off the delivery; this one carries the key alone
+ * and reads the rest off the ticket it has stored, which is **stricter** rather than kinder
+ * (standing rule 1): a delivery naming a ticket the fake does not know is `not_for_this_project`,
+ * where Jira would happily normalise one.
+ */
+const ticketCreatedBody = z.strictObject({
+  event: z.literal('ticket.created'),
+  ticket_key: z.string().min(1),
+});
+
 const deliveryBody = z.discriminatedUnion('event', [
   commentAddedBody,
   statusChangedBody,
   ticketMatchedBody,
+  ticketCreatedBody,
 ]);
 
 export interface FakeTaskManagement extends TaskManagementPort {
@@ -203,6 +217,11 @@ export interface FakeTaskManagement extends TaskManagementPort {
   emitTicketMatched(input: {
     readonly ticketKey: string;
     readonly rule: string;
+    readonly deliveryId?: string;
+  }): WebhookDelivery;
+  /** A ticket was created — the ticket readiness linter's door (WP-25). */
+  emitTicketCreated(input: {
+    readonly ticketKey: string;
     readonly deliveryId?: string;
   }): WebhookDelivery;
 }
@@ -455,6 +474,19 @@ export const createFakeTaskManagement = (
         return { events: [event], ignored: [] };
       }
 
+      if (body.event === 'ticket.created') {
+        const created: NormalisedEvent<'ticket.created'> = {
+          type: 'ticket.created',
+          payload: {
+            project_id: context.projectId,
+            ticket: ticketRef,
+            issue_type: ticket.issue_type,
+          },
+          actor,
+        };
+        return { events: [created], ignored: [] };
+      }
+
       const event: NormalisedEvent<'ticket.matched'> = {
         type: 'ticket.matched',
         payload: {
@@ -652,6 +684,16 @@ export const createFakeTaskManagement = (
           from: input.from,
           to: input.to,
         },
+      });
+    },
+
+    emitTicketCreated: (input) => {
+      requireTicket(ACTION, input.ticketKey);
+      return buildFakeDelivery({
+        secret: core.webhookSecret,
+        event: 'ticket.created',
+        deliveryId: input.deliveryId ?? nextDeliveryId(),
+        payload: { event: 'ticket.created', ticket_key: input.ticketKey },
       });
     },
 

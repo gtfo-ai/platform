@@ -420,7 +420,53 @@ describe('jira-cloud webhooks', () => {
         }),
         inboundContext(),
       );
-      expect(result.events.map((event) => event.type)).toEqual(['ticket.matched']);
+      // **Both**, and that is WP-25's shape: creation is a fact of its own, and the pick-up label
+      // is a second one. The linter reads `ticket.created` and skips the ticket precisely because
+      // it carries the label — a decision it takes from the ticket rather than from this pair.
+      expect(result.events.map((event) => event.type)).toEqual([
+        'ticket.matched',
+        'ticket.created',
+      ]);
+    });
+
+    it('reports a created ticket that matches nothing as ticket.created alone (WP-25)', async () => {
+      const result = await binding.port.inbound.normalise(
+        binding.replay.delivery('webhook-issue-updated-labels.json', {
+          patch: (body) => {
+            body.webhookEvent = 'jira:issue_created';
+            delete body.changelog;
+            const issue = body.issue as { fields: { labels: string[] } };
+            issue.fields.labels = ['billing'];
+          },
+        }),
+        inboundContext(),
+      );
+      expect(result.ignored).toEqual([]);
+      const { payload } = expectCatalogueEvent(
+        result.events[0] as NonNullable<(typeof result.events)[0]>,
+        'ticket.created',
+      );
+      expect(result.events).toHaveLength(1);
+      expect(payload).toEqual({
+        project_id: JIRA_PROJECT_ID,
+        ticket: {
+          provider: 'jira-cloud',
+          key: 'ACME-1',
+          url: 'https://acme-example.atlassian.net/browse/ACME-1',
+        },
+        issue_type: 'Bug',
+      });
+    });
+
+    it('is not a creation when the same issue is merely edited (WP-25)', async () => {
+      const result = await binding.port.inbound.normalise(
+        binding.replay.delivery('webhook-issue-updated-summary.json'),
+        inboundContext(),
+      );
+      // The other direction of the pair above (standing rule 42): an edit produces neither event,
+      // so a ticket is never linted twice because somebody fixed a typo.
+      expect(result.events).toEqual([]);
+      expect(result.ignored[0]?.reason).toBe('unsupported_event');
     });
   });
 

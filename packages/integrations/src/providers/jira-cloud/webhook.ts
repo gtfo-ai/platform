@@ -444,6 +444,32 @@ export const createJiraInboundNormaliser = (
       if (rule !== null) {
         events.push(matchedEvent(issue, context, rule));
       }
+      /**
+       * **Creation is a fact of its own** (WP-25), and it is emitted whether or not the ticket is
+       * for the agent: a ticket created *with* the pick-up label produces `ticket.matched` **and**
+       * this, and an ordinary one produces only this. The ticket readiness linter needs the second
+       * case (product/18: *"new tickets … that are **not** labelled for the agent"*) and nothing
+       * else in the platform can tell "a ticket was created" from "a ticket was edited", because
+       * `jira:issue_updated` carries the same envelope.
+       *
+       * It is **only** `jira:issue_created`. An edit is not a creation, and treating one as such
+       * would lint a ticket on every touch — the defect `pickupRuleHit`'s "now" paragraph is about.
+       */
+      if (body.webhookEvent === 'jira:issue_created') {
+        events.push({
+          type: 'ticket.created',
+          payload: {
+            project_id: context.projectId,
+            ticket,
+            issue_type: issue.fields.issuetype?.name ?? null,
+          },
+          actor: {
+            kind: 'integration',
+            integration_id: context.integrationId,
+            provider: PROVIDER_ID,
+          },
+        });
+      }
       const status = statusChangeOf(body);
       if (status !== null) {
         events.push({

@@ -89,6 +89,20 @@ runTaskManagementContract({
             };
           },
         }),
+      /**
+       * Jira sends `jira:issue_created` with the same envelope as an update and no changelog, so
+       * the corpus's documented update fixture is patched into one rather than a second document
+       * being invented — the idiom `jira-cloud-webhook.contract.test.ts` already uses for this
+       * event, and the reason the fixture corpus stays exactly as honest as it was.
+       */
+      emitTicketCreated: () =>
+        binding.replay.delivery('webhook-issue-updated-labels.json', {
+          deliveryId: nextDeliveryId(),
+          patch: (body) => {
+            body.webhookEvent = 'jira:issue_created';
+            delete body.changelog;
+          },
+        }),
       emitStatusChange: (to) =>
         binding.replay.delivery('webhook-issue-updated-status.json', {
           deliveryId: nextDeliveryId(),

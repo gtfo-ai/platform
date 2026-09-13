@@ -74,6 +74,11 @@ export interface PipelineStage {
   readonly enabled: boolean;
   readonly role: AgentRole | null;
   readonly produces: ArtifactType | null;
+  /**
+   * The artifact is read rather than obeyed, so completion always advances — see
+   * `agentStageSchema.advisory`. False for every stage of every template but the linter's.
+   */
+  readonly advisory: boolean;
   readonly requires: readonly ArtifactType[];
   readonly approveTo: Slug | null;
   readonly returnTo: Slug | null;
@@ -103,6 +108,7 @@ const normaliseStage = (stage: Stage): PipelineStage => ({
   enabled: stage.enabled ?? true,
   role: 'role' in stage ? (stage.role ?? null) : null,
   produces: 'produces' in stage ? (stage.produces ?? null) : null,
+  advisory: 'advisory' in stage ? (stage.advisory ?? false) : false,
   requires: 'requires' in stage ? (stage.requires ?? []) : [],
   approveTo: 'approve_to' in stage ? (stage.approve_to ?? null) : null,
   returnTo: 'return_to' in stage ? (stage.return_to ?? null) : null,
@@ -132,6 +138,9 @@ const normaliseCustomStage = (stage: CustomStage): PipelineStage => ({
   enabled: true,
   role: stage.role ?? null,
   produces: stage.produces ?? null,
+  // A project's custom stage cannot declare it: `customStageSchema` has no key for it, and a
+  // stage nobody can mark advisory behaves like every other one.
+  advisory: false,
   requires: [],
   approveTo: null,
   returnTo: null,

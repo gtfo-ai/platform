@@ -39,6 +39,16 @@ export const DEFAULT_STAGE_RUN_BUDGET_USD: Readonly<Record<string, number>> = {
    * librarian), and it is a cap rather than an estimate: the run stops at it.
    */
   discovery: 2,
+  /**
+   * The ticket readiness linter (WP-25). product/19 § 12 publishes its cost implication as *"~$0.10
+   * per ticket"*, and this is **a cap rather than that estimate**: a cap equal to the expected cost
+   * stops every lint that lands at the top of its normal range, and a lint stopped half-way produces
+   * no artifact and therefore no comment — the feature would fail silently for exactly the tickets
+   * with the most to read. Five times the published figure is the smallest number that leaves the
+   * expectation an order of magnitude of room and still costs a quarter of one refinement ($2) when
+   * a run goes wrong.
+   */
+  ticket_lint: 0.5,
 };
 
 /**

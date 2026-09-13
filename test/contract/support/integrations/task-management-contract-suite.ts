@@ -43,6 +43,16 @@ export interface TaskManagementContractContext {
   /** Produces a second, different delivery — for the dedup-key assertion. */
   emitStatusChange(to: string): WebhookDelivery;
   /**
+   * Produces the delivery a provider sends when a ticket is **created** (WP-25).
+   *
+   * An obligation of the contract rather than of one adapter (standing rule 23): the ticket
+   * readiness linter's door is `ticket.created`, and a provider that does not produce it is a
+   * provider the feature silently does nothing for. The harness supplies the delivery because only
+   * it knows what its provider sends; what the suite asserts is that it normalises into the
+   * catalogue event with the ticket and its type.
+   */
+  emitTicketCreated(): WebhookDelivery;
+  /**
    * A delivery this provider cannot act on, and the reason it reports for it.
    *
    * Both halves are the harness's because both are provider-shaped. `{"event":"comment.added"}` is
@@ -239,6 +249,26 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         const second = context.emitStatusChange(context.statuses.target);
         expect(port.inbound.deliveryKey(first)).toBe(port.inbound.deliveryKey(first));
         expect(port.inbound.deliveryKey(first)).not.toBe(port.inbound.deliveryKey(second));
+      });
+
+      /**
+       * WP-25's door. The *type* is what the linter's filter selects on, so a provider that
+       * normalised a creation without it would make `features.ticket_linter.issue_types` decide
+       * nothing — which is the shape of a filter that silently matches nothing.
+       */
+      it('normalises a created ticket into ticket.created, carrying its issue type', async () => {
+        const result = await port.inbound.normalise(context.emitTicketCreated(), inboundContext());
+        expect(result.ignored).toEqual([]);
+        const created = result.events.find((event) => event.type === 'ticket.created');
+        expect(created, 'no ticket.created event was produced').toBeDefined();
+        const payload = created?.payload as {
+          project_id: Id;
+          ticket: TicketRefInput;
+          issue_type: string | null;
+        };
+        expect(payload.project_id).toBe(context.projectId);
+        expect(payload.ticket.key).toBe(context.ticket.key);
+        expect(typeof payload.issue_type).toBe('string');
       });
 
       it('normalises a comment into a catalogue event with a verified author', async () => {

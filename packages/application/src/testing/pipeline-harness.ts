@@ -337,6 +337,18 @@ const stubTaskManagement = (
           comment_id: 'comment-1',
           url: null,
         }),
+        /** WP-25's linter comment. A test that wants to read the body overrides it and records. */
+        addComment: async (
+          _ref: TicketRefInput,
+          _markdown: string,
+          commentOptions?: { readonly markerId?: string | null },
+        ) => ({
+          provider: 'fake-jira',
+          ticket_key: 'ACME-1',
+          comment_id: 'comment-2',
+          url: null,
+          marker_id: commentOptions?.markerId ?? null,
+        }),
         transition: async (_ref: unknown, to: string) => ({ changed: true, from: 'To Do', to }),
         ...overrides,
       } as unknown as TaskManagementPort);

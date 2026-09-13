@@ -73,6 +73,7 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     epic: 'PROJ-1',
     links: [{ kind: 'blocks', key: 'PROJ-99', url: null }],
   },
+  'ticket.created': { ...projectScoped, ticket, issue_type: 'Story' },
   'ticket.comment.added': {
     ...projectScoped,
     task_id: TASK,
@@ -186,6 +187,14 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     threads_accepted: 2,
     threads_dismissed: 0,
     threads_unresolved: 1,
+  },
+  'task.lint.posted': {
+    ...taskScoped,
+    ticket,
+    score: 45,
+    missing: ['acceptance_criteria', 'validation'],
+    questions_posted: 3,
+    ticket_updated_at: AT,
   },
   'run.created': {
     ...taskScoped,

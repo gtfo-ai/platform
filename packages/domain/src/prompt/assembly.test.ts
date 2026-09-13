@@ -20,6 +20,7 @@ import {
   PLATFORM_PROMPT_VERSION,
   type PromptKnowledgeDocument,
   type PromptNonceSource,
+  STAGE_PROMPT_FOCUS,
   skillSetVersionOf,
 } from './assembly.js';
 import {
@@ -71,6 +72,9 @@ const inputWith = (
     returnFeedback: null,
   },
   artifactType: 'RefinedSpec',
+  // Required-and-nullable on the input, so the default here is the explicit "this stage has no
+  // narrower instruction" rather than a forgotten key (WP-25 round 2).
+  focus: null,
   ...overrides,
 });
 
@@ -107,6 +111,26 @@ describe('the assembled prompt', () => {
     // The version segment is unchanged and the digest is not: this is the case product/13's
     // "a prompt change is a decision" is exposed to — an edit without a bump.
     expect(edited.promptVersion).not.toBe(first.promptVersion);
+  });
+
+  /**
+   * The stage focus (WP-25), and the two properties that decided where it goes.
+   *
+   * It is platform text, so it belongs in the platform's voice; and it is in **layers 1–3**, so the
+   * digest covers it — an edit to `STAGE_PROMPT_FOCUS` that nobody declared moves the version every
+   * run of that stage records. Both halves are asserted, plus the absent case (standing rule 42):
+   * a stage with no focus gets a system prompt with no extra section at all.
+   */
+  it('renders a stage’s narrower instruction into the hashed layers, and nothing when it has none', () => {
+    const without = assemblePrompt(inputWith(BENIGN_TEXT));
+    const with_ = assemblePrompt(inputWith(BENIGN_TEXT, { focus: STAGE_PROMPT_FOCUS.ticket_lint }));
+    expect(without.systemPrompt).not.toContain('## This stage');
+    expect(with_.systemPrompt).toContain('## This stage');
+    expect(with_.systemPrompt).toContain('This run is a ticket readiness lint');
+    // Layers 4–6 are untouched: the instruction is not repeated beside the untrusted blocks.
+    expect(with_.userPrompt).toBe(without.userPrompt);
+    // …and the version moves with it, which is the whole reason it is in the system prompt.
+    expect(with_.promptVersion).not.toBe(without.promptVersion);
   });
 
   it('names the artifact type and its fields from the one schema', () => {

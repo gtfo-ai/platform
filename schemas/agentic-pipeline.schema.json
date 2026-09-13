@@ -116,6 +116,7 @@
       "type": "string",
       "enum": [
         "ticket.matched",
+        "ticket.created",
         "ticket.comment.added",
         "ticket.status.changed",
         "task.created",
@@ -137,6 +138,7 @@
         "task.cancelled",
         "task.completed",
         "task.review.observed",
+        "task.lint.posted",
         "run.created",
         "run.started",
         "run.finished",
@@ -217,6 +219,9 @@
               "$ref": "#/$defs/AgentRole"
             },
             "enabled": {
+              "type": "boolean"
+            },
+            "advisory": {
               "type": "boolean"
             },
             "produces": {

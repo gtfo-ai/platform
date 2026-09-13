@@ -39,6 +39,8 @@ describe('documented defaults', () => {
       librarian: 2,
       // product/06 § "Step 2": the Discovery agent is cheap and bounded (WP-21).
       discovery: 2,
+      // product/19 § 12 prices a lint at ~$0.10 per ticket; the cap is five times it (WP-25).
+      ticket_lint: 0.5,
     });
   });
 });

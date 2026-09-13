@@ -165,10 +165,34 @@ export const commandPolicySchema = z.strictObject({
 // ── features (BD-028) ────────────────────────────────────────────────────────
 
 export const featuresConfigSchema = z.strictObject({
+  /**
+   * The ticket readiness linter — product/18 § "Opt-in features", WP-25.
+   *
+   * *"A light Refinement pass on new tickets of configured issue types that are **not** labelled for
+   * the agent; posts one short comment"*. Three keys, and each one is read:
+   *
+   *  - `issue_types` are the provider's own type names (`Story`, `Task`, `Bug`), compared
+   *    case-insensitively and after trimming because a human types them into a wizard. An
+   *    **explicitly empty** list matches nothing, which is the fail-closed reading of "the types I
+   *    named" — the same answer `review_only.paths` gives (standing rule 20: this decides whether
+   *    the platform writes on somebody's ticket).
+   *  - `label` is the label that means *"for the agent"*: a ticket carrying it is **not** linted,
+   *    because the pipeline is going to deliver it, and the comment's closing line names the same
+   *    label as the offer (product/19 § 17). It is one key rather than two because printing a label
+   *    the platform does not act on would be an invitation that does nothing.
+   *
+   * technical/12's example carries `{enabled, issue_types}`; `label` is added there with this row.
+   * product/18 also lists *"comment language"* and *"re-lint on edit off/on"* as wizard settings and
+   * **neither is a key here**: nothing in this build reads a per-feature language (the artifact
+   * carries `language`), and a re-lint needs a "the ticket changed" signal no normaliser produces —
+   * an unread key is the defect PROGRESS backlog 58 is about, so the residuals are recorded in the
+   * ledger instead.
+   */
   ticket_linter: z
     .strictObject({
       enabled: z.boolean().optional(),
       issue_types: z.array(nonEmptyStringSchema).optional(),
+      label: nonEmptyStringSchema.optional(),
     })
     .optional(),
   /**

@@ -749,10 +749,23 @@ const record = async (
     data,
     attemptOnLowConfidence: false,
   };
-  // A verdict the platform cannot map is still passed through, capped: the interpreter escalates
-  // on it either way, and "the stage said `ship it`" is a far better blocker brief than "the stage
-  // said nothing".
-  const verdict = stageVerdict(verdictInput) ?? rawVerdict(verdictInput);
+  /**
+   * An **advisory** stage always advances (`agentStageSchema.advisory`, WP-25).
+   *
+   * The artifact is still produced, validated and stored; what it does not do is decide the
+   * transition. Without this, the ticket readiness linter's own success case — a `RefinedSpec`
+   * whose `decision` is `ask`, which is what an unready ticket deserves — would park the lint task
+   * in `waiting_answers` on questions nobody can answer, and a `reject` would escalate it to
+   * `needs_human`. Measured on the first run of `ticket-lint.test.ts`: *"expected
+   * 'waiting_answers' to be 'done'"*.
+   *
+   * A verdict the platform cannot map is still passed through, capped: the interpreter escalates
+   * on it either way, and "the stage said `ship it`" is a far better blocker brief than "the stage
+   * said nothing".
+   */
+  const verdict = stage.advisory
+    ? 'approve'
+    : (stageVerdict(verdictInput) ?? rawVerdict(verdictInput));
 
   const completed = completeStage(
     task,

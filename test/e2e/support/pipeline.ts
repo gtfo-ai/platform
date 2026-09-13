@@ -377,6 +377,9 @@ export interface StartPipelineOptions {
     readonly key: string;
     readonly title: string;
     readonly issueType?: string;
+    /** WP-25: the linter skips a ticket that already carries the project's agent label. */
+    readonly labels?: readonly string[];
+    readonly description?: string;
   }[];
   /** `projects.config` — technical/12's effective configuration, as the settings port reads it. */
   readonly config?: JsonObject;

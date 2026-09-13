@@ -12,6 +12,7 @@ import {
   REVIEW_ONLY_TEMPLATE,
   SHIPPED_TEMPLATES,
   stageAgentDefaults,
+  TICKET_LINT_TEMPLATE,
   TICKET_TEMPLATES,
 } from './templates.js';
 
@@ -55,7 +56,7 @@ describe('the shipped templates', () => {
     expect(ids(CHORE_TEMPLATE)).not.toContain('business_review');
   });
 
-  it('ships the three ticket templates plus discovery and review-only, and nothing else', () => {
+  it('ships the three ticket templates plus discovery, review-only and the ticket linter, and nothing else', () => {
     // The two maps are asserted against each other rather than each against a literal: `discovery`
     // is deliberately outside `TICKET_TEMPLATES` (it opens no merge request), and the case below
     // relies on that split being exactly this one.
@@ -66,9 +67,26 @@ describe('the shipped templates', () => {
       'chore',
       'discovery',
       'review_only',
+      'ticket_lint',
     ]);
     expect(SHIPPED_TEMPLATES.discovery).toBe(DISCOVERY_TEMPLATE);
     expect(SHIPPED_TEMPLATES.review_only).toBe(REVIEW_ONLY_TEMPLATE);
+    expect(SHIPPED_TEMPLATES.ticket_lint).toBe(TICKET_LINT_TEMPLATE);
+  });
+
+  /**
+   * `advisory` suppresses the artifact's verdict channel, so a stage that carried it by accident
+   * would stop escalating a `reject` and stop waiting on a blocking question. The set is therefore
+   * enumerated rather than sampled (standing rule 68), in both directions: exactly one stage of
+   * exactly one shipped template has it.
+   */
+  it('marks the linter’s stage advisory and no other stage of any shipped template', () => {
+    const advisory = Object.entries(SHIPPED_TEMPLATES).flatMap(([id, template]) =>
+      template.stages
+        .filter((stage) => 'advisory' in stage && stage.advisory === true)
+        .map((stage) => `${id}.${stage.id}`),
+    );
+    expect(advisory).toEqual(['ticket_lint.ticket_lint']);
   });
 
   /**

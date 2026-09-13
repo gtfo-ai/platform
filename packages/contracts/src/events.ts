@@ -35,6 +35,7 @@ import {
   stageIdSchema,
   taskModeSchema,
   templateIdSchema,
+  ticketReadinessGapSchema,
   ticketRefSchema,
   tokenCountSchema,
   tokenUsageSchema,
@@ -129,6 +130,28 @@ export const ticketMatchedEvent = defineEvent('ticket.matched', {
       url: urlSchema.nullish(),
     }),
   ),
+});
+
+/**
+ * A ticket was **created** in a project the binding reads — whatever the platform then does with it
+ * (WP-25).
+ *
+ * It is a different fact from `ticket.matched`, which says *"this ticket is for the agent"*: a
+ * delivery that creates a ticket already carrying the pick-up label produces **both**, and one that
+ * creates an ordinary ticket produces only this. That is what the ticket readiness linter needs
+ * (product/18: *"new tickets of configured issue types that are **not** labelled for the agent"*),
+ * and it is the honest shape — the normaliser reports what the provider said, and whether a project
+ * wants it linted is a *settings* question the pipeline answers later.
+ *
+ * `issue_type` is the provider's own type name, carried for the same reason `ticket.matched` carries
+ * it: a consumer can tell a Bug from an Epic without a provider round trip. Everything else the
+ * linter needs — the labels, the words — is read from the ticket itself when the duty fires, so it
+ * is the ticket as it is *now* rather than as the delivery described it.
+ */
+export const ticketCreatedEvent = defineEvent('ticket.created', {
+  ...projectScoped,
+  ticket: ticketRefSchema,
+  issue_type: nonEmptyStringSchema.nullish(),
 });
 
 export const ticketCommentAddedEvent = defineEvent('ticket.comment.added', {
@@ -286,6 +309,42 @@ export const taskReviewObservedEvent = defineEvent('task.review.observed', {
   threads_accepted: z.int().nonnegative(),
   threads_dismissed: z.int().nonnegative(),
   threads_unresolved: z.int().nonnegative(),
+});
+
+/**
+ * The ticket readiness linter posted its one comment — product/18's metric baseline (WP-25).
+ *
+ * A `task.*` event on the **task** stream for the reason `task.review.observed` is one: the
+ * aggregate it belongs to is the lint task, its producer is the pipeline rather than an adapter, and
+ * it cannot exist without a task. The ticket it is about is named in the payload.
+ *
+ * ## What it can and cannot measure, stated here because the payload is the whole evidence
+ *
+ * product/18:60 asks for *"tickets improved after lint (edited within 48 h), questions avoided
+ * downstream"*. Neither is computable from one event, and this one is deliberately the **baseline**
+ * rather than the answer:
+ *
+ *  - *edited within 48 h* needs a later "this ticket changed" signal. **No such event exists in this
+ *    build**: Jira's `jira:issue_updated` is normalised only into `ticket.matched` (when the change
+ *    is what made the ticket match) and `ticket.status.changed`, so an edited description produces
+ *    `unsupported_event` and nothing else. `ticket_updated_at` is carried here so that whoever adds
+ *    that signal compares against the ticket as the linter saw it, rather than re-reading the
+ *    provider for a number this event already knew.
+ *  - *questions avoided downstream* is a correlation across a later task on the same ticket, which
+ *    is WP-41's (statistics). `score` and `questions_posted` are what it correlates.
+ */
+export const taskLintPostedEvent = defineEvent('task.lint.posted', {
+  ...taskScoped,
+  /** The **real** ticket the comment was posted on, not the lint task's platform-issued reference. */
+  ticket: ticketRefSchema,
+  /** 0–100, the platform's own reading of the `RefinedSpec` (`policies/ticket-lint.ts`). */
+  score: z.int().min(0).max(100),
+  /** The gaps the score is made of, most costly first. */
+  missing: z.array(ticketReadinessGapSchema),
+  /** How many questions the comment carries — at most `MAX_LINT_QUESTIONS`. */
+  questions_posted: z.int().nonnegative(),
+  /** The provider's `updated_at` when the ticket was read, or `null` when it was unreadable. */
+  ticket_updated_at: isoDateTimeSchema.nullish(),
 });
 
 export const taskCancelledEvent = defineEvent('task.cancelled', {
@@ -555,6 +614,7 @@ export const shadowReportCreatedEvent = defineEvent('shadow.report.created', {
  */
 export const domainEventSchema = z.discriminatedUnion('type', [
   ticketMatchedEvent,
+  ticketCreatedEvent,
   ticketCommentAddedEvent,
   ticketStatusChangedEvent,
   taskCreatedEvent,
@@ -576,6 +636,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskCancelledEvent,
   taskCompletedEvent,
   taskReviewObservedEvent,
+  taskLintPostedEvent,
   runCreatedEvent,
   runStartedEvent,
   runFinishedEvent,

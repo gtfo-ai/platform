@@ -64,6 +64,18 @@ export const STAGE_AGENT_DEFAULTS: Readonly<Record<string, StageAgentDefaults>> 
    * are the document's, and the budget is `DEFAULT_STAGE_RUN_BUDGET_USD.discovery`.
    */
   discovery: { model: 'claude-sonnet-5', effort: 'medium', maxTurns: 40 },
+  /**
+   * The ticket readiness linter (WP-25), and the row is where *"light"* is actually expressed.
+   *
+   * product/18 calls it *"a light Refinement pass"* and product/19 § 12 publishes its cost
+   * implication as **~$0.10 per ticket**; `refinement` is Opus 5 at 30 turns with a $2 run cap
+   * (`DEFAULT_STAGE_RUN_BUDGET_USD`). Running the linter under the refinement row would have been
+   * twenty times the published figure, so the stage has a row of its own: Sonnet 5 — the model every
+   * other cheap stage uses — at `low` effort, and **5 turns**, because a lint reads one ticket and
+   * answers once. The one thing it must not do is take the repository apart, which is why its
+   * platform-tool list is narrowed as well (`PLATFORM_TOOLS_DENIED_BY_STAGE`).
+   */
+  ticket_lint: { model: 'claude-sonnet-5', effort: 'low', maxTurns: 5 },
 } as const;
 
 /** The fallback for a stage the table above does not name (a project's custom agent stage). */
@@ -365,6 +377,61 @@ export const REVIEW_ONLY_TEMPLATE: PipelineTemplate = {
 };
 
 /**
+ * product/04 § "Operating modes that reuse stages": *"**Ticket readiness linter:** a light
+ * Refinement pass on unlabelled tickets that posts one comment (product/18)"* — WP-25.
+ *
+ * **One agent stage, the Product Manager's, and a stage id of its own.** technical/04's mode table
+ * says the linter is the *"Product Manager role, ticket only, no repo, one comment"*, so the role
+ * and the artifact are `refinement`'s — a second *role* would mean a second prompt and a second eval
+ * corpus for the same job (`REVIEW_ONLY_TEMPLATE` makes that argument for the Reviewer). The **stage
+ * id** is not `refinement`, and that is the opposite call from review-only's, taken for two reasons
+ * that do not apply there:
+ *
+ *  - *"light"* lives in the stage defaults, and they are keyed by stage id. `refinement` is Opus 5,
+ *    30 turns, a $2 cap; product/19 § 12 prices a lint at ~$0.10 (`STAGE_AGENT_DEFAULTS.ticket_lint`
+ *    and `DEFAULT_STAGE_RUN_BUDGET_USD.ticket_lint` carry the derivation);
+ *  - `status_mapping` is keyed by stage id too (technical/12's example maps `refinement` to *"In
+ *    Refinement"*), and a linter that moved a human's ticket into the agent's workflow column would
+ *    be doing the one thing product/18 level 0 promises it does not do.
+ *
+ * The prompt is the Product Manager's with a narrower instruction rather than a variant file:
+ * `STAGE_PROMPT_FOCUS.ticket_lint` (`packages/domain/src/prompt/assembly.ts`) is platform text the
+ * assembler renders into the task section, so `ROLE_PROMPT_VERSIONS` and the role's eval cases are
+ * untouched while `promptVersion`'s digest still moves when the instruction is edited.
+ *
+ * **Where the ticket comes from.** The linter's task carries a platform-issued ticket reference
+ * (`application/pipeline/ticket-lint.ts`), and the ticket's own words reach the prompt as
+ * `tasks.ticket_snapshot` — read once, bounded and redacted by WP-15f's reader, before the task
+ * exists. There is no `requires` artifact for the same reason `REVIEW_ONLY_TEMPLATE` has none: no
+ * stage of this template produces one.
+ *
+ * **What it deliberately does not contain**: no classification, no gates, no merge tail. Nothing
+ * here produces a commit, and the task ends when the one comment has been posted.
+ */
+export const TICKET_LINT_TEMPLATE: PipelineTemplate = {
+  stages: [
+    { id: 'intake', kind: 'system' },
+    {
+      id: 'ticket_lint',
+      kind: 'agent',
+      role: 'product_manager',
+      produces: 'RefinedSpec',
+      requires: [],
+      /**
+       * **The artifact is read, not obeyed.** A `RefinedSpec` normally decides the transition — an
+       * unready ticket yields `decision: 'ask'`, which parks the task on blocking questions, and
+       * `reject` escalates it. An unready ticket is precisely what this stage exists to find, so
+       * obeying the verdict would park every lint on a question nobody is watching and escalate the
+       * worst tickets to a human. `agentStageSchema.advisory` carries the argument; the questions
+       * reach their audience as the comment.
+       */
+      advisory: true,
+    },
+    { id: 'done', kind: 'system' },
+  ],
+};
+
+/**
  * The templates that run a **ticket** to a merge request — product/04's three.
  *
  * Separate from {@link SHIPPED_TEMPLATES} because the merge tail is a property of these three and
@@ -382,6 +449,7 @@ export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   ...TICKET_TEMPLATES,
   discovery: DISCOVERY_TEMPLATE,
   review_only: REVIEW_ONLY_TEMPLATE,
+  ticket_lint: TICKET_LINT_TEMPLATE,
 };
 
 /**

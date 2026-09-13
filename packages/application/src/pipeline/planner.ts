@@ -49,6 +49,7 @@ import {
   type RolePromptDefinition,
   resolveRunCapUsd,
   type SkillDefinition,
+  STAGE_PROMPT_FOCUS,
   skillSetVersionOf,
   stageAgentDefaults,
 } from '@platform/domain';
@@ -62,6 +63,7 @@ import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
 import type { StoredArtifact, StoredTask } from './store.js';
+import { TICKET_LINT_STAGE, TICKET_LINT_TEMPLATE_ID } from './ticket-lint.js';
 
 /**
  * Which platform tools a role may call (technical/04: "a run is given the subset its role needs:
@@ -90,6 +92,27 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
   librarian: ['report_progress', 'get_task_context', 'kb_search'],
   discovery: ['report_progress', 'kb_search'],
 };
+
+/**
+ * Platform tools a **stage** takes away from the role that runs it (WP-25).
+ *
+ * The three least-privilege tables above are keyed by role, which is right for nearly everything —
+ * a role's tools are its job description. A stage that runs a role for a *narrower* job is the one
+ * case they cannot express, and the ticket readiness linter is one: the Product Manager may
+ * `ask_human` because a refinement stage has a task somebody is watching, and a lint has **no
+ * watcher and no ticket of its own**. On this build `task.question.asked` is consumed and its
+ * consumer posts a comment on the task's ticket (TD-005 priority 110), so a lint run that asked a
+ * question would try to write a *second* comment — against product/18's *"posts one short
+ * comment"* — and would park the lint task on a question nobody can answer.
+ *
+ * It removes rather than adds, which is the only direction a stage may move a role's privileges: the
+ * result is always a subset of {@link PLATFORM_TOOLS_BY_ROLE}, so a stage cannot hand a role a tool
+ * BD-021 did not give it.
+ */
+export const PLATFORM_TOOLS_DENIED_BY_STAGE: Readonly<Record<string, readonly PlatformToolName[]>> =
+  {
+    [TICKET_LINT_STAGE]: ['ask_human'],
+  };
 
 /**
  * Which **command baseline** a role's run starts from, before the project narrows it (BD-025).
@@ -299,6 +322,17 @@ export interface StageRunPlannerOptions {
 }
 
 /**
+ * The platform tools this run may call: the role's list minus anything the stage takes away.
+ *
+ * A subtraction, never a union — see {@link PLATFORM_TOOLS_DENIED_BY_STAGE}. A stage that is not in
+ * that table gets the role's list unchanged, which is every stage but one.
+ */
+export const platformToolsFor = (role: AgentRole, stage: string): readonly PlatformToolName[] => {
+  const denied = PLATFORM_TOOLS_DENIED_BY_STAGE[stage] ?? [];
+  return (PLATFORM_TOOLS_BY_ROLE[role] ?? []).filter((tool) => !denied.includes(tool));
+};
+
+/**
  * The organisation maximum this role's run starts from.
  *
  * `read_only` keeps the shipped `ask` and `block` lists and replaces only `allow`: an entry that
@@ -397,25 +431,40 @@ const promptDocument = (document: ContextPackDocument) => ({
 });
 
 /**
+ * `runs.mode` by **template** — the producer of a run, mapped to what the run was *for*.
+ *
+ * A table rather than a chain of comparisons because the column's meaning is a list and a list
+ * drifts when it is spelled as code (PROGRESS backlog **57**: four of technical/04's seven modes
+ * fell through to `normal`, three of them with live producers, and a discovery run's own screen said
+ * `normal` to a human). `RUN_MODE_BY_TEMPLATE_STAGE_MODES` below is the test's half of the same
+ * question.
+ *
+ * **What this row closed and what it did not.** WP-25 owes `linter` (backlog 57 records the
+ * obligation on this row), and `review_only` was WP-24's. `retro`, `librarian` and `discovery` are
+ * still unmapped: the first two are **stages** of the ticket templates rather than templates of
+ * their own, so mapping them needs a second lookup keyed by stage — a change with its own
+ * consequence for every run of every finished task — and `discovery` is WP-21's template. Backlog 57
+ * recommends taking those three together, and doing them here would be this work package deciding
+ * what another one's column means.
+ */
+export const RUN_MODE_BY_TEMPLATE: Readonly<Record<string, RunSpec['mode']>> = {
+  [REVIEW_ONLY_TEMPLATE_ID]: 'review_only',
+  [TICKET_LINT_TEMPLATE_ID]: 'linter',
+};
+
+/**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
  *
- * Two of its seven values are reachable on this build. `shadow` comes from `tasks.mode`, which is
- * the shadow switch `IntegrationActionExecutor` reads. `review_only` comes from the **template**,
- * because that is where "this run is the Code review stage alone, on a human merge request" is
- * expressed (WP-24) — `tasks.mode` deliberately stays two-valued so a security guard does not grow
- * a branch for a mode that changes nothing about it.
- *
- * The other four (`linter`, `discovery`, `retro`, `librarian`) are **not** mapped, and that is a
- * statement about the build rather than a decision: a discovery run and a librarian run are both
- * recorded `normal` today, which is a gap this work package found and did not widen. It is filed as
- * discovered work rather than fixed here, because each needs the work package that owns the mode to
- * say what the column is for.
+ * `shadow` comes from `tasks.mode`, which is the shadow switch `IntegrationActionExecutor` reads and
+ * which deliberately stays two-valued; everything else comes from the **template**, because that is
+ * where "this run is the Code review stage alone, on a human merge request" and "this run is a lint
+ * of one ticket" are expressed.
  */
 const runModeFor = (task: StoredTask): RunSpec['mode'] => {
   if (task.task.mode === 'shadow') {
     return 'shadow';
   }
-  return task.task.template === REVIEW_ONLY_TEMPLATE_ID ? 'review_only' : 'normal';
+  return RUN_MODE_BY_TEMPLATE[task.task.template] ?? 'normal';
 };
 
 export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRunPlanner => {
@@ -519,6 +568,9 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           returnFeedback: request.returnFeedback,
         },
         artifactType: stage.produces,
+        // The stage's narrower instruction, when it has one: platform text, typed as a closed set
+        // so nothing else can reach the platform's own voice (`STAGE_PROMPT_FOCUS`).
+        focus: STAGE_PROMPT_FOCUS[stage.id as keyof typeof STAGE_PROMPT_FOCUS] ?? null,
       });
 
       const spec: RunSpec = {
@@ -546,7 +598,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         limits: limitsFor(settings, stage.id, role),
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],
         disallowedTools: [],
-        platformTools: [...(PLATFORM_TOOLS_BY_ROLE[role] ?? [])],
+        platformTools: [...platformToolsFor(role, stage.id)],
         commandPolicy: {
           allow: [...policy.policy.allow],
           ask: [...policy.policy.ask],

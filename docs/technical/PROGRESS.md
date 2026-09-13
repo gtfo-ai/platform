@@ -2046,7 +2046,53 @@ The migration is independent of it. **Needs no measurement**: everything above w
 What is *not* measured is whether any instance in existence holds the value; the honest answer is
 that no release exists, so the population is whatever a dogfood instance hand-wrote.
 
-### 57. **`runs.mode` is `normal` for four of technical/04's seven modes, three of which have producers today — a librarian run, a retro run and a discovery run all record themselves as ordinary runs, and the run screen says so** (TODO, small — **one cause, four owners**; found by WP-24, session 5)
+### 60. **`project.communication_language` has a schema, a default and no reader anywhere, so every word the platform writes to a human is in whatever language a model chose** (TODO, small — **no work package owns it**; found by WP-25, session 5)
+Placed beside entry 58 because it is the same class one step earlier: 58 is a stored key the read
+refuses, this is a stored key nothing ever asks for.
+
+**What is wrong.** A project can set the language its humans speak and nothing consults it. The
+symptom WP-25 met is the linter's comment — posted on a **human's** ticket, in a team that chose its
+language in the wizard — but the cause is one level up and covers every human-facing string a run
+produces: the workpad, a question comment, a review thread, and the digest WP-32 will send.
+
+**Evidence.** The WP-25 bullet, quoted: *"product/18's configuration column names one. The artifact
+envelope carries `language` and nothing per-feature reads a language anywhere in this build, so the
+key was not added. If it is wanted it belongs beside `project.communication_language`, which is the
+setting that already exists for the same question."*
+
+The census behind that sentence (refiner, session 5; a grep over the tracked sources, no test run —
+rule 66): `communication_language` occurs in **five** places and not one of them reads it to decide
+anything — `packages/contracts/src/config.ts:74` (the schema, `'auto' | languageTag`),
+`packages/domain/src/config/effective-config.ts:71` (the `auto` default),
+`packages/contracts/src/config.test.ts:21` and
+`packages/domain/src/config/effective-config.test.ts:52,59` (tests), and
+`packages/contracts/src/common.ts:33`, whose comment says the BCP-47 subset is *"used for
+`communication_language` and the artifact envelope's `language`"*. The envelope's `language` is
+written by a **model** and is read by nothing either, so the two halves of that sentence are both
+decoration.
+
+**What it costs to leave.** An operator who sets the key gets nothing, and a setting that reads as a
+promise and does nothing is worse than an absent one (rule 31's shape). The visible cost is a platform
+that answers a Czech team's ticket in English because the model guessed — on the one comment product
+/18 says is aimed at *"human-implemented tickets too"*, i.e. at people who never asked for an agent.
+The cost of adding a per-feature `comment language` key instead, which is what product/18's column
+literally names, is a second setting to drift against this one.
+
+**What "done" looks like.** The effective configuration's `communication_language` reaches the
+assembled prompt as **platform text** in layers 1–3, so `promptVersion` digests it — the shape WP-25
+used for `STAGE_PROMPT_FOCUS`, and for the same reason: it is a closed set (`languageTagSchema`), so
+nothing assembled from a project's or a model's free text can reach the platform's voice. `auto` keeps
+today's behaviour and must stay the default. **No per-feature key**: product/18's *"comment language"*
+column is satisfied by the project setting. Whoever does it decides in the same change what the
+artifact envelope's `language` then is — an assertion to check against the setting, or a field to
+drop.
+
+**Depends on / owner.** No dependency. **No work package owns it.** Cheapest owner: **WP-32** — it is
+the first row that writes platform text to a human *outside* a ticket (digest, quiet hours) and will
+otherwise ask this question again from scratch; the prompt line it needs is the same one. Explicitly
+**not** WP-25's: the linter is one consumer of a setting that predates it.
+
+### 57. **`runs.mode` is `normal` for four of technical/04's seven modes, three of which have producers today — a librarian run, a retro run and a discovery run all record themselves as ordinary runs, and the run screen says so** (TODO, small — **one cause, four owners**; `linter` **paid at WP-25**, three left; found by WP-24, session 5)
 **What is wrong.** `runModeFor` (`packages/application/src/pipeline/planner.ts:414-419`) maps two of
 the seven values the `run_mode` enum ships: `shadow` from `tasks.mode` and `review_only` from the
 template. `linter`, `discovery`, `retro` and `librarian` fall through to `normal`, so the column
@@ -2101,6 +2147,163 @@ has no table row in `13-implementation-plan.md`, only the M2 prose line, so this
 obligation is recorded. **WP-36** (maintenance pipeline) and **WP-41** (statistics) are the downstream
 readers: WP-41 must not be the first row to discover this, because it would then be measuring the
 defect.
+
+**Update (refiner, session 5 — WP-25 paid one of the four and made the other three cheaper than this
+entry states).** The obligation above is met: `RUN_MODE_BY_TEMPLATE`
+(`packages/application/src/pipeline/planner.ts:450-453`) is the table this entry asked for, `runModeFor`
+reads it (`:463-468`), and a lint run records `runs.mode = 'linter'`. The walk is there too — *"records
+what each shipped template's run was for (PROGRESS backlog 57)"*,
+`packages/application/src/pipeline/planner.test.ts:533-589` — and it plans **every agent stage of every
+entry in `SHIPPED_TEMPLATES`**, asserting 24 stage rows against an expected map, so a template added
+later cannot quietly take `normal` (which is what this entry asked for, rule 18).
+
+Two corrections to "what done looks like", both from that map (read off the tree, no test run — rule
+66). **`discovery` is not a stage-keyed change: it is one more line in the table that now exists.**
+`DISCOVERY_TEMPLATE` is registered under the template id `discovery`
+(`packages/domain/src/pipeline/templates.ts:448-453`), the walk pins it as `'discovery.discovery':
+'normal'`, and `RUN_MODE_BY_TEMPLATE.discovery = 'discovery'` closes it. **Only `retro` and
+`librarian` need the second lookup**, because they are *stages* of all three ticket templates rather
+than templates — six of the walk's 24 rows (`feature|bug|chore` × `retrospective|librarian`) — so the
+change is a lookup keyed by stage id **and** a decision about which of the two keys wins when both
+match. The planner's own docblock (`:442-448`) states this and points back here.
+
+So the remaining item is smaller and unchanged in urgency: **three values, all with live producers,
+all wrong on a screen today**, one of them a single line. The recommendation stands — take the three
+together, in one change, with the backfill question answered in the same commit.
+
+### 59. **Nothing tells the platform that a ticket changed, so three separate promises rest on an event the catalogue does not have — and it is a one-normaliser change, not the two-provider one two documents price it at** (TODO, small — **no work package owns it**; found by WP-25, session 5; the product half is **Q61 (b)**)
+Placed directly above entry 23 because it is that entry's other half: 23 is *the platform never reads
+the ticket*, closed at WP-15f; this is *the platform is never told the ticket was rewritten*, which is
+what makes the snapshot 23 produced go stale in silence.
+
+**What is wrong.** There is no `ticket.updated`. The catalogue has `ticket.matched`,
+`ticket.comment.added` and `ticket.status.changed` (`packages/contracts/src/events.ts:118,134,144`),
+and the Jira normaliser folds `jira:issue_updated` into the first two or into nothing:
+`pickupRuleHit` when the edit is what *made* the ticket match, `statusChangeOf` when a status item is
+in the changelog, and otherwise `ignored('unsupported_event', '<event> changed nothing this binding
+acts on')` — `packages/integrations/src/providers/jira-cloud/webhook.ts:441-499`. An edited
+description, a rewritten acceptance criterion and a re-scoped ticket all land on that last branch.
+
+**One cause, three promises that need it.**
+1. **product/18:60's metric.** *"Ticket linter: tickets improved after lint (edited within 48 h)"* has
+   **no input at all**. WP-25 records the baseline — `task.lint.posted` carries the score, the gaps,
+   how many questions were posted and the ticket's own `updated_at` as the linter saw it, declared
+   `unconsumed` for WP-41 — so the later half is a comparison rather than a re-derivation, but there
+   is nothing for the comparison to fire on.
+2. **The re-lint setting.** product/18's *"re-lint on edit off/on"* and product/19 § 17's *"updated in
+   place if the ticket is edited and re-lint is enabled"*. WP-25 shipped neither and deliberately
+   added **no config key**, which is the right call: an unread key is backlog **58**'s defect.
+3. **Q61 (b)'s freshness.** The recommendation there is a re-read *"when the snapshot predates the
+   task's last provider signal"*, and that quantity does not exist — `ticket-snapshot.ts:65-71` says
+   so at the line. So `tasks.ticket_snapshot` is whatever the ticket said at intake, and every later
+   stage's prompt is served the stale copy of a document a human is still editing.
+
+**Evidence.** Quoted from the WP-25 bullet under "Discovered work — session 5": *"**Neither is
+buildable today**: no normaliser produces a 'this ticket changed' event — Jira's `jira:issue_updated`
+yields `ticket.matched` only when the change *made* the ticket match, `ticket.status.changed` for a
+status item, and `unsupported_event` for an edited description — so the setting would be a key nothing
+reads (backlog 58's defect) and the metric's other half (*'edited within 48 h'*, product/18:60) has no
+input."*
+
+**The price both documents put on it is wrong, and it is wrong in the cheap direction** (read off the
+tree by the refiner, session 5; no test run, rule 66). **Jira Cloud is the only task-management
+provider this build registers** — `packages/integrations/src/providers/jira-cloud/index.ts:197` is
+`type: 'task_management'`, `gitlab/index.ts:77` is `type: 'git'`, and no other provider under
+`providers/` registers a task-management port. GitLab's normaliser switches on `merge_request`,
+`note`, `pipeline` and `push` and answers `unsupported_event` for every other `object_kind`
+(`gitlab/inbound.ts:375-385`), so an issue webhook reaches no branch there at all. The WP-25 bullet's
+*"emitted by **both** shipped normalisers (a two-provider change, which is what Q61 (b) declined for
+the same event)"* and Q61 (b)'s *"a new `ticket.updated` normalisation on both providers"* therefore
+both over-price it: it is **one** normaliser, plus the fake and the shared contract suite (rule 23) —
+exactly the obligation `ticket.created` met *inside* WP-25.
+
+**What it costs to leave.** A shipped feature's only success metric cannot be computed, so the linter
+ships with no way to tell whether it works — which is the one question product/18 asks of it. The
+re-lint setting stays unbuildable, so product/19 § 17's *"updated in place"* sentence stays false. And
+the cost is not confined to the linter: every task whose ticket is edited after intake runs the rest
+of its pipeline against a snapshot nobody can invalidate, which is a wrong-answer failure rather than
+a missing-feature one.
+
+**What "done" looks like.** A `ticket.updated` type in `packages/contracts/src/events.ts` carrying the
+ticket ref, the provider's own `updated_at`, and the changed field names the delivery already has in
+hand (`body.changelog?.items[].field` is read today, only to build the ignore message); emitted by the
+Jira normaliser on `jira:issue_updated` **beside** whatever else that delivery produces — the shape
+`ticket.created` took at WP-25, a fact of its own rather than an alternative to `ticket.matched`; the
+fake answering it and the obligation stated in the shared task-management contract suite, so a sixth
+provider cannot skip it; and a row in `EVENT_CONSUMPTION` naming its consumer or declaring it
+`unconsumed` **with an owner**. Whoever emits it says in the same change which of the three consumers
+is built on it, and the honest minimum is **none**: an emitted-and-declared-unconsumed event is this
+project's own shape, while a config key nothing reads is entry 58's defect.
+
+**Needs measurement, before the re-lint half is built** (rule 66 — nothing was run here): how often a
+real Jira sends `jira:issue_updated` for a ticket in flight. A re-lint keyed on the event with no
+debounce posts on every touch, which is the defect `pickupRuleHit`'s own "now" paragraph exists to
+avoid, and product/19 § 12 prices a lint at *"~$0.10 per ticket"* against WP-25's $0.50 stage cap.
+
+**Depends on / owner.** No dependency; the normaliser, the contract suite and the fake all exist.
+**No work package owns it.** **WP-41** owns the metric and must not be the first row to discover the
+event is missing — the same sentence entry **57** carries about `runs.mode`, for the same reason: a
+row that measures a defect ships the defect's number. The re-lint setting is WP-25's follow-on and
+needs this first; Q61 (b) is the third consumer. Cheapest owner: whoever next touches
+`providers/jira-cloud/webhook.ts`, because the event is four lines there and a contract-suite case.
+
+### 62. **The write half of "a platform-issued reference is not a ticket" is refused by name and the read half is not — so a discovery or review-only task still asks Jira for a ticket no provider issued, and a docblock says it does not** (TODO, small — **no work package owns it**; the write half was closed inside **WP-25**; found by WP-25, session 5)
+
+**What is wrong.** Three kinds of task carry `{provider: 'platform', key: '<something>!<id>'}` because
+`tasks.ticket_*` is not nullable — discovery (WP-21), review-only (WP-24) and the lint task (WP-25).
+WP-25 made every ticket **write** refuse that provider by name (`namesAProviderTicket`,
+`packages/application/src/pipeline/integrations.ts:470`, checked at `:482`, `:545` and `:577` for
+`upsertWorkpad`, `lintComment` and `transition`). The **read** beside them has no such guard:
+`ticketReads.ticket` (`:400-413`) checks only `binding === null`, and the binding it checks is the
+*project's* task-management binding, not one for the `platform` provider.
+
+**Evidence** (read off the tree by the refiner, session 5; no test run, rule 66). The path is live for
+two of the three kinds. `ensureTicketSnapshot` runs from the `stage.execute` job for every agent stage
+whose task has no snapshot (`packages/application/src/pipeline/jobs.ts:378`), and both of those tasks
+are created with one: `onboarding/discovery.ts:203` and `pipeline/review-only.ts:768` both write
+`ticketSnapshot: null`. So `readTicketSnapshot` resolves the project's bindings, finds Jira, and calls
+`readTicket({provider: 'platform', key: 'mr!7'})` — a key no provider issued. WP-25's own note
+measured what the provider does with one: *"The fake answers `not_found` and Jira answers 404, so the
+audit row is a `failed` one"*. The **lint** task is exempt and only by accident of a different
+decision: `ticket-lint.ts:504-505` stores the real ticket's snapshot at creation, so
+`ensureTicketSnapshot` returns early.
+
+**And a docblock states the opposite.** `packages/application/src/pipeline/review-only.ts:120-125`:
+*"It also means `ensureTicketSnapshot` finds no binding for it and leaves `ticket_snapshot` null,
+which is the honest answer for a task with no ticket."* That is true only for a project with **no**
+task-management binding. For every project that has one — which is every project that can produce a
+lint task, and most that produce review-only tasks — the binding is found and the call is made.
+
+**What it costs to leave.** Per agent stage of every discovery and review-only task in a project with
+a task-management binding: one doomed provider round trip, one `failed` row in `integration_actions`
+(`action-executor.ts:796`), one rate-limit token, and a `warn` reading *"the ticket could not be read;
+this task runs without the ticket text until a later stage reads it"* about a ticket that does not
+exist. Nothing dead-letters, because this read **fails open** by design (rule 20 — a Jira outage must
+not stop tasks), which is exactly why nobody will notice it: it is the same reason the *write* half
+survived from WP-21 to WP-25, and standing rule **47** is the shape — it was refused *by the
+provider*, which is not the same as being refused. `integration_actions` is also the table an operator
+reads to answer *"what did the platform do to my Jira"*, so it accumulates failures the platform
+caused itself, against the one provider whose trust the product depends on.
+
+**What "done" looks like.** `ticketReads.ticket` answers `null` for a reference that names no provider
+ticket — one line, beside the three writes that already do it, and in the same place so a fourth
+caller cannot forget it. `review-only.ts`'s docblock corrected to say the refusal is by **provider
+value** and not by binding; `discovery.ts:201-203`'s comment is not false but implies the same benign
+outcome (*"`null` is exactly what `ensureTicketSnapshot` reads as 'the platform has not read this
+ticket'"*) and should say that the read is not attempted. The assertion is the countable
+effect (rule 79) — **no** `read_ticket` row in `integration_actions` for a discovery or review-only
+task in a project that *has* a Jira binding — which is the shape WP-25's own e2e used for the two
+writes it removed.
+
+**No standing rule is owed for this** (the refiner's judgement, session 5): rule **47** already names
+the shape, `PLATFORM_TICKET_PROVIDER`'s docblock cites it at the line where it binds, and an
+eighty-seventh rule restating an existing one costs every future reader of the list a re-read for
+nothing. What was owed was this entry — the half the fix did not cover.
+
+**Depends on / owner.** No dependency. **No work package owns it**; cheapest is whoever takes entry
+**59** or next edits `pipeline/integrations.ts`. Trigger that would make it urgent: a provider whose
+`readTicket` is *slow* rather than 404-fast, or a project on a tight Jira rate limit, at which point a
+per-stage doomed call becomes a delay on every discovery and review-only run.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -2603,6 +2806,57 @@ them WP-16's to fix, all three with an owner in the plan; **two of the three are
 
 Detail and measurement are in the WP-16 notes and in "Discovered work"; this entry exists so the gap
 is readable next to entry 1 rather than only under the work package that found it.
+
+### 61. **Two shipped stages sit outside `BUILTIN_STAGE_IDS`, so a readiness lint — a business pass — retrieves with technical weights, and the constant that decides it is doing two jobs** (TODO, small — **no work package owns it**; `discovery` has been in this position since WP-21; found by WP-25, session 5)
+Placed in the retrieval family, above entry 15, because it is a *pack quality* finding and not a
+configuration one: nothing is broken, the wrong half of the knowledge base is simply ranked higher.
+
+**What is wrong.** `emphasisFor(stage)` answers `DEFAULT_EMPHASIS = 'technical'` for any stage with no
+row in `STAGE_EMPHASIS` (`packages/domain/src/knowledge/retrieval.ts:83-88`), and `STAGE_EMPHASIS` is
+asserted **key-for-key** against `BUILTIN_STAGE_IDS` by `retrieval.test.ts`. So the two shipped stages
+that list deliberately omits — `discovery` (WP-21) and `ticket_lint` (WP-25) — cannot be given an
+emphasis without widening a constant whose *other* job is reserving stage ids against a project's
+`custom_stages` (`packages/application/src/pipeline/transitions.ts:14`) and whose docblock now reads
+*"stages of the shipped **ticket** templates"* (`packages/contracts/src/common.ts:289-298`). One
+constant, two meanings, and the second one is what makes a one-line fix a decision.
+
+**Evidence.** The WP-25 bullet, quoted: *"The cost is small and real: a readiness lint is a *business*
+pass — it is a light version of `refinement`, whose emphasis is `business` — and it retrieves with
+`technical` weights. The fix is one line in each of three places plus a decision about what that
+constant is *for*."*
+
+The size of "small and real", read off `EMPHASIS_LAYER_WEIGHTS` (`retrieval.ts:97-126`; refiner,
+session 5, no test run — rule 66): under `technical` a **business**-layer candidate keeps `0.5` of its
+full-text rank and `lessons` keeps `0.7`; under `business` the same candidate keeps `1.0`, `lessons`
+`0.6` and `decisions` drops `1.0 → 0.8`. So the pass whose entire subject is *"does this ticket say
+what the business wants"* ranks the project's business documents at **half weight**, and ranks its
+technical documents at full.
+
+**And the default is right for one of the two, which is why this is a decision and not two lines.**
+`discovery` reads a repository, so `technical` is the honest emphasis for it — it is simply
+*inherited* rather than *chosen*, and nothing distinguishes the two. `ticket_lint` is a light
+`refinement`, and `refinement` is `business` (`retrieval.ts:56`).
+
+**What it costs to leave.** One shipped feature retrieves against the wrong weighting on every run,
+silently: the pack records no emphasis, so neither a log line nor the run screen can tell "took the
+default" from "was given `technical`". It is the lowest-consequence entry of the WP-25 set and it is
+recorded because the next person to widen `BUILTIN_STAGE_IDS` will otherwise take the test failure as
+the whole question.
+
+**Needs measurement.** Nobody has measured what a `business` pack actually changes for a real lint —
+the weights above are the mechanism, not the outcome. The cheapest measurement is one lint planned
+twice over the same fixture vault, diffing the pack's entries; it needs a test run, which this refiner
+did not make (rule 66).
+
+**What "done" looks like.** A decision about what `BUILTIN_STAGE_IDS` is *for*, and a split if the
+answer is "two things": the reserved-id list `transitions.ts` cites, and the key set `STAGE_EMPHASIS`
+is held to. Then `ticket_lint` takes `business`, and `discovery` takes an emphasis it was **asked**
+for rather than one it inherited. Four places move together: the constant, `STAGE_EMPHASIS`,
+`retrieval.test.ts`'s key-for-key assertion, and `common.ts`'s docblock, which currently states the
+omission is load-bearing and would become false in the same change (rule 83).
+
+**Depends on / owner.** No dependency. **No work package owns it**; cheapest is whoever next touches
+retrieval — entry **15**'s owner, immediately below, is working in the same file.
 
 ### 15. **Retrieval has no defence against a junk query, and the remedy is a product decision (Q58)**
 **What is wrong.** Nothing between a degenerate query and the context pack rejects it. WP-16 round 1
@@ -11456,6 +11710,288 @@ mode"* along with twenty others. The restores were `diff`ed, not assumed.
 tie back to the artifact, because the thread body carries neither the id nor the index. Nothing needs
 it today — the metric matches on the marker and the key is the platform's — so it was not added.
 
+### WP-25 — the ticket readiness linter
+
+**What exists now.** A ticket created in a project that asked for it, of a configured issue type, and
+**not** labelled for the agent, produces a one-stage lint task, one Product Manager run recorded as
+`runs.mode = 'linter'`, and exactly one comment on the ticket in product/19 § 17's shape — a
+readiness score, the top three missing elements, up to five questions the model asked, and the offer
+to add the agent label. Nine files carry it: `packages/contracts/src/events.ts` (`ticket.created`,
+`task.lint.posted`), `packages/contracts/src/config.ts` (`features.ticket_linter.label`),
+`packages/contracts/src/pipeline.ts` (`agentStageSchema.advisory`),
+`packages/domain/src/policies/ticket-lint.ts` (the filter, the score, the question selection — pure),
+`packages/domain/src/pipeline/templates.ts` (`TICKET_LINT_TEMPLATE`, its stage defaults),
+`packages/domain/src/prompt/assembly.ts` (`STAGE_PROMPT_FOCUS`),
+`packages/application/src/pipeline/ticket-lint.ts` (two handlers, two `pipeline.outbound` duties, the
+renderer), `packages/application/src/pipeline/integrations.ts` (`ticketWrites.lintComment` and the
+platform-ticket refusal) and `packages/integrations/src/providers/jira-cloud/webhook.ts` +
+`task-management/fake.ts` (the new delivery). **No migration**: `run_mode` already ships `linter`,
+`tasks.template` is `text`, and the artifact is a `RefinedSpec`.
+
+**The event the lint starts from is new, and what it is not.** `ticket.created` — *a ticket was
+created in a project this binding reads* — emitted by the Jira normaliser on `jira:issue_created`
+**beside** `ticket.matched` when the ticket already carries the pick-up label, and alone when it does
+not. Today a creation without the label produces `ignored('unsupported_event')` and nothing else, so
+there was no signal at all. Three alternatives were rejected at the line: reusing `ticket.matched`
+(it means *"this is for the agent"*, which is the opposite of the linter's population); emitting only
+for unlabelled tickets (the normaliser would then be deciding a *project's* question with an
+*account's* configuration); and putting the labels on the payload (the duty reads the ticket anyway,
+so the label check is made against the ticket as it is **now** rather than as a delivery described
+it). It is an obligation of the shared task-management contract suite (rule 23), so the fake and the
+Jira replay corpus both answer it.
+
+**The task shape, and the one part that is new.** A task on the one-stage `TICKET_LINT_TEMPLATE`, in
+`mode: 'normal'`, with a platform-issued ticket reference — WP-21's and WP-24's argument for the
+third time (`runs.task_id` is `not null`; `tasks.mode` stays two-valued; the unique key makes it
+idempotent). The new part is **which** key: `lint!<ticket key>`, not the ticket's own. A lint task
+carrying `ACME-2` would *be* the row `pipeline.intake`'s dedup finds, so labelling a linted ticket
+afterwards would create no delivery task at all — the linter's own closing line would break the thing
+it offers. The e2e asserts both halves: a lint task `lint!ACME-2`, and a labelled ticket producing a
+`feature` task with no lint.
+
+**`advisory` is the one schema change, and it is the defect the first test run found.** A
+`RefinedSpec` decides the transition: `decision: 'ask'` parks the task on blocking questions and
+`reject` escalates it. An unready ticket is exactly what the linter exists to find, so obeying the
+verdict parks every lint on questions nobody is watching — measured on the first run of
+`packages/application/src/pipeline/ticket-lint.test.ts`: *"expected 'waiting_answers' to be 'done'"*.
+`agentStageSchema.advisory` says the artifact is **read, not obeyed**: the stage always advances and
+the platform reads the artifact afterwards. It is template data rather than a branch in the executor
+because "a pipeline is data, not code", and `templates.test.ts` asserts that exactly one stage of
+exactly one shipped template carries it.
+
+**Exactly one comment, ever — four things hold it and none is a provider's error.** (1) The lint
+task's key: a second `ticket.created` finds the task and creates nothing. (2)
+`lintCommentIdempotencyKey` — `ticket_lint_comment:<task id>`, **no part of it model output or
+provider text** (WP-24 round 2's rule), and `integration_idempotency` has no expiry, so a redelivered
+wake-up *and* a re-run of the stage both replay. (3) The filter: a ticket already labelled for the
+agent is not linted. (4) The Jira adapter's own marked-comment read before posting. The e2e asserts
+the countable effect (rule 79): one comment on the ticket after a redelivery **and** after a second,
+differently-keyed delivery.
+
+**A platform ticket reference is now refused by name, and that is a fix WP-21 and WP-24 needed too.**
+`tasks.ticket_*` is not nullable, so a discovery, review-only or lint task reaches the workpad
+handler (120) and the status mapping (110) like any other — and both used to call the provider with a
+key no provider issued. It *failed*: the fake answers `not_found`, Jira 404s, the audit row is
+`failed`, the job retries and dead-letters. Nothing leaked and nothing was written, which is why it
+read as working — standing rule 47 exactly. `ticketWrites` now returns `null`/`void` for
+`provider: 'platform'` before the call, and the lint e2e asserts **no** `upsert_workpad` and **no**
+`transition_ticket` row. It closes a live defect for the other two modes; the alternative was leaving
+this work package's "one comment" resting on an adapter's 404.
+
+**What the model is told, and what it may not do.** The prompt is the Product Manager's with
+`STAGE_PROMPT_FOCUS.ticket_lint` — platform text, typed as a **closed set of literals** so nothing
+assembled from configuration or from a model can reach the platform's voice, rendered into **layers
+1–3** so `promptVersion` digests it (an append after `assemblePrompt` would not have been). No new
+`prompt.md`, no `ROLE_PROMPT_VERSIONS` bump, no new eval corpus: TD-016's cases are per role and the
+role is unchanged. The stage also **takes `ask_human` away** from the role
+(`PLATFORM_TOOLS_DENIED_BY_STAGE`, a subtraction only): `task.question.asked` is consumed and its
+consumer posts a ticket comment, so a lint that asked would try to write a second one.
+
+**The score is the platform's; the questions are the model's.** `RefinedSpec` has no score field and
+none was added — the platform reads the artifact (`scoreTicketReadiness`), the way product/17's
+R9/R11/R12 are read off the repository rather than believed from a `DiscoveryDraft`. The weights are a
+partition of 100 (35 acceptance criteria / 25 scope boundaries / 15 validation / 5 per open question
+to a maximum of five), so no clamp is ever load-bearing, and a property test asserts the bound and
+monotonicity over arbitrary artifacts rather than trusting that sentence.
+
+**The comment's bytes.** `<!-- agentic:linter -->` (product/19 § 17's exact string) in the body
+**and** `marker_id: 'agentic:linter'` on the port — two spellings doing different jobs: the second is
+what makes `boundTicketSnapshot` skip the platform's own comment (a later Refinement must not read
+the lint as a human's) and what the Jira adapter looks for before posting. Residual, visible to a
+user: Jira renders neither markdown nor HTML comments, so on Jira the marker line is literal text and
+the adapter appends its own `[agentic:marker:…]` paragraph; the comment carries both rather than this
+row choosing which document to contradict. The body is bounded (five questions at 300 characters, the
+label at 64) and **redacted with the task-management binding's redactor at the call**, like
+`reviewWrites.thread`; the worst case is **1 843 characters over 10 lines**, produced by a test
+rather than quoted (rule 39).
+
+**The metric, and what it cannot observe.** product/18:60 wants *"tickets improved after lint (edited
+within 48 h)"*. **No "this ticket changed" signal exists in this build**: Jira's `jira:issue_updated`
+is normalised only into `ticket.matched` (when the change is what made it match) and
+`ticket.status.changed`, so an edited description produces `unsupported_event`. So `task.lint.posted`
+records the **baseline** — the score, the gaps, how many questions were posted, and the ticket's own
+`updated_at` as the linter saw it — declared `unconsumed` for WP-41, which can then compare against
+one later read rather than re-deriving a number this event already knew. *"Questions avoided
+downstream"* is a correlation across a later task on the same ticket and is WP-41's outright. The
+duplicate residual is WP-24's, stated the same way: a redelivered wake-up appends a second event with
+the same numbers and a consumer deduplicates on `task_id`.
+
+**Cost.** A stage id of its own (`ticket_lint`) rather than `refinement`, and that is the opposite
+call from WP-24's reuse of `code_review`, for two reasons that do not apply there: the stage defaults
+are keyed by stage id (`refinement` is Opus 5, 30 turns, a $2 cap against product/19 § 12's *"~$0.10
+per ticket"*, so the linter is Sonnet 5, `low`, 5 turns, cap $0.50 — five times the published
+expectation, because a cap equal to it stops an ordinary lint and a stopped lint posts nothing), and
+`status_mapping` is keyed by stage id too, so a project mapping `refinement` to *"In Refinement"*
+would have had its human's ticket moved into the agent's column.
+
+**Decisions and assumptions, each also in the code where it binds.**
+1. **Re-lint on edit is not built and gets no config key.** product/18 lists *"re-lint on edit
+   off/on"* and product/19 § 17 *"updated in place if the ticket is edited and re-lint is enabled"*;
+   the default is off, which is what this build does, and the *setting* needs the `ticket.updated`
+   normalisation that does not exist. An unread key is the defect backlog 58 is about, so it is
+   recorded as discovered work instead of shipped as decoration. Same for product/18's *"comment
+   language"*: the artifact carries `language` and nothing per-feature reads one.
+2. **An explicitly empty `issue_types` matches nothing** (fail-closed, the reading
+   `review_only.paths` takes); an **absent** one falls back to technical/12's own example list
+   (`Story`, `Task`, `Bug`). The type and the label are compared case-insensitively and after
+   trimming, because a human types both.
+3. **A ticket read that throws fails the job**; one that finds no binding settles. The ticket's text
+   *is* the input, so this is a decision to spend and fails closed (rule 20) — `runReviewOnlyCheck`'s
+   argument about the diff, not `runIntakeCheck`'s about the ticket.
+4. **No WIP admission and no protected-branch check** on a lint task: a lint pushes nothing and a
+   queued lint has no producer to dequeue it. Discovery and review-only made the same call.
+5. **`runs.mode` is mapped by a table** (`RUN_MODE_BY_TEMPLATE`), which is backlog 57's recommended
+   shape, and the walk it asks for is in `planner.test.ts` over `SHIPPED_TEMPLATES`. This row owed
+   `linter` and pays it; `retro`, `librarian` and `discovery` are **still `normal`** and the test says
+   so by naming them, because two of the three need a lookup keyed by *stage* rather than by template
+   and backlog 57 recommends taking all three together.
+
+**Five guards were mutation-checked, calibrated first** (standing rules 3, 21, 77): the suite passes
+unmutated (86/86 across the four files), and each mutant dies by a *named* test. Removing the
+platform-ticket refusal fails *"never writes a workpad on the ticket and never moves its status"*
+with the stub's own message; `const redacted = markdown` fails *"keeps a credential the model quoted
+out of the comment"*; short-circuiting the agent-label skip fails *"skips a ticket that is labelled
+for the agent, and lints the same ticket without it"* **and** two domain cases; emptying
+`PLATFORM_TOOLS_DENIED_BY_STAGE` fails *"gives the run no way to ask a human"* in both rings; and
+`advisory: false` fails *"lints it, posts one comment and finishes"* on `waiting_answers`, which is
+the defect it was written for. Each mutant was applied in place, the file restored from a copy taken
+first, and every restore `diff`ed rather than assumed.
+
+**Sentences this made false, and where they were** (rule 83): technical/02's event table (two new
+rows) and its task state-machine note (*"a third shape uses the same edge"* — there is a fourth, and
+it needed something the other three did not); technical/04's `linter` mode row, which described an
+unbuilt mode and whose *"no repo"* is **still** not implemented and now says so;
+technical/12's config example (`label`); `BUILTIN_STAGE_IDS`'s *"stages of the shipped templates"*,
+false since WP-21 and doubly so now (`STAGE_EMPHASIS` is asserted key-for-key against it, so
+`discovery` and `ticket_lint` both take the neutral emphasis — a small real loss for a *business*
+pass, recorded below); `STAGE_EMPHASIS`'s own list of runs with no key; and `EVENT_CONSUMPTION`'s
+measured count (24 → 25, 21 → 22 from the pipeline). technical/06:15's *"`addComment` … questions,
+linter output"* became **true** rather than false and needed no edit. **product/14:6 lists the ticket
+readiness linter under M2 and is product-owned**: it is now built, and the orchestrator owns that
+line.
+
+**For the orchestrator.** `CLAUDE.md` has no "Where to look" bullet for the linter; this implementer
+did not add one, because the session's standing instruction names that file among the things an
+agent's own message may not authorise changing. The bullet worth adding is one sentence: *the ticket
+readiness linter is `packages/application/src/pipeline/ticket-lint.ts` (two handlers, two
+`pipeline.outbound` duties), its template is `TICKET_LINT_TEMPLATE` whose stage is **advisory** (the
+artifact is read, not obeyed), and the one comment it posts is keyed by the task so it is never
+re-posted.*
+
+**Pre-review fix (rule 50):** the orchestrator's `verify:e2e` on this tree failed once —
+`lints an unlabelled ticket … posts one comment`, `AssertionError: expected [] to have a length of 1
+but got +0` at the `task.lint.posted` count — while the implementer's run had passed.
+`runTicketLintPost` **posts the comment and appends the event afterwards, in a transaction of its
+own**, so the test bound the *provider call* and asserted the *row written after it*: rule 50's
+shape, one commit wide, the rate the only random thing about it (rule 76). It now waits on
+`task.lint.posted` and asserts the comment the event implies, plus two ties the old ordering could
+not make (the body's score **is** the event's `score`; its `- ` lines **are** `questions_posted`).
+**Reproduced before and after** on throwaway copies of the case with a fake-side delay — `addComment`
+stores the comment, then sleeps 2 s, then returns, which is the window the duty already has (rule 76:
+force the interleaving rather than wait for it, and no product file was touched, rule 77): the
+pre-fix ordering fails **by name** with CI's own message at the `lints` assertion, the post-fix
+ordering passes under the same delay. Both copies deleted; `verify:e2e` PASS twice in a row (20
+files, 123 tests), `verify` PASS.
+
+*The rule-49 sweep of the file, one verdict per wait — two of five were short.* (1) *the lint task to
+finish* — **sufficient**: the `runs`/`task_stages` rows, the CLI capture and `ticket_snapshot` are
+all written before the task row moves to `done`. (2) *the lint comment to be posted* — **short, and
+for two assertions rather than one**: the events table, and also the `integration_actions` row, which
+the executor writes *after* the provider answers and before it returns (step 5). Both now sit under
+the event wait. (3) *the second delivery to be dispatched* — **sufficient, and only because of where
+the decision is made**: `pipeline.ticket.lint` (the sole consumer of `ticket.created`) finds
+`lint!ACME-2` inside its own handler transaction and enqueues nothing, so an empty `event_dispatch`
+means the decision is committed. The comment naming that is now at the line, because the wait would
+be short by one job if the handler ever enqueued one. (4)+(5) the second case's two refusals —
+**short in the vacuity direction** (rule 4, not a flake: every assertion there is negative, so a duty
+that has not started passes them all). The duty reads the ticket and *then* applies the filter, in a
+job enqueued after the handler's commit, so the drained dispatch queue bounded neither the label
+refusal nor the issue-type one. Each now waits for the duty's own `read_ticket` audit row — the
+executor records one for a read exactly as for a write — and the labelled ticket's `ticket.matched`
+is delivered **after** that wait, which both removes a race (a delivery task created first makes the
+handler return early, so the lint check might never have been enqueued) and makes the row
+unambiguously the linter's rather than intake's (WP-15f reads the same ticket with the same
+`taskId: null`, so the two rows are otherwise indistinguishable). Residual stated at the line: a
+*broken* filter would insert its task one transaction after that row, so the wait bounds the refusal
+and is one transaction short of bounding a mutant of it — which the domain ring's unit cases kill.
+
+**Review round 2:** one major, one minor, two nits. All four closed; `verify` **PASS**, exit 0;
+`verify:integration` **PASS**, exit 0 (28 files, 314 tests); `verify:e2e` **PASS** twice on the final
+tree, exit 0 both times (20 files, 123 tests each) — and twice more before the last edit to that
+file, which is a comment.
+
+*The major: a guard that was dead in the case it documents.* The `ticket.created` handler asked "is
+this ticket already a task the pipeline is delivering?" and the duty on fire did not — it re-read
+only the `lint!` key. `pipeline.intake` enqueues `intake_check` from `afterCommit`, so the **task**
+is created by a job: when one `jira:issue_created` delivery produces `ticket.matched` *and*
+`ticket.created` (`webhook.ts` pushes both), no delivery task exists yet when the handler looks, and
+nothing asked again. The reviewer's reproduction, now this file's: a project picking tickets up by
+`pickup_status`, or by a `pickup_label` that is not `features.ticket_linter.label`, ends with
+`tasks = ["feature:ACME-2", "ticket_lint:lint!ACME-2"]`, a charged lint run and a comment on ACME-2
+telling its author to add a label so the pipeline picks up a ticket it is already delivering. The
+label filter hid it only where the two labels happen to agree, which is why the e2e's case (a)
+passed. **The re-validation now sits in `runTicketLintCheck`, twice** (TD-004 — a timer cannot be
+cancelled, so a job asks on fire): once at the top, in the same transaction as the lint dedup and
+*before* the settings read, the binding load and the provider call; and once **inside the create
+transaction**, where everything between the two is I/O. Both go through one helper, `lintRefusal`,
+which is also what the handler's early-out calls — and the handler's copy is now documented as an
+early-out rather than as the guard, because it has no observable consequence of its own (removing it
+kills no test; it saves a job).
+*The residual is stated at the line and is narrower than the defect was.* `pipeline.outbound` runs
+at `concurrency: 1`, and `intake_check` is enqueued strictly first (its event has the lower position
+and its handler committed first), so on a single process the two duties are serial and the second
+ask cannot lose. The window that remains needs **two** processes working the queue at once, where
+the lint's create transaction commits before intake's. A third ask in `runTicketLintPost` would
+close that too and was **not** taken: it trades the comment for a run that was charged and says
+nothing, for an interleaving a single-process instance does not have.
+*Four cases, and both directions.* Two are the reviewer's reproduction through the real handlers
+(status pick-up; a pick-up label that is not the linter's), one is the opposite direction — the same
+harness, the same configuration, a ticket nothing picked up, still linted with one comment — and one
+**forces the interleaving** the second ask exists for (standing rule 76): the delivery lands from
+inside the duty's own `readTicket`, which is the last thing before the write. The harness helper
+grew a `delivering` mode, because a *delivery* task in the same harness legitimately makes the two
+ticket writes the linter must not.
+*Mutation-checked, calibrated first* (standing rules 3, 21, 77; the suite passes unmutated, 22/22).
+Dropping the delivery half of `lintRefusal` fails all three of *"is not linted when the project
+picks tickets up by status"*, *"…when the pick-up label is not the linter's label"* and *"does not
+create the lint task when the delivery lands while the duty is calling the provider"*; reverting the
+**inner** ask to the old lint-only read fails the third by name; deleting the **first** ask fails
+the first case at `expected 2 to be 1` — its ticket-read count, which is the only observable
+difference between asking early and asking late. Each mutant was applied in place and the file
+restored from a copy taken first, every restore `diff`ed rather than assumed.
+
+*`label` vs `pickup_label` is a product question and is filed as **Q75**.* The docs are not silent
+about the *meaning* — product/19 § 17's offer is *"add label `agentic` to have it delivered"*, and
+what delivers is the **binding's** pick-up rule (`pickup_label`, or `pickup_status`, which wins when
+both are set) — but no document says where that value is configured, and the platform has it in two
+places: the project's `features.ticket_linter.label` and the integration's config blob, which only
+the inbound normaliser reads and which `TaskManagementPort` does not expose. They agree today only
+because both defaults are `agentic`. Q75's recommendation is to make the project key an **override**
+over the binding's rule (and to phrase the offer for a *status* when the rule is a status); its
+implementable half is what this round did — **the guard no longer rests on the labels agreeing** —
+and the port half was deliberately not taken inside a review round, so the offer still names the
+project key.
+
+*The minor:* `AssemblePromptInput.focus` was `focus?:` under a docblock arguing for
+required-and-nullable (rule 86). The **field** was made to match the sentence, since it is the one
+the reasoning wants and the only production caller already passes it explicitly; the two test
+call sites now say `focus: null`, which is the statement the optional spelling let them omit.
+
+*The nits.* `agentStageSchema.advisory` now says what it may and may not be used for: it is for a
+stage whose whole output is advice, **not** a way to make a gating stage non-gating — `advisory` on
+`code_review` would turn a rejecting `ReviewReport` into an advance — and, since nothing reads a
+project's own `.agentic/pipeline.yml` today while `schemas/agentic-pipeline.schema.json` publishes
+the key, the refusal is named as an obligation of whoever builds that loader. And the idempotency
+case no longer asserts `lintCommentIdempotencyKey` against its own formula: it reads the **storage
+key the executor wrote** (`integrationId:add_comment:ticket_lint_comment%3A<task id>`), which is a
+claim about where the key went.
+
+*Found while fixing the nit, and fixed:* the helper returned `workpads`/`transitions` as **getters**,
+and the two cases that used them **destructured** — so both were read as `0` before the publish that
+would have moved them, and `expect(workpads).toBe(0)` could not have failed. It was not load-bearing
+(the stubs also *throw*, which is what killed that guard's mutant), but it is a vacuous assertion in
+a file this round was auditing, so the helper now returns the live `counters` object.
+
 ## Discovered work — session 5 (not in plan)
 - **`runs.mode` records `normal` for a discovery run, a retro run and a librarian run** (WP-24).
   technical/04's mode table has seven values and the `run_mode` enum ships all seven; the planner
@@ -11990,3 +12526,94 @@ it today — the metric matches on the marker and the key is the platform's — 
   no observed defect. **Nothing refuses the shape**: the sweep that found these three sites was a
   grep, and a guard would have to tell "promise held across an await" from "promise awaited", which
   biome's rules do not express.
+
+- **Re-lint on edit, and the `ticket.updated` signal it needs** (WP-25). product/18's linter row
+  lists *"re-lint on edit off/on"* as a setting and product/19 § 17 says the comment is *"updated in
+  place if the ticket is edited and re-lint is enabled"*. **Neither is buildable today**: no
+  normaliser produces a "this ticket changed" event — Jira's `jira:issue_updated` yields
+  `ticket.matched` only when the change *made* the ticket match, `ticket.status.changed` for a status
+  item, and `unsupported_event` for an edited description — so the setting would be a key nothing
+  reads (backlog 58's defect) and the metric's other half (*"edited within 48 h"*, product/18:60) has
+  no input. The shape if it is wanted: a `ticket.updated` event carrying the ticket ref and the
+  provider's `updated_at`, emitted by **both** shipped normalisers (a two-provider change, which is
+  what Q61 (b) declined for the same event); a `relint_on_edit` key beside `issue_types`; and the
+  comment **edited in place** through `upsertWorkpad`'s mechanism rather than a second `addComment`,
+  since `LINT_COMMENT_MARKER_ID` already marks it. `task.lint.posted` records the baseline the
+  correlation needs (score, gaps, questions, the ticket's `updated_at` as the linter saw it), so the
+  later half is a comparison rather than a re-derivation. No owner; the metric half is WP-41's.
+  *Refiner (session 5): **filed as backlog 59**, with the provider count corrected — Jira Cloud is the
+  only provider this build registers as `task_management` and GitLab's normaliser has no `issue`
+  branch at all, so `ticket.updated` is a **one**-normaliser change plus the fake and the contract
+  suite, not the two-provider change this bullet and Q61 (b) both price it at. Q61 carries a note to
+  the same effect; WP-41 must not be the row that discovers this, for entry 57's reason.*
+- **`features.ticket_linter` has no `comment language`** (WP-25). product/18's configuration column
+  names one. The artifact envelope carries `language` and nothing per-feature reads a language
+  anywhere in this build, so the key was not added. If it is wanted it belongs beside
+  `project.communication_language`, which is the setting that already exists for the same question.
+  *Refiner (session 5): **filed as backlog 60**, widened to the cause this bullet names but does not
+  measure — `project.communication_language` has a schema, an `auto` default and **no reader
+  anywhere** (five occurrences, all schema, default or test), so the linter's missing key is one
+  symptom of a setting the platform never consults. Cheapest owner named there: **WP-32**, the first
+  row that writes platform text to a human outside a ticket. Not WP-25's.*
+- **Two shipped stages are outside `BUILTIN_STAGE_IDS`, so both take the neutral context emphasis**
+  (found at WP-25; `discovery` has been in this position since WP-21). `STAGE_EMPHASIS`
+  (`packages/domain/src/knowledge/retrieval.ts`) is asserted **key-for-key** against
+  `BUILTIN_STAGE_IDS` by `retrieval.test.ts`, so adding `ticket_lint` there means adding it to a
+  constant whose docblock calls it "the stages of the shipped templates" and which
+  `transitions.ts` cites for its reserved ids. The cost is small and real: a readiness lint is a
+  *business* pass — it is a light version of `refinement`, whose emphasis is `business` — and it
+  retrieves with `technical` weights. The fix is one line in each of three places plus a decision
+  about what that constant is *for*; it was not taken inside this row because the same question
+  covers `discovery` and belongs with backlog 57's owner.
+  *Refiner (session 5): **filed as backlog 61** — not 57's, which is about a column that mislabels a
+  run rather than a pack that mis-ranks a document. Two things added there: the weights the neutral
+  default actually costs (a business-layer candidate keeps **0.5** of its rank under `technical` and
+  **1.0** under `business`), and the observation that makes it a decision rather than two lines — the
+  default is right for `discovery` and wrong for `ticket_lint`, so widening the list settles what
+  `BUILTIN_STAGE_IDS` is *for*. Needs measurement is stated there.*
+- **`runs.mode` is still `normal` for `retro`, `librarian` and `discovery`** (backlog **57**, partly
+  paid). WP-25 added `RUN_MODE_BY_TEMPLATE` — the table that entry asks for — and the
+  `SHIPPED_TEMPLATES` walk in `planner.test.ts` that pins every agent stage's planned mode, so the
+  three remaining values are now **named in a test** rather than invisible. Two of them need a
+  lookup keyed by *stage* (they are stages of the ticket templates, not templates of their own),
+  which is a one-line change plus a decision this row did not own.
+  *Refiner (session 5): **folded into backlog 57**, not filed again — 57's heading now says `linter`
+  is paid and its body carries an Update with what the walk covers (24 stage rows, every agent stage
+  of every `SHIPPED_TEMPLATES` entry) and one correction this bullet inherits from the entry:
+  **`discovery` is not a stage-keyed change**, it is one more line in `RUN_MODE_BY_TEMPLATE`
+  (`DISCOVERY_TEMPLATE` is registered under the template id `discovery`), so only `retro` and
+  `librarian` need the second lookup — six of the walk's 24 rows.*
+
+- **A platform-issued ticket reference is refused by every ticket *write* and by no ticket *read*,
+  and a docblock says otherwise** (found at WP-25 while reading the refusal that row shipped; the
+  write half is **closed** in that change). `ticketWrites` now answers `null` for
+  `provider: 'platform'` before the call — which closed a live defect for discovery and review-only
+  tasks, where the workpad render (TD-005 priority 120) and the status mapping (110) had been calling
+  the provider with a key no provider issued since WP-21, failing, retrying and dead-lettering while
+  nothing leaked and nothing was written (standing rule **47**: refused *by the provider* is not the
+  same as refused). `ticketReads.ticket` beside them has no such guard, and both task kinds are
+  created with `ticketSnapshot: null`, so `ensureTicketSnapshot` asks the project's Jira for
+  `discovery!<id>` / `mr!<iid>` at every agent stage.
+  *Refiner (session 5): **filed as backlog 62** — the open half of a fix whose closed half needs no
+  entry. **No standing rule is owed**: rule 47 already names the shape and `PLATFORM_TICKET_PROVIDER`'s
+  docblock cites it where it binds, so an eighty-seventh rule restating an existing one would cost
+  every future reader of the list a re-read for nothing. Two things the entry adds: the lint task is
+  exempt only by accident (`ticket-lint.ts:504-505` stores the real ticket's snapshot at creation),
+  and `review-only.ts:120-125`'s claim that `ensureTicketSnapshot` "finds no binding for it" is false
+  for any project that **has** a task-management binding — which is every project that can produce a
+  lint task.*
+
+- **product/14:6 lists the ticket readiness linter and review-only mode as M2 work, and both are now
+  built** (WP-25, carried from that row's *"Sentences this made false"*; the row states it and cannot
+  fix it). The line is *"**M2 — trust:** review-only mode, ticket readiness linter, rebase gate,
+  steer/take-over, cost estimate, human time accounting, autonomy dial, wizard step, ask-the-task,
+  digest/quiet hours"* — a roadmap sentence that is not wrong so much as stale, and it is the only
+  product document that has to move for WP-24 and WP-25 together.
+  *Refiner (session 5): **recorded here as a product-doc pointer and deliberately not as a backlog
+  entry** — the backlog is for defects and loose ends, and a roadmap line whose items shipped is
+  neither. **The orchestrator owns it**; a refiner writes no product document (the same disposition
+  as *"product/13's least-privilege table has no Discovery row"* above, and as the product/13
+  amendment WP-14a needed). The exact line is `docs/product/14-mvp-scope-and-roadmap.md:6`, and the
+  two items to strike or mark built are *"review-only mode"* (WP-24, merged at `9a02c3b`) and
+  *"ticket readiness linter"* (WP-25). The M2 sentence in `13-implementation-plan.md:57` is the
+  ledger's own copy and is the orchestrator's too.*

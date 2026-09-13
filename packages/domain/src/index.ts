@@ -58,6 +58,7 @@ export * from './policies/command-policy.js';
 export * from './policies/iteration-limits.js';
 export * from './policies/path-patterns.js';
 export * from './policies/review-only.js';
+export * from './policies/ticket-lint.js';
 export * from './policies/wip.js';
 // Prompt assembly and the data-block contract for untrusted text (WP-17, BD-022)
 export * from './prompt/assembly.js';

@@ -44,6 +44,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
+import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
 export interface PipelineOutboundOptions extends PipelineSagaOptions {
@@ -83,6 +84,12 @@ export const pipelineOutboundHandler = (
         return;
       case 'review_only_observe':
         await runReviewOnlyObservation(options, data);
+        return;
+      case 'ticket_lint_check':
+        await runTicketLintCheck(options, data);
+        return;
+      case 'ticket_lint_post':
+        await runTicketLintPost(options, data);
         return;
       default:
         logger.warn(

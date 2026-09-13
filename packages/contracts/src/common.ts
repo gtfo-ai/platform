@@ -231,6 +231,21 @@ export const sizeSchema = z.enum(['S', 'M', 'L', 'XL']);
 /** Review finding severities (technical/12 ReviewVerdict). */
 export const severitySchema = z.enum(['blocker', 'major', 'minor', 'nit']);
 
+/**
+ * What a linted ticket is missing — product/19 § 17's *"top 3 missing elements (acceptance
+ * criteria, scope boundaries, validation)"*, as a closed set (WP-25).
+ *
+ * A closed set rather than free text because it is **the platform's own reading of an artifact**,
+ * not the model's words: `packages/domain/src/policies/ticket-lint.ts` decides each one from the
+ * `RefinedSpec` the lint run produced, and the linter's comment prints the platform's label for it.
+ * A model that wrote its own "missing element" would be inventing a metric key.
+ */
+export const ticketReadinessGapSchema = z.enum([
+  'acceptance_criteria',
+  'scope_boundaries',
+  'validation',
+]);
+
 /** Autonomy dial (BD-027, technical/12 `policies.autonomy`). */
 export const autonomyLevelSchema = z.enum(['observe', 'assist', 'supervised', 'autonomous']);
 
@@ -272,7 +287,16 @@ export const templateIdSchema = slugSchema;
 /** Stage identifier — also a slug, because `custom_stages` introduces new ids (technical/12). */
 export const stageIdSchema = slugSchema;
 
-/** Stages of the shipped templates (technical/12 `pipeline.yml`). */
+/**
+ * Stages of the shipped **ticket** templates (technical/12 `pipeline.yml`).
+ *
+ * Two shipped stages are deliberately **not** here — `discovery` (WP-21) and `ticket_lint`
+ * (WP-25) — and the omission is load-bearing rather than an oversight: `STAGE_EMPHASIS`
+ * (`packages/domain/src/knowledge/retrieval.ts`) is asserted key-for-key against this list, so a
+ * name added here without an emphasis row fails that test, and both of those stages take the
+ * neutral `DEFAULT_EMPHASIS`. The sentence used to read "the shipped templates", which stopped
+ * being true when the first template outside the ticket flow shipped.
+ */
 export const BUILTIN_STAGE_IDS = [
   'intake',
   'refinement',
@@ -507,6 +531,7 @@ export type IntegrationType = z.infer<typeof integrationTypeSchema>;
 export type ProviderMode = z.infer<typeof providerModeSchema>;
 export type Size = z.infer<typeof sizeSchema>;
 export type Severity = z.infer<typeof severitySchema>;
+export type TicketReadinessGap = z.infer<typeof ticketReadinessGapSchema>;
 export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
 export type Effort = z.infer<typeof effortSchema>;
 export type ArtifactType = z.infer<typeof artifactTypeSchema>;

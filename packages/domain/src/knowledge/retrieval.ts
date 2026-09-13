@@ -70,8 +70,13 @@ export const STAGE_EMPHASIS = {
 
 /**
  * A project's `custom_stages` (technical/12) are slugs the platform has never seen, so there is
- * always a stage with no entry above — and a run with no stage at all (discovery, ask-the-task,
- * librarian outside the pipeline) has no key to look up either. `technical` is the neutral choice
+ * always a stage with no entry above — and a run with no stage at all (ask-the-task, librarian
+ * outside the pipeline) has no key to look up either. Two **shipped** stages are in the same
+ * position and say so at `BUILTIN_STAGE_IDS`: `discovery` (WP-21) and `ticket_lint` (WP-25), which
+ * this record is asserted key-for-key against and which therefore both take the default. For the
+ * linter that is a real (small) loss — a readiness pass is a *business* question, like the
+ * refinement stage it is a light version of — and it is recorded in `PROGRESS.md` rather than
+ * closed by widening a list three other things are held to. `technical` is the neutral choice
  * and `emphasisFor` is where it is taken; the branch has its own named test, because a default
  * nothing exercises is a default nobody has read.
  */
