@@ -10,17 +10,46 @@
  * ### The plugin order is not arbitrary
  * 1. zod validator/serializer compilers, before any route is declared.
  * 2. `@fastify/swagger`, before the routes it documents — it collects them as they register.
- * 3. `@fastify/under-pressure`, so `/healthz` can ask it.
- * 4. `@fastify/sse`, before `/events` declares `sse: true`.
- * 5. the auth plugin, whose `onRequest` hooks must run before any route's `preHandler`.
- * 6. routes.
+ * 3. `@fastify/compress`, before any route: it attaches its `onSend` through an `onRoute` hook, so
+ *    a route registered earlier would never be compressed.
+ * 4. `@fastify/under-pressure`, so `/healthz` can ask it.
+ * 5. `@fastify/sse`, before `/events` declares `sse: true`.
+ * 6. the auth plugin, whose `onRequest` hooks must run before any route's `preHandler`.
+ * 7. routes.
  *
- * ### Compression is deliberately absent
- * TD-002 notes that `@fastify/compress` "must exclude `text/event-stream`" — a compressed SSE
- * stream buffers until the compressor flushes, which turns a live stream into a stalled one. The
- * simplest way to honour that is not to register the plugin at all until something needs it; when
- * WP-20 does, the exclusion is the first thing to configure.
+ * ### Compression, and the two responses that are excluded from it
+ *
+ * TD-002 puts `@fastify/compress` in the stack with one constraint — *"must exclude
+ * `text/event-stream`"* — because a compressed SSE stream buffers until the compressor flushes,
+ * which turns a live stream into a stalled one. WP-15j is what made it matter: the SPA's initial
+ * graph is 551 009 raw bytes, against the 163 554 gzipped that `pnpm bundle:check` holds to
+ * TD-013:8's 300 kB budget, so before this the budget was a statement about a number no instance
+ * ever put on the wire.
+ *
+ * Three things here are measured rather than assumed (standing rule 13, on
+ * `@fastify/compress@9.2.0` — MIT, Fastify-org, last published 2026-09-04):
+ *
+ * 1. **`/events` is never coded, and three separate things see to it.** `@fastify/sse` commits the
+ *    response by writing to `reply.raw` (`sendHeaders`, `index.js:433`), so no `onSend` hook — the
+ *    compressor's or anyone's — ever sees an SSE payload; the plugin's default type table excludes
+ *    `text/event-stream` twice over (its regex and mime-db); and the route carries `compress:
+ *    false`, which is TD-002's constraint stated in our own code and which, measured by mutation,
+ *    decides nothing today. `web/compression.test.ts` therefore asserts the **outcome** over a
+ *    socket — the first frame of a real `/events` response arrives, unencoded, while the response
+ *    is still open — including on an instance configured to compress every content type.
+ * 2. **`/api/auth/*` carries `compress: false`** (`auth/plugin.ts`). Better Auth's session
+ *    responses are the only bodies on this origin that carry a bearer credential, and compressing
+ *    a body that holds a secret beside anything a caller influences is BREACH's precondition. The
+ *    responses are small; the exclusion costs nothing and removes the question.
+ * 3. **Request decompression is off** (`globalDecompression: false`). Nothing in this product
+ *    sends a compressed request body, `/webhooks/*` verifies a signature over the bytes as they
+ *    arrive (WP-15c), and an inflating body limit is a zip bomb with extra steps.
+ *
+ * What the plugin does **not** cover is the browser application, and that is structural: it works
+ * through `onRoute`, and Fastify emits no `onRoute` for the context `setNotFoundHandler` creates,
+ * which is where the SPA is served from. `web/encoding.ts` is that half, with the measurement.
  */
+import fastifyCompress from '@fastify/compress';
 import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
@@ -63,6 +92,7 @@ import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
+import { type ClientFallback, createClientFallback } from './web/fallback.js';
 
 export interface BuildAppOptions {
   readonly config: ServerConfig;
@@ -113,6 +143,21 @@ export interface BuildAppOptions {
    * with no queue, and the four that must start a stage refuse by name (`commands.ts`).
    */
   readonly commands: TaskCommands | null;
+  /**
+   * The directory holding the built SPA, or absent for a process that serves no browser
+   * application (WP-15j).
+   *
+   * **Optional, and absent means nothing is served from disk** — deliberately, in both halves.
+   * Optional, because `buildApp` is driven directly by `app.test.ts` and
+   * `routes/client-census.test.ts`, whose subject is the API, and a required field would have made
+   * the census fail to **compile** — the one thing this row may not do to it, its passing unchanged
+   * being a criterion. Absent meaning *nothing*, because the alternative — defaulting to the
+   * bundled path here — would make both of those files answer differently depending on whether
+   * somebody had run `pnpm bundle:check` in the checkout. The default lives in `runtime.ts`, which is the production
+   * composition, and `test/e2e/server/web-bundle.e2e.test.ts` drives a real instance through it
+   * (standing rule 35: making a collaborator required proves it is supplied, not that it is used).
+   */
+  readonly webRoot?: string | null;
 }
 
 /** Event-loop delay above which the process reports itself degraded rather than healthy. */
@@ -145,6 +190,24 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     }),
   });
 
+  /**
+   * Every route URL this instance registers, in registration order (WP-15j).
+   *
+   * The hook is added before the first route so that it sees them all, including the ones plugins
+   * register under a prefix. Two readers, and both need the *live* table rather than a copy:
+   * `createClientFallback` derives the first segments the router reserves, and
+   * `web/web-serving.test.ts` parameterises "this prefix never answers with the SPA shell" over the
+   * same set, so a prefix added later is covered by the assertion the day it exists (standing rules
+   * 7 and 68). Fastify exposes no route enumeration — `printRoutes` prints a wildcard route as a
+   * bare `*`, losing the `/api/auth` it was registered under, measured — which is why this is
+   * collected here rather than read back.
+   */
+  const routeUrls: string[] = [];
+  app.addHook('onRoute', (route) => {
+    routeUrls.push(route.url);
+  });
+  app.decorate('registeredRouteUrls', routeUrls as readonly string[]);
+
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
@@ -169,6 +232,21 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       ],
     },
     transform: jsonSchemaTransform,
+  });
+
+  /**
+   * Response compression for every registered route (TD-002; see the module docblock).
+   *
+   * `encodings` is an explicit preference order rather than the plugin's default, which includes
+   * `zstd` on a Node that has it: the bundle half of this origin (`web/encoding.ts`) offers `br`
+   * and `gzip`, and one origin answering a third coding on half its paths is a difference nobody
+   * asked for. `threshold` is left at the plugin's 1 024 bytes, and `web/encoding.ts` uses the
+   * same number for the same reason.
+   */
+  await app.register(fastifyCompress, {
+    global: true,
+    globalDecompression: false,
+    encodings: ['br', 'gzip', 'deflate'],
   });
 
   await app.register(underPressure, {
@@ -237,9 +315,22 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     return reply.status(mapped.statusCode).send(mapped.body);
   });
 
-  app.setNotFoundHandler(async (_request, reply) =>
-    reply.status(404).send({ error: { code: 'not_found', message: 'no such endpoint' } }),
-  );
+  /**
+   * The unmatched-path handler, which is also where the SPA is served from (WP-15j).
+   *
+   * One handler, because Fastify allows one per encapsulation context — and the order is the point:
+   * the router has already failed to match, so nothing here can shadow a route, and the JSON body
+   * below is still what an unmatched `/api/…` path answers with. `clientFallback` is assigned after
+   * the routes are registered (it derives the reserved prefixes from them), which is why it is a
+   * mutable binding rather than an argument.
+   */
+  let clientFallback: ClientFallback | null = null;
+  app.setNotFoundHandler(async (request, reply) => {
+    if (clientFallback !== null && (await clientFallback(request, reply))) {
+      return reply;
+    }
+    return reply.status(404).send({ error: { code: 'not_found', message: 'no such endpoint' } });
+  });
 
   // Every role serves the ops endpoints — see role.ts.
   await registerOpsRoutes(app, {
@@ -308,6 +399,23 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     });
 
     app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+
+    /**
+     * The browser application, last: it reads the route table above to learn which first segments
+     * the router owns (WP-15j, criterion 2).
+     *
+     * Gated on `capabilities.api` and nothing else. A `worker`, `runner` or `indexer` container
+     * serves the ops endpoints so that an orchestrator can probe it, and serving the SPA from a
+     * process nobody browses to would put a second origin in front of the same API — which is the
+     * arrangement technical/09's "same origin" sentence exists to prevent.
+     */
+    if (options.webRoot !== undefined && options.webRoot !== null) {
+      clientFallback = await createClientFallback({
+        root: options.webRoot,
+        routeUrls,
+        logger: app.log,
+      });
+    }
   }
 
   /**
@@ -328,5 +436,9 @@ declare module 'fastify' {
   interface FastifyRequest {
     /** Set by the first `onRequest` hook; used to observe the duration histogram. */
     startedAt?: bigint;
+  }
+  interface FastifyInstance {
+    /** Every route URL this instance registered, in registration order (WP-15j). */
+    registeredRouteUrls: readonly string[];
   }
 }

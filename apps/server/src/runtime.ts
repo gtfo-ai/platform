@@ -72,6 +72,7 @@ import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
+import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 
 export interface ServerRuntime {
   readonly config: ServerConfig;
@@ -581,6 +582,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       knowledge: knowledgeCommands,
       onboarding: onboardingCommands,
       commands: taskCommands,
+      /**
+       * The browser application (WP-15j): the operator's directory, or the one the image carries.
+       *
+       * The default is applied **here** rather than in `config.ts` or `buildApp`, because this is
+       * the production composition: a default inside `buildApp` would make every test that builds
+       * an app serve whatever `apps/web/dist` happened to hold in that checkout, and a default in
+       * the config schema would put a path in `APP_WEB_ROOT`'s slot that no operator typed.
+       * `web/bundle.ts` owns the constant; an absent directory is logged by name and nothing else
+       * changes.
+       */
+      webRoot: config.webRoot ?? BUNDLED_WEB_ROOT,
       version: buildInfo(env),
       readiness: createReadinessCheck({
         database: database.db,

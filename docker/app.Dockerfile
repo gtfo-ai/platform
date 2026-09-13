@@ -20,10 +20,12 @@
 # the image runs are the same bytes. The amendment is recorded in technical/11.
 #
 # **`apps/web` is the exception and is built**, because a browser needs a bundle: the `web` stage
-# runs Vite and the result is copied to `/app/apps/web/dist`. Nothing in `apps/server` serves it
-# yet — that route is technical/09's "served as a static bundle by the app process" and it does not
-# exist; the bundle is in the image so the service that gains the route needs no new build step,
-# and the gap is recorded in PROGRESS rather than papered over with an env var nothing reads.
+# runs Vite and the result is copied to `/app/apps/web/dist`. **`apps/server` serves it from there
+# since WP-15j** — technical/09's "served as a static bundle by the app process with SPA fallback",
+# on the same origin as `/api` and `/events`. The path is stated once, in
+# `apps/server/src/web/bundle.ts`, and `apps/server/src/web/bundle-path.test.ts` reads the `COPY`
+# below to hold the two equal: moving either fails a test instead of 404ing only inside the image.
+# `APP_WEB_ROOT` overrides it for an operator serving a patched bundle from a mounted volume.
 ARG BASE_IMAGE=platform-base:dev
 
 # ── The SPA bundle ───────────────────────────────────────────────────────────────────────────────

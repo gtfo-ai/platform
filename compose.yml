@@ -115,6 +115,11 @@ services:
       # owns and fetches into itself with `git`, never the launcher's `repo-cache`.
       APP_KNOWLEDGE_MIRROR_ROOT: /var/lib/app/knowledge
       APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      # WP-15j: where this process reads the browser application from. Empty means the directory
+      # the image carries -- `docker/app.Dockerfile` copies the Vite output there and
+      # `apps/server/src/web/bundle.ts` names it once, so there is deliberately no second copy of
+      # the path here. Set it to serve a patched bundle from a mounted volume.
+      APP_WEB_ROOT: ${APP_WEB_ROOT:-}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-UTC}

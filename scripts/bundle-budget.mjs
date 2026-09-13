@@ -24,10 +24,13 @@
  * Reading the manifest instead would measure what Vite *recorded* rather than what the page
  * *requests*, and the page is what a user waits for.
  *
- * **Gzip, at the default level.** The bytes on the wire depend on the reverse proxy's compressor
- * and its level, so no number computed here is the number a user downloads. What this needs is a
- * *comparable* one: `zlib.gzipSync` at its default level, applied the same way on every run, so a
- * change in the number is a change in the bundle. Brotli would be smaller and equally arbitrary.
+ * **Gzip, at the default level.** What this needs is a *comparable* number: `zlib.gzipSync` at its
+ * default level, applied the same way on every run, so a change in it is a change in the bundle.
+ * It is **close to** the number a user downloads and still not it: since WP-15j's review the app
+ * process codes the bundle itself (`apps/server/src/web/encoding.ts`) at gzip level 9, or brotli
+ * when the browser offers it, so a real download is smaller than this figure — and a reverse proxy
+ * an operator puts in front may recompress at a level of its own. The budget is deliberately the
+ * conservative side of all three.
  *
  * **300 kB means 300 000 bytes.** "kB" is the SI kilobyte and TD-013 writes it that way; reading it
  * as 300 × 1024 would grant 7 168 bytes the decision did not. The stricter reading is the one that

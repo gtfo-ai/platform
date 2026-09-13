@@ -86,6 +86,35 @@ jobs:
           APP_BUILT_AT: ${{ steps.meta.outputs.built_at }}
         run: node scripts/build-images.mjs --tag ci --size-check
 
+      # WP-15j's criterion 8, and the only place it can be measured: that `docker compose up`
+      # serves the SPA at `/` and the API at `/api` from **this** image. It runs here rather than in
+      # `ci.yml` because this is the job with a daemon *and* with the image already built — the
+      # check takes `--no-build` and `--tag ci`, so it starts the artefact this workflow will
+      # publish rather than a second build of the same tree. Both architectures run it: the bundle
+      # is architecture-independent, but the path inside the image and the process that reads it
+      # are not something to assume on one of two runners.
+      #
+      # The compose project name carries the run id, the attempt and the architecture, so nothing
+      # here can collide with another job on a shared daemon; the script picks a free published
+      # port for the same reason. The script tears its own project down in a `finally`, and the
+      # step below repeats it unconditionally because a killed step has no `finally`.
+      - name: serve the SPA from the image just built
+        run: >-
+          node scripts/web-compose-check.mjs --tag ci --no-build
+          --project-suffix ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+
+      - name: tear down the compose project
+        if: always()
+        env:
+          # `docker compose down` interpolates the file, and `app` declares `APP_SECRET_KEY` with
+          # `:?`, so a value has to be present even for a teardown. Obviously fake, and unused: no
+          # container is started by this step.
+          APP_SECRET_KEY: web-compose-check-teardown-not-a-real-secret
+        run: >-
+          docker compose
+          -p agentic-web-check-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          --env-file /dev/null -f compose.yml down -v --remove-orphans
+
       - name: log in to the registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

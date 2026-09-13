@@ -95,9 +95,23 @@ packaging decision was due. It is taken the way that keeps one code path: the im
 tested, byte for byte, with no second module-resolution scheme to keep true. The entrypoint is
 `node --import ./scripts/ts-source-resolver.mjs apps/server/src/main.ts`, and `migrate` is the same
 entrypoint with `apps/server/src/migrate.ts`. `apps/web` **is** built, by Vite, into
-`/app/apps/web/dist`: a browser needs a bundle. Nothing serves that bundle yet — technical/09's
-"served as a static bundle by the app process with SPA fallback" has no implementation — and the
-gap is in PROGRESS rather than hidden behind an environment variable nothing reads.
+`/app/apps/web/dist`: a browser needs a bundle. **WP-15j serves it from there**, which is
+technical/09's "served as a static bundle by the app process with SPA fallback" and the reason the
+image needs no web server in front of it: `/` and every deep link answer the shell, the hashed
+assets answer from `assets/`, and `/api`, `/events`, `/webhooks/*` and the probes are untouched
+because the fallback answers only paths whose first segment the SPA's own route tree declares. The
+directory is stated once (`apps/server/src/web/bundle.ts`) and held to the `COPY` above by
+`apps/server/src/web/bundle-path.test.ts`; `APP_WEB_ROOT` overrides it for a patched bundle on a
+mounted volume, and a directory that is not there is named in a warning while the API keeps
+serving. `node scripts/web-compose-check.mjs` is the daemon-side measurement, beside
+`scripts/runlet-container-check.mjs` — and like that one it **runs in CI**: the `build` job of
+`image.yml` calls it with `--tag ci --no-build` after the images are built, on both architectures,
+so what is measured is the artefact that job is about to publish rather than a second build of the
+same tree. The compose project name carries the run id, the attempt and the architecture, the
+published port is chosen free, and the teardown is repeated in an `always` step because a cancelled
+step has no `finally`. It also asserts what the image puts **on the wire**: the hashed asset arrives
+`content-encoding: gzip` for a client that accepts it and decodes to the same bytes, and the shell
+carries the framing headers.
 
 **Compose: an override file for local mode, a profile for the backup, and a socket proxy.** The
 services are `db`, `migrate`, `app`, `docker-socket-proxy`, `launcher` and (profile `backup`)

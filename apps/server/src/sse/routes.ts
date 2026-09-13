@@ -107,6 +107,20 @@ export const registerSseRoutes = async (
       // `only`: this route serves nothing but an event stream, so a client that explicitly refuses
       // `text/event-stream` gets 406 rather than a body it cannot read.
       sse: { kind: 'only', heartbeat: false },
+      // TD-002's one constraint on `@fastify/compress`, stated where the stream is declared: a
+      // compressed SSE response buffers in the compressor until it flushes, so the frame the hub
+      // wrote is a frame the browser has not received.
+      //
+      // **It is a declaration, and today it decides nothing — measured, not assumed.** Removing
+      // this line fails no test in this repository, because two other things already exclude the
+      // stream: `@fastify/sse` commits the response by writing to `reply.raw` directly
+      // (`sendHeaders`, `index.js:433`), so *no* `onSend` hook — the plugin's or anyone's — ever
+      // sees an SSE payload; and `@fastify/compress`'s default type table excludes
+      // `text/event-stream` twice over (its regex and mime-db). It stays because the requirement
+      // is this platform's rather than a dependency's, and because either of those could change
+      // under us; `web/compression.test.ts` asserts the **outcome** over a socket, which is what
+      // would catch it if they did.
+      compress: false,
       schema: {
         summary: 'Multiplexed server-sent event stream',
         description:

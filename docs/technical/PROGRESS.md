@@ -4348,11 +4348,11 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-25 | ticket readiness linter | TODO | — | |
 | WP-26 | rebase gate + conflict warnings | TODO | — | |
 | WP-27 | steer + take-over/hand-back (export, resume instructions) | TODO | — | |
-| WP-28 | cost estimate + budget approval | TODO | — | |
-| WP-29 | human time accounting | TODO | — | |
-| WP-30 | autonomy dial + wizard step 4 + settings mirror | TODO | — | |
-| WP-31 | ask-the-task | TODO | — | |
-| WP-32 | digest + quiet hours | TODO | — | |
+| WP-28 | cost estimate + budget approval | TODO | — | **Has a plan row with acceptance criteria since session 5** (refiner, at `785941f`): the estimate half is **already shipped by WP-19** and this row owns only the gate — `requiresBudgetApproval` (`packages/domain/src/policies/autonomy.ts:219-220`) is defined and unconsumed, and the threshold it reads is materialised into a `human_actions` params blob and nowhere a query can reach. **After WP-30. Q71** filed: product/19:142 gates on the p75 of a range the shipped scalar estimator does not compute |
+| WP-29 | human time accounting | TODO | — | **Has a plan row with acceptance criteria since session 5** (refiner). `human_time_entries` has existed since `0007_cost.sql:110` and has never held a row; `human_time_kind` cannot store the `steer` kind product/19:145 defines; two of the three review anchors (*approval*, *review start*) have no event in technical/02's catalogue; and `user_identities` — the only author-to-user mapping — is read in one place and **written nowhere**, so every derived minute has `user_id: null`. **Q73** filed: no document gives an hourly rate, so *"total cost of delivery = tokens + people"* cannot be summed honestly |
+| WP-30 | autonomy dial + wizard step 4 + settings mirror | TODO | — | **Has a plan row with acceptance criteria since session 5** (refiner), and it answers the question the WP-21 bullet left open — **product/18:55 is the binding wording, so this row mirrors all five wizard steps**, including the integrations create and test buttons. BD-027:14's *"materialised at selection time"* is the unbuilt half: only the level is stored, `requiresPlanApproval` is unconsumed beside `requiresBudgetApproval`, and `insert into budgets` exists in exactly two **test** files, so BD-010's caps are inert on a real instance. **Before WP-28 and WP-32** |
+| WP-31 | ask-the-task | TODO | — | **Has a plan row with acceptance criteria since session 5** (refiner). `POST /api/tasks/:id/ask` is unbuilt and the client-driven census is **blind** to it; `ticket.comment.added` is `unconsumed` and named for this row; and no vocabulary can express an ask — no `run_mode` value, no `agent_role`, no role prompt, no product/13 table row, and `get_task_context` refuses by name. **Q72** filed with a four-part recommendation for what an ask *is* |
+| WP-32 | digest + quiet hours | TODO | — | **Has a plan row with acceptance criteria since session 5** (refiner), and the row is bigger than its title: **this build sends no notification at all.** Nothing calls a single `CommunicationPort` method, the loader resolves git and task_management only, and the Slack notify band at TD-005 priority 210 is attributed by `consumption.ts:112-114` to **WP-10, which is DONE** — a finished row cannot own unbuilt work, so this row takes it. The digest *mechanism* is built and unscheduled (`providers/slack/digest.ts`). **After WP-30** |
 | WP-33 | nightly real-LLM smoke + evals in CI (`llm-ci` environment). | TODO | — | |
 
 ## Milestone M3 — show the value
@@ -8411,6 +8411,339 @@ branch degrades a prompt rather than hiding an operator error.
 
 ## WP notes — session 5 (decisions, assumptions, reviewer findings)
 
+### WP-15j — serving the SPA
+
+**What exists now.** `apps/server/src/web/` — `bundle.ts` (the path guard and the one constant for
+the bundle directory), `client-routes.ts` (the allow-list), `fallback.ts` (the not-found handler's
+serving half) and, since review round 2 below, `encoding.ts` (the content coding the compressor
+plugin structurally cannot reach) — plus `APP_WEB_ROOT` in `config.ts`, `.env.example`, `compose.yml` and technical/12,
+the default applied in `runtime.ts`, and `scripts/web-compose-check.mjs` for the daemon-side
+statement. `docker/app.Dockerfile:23`, technical/11:98 and technical/09:6 no longer say nothing
+serves it (rule 83). Backlog **33** is closed by this row and is the orchestrator's to mark.
+
+**The fallback is a not-found handler, not a route, and that is what makes criterion 2 structural.**
+The router has already failed to match when it runs, so it cannot shadow a registered route at all —
+the ordering question a `GET /*` route would have created does not exist. What it could still do
+wrong is answer for an `/api/…` path *no route serves*, which is exactly what would turn off the
+census (`routes/client-census.test.ts` classifies "not served" by the not-found body). Two rules stop
+it, and only the first is a list a human wrote: **the shell is returned only for a path whose first
+segment the SPA's own route tree declares** (`CLIENT_ROUTE_SEGMENTS`, held to
+`apps/web/src/routes/tree.tsx` by a test that reads it off disk and compares in both directions), and
+**a file is served only if the first segment is not one the router reserves**, that set being derived
+from the live route table through an `onRoute` hook rather than written down. The second exists
+because a bundle containing `api/planted.txt` would otherwise answer an unserved `/api/planted.txt`;
+it is asserted with such a file planted in the fixture.
+
+**The dependency was measured and then not taken.** `@fastify/static@10.1.3` (MIT, `@fastify/send@4.1.1`,
+Fastify-org maintained) was installed in a scratch directory and driven over a real socket: it refuses
+`/../outside.txt`, `/%2e%2e/outside.txt` and `/assets/../../outside.txt` with 403 — and **serves a
+symlink planted inside the root pointing outside it** (200 with the outside file's bytes, and 645
+bytes of `/etc/hosts` through a second link), and serves `/.env` too. `send` has no realpath check.
+Criterion 3 names exactly that case, so the guard would have been ours either way, and then two path
+semantics would decide one question (rule 15's shape). The containment test is therefore a
+**realpath comparison** — which is also what makes rules 15 and 26 inapplicable here: whatever case or
+unicode folding APFS applies, the kernel returns the canonical path, and the test states the
+guarantee over a case-insensitive volume rather than assuming one. The 50-odd lines this cost buy no
+`glob`, `fastq` or `content-disposition` in the dependency tree.
+
+**`app.inject()` normalises the request target, so half the tests had to talk to a socket.** Measured
+on light-my-request under Fastify 5.12.3: `/../outside.txt` and `/%2e%2e/outside.txt` both reach the
+handler as `/outside.txt`, and `/a/../../b` as `/b`. A traversal suite written with `inject` therefore
+asserts that the server refuses a request **nobody can make** — rule 21's uncalibrated instrument in a
+new spelling, and it would have been green against a server with no guard at all. Node's HTTP server
+does no such normalisation, so `web-serving.test.ts` writes the request line onto a raw socket, with a
+positive control on the same transport. The same measurement in the other direction: `inject` returns
+a **body** for a `HEAD`, where Node's own `ServerResponse` sends `content-length: 73` and no body.
+*Candidate standing rule for the orchestrator: the injector is not the transport — a test about the
+bytes on the wire has to use one.*
+
+**Decisions, each of which could have gone the other way.**
+- **`buildApp`'s `webRoot` is optional and absent means "serve nothing".** Required would have made
+  the census fail to compile, which is the one thing this row may not do to it; defaulting to the
+  bundled path inside `buildApp` would have made `app.test.ts` and the census answer differently
+  depending on whether somebody had run `pnpm bundle:check` in that checkout. The default lives in
+  `runtime.ts`, and `test/e2e/server/web-bundle.e2e.test.ts` drives a real instance through it so the
+  production wiring is asserted rather than assumed (rule 35).
+- **`APP_WEB_ROOT` has a default, unlike `APP_KNOWLEDGE_MIRROR_ROOT`.** A mirror root names a data
+  volume an operator must choose, so a default there would be a mirror nobody asked for. A web root
+  names part of the image, so the default is a fact about the artefact — stated once in
+  `bundle.ts` and held to the Dockerfile's `COPY` by `bundle-path.test.ts`. `compose.yml` declares the
+  variable with an **empty** default rather than repeating the path, so there is no third copy.
+- **Caching: `assets/` is `public, max-age=31536000, immutable`; everything else, including the shell,
+  is `no-cache`.** technical/09 states no headers, so the rule is derived from what Vite hashes: a
+  file under `assets/` carries a content hash, one copied from `public/` does not. The failure
+  direction is a revalidation nobody needed, never a stale shell pinning a deleted bundle.
+- **A missing asset is a JSON 404, never the shell**, because `assets` is not a client route. A
+  browser handed `index.html` with a `text/javascript` expectation reports a syntax error instead of
+  a missing file.
+- **Only a role that serves the API serves the bundle.** A `worker` container is probed, not browsed
+  to, and a second origin in front of the same API is what technical/09's "same origin" sentence
+  exists to prevent.
+- **An absent bundle logs and keeps serving** (rule 18/31's direction, the shape `startRuntime` uses
+  for a missing runner): one warn line naming the directory and `APP_WEB_ROOT`, `/readyz` still ok,
+  `/api/*` untouched. In `pnpm dev` that line is expected — Vite serves the app there — and it is
+  left as a warning rather than softened, because in an image it is the sentence that explains a
+  blank browser.
+
+**Mutation checks** (rule 3, with rule 77's copy recipe and rule 21's canary — a planted `throw` was
+reported as 4 named failures before any mutant was believed): containment removed → 2 named failures;
+dotfile/dot-segment refusal removed → 6; separator/NUL refusal removed → 2; `isFile` removed → 1;
+cache rule flattened → 2; the reserved-prefix guard removed → 1 (`refuses a bundle file whose path the
+router owns`); the client allow-list removed → 6; the method guard removed → 1; a segment dropped from
+`CLIENT_ROUTE_SEGMENTS` → 2, one in each direction. One clause was **deleted rather than tested**:
+`decoded.length === 0` is unreachable, because an empty raw segment is skipped before decoding
+(rule 22).
+
+**Verdicts, each read from the target's own last line with the exit status beside it** (rules 61, 75).
+`PASS: verify` exit 0 (5448 passed, 14 skipped; `bundle:check` inside it reported **163554 B gzipped
+over 2 initial assets against the 300000 B budget**, so TD-013:8 holds and no second build step was
+added), `PASS: verify:integration` exit 0, `PASS: verify:e2e` exit 0 (18 files, 117 tests),
+`PASS: verify:ui` exit 0, `PASS: verify:web-e2e` exit 0.
+
+**The compose measurement, taken once on this machine** (criterion 8; `node scripts/web-compose-check.mjs`,
+project `agentic-wp15j-web-check`, a reserved port, `down -v` afterwards). Docker 29.7.2,
+`platform:dev` built from this tree: `GET /` **200** `text/html; charset=utf-8` `no-cache`, **721
+bytes served and 721 bytes in the container's `/app/apps/web/dist/index.html`, identical**; the
+script the shell names, `/assets/index-BeYv9lvI.js`, **200** `text/javascript; charset=utf-8`
+`public, max-age=31536000, immutable`; `/projects/ACME/tasks/7` the same shell; `/api/version`
+**200 JSON**; `/api/wp15j-no-such-endpoint` **404** `{"error":{"code":"not_found",…}}`; `/healthz`
+**200**. `PASS: web-compose-check`, exit 0. Nothing of the project is left behind (no container, no
+volume, no network).
+
+**The first run of that check failed and the cause was the machine, not the tree** (recorded rather
+than hidden, rule 84): `db` never became healthy because `initdb` could not create `pg_wal` — *"No
+space left on device"* — with the Docker VM at 204.4 G, 0 free. **18 437 anonymous dangling volumes**
+holding 5.8 G were removed to make room (only 64-hex anonymous ones; the 99 *named* dangling volumes
+are other projects' data and were left alone). Then the check passed. The obvious suspect is this
+repository's own integration tier, and **it is not guilty**: a one-file integration run was measured
+before and after and leaked **0** anonymous volumes (rule 81 — the number was real and the cause
+guessed, so the cause was re-derived). Where the 18 437 came from is unattributed, and the VM is
+still at 97 % (5.8 G free, 230 images, 159.8 G) — which is a standing risk for every tier that needs
+a container.
+
+**Review round 2:** one major, two minors and a nit — all four fixed, and the major turned out to
+have a second half nobody had measured.
+
+**Compression (major).** TD-002 names `@fastify/compress` and the tree had none, so TD-013:8's
+"≤ 300 kB gz initial" was a statement about a number no instance ever put on the wire: the initial
+graph was **551 009 B raw** (533 157 JS + 17 852 CSS) against `bundle:check`'s 163 554 gzipped.
+`@fastify/compress@9.2.0` (MIT, Fastify-org, published 2026-09-04) is now registered in `app.ts`
+— and **it cannot serve the browser application**, which is the half the finding did not know
+about. Measured before anything was written (rule 13), on the real plugin over a real socket:
+
+| response                                    | `content-encoding` with `accept-encoding: gzip` |
+|---------------------------------------------|--------------------------------------------------|
+| a registered route returning 8 000 B        | `gzip`                                            |
+| the **not-found handler** returning 8 000 B | *none* — 8 000 B on the wire                      |
+
+The plugin attaches its `onSend` through an `onRoute` hook (`index.js:65`) and Fastify emits no
+`onRoute` for the context `setNotFoundHandler` creates: `lib/four-oh-four.js` builds that context at
+`preReady` out of `instance[kHooks]` — the hooks added with `addHook`, which is not where the plugin
+puts its own. The SPA is served *from* that handler, so registering the plugin and stopping there
+would have compressed every API response and left the 533 kB a browser actually downloads
+untouched. Hence two halves, deliberately not two negotiators for one response: the plugin owns
+every registered route, `apps/server/src/web/encoding.ts` owns the bundle. **What an instance now
+ships**, measured on the built bundle: 551 009 → **163 176 B** at gzip level 9, **155 467 B** at
+brotli quality 5, so `bundle:check`'s 163 554 is finally within 400 bytes of what a gzip client
+downloads. The 721-byte shell stays raw — it is below the 1 024-byte threshold both halves use.
+
+**The stream is excluded, and the honest version of that sentence has three parts.**
+`web/compression.test.ts` asserts the **outcome** over a socket: the first frame of a real `/events`
+response arrives as readable text, with no `content-encoding` and no gzip magic, **while the socket
+is still open** — `app.inject()` buffers, so it cannot tell a frame that arrived from one a
+compressor held, which is the whole failure mode. A second case repeats it on an instance
+configured with `customTypes: () => true` — *everything* compressible — with a sibling JSON route as
+the calibration (it *is* coded there). What the mutation run then showed: **removing `compress:
+false` from `/events` fails no test**, because `@fastify/sse` commits the response by writing to
+`reply.raw` (`sendHeaders`, `index.js:433`), so no `onSend` hook of any kind ever sees an SSE
+payload, and the plugin's default type table excludes `text/event-stream` twice over besides. The
+route option stays as this platform's own statement of TD-002's constraint, and the fact that it
+decides nothing today is written at the line rather than implied (rules 44, 86).
+
+**The three other decisions the finding asked about.** `/openapi.json`, `/metrics` and every JSON
+API response are coded globally — asserted for the first two, with the metrics case carrying its own
+scope note (a *fresh* registry renders 362 bytes, below the threshold, so the first `/metrics` of a
+process is legitimately uncoded and the case warms it first). **`/api/auth/*` is excluded**: those
+are the only bodies on this origin carrying a bearer credential, and compressing a secret beside
+anything a caller influences is BREACH's precondition — precautionary rather than a demonstrated
+exploit, and it costs nothing (the responses are hundreds of bytes). **Request decompression is
+off** (`globalDecompression: false`): nothing in the product sends a compressed body, `/webhooks/*`
+verifies a signature over the bytes as they arrive, and a body limit applied before inflation is a
+body limit applied to the wrong number. That one is asserted with the instrument calibrated first
+(rule 21) — the same plugin version with decompression at its default answers the same request
+`400 FST_CP_ERR_INVALID_CONTENT`.
+
+**Why the bundle half is 60 lines rather than a second plugin call.** `br` is preferred over `gzip`
+at equal quality because the result is cached and the smaller one is then free; nothing below
+1 024 bytes and nothing of an already-compressed type is coded (the classification is a **census**
+over `bundle.ts`'s closed content-type table, so a type added there with no decision about the wire
+fails a test); each file is coded once per coding and kept, keyed by its own validator, which is
+what makes gzip level 9 and brotli quality 5 affordable — paid once, on a thread-pool thread, never
+on the event loop; and the cache is **bounded at 8 MB**, past which files are served uncoded with
+one warn line rather than recompressed per request (a root that large is an operator pointing
+`APP_WEB_ROOT` at something that is not a Vite bundle). A coding that would make a response *bigger*
+is remembered as a refusal.
+
+**Framing (minor 3).** There is no `@fastify/helmet` in this build and neither TD-002 nor
+technical/08 asks for one, so the header went where every HTML byte this platform serves comes
+from: `fallback.ts`'s `send`, which means the shell, a deep link and every bundle file carry
+`x-frame-options: DENY` **and** `content-security-policy: frame-ancestors 'none'` (both spellings:
+one is specified, the other is what a scanner and an older engine read). This origin also serves
+WP-15i's authenticated commands, which is what makes it worth the two lines. ~~A **fuller** CSP is
+deliberately not shipped and is filed as discovered work: the shell carries a synchronous inline
+theme script (`apps/web/index.html`) and the component library writes inline styles, so a real
+policy needs `'unsafe-inline'` in two directives — a policy that says little — or a nonce a static
+file server cannot mint.~~ **Both halves of that sentence were false and round 3 below replaced
+them with a measurement**: the shell has no inline script (`apps/web/index.html` says so, on
+purpose) and there is no component library in this build — the whole policy ships.
+`vary: accept-encoding` is set on every bundle response including the
+uncoded ones and the 304s, because a cache that learned the header on one response and not the next
+is the one that hands gzip to a client that cannot read it.
+
+**The conditional request (nit 4).** `Last-Modified` was sent and `If-Modified-Since` never read, so
+every conditional request by date got the whole file. It is honoured now, in RFC 9110's order —
+§13.1.3 ignores the date when an entity tag is present — and the comparison parses back the
+`toUTCString()` this server handed out, so it is second-granular on both sides rather than a
+millisecond mtime against a header that cannot carry one. Asserted both ways, plus the
+both-validators case and an unparseable date.
+
+**`web-compose-check.mjs` runs in CI now (minor 2).** `.github/workflows/image.yml`'s `build` job
+calls it after the images are built, on both architectures, with `--tag ci --no-build` so what is
+measured is the artefact that job is about to publish rather than a second build of the same tree;
+the compose project name carries the run id, the attempt and the architecture, the published port
+is chosen free, and the teardown is repeated in an `if: always()` step (a cancelled step has no
+`finally`) with an obviously fake `APP_SECRET_KEY`, because `docker compose down` interpolates the
+file and `app` declares that variable with `:?`. The script grew three options (`--tag`,
+`--no-build`, `--project-suffix`, and it refuses an unknown one) and three assertions: the hashed
+asset arrives `content-encoding: gzip` and **decodes to the same bytes as the same file fetched
+plainly**, `Vary` is declared, and the shell carries the framing headers. The asset rather than the
+shell, because this bundle's `index.html` is 721 bytes — below the threshold — so a gzip assertion
+on `/` would have been asserting the wrong thing.
+
+**Mutation checks** (rule 3; the canary first — a planted `throw` in the encoder was reported as 26
+named failures before any mutant was believed, rule 21). Negotiation forced to "no coding" → 16
+named failures; the framing headers dropped → 1; `vary` dropped → 3; `If-Modified-Since` ignored
+again → 1; the threshold removed → 1; every content type made compressible → 2; the cache removed →
+2; `/api/auth/*`'s `compress: false` removed → 1; `globalDecompression: false` removed → 1; the
+plugin registration removed → 2. And the one that fails **nothing**, recorded above with its cause:
+`/events`'s `compress: false`.
+
+**Verdicts, each read from the target's own last line with the exit status beside it** (rules 61,
+75). `PASS: verify` exit 0 (5 486 passed, 14 skipped; `bundle:check` 163 554 B gzipped over 2
+initial assets against the 300 000 B budget), `PASS: verify:integration` exit 0 (314),
+`PASS: verify:e2e` exit 0 (18 files, 118 tests), `PASS: verify:ui` exit 0 (251),
+`PASS: verify:web-e2e` exit 0 (33). `PASS: web-compose-check` exit 0 against a **rebuilt**
+`platform:dev` (Docker 29.7.2, project `agentic-web-check-local`, a reserved port, `down -v`
+afterwards; no container, volume or network left behind): `GET /` 200 and 721 bytes identical to the
+file in the image, `/assets/index-BeYv9lvI.js` **gzip, 533 050 bytes decoded, equal to the plain
+fetch**, `Vary: accept-encoding`, `DENY; frame-ancestors 'none'`, the deep link, `/api/version`,
+the JSON 404 and `/healthz` all unchanged.
+
+**Discovered work.** ~~A real Content-Security-Policy for the SPA (script/style/connect/img
+directives, and what to do about the inline theme script — a nonce needs a template step this
+static file server does not have). Bigger than this row: it touches `apps/web/index.html`, the
+theme, and possibly the build.~~ **Withdrawn at round 3, on the premise being false**: there is no
+inline theme script, so the policy needed neither a nonce nor a template step and is shipped in
+this row. What is genuinely left for a later row is the *report* channel — `report-to` /
+`Reporting-Endpoints` and an endpoint to receive a violation — which needs a route, a store and a
+retention answer, none of which this row has.
+
+**Review round 3:** one major and one nit — both fixed, and the major's measurement found a
+defect in the *application* that no tier could have seen without a browser.
+
+**The false premise (major).** Round 2's docblock, technical/09 and the discovered-work item all
+said a fuller CSP was impossible because *the shell carries an inline theme script*. It does not:
+`apps/web/index.html` carries a comment saying there is no inline theme bootstrap **on purpose**
+(the theme is `document.documentElement.dataset.theme`, applied in `main.tsx`), and the built
+721-byte `index.html` is one `<script type="module" crossorigin src="/assets/…">` and one
+`<link rel=stylesheet>`. The "component library writes inline styles" half was false too — there is
+no component library in this build; Tailwind 4 emits one stylesheet at build time, and `style=`
+appears **0** times in `apps/web/src`. All four sentences are corrected, and the discovered-work
+item is withdrawn rather than re-filed (what remains for a later row is the *report* channel, which
+needs a route and a retention answer).
+
+**What was measured, and what is now served.** On the built bundle (Vite 8 / React 19 / Tailwind 4;
+`index.html` 721 B, `index-BeYv9lvI.js` 533 157 B, `index-B3jozLGE.css` 17 852 B,
+`run-route-WpbTquXr.js` 15 040 B): no inline script; no `<style>` element and no `style=` attribute;
+no `cssText`, `setAttribute('style', …)`, `insertRule` or `adoptedStyleSheets` — the chunk's only
+style writes are React's `element.style[name] = …`/`setProperty`, which `style-src` deliberately
+does **not** govern (MDN's own note on the directive); no `eval`, no `new Function`, no
+`WebAssembly`, no worker; no `url(…)`, `@font-face` or `@import` in the CSS, and the absolute URLs
+in the chunk are XML namespaces, JSON-Schema `$id`s and React's error link, none of them fetched;
+and the app talks only to its own origin (`fetch('/api/…')` with an empty base URL,
+`new EventSource('/events')`). So `apps/server/src/web/csp.ts` ships, on **every** bundle response:
+`default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
+connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`
+— no `'unsafe-inline'`, no `'unsafe-eval'`, no nonce, and therefore no template step.
+
+**What it excludes, stated at the line rather than implied.** `require-trusted-types-for 'script'`
+is **not** shipped: react-dom writes `innerHTML` itself (two sites in the chunk, one of them its
+`<script>`-element workaround), so the directive would need a Trusted Types policy the application
+does not have and would break the product's only screen. `worker-src`, `frame-src` and `media-src`
+are left to `default-src 'self'` because this bundle uses none of them. The policy is a header on
+the **bundle's** responses only — `/api/*` carries none. And a library that writes a `style`
+attribute or injects a `<style>` element (technical/09's planned `@base-ui/react`, CodeMirror,
+shiki-in-a-worker) will be refused: loudly, in a browser, in development — which is the direction
+this project chooses over `'unsafe-inline'` bought in advance.
+
+**The browser-level proof, and why the harness had to change.** `verify:web-e2e` serves the built
+bundle from **its own** static server (`test/web-e2e/support/fake-backend.ts`), not through
+`apps/server`'s fallback, so the policy was not exercised there at all. The header is now served by
+that fake too — **imported** from `apps/server/src/web/csp.ts`, not copied, because a fake that is
+kinder than the adapter proves nothing (rule 1) — which means all 35 Playwright tests now drive the
+application under the real policy. `test/web-e2e/csp.spec.ts` is the assertion, in two halves that
+are worthless apart: a listener registered before any page script collects every
+`securitypolicyviolation` through sign-in, a screen change and the **lazily imported** route chunk
+(asserted present in `performance.getEntriesByType('resource')`, so a policy that allowed only the
+entry module would fail), the stylesheet is asserted to have loaded and to have rules, and the run
+ends with **zero** violations; and a probe pair — an inline `<script>` and a `<style>` element
+injected into the same page — must both be **refused**, without which "zero violations" would also
+be the reading for a browser that received no header (rule 21's calibration). The one-copy rule:
+the exact string is spelled out in `web-serving.test.ts` and the e2e (a test that imports the
+constant it checks asserts nothing, rule 44), `scripts/web-compose-check.mjs` keeps a literal copy
+because it is plain Node run on the image workflow's un-pinned interpreter, and
+`apps/server/src/web/csp.test.ts` reads that script off disk and fails when the two differ.
+
+**The defect the browser found: zod probes for `eval`, and the probe is refused.** The first run of
+the new spec failed with a violation nobody predicted — `blocked: "eval", directive: "script-src"`,
+sourced to the main chunk. zod 4 JIT-compiles a schema with `new Function` and decides whether it
+may by evaluating `Function("")` once; under `script-src 'self'` that throws, zod falls back to its
+interpreted path and **everything works**, but every page load reported a violation — and a
+violation channel that is never empty is a channel nobody reads. `z.config({ jitless: true })` says
+it up front. **Where that call lives was itself a measurement**: in `main.tsx`'s body it changed
+nothing, because a module's imports run first and `@platform/contracts`' schemas had already made
+the decision, which zod memoises. It is therefore `apps/web/src/zod-jitless.ts`, imported on the
+line **above** every other import of `main.tsx`. The side effect is that `pnpm dev` (no policy at
+all) now parses on the same path as an instance.
+
+**The in-flight compression (nit).** The encoder cached the compressed *buffer*, so N concurrent
+first requests for the 533 kB chunk each paid gzip-9/brotli-5: every one of them found the map
+empty. It now caches the **promise**, which is the only version that covers the cold-start second
+after a deploy — measured with a counting compressor and three racing calls (1 compression, and the
+same `Buffer` identity to all three). A **rejected** compression is evicted rather than remembered,
+so a transient zlib failure cannot turn one file into a permanent 500; that has its own case.
+
+**Mutation checks** (rule 3, canary first, rule 21: a planted `throw` in `fallback.ts`'s `send` was
+reported as **23** named failures before any mutant was believed). `object-src 'none'` dropped from
+the policy → 3 named failures (the compose-check copy, the header equality, the directive census);
+the compose check's copy drifted by one directive → 1; the encoder caching the result instead of
+the in-flight promise → 1, and **only** the new concurrency case, so the older "codes a file once"
+test is not what is covering it; the rejection remembered instead of evicted → 1; the harness's CSP
+header removed → **both** browser cases, which is the calibration the second one exists to give.
+Reverting `zod-jitless.ts` → the browser case fails with the zod violation, which is how it was
+found.
+
+**Verdicts, each read from the target's own last line with the exit status beside it** (rules 61,
+75). `PASS: verify` exit 0 (297 files, 5 491 passed, 14 skipped; `bundle:check` **163 683 B
+gzipped over 2 initial assets against the 300 000 B budget**, so TD-013:8 still holds with the
+jitless line in), `PASS: verify:integration` exit 0 (314), `PASS: verify:e2e` exit 0 (18 files, 118
+tests), `PASS: verify:ui` exit 0 (251), `PASS: verify:web-e2e` exit 0 (**35** tests — 33 existing,
+now all of them under the real policy, plus the two new ones). No compose run and no image build this round
+(the Docker VM is at 97 %); `scripts/web-compose-check.mjs` is updated to compare the whole policy
+and is asserted against the server's constant by `csp.test.ts`, but the **image-level** statement
+of round 2 was not re-taken — the next run of the `image` workflow, or a local
+`node scripts/web-compose-check.mjs`, is what re-establishes it.
+
 ### WP-15i — the task and run command surface
 
 **What exists now.** Eleven `POST` routes (`apps/server/src/routes/commands.ts`), the nine new
@@ -10486,6 +10819,26 @@ project) and `gitProjects` (the fake git provider has to know the path
 `repositoryPathOf(projects.repo_url)` derives for a fixture repository on disk).
 
 ## Discovered work — session 5 (not in plan)
+- **Every SPA navigation is one `route="unknown"` sample in the HTTP histogram** (WP-15j). The
+  fallback runs in the not-found handler, so `request.routeOptions.url` is `undefined` and
+  `routeLabel` (`apps/server/src/metrics.ts:107`) labels it `unknown` — the same bucket a scanner's
+  `/wp-login.php` lands in. That is deliberate on the cardinality side (never the raw path, which
+  `app.test.ts` pins) but it means an operator cannot tell "the browser application was served" from
+  "somebody probed a path that does not exist", and after this row the first is the common case. The
+  fix is a fixed label for a fallback-served request (`route="spa"`, `route="asset"`), which is a
+  metrics decision rather than this row's.
+- **technical/09's route list and `apps/web/src/routes/tree.tsx` disagree about two screens**
+  (WP-15j, found by the test that compares the server's allow-list to the tree). The document's
+  Structure block names `/onboarding/$step` and the tree declares `/onboarding`; the document omits
+  `/sign-in`, `/integrations`, `/tasks/$taskId`, `/projects/$key/knowledge`,
+  `/projects/$key/pipeline` and `/projects/$key/budgets`, all of which exist. Nothing breaks — the server's list is held to the
+  **tree**, not to the document — but the document is the spec, so one of the two is wrong and it is
+  not a question this row may answer.
+- **A `pnpm dev` server logs "no SPA bundle directory" on every start in a checkout that has never
+  run the Vite build** (WP-15j). It is true — that process serves the API and Vite serves the app on
+  its own port — and the warning is left at `warn` because in an image it is the one line that
+  explains a blank browser. If it becomes noise, the answer is for `scripts/dev.mjs` to say which
+  half serves the app, not for the server to lower the level.
 - **A cancelled run's spend is never recorded** (WP-15i). `POST /api/runs/:id/cancel` writes the
   row's cost as `0, is_estimate: true` because the request cannot know what the session had burned,
   and the run's own process — which knows exactly — is refused the write by the conditional

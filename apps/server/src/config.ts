@@ -54,6 +54,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   trustProxy: 'APP_TRUST_PROXY',
   providerMode: 'APP_PROVIDER_MODE',
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
+  webRoot: 'APP_WEB_ROOT',
   integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
   modelApiKey: 'ANTHROPIC_API_KEY',
   claudeBinary: 'APP_CLAUDE_BINARY',
@@ -216,6 +217,32 @@ const serverConfigFields = z.strictObject({
     .refine(
       (value) => value.startsWith('/'),
       'must be an absolute path, e.g. /var/lib/app/knowledge: it names a data volume, not a place relative to the working directory',
+    )
+    .nullable(),
+
+  /**
+   * `APP_WEB_ROOT` — the directory holding the built SPA, or `null` for the one baked into the
+   * image (WP-15j).
+   *
+   * Unlike `APP_KNOWLEDGE_MIRROR_ROOT` this one **does** have a default, and the difference is the
+   * kind of thing the two name. A mirror root is a *data volume* an operator has to choose, and a
+   * path that appears by default is a mirror they did not ask for. A web root is a *part of the
+   * image*: `docker/app.Dockerfile` copies the Vite output to `/app/apps/web/dist`, so the default
+   * is not a guess about the host but a fact about the artefact, expressed once as
+   * `BUNDLED_WEB_ROOT` and held to the Dockerfile by a test. The variable exists for the operator
+   * who serves a patched bundle from a mounted volume.
+   *
+   * Absolute for the reason the mirror root is: it is resolved against nothing, and joining it to
+   * whatever the process's working directory happens to be would serve a different directory
+   * depending on how the container was started. An absent bundle is logged by name and the API is
+   * unaffected (`web/fallback.ts`).
+   */
+  webRoot: z
+    .string()
+    .min(1)
+    .refine(
+      (value) => value.startsWith('/'),
+      'must be an absolute path, e.g. /app/apps/web/dist: it names a directory in the image or on a mounted volume, not a place relative to the working directory',
     )
     .nullable(),
 
@@ -589,6 +616,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     modelApiKey: nullableString(readSecret('ANTHROPIC_API_KEY', env)),
     claudeBinary: nullableString(env.APP_CLAUDE_BINARY),
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
+    webRoot: nullableString(env.APP_WEB_ROOT),
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,

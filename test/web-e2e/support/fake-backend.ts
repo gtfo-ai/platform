@@ -17,7 +17,9 @@
  * `X-Requested-With` header. A fake that skipped it would let the client forget the header and
  * every Playwright test would still pass, which is precisely the class of defect the rule exists
  * for. Unknown paths are 404 with the documented problem shape rather than a friendly empty
- * object.
+ * object. The same rule is why the bundle is served under `apps/server/src/web/csp.ts`'s
+ * Content-Security-Policy, imported rather than copied: the whole suite therefore drives the
+ * application under the policy a browser will really meet, and `csp.spec.ts` asserts it.
  *
  * ### What the test can drive
  *
@@ -44,6 +46,7 @@ import {
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
 } from '@platform/contracts';
+import { CONTENT_SECURITY_POLICY } from '../../../apps/server/src/web/csp.js';
 import * as fixtures from './fixtures.js';
 
 /**
@@ -233,6 +236,12 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     response.writeHead(200, {
       'content-type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
       'cache-control': 'no-store',
+      // The **server's own** policy, imported rather than copied: a fake that served the bundle
+      // more permissively than `apps/server/src/web/fallback.ts` does would let the suite prove
+      // the application works in a browser it will never meet (standing rule 1). `csp.spec.ts`
+      // is what reads it, and it is the only browser-level proof this repository has that the
+      // built bundle runs under the policy.
+      'content-security-policy': CONTENT_SECURITY_POLICY,
     });
     createReadStream(file).pipe(response);
   };

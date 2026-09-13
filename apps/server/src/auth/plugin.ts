@@ -214,6 +214,13 @@ const plugin: FastifyPluginAsync<AuthPluginOptions> = async (
       // Better Auth documents its own OpenAPI through its `openAPI` plugin; describing its routes
       // a second time here would be a copy that drifts.
       schema: { hide: true },
+      // Not compressed, unlike every other route (`app.ts` registers `@fastify/compress`
+      // globally). These are the only responses on this origin whose body carries a bearer
+      // credential — `getSession` returns the session token, sign-in returns it beside the caller's
+      // own email — and compressing a secret together with anything a caller influences is what
+      // BREACH needs. They are a few hundred bytes, most of them under the compressor's 1 024-byte
+      // threshold anyway, so the exclusion costs nothing measurable and removes the question.
+      compress: false,
       handler: async (request, reply) => {
         const response = await options.auth.handler(
           toWebRequest(request, origin, options.trustProxy),
