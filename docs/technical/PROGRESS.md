@@ -9,8 +9,9 @@
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Session 5 so far.** `main` is at **`d1a5116`** (WP-15h part 2: `ci` `34725765067` and `image`
-`34725765044` success; `93ffb32` ci-fix: `ci` `34724884638` and `image` `34724884600` success; `3eaf34b`
+**Session 5 so far.** `main` is at **`dcc1f21`** (WP-14a: `ci` `34730606133` and `image` `34730606129`
+success; `5cd4557` docs: `ci` `34726051140` and `image` `34726051212` success; `d1a5116` WP-15h part 2:
+`ci` `34725765067` and `image` `34725765044` success; `93ffb32` ci-fix: `ci` `34724884638` and `image` `34724884600` success; `3eaf34b`
 docs: `ci` `34722271238` **failure** — the librarian e2e flake below — and `image` `34722271241` success;
 `24efdc7` WP-18b: `ci` `34721840974` and `image` `34721840941`
 success; `6a24fd9` docs: `ci` `34715017165` and `image` `34715017226` success; `79cb3f9` WP-18a: `ci`
@@ -59,17 +60,18 @@ Third harness flake of the session, third distinct mechanism (backlog 28: an unl
 the event-log case: a handler attached one `await` late; this: a wait on the call rather than on the row
 it implies), all found by CI on docs-only commits and none by a local run.
 
-**Seven work packages closed in session 5 so far** — backlog 28 (the e2e teardown flake, now standing
+**Eight work packages closed in session 5 so far** — backlog 28 (the e2e teardown flake, now standing
 rule 85), **WP-15h parts 1 and 2** (every read the SPA calls is served, and the `run:<id>` topic has a
 publisher), **WP-19** (the cost ledger; every run the platform produces is now cost-accounted), **WP-22**
 (five images, compose, and the real provider tested against the real images on Linux; rule 86), **WP-18a**
 (the index reads a bare mirror the platform owns, TD-026), **WP-18b** (the librarian pipeline: proposals
-reach rows, a branch and an MR, never the default branch) — plus three ci-fixes for harness flakes (three
-distinct mechanisms, all found by CI on docs-only commits), an architect ruling (TD-026), TD-018 amended
-as built, backlog entries 30–38, Q63–Q66, and a milestone row for **WP-15e** (backlog 18's class, which
-had a plan row and no milestone row). **Next**: **WP-14a** (the ten platform skills and the provisioning
-copy; brief drafted in the orchestrator's scratchpad, to be re-derived from the row and backlog 24 if
-lost), then WP-15e (brief drafted), WP-21, WP-23, then M2.
+reach rows, a branch and an MR, never the default branch), **WP-14a** (the ten skills, mounted as a plugin
+because the documented layout was measured wrong; Q67 and a product/13 amendment) — plus three ci-fixes
+for harness flakes (three distinct mechanisms, all found by CI on docs-only commits), an architect ruling
+(TD-026), TD-018 amended as built, backlog entries 30–41, Q63–Q67, and a milestone row for **WP-15e**
+(backlog 18's class, which had a plan row and no milestone row). **Next**: **WP-15e** (the whole-row
+`tasks.save` class; brief drafted in the orchestrator's scratchpad, to be re-derived from the row and
+backlog 18 if lost), then WP-21 and WP-23 (briefs drafted), then M2.
 
 **CI went RED on `38f3d82` (run `34692908462`, a docs-only commit) and is GREEN again at `58503b5`
 (run `34696889564`, read as `completed success`).** Ten jobs were green; `integration` failed with **every
@@ -112,7 +114,8 @@ closed for this census, still open for `nul:check`).
 half refused against TD-025 §2 and TD-021, an orphan-directory sweep remains). (4) **WP-18a is DONE** at
 `79cb3f9` — the git-backed vault and the indexer job under **TD-026**; (5) **WP-18b is DONE** at
 `24efdc7` — the librarian pipeline, proposals, apply policy, knowledge MR flow and nightly hygiene;
-(6) **WP-15h part 2 is DONE** at `d1a5116`; (7) **WP-14a** is next, then WP-15e, WP-21, WP-23. Then **WP-15h part 2** (the seven reads the census attributes to it), WP-14a, WP-21, WP-23; then
+(6) **WP-15h part 2 is DONE** at `d1a5116`; (7) **WP-14a is DONE** at `dcc1f21`; (8) **WP-15e** is next,
+then WP-21, WP-23. Then **WP-15h part 2** (the seven reads the census attributes to it), WP-14a, WP-21, WP-23; then
 M2 (WP-24–33); then M3.
 
 **The session 4 note follows, kept for its evidence; where it names a head or a next step, this note wins.**
@@ -3507,6 +3510,7 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-12 | Claude SDK runner (technical/04) | WP-04, WP-05 | no | DONE | `951e343` | 3 review rounds + pre-merge; rules 15, 16, 26, 27, 28; **Q41**; unblocks WP-13 |
 | WP-13 | Run shim `agentic-runlet` (TD-025) | WP-12 | no | DONE | `d1e7b69` | 2 review rounds + pre-merge; rules 43, 49, 50; **Q50, Q51**; unblocks WP-14 |
 | WP-14 | Launcher service + `WorkspaceProvider` (docker + fake) | WP-13 | no | DONE | `a810784` | **3 review rounds**; Q52/Q53 needed no renumbering (main reached Q51 then took Q54/Q55). Round 1 found a live container nobody held a handle to and a deny-list of symlinks that never fired; round 2 found `verify` red under a report that said PASS; round 3 shipped `scripts/citations.ts`, which found two defects in itself. Rules 54, 55, 58, 59, 60, 61, 65. |
+| WP-14a | **The ten platform skills, and the provisioning step that mounts them** (backlog 24) | WP-14, WP-17 | no | DONE | `dcc1f21` | **2 review rounds + a pre-merge round; CI `34730606133` and `image` `34730606129`, read as `completed success`.** **technical/04's layout was wrong and is amended on a measurement, re-derived by the round-1 reviewer with the pinned binary** (`@anthropic-ai/claude-agent-sdk@0.3.267`, the init message's `skills` field): `.claude/skills/_platform/<n>/SKILL.md` is **not** discovered, nor a parent's `.claude/skills` when the checkout is a git root (the shipped case); a **plugin directory** holding `skills/<n>/SKILL.md` **is**, namespaced `agentic:<n>`, the directory name being the identity. So `create` writes `<checkout>/.agentic-run/plugins/agentic/skills/` from a `skills-<run>` helper inside the launcher, bytes from the **launcher's** `@platform/prompts`, kept out of commits by `.git/info/exclude`; `skillSetVersionOf` folds a digest of the set into `prompt_version`; no image rebuild. The ten `SKILL.md` files have frontmatter `name` equal to the directory, held by a test over the directory read off disk; every provider `skill` ref is real. **Role table** (`SKILLS_BY_ROLE`, enumerated): triager none; PM and architect `ask-human`, `kb` (+`jira-ticket`); investigator adds `loki-logs`, `sentry-issue`; developer nine; reviewer, acceptance tester, librarian, discovery `kb`; facilitator `kb`, `retro`. **Q67 filed and implemented, product/13 amended by the orchestrator**: the platform's list *replaces* project-skill discovery, because BD-025 trusts `.claude/` only from the default branch and a re-entry checks out the task branch. Tier 2 in a real container against `platform-runtime:dev`: byte for byte, the project's own `.claude/skills` untouched, the checkout clean, only the role's skills — mutation-calibrated; tier 3 scoped out. **Both review rounds were the same finding, and it is rule 86 inside prompt material**: seven sentences across the skills stated runtime facts that are false in this build — a credential no run has (`agentRunEnvironment` injects only `ANTHROPIC_API_KEY` and nothing reads `AgentTooling.env`; backlog **40**), a context directory nothing writes, an MCP server that is not mounted, a question timeout `ask_human` refuses today. All hedged to what is true, and `test/contract/prompts/platform-skills.contract.test.ts` now refuses a credential claim, requires a skill naming a run-image CLI to be backed by a provider's tooling **or** to carry the hedge (`acli`, `jira` and `sentry-cli` are in the image while Jira and Sentry declare none), and holds path and server claims the same way, its residual stated (a claim about a platform tool, event or pipeline behaviour is still unguarded). Minor: the role table's docblock records its three mismatches with product/13 (backlog **39**). Filed by the refiner: **39** (the investigator has no `Bash`), **40**, **41** (`sentry-cli` 3.7.0 contradicts the provider's cited docs); backlog **24 RESOLVED** on the measured layout; the e2e fixture's two unlabelled named volumes leak only when a run is killed (on rule 60's bullet). **The machine got a third vote during this row**: the orchestrator's wait loop was killed for low memory and its detached e2e died with it; cleaned and rerun green. |
 | WP-15 | Pipeline interpreter + stage executor + sagas (technical/02) | WP-04…WP-12 | no | DONE | `79582c6` | 2 review rounds. The e2e is **proved**: stubbing `transition()` reddens 3 of 4. Four product defects only the loop could find. Round 1 found two live branches no test ran, one failing **open**. Rules 67, 68. Cuts: spike template, librarian stage, CI error block (Q55), probation mode, `command` gates (fail-closed). |
 | WP-15a | **Compose the pipeline into `apps/server`** — binding loader + registration + e2e on a real server instance | WP-15 | no | DONE | `be05a9b` | **4 rounds + an architect ruling.** The honest claim is narrower than the row: *the pipeline is composed and production does not start it* — `main.ts` passes no runner and no audit log, and there is no webhook ingress, both filed. A feature and a bug ticket reach `task.completed` through an `apps/server` instance the e2e starts, from seeded rows; deleting the bindings inserts parks all five at `ci_gate`. Found: the **fifth fail-open gate** (a project with no git binding settled CI `passed: true`, which had invalidated round 1's own falsification), an instance with no pipeline **eating** a `ticket.matched` while `/readyz` read ok, and **no credential broker existing at all** — so it also brings a `SecretStore` and an AES-256-GCM envelope. Rules 73, 74, 75; Q55's mechanism closed, its product cut stands. |
 | WP-15b | **Postgres `IntegrationAuditLog` + `IdempotencyStore` + migration 0013** | WP-15a | no | DONE | `31abfc6` | 1 review round. `startRuntime()` composes a real audit log with **no caller able to supply one** (the field is gone from `PipelineComposition`); the composed-log→no-op mutation fails the e2e with `expected 0 to be greater than 0`, so the dependency is **used**, not merely supplied (rule 35). `redaction_count` asserted in **both** directions (rule 42); counters `not null` with the **default dropped**, so an omitted one errors rather than recording a zero (rule 18). **FK on `integration_actions` dropped** — a log of external facts must not be gated on internal referential state; deferral cannot help because the audit transaction commits **before** the saga's. Zero readers today, so technical/03 carries the `LEFT JOIN` sentence the first one will need. Pool floor recomputed: only the audit connection is concurrency-proportional (both job workers call providers *outside* their transactions), poolMax 10 → 13, and the test asserts the **shape** (+6 for N 1→3) so a flat reservation fails. Round 1 found the idempotency invariant asserted by **nothing** on Postgres while the fake *was* held to it — rule 1 inverted. |
