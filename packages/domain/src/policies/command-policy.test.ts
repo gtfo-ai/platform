@@ -5,6 +5,7 @@ import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   assertCommandAllowed,
   basename,
+  CONFLICT_RESOLUTION_EXTRA_ALLOW,
   commandUncertainty,
   DECLINED_BLOCK_VARIANTS,
   DEFAULT_BLOCKED_COMMANDS,
@@ -885,6 +886,120 @@ describe('the block-list variants product/19 §3 does not state (Q37)', () => {
     for (const command of ['rm -fr /', 'rm -r -f /', 'git branch --delete --force main']) {
       expect(verdict(command), command).toBe('ask');
     }
+  });
+});
+
+/**
+ * TD-027 (the ruling on Q77): the merge is a **stage** default and is not at the organisation
+ * maximum. The evaluations are the guarantee, not the arrays (standing rule 10), and every case is
+ * asserted against **both** policies so the stage layer is measured as a difference (rule 42).
+ */
+describe('the conflict-resolution stage layer (TD-027, product/19 §3)', () => {
+  /** What `commandBaselineFor('developer', CONFLICT_RESOLUTION_STAGE)` builds, one ring up. */
+  const stagePolicy: ResolvedCommandPolicy = {
+    ...DEFAULT_COMMAND_POLICY,
+    allow: [...DEFAULT_COMMAND_POLICY.allow, ...CONFLICT_RESOLUTION_EXTRA_ALLOW],
+  };
+
+  it('quotes product/19 §3 exactly, and puts no merge verb at the maximum', () => {
+    expect(CONFLICT_RESOLUTION_EXTRA_ALLOW).toEqual([
+      'git merge origin/*',
+      'git merge --no-edit origin/*',
+      'git merge --abort',
+      'git merge --continue',
+    ]);
+    // The organisation maximum names no merge at all — the state before WP-26, restored. Read off
+    // the list rather than asserted as an absent string, so a re-added `git merge *` cannot hide.
+    expect(DEFAULT_IMPLEMENTATION_ALLOW.filter((entry) => entry.startsWith('git merge'))).toEqual(
+      [],
+    );
+  });
+
+  it('grants the four spellings at the stage and nowhere else', () => {
+    for (const command of [
+      'git merge origin/main',
+      'git merge --no-edit origin/main',
+      'git merge --no-edit origin/release-2.1',
+      'git merge --abort',
+      'git merge --continue',
+    ]) {
+      expect(verdict(command, stagePolicy), command).toBe('allow');
+      // The same line for an implementation run of any project: unmatched, so the `ask` fallback.
+      expect(verdict(command, DEFAULT_COMMAND_POLICY), command).toBe('ask');
+    }
+  });
+
+  it('refuses every merge spelling that discards a side or skips a hook, at the stage too', () => {
+    for (const command of [
+      // Nothing may sit between the verb and the ref, so the closed set answers these.
+      'git merge --no-verify origin/main',
+      'git merge -s ours origin/main',
+      'git merge --strategy=ours origin/main',
+      'git merge -X theirs origin/main',
+      'git merge -X ours origin/main',
+      // A local branch, a raw sha and a ref from somewhere else are not remote-tracking refs.
+      'git merge main',
+      'git merge 1234abcd',
+      'git merge upstream/main',
+      // **The same flags after the ref**, which the closed set does *not* answer: an allow glob's
+      // `*` spans spaces, so `git merge origin/*` matches these and `HAZARDOUS_ARGUMENTS` is what
+      // floors them. Measured with `evaluateCommand` — they were `allow` before those entries.
+      'git merge origin/main --no-verify',
+      'git merge origin/main -s ours',
+      'git merge origin/main --strategy=ours',
+      'git merge origin/main -X theirs',
+      'git merge --no-edit origin/main -X theirs',
+      'git merge --no-edit origin/main --no-verify',
+    ]) {
+      expect(verdict(command, stagePolicy), command).toBe('ask');
+      expect(verdict(command, DEFAULT_COMMAND_POLICY), command).toBe('ask');
+    }
+    // …and the floor names which argument did it, so the run log says why.
+    expect(hazardousArgument('git merge origin/main --no-verify')).toMatchObject({
+      pattern: 'git * --no-verify*',
+    });
+    expect(hazardousArgument('git merge origin/main -s ours')).toMatchObject({
+      pattern: 'git merge* -s*',
+    });
+    expect(hazardousArgument('git merge origin/main -X theirs')).toMatchObject({
+      pattern: 'git merge* -X*',
+    });
+  });
+
+  it('floors --no-verify on every git verb, not only on commit', () => {
+    // The generalisation WP-26's review round 2 earned: `git push origin agentic/x --no-verify`
+    // matched the allow entry `git push origin agentic/*` and was `allow`. `--no-verify` skips the
+    // hooks where a repository runs its secret scan (BD-002) whichever verb carries it.
+    for (const command of [
+      'git push origin agentic/x --no-verify',
+      'git commit --no-verify -m x',
+      'git merge origin/main --no-verify',
+    ]) {
+      expect(verdict(command, stagePolicy), command).toBe('ask');
+    }
+    // The verbs themselves still run, so the floor is about the flag (rule 42).
+    for (const command of [
+      'git push origin agentic/x',
+      'git commit -m x',
+      'git merge origin/main',
+    ]) {
+      expect(verdict(command, stagePolicy), command).toBe('allow');
+    }
+  });
+
+  it('adds to `allow` only, and a project still narrows what it added', () => {
+    expect(stagePolicy.ask).toEqual(DEFAULT_COMMAND_POLICY.ask);
+    expect(stagePolicy.block).toEqual(DEFAULT_COMMAND_POLICY.block);
+
+    // A project that declares its own allow-list without the merge loses it — TD-027's stated
+    // consequence, and the reason the layer is applied *before* the narrowing.
+    const narrowed = narrowCommandPolicy(stagePolicy, { allow: ['git status', 'git status *'] });
+    expect(narrowed.policy.allow).toEqual(['git status', 'git status *']);
+    expect(verdict('git merge --no-edit origin/main', narrowed.policy)).toBe('ask');
+    // A project cannot reach the merge by *asking* for it either, unless it spells it the same way.
+    expect(narrowCommandPolicy(stagePolicy, { allow: ['git merge *'] }).ignoredAllow).toEqual([
+      'git merge *',
+    ]);
   });
 });
 

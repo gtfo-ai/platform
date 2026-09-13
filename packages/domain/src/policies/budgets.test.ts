@@ -41,6 +41,8 @@ describe('documented defaults', () => {
       discovery: 2,
       // product/19 § 12 prices a lint at ~$0.10 per ticket; the cap is five times it (WP-25).
       ticket_lint: 0.5,
+      // product/04 S6b's "short Implementation run": a third of `implementation`'s cap (WP-26).
+      conflict_resolution: 5,
     });
   });
 });

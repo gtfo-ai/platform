@@ -115,6 +115,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
       refinement_questions: 2,
       architecture_revisions: 2,
       rebase: 2,
+      rebase_rechecks: 10,
     },
     sequence: 1,
   },

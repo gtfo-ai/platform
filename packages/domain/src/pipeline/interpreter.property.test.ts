@@ -29,7 +29,7 @@ import {
   type PipelineSignal,
   stageOf,
 } from './interpreter.js';
-import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from './templates.js';
+import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES, TICKET_TEMPLATES } from './templates.js';
 
 /**
  * **Every** shipped template, read off `SHIPPED_TEMPLATES` rather than listed here.
@@ -271,9 +271,27 @@ describe('a whole task, walked with arbitrary verdicts', () => {
         );
       }
       expect(decision).toEqual({ kind: 'complete', from: 'done' });
-      // …through every stage the template declares, in order: a walk that skipped the tail would
-      // also "complete" (standing rule 10).
-      expect(visited).toEqual(pipeline.stages.map((stage) => stage.id));
+      /**
+       * …through every stage the template declares **that an approving path can reach**, in order:
+       * a walk that skipped the tail would also "complete" (standing rule 10).
+       *
+       * `conflict_resolution` is the one exception and it is named rather than filtered by a rule
+       * (WP-26): the rebase gate's `fail_to` is the only way in, so a happy path that entered it
+       * would mean the stage had landed on the forward path and every task was paying for a
+       * resolution run it did not need. The assertion below makes the exception a claim of its own,
+       * so "the walk skipped it" and "the template lost it" cannot look the same.
+       */
+      const backwardsOnly = ['conflict_resolution'];
+      expect(visited).toEqual(
+        pipeline.stages.map((stage) => stage.id).filter((id) => !backwardsOnly.includes(id)),
+      );
+      expect({
+        template: pipeline.templateId,
+        declares: pipeline.stages.some((stage) => stage.id === 'conflict_resolution'),
+      }).toEqual({
+        template: pipeline.templateId,
+        declares: Object.hasOwn(TICKET_TEMPLATES, pipeline.templateId),
+      });
       // The `toContain('librarian')` that used to stand here is now implied by the equality above
       // and was false for the two templates that have no merge tail — `discovery` and
       // `review_only`, which this block started covering when the template list stopped being

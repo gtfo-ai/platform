@@ -188,6 +188,45 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 
 `canUseTool` answers only for the ask-list: creates a Question with the exact command, waits (bounded by the run's wall clock and the question timeout), returns allow/deny; unattended default deny.
 
+> **Amended by TD-027 (ruling on Q77) — where the policy a run is given comes from, and the per-stage
+> layer BD-025 always had.** The run's `ResolvedCommandPolicy` is built in the planner, at one call
+> site, in three steps: the **role** picks a baseline (`COMMAND_BASELINE_BY_ROLE` — `read_only` or
+> `implementation`, product/19 §3's two groups); the **stage** may add allow patterns
+> (`COMMAND_ALLOW_BY_STAGE`, consulted by `commandBaselineFor(role, stage)`); then the project
+> narrows what is left (`narrowCommandPolicy`, whose `allow` may only shrink and whose `ask`/`block`
+> may only grow). BD-025 §2's words are *"defaults ship per stage"* and product/19 §3 is titled per
+> stage; the role table was the approximation, and the stage layer is the missing half rather than a
+> new concept.
+>
+> Three rules bound it, because a table that **adds** privileges inverts the direction of the one
+> other per-stage table here (`PLATFORM_TOOLS_DENIED_BY_STAGE` only subtracts). It adds to `allow`
+> only — never an `ask` entry, never a `block` removal — and it holds patterns rather than a
+> replacement list, so the direction is structural. Every entry must be a literal spelling
+> **product/19 §3 lists for that stage**: a stage layer is where a documented default is put, not
+> where one is invented (the allow-side twin of `DECLINED_BLOCK_VARIANTS`' standing rule). And it is
+> applied *before* the project's narrowing, so a project's own `commands.allow` still drops it.
+>
+> The only entry is `conflict_resolution` (WP-26, BD-030): `git merge origin/*`,
+> `git merge --no-edit origin/*`, `git merge --abort`, `git merge --continue`. Nothing sits between
+> the verb and a remote-tracking ref, so `-s ours`, `-X ours`/`-X theirs` and `--no-verify` written
+> *there* fall through to the `ask` fallback and an unattended run is denied. **Written after the ref
+> they do not** — an allow glob's `*` spans spaces, so `git merge origin/main --no-verify` matches
+> `git merge origin/*` and was `allow` until it was measured (TD-027's amendment; the claim that a
+> closed set alone sufficed is withdrawn there). Four `HAZARDOUS_ARGUMENTS` floors are the other half:
+> `git * --no-verify*`, `git merge* -s*`, `git merge* --strategy*`, `git merge* -X*`. So the two
+> mechanisms have different jobs — the closed set decides what may run, the floors what an allowed
+> line may not carry. `git merge` is
+> **not** at the implementation maximum. The reason the stage merges rather than rebases is Q76: the
+> block `git push --force*` covers every stage, so a rebased branch cannot be published by any run
+> this build starts.
+>
+> The enforcement point is unchanged and is the row above: `PreToolUse(Bash)` → `evaluateCommand`, in
+> the platform process. Neither the launcher nor the run shim evaluates a command — the shim owns one
+> child, the CLI, and its credential socket refuses every frame but `cred.get`/`ping` (TD-025) — so
+> for what `git` is asked to do inside a workspace this policy is the layer, with the container's
+> mounts, the egress proxy and the credential caps around it and the provider's branch protection
+> (Q40) behind it.
+
 ## Streaming and steering
 
 - `includePartialMessages: true`; every `SDKMessage`/`StreamEvent` is appended to the transcript store with a monotonic sequence and published to the UI channel (08). Compaction boundaries and subagent nesting are first-class transcript entries.

@@ -38,6 +38,9 @@ describe('the shipped templates', () => {
       'refinement',
       'architecture',
       'implementation',
+      // Declared between `implementation` and the CI gate and reachable only from
+      // `rebase_gate.fail_to` (WP-26): the forward path names `ci_gate` explicitly.
+      'conflict_resolution',
       'ci_gate',
       'code_review',
       'business_review',
@@ -54,6 +57,49 @@ describe('the shipped templates', () => {
     );
     expect(ids(CHORE_TEMPLATE)).not.toContain('architecture');
     expect(ids(CHORE_TEMPLATE)).not.toContain('business_review');
+    // Every **ticket** template has the rebase gate's resolution stage and no other template does:
+    // nothing outside the ticket flow opens a merge request, so nothing outside it can conflict.
+    for (const [id, template] of Object.entries(SHIPPED_TEMPLATES)) {
+      expect({ id, has: ids(template).includes('conflict_resolution') }).toEqual({
+        id,
+        has: Object.hasOwn(TICKET_TEMPLATES, id),
+      });
+    }
+  });
+
+  /**
+   * WP-26. The graph property that makes the rebase gate's loop bounded and its stage free on the
+   * happy path, asserted on the data rather than through the interpreter: the gate's failure goes
+   * *backwards* into the resolution (so `returnTo` counts it) and the resolution sits *before* the
+   * CI gate (so its fall-through re-runs CI).
+   */
+  it('places the conflict resolution behind the CI gate, with the rebase gate failing back into it', () => {
+    for (const [id, template] of Object.entries(TICKET_TEMPLATES)) {
+      const ids = template.stages.map((stage) => stage.id);
+      const gate = template.stages.find((stage) => stage.id === 'rebase_gate');
+      const implementation = template.stages.find((stage) => stage.id === 'implementation');
+      expect({ id, failTo: gate && 'fail_to' in gate ? gate.fail_to : null }).toEqual({
+        id,
+        failTo: 'conflict_resolution',
+      });
+      expect({
+        id,
+        approveTo:
+          implementation && 'approve_to' in implementation ? implementation.approve_to : null,
+      }).toEqual({ id, approveTo: 'ci_gate' });
+      expect({ id, before: ids.indexOf('conflict_resolution') < ids.indexOf('ci_gate') }).toEqual({
+        id,
+        before: true,
+      });
+      expect({
+        id,
+        behind: ids.indexOf('conflict_resolution') > ids.indexOf('implementation'),
+      }).toEqual({ id, behind: true });
+      expect({
+        id,
+        backwards: ids.indexOf('conflict_resolution') < ids.indexOf('rebase_gate'),
+      }).toEqual({ id, backwards: true });
+    }
   });
 
   it('ships the three ticket templates plus discovery, review-only and the ticket linter, and nothing else', () => {

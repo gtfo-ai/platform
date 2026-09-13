@@ -34,6 +34,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import {
@@ -103,7 +104,9 @@ export interface PipelineOutboundData {
     | 'review_only_observe'
     /** WP-25, the ticket readiness linter: consider a new ticket, post the one comment. */
     | 'ticket_lint_check'
-    | 'ticket_lint_post';
+    | 'ticket_lint_post'
+    /** WP-26, the rebase gate: tell this task's merge request which peers touch the same files. */
+    | 'conflict_warn';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -455,6 +458,26 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       passed: result.passed,
       detail: result.detail,
     });
+
+    /**
+     * The rebase gate's own measurement, after the settlement and in a transaction of its own
+     * (WP-26, product/16: *"conflicts auto-resolved vs escalated"*).
+     *
+     * **After**, because `stream_seq` has to be read where the append happens and the settlement
+     * has just written the transition's events. **From `stored`**, because the content is the check
+     * the gate made on the snapshot it evaluated — a row that agreed with the transition but not
+     * with the read would be a measurement of neither.
+     */
+    if (request.stage === REBASE_GATE_STAGE && stored.mr !== null) {
+      await recordRebaseCheck(options, {
+        taskId: request.taskId,
+        mr: stored.mr,
+        conflicts: !result.passed,
+        attempts: stored.task.iterationCounters.rebase ?? 0,
+        limit: stored.task.limits.rebase,
+        causeEventId: null,
+      });
+    }
   };
 };
 

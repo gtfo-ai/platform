@@ -193,6 +193,11 @@ export const DEFAULT_IMPLEMENTATION_ALLOW: readonly string[] = [
   'git push origin agentic/*',
   'git rebase',
   'git rebase *',
+  // No merge verb: product/19 §3's Implementation bullet names `git rebase` and no merge at all,
+  // and this constant is the organisation **maximum** every implementation-stage run of every
+  // project inherits. WP-26 put `'git merge'` and `'git merge *'` here to make the rebase gate's
+  // conflict resolution runnable; TD-027 (the ruling on Q77) took them out again and moved four
+  // literal spellings onto the stage that needs them — {@link CONFLICT_RESOLUTION_EXTRA_ALLOW}.
   'git fetch',
   'git fetch *',
   'npm ci',
@@ -201,13 +206,60 @@ export const DEFAULT_IMPLEMENTATION_ALLOW: readonly string[] = [
 ];
 
 /**
+ * product/19 §3, Conflict resolution: the four merge spellings the rebase gate's resolution stage
+ * adds to the implementation baseline — and nothing else (TD-027, the ruling on Q77).
+ *
+ * **Extra patterns, not a replacement list**, so the direction is structural: the stage layer that
+ * consults this (`COMMAND_ALLOW_BY_STAGE` in the planner) can only *add* to `allow`, never touch
+ * `ask` and never remove from `block`, and the project's own narrowing still runs after it. BD-025
+ * §2's words are *"defaults ship **per stage**"*; the role table was the approximation that made a
+ * one-stage need look like a change to the organisation maximum.
+ *
+ * **Every entry is a literal spelling product/19 §3 lists for this stage** — the allow-side twin of
+ * {@link DECLINED_BLOCK_VARIANTS}' standing rule. A stage layer is where a documented default is
+ * put, not where one is invented.
+ *
+ * **What the set is shaped to exclude.** Nothing may sit between the verb and a remote-tracking
+ * ref, so `git merge -s ours origin/main` (git-merge(1): the `ours` strategy's *"resulting tree of
+ * the merge is always that of the current branch head"* — a branch that claims commits it does not
+ * contain), `git merge -X theirs …` (*"forces conflicting hunks to be auto-resolved"* by deleting a
+ * side) and `git merge --no-verify …` (skips the hooks where a repository runs its secret scan,
+ * BD-002) match nothing here and fall to the `ask` fallback, which an unattended run denies.
+ * **The same flags written *after* the ref are a different matter and are floored, not excluded**:
+ * `*` matches a run of characters including spaces, so `git merge origin/main --no-verify` *does*
+ * match `git merge origin/*` — measured with `evaluateCommand` — and what refuses it is
+ * {@link HAZARDOUS_ARGUMENTS}, exactly as that list's docblock says a flag under a wide allow entry
+ * is refused. product/19 §3's fourth bullet requires those spellings to be `ask` wherever they sit.
+ *
+ * `--no-edit` is here because git-merge(1) makes the editor the default on a successful mechanical
+ * merge and a run has no terminal; `--abort` because `git reset --hard origin/*` is blocked and a
+ * half-finished merge would otherwise strand the workspace for the second of BD-030's two attempts;
+ * `--continue` because it can do nothing `git commit *` cannot already do. The reason the stage
+ * merges rather than rebases is Q76: `git push --force*` is blocked for every stage, so a rebased
+ * branch cannot be published by any run this build starts.
+ */
+export const CONFLICT_RESOLUTION_EXTRA_ALLOW: readonly string[] = [
+  'git merge origin/*',
+  'git merge --no-edit origin/*',
+  'git merge --abort',
+  'git merge --continue',
+];
+
+/**
  * product/19 §3, Implementation: dependency additions and anything that leaves the workspace.
  *
  * The `-exec` family is here rather than on the allow-list because it turns a safe command into an
  * arbitrary-command runner: `find … -exec` runs a command per match and `git rebase -x/--exec` runs
- * one per commit. The plain verbs stay allowed — product/19 §3 allows both, and the rebase gate
- * (WP-26) rebases on every task's happy path — because these ask entries are more specific and so
- * win the tie against them.
+ * one per commit. The plain verbs stay allowed — product/19 §3 allows both — because these ask
+ * entries are more specific and so win the tie against them.
+ *
+ * **This sentence used to end "…and the rebase gate (WP-26) rebases on every task's happy path",
+ * which WP-26 made false twice over** (standing rule 83). The gate does not run a command at all:
+ * it reads the provider's `has_conflicts` and settles. A command is run only when it *fails*, by
+ * the `conflict_resolution` stage — and what that stage runs is one of the four merge spellings of
+ * {@link CONFLICT_RESOLUTION_EXTRA_ALLOW}, which is the **stage's** list and not this maximum
+ * (TD-027), because a rebased branch cannot be pushed under the same list's `git push --force*`
+ * block (Q76).
  */
 export const DEFAULT_IMPLEMENTATION_ASK: readonly string[] = [
   'npm install *',
@@ -316,11 +368,43 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
       'a refspec pushes to a destination ref of its own choosing, so `git push origin agentic/x:main` writes main under an allow entry that names only agentic/*; a remote spelled as a URL is caught by the same colon',
   },
   {
-    pattern: 'git commit* --no-verify*',
+    // Not scoped to `commit`, for `git * --exec*`'s reason and for a measured one. `git merge` is
+    // allow-listed at the `conflict_resolution` stage (TD-027) and git-merge(1) says `--no-verify`
+    // there *"bypasses the pre-merge and commit-msg hooks"*; because an allow glob's `*` spans
+    // spaces, `git merge origin/main --no-verify` matches `git merge origin/*` and was `allow`
+    // before this entry existed (measured with `evaluateCommand`). The next verb to grow the flag
+    // would be missed the same way.
+    pattern: 'git * --no-verify*',
     hazard:
-      'skips the pre-commit hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
+      'skips the pre-commit, pre-merge and commit-msg hooks, which is where a repository runs its secret scan (BD-002) and its formatter',
   },
   { pattern: 'git commit* -n*', hazard: 'the short spelling of --no-verify' },
+  /**
+   * The two merge strategy flags, floored because product/19 §3's conflict-resolution bullet says
+   * they are `ask` *"never allow"* and the closed allow set only answers for the position before
+   * the ref: `git merge -s ours origin/main` matches no allow pattern, but
+   * `git merge origin/main -s ours` matches `git merge origin/*`.
+   *
+   * They belong on this list rather than on `DEFAULT_IMPLEMENTATION_ASK` for the list's own reason
+   * — an ask entry wins only by pinning more literal characters, and `git merge origin/*` pins
+   * eighteen. git-merge(1), retrieved 2026-09-13: `-s ours` gives a merge whose *"resulting tree …
+   * is always that of the current branch head, effectively ignoring all changes from all other
+   * branches"*, and `-X ours`/`-X theirs` *"forces conflicting hunks to be auto-resolved cleanly by
+   * favoring"* one side — the one outcome the stage's own prompt tells the model not to produce.
+   */
+  {
+    pattern: 'git merge* -s*',
+    hazard:
+      'the `ours` merge strategy records the other branch as merged while discarding its tree, so the human merge that follows silently reverts it',
+  },
+  {
+    pattern: 'git merge* --strategy*',
+    hazard: 'the long spelling of -s, and --strategy-option is the long spelling of -X',
+  },
+  {
+    pattern: 'git merge* -X*',
+    hazard: 'resolves every conflicting hunk by deleting one side of it',
+  },
   {
     pattern: 'pip install* --index-url*',
     hazard: 'installs from a package index nobody has read (BD-030)',

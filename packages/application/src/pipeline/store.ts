@@ -151,6 +151,25 @@ export interface TaskRepository {
   ): Promise<StoredTask | null>;
   /** Every task of a project sitting at `stage`, whatever its state. */
   listAtStage(tx: Transaction, projectId: Id, stage: Slug): Promise<readonly StoredTask[]>;
+  /**
+   * The project's other **live** tasks that are working through a merge request — WP-26's conflict
+   * warnings (product/04 S6b: *"two active tasks touch the same files"*).
+   *
+   * *Live* is "not `done` and not `cancelled`", which is wider than `active`: a task parked in
+   * `needs_human` or `paused` still has an open merge request, and a warning that ignored it would
+   * go silent exactly when a human is already involved. `excludeTaskId` is the asking task, which
+   * is always excluded rather than filtered out by the caller — a task overlaps itself completely.
+   *
+   * `limit` is the caller's and is not optional: this is the fan-out of a provider read per row
+   * (`conflictWarningHandler` reads each merge request's changed files), so the bound belongs at
+   * the call site that knows what it can afford. Oldest first, so the set a task is compared
+   * against is stable between two runs of the same gate.
+   */
+  listWithMergeRequest(
+    tx: Transaction,
+    projectId: Id,
+    query: { readonly excludeTaskId: Id; readonly limit: number },
+  ): Promise<readonly StoredTask[]>;
   insert(tx: Transaction, stored: StoredTask): Promise<void>;
   /**
    * Writes the aggregate's own columns, and only if the row is still at `stored.version`.

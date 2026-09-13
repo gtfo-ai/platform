@@ -39,6 +39,7 @@ import type {
 } from '@platform/contracts';
 import {
   assemblePrompt,
+  CONFLICT_RESOLUTION_EXTRA_ALLOW,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
   DEFAULT_READ_ONLY_ALLOW,
@@ -46,6 +47,7 @@ import {
   PLATFORM_DEFAULT_CONFIG,
   type PromptContextPack,
   type PromptNonceSource,
+  type ResolvedCommandPolicy,
   type RolePromptDefinition,
   resolveRunCapUsd,
   type SkillDefinition,
@@ -59,6 +61,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
 import { qualifiedPlatformSkill } from '../ports/workspace.js';
+import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
@@ -112,7 +115,36 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
 export const PLATFORM_TOOLS_DENIED_BY_STAGE: Readonly<Record<string, readonly PlatformToolName[]>> =
   {
     [TICKET_LINT_STAGE]: ['ask_human'],
+    /**
+     * The rebase gate's conflict resolution (WP-26) runs the **developer** role on a task whose
+     * merge request already exists, so `open_mr` is a tool with nothing to do and one thing to get
+     * wrong: a second merge request from the same branch would be the row `findByMergeRequest`
+     * answers with, which is how `mr.merged` advances a task and how a human comment opens BD-007's
+     * batch window. `update_mr_description` stays — the description is where the run says what it
+     * merged.
+     */
+    [CONFLICT_RESOLUTION_STAGE]: ['open_mr'],
   };
+
+/**
+ * Command patterns a **stage** adds to the `allow` list of the role that runs it (TD-027, the
+ * ruling on Q77) — BD-025 §2's *"defaults ship **per stage**"*, which the code had only per role.
+ *
+ * It **adds**, which inverts the direction of {@link PLATFORM_TOOLS_DENIED_BY_STAGE} above, and
+ * three rules bound the inversion. It may only add to `allow` — never an `ask` entry, never a
+ * `block` removal — and it holds *patterns* rather than a replacement list, so the direction is
+ * structural rather than a convention. Every entry must be a literal spelling **product/19 §3 lists
+ * for that stage**: a stage layer is where a documented default is put, not where one is invented
+ * (the allow-side twin of `DECLINED_BLOCK_VARIANTS`' standing rule). And it is applied *before*
+ * `narrowCommandPolicy`, so a project's own `commands.allow` still drops what it does not list and
+ * reports it in `ignoredAllow`.
+ *
+ * The only entry is the rebase gate's conflict resolution (WP-26, BD-030), whose four merge
+ * spellings and their argument are {@link CONFLICT_RESOLUTION_EXTRA_ALLOW}.
+ */
+export const COMMAND_ALLOW_BY_STAGE: Readonly<Record<string, readonly string[]>> = {
+  [CONFLICT_RESOLUTION_STAGE]: CONFLICT_RESOLUTION_EXTRA_ALLOW,
+};
 
 /**
  * Which **command baseline** a role's run starts from, before the project narrows it (BD-025).
@@ -333,16 +365,25 @@ export const platformToolsFor = (role: AgentRole, stage: string): readonly Platf
 };
 
 /**
- * The organisation maximum this role's run starts from.
+ * The organisation maximum this run starts from: the role's baseline plus what its stage adds.
  *
  * `read_only` keeps the shipped `ask` and `block` lists and replaces only `allow`: an entry that
  * moves out of `allow` becomes unmatched, falls to the `ask` fallback and is **denied** unattended,
  * which is the direction a narrowing has to fail in.
+ *
+ * The `stage` argument is required rather than optional (TD-027): a caller that forgot it would
+ * silently plan a run on the role baseline, and a conflict-resolution run planned that way spends
+ * its attempt on a denied merge. `ask` and `block` come through byte-identical — the layer appends
+ * to `allow` and touches nothing else.
  */
-export const commandBaselineFor = (role: AgentRole) =>
-  COMMAND_BASELINE_BY_ROLE[role] === 'read_only'
-    ? { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW }
-    : DEFAULT_COMMAND_POLICY;
+export const commandBaselineFor = (role: AgentRole, stage: string): ResolvedCommandPolicy => {
+  const base: ResolvedCommandPolicy =
+    COMMAND_BASELINE_BY_ROLE[role] === 'read_only'
+      ? { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW }
+      : DEFAULT_COMMAND_POLICY;
+  const extra = COMMAND_ALLOW_BY_STAGE[stage];
+  return extra === undefined ? base : { ...base, allow: [...base.allow, ...extra] };
+};
 
 const limitsFor = (settings: ProjectSettings, stage: string, role: AgentRole): RunLimits => {
   const defaults = stageAgentDefaults(stage);
@@ -529,7 +570,12 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const role = stage.role ?? 'developer';
       const defaults = stageAgentDefaults(stage.id);
       const configured = settings.config.stages?.[stage.id];
-      const policy = narrowCommandPolicy(commandBaselineFor(role), settings.config.commands);
+      // Role baseline, then the stage's extra `allow` patterns, then the project's narrowing — in
+      // that order, so a project still narrows what the stage added (TD-027).
+      const policy = narrowCommandPolicy(
+        commandBaselineFor(role, stage.id),
+        settings.config.commands,
+      );
       const protectedPaths =
         settings.config.policies?.protected_paths ??
         PLATFORM_DEFAULT_CONFIG.policies?.protected_paths ??

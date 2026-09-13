@@ -82,6 +82,9 @@ const linesMatching = (text: string, pattern: RegExp): readonly number[] => {
  * which is exactly the change that should not pass unnoticed.
  */
 const DOOR_SITES: Readonly<Record<string, number>> = {
+  // WP-26's conflict warning: one resolution for the whole duty, and every peer's diff is read
+  // through it — a binding per peer would be a credential decryption per comparison.
+  'conflict-warning.ts': 1,
   'gates.ts': 1,
   'jobs.ts': 1,
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the

@@ -347,6 +347,61 @@ export const taskLintPostedEvent = defineEvent('task.lint.posted', {
   ticket_updated_at: isoDateTimeSchema.nullish(),
 });
 
+/**
+ * The rebase gate checked a merge request against its target — product/16's *"conflicts
+ * auto-resolved vs escalated"* (WP-26, BD-030).
+ *
+ * One event per settlement of the `rebase_gate`, so the metric is a count of rows rather than a
+ * join across a transition and an escalation reason. `outcome` is the whole of it:
+ *
+ *  - `clean` — the branch applied to its target on the first check of this pass, and no run was
+ *    spent;
+ *  - `resolved` — it applies now and it did not before: `attempt` says how many conflict-resolution
+ *    runs it took, and this is the numerator of *"resolved automatically"*;
+ *  - `conflicted` — it does not apply and the bounded loop has another attempt left;
+ *  - `exhausted` — it does not apply and the loop is spent, so the task is escalated. This is the
+ *    denominator's other half, *"escalated"*.
+ *
+ * It reports **the check the gate made on the snapshot it read**, which is what makes it a
+ * measurement rather than a prediction: a task another writer moved between the read and the
+ * settlement is settled by the gate's own re-validation, and this row still says what was seen.
+ */
+export const taskRebaseCheckedEvent = defineEvent('task.rebase.checked', {
+  ...taskScoped,
+  mr: mergeRequestRefSchema,
+  /** What the provider said about the branch applying to its target. */
+  conflicts: z.boolean(),
+  /** Conflict-resolution runs spent on this merge request so far (`iteration_counters.rebase`). */
+  attempt: z.int().nonnegative(),
+  outcome: z.enum(['clean', 'resolved', 'conflicted', 'exhausted']),
+});
+
+/**
+ * Two active tasks touch the same files — product/04 S6b's *"The board warns when two active tasks
+ * touch the same files"* and product/16's *"concurrent-task overlaps"* (WP-26, BD-030).
+ *
+ * One event per **ordered pair**: it is appended on the stream of the task whose rebase gate ran,
+ * and `other_task_id` names the task it was compared against. The pair is not symmetric, because
+ * the comparison is not: the other task's own gate may have run before this task had a merge
+ * request at all, in which case it was told nothing.
+ *
+ * `paths` is **provider text** (BD-022) — the file paths of somebody's repository — so it is
+ * bounded and redacted before it is stored, and `path_count` is the number of overlapping paths
+ * *found*, which is not the length of `paths` when the list was cut. `truncated` says that one of
+ * the two merge requests had more files than the comparison read, so an empty overlap under
+ * `truncated: true` is "nothing found in what was compared" rather than "nothing to find".
+ */
+export const taskConflictWarnedEvent = defineEvent('task.conflict.warned', {
+  ...taskScoped,
+  mr: mergeRequestRefSchema,
+  other_task_id: idSchema,
+  /** The other task's ticket key, bounded — it is what the warning names to a human. */
+  other_ticket_key: nonEmptyStringSchema.max(256),
+  paths: z.array(nonEmptyStringSchema.max(256)).max(20),
+  path_count: z.int().nonnegative(),
+  truncated: z.boolean(),
+});
+
 export const taskCancelledEvent = defineEvent('task.cancelled', {
   ...taskScoped,
   outcome: nonEmptyStringSchema,
@@ -637,6 +692,8 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskCompletedEvent,
   taskReviewObservedEvent,
   taskLintPostedEvent,
+  taskRebaseCheckedEvent,
+  taskConflictWarnedEvent,
   runCreatedEvent,
   runStartedEvent,
   runFinishedEvent,

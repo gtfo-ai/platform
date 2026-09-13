@@ -48,6 +48,7 @@ import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { conflictWarningHandlers } from './conflict-warning.js';
 import {
   declarePipelineQueues,
   type PipelineJobOptions,
@@ -113,8 +114,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
 
   return {
     /**
-     * The saga's handlers, plus review-only mode's three (WP-24) and the ticket linter's two
-     * (WP-25).
+     * The saga's handlers, plus review-only mode's three (WP-24), the ticket linter's two (WP-25)
+     * and the rebase gate's conflict warning (WP-26).
      *
      * Registered here rather than inside `pipelineHandlers` because `review-only.ts` and
      * `ticket-lint.ts` import from `saga.ts` (`priorityRankOf`, `PipelineSagaOptions`), and the
@@ -125,6 +126,7 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...pipelineHandlers(options),
       ...reviewOnlyHandlers(options),
       ...ticketLintHandlers(options),
+      ...conflictWarningHandlers(options),
     ],
     executor,
     start: async () => {

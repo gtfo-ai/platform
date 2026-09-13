@@ -239,6 +239,47 @@ Three things follow, and they are the whole of the narrowing:
    \`acceptance_criteria\`, \`in_scope\` or \`out_of_scope\` are honest answers about an unready
    ticket, and the platform reads them as such; inventing them would hide the gap this run exists to
    report. Do not ask a human anything — this run has no watcher.`,
+  /**
+   * The rebase gate's conflict resolution (WP-26, product/04 S6b).
+   *
+   * **Why it says "merge" and not "rebase".** product/04 S6b offers either; product/19 §3 blocks
+   * `git push --force*` at the organisation maximum and no project may remove it
+   * (`DEFAULT_BLOCKED_COMMANDS`), and a rebased branch can only be published with a force push. So
+   * a run told to rebase would do the work and then be denied the push — the failure mode this
+   * paragraph exists to avoid, measured against `evaluateCommand` before it was written, and filed
+   * as **Q76** with the carve-out that would let a project choose `rebase`.
+   *
+   * **Why item 1 spells the commands out.** What this stage may run is a closed set of four
+   * spellings (`CONFLICT_RESOLUTION_EXTRA_ALLOW`, TD-027): anything else — a local branch name
+   * instead of `origin/…`, a `-X theirs`, a `--no-verify` — falls to the command policy's `ask`
+   * fallback, and a run nobody is watching has that denied. A denial costs one of BD-030's two
+   * attempts, so the spellings are in the prompt rather than left to be discovered.
+   *
+   * The rest is the narrowing: the task's *feature* work is already reviewed and merged into this
+   * branch's history, so re-doing any of it is how a resolution silently drops somebody's change.
+   */
+  conflict_resolution: `**This run resolves a merge conflict, not a ticket.** The work for this
+task is already done, committed and reviewed on the branch you are checked out on; the default
+branch has moved underneath it and the merge request no longer applies. Bring the branch up to date
+and do nothing else.
+
+1. **Merge, do not rebase, and use these exact commands.** \`git fetch origin\`, then
+   \`git merge --no-edit origin/<default branch>\`; resolve the conflicts; \`git commit -m …\` and
+   \`git push origin <your branch>\`. \`git merge --abort\` backs the merge out. **Every other merge
+   spelling is denied** — \`git merge main\` (no \`origin/\`), \`git merge -X theirs …\`,
+   \`git merge -s ours …\` and \`git merge --no-verify …\` all need a human approval this run has no
+   watcher for, so they end the attempt instead of resolving anything. A rebase is worse than
+   denied: it would succeed and then be unpublishable, because the force push it needs is blocked.
+2. **Keep both sides.** Every conflict is somebody's change against somebody else's. Read enough of
+   each to keep what both were doing; deleting one side to make the file compile is the one outcome
+   nobody downstream will catch.
+3. **Change nothing else.** No refactoring, no new tests beyond what a conflicting test file needs
+   to make sense, no scope the ticket did not ask for. The diff a human is asked to merge is
+   re-reviewed after this run, and every line you add is a line they did not ask for.
+4. **Say what you did.** Put the commands you ran in \`commands_run\` and the files you resolved in
+   the summary. If a conflict cannot be resolved without a decision you are not in a position to
+   take, say so in \`known_gaps\` and stop — the gate will see the branch still conflicts, and the
+   platform escalates to a human after a bounded number of attempts.`,
 } as const;
 
 /** The platform's own stage instructions; see {@link STAGE_PROMPT_FOCUS}. */

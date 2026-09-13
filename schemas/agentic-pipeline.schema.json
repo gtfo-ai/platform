@@ -139,6 +139,8 @@
         "task.completed",
         "task.review.observed",
         "task.lint.posted",
+        "task.rebase.checked",
+        "task.conflict.warned",
         "run.created",
         "run.started",
         "run.finished",

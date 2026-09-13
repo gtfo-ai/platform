@@ -196,6 +196,22 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     questions_posted: 3,
     ticket_updated_at: AT,
   },
+  'task.rebase.checked': {
+    ...taskScoped,
+    mr,
+    conflicts: false,
+    attempt: 1,
+    outcome: 'resolved',
+  },
+  'task.conflict.warned': {
+    ...taskScoped,
+    mr,
+    other_task_id: uuid(21),
+    other_ticket_key: 'ACME-98',
+    paths: ['src/totals.ts'],
+    path_count: 1,
+    truncated: false,
+  },
   'run.created': {
     ...taskScoped,
     run_id: RUN,

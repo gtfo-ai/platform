@@ -303,6 +303,7 @@ export const BUILTIN_STAGE_IDS = [
   'investigation',
   'architecture',
   'implementation',
+  'conflict_resolution',
   'ci_gate',
   'code_review',
   'business_review',

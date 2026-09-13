@@ -235,6 +235,23 @@ export const createPostgresPipelineStore = (
       return rows.map((row) => toStoredTask(row, templateFor(row)));
     },
 
+    listWithMergeRequest: async (tx, projectId, query) => {
+      // `state not in (…)` rather than `= 'active'`: the port's docblock says why, and the two
+      // terminal states are spelled rather than derived because `task_state` is a database enum
+      // and a value added to it later must not silently join this list.
+      const { rows } = await sqlOf(tx).query<TaskRow>(
+        `select ${TASK_COLUMNS} from tasks t
+          where t.project_id = $1
+            and t.id <> $2
+            and t.mr_ref is not null
+            and t.state not in ('done', 'cancelled')
+          order by t.created_at
+          limit $3`,
+        [projectId, query.excludeTaskId, Math.max(query.limit, 0)],
+      );
+      return rows.map((row) => toStoredTask(row, templateFor(row)));
+    },
+
     insert: async (tx, stored) => {
       const { task } = stored;
       await sqlOf(tx).query(

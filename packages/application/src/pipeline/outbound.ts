@@ -41,6 +41,7 @@ import type { JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { runConflictWarning } from './conflict-warning.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
@@ -90,6 +91,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'ticket_lint_post':
         await runTicketLintPost(options, data);
+        return;
+      case 'conflict_warn':
+        await runConflictWarning(options, data);
         return;
       default:
         logger.warn(

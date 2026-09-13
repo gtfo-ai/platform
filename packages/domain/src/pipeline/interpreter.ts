@@ -215,7 +215,39 @@ export const RETURN_LOOPS: Readonly<Record<string, IterationLoop>> = {
   ready_for_merge: 'human_rounds',
 } as const;
 
-export const returnLoopFor = (stage: Slug): IterationLoop | null => RETURN_LOOPS[stage] ?? null;
+/**
+ * The edges where the loop is a property of the **transition** rather than of the stage it leaves
+ * — WP-26, and one entry.
+ *
+ * `RETURN_LOOPS` above attributes by `from`, which is right whenever a stage has one reason to send
+ * a task back. `ready_for_merge` has two, and they are not the same budget:
+ *
+ *  - a human comments on the merge request → `implementation`, which is BD-008's *human MR rounds*;
+ *  - the **default branch moves** → `rebase_gate`, which is product/04 S6b's re-check and costs one
+ *    provider read rather than a round with a person.
+ *
+ * Counting the second as a human round is what this table exists to stop: three merges to `main`
+ * under a waiting merge request escalated the task with *"human_rounds iteration limit of 3
+ * reached: main moved to …"* — a bound nobody had spent, named after a loop nobody had been round
+ * (`saga.test.ts` pinned the wrong number before this). It is an **enumeration** rather than a rule
+ * for the same reason `BUILTIN_GATE_STAGE_IDS` is one: an edge that is not in it falls through to
+ * the table above and then to "no loop, escalate", which is the fail-closed direction, so a
+ * project's own template cannot reach a cheaper counter by pointing at a gate.
+ */
+export const RETURN_LOOPS_BY_EDGE: Readonly<
+  Record<string, Readonly<Record<string, IterationLoop>>>
+> = {
+  ready_for_merge: { rebase_gate: 'rebase_rechecks' },
+} as const;
+
+/**
+ * Which bounded loop a return from `from` to `to` spends.
+ *
+ * `to` is optional so the older callers — and any reader asking "can this stage return at all?" —
+ * keep the question they had; the edge table is consulted only when the target is known.
+ */
+export const returnLoopFor = (from: Slug, to?: Slug): IterationLoop | null =>
+  (to === undefined ? undefined : RETURN_LOOPS_BY_EDGE[from]?.[to]) ?? RETURN_LOOPS[from] ?? null;
 
 // ── Signals and decisions ────────────────────────────────────────────────────
 
@@ -316,7 +348,7 @@ const returnTo = (
   target: Slug,
   reason: string,
 ): PipelineDecision => {
-  const loop = returnLoopFor(from);
+  const loop = returnLoopFor(from, target);
   if (loop === null) {
     return escalate(
       `return from "${from}" belongs to no bounded loop`,

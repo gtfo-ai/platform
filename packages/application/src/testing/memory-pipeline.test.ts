@@ -33,6 +33,7 @@ const task = (id: string, key = 'ACME-1'): StoredTask => ({
       refinement_questions: 2,
       architecture_revisions: 2,
       rebase: 2,
+      rebase_rechecks: 10,
     },
     sequence: 1,
   },

@@ -16,8 +16,21 @@
  *
  * And `has_conflicts: null` is a **third** answer, not a false one: the provider has not finished
  * computing it. Treating unknown as "no conflicts" merges a conflicted branch; treating it as
- * "conflicted" sends a clean branch back to Implementation to fix nothing. So it is neither — the
+ * "conflicted" sends a clean branch to a resolution run with nothing to fix. So it is neither — the
  * gate reports `pending` and the job re-runs it, a bounded number of times.
+ *
+ * ## What happens after it says `false` — and what this module does *not* do (WP-26)
+ *
+ * It runs no command and touches no working copy: the gate is a **read**, and product/04 S6b's
+ * *"rebase, resolve conflicts, re-run CI"* is the template's answer to a failure rather than this
+ * function's. `rebase_gate.fail_to` is `conflict_resolution`, an agent stage declared behind
+ * `ci_gate` (`packages/domain/src/pipeline/templates.ts`), so the failure is a **return** that
+ * spends a round of the `rebase` loop — product/04 S6b's *"bounded, default 2 attempts"*, with the
+ * escalation at the end of it belonging to `returnToStage` like every other loop — and the
+ * resolution's own fall-through re-enters the CI gate above.
+ *
+ * The settlement's *measurement* is not here either: `task.rebase.checked` is appended by the job
+ * that settled the gate (`rebase.ts`), because this module returns a value and writes nothing.
  *
  * ## What a failed CI gate says, and what it deliberately does not (Q55)
  *

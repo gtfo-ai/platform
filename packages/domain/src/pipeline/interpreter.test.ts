@@ -209,7 +209,14 @@ describe('returns', () => {
     });
   });
 
-  it('re-runs the rebase gate when the default branch moves under a waiting MR', () => {
+  /**
+   * WP-26: the two ways back into the rebase gate spend **different** budgets, and the pair is
+   * asserted together because the defect was that they shared one. `ready_for_merge` has two
+   * outgoing returns and `RETURN_LOOPS` attributes by the stage a return leaves, so a merge to the
+   * default branch used to count as a *human MR round* — three of them escalated a task with
+   * `human_rounds iteration limit of 3 reached: main moved to …`, a loop nobody had been round.
+   */
+  it('spends the recheck loop when the default branch moves, not a human round', () => {
     expect(
       interpret(feature, {
         kind: 'event',
@@ -221,8 +228,20 @@ describe('returns', () => {
       kind: 'return',
       from: 'ready_for_merge',
       to: 'rebase_gate',
-      loop: 'human_rounds',
+      loop: 'rebase_rechecks',
     });
+    // The other direction (standing rule 42): the *human's* edge out of the same stage is
+    // unchanged, so the edge table narrowed one transition rather than the stage.
+    expect(
+      interpret(feature, {
+        kind: 'event',
+        stage: 'ready_for_merge',
+        event: 'mr.review.comment',
+        detail: '1 unresolved thread',
+      }),
+    ).toMatchObject({ kind: 'return', to: 'implementation', loop: 'human_rounds' });
+    expect(returnLoopFor('ready_for_merge', 'rebase_gate')).toBe('rebase_rechecks');
+    expect(returnLoopFor('ready_for_merge')).toBe('human_rounds');
   });
 
   it('bounds the rebase gate with its own loop (product/04 S6b: default 2 attempts)', () => {
@@ -233,7 +252,35 @@ describe('returns', () => {
         passed: false,
         detail: 'conflicts in src/totals.ts',
       }),
-    ).toMatchObject({ kind: 'return', to: 'implementation', loop: 'rebase' });
+      // `conflict_resolution`, not `implementation`: the gate's failure enters the short run
+      // product/04 S6b asks for, and that return is what the `rebase` loop counts.
+    ).toMatchObject({ kind: 'return', to: 'conflict_resolution', loop: 'rebase' });
+  });
+
+  /**
+   * The stage is reachable **only** backwards, which is the property that keeps a rebase gate off
+   * every task's happy path. Both directions, because an advance that skipped it and a template
+   * that never declared it look identical from the forward side (standing rule 42).
+   */
+  it('steps over the conflict resolution on the way forward and enters it from the gate', () => {
+    expect(interpret(feature, completed('implementation', 'approve'))).toEqual({
+      kind: 'enter',
+      stage: 'ci_gate',
+    });
+    expect(
+      interpret(feature, {
+        kind: 'gate_settled',
+        stage: 'rebase_gate',
+        passed: false,
+        detail: 'conflicts',
+      }),
+    ).toMatchObject({ to: 'conflict_resolution' });
+    // And the resolution's own completion falls through to the CI gate, which is product/04 S6b's
+    // "re-run CI" expressed as declaration order rather than as a branch.
+    expect(interpret(feature, completed('conflict_resolution', 'approve'))).toEqual({
+      kind: 'enter',
+      stage: 'ci_gate',
+    });
   });
 
   it('shares one counter between the two "the plan was wrong" returns', () => {

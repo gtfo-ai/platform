@@ -5,16 +5,28 @@
  * CI fixes 3, refinement question rounds 2, architecture revisions 2, human MR rounds 3).
  * Exceeding any limit moves the task to `Needs human` … Nothing retries silently."
  *
- * Three of those loops have no key in `pipelineLimitsSchema` (`@platform/contracts`, from
- * technical/12's `pipeline.limits` block): refinement question rounds, architecture revisions and
- * — added at WP-15 — the rebase gate's attempts. They are enforced here with the documented
- * defaults but are not configurable yet: see the WP-02 report; the fix belongs in the config
- * schema, not in a workaround here.
+ * **Two** of those loops have no key in `pipelineLimitsSchema` (`@platform/contracts`, from
+ * technical/12's `pipeline.limits` block): refinement question rounds and architecture revisions.
+ * They are enforced here with the documented defaults but are not configurable yet: see the WP-02
+ * report; the fix belongs in the config schema, not in a workaround here. The rebase gate's two
+ * loops were in that list until **WP-26** and are configurable now (`rebase_attempts`,
+ * `rebase_rechecks`).
  *
  * `rebase` is product/04 S6b rather than BD-008: "rebase (or merge, per project), resolve
- * conflicts (**bounded, default 2 attempts**, by a short Implementation run), re-run CI". It is a
- * return cycle like the others — the rebase gate sends the task back to `implementation` — so it
- * is counted like the others rather than left as the one loop with no ceiling.
+ * conflicts (**bounded, default 2 attempts**, by a short Implementation run), re-run CI". It counts
+ * exactly those attempts: the rebase gate sends the task back to `conflict_resolution`, and the
+ * third failure escalates instead.
+ *
+ * `rebase_rechecks` counts the **other** way into that gate, and it is a separate loop rather than
+ * a second helping of the first because the two bound different things (WP-26). product/04 S6b runs
+ * the gate again "whenever the default branch moves while the MR waits", which is a backwards
+ * transition out of `ready_for_merge` — so before this loop existed it spent a round of
+ * **`human_rounds`**, whose meaning is BD-008's "human MR rounds": three merges to `main` under a
+ * waiting merge request parked the task with *"human_rounds iteration limit of 3 reached: main
+ * moved to …"*, an escalation naming a loop no human had been round. Sharing `rebase` instead would
+ * be worse in the other direction: one default-branch move would eat one of the two resolution
+ * attempts product/04 promises. So there are two counters, and the edge that spends this one is
+ * named in `RETURN_LOOPS_BY_EDGE` (`../pipeline/interpreter.js`).
  */
 import type { PipelineLimits } from '@platform/contracts';
 
@@ -27,6 +39,7 @@ export const ITERATION_LOOPS = [
   'refinement_questions',
   'architecture_revisions',
   'rebase',
+  'rebase_rechecks',
 ] as const;
 
 export type IterationLoop = (typeof ITERATION_LOOPS)[number];
@@ -39,8 +52,19 @@ export const DEFAULT_ITERATION_LIMITS = {
   human_rounds: 3,
   refinement_questions: 2,
   architecture_revisions: 2,
-  /** product/04 S6b, not BD-008. */
+  /** product/04 S6b, not BD-008: conflict-resolution runs per merge request. */
   rebase: 2,
+  /**
+   * Re-checks of the rebase gate driven by the default branch moving (WP-26).
+   *
+   * **Ten, and it is the platform's number rather than a product one** — no document names a limit
+   * for something the outside world drives. It is an order of magnitude above BD-008's largest
+   * agent loop because a round costs one `get_merge_request` read rather than a run, and a merge
+   * request that has outlived ten merges to the default branch is one a human should be looking at
+   * anyway. A project that merges to `main` more often than that raises it with
+   * `pipeline.limits.rebase_rechecks`.
+   */
+  rebase_rechecks: 10,
 } as const satisfies Record<IterationLoop, number>;
 
 export type IterationLimits = Record<IterationLoop, number>;
@@ -57,6 +81,9 @@ export const AGENT_ITERATION_LOOPS = [
   'refinement_questions',
   'architecture_revisions',
   'rebase',
+  // A human decision refills it for the same reason it refills the others: the budget exists to
+  // stop the *machine* looping, and a human who has just looked at the task has ended that concern.
+  'rebase_rechecks',
 ] as const satisfies readonly IterationLoop[];
 
 export type IterationCounters = Readonly<Partial<Record<IterationLoop, number>>>;
@@ -78,7 +105,8 @@ export const resolveIterationLimits = (
   human_rounds: limits?.human_rounds ?? humanRounds ?? DEFAULT_ITERATION_LIMITS.human_rounds,
   refinement_questions: DEFAULT_ITERATION_LIMITS.refinement_questions,
   architecture_revisions: DEFAULT_ITERATION_LIMITS.architecture_revisions,
-  rebase: DEFAULT_ITERATION_LIMITS.rebase,
+  rebase: limits?.rebase_attempts ?? DEFAULT_ITERATION_LIMITS.rebase,
+  rebase_rechecks: limits?.rebase_rechecks ?? DEFAULT_ITERATION_LIMITS.rebase_rechecks,
 });
 
 export interface IterationDecision {

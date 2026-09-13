@@ -15,6 +15,7 @@
  * | 5 | ~~The whole-row `save` writes `ticketSnapshot`/`ticketSnapshotAt`; the SQL `save` does not name those two columns at all (WP-15f).~~ **Closed at WP-15e**: `save` now writes exactly the column set the SQL statement names, in both stores, and the divergence is gone rather than justified. | **same** | It was filed as *stricter* and it was, but a fake that can clobber a column the database cannot is a fake that answers a question production never asks — and the same shape one work package later (`save` clobbering `workpad_ref`, which PostgreSQL **could** do) was a live defect. The partition is now enforced off disk by `tasks-column-ownership.test.ts`. |
  * | 6 | `save` refuses a write over a row whose `version` has moved, exactly as the SQL `where … and version = $n` does (WP-15e). | **same** | The fake compares a number where PostgreSQL compares a predicate, and both throw `TaskConcurrentModificationError`. Asserted for both by `pipeline-store-concurrency-suite.ts`, which drives two transactions over one committed row. The fake's `version` is still only as good as divergence 4: with no isolation, the interleaving it reproduces is the *ordering*, not the locking. |
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
+ * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  */
 import type { ArtifactType, Id, Slug } from '@platform/contracts';
 import { workpadRefSchema } from '@platform/contracts';
@@ -57,7 +58,20 @@ export interface MemoryPipelineStore extends PipelineStore {
   readonly stageRows: readonly StageRow[];
 }
 
-export const createMemoryPipelineStore = (): MemoryPipelineStore => {
+export interface MemoryPipelineStoreOptions {
+  /**
+   * The next `stream_seq` of a task's event stream, read from the harness's own event log — the
+   * number PostgreSQL derives in `TASK_COLUMNS` (WP-26, divergence 7).
+   *
+   * Optional, so every existing construction site keeps working; a harness that composes this store
+   * beside `MemoryEventing` should pass it, and `createPipelineHarness` does.
+   */
+  readonly streamSequence?: (taskId: Id) => number;
+}
+
+export const createMemoryPipelineStore = (
+  options: MemoryPipelineStoreOptions = {},
+): MemoryPipelineStore => {
   const tasks = new Map<Id, StoredTask>();
   const stages: StageRow[] = [];
   const artifacts: StoredArtifact[] = [];
@@ -66,10 +80,24 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
   const approvals = new Map<Id, StoredApproval>();
   let sequence = 0;
 
+  /**
+   * A read of a task row, with `task.sequence` reconciled against the event log (divergence 7).
+   *
+   * The **maximum** of the two, never a replacement: the log's answer is right after an out-of-band
+   * append, and the aggregate's is right inside a transaction whose own appends are still staged.
+   */
+  const readTask = (stored: StoredTask): StoredTask => {
+    const copy = clone(stored);
+    const fromLog = options.streamSequence?.(stored.task.id);
+    return fromLog === undefined || fromLog <= copy.task.sequence
+      ? copy
+      : { ...copy, task: { ...copy.task, sequence: fromLog } };
+  };
+
   const taskRepository: TaskRepository = {
     load: async (_tx, taskId) => {
       const stored = tasks.get(taskId);
-      return stored === undefined ? null : clone(stored);
+      return stored === undefined ? null : readTask(stored);
     },
     findByTicket: async (_tx, query) => {
       const found = [...tasks.values()].find(
@@ -79,20 +107,33 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
           stored.task.ticket.key === query.ticketKey &&
           stored.task.mode === query.mode,
       );
-      return found === undefined ? null : clone(found);
+      return found === undefined ? null : readTask(found);
     },
     findByMergeRequest: async (_tx, query) => {
       const found = [...tasks.values()].find(
         (stored) => stored.task.projectId === query.projectId && stored.mr?.iid === query.iid,
       );
-      return found === undefined ? null : clone(found);
+      return found === undefined ? null : readTask(found);
     },
     listAtStage: async (_tx, projectId, stage) =>
       [...tasks.values()]
         .filter(
           (stored) => stored.task.projectId === projectId && stored.task.currentStage === stage,
         )
-        .map(clone),
+        .map(readTask),
+    listWithMergeRequest: async (_tx, projectId, query) =>
+      [...tasks.values()]
+        .filter(
+          (stored) =>
+            stored.task.projectId === projectId &&
+            stored.task.id !== query.excludeTaskId &&
+            stored.mr !== null &&
+            stored.task.state !== 'done' &&
+            stored.task.state !== 'cancelled',
+        )
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+        .slice(0, Math.max(query.limit, 0))
+        .map(readTask),
     insert: async (_tx, stored) => {
       const duplicate = [...tasks.values()].some(
         (existing) =>

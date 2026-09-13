@@ -76,6 +76,18 @@ export const STAGE_AGENT_DEFAULTS: Readonly<Record<string, StageAgentDefaults>> 
    * platform-tool list is narrowed as well (`PLATFORM_TOOLS_DENIED_BY_STAGE`).
    */
   ticket_lint: { model: 'claude-sonnet-5', effort: 'low', maxTurns: 5 },
+  /**
+   * The rebase gate's conflict resolution (WP-26), and the row is where *"short"* is expressed.
+   *
+   * product/04 S6b asks for *"a short Implementation run"*. The **model** is `implementation`'s,
+   * deliberately: a conflict is resolved by understanding two changes to the same lines, and a
+   * resolution that silently drops one of them is a defect no later stage looks for. What is short
+   * is the *work* — 40 turns against implementation's 200 and a $5 cap against its $15
+   * (`DEFAULT_STAGE_RUN_BUDGET_USD.conflict_resolution`), because the job is bounded by the number
+   * of conflicted hunks rather than by the ticket's scope, and `medium` effort rather than `high`
+   * for the same reason.
+   */
+  conflict_resolution: { model: 'claude-opus-5', effort: 'medium', maxTurns: 40 },
 } as const;
 
 /** The fallback for a stage the table above does not name (a project's custom agent stage). */
@@ -107,9 +119,50 @@ const BUSINESS_REVIEW_STAGE: Stage = {
   return_to: 'implementation',
 };
 
+/**
+ * product/04 S6b's *"resolve conflicts (bounded, default 2 attempts, by a short Implementation
+ * run)"* — WP-26, and the three decisions it embodies.
+ *
+ * **It is a run, not a provider call.** `GitProviderPort`'s own docblock says *"the port never
+ * touches a working copy: clone, branch, commit, rebase and push are the workspace manager's job,
+ * with `git` and a credential helper (BD-025)"*, and the half product/04 actually asks for —
+ * *resolving* the conflict — is not something a provider's server-side rebase endpoint can do at
+ * all: it fails on conflict and hands the branch back. So the gate's failure enters a stage with
+ * the developer's role, its workspace and its narrowed command policy.
+ *
+ * **It is spliced in before `ci_gate`, and the forward path steps over it.** `implementation`
+ * carries an explicit `approve_to: 'ci_gate'` for exactly that reason — declaration order is the
+ * pipeline, so a stage that must be *reachable only backwards* has to sit behind the stage that
+ * skips it. Two things fall out, and both are product/04 S6b's sentence rather than a coincidence:
+ * the gate's `fail_to` is a **return**, so it spends a round of the `rebase` loop and the third
+ * failure escalates (*"bounded, default 2 attempts"*); and the resolution's own fall-through is
+ * `ci_gate`, so the pushed merge commit is **re-checked by the CI gate the platform already has**
+ * (*"re-run CI"*) rather than by a local command no run is allowed to execute (PROGRESS backlog
+ * 49). Re-entering `ci_gate` re-runs the review tail as well, which is the price of resolving a
+ * conflict by changing the code: the diff a human is asked to merge is not the one that was
+ * reviewed.
+ *
+ * **It merges rather than rebases, and that is measured rather than preferred** — see
+ * `STAGE_PROMPT_FOCUS.conflict_resolution` and Q76. product/04 S6b says *"rebase (or merge, per
+ * project)"*; product/19 §3 blocks `git push --force*` at the organisation maximum and no project
+ * may remove it (`DEFAULT_BLOCKED_COMMANDS`), so a rebased branch cannot be published by any run
+ * this build starts. The merge can: it fast-forwards the agent's own branch and pushes it with the
+ * allow-listed `git push origin agentic/*`.
+ */
+const CONFLICT_RESOLUTION_STAGE: Stage = {
+  id: 'conflict_resolution',
+  kind: 'agent',
+  role: 'developer',
+  produces: 'ImplementationNotes',
+  // The notes name the merge request and the branch the run has to bring up to date, and they are
+  // produced by `implementation`, which is upstream in all three ticket templates — the plan is
+  // not (`chore` has no architecture stage), so requiring it would make one template invalid.
+  requires: ['ImplementationNotes'],
+};
+
 const mergeTail = (options: { readonly businessReview: boolean }): readonly Stage[] => [
   ...(options.businessReview ? [BUSINESS_REVIEW_STAGE] : []),
-  { id: 'rebase_gate', kind: 'gate', pass_to: 'ready_for_merge', fail_to: 'implementation' },
+  { id: 'rebase_gate', kind: 'gate', pass_to: 'ready_for_merge', fail_to: 'conflict_resolution' },
   {
     id: 'ready_for_merge',
     kind: 'human',
@@ -141,6 +194,10 @@ const mergeTail = (options: { readonly businessReview: boolean }): readonly Stag
  * product/04's default stage set:
  * `Intake → Refinement → Architecture → Implementation → CI gate → Code review → Business review →
  * Rebase gate → Ready for merge → Merged gate → Retrospective → Done`.
+ *
+ * `conflict_resolution` is declared between `implementation` and `ci_gate` and is **not** in that
+ * sentence, which is the point: nothing advances into it, and only `rebase_gate.fail_to` enters it
+ * (WP-26 — see {@link CONFLICT_RESOLUTION_STAGE}).
  */
 export const FEATURE_TEMPLATE: PipelineTemplate = {
   stages: [
@@ -167,7 +224,18 @@ export const FEATURE_TEMPLATE: PipelineTemplate = {
       produces: 'ImplementationNotes',
       requires: ['ImplementationPlan'],
       return_to: 'architecture',
+      /**
+       * Explicit, because `conflict_resolution` sits between this stage and the gate: the forward
+       * path steps over it and only `rebase_gate.fail_to` enters it (WP-26).
+       *
+       * `approve_to` rather than `next`: an agent stage's completion is routed by its **verdict**,
+       * and `ImplementationNotes` has no verdict channel, so `stageVerdict` reads it as `approve`.
+       * `next` is consulted for a `system` stage only (`interpret`), which is why the `next:
+       * 'librarian'` on `retrospective` is decoration that happens to agree with declaration order.
+       */
+      approve_to: 'ci_gate',
     },
+    CONFLICT_RESOLUTION_STAGE,
     {
       id: 'ci_gate',
       kind: 'gate',
@@ -191,7 +259,8 @@ export const FEATURE_TEMPLATE: PipelineTemplate = {
 /**
  * product/04 § "Bug template (differences)": `Intake → Refinement (bug-flavoured) → Investigation →
  * Architecture (fix plan, regression test) → Implementation → …`. Everything from `implementation`
- * on is the feature template's, which is the point of the difference being stated as one stage.
+ * on is the feature template's, which is the point of the difference being stated as one stage —
+ * including the `conflict_resolution` stage only the rebase gate enters (WP-26).
  */
 export const BUG_TEMPLATE: PipelineTemplate = {
   stages: [
@@ -226,7 +295,18 @@ export const BUG_TEMPLATE: PipelineTemplate = {
       produces: 'ImplementationNotes',
       requires: ['ImplementationPlan'],
       return_to: 'architecture',
+      /**
+       * Explicit, because `conflict_resolution` sits between this stage and the gate: the forward
+       * path steps over it and only `rebase_gate.fail_to` enters it (WP-26).
+       *
+       * `approve_to` rather than `next`: an agent stage's completion is routed by its **verdict**,
+       * and `ImplementationNotes` has no verdict channel, so `stageVerdict` reads it as `approve`.
+       * `next` is consulted for a `system` stage only (`interpret`), which is why the `next:
+       * 'librarian'` on `retrospective` is decoration that happens to agree with declaration order.
+       */
+      approve_to: 'ci_gate',
     },
+    CONFLICT_RESOLUTION_STAGE,
     {
       id: 'ci_gate',
       kind: 'gate',
@@ -254,7 +334,9 @@ export const BUG_TEMPLATE: PipelineTemplate = {
  *
  * With no Architecture stage, `implementation` requires the `RefinedSpec` directly and a code
  * review return has nowhere further back to go than `implementation`, which is what the graph
- * says rather than something the interpreter has to special-case.
+ * says rather than something the interpreter has to special-case. The rebase gate's
+ * `conflict_resolution` stage is the feature template's, unchanged: a chore's merge request meets
+ * a moving default branch exactly as any other does.
  */
 export const CHORE_TEMPLATE: PipelineTemplate = {
   stages: [
@@ -273,7 +355,10 @@ export const CHORE_TEMPLATE: PipelineTemplate = {
       produces: 'ImplementationNotes',
       requires: ['RefinedSpec'],
       return_to: 'refinement',
+      /** As in the other two templates: the forward path steps over `conflict_resolution`. */
+      approve_to: 'ci_gate',
     },
+    CONFLICT_RESOLUTION_STAGE,
     {
       id: 'ci_gate',
       kind: 'gate',

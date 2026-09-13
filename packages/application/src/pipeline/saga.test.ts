@@ -8,7 +8,7 @@
  */
 import type { DomainEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { readDataBlocks } from '@platform/domain';
+import { DEFAULT_ITERATION_LIMITS, readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -137,6 +137,13 @@ const happyRuns = (iid = 7) => ({
   refinement: completedRun(REFINED_SPEC),
   architecture: completedRun(PLAN),
   implementation: completedRun(NOTES(iid)),
+  /**
+   * WP-26's conflict resolution produces the developer's artifact too, so a *scripted* resolution
+   * is a resolution that claims to have merged the default branch in. Whether the branch really
+   * applies afterwards is the **gate's** answer and not this artifact's, which is why the tests
+   * below drive `getMergeRequest` rather than this script to decide the outcome.
+   */
+  conflict_resolution: completedRun(NOTES(iid)),
   code_review: completedRun(REVIEW('approve')),
   business_review: completedRun(ACCEPTANCE('approve')),
   retrospective: completedRun(RETRO),
@@ -745,7 +752,7 @@ describe('code-review convergence (product/04 S5)', () => {
 });
 
 describe('the rebase gate', () => {
-  it('returns to implementation when the branch conflicts, and stops at the loop’s limit', async () => {
+  it('resolves the conflict in a short run and stops at the loop’s limit (product/04 S6b)', async () => {
     const harness = harnessWith({ git: { getMergeRequest: async () => mergeRequest(true) } });
     await harness.publish([ticketMatched()]);
     const task = taskOf(harness);
@@ -753,7 +760,71 @@ describe('the rebase gate', () => {
     // both and then parks for a human rather than looping.
     expect(task.task.iterationCounters.rebase).toBe(2);
     expect(task.task.state).toBe('needs_human');
-    expect(harness.specs.filter((spec) => spec.stage === 'implementation')).toHaveLength(3);
+    expect(task.task.currentStage).toBe('rebase_gate');
+    // **Two resolution runs, not three implementation runs** (WP-26). The failure used to re-enter
+    // `implementation`, which re-did the ticket at $15 a go to fix a merge conflict; it now enters
+    // the short run product/04 S6b asks for, and the *implementation* stage runs exactly once.
+    expect(harness.specs.filter((spec) => spec.stage === 'conflict_resolution')).toHaveLength(2);
+    expect(harness.specs.filter((spec) => spec.stage === 'implementation')).toHaveLength(1);
+    // Each attempt re-runs CI through the gate the platform already has, which is what putting the
+    // stage before `ci_gate` buys: three passes of the CI gate — the first delivery and one per
+    // resolution.
+    expect(task.task.stageAttempts.ci_gate).toBe(3);
+    // The metric product/16 asks for, on the events rather than derived from the escalation's prose.
+    const outcomes = harness
+      .events()
+      .filter((entry) => entry.type === 'task.rebase.checked')
+      .map((entry) => (entry.payload as { outcome: string }).outcome);
+    expect(outcomes).toEqual(['conflicted', 'conflicted', 'exhausted']);
+  });
+
+  it('records a clean check as clean, and one that took a run as resolved', async () => {
+    // The other direction (standing rule 42): the same harness with a branch that applies.
+    const clean = harnessWith();
+    await clean.publish([ticketMatched()]);
+    expect(
+      clean
+        .events()
+        .filter((entry) => entry.type === 'task.rebase.checked')
+        .map((entry) => (entry.payload as { outcome: string; attempt: number }).outcome),
+    ).toEqual(['clean']);
+    expect(clean.specs.filter((spec) => spec.stage === 'conflict_resolution')).toHaveLength(0);
+
+    // And a branch that conflicts once: the resolution run, then a gate that passes — which is
+    // product/16's "resolved automatically".
+    let conflicts = true;
+    const resolved = harnessWith({
+      git: {
+        getMergeRequest: async () => {
+          const answer = mergeRequest(conflicts);
+          conflicts = false;
+          return answer;
+        },
+      },
+    });
+    await resolved.publish([ticketMatched()]);
+    expect(taskOf(resolved).task.state).toBe('ready_for_merge');
+    expect(resolved.specs.filter((spec) => spec.stage === 'conflict_resolution')).toHaveLength(1);
+    expect(
+      resolved
+        .events()
+        .filter((entry) => entry.type === 'task.rebase.checked')
+        .map((entry) => {
+          const payload = entry.payload as {
+            outcome: string;
+            attempt: number;
+            conflicts: boolean;
+          };
+          return {
+            outcome: payload.outcome,
+            attempt: payload.attempt,
+            conflicts: payload.conflicts,
+          };
+        }),
+    ).toEqual([
+      { outcome: 'conflicted', attempt: 0, conflicts: true },
+      { outcome: 'resolved', attempt: 1, conflicts: false },
+    ]);
   });
 
   it('asks again while the provider has not computed mergeability, and gives up loudly', async () => {
@@ -953,7 +1024,51 @@ describe('when the default branch moves under a waiting merge request', () => {
     // It re-entered the gate, passed it again, and is waiting for a human once more.
     expect(taskOf(harness).task.stageAttempts.rebase_gate).toBe(2);
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
-    expect(taskOf(harness).task.iterationCounters.human_rounds).toBe(1);
+    /**
+     * **The re-check spends its own loop, and not a human round** (WP-26).
+     *
+     * This line read `human_rounds` until WP-26, which is the defect rather than the assertion: a
+     * merge to the default branch is not a round with a person, and BD-008 bounds human MR rounds
+     * at 3 — so the fourth merge to `main` under a waiting merge request escalated the task with
+     * *"human_rounds iteration limit of 3 reached: main moved to …"*. Both counters are asserted,
+     * because "the right one moved" and "the wrong one did not" are two facts (standing rule 42).
+     */
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks).toBe(1);
+    expect(taskOf(harness).task.iterationCounters.human_rounds).toBeUndefined();
+  });
+
+  it('keeps re-checking past the human-round limit, and parks when its own loop is spent', async () => {
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    const moves = DEFAULT_ITERATION_LIMITS.rebase_rechecks;
+    for (let move = 0; move < moves; move += 1) {
+      await harness.publish([
+        event('default_branch.moved', {
+          project_id: PROJECT,
+          branch: 'main',
+          new_head: `${move}`.padStart(40, 'd'),
+        }),
+      ]);
+    }
+    // Ten merges to `main` — more than three times BD-008's human-round limit — and the task is
+    // still waiting for its human rather than parked under somebody else's counter.
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks).toBe(moves);
+
+    // The bound is real, though: the next one spends a round that is not there.
+    await harness.publish([
+      event('default_branch.moved', {
+        project_id: PROJECT,
+        branch: 'main',
+        new_head: 'e'.repeat(40),
+      }),
+    ]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated')
+      .at(-1) as Extract<DomainEvent, { type: 'task.escalated' }>;
+    expect(escalation.payload.reason).toContain('rebase_rechecks iteration limit of 10');
   });
 });
 

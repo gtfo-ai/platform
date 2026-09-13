@@ -71,6 +71,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           refinement_questions: 2,
           architecture_revisions: 2,
           rebase: 2,
+          rebase_rechecks: 10,
         },
         sequence: 1,
       },
@@ -391,6 +392,55 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           ),
         ).toEqual([waiting.task.id]);
         expect(await store.tasks.listAtStage(tx, projectId, 'code_review')).toEqual([]);
+      });
+
+      /**
+       * WP-26's conflict warnings ask the store a question no other caller asks: *which other tasks
+       * of this project are working through a merge request right now?* The three clauses are
+       * asserted separately because each one is a way for the answer to be silently wrong — a task
+       * with no merge request, a task that has finished, and the asking task itself.
+       */
+      it('lists the project’s other live tasks that have a merge request', async () => {
+        const withMr = (key: string, state: StoredTask['task']['state'], iid: number): StoredTask =>
+          task(
+            {
+              mr: {
+                provider: 'fake-git',
+                project_path: 'acme/api',
+                iid,
+                url: `https://git.example.test/acme/api/-/merge_requests/${iid}`,
+                branch: `agentic/${key.toLowerCase()}`,
+                head_sha: 'b'.repeat(40),
+              },
+              task: { ...task({}, key).task, state, currentStage: 'ready_for_merge' },
+            },
+            key,
+          );
+        const asking = withMr('ACME-M1', 'ready_for_merge', 101);
+        const peer = withMr('ACME-M2', 'needs_human', 102);
+        const finished = withMr('ACME-M3', 'done', 103);
+        const noMergeRequest = task({}, 'ACME-M4');
+        for (const row of [asking, peer, finished, noMergeRequest]) {
+          await store.tasks.insert(tx, row);
+        }
+
+        const found = await store.tasks.listWithMergeRequest(tx, projectId, {
+          excludeTaskId: asking.task.id,
+          limit: 10,
+        });
+        // `needs_human` counts — its merge request is still open and still conflicts — while `done`
+        // does not, and a task with no merge request cannot overlap with anything.
+        expect(found.map((entry) => entry.task.ticket.key)).toEqual(['ACME-M2']);
+        // The asking task is excluded by the store rather than by the caller: a task overlaps
+        // itself completely, and every caller would have to remember.
+        expect(found.map((entry) => entry.task.id)).not.toContain(asking.task.id);
+        // And the limit is honoured, which is what bounds the provider reads the caller then makes.
+        expect(
+          await store.tasks.listWithMergeRequest(tx, projectId, {
+            excludeTaskId: asking.task.id,
+            limit: 0,
+          }),
+        ).toEqual([]);
       });
     });
 

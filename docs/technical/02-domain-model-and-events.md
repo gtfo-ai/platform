@@ -48,6 +48,8 @@ queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged 
 ```
 Guards: WIP limits on `queued → active`; iteration limits on any `returned`; budget on every `active` entry; readiness/autonomy policies on approvals.
 
+*Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
+
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and
@@ -139,6 +141,8 @@ records the trade).
 | `task.cancelled` / `task.completed` | Pipeline | task, outcome, totals | Ticket transition (110), Slack (210), stats (230) |
 | `task.review.observed` | Review-only (WP-24) | task, mr, head sha reviewed and now, threads posted/resolved/accepted/dismissed/unresolved | stats (230) |
 | `task.lint.posted` | Ticket readiness linter (WP-25) | task, ticket, score, missing elements, questions posted, the ticket's `updated_at` | stats (230) |
+| `task.rebase.checked` | Rebase gate (WP-26) | task, mr, conflicts, attempt, outcome (`clean`/`resolved`/`conflicted`/`exhausted`) | stats (230) |
+| `task.conflict.warned` | Rebase gate (WP-26) | task, mr, the other task and its ticket key, overlapping paths, how many, whether the comparison was cut | stats (230) |
 | `run.created` | Runner | run, task, stage, role, mode, attempt, run key | UI (220) |
 | `run.started` | Runner | run, model, effort, prompt version, context pack | UI (220) |
 | `run.finished` / `run.failed` | Runner | run, status, usage, cost, exit reason | Cost ledger (10), stage executor (20), UI |
@@ -148,7 +152,7 @@ records the trade).
 | `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10), review-only (10 on `opened`, 120 on `merged`/`closed`, WP-24), stats (230) |
 | `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30) |
 | `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10), flaky detector (15) |
-| `default_branch.moved` | git adapter | project, new head | Rebase gate (10), conflict warning (20) |
+| `default_branch.moved` | git adapter | project, new head | Rebase gate (10), KB index (40) |
 | `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210) |
 | `feedback.received` | Feedback | feedback | Feedback intake agent (30) |
 | `knowledge.proposal.created` / `.applied` / `.rejected` | Librarian / Human | proposal | Index rebuild (40), UI |
@@ -157,6 +161,8 @@ records the trade).
 | `config.changed` | Settings / repo sync | scope, diff (secrets redacted), actor | Audit (0), effective config rebuild (10) |
 | `integration.action.performed` / `.failed` | adapters | integration, action, payload (redacted), result | Audit (0), health (20) |
 | `shadow.report.created` | Shadow runner | task, comparison | UI |
+
+**Amendment (WP-26): the conflict warning is a consumer of `task.stage.entered`, not of `default_branch.moved`.** This table listed *"conflict warning (20)"* against the default branch moving, which is one of the two moments product/04 S6b names and not the other: a warning is also owed *before Ready*, when two open merge requests touch the same files and nothing has moved. Both moments are the same stage entry — `ready_for_merge`'s `on` list sends a moved default branch back to `rebase_gate`, so the gate is entered in both cases — so `pipeline.conflict.warning` listens to `task.stage.entered` and filters on the gate (priority 120, the integrations band, because it tells the outside world about a transition the core band has decided). The row above now names the consumer this build actually registers for that event. The KB indexer (WP-18a) is the other one.
 
 Custom project stages (product/04) register handlers on `task.stage.completed` for a predecessor and emit `task.stage.entered` for themselves; the platform validates the template graph at load.
 

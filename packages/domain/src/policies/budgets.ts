@@ -49,6 +49,14 @@ export const DEFAULT_STAGE_RUN_BUDGET_USD: Readonly<Record<string, number>> = {
    * a run goes wrong.
    */
   ticket_lint: 0.5,
+  /**
+   * The rebase gate's conflict resolution (WP-26). A third of `implementation`'s cap, for the
+   * reason `STAGE_AGENT_DEFAULTS.conflict_resolution` gives: the work is bounded by the conflicted
+   * hunks rather than by the ticket, and product/04 S6b calls it *"a short Implementation run"*.
+   * It is a cap rather than an estimate — the run stops at it, and a task may spend it twice
+   * (`DEFAULT_ITERATION_LIMITS.rebase`).
+   */
+  conflict_resolution: 5,
 };
 
 /**

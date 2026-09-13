@@ -396,7 +396,13 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const ids = testIds();
   const memory = new MemoryEventing();
   const bus = new EventBus({ unitOfWork: memory, retryDelayMs: 0, maxRetryDelayMs: 0 });
-  const store = createMemoryPipelineStore();
+  // The event log is wired in, so `task.sequence` is derived from it exactly as PostgreSQL's
+  // `TASK_COLUMNS` derives it (memory-pipeline.ts, divergence 7). Without it an event appended to a
+  // task's stream by anything other than the aggregate leaves the fake's aggregate one behind, and
+  // the *next* aggregate write clashes in production while this tier stays green.
+  const store = createMemoryPipelineStore({
+    streamSequence: (taskId) => memory._committedLastSeq('task', taskId) + 1,
+  });
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();
   const knowledge = options.knowledge ?? memoryKnowledgeStore({ now: () => clock.now() });

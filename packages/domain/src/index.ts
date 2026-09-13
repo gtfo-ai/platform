@@ -55,6 +55,7 @@ export * from './pipeline/templates.js';
 export * from './policies/autonomy.js';
 export * from './policies/budgets.js';
 export * from './policies/command-policy.js';
+export * from './policies/conflict-overlap.js';
 export * from './policies/iteration-limits.js';
 export * from './policies/path-patterns.js';
 export * from './policies/review-only.js';

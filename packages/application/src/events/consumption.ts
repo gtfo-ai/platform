@@ -162,6 +162,12 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // metric — "edited within 48 h" — needs a "this ticket changed" signal no normaliser produces
   // today; `taskLintPostedEvent`'s docblock carries the measurement and the baseline it records.
   'task.lint.posted': 'unconsumed',
+  // WP-41 statistics: product/16's "conflicts auto-resolved vs escalated" and "concurrent-task
+  // overlaps". Both are appended by WP-26 — `task.rebase.checked` once per settlement of the rebase
+  // gate, `task.conflict.warned` once per warned pair — and both carry the numbers a consumer needs
+  // without a second provider read, which is why neither has a projection of its own here.
+  'task.rebase.checked': 'unconsumed',
+  'task.conflict.warned': 'unconsumed',
   'shadow.report.created': 'unconsumed', // WP-34 shadow mode.
 };
 

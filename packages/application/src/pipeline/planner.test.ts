@@ -17,6 +17,7 @@
 import type { Id, IsoDateTime, TicketSnapshot } from '@platform/contracts';
 import { agentRoleSchema } from '@platform/contracts';
 import {
+  CONFLICT_RESOLUTION_EXTRA_ALLOW,
   DATA_BLOCK_TAG,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_READ_ONLY_ALLOW,
@@ -35,6 +36,7 @@ import { silentLogger } from '../ports/logger.js';
 import { FIXTURE_HOSTILE_PATH, FIXTURE_ZERO_WIDTH } from '../testing/fixture-vault.js';
 import { indexedFixtureVault } from '../testing/memory-knowledge.js';
 import {
+  COMMAND_ALLOW_BY_STAGE,
   COMMAND_BASELINE_BY_ROLE,
   commandBaselineFor,
   createStageRunPlanner,
@@ -44,6 +46,7 @@ import {
   TOOLS_BY_ROLE,
   taskTextOf,
 } from './planner.js';
+import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import type { StageRunRequest } from './stage-executor.js';
 import { TICKET_LINT_STAGE } from './ticket-lint.js';
 
@@ -423,18 +426,22 @@ describe('the platform skills a stage is planned with', () => {
         .filter(([, baseline]) => baseline === 'read_only')
         .map(([role]) => role),
     ).toEqual(['discovery']);
-    expect(commandBaselineFor('discovery').allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
-    expect(commandBaselineFor('developer').allow).toEqual(DEFAULT_COMMAND_POLICY.allow);
+    expect(commandBaselineFor('discovery', 'discovery').allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
+    expect(commandBaselineFor('developer', 'implementation').allow).toEqual(
+      DEFAULT_COMMAND_POLICY.allow,
+    );
 
     // What the narrowing actually removes, named rather than implied: the round-1 baseline gave
     // discovery these, and a read-only run is not stopped from pushing by having no credential.
     for (const entry of ['git add *', 'git commit *', 'git push origin agentic/*', 'npm ci']) {
       expect(DEFAULT_COMMAND_POLICY.allow, entry).toContain(entry);
-      expect(commandBaselineFor('discovery').allow, entry).not.toContain(entry);
+      expect(commandBaselineFor('discovery', 'discovery').allow, entry).not.toContain(entry);
     }
     // …and the refusals are untouched: a narrowing must not drop an `ask` or a `block`.
-    expect(commandBaselineFor('discovery').ask).toEqual(DEFAULT_COMMAND_POLICY.ask);
-    expect(commandBaselineFor('discovery').block).toEqual(DEFAULT_COMMAND_POLICY.block);
+    expect(commandBaselineFor('discovery', 'discovery').ask).toEqual(DEFAULT_COMMAND_POLICY.ask);
+    expect(commandBaselineFor('discovery', 'discovery').block).toEqual(
+      DEFAULT_COMMAND_POLICY.block,
+    );
   });
 
   it('refuses a write command under the discovery policy, at the fallback a run really uses', () => {
@@ -448,7 +455,7 @@ describe('the platform skills a stage is planned with', () => {
      * `command-policy.test.ts` already has a read-only case, with fallback `block`; this one uses
      * the fallback a run actually passes, so it measures the arrangement that ships.
      */
-    const policy = commandBaselineFor('discovery');
+    const policy = commandBaselineFor('discovery', 'discovery');
     expect(evaluateCommand({ command: 'git log -5' }, policy, 'ask').verdict).toBe('allow');
     expect(evaluateCommand({ command: 'cat package.json' }, policy, 'ask').verdict).toBe('allow');
     for (const command of [
@@ -464,9 +471,72 @@ describe('the platform skills a stage is planned with', () => {
     // this role's narrowing rather than about the evaluator refusing everything (rule 42).
     for (const command of ['git push origin agentic/x', 'git commit -m x', 'npm ci']) {
       expect(
-        evaluateCommand({ command }, commandBaselineFor('developer'), 'ask').verdict,
+        evaluateCommand({ command }, commandBaselineFor('developer', 'implementation'), 'ask')
+          .verdict,
         command,
       ).toBe('allow');
+    }
+  });
+
+  /**
+   * The per-stage command layer TD-027 added (the ruling on Q77), asserted as the three properties
+   * that keep an *adding* table from becoming a second policy: its keys are real stages, it moves
+   * `allow` only, and the verb it grants is granted **nowhere else** (standing rule 68 over the
+   * stage table, rule 42 in both directions).
+   */
+  it('adds the stage’s command patterns to `allow` and touches nothing else', () => {
+    const stages = new Set(
+      Object.values(SHIPPED_TEMPLATES).flatMap((template) =>
+        template.stages.map((stage) => stage.id),
+      ),
+    );
+    expect(Object.keys(COMMAND_ALLOW_BY_STAGE)).toEqual([CONFLICT_RESOLUTION_STAGE]);
+    for (const stage of Object.keys(COMMAND_ALLOW_BY_STAGE)) {
+      // A key nothing can reach is a default nobody gets — and a typo here is silent otherwise.
+      expect(stages, stage).toContain(stage);
+    }
+    expect(COMMAND_ALLOW_BY_STAGE[CONFLICT_RESOLUTION_STAGE]).toBe(CONFLICT_RESOLUTION_EXTRA_ALLOW);
+
+    const base = commandBaselineFor('developer', 'implementation');
+    const layered = commandBaselineFor('developer', CONFLICT_RESOLUTION_STAGE);
+    expect(layered.ask).toEqual(base.ask);
+    expect(layered.block).toEqual(base.block);
+    expect(layered.allow).toEqual([...base.allow, ...CONFLICT_RESOLUTION_EXTRA_ALLOW]);
+    // The role's own baseline is unchanged by the table: a read-only role at this stage gains the
+    // patterns and still has no write verb (the layer adds, the role still decides the rest).
+    expect(commandBaselineFor('discovery', CONFLICT_RESOLUTION_STAGE).allow).toEqual([
+      ...DEFAULT_READ_ONLY_ALLOW,
+      ...CONFLICT_RESOLUTION_EXTRA_ALLOW,
+    ]);
+  });
+
+  it('grants the merge at the conflict resolution and at no other stage', () => {
+    // The evaluation rather than the list (rule 10), at the fallback a run really uses.
+    const at = (stage: string, command: string) =>
+      evaluateCommand({ command }, commandBaselineFor('developer', stage), 'ask').verdict;
+
+    expect(at(CONFLICT_RESOLUTION_STAGE, 'git merge --no-edit origin/main')).toBe('allow');
+    expect(at(CONFLICT_RESOLUTION_STAGE, 'git merge --abort')).toBe('allow');
+    // Every other stage of every shipped template, enumerated rather than sampled: the entry that
+    // WP-26 first put at the organisation maximum would make this list fail.
+    for (const stage of new Set(
+      Object.values(SHIPPED_TEMPLATES)
+        .flatMap((template) => template.stages.map((entry) => entry.id))
+        .filter((id) => id !== CONFLICT_RESOLUTION_STAGE),
+    )) {
+      expect(at(stage, 'git merge origin/main'), stage).toBe('ask');
+      expect(at(stage, 'git merge --no-edit origin/main'), stage).toBe('ask');
+    }
+    // …and the spellings that discard a side are `ask` at the stage itself (TD-027's closed set,
+    // and `HAZARDOUS_ARGUMENTS` for the same flags written after the ref).
+    for (const command of [
+      'git merge --no-verify origin/main',
+      'git merge origin/main --no-verify',
+      'git merge -s ours origin/main',
+      'git merge origin/main -X theirs',
+      'git merge main',
+    ]) {
+      expect(at(CONFLICT_RESOLUTION_STAGE, command), command).toBe('ask');
     }
   });
 
@@ -564,6 +634,9 @@ describe('the platform skills a stage is planned with', () => {
       'feature.implementation': 'normal',
       'feature.code_review': 'normal',
       'feature.business_review': 'normal',
+      // WP-26's conflict resolution is a stage of a ticket task, so `runs.mode` is the template's
+      // (backlog 57's rule): a rebase is part of delivering this ticket, not a mode of its own.
+      'feature.conflict_resolution': 'normal',
       // Backlog 57's `retro` and `librarian`, still unmapped and shared by all three templates.
       'feature.retrospective': 'normal',
       'feature.librarian': 'normal',
@@ -573,11 +646,13 @@ describe('the platform skills a stage is planned with', () => {
       'bug.implementation': 'normal',
       'bug.code_review': 'normal',
       'bug.business_review': 'normal',
+      'bug.conflict_resolution': 'normal',
       'bug.retrospective': 'normal',
       'bug.librarian': 'normal',
       'chore.refinement': 'normal',
       'chore.implementation': 'normal',
       'chore.code_review': 'normal',
+      'chore.conflict_resolution': 'normal',
       'chore.retrospective': 'normal',
       'chore.librarian': 'normal',
       // Backlog 57's `discovery`, WP-21's to map.
@@ -601,6 +676,18 @@ describe('the platform skills a stage is planned with', () => {
     expect(narrowed).toEqual(
       PLATFORM_TOOLS_BY_ROLE.product_manager.filter((tool) => tool !== 'ask_human'),
     );
+  });
+
+  it('takes `open_mr` away from the conflict resolution and leaves the developer’s other tools', () => {
+    // WP-26: the merge request already exists, and a second one from the same branch would be the
+    // row `findByMergeRequest` answers with — which is how `mr.merged` advances a task.
+    expect(platformToolsFor('developer', 'implementation')).toEqual(
+      PLATFORM_TOOLS_BY_ROLE.developer,
+    );
+    const narrowed = platformToolsFor('developer', CONFLICT_RESOLUTION_STAGE);
+    expect(narrowed).not.toContain('open_mr');
+    // A narrowing, never a widening — the same property the lint stage's case asserts.
+    expect(narrowed).toEqual(PLATFORM_TOOLS_BY_ROLE.developer.filter((tool) => tool !== 'open_mr'));
   });
 
   it('refuses to build a planner whose catalogue cannot answer the table', () => {

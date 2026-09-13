@@ -24,6 +24,9 @@ describe('BD-008 defaults', () => {
       architecture_revisions: 2,
       // Not BD-008: product/04 S6b bounds the rebase gate at "default 2 attempts" (WP-15).
       rebase: 2,
+      // Not BD-008 either, and not product/04: the platform's own ceiling on a gate re-check the
+      // outside world drives (WP-26). Ten, because a round costs a provider read and not a run.
+      rebase_rechecks: 10,
     });
     expect([...ITERATION_LOOPS].sort()).toEqual(Object.keys(DEFAULT_ITERATION_LIMITS).sort());
   });
@@ -41,6 +44,8 @@ describe('resolveIterationLimits', () => {
         business_review_iterations: 0,
         ci_fix_iterations: 1,
         human_rounds: 4,
+        rebase_attempts: 3,
+        rebase_rechecks: 25,
       }),
     ).toEqual({
       code_review: 5,
@@ -49,8 +54,15 @@ describe('resolveIterationLimits', () => {
       human_rounds: 4,
       refinement_questions: 2,
       architecture_revisions: 2,
-      rebase: 2,
+      rebase: 3,
+      rebase_rechecks: 25,
     });
+    // Both halves of WP-26's configuration, and the pair matters: `rebase_attempts` is the
+    // product's key (product/18 § "Rebase gate … attempts") and it is named differently from the
+    // counter it sets, so a mapping that dropped it would leave the shipped 2 in place and look
+    // exactly like a project that configured nothing (standing rule 18).
+    expect(resolveIterationLimits({ rebase_attempts: 0 }).rebase).toBe(0);
+    expect(resolveIterationLimits({}).rebase).toBe(2);
   });
 
   it('uses the autonomy preset for human MR rounds when the config is silent', () => {

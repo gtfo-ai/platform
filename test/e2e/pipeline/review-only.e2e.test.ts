@@ -122,6 +122,23 @@ const humanMergeRequest = async (pipeline: PipelineE2E, labels: readonly string[
 };
 
 /**
+ * The audit rows for the threads this mode posted — **the last write `review_only_post` makes, and
+ * therefore the line every wait in this file binds to.**
+ *
+ * A thread is two writes, in this order: `IntegrationActionExecutor` performs the provider call and
+ * writes the `integration_actions` row **after** it returns (`action-executor.ts` step 5, "Success:
+ * remember it, then record it"). So a wait on the fake provider's discussions is satisfied one
+ * write short of the rows the assertions read, and the summary — posted second — is the row that
+ * goes missing. That is standing rule 50/76's shape, and it is not hypothetical here: delaying the
+ * executor's post-call `record` by 1.5 s made the previous wait fail on **every** run at
+ * `expected [ { …(7) } ] to have a length of 2 but got 1`, which is verbatim the intermittent this
+ * file produced once on a loaded machine. Bind to the row, and the discussion is what the row
+ * implies.
+ */
+const auditedThreads = async (pipeline: PipelineE2E) =>
+  (await pipeline.auditRows()).filter((row) => row.action === 'create_discussion');
+
+/**
  * The threads this mode posted, and the wait that has to precede reading them.
  *
  * **Bound the line you assert, not one that precedes it** (standing rule 50/76). A review-only task
@@ -129,6 +146,8 @@ const humanMergeRequest = async (pipeline: PipelineE2E, labels: readonly string[
  * handler at TD-005 priority 120 enqueues *after* that commit. Waiting on the task state and then
  * reading the merge request is a wait that is structurally incapable of covering the assertion — it
  * passed nothing at all here, which is the honest version of the flake that shape usually produces.
+ * {@link auditedThreads} is that argument one layer further in: the merge request is itself a
+ * *preceding* line once the assertions read the audit.
  */
 const ourThreads = async (pipeline: PipelineE2E, iid: number, url: string) => {
   const ref = { provider: 'fake-git', project_path: GIT_PROJECT, iid, url };
@@ -216,10 +235,14 @@ describe('review-only mode, from a signed merge-request delivery', () => {
     expect(stdin).toContain('merge_request');
 
     // ── the review reached the merge request ────────────────────────────────
+    //
+    // The wait is on the **audit rows**, which this test reads at the bottom and which the executor
+    // writes after the provider call returns — see {@link auditedThreads}. The discussions are then
+    // what those rows imply, so they are asserted rather than waited for.
     const threads = await ourThreads(pipeline, mr.ref.iid, mr.web_url);
     await pipeline.waitFor(
-      'the review to be posted',
-      async () => (await threads.mine()).length >= 2,
+      'both review threads to be posted and audited',
+      async () => (await auditedThreads(pipeline)).length >= 2,
     );
     const ours = await threads.mine();
     // The blocker as an anchored thread, and the summary on the merge request itself. The `nit` is
@@ -255,7 +278,9 @@ describe('review-only mode, from a signed merge-request delivery', () => {
     // happened to wrap.
     const actions = await pipeline.auditRows();
     expect(actions.map((row) => row.action)).not.toContain('open_merge_request');
-    expect(actions.filter((row) => row.action === 'create_discussion')).toHaveLength(2);
+    // The same spelling the wait above uses, so the two cannot drift apart: exactly two, which is
+    // the pair the merge request carries — the blocker and the summary.
+    expect(await auditedThreads(pipeline)).toHaveLength(2);
   }, 180_000);
 
   it('does nothing at all for a merge request the filter does not select', async () => {
@@ -278,6 +303,26 @@ describe('review-only mode, from a signed merge-request delivery', () => {
     expect(response.status).toBe(202);
 
     // The delivery was accepted and recorded; what must not happen is a task, a run or a comment.
+    //
+    // **The bound is the duty's own last read, not the dispatch queue** (standing rules 4 and 49).
+    // Every assertion below is negative, and a negative assertion passes silently on a duty that
+    // has not started: `reviewOnlyHandler` only *enqueues* `review_only_check` after its commit, so
+    // a drained `event_dispatch` says the handler ran, not that the filter did. `runReviewOnlyCheck`
+    // reads the merge request, then its diff, then applies the label filter on the next line with
+    // nothing written in between — so the diff read's `integration_actions` row is the marker that
+    // the refusal has been reached, exactly as `ticket-lint.e2e.test.ts` uses `read_ticket`. This
+    // test is the only reader of that merge request: no task exists, so there is no intake read to
+    // confuse the row with.
+    //
+    // Residual, stated rather than implied: a *broken* filter would insert its task one transaction
+    // after this row, so the wait bounds the refusal and is one transaction short of bounding a
+    // mutant of it. That mutant dies in the ring that owns the filter (`mergeRequestMatchesFilter`
+    // and its unit cases).
+    await pipeline.waitFor('the filter to have read the merge request', async () =>
+      (await pipeline.auditRows()).some(
+        (row) => row.action === 'get_merge_request_diff' && row.payload.iid === mr.ref.iid,
+      ),
+    );
     await pipeline.waitFor('the delivery to be dispatched', async () => {
       const rows = await pipeline.query<{ pending: number }>(
         'select count(*)::int as pending from event_dispatch',
@@ -313,11 +358,14 @@ describe('review-only mode, from a signed merge-request delivery', () => {
       return task?.state === 'done';
     });
 
-    // The human resolves the platform's threads, then merges.
+    // The human resolves the platform's threads, then merges. The same wait as the first test's
+    // (standing rule 49: a liveness fix that is not swept onto its siblings is half a fix) — and
+    // strictly the stronger one, because the audit row is written after the call that created the
+    // thread this test is about to resolve.
     const threads = await ourThreads(pipeline, mr.ref.iid, mr.web_url);
     await pipeline.waitFor(
-      'the review to be posted',
-      async () => (await threads.mine()).length >= 2,
+      'both review threads to be posted and audited',
+      async () => (await auditedThreads(pipeline)).length >= 2,
     );
     for (const discussion of await threads.mine()) {
       await pipeline.git.resolveDiscussion(threads.ref, discussion.id);

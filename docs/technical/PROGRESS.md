@@ -330,6 +330,23 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    arithmetic** — and a number that moved for a reason nobody re-derived is how a real regression hides
    behind a plausible sentence.
 
+   **Another instance, and this one was a *test* rather than a comment — WP-26, session 5, and it was live
+   on `main`.** `RETURN_LOOPS` attributes a return to the loop of the stage it *leaves*, and
+   `ready_for_merge` has two outgoing returns; so the `default_branch.moved → rebase_gate` edge spent
+   **`human_rounds`** (BD-008, ceiling 3), and four merges to `main` under a waiting merge request
+   escalated the task with *"human_rounds iteration limit of 3 reached: main moved to `<sha>`"* — a bound
+   nobody had spent, named after a loop nobody had been round, on the most ordinary event in a busy
+   repository. `saga.test.ts` asserted `iterationCounters.human_rounds` = **1** after a default-branch
+   move: the **number** was right (one return *was* spent) and the **name** was wrong, so the assertion
+   agreed with the defect and pinned it. Fixed by `RETURN_LOOPS_BY_EDGE`, an enumeration keyed by the
+   edge. The instrument lesson is this rule's, moved one step earlier: when a test pins a value the code
+   produced, the thing to re-derive is *which key*, not whether the count is 1 — and a counter's **name**
+   is an explanation, so it is inside this rule's scope and not only its arithmetic. *No eighty-seventh
+   rule is owed for it* (the refiner's judgement, session 5, in the shape entry **62** used): the keying
+   half — a lookup keyed by one endpoint of an edge merges two edges that share it — is already stated at
+   `RETURN_LOOPS_BY_EDGE`'s own docblock, which is where the next counter question (backlog **66**) will
+   be asked, and a new rule restating this one costs every future reader of the list a re-read.
+
 80. **"Nothing under `apps/web` changed" is not "nothing `apps/web` depends on changed", and the target you
    skip on that reasoning is the one that finds it.** WP-17's implementer declined to re-run
    `verify:web-e2e` in round 2 because no file under `apps/web` was touched. The verdict was right and the
@@ -2304,6 +2321,159 @@ nothing. What was owed was this entry — the half the fix did not cover.
 **59** or next edits `pipeline/integrations.ts`. Trigger that would make it urgent: a provider whose
 `readTicket` is *slow* rather than 404-fast, or a project on a tight Jira rate limit, at which point a
 per-stage doomed call becomes a delay on every discovery and review-only run.
+
+### 63. **The conflict warning reaches a merge-request thread and an `events` row, and the board both product documents name has no field to render it — the promised surface is the one surface with nothing on it** (TODO, small — **no work package owns it**; found by WP-26, session 5)
+**What is wrong.** product/04 S6b is *"the board warns when two active tasks touch the same files"* and
+product/18 is *"surfaced on the board ('touches the same files as PROJ-98')"*. What WP-26 ships is a
+thread on the task's **own** merge request plus `task.conflict.warned`. Nothing in `apps/web` reads
+either, and nothing could: `taskRecordSchema` is **strict** and has no field for it
+(`packages/contracts/src/records.ts:207-228`), so the board card has no datum to render, and
+`EVENT_CONSUMPTION` declares the event `unconsumed` with WP-41 named
+(`packages/application/src/events/consumption.ts:165-170`).
+
+**Evidence.** The WP-26 bullet under "Discovered work — session 5", quoted: *"What this row ships is a
+thread on the task's own merge request plus `task.conflict.warned`; nothing in `apps/web` reads either.
+Closing it needs **one field on the task DTO** — the other task's ticket key and the overlapping path
+count, which a projection over the task stream can answer without a table — a badge on the board card,
+and the WP-15h census entry that comes with any new client path. It is recorded here rather than built
+because a client path with no screen is exactly what that census refuses."* Read off the tree (refiner,
+session 5; no test run, rule 66): `grep -rn conflict apps/web/src` matches **nothing**, and the twenty
+fields `taskRecordSchema` publishes include `mr_ref` and `iteration_counters` and no overlap of any
+kind. The refusal to add a client path with no screen is correct and is not what this entry is about.
+
+**What it costs to leave.** The feature's only human-visible output is inside a merge request — the
+place a maintainer goes *after* deciding what to work on — while the promise in two product documents is
+about the screen where that decision is made. A reader of the board is told nothing, and the platform
+already knows. Meanwhile `task.conflict.warned` accrues with no reader, so whoever writes the
+projection later writes it over history whose meaning nobody re-derives (the shape backlog **52** has
+for `human_actions`).
+
+**What "done" looks like.** One nullish field on `taskRecordSchema` — the peer's ticket key and the
+overlapping path count, which a projection over the task's own stream answers without a table — the
+projection beside the others in `apps/server/src/queries/pipeline-queries.ts`, the badge on the board
+card, the census line in `apps/server/src/routes/client-census.test.ts` that comes with any new client
+path, and `pnpm schemas` regenerated. **Entry 64 must be answered in the same change**: on this build
+only one task of a warned pair has the event, so the badge would appear on one card of two and read as
+*"PROJ-98 conflicts with PROJ-12 but not vice versa"*.
+
+**Depends on / owner.** No dependency; the events, the comparison and the read API all exist.
+**No work package owns it.** Cheapest owner is **WP-41** (statistics), which already owes the only
+consumer of both WP-26 events and would traverse the same stream once for both — but WP-41 is M3 and the
+promise is M2, so if the badge is wanted in M2 it is a small row of its own and this entry is its brief.
+No measurement needed.
+
+### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5)
+**What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
+calls `getMergeRequestDiff` once for the task and once per peer and keeps `new_path`/`old_path`; the
+port's `FileDiff` carries `diff` as well, so every patch is fetched and discarded. One gate entry is
+**1 + up to 10** provider reads (`MAX_CONFLICT_PEERS = 10`) of **up to 100 files each**
+(`MAX_CONFLICT_FILES = 100`).
+
+**Evidence.** The WP-26 bullet, quoted: *"one gate entry on a project with three live merge requests
+fetches three merge requests' worth of patch text and discards all of it, bounded at 100 files per read.
+The honest read is a paths-only port method (`getChangedPaths(ref, {limit})`, answerable from GitLab's
+`…/diffs` and GitHub's `…/files` without the patch)"*.
+
+**The last clause does not hold for the endpoint this build uses** (refiner, session 5, read off the
+tree; no network read and no test run — rule 66). The adapter's read is
+`GET …/merge_requests/:iid/diffs` with `per_page`
+(`packages/integrations/src/providers/gitlab/client.ts:341-351`), and this repository's **own**
+provenance record for that page — retrieved **2026-09-13**, the same day the row was written — enumerates
+its query attributes as exactly *"its `page`, `per_page` and `unidiff` attributes, its eleven response
+attributes (`a_mode`, `b_mode`, `collapsed`, `deleted_file`, `diff`, `generated_file`, `new_file`,
+`new_path`, `old_path`, `renamed_file`, `too_large`)"* (`test/fixtures/http/gitlab/SOURCES.md:127-135`).
+There is no field selector, so a `getChangedPaths` implemented over that endpoint would fetch the same
+patches and discard them one layer lower. Whether GitLab has **another** surface that answers paths
+without patches — GraphQL `diffStats`, the deprecated `…/changes` — is **not established: needs a
+documentation check with provenance** before this is planned as a port method.
+
+**What it costs to leave.** Derived arithmetic rather than a measurement: the gate is re-entered on
+every `default_branch.moved` that finds a task waiting, so one merge to a busy project's default branch
+costs `K × (1 + min(K−1, 10))` diff reads, where `K` is the number of that project's tasks with a live
+merge request — 25 reads at five tasks, 110 at eleven — each carrying patch text nobody reads. It is
+bandwidth and somebody else's rate limit; **no wrong behaviour follows**, which is why this is small.
+
+**What "done" looks like.** Two shapes, cheap one first. **(a) Bound the waste where it is.** Every
+task at the gate in the same minute reads the same peers' merge requests, and the revision is already
+treated as the identity of a warning (`conflictWarningIdempotencyKey` keys on `head_sha`), so one
+coalesced read per `(merge request, head sha)` removes the `K²` factor with no port change and no
+provider work. **(b) The port method, only once a documented surface answers it without the patch** —
+`getChangedPaths(ref, {limit})` is a method, a fake, a shared contract-suite case, a GitLab adapter and a
+fixture with a `source` block, which is a work package. Whoever plans (b) records the page and the
+retrieval date the way `SOURCES.md` does; if no such surface exists, (b) closes as *"refused, and here is
+why"* rather than staying open as an unbuilt improvement.
+
+**Depends on / owner.** No dependency. **No work package owns it**; nearest is whoever next touches the
+git adapter. Trigger that would make it urgent: a project with a busy default branch and ten or more
+live merge requests, where the `K²` reads land on the provider's rate limit that the pipeline's own
+calls share.
+
+### 65. **A conflict warning is posted on the merge request of whichever task entered the rebase gate second, and the other task of the pair is never told** (TODO, small — stated as a design property by WP-26 and filed because the promise is about the pair; **no work package owns it**; found by WP-26, session 5)
+**What is wrong.** The trigger is `task.stage.entered` filtered to the rebase gate, so a task learns
+about an overlap only when **its own** gate runs. A task whose gate ran before the peer had a merge
+request is told nothing, and it is asleep at `ready_for_merge`, woken only by `mr.review.comment`,
+`default_branch.moved` and `mr.merged` — not by a peer opening an overlapping merge request.
+
+**Evidence.** The duty's own docblock, quoted
+(`packages/application/src/pipeline/conflict-warning.ts:31-35`): *"**It warns one side of the pair, and
+that is a property of the trigger rather than an oversight.** A task whose gate ran before the other
+task had a merge request is told nothing; the other one, at its own gate, is told about both. Warning
+both would mean recomputing on every `mr.opened` and `mr.updated` of every project, which is a provider
+read per peer per push."* The reasoning for not recomputing per push is sound and this entry does not
+dispute it.
+
+**What it costs to leave.** Working as designed, with a cost the design statement does not name: both
+product sentences are about the **pair** (*"when two active tasks touch the same files"*), and the
+warning is on one merge request. The developer who is about to push the conflicting change is precisely
+the one who is not told. It also makes entry **63**'s badge asymmetric on the board, which is a wrong
+reading rather than a missing one.
+
+**What "done" looks like.** The symmetric answer that costs no extra provider read: the overlap for a
+pair is already computed, so the duty appends `task.conflict.warned` for **both** tasks and posts the
+thread on the one whose gate ran. The peer's own `mr_ref.head_sha` is loaded already, so the peer's
+idempotency key is available. Two things whoever does it inherits: the append lands on another task's
+**live** stream, which is exactly the case that broke eleven tests through the in-memory store's
+sequence (WP-26's divergence 7 — the three earlier out-of-band appenders all landed on stopped tasks);
+and a decision about whether the peer also gets a thread on *its* merge request, which is a second
+provider write per pair and BD-003's audit row with it.
+
+**Depends on / owner.** No dependency; entry **63** consumes it. **No work package owns it**; cheapest
+is whoever takes 63, in the same change, because the board is where the asymmetry becomes visible.
+
+### 66. **A conflict resolution re-runs the whole review tail, and two of them can spend over half a task's default budget and two of its three code-review rounds** (TODO, small — priced and deliberate; filed for the bound nobody stated; found by WP-26, session 5)
+**What is wrong.** Nothing in the pipeline: `conflict_resolution` falls through to `ci_gate`, which is
+product/04 S6b's *"re-run CI"*, and the tail after it is `code_review` → `business_review` →
+`rebase_gate` (`packages/domain/src/pipeline/templates.ts:163-191`). The price is stated at the line —
+*"Re-entering `ci_gate` re-runs the review tail as well, which is the price of resolving a conflict by
+changing the code: the diff a human is asked to merge is not the one that was reviewed"* (`:140-143`).
+What is stated nowhere is the bound in the two currencies that **stop a task**.
+
+**Evidence** (refiner, session 5; caps read off the tree, no run — rule 66). `DEFAULT_STAGE_RUN_BUDGET_USD`
+(`packages/domain/src/policies/budgets.ts:26-34`) caps `conflict_resolution` at **$5**, `code_review` at
+**$5** and `business_review` at **$3**; `DEFAULT_ITERATION_LIMITS.rebase` is **2**
+(`packages/domain/src/policies/iteration-limits.ts:56`), so a task can do this twice. That is **up to $26
+of caps** against BD-010's default per-task cap of **$50** — before the human's own review rounds are
+counted. And a re-review that **returns** spends `code_review` (limit 3) or `business_review` (limit 2),
+BD-008 bounds meant for the agent's iteration on findings; two resolutions whose reviews both return
+leave one code-review round for everything else. Whether a re-review of a merge commit typically
+returns is **a hypothesis, not a measurement**: no run of the tail after a resolution has been observed.
+
+**What it costs to leave.** A task can pause on budget, or escalate on a review loop, for reasons that
+are entirely the default branch's traffic — and the escalation names the review loop rather than the
+conflict. That is the *reading* problem the `human_rounds` defect had (see standing rule **81**'s WP-26
+instance), one loop further out: the bound is spent correctly and its name explains nothing.
+
+**What "done" looks like.** The cheap half is not code: the two numbers above belong where a reader
+meets them — beside `CONFLICT_RESOLUTION_STAGE`, which prices the run and not the tail, and in
+product/04 S6b's paragraph. The expensive half waits on a measurement: **needs measurement** — the first
+dogfood task (or WP-33's nightly real-LLM smoke) that actually hits a conflict tells us whether the
+re-review returns. Only if it does is there a decision to make, and it is a counter decision of exactly
+the shape WP-26 built `RETURN_LOOPS_BY_EDGE` for: whether a review round after an automatic resolution
+spends the same budget as one after a human's finding.
+
+**Depends on / owner.** No dependency. **No work package owns it**; the measurement arrives with
+**WP-33** or with the first conflicted dogfood task, and the documentation half is whoever next edits
+product/04 S6b.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -11992,7 +12162,519 @@ would have moved them, and `expect(workpads).toBe(0)` could not have failed. It 
 (the stubs also *throw*, which is what killed that guard's mutant), but it is a vacuous assertion in
 a file this round was auditing, so the helper now returns the live `counters` object.
 
+### Ruling — Q77 (architect, session 5) — the merge is a stage default, and BD-025 already said "per stage"
+
+**Asked against WP-26's uncommitted tree**, where the rebase gate works because `'git merge'` and
+`'git merge *'` were added to `DEFAULT_IMPLEMENTATION_ALLOW` — the organisation **maximum** that every
+implementation-stage run of every project inherits — to serve one stage, while product/19 §3's
+Implementation list names `git rebase` and no merge at all. The refiner offered two resolutions
+(amend the document's Implementation list, or push the merge onto the ask-list and make product/04
+S6b's automatic resolution not automatic) and asked an architect to choose.
+
+**Ruling: neither — the third one, which is the document's own shape. (b), narrowed.** Recorded as
+**TD-027** (`docs/decisions/technical/TD-027-stage-scoped-command-defaults.md`), with the third
+per-stage bullet in **product/19 §3**, the mechanism amended into **technical/04 § "Hooks and
+policies"**, and **Q77** answered in `OPEN-QUESTIONS.md` (Q76 gets a cross-reference and stays open).
+
+BD-025 §2 is *"Defaults ship **per stage**; the organisation sets the maximum autonomy; projects can
+only narrow it"* and product/19 §3 is titled *"Command policy defaults per stage"*. The code
+implements that **per role** — `COMMAND_BASELINE_BY_ROLE` picks one of two baselines and
+`commandBaselineFor(role)` is called once, at `planner.ts:542` — so there was no place to put a
+one-stage default and the only reachable list was the maximum. Per role was the approximation; the
+stage layer is the missing half of a decision already taken, not a new concept, which is why this is
+a ruling and not a new BD.
+
+**Why not the alternatives, in one line each.** *(a) merge at the maximum, narrowed or not:* it
+changes the Implementation sentence for every project to serve one stage, and it puts a second,
+**unmeasured** writer on the activity BD-030 gave the rebase gate and product/16 counts
+(`task.rebase.checked`, *"conflicts auto-resolved vs escalated"*) — standing rule 9, one number two
+writers. *(c) `git push --force-with-lease origin agentic/*`:* it needs a **block** entry split
+(`git push --force*` is a prefix), which is the one list BD-025 lets nobody narrow and which Q76
+already owns; git-push(1) says the lease is *"trivially defeated if some background process is
+updating refs"* and this run's own first command is an allow-listed `git fetch`, so it would set the
+lease it then satisfies (`--force-if-includes` is git's documented repair and would have to come
+with it); and the blast radius rests on the provider's branch protection, which **Q40** records as an
+operator prerequisite no platform code verifies. Declined at this row; Q76 unchanged. *(d) product/18's
+`strategy: rebase | merge`:* unchanged from WP-26 — an unread key is backlog 58 and a key whose second
+value cannot run is worse than one. *(e) change nothing:* the constant and the document would keep
+contradicting each other and the document moves first.
+
+**What makes the narrow list safe is what is *not* in it.** git-merge(1) (retrieved 2026-09-13):
+`-s ours` gives a merge whose *"resulting tree … is always that of the current branch head,
+effectively ignoring all changes from all other branches"* — the one effect no already-allowed
+command had, because it writes **ancestry**: the branch claims commits it does not contain and the
+human merge that follows reverts them; `--no-verify` *"bypasses"* the *"pre-merge and commit-msg
+hooks"*, walking around the hazard `git commit* --no-verify*` is already floored for (a repository's
+pre-commit hook is where its secret scan runs, BD-002); `-X ours`/`-X theirs` *"forces conflicting
+hunks to be auto-resolved cleanly by favoring"* one side, which is exactly what
+`STAGE_PROMPT_FOCUS.conflict_resolution` tells the model not to do. Because the four allowed
+spellings let **nothing sit between the verb and a remote-tracking ref**, all five reach the `ask`
+fallback (rule 4) and an unattended run is denied.
+
+*Amended after WP-26 round 2 measured it (rule 83).* This ruling went on to say *"so **no
+`HAZARDOUS_ARGUMENTS` entry is added**: the defence is a closed set, not a blacklist chasing
+spellings"*, **and that was wrong**: an allow glob's `*` spans spaces, so the same flags written
+*after* the ref — `git merge origin/main --no-verify`, `… -s ours`, `… -X theirs` — match
+`git merge origin/*` and answered `allow` (measured with `evaluateCommand`). The closed set answers
+for the pre-ref position only; four floors answer for the rest — `git * --no-verify*` (which also
+closed `git push origin agentic/x --no-verify`), `git merge* -s*`, `git merge* --strategy*`,
+`git merge* -X*` — and they belong on that list rather than on the ask-list because an ask entry wins
+only by pinning more literal characters and `git merge origin/*` pins eighteen. The shape of the
+ruling is unchanged; the sentence explaining **why** it is safe is corrected here, in TD-027's
+*"Amendment (WP-26 round 2 — as measured)"*, in product/19 §3's fourth bullet and in technical/04's
+amendment. `--no-edit` is in the set because
+git-merge(1) makes the editor the default on a successful mechanical merge and a run has no terminal;
+`--abort` is in it because `git reset --hard origin/*` is blocked and a half-finished merge would
+otherwise strand the workspace for the second of BD-030's two attempts.
+
+**The enforcement point, read off the code rather than remembered** (the question asked for this):
+the only thing that evaluates a shell command is the platform-side `PreToolUse(Bash)` hook
+(`packages/infrastructure/src/runner/hooks.ts` → `evaluateCommand`). `apps/launcher` never sees a
+command, and the runlet never sees one — the shim *"owns exactly one child: the Claude Code CLI"* and
+its credential socket *"accepts `cred.get` and `ping` and refuses every other frame, `spawn`
+included"* (TD-025). So for what `git` is asked to do inside a workspace, this policy is the layer,
+not one of several; around it are the container's mounts, the egress proxy and the credential caps,
+and behind it a push credential whose `branchPatterns` is **carried, not enforced** (Q40).
+
+**What WP-26 owes before it merges** — five files and two tests; nothing about the gate, the stage
+graph, the loops or the events changes.
+
+1. `packages/domain/src/policies/command-policy.ts` — delete `'git merge'` and `'git merge *'` from
+   `DEFAULT_IMPLEMENTATION_ALLOW` together with the docblock paragraph that justifies them, and add
+   beside it `export const CONFLICT_RESOLUTION_EXTRA_ALLOW: readonly string[] = ['git merge origin/*',
+   'git merge --no-edit origin/*', 'git merge --abort', 'git merge --continue']` — **extra patterns,
+   not a replacement list**, so the additive direction is structural — citing TD-027 and product/19 §3.
+   While there, the `DEFAULT_IMPLEMENTATION_ASK` docblock's closing sentence (*"what that stage runs
+   is `git merge`"*) must name the stage list rather than the maximum.
+2. `packages/application/src/pipeline/planner.ts` — add `COMMAND_ALLOW_BY_STAGE: Readonly<Record<string,
+   readonly string[]>> = { [CONFLICT_RESOLUTION_STAGE]: CONFLICT_RESOLUTION_EXTRA_ALLOW }` beside
+   `PLATFORM_TOOLS_DENIED_BY_STAGE` (which already imports that stage id from `rebase.ts`, so no new
+   import edge), change `commandBaselineFor(role)` to `commandBaselineFor(role, stage)` returning
+   `{ ...base, allow: [...base.allow, ...(COMMAND_ALLOW_BY_STAGE[stage] ?? [])] }`, and pass
+   `stage.id` at the single call site (`planner.ts:542`, inside `narrowCommandPolicy`, which stays
+   **after** the layer so a project still narrows the result).
+3. `packages/domain/src/prompt/assembly.ts` — `STAGE_PROMPT_FOCUS.conflict_resolution` item 1 must
+   name the **exact** spellings (`git fetch`, then `git merge --no-edit origin/<default branch>`,
+   `git commit -m` to conclude, `git merge --abort` to back out) and say that any other merge form is
+   denied unattended. Without it the model writes `git merge main` or `git merge -X theirs` and burns
+   an attempt on a denial. The focus is platform text in layers 1–3, so `promptVersion`'s digest
+   covers the edit; **no `ROLE_PROMPT_VERSIONS` bump** is owed unless `packages/prompts/roles/*`
+   changes.
+4. Tests — `command-policy.test.ts`: `git merge origin/main` is **`ask`** under `DEFAULT_COMMAND_POLICY`
+   and **`allow`** under the conflict-resolution baseline; `git merge -s ours origin/main`,
+   `git merge --no-verify origin/main`, `git merge -X theirs origin/main` and `git merge main` are
+   `ask` under **both**. `planner.test.ts`: every key of `COMMAND_ALLOW_BY_STAGE` is a stage id that
+   exists in a shipped template, and the layer leaves `ask` and `block` byte-identical to the role
+   baseline (the invariant that keeps an "adding" table from becoming a second policy).
+5. This ledger — the WP-26 section's sentence *"(it is the one verb of product/19 §3's Implementation
+   sentence that the shipped constant omits)"* is **false** (product/19 §3 does not contain the verb)
+   and is the first thing a later reader meets. The row owns that correction; TD-027 is the reference.
+
+**What is deliberately left alone.** `git rebase *` is still a wide spelling at the maximum — the verb
+*is* in product/19 §3, its `-x`/`--exec` forms are on the ask list and its `--upload-pack`/`--exec`
+payloads are floored — so pinning its arguments the way the merge's are pinned is a change to a
+documented entry and needs its own row. The two git behaviours this ruling turns on are cited inline
+in TD-027 with retrieval dates rather than in a `docs/research/` file, because the ruling was made in
+a round that could not open one.
+
+### WP-26 — the rebase gate and conflict warnings
+
+**What exists now.** A task's merge request is checked against its target before Ready and again
+every time the default branch moves under it; a branch that no longer applies is brought up to date
+by a **short developer run**, bounded at two attempts, after which the task escalates; every
+settlement of the gate records what it saw; and a task whose merge request touches the same files as
+another live task's gets one thread on its own merge request saying so. Twelve files carry it:
+`packages/contracts/src/{common,config,events}.ts` (the stage id, two `pipeline.limits` keys, two
+events), `packages/domain/src/policies/iteration-limits.ts` (a second loop and both config keys),
+`packages/domain/src/pipeline/interpreter.ts` (`RETURN_LOOPS_BY_EDGE`),
+`packages/domain/src/pipeline/templates.ts` (`CONFLICT_RESOLUTION_STAGE` in the three ticket
+templates), `packages/domain/src/policies/{budgets,command-policy,conflict-overlap}.ts`,
+`packages/domain/src/prompt/assembly.ts` (`STAGE_PROMPT_FOCUS.conflict_resolution`),
+`packages/application/src/pipeline/{rebase,conflict-warning}.ts`, the store's
+`listWithMergeRequest` in both implementations, and `packages/application/src/testing/memory-pipeline.ts`
+(divergence 7, below). **No migration**: `tasks.iteration_counters` and `iteration_limits` are
+`jsonb`, `tasks.template_snapshot` holds the template, and the two events need no table.
+
+**The rebase is a run, not a provider call, and the port is where that is decided.**
+`GitProviderPort`'s own docblock reads *"the port never touches a working copy: clone, branch,
+commit, rebase and push are the workspace manager's job, with `git` and a credential helper
+(BD-025)"*, and there is no `rebase` method to check for. Adding one would not have paid either: a
+provider's server-side rebase (GitLab's `PUT …/merge_requests/:iid/rebase`) **fails on conflict** and
+hands the branch back, which is the half product/04 S6b actually asks for — *resolve* conflicts. So
+the gate's failure enters an agent stage with the developer's role, its workspace, its minted push
+credential and its narrowed command policy (technical/04, BD-025).
+
+**What that run runs is `git merge`, and that is measured rather than preferred (Q76).** product/04
+S6b offers *"rebase (or merge, per project)"*. Measured with `evaluateCommand` against the shipped
+policy **before** anything was written: `git push --force-with-lease origin agentic/acme-1` is
+**block**, matched `git push --force*` — as are the `--force-with-lease=<ref>` spelling and the flag
+written after the refspec — and `DEFAULT_BLOCKED_COMMANDS` is the organisation maximum, which
+`narrowCommandPolicy` only ever *adds* to. A rebase rewrites history and can only be published with a
+force push, so a run told to rebase would do the work and be denied the last command. `git merge` was
+**not on the allow list either** — and **product/19 §3 did not name it anywhere**: its Implementation
+sentence lists `git rebase` and no merge at all, and the verb appears only in product/04 S6b's
+*"rebase (or merge, per project)"*. Round 1 read that backwards and added `'git merge'`/`'git merge *'`
+to the organisation maximum, which is what **Q77** objected to; **TD-027** ruled, and the four literal
+spellings now live on a `conflict_resolution` **stage** layer instead (review round 2 below, and
+product/19 §3's fourth bullet, which is where the document says them). The merge's result is published
+by the already-allowed `git push origin agentic/*`. Q76 asks whether product/19 §3's block was meant
+to cover `--force-with-lease` into the platform's own namespace and recommends leaving it alone —
+which is what this row implements — with the carve-out written out for whoever owns that document.
+**product/18's `strategy: rebase | merge` key is therefore deliberately not added**: an unread key is
+backlog 58's defect and a key whose second value cannot run is worse than one.
+
+**Where the stage sits, and why the graph says it rather than the interpreter.**
+`conflict_resolution` is declared **between `implementation` and `ci_gate`** and `implementation`
+carries an explicit `approve_to: 'ci_gate'`, so the forward path steps over it: declaration order is
+the pipeline, so a stage that must be reachable *only backwards* has to sit behind the stage that
+skips it. Two of product/04 S6b's clauses then fall out of the data rather than out of a branch:
+`rebase_gate.fail_to: conflict_resolution` is a transition to an **earlier** stage, so it is a
+*return* and spends a round of the `rebase` loop — *"bounded, default 2 attempts"*, with the
+escalation at the end of it belonging to `returnToStage` like every other loop (Q59's ending, no new
+task state) — and the resolution's own fall-through is `ci_gate`, which is *"re-run CI"* through the
+provider's pipeline and never a local command (PROGRESS backlog **49** is therefore not a blocker for
+this row, and the CI gate is the reason: it reads `getPipelineStatus`). `approve_to` and not `next`,
+because the interpreter routes an **agent** stage's completion by its verdict and consults `next`
+only for a `system` stage — which is why `retrospective`'s `next: 'librarian'` is decoration that
+happens to agree with declaration order. The price is stated at the line: re-entering `ci_gate`
+re-runs the review tail, because the diff a human is asked to merge is no longer the one that was
+reviewed.
+
+**The attempt count does not travel in the job payload, and that is a deviation from the brief with
+a reason.** The brief asked for it to ride `stage.execute` the way `gate_checks` and
+`start_attempts` do. Those two count things **no aggregate knows about** — how many times a gate
+answered "not yet", how many times a transport failed to start a run — and they are lost on purpose
+when the wake-up is. A conflict-resolution attempt is a *return*, which BD-008 already counts on the
+task (`tasks.iteration_counters`), enforces in `returnToStage` (the counter can never pass its
+limit), publishes on `task.stage.returned.iteration` and escalates from with a blocker brief. Putting
+it in a payload as well would give one number two writers and no arbiter (standing rule 9), and the
+row survives a restart where a payload does not. `pipeline.limits.rebase_attempts` is the strict
+schema half the brief asked for (`.max(20)`), and it is the **first** time the rebase loop is
+configurable at all — `iteration-limits.ts` said "not configurable yet" until this row.
+
+**The second loop is the defect this row found, and it was live on `main`.** `ready_for_merge` has
+two outgoing returns and `RETURN_LOOPS` attributes by the stage a return *leaves*, so the
+`default_branch.moved → rebase_gate` edge spent a round of **`human_rounds`** — BD-008's *"human MR
+rounds"*, ceiling 3. Four merges to `main` under a waiting merge request therefore escalated the task
+with *"human_rounds iteration limit of 3 reached: main moved to `<sha>`"*: a bound nobody had spent,
+named after a loop nobody had been round, on the single most ordinary event in a busy repository.
+`saga.test.ts` **pinned the wrong number** (`iterationCounters.human_rounds` = 1) rather than
+catching it. The fix is `RETURN_LOOPS_BY_EDGE`, an **enumeration** with one entry: the loop is a
+property of the *transition* where the two disagree, everything else falls through to the stage
+table, and an edge in neither cannot return at all (the fail-closed direction, so a project's own
+template cannot reach a cheaper counter by pointing at a gate). Sharing the `rebase` loop instead was
+measured and rejected at the line: one default-branch move would then eat one of the two resolution
+attempts product/04 promises. The new loop's ceiling is **10** and it is the platform's number rather
+than a product one — no document bounds something the outside world drives — chosen an order of
+magnitude above BD-008's largest because a round costs one provider read rather than a run;
+`pipeline.limits.rebase_rechecks` raises it to 50.
+
+**What "surfaced" is, and where the overlap is computed.** Two things, and neither is the board. (1)
+**A thread on the task's own merge request**, un-anchored, through the `createDiscussion` WP-24
+widened — so no port method is added, and the warning reaches the humans and agents already looking
+at that merge request. (2) **`task.conflict.warned`**, which is product/16's *"concurrent-task
+overlaps"* and is what a board projection will read when one exists. The board badge needs a DTO
+field and a screen, neither of which exists, and adding a client path with no screen is what the
+WP-15h census refuses — it is discovered work below, with the field named. The overlap is computed
+**from the merge requests' changed paths through the provider** (`getMergeRequestDiff`, WP-24's), not
+from platform knowledge of the branches: `tasks.mr_ref` holds an iid, a branch and a head sha and no
+file list, so the alternative is a column somebody has to keep in step with a provider. The cost is
+stated rather than discovered: one provider read per peer, bounded at **10** peers and 100 files
+each, and each read returns *patches* the platform then throws away, because that is the shape the
+port has. A paths-only port method is recorded as discovered work rather than added here.
+
+**The trigger is the gate's entry, which is both of product/04 S6b's moments.** technical/02
+attributed the conflict warning to `default_branch.moved` at priority 20; that is one of the two
+moments and not the other, because a warning is also owed *before Ready* when nothing has moved. One
+handler on `task.stage.entered` filtered to `rebase_gate` reaches both, since `ready_for_merge`'s
+`on` list sends a moved default branch back into the gate — the amendment is on that page. It warns
+**one side of the pair**, which is a property of the trigger and is stated at the line: the task
+whose gate ran before the other had a merge request is told nothing.
+
+**Paths are redacted at the read, not at the write.** A repository path is untrusted provider text
+(BD-022) and it reaches **two** sinks — a merge-request thread and an `events` row — and only the
+first redacts on the way out (`reviewWrites.thread`). So the binding's redactor is applied where the
+paths come off the provider, in full, *before* the length cap: an exact-match redactor cannot find a
+secret a cap has halved (the rule `ticket-snapshot.ts` states at its own `clean`). The residual is
+rule 70's in its harmless direction, stated at the line: redaction is many-to-one, so two paths that
+differ only inside a redacted value compare equal and over-warn — and nothing branches on a warning.
+
+**The metric is one event per settlement, and it answers product/16 without a join.**
+`task.rebase.checked` carries `outcome` ∈ `clean | resolved | conflicted | exhausted`: *"conflicts
+resolved automatically"* is `resolved` (the branch applies now and did not before, with `attempt`
+saying how many runs it took) and *"escalated"* is `exhausted`. The alternative — counting
+`task.escalated` rows whose **reason string** names the rebase loop — was rejected: `task.escalated`
+carries only `reason` and `blocker_brief`, so a statistic would be matching on prose. The outcome is
+computed from *the snapshot the gate evaluated* and the loop as it stood, so the row cannot disagree
+with the transition it describes; it is appended **after** the settlement in a transaction of its
+own, because `stream_seq` is `event_streams.last_seq + 1` and has to be read where the append
+happens. Both events are declared `unconsumed` for WP-41.
+
+**The e2e, and what the fake runner emits.** Four cases in
+`test/e2e/pipeline/rebase-gate.e2e.test.ts`, each a whole `apps/server` instance on PostgreSQL: a
+clean gate that then re-arms on a **signed `default_branch.moved` delivery** through the
+unauthenticated webhook route (WP-15c's shape, `git.emitDefaultBranchMoved` → `deliverGit` → 202);
+one conflict resolved; the bound spent and the task parked; and the warning between two tasks. The
+resolution case runs `agent: 'real-over-fake-cli'` — the **production** runner over a scripted CLI —
+so the assertion that the conflict instruction reached the model is on `cli.stdin`, the bytes the CLI
+received (standing rule 82), and it checks for *"This run resolves a merge conflict"*, *"Merge, do
+not rebase"* **and** the ticket's own title, so a narrowing that replaced the task's context would
+fail. The fake provider decides the outcome rather than the scenario: `setMergeability` makes the
+branch conflict, and the flip to "applies" is made from inside the resolution run's own provisioning
+(`onAgentSpec`), so the gate's next evaluation is ordered after it by construction rather than by a
+sleep. The other three run the fake runner, whose `conflict_resolution` scenario is an ordinary
+`ImplementationNotes` — the same artifact the developer's stage produces, because it is the same
+role.
+
+*The rule-49 sweep of that file, one verdict per wait.* Every `settle` on a task state is
+**sufficient** for the assertions that read the task row (`stage_attempts`, `iteration_counters`) and
+for `pipeline.specs`, which is in-process and written before the run. Every assertion on
+`task.rebase.checked` was **short**, structurally and not by luck: the event is appended in a
+transaction *after* the one that moved the task, so `state === 'ready_for_merge'` cannot bound it —
+standing rule 50's shape, one commit wide. Each now waits on the event count it then reads. The
+warning case already waited on `task.conflict.warned`, which the thread assertion is safe behind
+because the duty posts the thread first and appends afterwards; the `integration_actions` reads it
+counts are written before that.
+
+**The two peers in the warning case are inserted as rows, and that is a fixture rather than a
+shortcut.** The harness scripts one `ImplementationNotes` per stage, so two tasks driven through the
+pipeline would both claim the same merge request and `findByMergeRequest` would answer for one of
+them. A `tasks` row with an `mr_ref` is exactly what the duty reads, and the thing under test is the
+comparison. The peers are given real merge requests in the fake provider with seeded diffs, so the
+provider half is not faked.
+
+**A fake that was kinder than the database, found by this row and fixed** (standing rule 1). The
+in-memory `PipelineStore` returned `task.sequence` from the **stored aggregate**; PostgreSQL derives
+it from the event log (`max(stream_seq) + 1`, `TASK_COLUMNS`). So an event appended to a task's
+stream by anything other than the aggregate left the fake's aggregate one behind, and the *next*
+aggregate write clashed in production while this tier stayed green. It was invisible until now
+because the three existing out-of-band appenders — `task.review.observed` (WP-24),
+`task.lint.posted` (WP-25) and both of this row's — all landed on tasks that had **stopped**;
+`task.rebase.checked` lands on a live one, and eleven tests failed with
+`StreamConflictError: stream task/… already has an event at sequence 23`. `createMemoryPipelineStore`
+now takes a `streamSequence` accessor, `createPipelineHarness` wires the harness's own event log into
+it, and the read takes the **maximum** of the two numbers — the log's is right after an out-of-band
+append, the aggregate's is right inside a transaction whose own appends are still staged. Divergence
+7 in that file's register records it.
+
+**Decisions and assumptions, each also in the code where it binds.**
+1. **The gate fails only on `has_conflicts`, not on "behind the target".** A branch that merely lags
+   but merges cleanly is passed, which is what `gates.ts`'s existing argument says the gate asks; the
+   alternative would spend an Opus run per task to produce a linear history nobody asked for.
+2. **A conflict-resolution run is charged like any other** (WP-19's guard is the stage executor's, and
+   the admission read happens for this stage as for every other): `claude-opus-5` because resolving a
+   conflict is code comprehension and a resolution that drops one side is a defect no later stage
+   looks for; *short* is 40 turns against implementation's 200 and a $5 cap against its $15.
+3. **The stage takes `open_mr` away from the developer** (`PLATFORM_TOOLS_DENIED_BY_STAGE`, a
+   subtraction only): the merge request exists, and a second one from the same branch would be the
+   row `findByMergeRequest` answers with.
+4. **A path with no head sha posts no warning.** `MergeRequestRef.head_sha` is nullish and it is what
+   makes the idempotency key an identity; keying on a placeholder would post one warning for the
+   whole life of the merge request. The skip is logged rather than silent.
+5. **`runs.mode` stays the template's** for a conflict-resolution run (backlog 57's rule): a rebase is
+   part of delivering this ticket, not a mode of its own.
+6. **A warning names the overlapping paths and not the whole diff**, case-sensitively, with a rename's
+   *old* path counted as well as its new one; two tasks in one **directory** are not an overlap,
+   because git merges those without a conflict and a warning that fired on them would be switched
+   off.
+
+**Seven guards were mutation-checked, calibrated first** (standing rules 3, 21, 77): the suite passes
+unmutated, and each mutant dies by a *named* test rather than by a timeout. Deleting the
+`ready_for_merge → rebase_gate` entry from `RETURN_LOOPS_BY_EDGE` fails *"spends the recheck loop when
+the default branch moves, not a human round"*, *"sends the task back through the rebase gate"* and
+*"keeps re-checking past the human-round limit"*. Replacing the path redactor with the identity fails
+*"keeps a credential out of the thread and out of the stored event"*. Collapsing `resolved` into
+`clean` fails *"records a clean check as clean, and one that took a run as resolved"*. Removing
+`implementation.approve_to: 'ci_gate'` from the three templates — which puts the resolution stage on
+every task's happy path — fails ten, including the three property walks and
+*"steps over the conflict resolution on the way forward"*. Dropping the `overlap.count === 0` skip
+fails *"says nothing when the two branches touch different files"*. Reverting the memory store's
+sequence to the stored aggregate's fails eight, including three of this row's own. Giving the
+resolution stage `open_mr` back fails *"takes `open_mr` away from the conflict resolution"*. Each mutant was
+applied in place from a copy taken first and every restore was `diff`ed rather than assumed — and the
+first attempt at the *first* mutant **survived**, because a shell quoting error meant the replacement
+never applied; the harness now asserts its target exists before writing, which is standing rule 3
+about the instrument rather than the code.
+
+**Sentences this made false, and where they were** (rule 83): `command-policy.ts`'s
+`DEFAULT_IMPLEMENTATION_ASK` docblock claimed *"the rebase gate (WP-26) rebases on every task's happy
+path"* — false twice over, since the gate runs no command at all and what the resolution runs is a
+merge; `gates.ts`'s docblock said a `pending` gate *"sends a clean branch back to Implementation to
+fix nothing"* and named no destination for a failure, and now carries the whole shape including what
+this module deliberately does not do; `iteration-limits.ts`'s *"Three of those loops have no key in
+`pipelineLimitsSchema`"* (two, now) and its *"the rebase gate sends the task back to
+`implementation`"*; technical/02's event table (two new rows), its `default_branch.moved` consumer
+column (*"conflict warning (20)"*, amended with the reasoning) and its state-machine guards
+paragraph, which said iteration limits apply *"on any `returned`"* without saying which limit;
+technical/12's configuration example (two `limits` keys) and its `feature` template (three lines);
+`saga.test.ts`'s *"returns to implementation when the branch conflicts"*, which is now the short run;
+and the memory store's divergence register, which had no entry 7. **product/14 lists the rebase gate
+under M2 and is product-owned**: it is now built, and the orchestrator owns that line.
+
+**For the orchestrator.** `CLAUDE.md` has no "Where to look" bullet for the rebase gate; this
+implementer did not add one, because the session's standing instruction names that file among the
+things an agent's own message may not authorise changing. The bullet worth adding is two sentences:
+*the rebase gate is `packages/application/src/pipeline/gates.ts` (the read) plus
+`rebase.ts` (the metric) and `conflict-warning.ts` (one handler, one `pipeline.outbound` duty); its
+failure enters `CONFLICT_RESOLUTION_STAGE`, an agent stage declared behind `ci_gate` and reachable
+only from `rebase_gate.fail_to`, so the gate's failure is a **return** that spends the `rebase` loop
+and the resolution's fall-through re-runs CI. The default branch moving re-enters the same gate and
+spends `rebase_rechecks` instead, because the loop is a property of the edge (`RETURN_LOOPS_BY_EDGE`)
+where a stage has two outgoing returns.*
+
+**Review round 2:** the two majors were both the merge verb, and **TD-027** (the ruling on Q77)
+decided them: the merge is a *stage* default and never the organisation maximum. Five changes, and
+one the ruling did not foresee.
+
+- **`packages/domain/src/policies/command-policy.ts`** — `'git merge'` and `'git merge *'` are out of
+  `DEFAULT_IMPLEMENTATION_ALLOW` together with the paragraph that justified them, replaced by a
+  comment saying why no merge verb is there. `CONFLICT_RESOLUTION_EXTRA_ALLOW` is the four spellings
+  product/19 §3's fourth bullet lists — `git merge origin/*`, `git merge --no-edit origin/*`,
+  `git merge --abort`, `git merge --continue` — as **extra patterns**, so the additive direction is
+  structural. The `DEFAULT_IMPLEMENTATION_ASK` docblock now names the stage list rather than the
+  maximum.
+- **`packages/application/src/pipeline/planner.ts`** — `COMMAND_ALLOW_BY_STAGE` beside
+  `PLATFORM_TOOLS_DENIED_BY_STAGE` (one entry, the same stage id, no new import edge) and
+  `commandBaselineFor(role, stage)` returning `{ ...base, allow: [...base.allow, ...extra] }`, called
+  with `stage.id` at the one site, **before** `narrowCommandPolicy`. The `stage` argument is
+  **required rather than optional** — the assumption this row made and the reason is at the line: a
+  caller that forgot it would silently plan a conflict-resolution run on the role baseline and spend
+  one of BD-030's two attempts on a denied merge.
+- **`STAGE_PROMPT_FOCUS.conflict_resolution`** item 1 now spells the commands out (`git fetch origin`,
+  `git merge --no-edit origin/<default branch>`, `git commit -m`, `git merge --abort` to back out) and
+  says every other merge form is denied unattended. No `ROLE_PROMPT_VERSIONS` bump is owed:
+  `packages/prompts/roles/*` is untouched and the digest in `promptVersion` covers platform text.
+- **Measured, before and after**, with `evaluateCommand` on the shipped policy.
+  `git merge --no-verify origin/main`: **allow** before, **ask** after, at both the maximum and the
+  stage. `git merge origin/main`: **allow** before at the maximum, **ask** after at every stage but
+  `conflict_resolution`, where it is **allow**. The four spellings are `allow` only at that stage.
+- **One deviation from TD-027's rationale, and it is a measurement.** The ruling says *"no
+  `HAZARDOUS_ARGUMENTS` entry is added and none is needed: the defence is a closed set"*, on the
+  premise that nothing may sit between the verb and the ref. The closed set answers that position
+  only: an allow glob's `*` matches a run of characters **including spaces**, so
+  `git merge origin/main --no-verify`, `git merge origin/main -s ours` and
+  `git merge origin/main -X theirs` all match `git merge origin/*` and were **allow** under the new
+  stage baseline (measured). product/19 §3's fourth bullet states the requirement rather than the
+  mechanism — those spellings are *"**ask**, never allow"* — so the code implements the bullet with
+  four floors: `git * --no-verify*` (generalised from `git commit* --no-verify*`, which is also what
+  review round 2's first major asked for — it closed `git push origin agentic/x --no-verify`, `allow`
+  until now), plus `git merge* -s*`, `git merge* --strategy*` and `git merge* -X*`. **Three sentences
+  a document owner may want to amend** (rule 83): TD-027 § Rationale's *"no new `HAZARDOUS_ARGUMENTS`
+  entry is added and none is needed"*, the same claim in technical/04's amendment, and product/19 §3's
+  *"therefore"*, which is true of the pre-ref position and true of the shipped behaviour but not of
+  the closed set alone.
+- **The minor that was a live leak:** `conflict-warning.ts` bounded `other_ticket_key` and did not
+  redact it, while the same string in the thread body was redacted by `reviewWrites.thread`. It is now
+  redacted **then** capped, on `changedPathsOf`'s own argument (an exact-match redactor cannot find a
+  secret a cap has already halved), with a planted-credential case that fails before and passes after.
+- **Tests.** `command-policy.test.ts` gains a TD-027 describe block: the list quotes the document, no
+  maximum entry starts with `git merge`, the four spellings are `allow` at the stage and `ask` at the
+  maximum, fourteen refused spellings are `ask` under **both** policies, the `--no-verify` floor holds
+  across verbs while the verbs themselves still run, and a project's own `allow` list drops the merge
+  (`ignoredAllow`). `planner.test.ts` gains two: the table's keys are stage ids of shipped templates
+  and the layer leaves `ask`/`block` byte-identical, and the merge is `allow` at
+  `conflict_resolution` and `ask` at **every other stage of every shipped template**, enumerated. The
+  e2e now reads the four spellings off the `conflict_resolution` `RunSpec` the real server built and
+  asserts the `implementation` spec carries no merge pattern at all.
+
+**Rule-50 sweep on WP-26's tree:** `verify:e2e` failed once here on WP-24's
+`test/e2e/pipeline/review-only.e2e.test.ts` — *"expected [ { …(7) } ] to have a length of 2 but got
+1"* at the `create_discussion` audit rows — a file WP-26 does not touch. It is standing rule 50/76's
+shape for the **fifth** time this session: the test waited on the fake provider's *discussions* and
+then read the `integration_actions` rows, which `IntegrationActionExecutor` writes **after** the
+provider call returns (step 5, *"remember it, then record it"*), so the wait was one write short of
+the assertion and the row that went missing was the summary's, posted second. **Reproduced
+deterministically** (rule 76) by delaying the executor's post-call `record` by 1.5 s: the old wait
+failed at `review-only.e2e.test.ts:258` on every run, and the new one — bound to
+`auditedThreads`, the last row the duty writes — passed with the delay still planted (3/3), then
+again with it removed. The discussions are now asserted as what the rows imply. Test 3 ("records
+what became of the findings") had the **same** wait and got the same fix (rule 49: a liveness fix
+not swept onto its siblings is half a fix); it is strictly the stronger bound, since the row follows
+the call that created the thread the test then resolves.
+
+Two waits in that file were **not** the same defect and one of them was worse. Test 2 ("does nothing
+at all") bounded three *negative* assertions on a drained `event_dispatch`, but `reviewOnlyHandler`
+only **enqueues** `review_only_check` after its commit, so the queue drains before the filter has
+run at all — a negative assertion passing on a duty that has not started (rule 4). **Measured** with
+5 s planted at `runReviewOnlyCheck`'s first line: with the dispatch queue empty there was **no**
+`get_merge_request_diff` row, so the old wait bounded no refusal. The bound is now the duty's own
+last read before the filter, exactly as `ticket-lint.e2e.test.ts` uses `read_ticket`, with the same
+residual stated at the line (a *broken* filter inserts its task one transaction later, so this
+bounds the refusal and not a mutant of it; that mutant dies in `mergeRequestMatchesFilter`'s unit
+cases).
+
+Per wait, across the other two files, nothing to fix. **`rebase-gate.e2e.test.ts`** (WP-26's own,
+nine waits): three `settle`s read only `tasks` columns and in-process `pipeline.specs`; four
+`waitFor`s on `task.rebase.checked` read exactly those events; `task.escalated` is appended in the
+**same transaction** as the escalating `save` (`transitions.ts` `applyEscalation`), so `settle`
+bounds it; `get_pipeline_status` rows are `await record(...)`ed before `execute` returns the status
+the gate then acts on, so `ready_for_merge` bounds them; and the conflict-warning case waits on
+`task.conflict.warned`, which `conflict-warning.ts` appends after the three diff reads *and* after
+the thread — so one wait covers the event, the thread body and the `get_merge_request_diff` count.
+**`ticket-lint.e2e.test.ts`** (WP-25's, five waits, swept there and re-asked here): wait 1's three
+blocks are all written before the task row reaches `done`; wait 2 is on `task.lint.posted`, the last
+write of the duty; wait 3's "one handler, decided inside its own transaction" argument still holds —
+`ticket.created` has exactly one consumer on this tree (`ticket-lint.ts:359`); and the two
+`read_ticket` waits in the second test bound the duty's refusals the way review-only's test 2 now
+does.
+
 ## Discovered work — session 5 (not in plan)
+- **The conflict warning has no screen, and the board is where product/04 says it belongs** (WP-26).
+  product/04 S6b is *"the board warns when two active tasks touch the same files"* and product/18 is
+  *"surfaced on the board ('touches the same files as PROJ-98')"*. What this row ships is a thread on
+  the task's own merge request plus `task.conflict.warned`; nothing in `apps/web` reads either.
+  Closing it needs **one field on the task DTO** — the other task's ticket key and the overlapping
+  path count, which a projection over the task stream can answer without a table — a badge on the
+  board card, and the WP-15h census entry that comes with any new client path. It is recorded here
+  rather than built because a client path with no screen is exactly what that census refuses, and
+  the projection is a decision about what the board reads rather than a corner of this row.
+  *Refiner (session 5): **filed as backlog 63**, cheapest owner **WP-41** (it already owes the only
+  consumer of both WP-26 events) with the caveat that WP-41 is M3 and the promise is M2; backlog **65**
+  must be answered in the same change or the badge shows on one card of a warned pair.*
+- **The overlap comparison downloads patches to read paths** (WP-26). `GitProviderPort` has
+  `getMergeRequestDiff`, which returns `FileDiff[]` — `new_path`, `old_path` **and** `diff` — and the
+  conflict warning wants only the first two. So one gate entry on a project with three live merge
+  requests fetches three merge requests' worth of patch text and discards all of it, bounded at 100
+  files per read. The honest read is a paths-only port method (`getChangedPaths(ref, {limit})`,
+  answerable from GitLab's `…/diffs` and GitHub's `…/files` without the patch), and it costs a port
+  method, a fake, a shared contract suite case, a GitLab adapter and a fixture with provenance —
+  which is a work package rather than a corner of this one. Nothing is wrong today; it is bandwidth
+  and a provider's rate limit spent on bytes nobody reads.
+  *Refiner (session 5): **filed as backlog 64**, with one clause **falsified** — this repository's own
+  provenance record for `…/diffs`, retrieved the same day, lists its query attributes as `page`,
+  `per_page` and `unidiff` and no field selector (`test/fixtures/http/gitlab/SOURCES.md:127-135`), so a
+  `getChangedPaths` over that endpoint would fetch the same patches; the entry recommends coalescing the
+  per-`(mr, head_sha)` read first and treats the port method as **needing a documentation check**.*
+- **product/18's `strategy: rebase | merge` key is not implemented, and cannot be until Q76 is
+  answered** (WP-26). The rebase gate's configuration column in product/18 is *"attempts; strategy
+  `rebase | merge`"*; `rebase_attempts` shipped, `strategy` did not. A rebased branch cannot be
+  pushed by any run this build starts — `git push --force*` is blocked at the organisation maximum
+  and no project may remove it, measured with `evaluateCommand` — so a key whose second value cannot
+  run would be worse than a missing one (backlog **58** is what an unread key costs). **Q76** carries
+  the measurement and the carve-out that would make `rebase` runnable; this bullet is the key that
+  waits on it.
+  *Refiner (session 5): **no new backlog entry — the key stays on Q76**, and the half that is not a
+  product question is filed as **Q77**: `git merge` was added to `DEFAULT_IMPLEMENTATION_ALLOW`, which is
+  the organisation **maximum** every project inherits, and product/19 §3's Implementation list names
+  `git rebase` and **not** `git merge` — so the widening has no document behind it and the parenthetical
+  in this row's notes that says it does is false (the constant's own docblock states it correctly). Q77
+  is a **BD-025 matter for an architect ruling**, not a refiner's call; it is stated there and in the
+  report to the orchestrator.*
+- **Three sentences say the conflict-resolution allow set needs no `HAZARDOUS_ARGUMENTS` entry, and
+  the measurement says otherwise** (WP-26 review round 2; the **code is correct**, the documents are
+  the loose end). TD-027 § Rationale — *"no new `HAZARDOUS_ARGUMENTS` entry is added and none is
+  needed: the defence is a closed set, not a blacklist chasing spellings"* — and the same claim in
+  technical/04's amendment rest on *"nothing may sit between the verb and the ref"*. That is true of
+  the position **before** the ref and not of the position after it: an allow glob's `*` matches a run
+  of characters including spaces, so `git merge origin/main --no-verify`, `… -s ours` and
+  `… -X theirs` all match `git merge origin/*` and were `allow` under the new stage baseline
+  (measured with `evaluateCommand`). product/19 §3's fourth bullet states the **requirement** — those
+  spellings are *"**ask**, never allow"* — so this row implemented the bullet with four floors
+  (`git * --no-verify*`, `git merge* -s*`, `git merge* --strategy*`, `git merge* -X*`) and the
+  behaviour now matches every document's requirement. The **reasoning clause** was owed in
+  three places — TD-027's rationale sentence, technical/04's amendment, and product/19 §3's
+  *"therefore"* — and the architect amended all three in the same round (TD-027 § Amendment); Q77's
+  answer was corrected by the orchestrator. **Closed before the merge.**
 - **`runs.mode` records `normal` for a discovery run, a retro run and a librarian run** (WP-24).
   technical/04's mode table has seven values and the `run_mode` enum ships all seven; the planner
   mapped exactly one of them until this work package, and now maps two — `shadow` from `tasks.mode`

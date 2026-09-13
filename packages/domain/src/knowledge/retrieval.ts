@@ -57,6 +57,8 @@ export const STAGE_EMPHASIS = {
   investigation: 'technical',
   architecture: 'technical',
   implementation: 'implementation',
+  /** The same emphasis as the stage it is a short version of (WP-26). */
+  conflict_resolution: 'implementation',
   ci_gate: 'implementation',
   code_review: 'technical',
   business_review: 'business',

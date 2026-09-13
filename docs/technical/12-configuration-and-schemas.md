@@ -56,6 +56,8 @@ pipeline:
     business_review_iterations: 2
     ci_fix_iterations: 3
     human_rounds: 3
+    rebase_attempts: 2           # conflict-resolution runs per MR (product/04 S6b)
+    rebase_rechecks: 10          # gate re-checks driven by the default branch moving (WP-26)
     question_timeout: 1 working day
 stages:                          # per-stage agent settings
   refinement: { model: claude-opus-5, effort: medium, max_turns: 30, budget_usd: 2 }
@@ -103,12 +105,13 @@ templates:
       - id: intake        ; kind: system
       - id: refinement    ; kind: agent  ; role: product_manager ; produces: RefinedSpec ; requires: []
       - id: architecture  ; kind: agent  ; role: architect       ; produces: ImplementationPlan ; requires: [RefinedSpec]
-      - id: implementation; kind: agent  ; role: developer       ; produces: ImplementationNotes ; requires: [ImplementationPlan]
+      - id: implementation; kind: agent  ; role: developer       ; produces: ImplementationNotes ; requires: [ImplementationPlan] ; approve_to: ci_gate
+      - id: conflict_resolution; kind: agent ; role: developer   ; produces: ImplementationNotes ; requires: [ImplementationNotes]
       - id: ci_gate       ; kind: gate   ; on: ci.pipeline.finished ; pass_to: code_review ; fail_to: implementation
       - id: code_review   ; kind: agent  ; role: reviewer        ; produces: ReviewVerdict ; approve_to: business_review ; return_to: implementation
       - id: business_review; kind: agent ; role: acceptance_tester ; produces: AcceptanceVerdict ; approve_to: rebase_gate ; return_to: implementation
-      - id: rebase_gate   ; kind: gate   ; pass_to: ready_for_merge
-      - id: ready_for_merge; kind: human ; on: [mr.review.comment -> implementation, mr.merged -> merged_gate]
+      - id: rebase_gate   ; kind: gate   ; pass_to: ready_for_merge ; fail_to: conflict_resolution
+      - id: ready_for_merge; kind: human ; on: [mr.review.comment -> implementation, default_branch.moved -> rebase_gate, mr.merged -> merged_gate]
       - id: merged_gate   ; kind: gate   ; pass_to: retrospective
       - id: retrospective ; kind: agent  ; role: facilitator     ; produces: RetroReport
       - id: librarian     ; kind: agent  ; role: librarian ; produces: LibrarianProposals ; requires: [RetroReport]
@@ -118,6 +121,8 @@ templates:
       - id: docs_update   ; kind: agent ; after: business_review ; role: developer ; prompt: prompts/docs-update.md
 ```
 (`;`-separated inline form shown for brevity; real files use nested YAML.) The platform validates: every `requires` artifact is produced upstream; every transition target exists; no unbounded cycles without an iteration limit.
+
+**`conflict_resolution` is declared between `implementation` and `ci_gate` and is reached only backwards** (WP-26, product/04 S6b). Declaration order is the pipeline, so `implementation` names `approve_to: ci_gate` explicitly and the forward path steps over the stage; the only way in is `rebase_gate.fail_to`, which — being a transition to an *earlier* stage — is a **return** and therefore spends a round of the `rebase` loop (`limits.rebase_attempts`, default 2). The resolution's own fall-through is `ci_gate`, which is how *"re-run CI"* is expressed without a branch in the interpreter.
 
 ## Artifact schemas (structured JSON, validated on stage completion)
 

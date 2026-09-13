@@ -96,6 +96,19 @@ export const pipelineLimitsSchema = z.strictObject({
   business_review_iterations: z.int().min(0).max(20).optional(),
   ci_fix_iterations: z.int().min(0).max(20).optional(),
   human_rounds: z.int().min(0).max(20).optional(),
+  /**
+   * product/18's *"Rebase gate … Configuration: attempts"* — how many conflict-resolution runs one
+   * merge request may spend before the task is escalated (product/04 S6b: *"bounded, default 2
+   * attempts"*). WP-26.
+   */
+  rebase_attempts: z.int().min(0).max(20).optional(),
+  /**
+   * How many times the default branch may move under a waiting merge request before the task is
+   * parked, which is a **different** budget from {@link pipelineLimitsSchema.shape.rebase_attempts}
+   * and is bounded higher on purpose: a re-check costs one provider read, an attempt costs a run.
+   * The ceiling is 50 rather than the 20 every loop above carries for the same reason.
+   */
+  rebase_rechecks: z.int().min(0).max(50).optional(),
   question_timeout: durationSchema.optional(),
 });
 
