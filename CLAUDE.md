@@ -56,6 +56,22 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   `schemas/artifacts/*.schema.json` is already generated from the one zod definition, and a second
   copy is a second thing to drift. `promptVersion` carries a digest of the assembled system prompt
   beside the declared version, so an edit that forgot to bump is visible in the audit.
+- **The ten platform skills are `packages/prompts/skills/<name>/SKILL.md`, and the directory name is
+  the identity** (WP-14a): the pinned CLI lists a skill under its *directory* name, so the
+  frontmatter `name` must equal it, and a skill nested under `.claude/skills/_platform/` — the layout
+  technical/04 used to specify — is **not discovered at all** (measured; the table is in that page's
+  WP-14a amendment and in `packages/prompts/src/skills.ts`). They reach a run as a **plugin**:
+  `WorkspaceProvider.create` writes the stage role's skills into
+  `<checkout>/.agentic-run/plugins/agentic/skills/`, from the **launcher's** own copy of
+  `@platform/prompts` rather than from the run image, and `options.ts` passes that directory as
+  `Options.plugins` so the names are namespaced (`agentic:kb`) and nothing of the project's
+  `.claude/skills` is touched. The per-role table is `SKILLS_BY_ROLE` beside the other two
+  least-privilege tables in the planner, and **it is the restriction** — the SDK's `skills` option is
+  a context filter, not a sandbox, so a skill a role may not use is absent from the workspace rather
+  than hidden. A skill has a declared version (`PLATFORM_SKILL_VERSIONS`) and its set's digest rides
+  in `prompt_version`; it has **no eval cases**, because TD-016's format is per role and
+  artifact-shaped (the reasoning is in the WP-14a notes). That the list also hides a project's own
+  skills is **Q67**.
 - Env naming: `APP_*` for platform settings, tool-native names for integration credentials, `_FILE` variants for secrets (TD-020).
 - The wire format is snake_case everywhere (config YAML, event payloads, artifact data, API DTOs, transcript rows), matching technical/02, /03, /08 and /12; exported identifiers stay camelCase.
 - Boundary schemas are **strict**: an unknown key is an error, never dropped. The exceptions are records with user-chosen keys (stage ids, template names, risk classes, status mapping) and opaque provider payloads.

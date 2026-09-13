@@ -9,6 +9,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WorkspaceSpec } from '@platform/application';
+import type { PlatformSkillCatalogue } from './skills.js';
 
 /**
  * A temporary directory short enough to hold a Unix socket path.
@@ -21,6 +22,30 @@ import type { WorkspaceSpec } from '@platform/application';
 export const shortTempDir = async (prefix: string): Promise<string> => {
   const root = process.platform === 'win32' ? tmpdir() : '/tmp';
   return mkdtemp(path.join(root, prefix));
+};
+
+/**
+ * A skill catalogue for the tiers that cannot read the shipped one.
+ *
+ * `packages/infrastructure` does not depend on `@platform/prompts` — the launcher's composition
+ * root supplies the real files (`apps/launcher/src/runtime.ts`) — so the unit tier uses these two,
+ * which are exactly the names {@link workspaceSpecFixture} puts in its spec. The contract and e2e
+ * tiers pass `PLATFORM_SKILLS` instead, so what reaches a real container is the real text.
+ *
+ * The bodies are obviously fixtures: a case that asserted a shipped skill's wording against a copy
+ * in this file would be asserting a string this repository wrote twice (standing rule 3).
+ */
+export const SKILL_CATALOGUE_FIXTURE: PlatformSkillCatalogue = {
+  'ask-human': {
+    name: 'ask-human',
+    version: 'fixture',
+    text: '---\nname: ask-human\ndescription: fixture\n---\n\nfixture ask-human body\n',
+  },
+  kb: {
+    name: 'kb',
+    version: 'fixture',
+    text: '---\nname: kb\ndescription: fixture\n---\n\nfixture kb body\n',
+  },
 };
 
 export const FIXTURE_RUN_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -61,6 +86,9 @@ export const workspaceSpecFixture = (
     ...overrides.egress,
   },
   runtime: overrides.runtime ?? 'runc',
+  // Two of the ten, so a case that asserts "only the skills the spec names" has something to be
+  // wrong about. `ask-human` and `kb` are the pair every non-triager role gets.
+  skills: overrides.skills ?? ['ask-human', 'kb'],
   readOnly: overrides.readOnly ?? false,
   env: (overrides.env as Record<string, string> | undefined) ?? { CI: 'true' },
   keepUntil: overrides.keepUntil ?? '2026-09-13T00:00:00.000Z',

@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { Logger } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
+import { PLATFORM_SKILLS } from '@platform/prompts';
 
 const run = promisify(execFile);
 
@@ -205,6 +206,12 @@ const WORKSPACE_VOLUME = /^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
  * daemon is anonymous, so the *push* this e2e demonstrates is unauthenticated, and the run-scoped
  * credential's own behaviour is `broker.test.ts`'s.
  */
+/** The project's own skill, as the fixture repository commits it. Asserted byte for byte. */
+export const PROJECT_SKILL_DESCRIPTION =
+  'The project ships this one and the platform never touches it.';
+export const PROJECT_SKILL_BODY = 'Run the house script.';
+export const PROJECT_SKILL_FILE = `---\nname: project-own\ndescription: ${PROJECT_SKILL_DESCRIPTION}\n---\n\n${PROJECT_SKILL_BODY}\n`;
+
 const startRepoContainer = async (name: string, network: string): Promise<void> => {
   const script = [
     `apk add --no-cache ${VCS} ${VCS}-daemon >/dev/null 2>&1`,
@@ -216,6 +223,11 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
     `${VCS} config user.name fixture`,
     'printf "# fixture repository\\n" > README.md',
     'mkdir -p src && printf "export const a = 1;\\n" > src/a.ts',
+    // The project's **own** skill, committed on the default branch, so "provisioning leaves the
+    // project's `.claude/skills` untouched" has something to be wrong about (standing rule 42: a
+    // filter with nothing to filter passes). Its name is not one of the platform's ten.
+    'mkdir -p .claude/skills/project-own',
+    `printf -- '---\\nname: project-own\\ndescription: ${PROJECT_SKILL_DESCRIPTION}\\n---\\n\\n${PROJECT_SKILL_BODY}\\n' > .claude/skills/project-own/SKILL.md`,
     'mkdir -p node_modules/left-pad && printf "x\\n" > node_modules/left-pad/index.js',
     `${VCS} add -A`,
     `${VCS} commit -q -m "fixture"`,
@@ -381,6 +393,9 @@ export const startDockerFixture = async (
     cacheVolume,
     helperNetwork: network,
     egressNetwork: network,
+    // The shipped ten, not a fixture: this tier's whole point is that what a real container ends
+    // up holding is what the platform ships (standing rule 82).
+    skills: PLATFORM_SKILLS,
     // Q51: the provider refuses any uid but 1000, because the shim's control socket is 0600 and
     // created as uid 1000. This process is almost certainly *not* uid 1000 — a GitHub Actions
     // runner is 1001 — and that is the point of {@link relaxControlDirectoryForHost}: the

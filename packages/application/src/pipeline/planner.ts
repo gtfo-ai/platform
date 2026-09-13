@@ -47,6 +47,8 @@ import {
   type PromptNonceSource,
   type RolePromptDefinition,
   resolveRunCapUsd,
+  type SkillDefinition,
+  skillSetVersionOf,
   stageAgentDefaults,
 } from '@platform/domain';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
@@ -54,6 +56,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
+import { qualifiedPlatformSkill } from '../ports/workspace.js';
 import type { ProjectSettings } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
 import type { StoredArtifact } from './store.js';
@@ -101,6 +104,72 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
 };
 
 /**
+ * Which platform skills a role's workspace is provisioned with — WP-14a, and the third table of
+ * BD-021's least privilege beside {@link PLATFORM_TOOLS_BY_ROLE} and {@link TOOLS_BY_ROLE}.
+ *
+ * **This table is the restriction, not the SDK option.** `Options.skills` is "a context filter, not
+ * a sandbox: unlisted skills are hidden from the model's listing and rejected by the Skill tool,
+ * but their files remain on disk and are reachable via Read/Bash"
+ * (`@anthropic-ai/claude-agent-sdk@0.3.267`, `sdk.d.ts:2089-2098`). So what a role may use is
+ * decided by what provisioning **copies** — `WorkspaceSpec.skills` — and the option is the second
+ * lane, not the first.
+ *
+ * Two rules were applied, and both are visible in the rows:
+ *
+ *  1. **A skill never describes a mutation the role cannot make.** `gitlab-mr`,
+ *     `file-followup-ticket`, `mr-description` and `verify-work` carry the writing half of the
+ *     work, so they go to the developer — the only role with `open_mr`,
+ *     `update_mr_description`, `create_followup_ticket` and a git write credential.
+ *  2. **A skill goes to a role that has the tool it is about.** `kb` follows `kb_search`,
+ *     `ask-human` follows `ask_human`, `retro` follows the facilitator's stage.
+ *
+ * Every one of the ten appears in at least one row, which
+ * `test/contract/prompts/platform-skills.contract.test.ts` asserts: a skill provisioned for nobody
+ * is ten files nobody reads, which is the defect PROGRESS backlog entry 24 exists to have avoided.
+ *
+ * **The rows follow product/13, and three mismatches with the *shipped* tables follow from that.**
+ * Recorded here in full rather than smoothed over, because a docblock that named one of them would
+ * read as if the other two did not exist (PROGRESS backlog **39** owns the reconciliation):
+ *
+ *  - **No `Bash` for the investigator or the product manager.** product/13 gives the Investigator
+ *    "read-only cmds" and observability and the Product Manager Shell "–"; {@link TOOLS_BY_ROLE}
+ *    gives *neither* a `Bash` tool. So `loki-logs`, `sentry-issue` and `jira-ticket` name commands
+ *    those two roles cannot currently run at all.
+ *  - **Neither holds `add_ticket_comment` or `create_followup_ticket`**, which `jira-ticket` names
+ *    as the way to write back. The skill says "you do not [write], and here is the tool that would"
+ *    — true for them, but the tool is not in their list.
+ *  - The skills are handed out by **role**, not by the project's bindings, so a project with no
+ *    Loki integration still gets `loki-logs` in its investigator runs.
+ *
+ * They are left standing rather than papered over because the fix belongs to whichever table is
+ * wrong — and product/13 is the spec, so it is probably {@link TOOLS_BY_ROLE}. What is *not* left
+ * to judgement is the pair of rules above: `test/contract/prompts/platform-skills.contract.test.ts`
+ * enforces them for the five skills whose platform tool is unambiguous.
+ */
+export const SKILLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
+  triager: [],
+  product_manager: ['ask-human', 'jira-ticket', 'kb'],
+  investigator: ['ask-human', 'jira-ticket', 'kb', 'loki-logs', 'sentry-issue'],
+  architect: ['ask-human', 'kb'],
+  developer: [
+    'ask-human',
+    'file-followup-ticket',
+    'gitlab-mr',
+    'jira-ticket',
+    'kb',
+    'loki-logs',
+    'mr-description',
+    'sentry-issue',
+    'verify-work',
+  ],
+  reviewer: ['kb'],
+  acceptance_tester: ['kb'],
+  facilitator: ['kb', 'retro'],
+  librarian: ['kb'],
+  discovery: ['kb'],
+};
+
+/**
  * How much of the task's own text the retrieval query is built from.
  *
  * `extractQueryTerms` already bounds the *query* at `MAX_QUERY_TERMS`; this bounds the **scan**. A
@@ -124,6 +193,16 @@ export interface StageRunPlannerOptions {
    * parks every task one stage short of `done`). It is in the ledger's discovered work, unowned.
    */
   readonly prompts: Readonly<Record<AgentRole, RolePromptDefinition>>;
+  /**
+   * The shipped platform skills (`@platform/prompts`), by name.
+   *
+   * Required, and validated at construction against every name {@link SKILLS_BY_ROLE} uses: a
+   * planner built without them would plan runs whose `promptVersion` claims a skill set the
+   * workspace was never given (standing rules 18/31/55 — an absent skills directory is a refusal at
+   * composition, never an empty list that looks like "no skills"). The catalogue is read for its
+   * *digest* here; the bytes reach the workspace through `WorkspaceProvider.create`.
+   */
+  readonly skills: Readonly<Record<string, SkillDefinition>>;
   /**
    * Where the data-block nonce comes from. **Required, never defaulted** — a default would make the
    * marker predictable, which is the one property the delimiter contract rests on (standing rule
@@ -251,6 +330,16 @@ const promptDocument = (document: ContextPackDocument) => ({
 
 export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRunPlanner => {
   const logger = options.logger ?? silentLogger;
+  // At construction, not at the first run of the role that needs it: a skill the catalogue is
+  // missing is missing for the deployment.
+  const unknownSkills = [...new Set(Object.values(SKILLS_BY_ROLE).flat())]
+    .filter((name) => options.skills[name] === undefined)
+    .sort();
+  if (unknownSkills.length > 0) {
+    throw new Error(
+      `the platform skill catalogue is missing ${unknownSkills.join(', ')}; SKILLS_BY_ROLE names skills this deployment does not ship`,
+    );
+  }
 
   const resolvePack = async (
     request: StageRunRequest,
@@ -309,6 +398,13 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const budgetTokens =
         settings.config.project?.context_budget_tokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
 
+      // Resolved rather than named: the digest below is over the bytes, so the same list must
+      // produce the same entries the workspace is given. `createStageRunPlanner` already refused a
+      // catalogue that cannot answer every name in the table.
+      const skills = (SKILLS_BY_ROLE[role] ?? []).map(
+        (name) => options.skills[name] as SkillDefinition,
+      );
+
       const pack = await resolvePack(request, stage.id, budgetTokens);
       const prompt = assemblePrompt({
         nonce: options.nonce,
@@ -343,7 +439,10 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         model: configured?.model ?? defaults.model,
         effort: configured?.effort ?? defaults.effort,
         providerMode: options.providerMode ?? 'api',
-        promptVersion: prompt.promptVersion,
+        // Two lanes, joined: the assembled prompt's version (technical/04's "hash of layers 1-3")
+        // and a digest of the skill files this run's workspace was provisioned with, so an edit to
+        // a `SKILL.md` that forgot to bump its declared version is visible in the audit.
+        promptVersion: `${prompt.promptVersion}+${skillSetVersionOf(skills)}`,
         systemPromptAppend: prompt.systemPrompt,
         userPrompt: prompt.userPrompt,
         workspacePath: options.workspacePath(task.task.id),
@@ -364,7 +463,10 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         plannedProtectedPaths: [],
         agents: {},
         mcpServers: {},
-        skills: [],
+        // `agentic:<name>`: the plugin-qualified spelling the SDK's filter takes, and the one the
+        // CLI lists once the plugin is discovered. The *restriction* is the provisioning copy
+        // (`WorkspaceSpec.skills`); this is the second lane.
+        skills: skills.map((skill) => qualifiedPlatformSkill(skill.name)),
         artifactType: stage.produces,
         env: { ...(options.env ?? {}) },
         secretEnvNames: [...(options.secretEnvNames ?? [])],

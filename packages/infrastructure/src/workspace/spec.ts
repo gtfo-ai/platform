@@ -52,7 +52,7 @@ import type {
   WorkspaceRuntime,
   WorkspaceSpec,
 } from '@platform/application';
-import { workspaceSpecSchema } from '@platform/application';
+import { platformSkillOfQualified, workspaceSpecSchema } from '@platform/application';
 
 /**
  * TD-021's per-run defaults: "project defaults 2 CPU / 4 GiB / 512 pids", `stop_grace_period: 20s`
@@ -132,6 +132,23 @@ export const mirrorCacheKeyFor = (projectId: string): string =>
 export const runIsReadOnly = (spec: RunSpec): boolean =>
   !spec.tools.includes('Write') && !spec.tools.includes('Edit');
 
+/**
+ * The platform skills to provision, read off the run's own `skills` list.
+ *
+ * `RunSpec.skills` is plugin-qualified (`agentic:kb`) because that is what the SDK's filter takes;
+ * a workspace directory is called `kb`. A name that is **not** the platform's is dropped rather
+ * than provisioned: the provider has no file for it, and creating an empty directory named after
+ * somebody else's skill would put a skill in the listing with no body. Dropping is safe in the
+ * direction that matters — a skill that is not in the workspace cannot be used — and the planner is
+ * the only producer, so a drop here means the two disagreed and the run is narrower than intended.
+ */
+export const platformSkillsOf = (spec: RunSpec): readonly string[] => {
+  const names = spec.skills
+    .map((qualified) => platformSkillOfQualified(qualified))
+    .filter((name): name is string => name !== null);
+  return [...new Set(names)].sort();
+};
+
 export interface BuildWorkspaceSpecInput {
   /** The run the workspace is for; `runId`, `projectId` and the tool policy are read from it. */
   readonly spec: RunSpec;
@@ -183,6 +200,7 @@ export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpe
     // `runc` unless an operator asks for gVisor; TD-021 makes `runsc` opt-in and Linux-only.
     runtime: input.runtime ?? 'runc',
     readOnly: runIsReadOnly(input.spec),
+    skills: platformSkillsOf(input.spec),
     env: { ...(input.containerEnv ?? {}) },
     keepUntil: keepUntil.toISOString(),
   });

@@ -250,7 +250,19 @@ export const mcpServerSpecSchema = z.strictObject({
   env: envSpecSchema,
 });
 
-/** A skill directory of recipes shipped with the provider. */
+/**
+ * A skill directory of recipes shipped with the provider — `packages/prompts/skills/<id>`.
+ *
+ * **Who reads it, as of WP-14a:** `test/contract/prompts/platform-skills.contract.test.ts`, which
+ * resolves every registration's `path` against the disk and requires `id` to be one of the ten
+ * shipped skills. Nothing else does, and that is a decision rather than an omission: provisioning is
+ * **role-driven** — a run gets the skills `SKILLS_BY_ROLE` lists for its stage's role, not the
+ * skills its project's bindings happen to name — so a ref's job is to tell an operator reading a
+ * provider which recipes an agent has. Narrowing provisioning to a project's actual bindings is in
+ * the ledger's discovered work.
+ *
+ * Before WP-14a nothing read it at all, and GitLab's ref named a directory that did not exist.
+ */
 export const skillRefSchema = z.strictObject({
   id: nonEmptyStringSchema,
   path: nonEmptyStringSchema,

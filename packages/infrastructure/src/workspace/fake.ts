@@ -59,6 +59,11 @@ import { type DockerCreateBody, runContainerCreateBody } from './hardening.js';
 import { assertRunId, controlSocketPath, WORKSPACE_WORKDIR, workspaceVolumeName } from './names.js';
 import { assertProjectEnv, mintRunToken } from './provider.js';
 import { retentionDecisions } from './retention.js';
+import {
+  type PlatformSkillCatalogue,
+  WORKSPACE_GIT_EXCLUDE_ENTRY,
+  workspaceSkillFiles,
+} from './skills.js';
 import { filterTar, type TarInput, writeTar } from './tar.js';
 
 interface FakeRun {
@@ -73,6 +78,13 @@ interface FakeRun {
 }
 
 export interface FakeWorkspaceProviderOptions {
+  /**
+   * The platform skills this deployment ships. Required for the same reason the Docker provider
+   * requires them: a fake that quietly provisioned none would be kinder than the implementation it
+   * stands in for (standing rule 1), and the contract suite would certify a workspace with nothing
+   * in it.
+   */
+  readonly skills: PlatformSkillCatalogue;
   /** Where the (never-listening) control sockets are said to live. */
   readonly controlRoot?: string;
   readonly now?: () => Date;
@@ -87,6 +99,7 @@ export interface FakeWorkspaceEvent {
 
 export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly #controlRoot: string;
+  readonly #skills: PlatformSkillCatalogue;
   readonly #now: () => Date;
   readonly #mintToken: () => string;
   readonly #runs = new Map<string, FakeRun>();
@@ -94,8 +107,9 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly #seen = new Set<string>();
   readonly events: FakeWorkspaceEvent[] = [];
 
-  constructor(options: FakeWorkspaceProviderOptions = {}) {
+  constructor(options: FakeWorkspaceProviderOptions) {
     this.#controlRoot = options.controlRoot ?? '/tmp/agentic-fake-ctl';
+    this.#skills = options.skills;
     this.#now = options.now ?? (() => new Date());
     this.#mintToken = options.mintToken ?? mintRunToken;
   }
@@ -201,6 +215,32 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           'repo/node_modules/left-pad/index.js',
           { name: 'repo/node_modules/left-pad/index.js', type: 'file', content: 'x\n' },
         ],
+        // The platform skills, through the same function the Docker provider gives to its helper
+        // container, so the two cannot disagree about which files a spec produces. What this
+        // **cannot** show is that a CLI discovers them: that is the real container's tier and
+        // standing rule 82's whole point (`docker-workspace.e2e.test.ts`).
+        ...workspaceSkillFiles(spec, this.#skills).map(
+          (file) =>
+            [
+              `repo/${file.path}`,
+              { name: `repo/${file.path}`, type: 'file', content: file.content },
+            ] as const,
+        ),
+        // Only when there is something to exclude — `#provisionSkills` returns before writing it
+        // for a role with no skills, and a fake that wrote it anyway would be the more generous of
+        // the two (standing rule 1). No divergence remains on this line.
+        ...(spec.skills.length === 0
+          ? []
+          : [
+              [
+                'repo/.git/info/exclude',
+                {
+                  name: 'repo/.git/info/exclude',
+                  type: 'file',
+                  content: `${WORKSPACE_GIT_EXCLUDE_ENTRY}\n`,
+                },
+              ] as const,
+            ]),
       ]),
       running: true,
       destroyed: false,
@@ -319,6 +359,19 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   /** Plants a file, a directory or a symlink in the workspace, for the export cases. */
   plant(runId: string, entry: TarInput): void {
     this.#run(runId).files.set(entry.name, entry);
+  }
+
+  /**
+   * A file of the workspace, by its path relative to the checkout — the shared suite's seam for
+   * "what did provisioning put in there".
+   *
+   * `null` for a path the workspace does not have, never a throw: the suite asks the question of
+   * both implementations and the Docker one answers it by `cat`ting inside a container, where an
+   * absent file is a non-zero exit rather than an error.
+   */
+  readWorkspaceFile(runId: string, relativePath: string): string | null {
+    const entry = this.#runs.get(runId)?.files.get(`repo/${relativePath}`);
+    return entry?.type === 'file' ? (entry.content ?? null) : null;
   }
 
   /** Whether the run's container is still running, for tests asserting `kill`/`destroy`. */

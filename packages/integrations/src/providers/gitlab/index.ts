@@ -37,7 +37,10 @@ export const gitlabAgentTooling: AgentTooling = {
     },
   },
   mcp: null,
-  skill: { id: 'gitlab', path: 'packages/prompts/skills/gitlab' },
+  // WP-14a: the directory exists now, and `test/contract/prompts/platform-skills.contract.test.ts`
+  // resolves this path against disk for every registration. The id is the skill's **directory**
+  // name, which is what the CLI matches on.
+  skill: { id: 'gitlab-mr', path: 'packages/prompts/skills/gitlab-mr' },
   env: {
     variables: [
       {

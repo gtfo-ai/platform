@@ -90,4 +90,6 @@ export const ROLE_PROMPTS: Readonly<Record<AgentRole, RolePrompt>> = Object.from
   agentRoleSchema.options.map((role) => [role, load(role)]),
 ) as Readonly<Record<AgentRole, RolePrompt>>;
 
+export * from './skills.js';
+
 export const packageId = '@platform/prompts' as const;

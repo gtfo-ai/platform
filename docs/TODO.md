@@ -155,7 +155,20 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [ ] **`pids_limit`, `stop_grace_period` and `cpus` are asserted from `docker inspect`, not demonstrated.** WP-14's e2e demonstrates the properties of `--read-only`, `--user`, `--cap-drop`, `no-new-privileges`, `--init`, `--memory` (read out of the container's own cgroup) and the internal network; for the other three it reads back what the daemon recorded. A fork bomb and a CPU-burn assertion on a two-core CI runner are hardware assertions (standing rule 2), and a `stop_grace_period` test waits 20 s by construction. Worth doing in **WP-22**'s image checks, where a slow deliberate test is affordable, and worth doing with a *lower bound* (`pids_limit` refuses the (n+1)th process, whatever the timing).
 - [ ] **The launcher has no network transport, so nothing yet composes it with the runner across two processes.** TD-021 deploys `ROLE=launcher` as its own container; WP-14 built the service as a plain object because there is no second process to talk to until **WP-22** has a compose file, and an unexercised RPC surface in front of the Docker socket is the wrong thing to write untested. Filed as **Q52**, with the recommendation implemented (in-process for now). The **composition** that recommendation implies — a production `ClaudeRunner` and the run's workspace inside `apps/server`, which no plan row owned — is now **WP-15g**; Q52's two remaining sub-decisions are about the *out-of-process* transport and do not block it, but composing the launcher inside `apps/server` does contradict TD-021's *"only component that can reach the Docker socket"*, so that row amends TD-021 before it writes code.
 
-- [ ] **Nothing mounts a platform skill, and the ten were correctly refused at WP-17.** The SDK's
+- [x] **Nothing mounts a platform skill, and the ten were correctly refused at WP-17.** — **closed at
+      WP-14a** (session 5; the change is uncommitted at the time of writing, so this closes *pending
+      merge*): the ten files exist as `packages/prompts/skills/<name>/SKILL.md`, `SKILLS_BY_ROLE` is a
+      third least-privilege table beside the two the planner already had, `WorkspaceSpec.skills` carries
+      the role's list, provisioning writes them into the workspace and the runner passes the directory
+      as a plugin, and `RunSpec.skills` names them plugin-qualified (`agentic:kb`) instead of staying
+      `[]`. **The layout in the original wording is wrong, and it was measured rather than reasoned
+      about**: the pinned CLI does **not** discover `.claude/skills/_platform/<name>/SKILL.md` (twice,
+      two fixtures) and **does** discover a plugin directory's `skills/<name>/SKILL.md`, namespaced
+      `agentic:<name>` — so the shipped path is
+      `<checkout>/.agentic-run/plugins/agentic/skills/<name>/SKILL.md` plus one `--plugin-dir`.
+      `docs/technical/04-agent-runtime.md` carries the amendment and PROGRESS backlog entry **24** the
+      note; the per-role list also **replaces** project-skill discovery, which is **Q67**, and what WP-14a
+      left open is PROGRESS backlog **39**, **40** and **41**. The original wording follows. (was: The SDK's
       `skills?: string[] | 'all'` (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`) is *"a
       context filter, not a sandbox"*, matching the `SKILL.md` `name`/directory name, so `RunSpec.skills`
       can only filter what the CLI discovers in the workspace; technical/04:35 puts them there at
@@ -164,7 +177,7 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       (`providers/gitlab/index.ts:40`), nothing reads `skillRefSchema`, and the planner sends
       `skills: []` — which `options.ts:152` turns into *omitting* the option, and the SDK docblock says
       an omitted option is **not** "skills off", so no filter is applied today (product/13 § "Reuse of
-      project skills", working as documented). Now **WP-14a**. PROGRESS backlog entry 24.
+      project skills", working as documented). Now **WP-14a**. PROGRESS backlog entry 24.)
 
 ## Parking lot (not for v0.1; see product/14 roadmap)
 

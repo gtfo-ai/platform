@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { workspace } from '@platform/infrastructure';
+import { PLATFORM_SKILLS } from '@platform/prompts';
 import { runWorkspaceProviderContractSuite } from '../support/workspace/provider-suite.js';
 
 /**
@@ -43,9 +44,20 @@ runWorkspaceProviderContractSuite('FakeWorkspaceProvider', {
     }
     return containerOps(current, handle.runId);
   },
+  readWorkspaceFile: async (handle, relativePath) => {
+    if (current === null) {
+      throw new Error('readWorkspaceFile was asked before the harness built a provider');
+    }
+    return current.readWorkspaceFile(handle.runId, relativePath);
+  },
   provider: async () => {
     const dir = await workspace.shortTempDir('agentic-ws-contract-');
-    const provider = new workspace.FakeWorkspaceProvider({ controlRoot: path.join(dir, 'ctl') });
+    const provider = new workspace.FakeWorkspaceProvider({
+      controlRoot: path.join(dir, 'ctl'),
+      // The shipped files, so the shared suite's skills case is about the real corpus in both
+      // tiers — this one and the Docker runner's, which reads them out of a real container.
+      skills: PLATFORM_SKILLS,
+    });
     current = provider;
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
     return {

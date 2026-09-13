@@ -10,7 +10,12 @@ import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeWorkspaceProvider } from './fake.js';
-import { FIXTURE_RUN_ID, shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import {
+  FIXTURE_RUN_ID,
+  SKILL_CATALOGUE_FIXTURE,
+  shortTempDir,
+  workspaceSpecFixture,
+} from './fixtures.js';
 import { parseTar } from './tar.js';
 
 let dir: string;
@@ -24,7 +29,10 @@ const created = async () => {
 
 beforeEach(async () => {
   dir = await shortTempDir('agentic-fake-ws-');
-  provider = new FakeWorkspaceProvider({ controlRoot: path.join(dir, 'ctl') });
+  provider = new FakeWorkspaceProvider({
+    controlRoot: path.join(dir, 'ctl'),
+    skills: SKILL_CATALOGUE_FIXTURE,
+  });
 });
 
 afterEach(async () => {
@@ -93,9 +101,16 @@ describe('divergence 4 — the tarball comes from an in-memory tree', () => {
       null,
     );
     expect(result.droppedLinks).toBe(1);
+    // The platform's own directory is in the archive, and that is the Docker provider's behaviour
+    // too: `filterTar` drops `.git` and `node_modules` (technical/05 §6) and nothing else, so an
+    // export carries the skills the run was given — platform text, and what a human resuming the
+    // run would want beside the checkout. `.git/info/exclude` keeps them out of the *commit*,
+    // which is the half that matters.
     expect(parseTar(await readFile(target)).map((entry) => entry.name)).toEqual([
       'repo/',
       'repo/README.md',
+      'repo/.agentic-run/plugins/agentic/skills/ask-human/SKILL.md',
+      'repo/.agentic-run/plugins/agentic/skills/kb/SKILL.md',
     ]);
   });
 });

@@ -192,12 +192,13 @@ export type LokiProvider = ObservabilityLogsPort;
  * platform means to hand an agent is a read-only token, and a spec that also named a basic-auth
  * pair would invite an operator to inject the binding's own account into a run container.
  *
- * `skill` is `null` rather than a path: `packages/prompts/` still has no `skills/` directory, and a
- * `SkillRef` naming a directory that is not on disk is a promise the runner cannot keep. WP-17
- * shipped the role prompts and **deliberately did not ship skills** — nothing mounts them
- * (technical/04 copies them into the workspace at provisioning, which needs the workspace provider
- * the pipeline does not compose), and the reasoning is in `PROGRESS.md` under WP-17. Recorded as
- * discovered work rather than written as a claim.
+ * `skill` names `packages/prompts/skills/loki-logs`, which **exists** since WP-14a: the ten platform
+ * skills are shipped and `WorkspaceProvider.create` copies a run's own into the workspace, so a
+ * `SkillRef` is no longer a promise nothing keeps. Two limits, stated rather than implied: the path
+ * is resolved against disk by `test/contract/prompts/platform-skills.contract.test.ts` and by
+ * nothing else, and **provisioning is role-driven rather than binding-driven** — a run of the
+ * investigator role gets `loki-logs` whether or not this project has a Loki binding. Narrowing it
+ * to the bindings a project actually has is in the ledger's discovered work.
  */
 export const LOKI_AGENT_TOOLING: AgentTooling = {
   cli: {
@@ -224,7 +225,7 @@ export const LOKI_AGENT_TOOLING: AgentTooling = {
     },
   },
   mcp: null,
-  skill: null,
+  skill: { id: 'loki-logs', path: 'packages/prompts/skills/loki-logs' },
   env: {
     variables: [
       {

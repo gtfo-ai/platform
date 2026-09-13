@@ -31,7 +31,7 @@ import type {
   WorkspaceProvider,
   WorkspaceSpec,
 } from '@platform/application';
-import { WorkspaceError } from '@platform/application';
+import { PLATFORM_SKILLS_PLUGIN_DIRECTORY, WorkspaceError } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
 import { describe, expect, it } from 'vitest';
 
@@ -63,6 +63,20 @@ export interface WorkspaceProviderContractContext {
    * reports is the sequence of calls that went to the daemon.
    */
   readonly containerOps: (handle: WorkspaceHandle) => readonly ('stop' | 'remove')[];
+  /**
+   * One file of the created workspace, by its path relative to the checkout, or `null` when it is
+   * not there — the seam for "what did provisioning write".
+   *
+   * A seam because the two implementations answer it differently and neither can be inferred from
+   * the port: the fake reads its in-memory tree, and the Docker runner `cat`s the path inside a
+   * container created from the run's own configuration. Only the second is evidence about a real
+   * container (standing rule 82), which is why the interesting half of this question — that a CLI
+   * then discovers them, and that the project's own `.claude/skills` survives — lives in the e2e.
+   */
+  readonly readWorkspaceFile: (
+    handle: WorkspaceHandle,
+    relativePath: string,
+  ) => Promise<string | null>;
 }
 
 const exportRequest = (tarballPath: string | null): WorkspaceExportRequest => ({
@@ -194,6 +208,35 @@ export const runWorkspaceProviderContractSuite = (
         // that the volume survived — and it is also the real take-over sequence.
         const result = await provider.export(handle, exportRequest(tarballPath), null);
         expect(result.tarballBytes).toBeGreaterThan(0);
+      });
+    });
+
+    /**
+     * WP-14a: provisioning puts the spec's platform skills in the workspace, under the plugin
+     * directory the runner passes to the CLI — and puts nothing in the project's own `.claude/`.
+     *
+     * The spec fixture names two of the ten, so "only what the spec named" has something to be
+     * wrong about: a provider that copied the whole catalogue would fail the third assertion.
+     */
+    it('provisions the platform skills the spec names, and no others', async () => {
+      await withRun(async ({ handle, spec }) => {
+        expect(spec.skills.length).toBeGreaterThan(0);
+        for (const name of spec.skills) {
+          const body = await context.readWorkspaceFile(
+            handle,
+            `${PLATFORM_SKILLS_PLUGIN_DIRECTORY}/skills/${name}/SKILL.md`,
+          );
+          expect(body, `${name} should be in the workspace`).toContain(`name: ${name}`);
+        }
+        const unprovisioned = 'retro';
+        expect(spec.skills).not.toContain(unprovisioned);
+        expect(
+          await context.readWorkspaceFile(
+            handle,
+            `${PLATFORM_SKILLS_PLUGIN_DIRECTORY}/skills/${unprovisioned}/SKILL.md`,
+          ),
+          'a skill the role may not use is not in the workspace at all',
+        ).toBeNull();
       });
     });
 

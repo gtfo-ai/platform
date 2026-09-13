@@ -20,6 +20,7 @@ import {
   PLATFORM_PROMPT_VERSION,
   type PromptKnowledgeDocument,
   type PromptNonceSource,
+  skillSetVersionOf,
 } from './assembly.js';
 import {
   DATA_BLOCK_TAG,
@@ -487,5 +488,55 @@ describe('the ticket block', () => {
     expect(ticket?.body).toContain(HOSTILE_CONSTRUCTS.system_tag);
     // The cut is the platform's claim: a body that writes one does not make the marker say it.
     expect(ticket?.attributes.truncated).toBeUndefined();
+  });
+});
+
+/**
+ * The skills lane of `runs.prompt_version` (WP-14a).
+ *
+ * A skill is prompt material the platform ships, so product/13's "prompt changes are decisions"
+ * needs the same two things it has for a role prompt: the declared version a human bumps, and a
+ * digest that catches the edit that forgot to bump.
+ */
+describe('skillSetVersionOf', () => {
+  const kb = { name: 'kb', version: '1', text: '# kb\n' };
+  const retro = { name: 'retro', version: '1', text: '# retro\n' };
+
+  it('says so when a run was given no skills, rather than digesting nothing', () => {
+    expect(skillSetVersionOf([])).toBe('skills@none');
+  });
+
+  it('does not depend on the order the planner happened to list them in', () => {
+    expect(skillSetVersionOf([kb, retro])).toBe(skillSetVersionOf([retro, kb]));
+  });
+
+  it('changes when a skill body is edited without its declared version being bumped', () => {
+    expect(skillSetVersionOf([{ ...kb, text: '# kb\n\nOne more line.\n' }])).not.toBe(
+      skillSetVersionOf([kb]),
+    );
+  });
+
+  it('changes when the declared version is bumped without the body changing', () => {
+    expect(skillSetVersionOf([{ ...kb, version: '2' }])).not.toBe(skillSetVersionOf([kb]));
+  });
+
+  it('distinguishes a different set of the same size', () => {
+    expect(skillSetVersionOf([kb])).not.toBe(skillSetVersionOf([retro]));
+  });
+
+  /**
+   * The framing carries each entry's length, so two sets cannot collide by concatenation: `ab` +
+   * `c` and `a` + `bc` are different digests even though the joined text is the same.
+   */
+  it('cannot be collided by moving a byte across the boundary between two skills', () => {
+    const left = skillSetVersionOf([
+      { name: 'a', version: '1', text: 'xy' },
+      { name: 'b', version: '1', text: 'z' },
+    ]);
+    const right = skillSetVersionOf([
+      { name: 'a', version: '1', text: 'x' },
+      { name: 'b', version: '1', text: 'yz' },
+    ]);
+    expect(left).not.toBe(right);
   });
 });

@@ -24,7 +24,7 @@ import type {
   PipelineTemplate,
 } from '@platform/contracts';
 import { agentRoleSchema } from '@platform/contracts';
-import type { RolePromptDefinition } from '@platform/domain';
+import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { createBudgetGuard } from '../cost/guard.js';
 import { costHandlers } from '../cost/runtime.js';
@@ -36,7 +36,7 @@ import type { TaskCommandDependencies } from '../pipeline/commands.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
-import { createStageRunPlanner } from '../pipeline/planner.js';
+import { createStageRunPlanner, SKILLS_BY_ROLE } from '../pipeline/planner.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
 import { defaultProjectSettings, staticProjectSettings } from '../pipeline/settings.js';
@@ -335,6 +335,23 @@ const harnessRolePrompts = (): Readonly<Record<AgentRole, RolePromptDefinition>>
     ]),
   ) as Readonly<Record<AgentRole, RolePromptDefinition>>;
 
+/**
+ * A skill catalogue for the harness — the names {@link SKILLS_BY_ROLE} uses, with stub bodies.
+ *
+ * Stubs rather than the shipped files because this ring may not import `@platform/prompts`
+ * (`biome.json`), and because what the harness exercises is the *wiring*: that a role's list
+ * reaches `RunSpec.skills` and the digest reaches `prompt_version`. What the files say is held by
+ * `packages/prompts`' own tests, and whether they arrive in a workspace is the e2e's (standing rule
+ * 82: `FakeClaudeRunner` would pass a run whose skills were never copied).
+ */
+const harnessSkills = (): Readonly<Record<string, SkillDefinition>> =>
+  Object.fromEntries(
+    [...new Set(Object.values(SKILLS_BY_ROLE).flat())].map((name) => [
+      name,
+      { name, version: 'harness', text: `# ${name}\n\nThe harness's skill.\n` },
+    ]),
+  );
+
 /** A UUID from the harness's id source, as the 32 hex characters the data-block nonce must be. */
 const nonceFor = (id: Id): string => id.replaceAll('-', '').padEnd(32, '0').slice(0, 32);
 
@@ -455,6 +472,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       planner: createStageRunPlanner({
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
         prompts: harnessRolePrompts(),
+        skills: harnessSkills(),
         // Deterministic and distinct per run: a constant would make the delimiter predictable, and
         // the executor's own ids are already the harness's one source of "unique".
         nonce: { next: () => nonceFor(ids.next()) },

@@ -99,7 +99,9 @@ Full default prompt texts are written in Round 2 as files; here is the intent an
 - `docs-sync` — check that product docs, decisions and glossary agree (lint for undefined terms).
 
 ### Reuse of project skills
-Agents run real Claude Code with project setting sources, so a project's own `.claude/skills` and `CLAUDE.md` are available; the `kb` skill instructs agents to prefer project skills for project procedures. (Verified: `settingSources: ["project"]` loads project skills without host config; there is no SDK bare mode, and CLI bare mode would also drop the subscription token — research/04.)
+Agents run real Claude Code with project setting sources (`settingSources: ["project"]` — verified: it loads project settings without host config; there is no SDK bare mode, and CLI bare mode would also drop the subscription token — research/04), so a project's `CLAUDE.md` and `.agentic/rules` are loaded in every run.
+
+**Amended at WP-14a (session 5, Q67): a project's own `.claude/skills` are *not* enabled while a platform stage runs.** The SDK's `skills` option is a filter over what the CLI discovered — a list "enables only the listed skills", with no "these and whatever the project ships" form — and the platform passes each role its own list of platform skills, which therefore hides the project's. This is the narrowing direction under BD-025 §2, and it closes a live path: BD-025 trusts `.claude/` only from the default branch, while a re-entry checks out the task branch, so an unfiltered run would enable a skill a merge request added in the very run that reviews it. The shipped `kb` skill therefore points agents at the knowledge base, `CLAUDE.md` and `.agentic/rules`, not at project skills. Widening is a future configuration key (a project opting its skills in) that must read the **default-branch snapshot** rather than the checkout; nothing implements it today, and the trigger is the first customer who asks why their skill is not listed (Q67).
 
 ## Prompt quality process
 

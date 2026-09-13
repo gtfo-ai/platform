@@ -127,4 +127,33 @@ describe('buildQueryOptions', () => {
     expect(Object.keys(populated.agents ?? {})).toEqual(['explorer']);
     expect(populated.skills).toEqual(['pdf']);
   });
+
+  /**
+   * WP-14a. The skills the platform provisions are a **plugin** rather than files in the project's
+   * own `.claude/skills`, because the pinned CLI does not discover a skill nested under
+   * `.claude/skills/_platform/` and does discover a plugin's `skills/<name>/SKILL.md` — measured,
+   * with the fixtures named in `PLATFORM_SKILLS_PLUGIN_DIRECTORY`.
+   */
+  it('loads the platform skills as a plugin inside the workspace, with MCP discovery off', () => {
+    const populated = buildQueryOptions(
+      runSpecFixture({ workspacePath: '/work/repo', skills: ['agentic:kb'] }),
+      parts(),
+    );
+    expect(populated.plugins).toEqual([
+      {
+        type: 'local',
+        path: '/work/repo/.agentic-run/plugins/agentic',
+        // BD-025: what a run may reach is the platform's decision, and a plugin may declare MCP
+        // servers.
+        skipMcpDiscovery: true,
+      },
+    ]);
+    expect(populated.skills).toEqual(['agentic:kb']);
+  });
+
+  it('passes no plugin for a role with no skills, and says why in the docblock', () => {
+    // "Omitted is not skills off" (`sdk.d.ts:2089-2098`): for such a role the restriction is that
+    // provisioning copied nothing, which is the stronger of the two lanes.
+    expect(buildQueryOptions(runSpecFixture({ skills: [] }), parts()).plugins).toBeUndefined();
+  });
 });

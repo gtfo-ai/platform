@@ -20,6 +20,7 @@
     "@platform/application": "workspace:*",
     "@platform/contracts": "workspace:*",
     "@platform/infrastructure": "workspace:*",
+    "@platform/prompts": "workspace:*",
     "zod": "4.5.4",
     "pino": "10.3.1"
   }

@@ -23,13 +23,19 @@ import {
   type RolePromptDefinition,
   readDataBlocks,
   SANITISED_MARKER,
+  type SkillDefinition,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import { silentLogger } from '../ports/logger.js';
 import { FIXTURE_HOSTILE_PATH, FIXTURE_ZERO_WIDTH } from '../testing/fixture-vault.js';
 import { indexedFixtureVault } from '../testing/memory-knowledge.js';
-import { createStageRunPlanner, taskTextOf } from './planner.js';
+import {
+  createStageRunPlanner,
+  PLATFORM_TOOLS_BY_ROLE,
+  SKILLS_BY_ROLE,
+  taskTextOf,
+} from './planner.js';
 import type { StageRunRequest } from './stage-executor.js';
 
 /** The id `indexedFixtureVault` writes under — the same corpus every retrieval tier measures. */
@@ -73,10 +79,25 @@ const requestWith = (
     returnFeedback: null,
   }) as unknown as StageRunRequest;
 
+/**
+ * The catalogue the planner is built with: every name {@link SKILLS_BY_ROLE} uses, stub bodies.
+ *
+ * The cases below assert the *selection* and the digest, which is all this ring decides. The files
+ * themselves are `packages/prompts`' (`skills.test.ts`), and their arrival in a workspace is the
+ * docker workspace e2e's.
+ */
+const testSkills: Readonly<Record<string, SkillDefinition>> = Object.fromEntries(
+  [...new Set(Object.values(SKILLS_BY_ROLE).flat())].map((name) => [
+    name,
+    { name, version: '1', text: `# ${name}\n` },
+  ]),
+);
+
 const planWith = async (taskText: string, ticketSnapshot: TicketSnapshot | null = null) => {
   const planner = createStageRunPlanner({
     workspacePath: (taskId) => `/workspaces/${taskId}`,
     prompts: prompts as never,
+    skills: testSkills,
     nonce: { next: () => NONCE },
     contextPacks: createContextPackAssembler({
       store: (await indexedFixtureVault()).store,
@@ -350,5 +371,76 @@ describe('the query terms a task yields (WP-15f)', () => {
     );
     expect(terms.slice(0, 3)).toEqual(['sess', 'ions', 'rollback']);
     expect(terms).not.toContain('sessions');
+  });
+});
+
+/**
+ * The role → skill table (WP-14a), enumerated rather than sampled (standing rule 68).
+ *
+ * The planner decides two things about skills and nothing else: **which** ones a run is given, and
+ * that their digest reaches `prompt_version`. Whether the files then arrive in the workspace is the
+ * docker workspace e2e's question, because a fake provider would pass either way (rule 82).
+ */
+describe('the platform skills a stage is planned with', () => {
+  it('has a row for every role, with no unknown name in it', () => {
+    expect(Object.keys(SKILLS_BY_ROLE).sort()).toEqual([...agentRoleSchema.options].sort());
+    const unknown = Object.values(SKILLS_BY_ROLE)
+      .flat()
+      .filter((name) => testSkills[name] === undefined);
+    expect(unknown).toEqual([]);
+  });
+
+  it('uses every skill it declares: none is provisioned for nobody', () => {
+    expect([...new Set(Object.values(SKILLS_BY_ROLE).flat())].sort()).toEqual(
+      Object.keys(testSkills).sort(),
+    );
+  });
+
+  /**
+   * The two rules the rows were written to, asserted as properties rather than by restating the
+   * table: a skill whose recipes are about changing something outside the workspace goes only to a
+   * role that holds the platform tool for it, and `ask-human` only to a role that can ask.
+   */
+  it('gives the writing skills only to the role that may write', () => {
+    for (const [role, skills] of Object.entries(SKILLS_BY_ROLE)) {
+      const platformTools = PLATFORM_TOOLS_BY_ROLE[role as keyof typeof PLATFORM_TOOLS_BY_ROLE];
+      if (skills.includes('gitlab-mr') || skills.includes('mr-description')) {
+        expect(platformTools, `${role} has an MR skill`).toContain('open_mr');
+      }
+      if (skills.includes('file-followup-ticket')) {
+        expect(platformTools, `${role} may file follow-ups`).toContain('create_followup_ticket');
+      }
+      if (skills.includes('ask-human')) {
+        expect(platformTools, `${role} may ask`).toContain('ask_human');
+      }
+      if (skills.includes('kb')) {
+        expect(platformTools, `${role} may search the KB`).toContain('kb_search');
+      }
+    }
+  });
+
+  it("names the stage's role's skills on the RunSpec, plugin-qualified", async () => {
+    const { spec } = await planWith('a ticket about refunds');
+    expect(spec.skills).toEqual(SKILLS_BY_ROLE.product_manager.map((name) => `agentic:${name}`));
+  });
+
+  it('carries a digest of those skills in the prompt version, beside the prompt’s own', async () => {
+    const { spec } = await planWith('a ticket about refunds');
+    expect(spec.promptVersion).toContain('+skills@');
+    expect(spec.promptVersion).toMatch(/\+product_manager@1\+/);
+    expect(spec.promptVersion.endsWith('+skills@none')).toBe(false);
+  });
+
+  it('refuses to build a planner whose catalogue cannot answer the table', () => {
+    expect(() =>
+      createStageRunPlanner({
+        workspacePath: (taskId) => `/workspaces/${taskId}`,
+        prompts: prompts as never,
+        skills: { kb: testSkills['kb'] as SkillDefinition },
+        nonce: { next: () => NONCE },
+        contextPacks: { assemble: async () => ({}) as never },
+        clock: { now: () => NOW },
+      }),
+    ).toThrow(/missing ask-human/);
   });
 });

@@ -2803,7 +2803,7 @@ that exposed it is WP-15h. Smallest sensible home is **WP-15h part 2** (it alrea
 projection) or the next row that writes a `task_stages` state. No measurement needed; needs a
 decision on whether `skipped`/`failed` get writers at the same time or stay declared-and-unused.
 
-### 24. **The ten platform skills were correctly refused at WP-17, and nothing mounts a skill** (TODO — now **WP-14a**)
+### 24. **The ten platform skills were correctly refused at WP-17, and nothing mounts a skill** (**RESOLVED** at **WP-14a**, session 5 — *pending merge*, the change is uncommitted at the time of writing; kept for its evidence, and **tier 2's layout below is wrong**: see the refiner note at the end of this entry)
 **What is wrong.** WP-17's plan row lists "platform skills" and the implementer did not build them.
 **The refusal is right and is recorded here so it is not re-litigated**, together with the SDK fact
 that makes it right — and with the half that *is* missing, which is a delivery path, not ten files.
@@ -2858,8 +2858,10 @@ transport (Q52) plus a composed `ClaudeRunner`. Until then a mounted skill would
 1. the ten skills exist as `packages/prompts/skills/<name>/SKILL.md` with frontmatter whose `name`
    matches the directory (the SDK matches on exactly that), GitLab's dangling `path` resolves, and the
    provider `skill` refs are read by whatever does the copying rather than by nothing;
-2. provisioning copies them into the workspace's `.claude/skills/_platform/`, asserted **in a real
-   container** by the WP-14 docker workspace e2e that already exists
+2. provisioning copies them into the workspace — ~~`.claude/skills/_platform/`~~ (that layout was
+   technical/04's and was **falsified by measurement at WP-14a**: the CLI discovers a *plugin*
+   directory, `<checkout>/.agentic-run/plugins/agentic/skills/`, and not that path — see the note
+   below) — asserted **in a real container** by the WP-14 docker workspace e2e that already exists
    (`test/e2e/workspace/docker-workspace.e2e.test.ts`, `test/e2e/support/docker-workspace.ts`) — the
    files are present, the project's own `.claude/skills` is untouched, and `RunSpec.skills` names them;
 3. and the acceptance that a run's model *lists* them is **explicitly out of scope** until a production
@@ -2879,6 +2881,239 @@ into `apps/server`.* Q52 is the transport **question**, not a work package; WP-2
 compose, not the composition root. Until such a row existed, tier 3 above had nowhere to live and
 `apps/server` started no pipeline runs at all. **That row is now WP-15g** (refiner, session 4), and
 tier 3 is its criterion rather than this one's; tiers 1 and 2 here still do not wait on it.
+
+> **Refiner note (session 5) — the layout tier 2 specifies is not discovered by the pinned CLI, and the
+> entry is RESOLVED at WP-14a pending merge.** Tier 2 above copies the skills into the workspace's
+> `.claude/skills/_platform/`, which is technical/04:35's wording, and that line had never been run.
+> WP-14a ran it against the `claude` binary `@anthropic-ai/claude-agent-sdk@0.3.267` resolves, by asking
+> for a `system`/`init` message and reading the `skills` it reports discovering:
+> `.claude/skills/flat-skill/SKILL.md` **is** discovered; the same file one level deeper at
+> `.claude/skills/_platform/nested-skill/SKILL.md` is **not** — twice, with two fixtures; a
+> `.claude/skills` in a **parent** of the checkout is not discovered either; a plugin directory holding
+> `skills/<name>/SKILL.md`, passed as `Options.plugins` (`--plugin-dir`), **is** discovered and
+> namespaced `agentic:<name>`; and the **directory** name is the identity, so a `SKILL.md` whose
+> frontmatter `name` differs is listed under its directory. So the shipped layout is
+> `<checkout>/.agentic-run/plugins/agentic/skills/<name>/SKILL.md` plus one `--plugin-dir`, which is
+> better than the flat alternative for two reasons this entry did not anticipate: the platform's ten
+> names would otherwise share a namespace with the project's own `.claude/skills` (a repository with its
+> own `kb` loses it or shadows ours), and the files would sit where `git add -A` sweeps them into the
+> merge request. **technical/04 carries the amendment** — its § "Amendment (WP-14a, 2026-09-13) — where
+> the platform's skills actually go, and why not where this page said" — written by WP-14a's
+> implementer, so the doc changed first. Tier 1 is met (`packages/prompts/skills/<name>/SKILL.md` × 10,
+> GitLab's dangling `skill.path` resolves, the refs are read by the copy), tier 2 is met at the
+> corrected path, and tier 3 stays WP-15g's as this entry already says.
+>
+> **Six sentences still state the old layout, and none of them is the refiner's to change** (rule 83 —
+> closing a gap falsifies every sentence that described it, and the sentence nearest the fix is not the
+> only one). Counted by grepping this repository for `_platform` rather than by memory: **two in this
+> entry** (the evidence paragraph's quotation of technical/04:35, and tier 2), **one in the WP-17 notes**
+> under the section "WP-17 — the delimiter first, then the pack; and the eval half that cannot run",
+> **three in `13-implementation-plan.md`** — WP-14a's own row, in its description *and* in its acceptance
+> criterion, plus WP-15g's row where it names WP-14a's first two tiers. The WP-17 **milestone row** does
+> not state a layout, so it needs nothing. The orchestrator owns all of them; the ledger and the plan are
+> its files, and `docs/technical/04-agent-runtime.md` is already corrected.
+> `docs/TODO.md`'s *"Nothing mounts a platform skill"* item is struck in this same pass. What WP-14a left
+> open is filed below as entries **39**, **40** and **41**, and the product decision it took is **Q67**.
+
+### 39. **product/13's least-privilege table and the shipped `TOOLS_BY_ROLE` disagree about the investigator's shell, and the skill table follows the document while the tool table ships** (TODO, small — **no work package owns it**; found by WP-14a, session 5)
+
+**What is wrong.** What the investigator may do is written down twice and the two do not agree.
+product/13's least-privilege table gives the role a shell and observability; the table that ships gives
+it no shell at all. `SKILLS_BY_ROLE` followed the **product document**, so the investigator's workspace
+is provisioned with `loki-logs` and `sentry-issue` — two skills whose entire content is command recipes
+— for a role whose SDK tool list cannot run a command.
+
+**Evidence** (measured and recorded by WP-14a's implementer; the refiner read the four sites, no test
+run — rule 66).
+- `docs/product/13-agents-prompts-skills.md:70`, the row as written:
+  `| Investigator | ✔ | – | read-only cmds | – | – | via platform | ✔ | – | ✔ |`
+- `packages/application/src/pipeline/planner.ts:96` — `investigator: ['Read', 'Glob', 'Grep'],`
+- `packages/application/src/pipeline/planner.ts:139` — the skills row for the same role is
+  `['ask-human', 'jira-ticket', 'kb', 'loki-logs', 'sentry-issue']`, and the table's own docblock
+  (`:130-134`) states the mismatch rather than hiding it: *"The rows follow product/13 because that is
+  the spec and the tools table is the half that is wrong"*.
+- The absence is **not** a blanket "no shell for read-only roles" policy: the acceptance tester in the
+  same table is `['Read', 'Glob', 'Grep', 'Bash']` (`planner.ts:100`), which is product/13's *tests
+  only* row, and the developer holds `Bash` as well.
+
+**Which one is right, and what BD-025 actually decides.** BD-025 §2 settles the *direction* and not the
+row: defaults ship per stage, the organisation sets the maximum autonomy, and projects may only narrow
+it. A platform table **narrower** than the spec is therefore safe to ship and a table wider than the
+spec is what would need a decision — so the code is the conservative half and the **documents** are the
+inconsistent pair. It is still a defect, because CLAUDE.md's rule is that the docs win and a deviation
+changes the doc first. **Hypothesis, labelled (rule 39): the missing `Bash` is an omission rather than a
+recorded cut.** A record was searched for and none was found — WP-17's plan row and the WP-17 notes,
+which shipped the planner's other two tables, do not mention `TOOLS_BY_ROLE` at all, and the only
+sentence in the tree that weighs the two is the docblock WP-14a wrote while filing this. An absence of
+a record is weak evidence, so whoever resolves it should ask the question rather than assume the answer:
+if the cut **was** deliberate, the fix is one sentence in product/13 and not a `Bash` grant.
+
+**What it costs to leave.** Two answers to "what may this role do", and the one a reader reaches for
+first is the one that has never shipped: an operator reasoning about blast radius from product/13 reads
+a row that is not true, and an implementer reasoning from the code reads a role that cannot do what
+three of its own skills describe. The narrow cost today is that the investigator's two observability
+skills are text it cannot act on; the wider cost is that BD-025 §3's promise of *"read-mostly CLI
+access"* has no owner in either table. Widening is not free but is bounded: an SDK `Bash` grant is still
+governed by the three-list policy composed per run at `packages/application/src/pipeline/planner.ts:380`
+(`narrowCommandPolicy(DEFAULT_COMMAND_POLICY, settings.config.commands)`), so the decision is about
+which list the investigator's commands sit in, not about an unguarded shell.
+
+**What "done" looks like.** One of the two documents changes, and a test enumerates the roles against
+whichever survives.
+1. **Either** product/13's Investigator row loses its shell and its observability tick — and
+   `SKILLS_BY_ROLE` drops `loki-logs`/`sentry-issue` for that role, or keeps them and says in the
+   docblock why a role with no shell holds two command skills — **or** `TOOLS_BY_ROLE` gains `Bash` for
+   the investigator with the command policy's read-only list named in the same change. **The
+   orchestrator owns the product/13 amendment**; the refiner writes no product document.
+2. **A test that enumerates every role against the table**, because this is rule 68's shape: the tested
+   half makes the untested half look covered. Today the only census over the three tables is
+   `test/contract/prompts/platform-skills.contract.test.ts` › "%s: is handed no skill it cannot act on"
+   whose `required` map names five of the ten skills and maps each onto a **platform** tool
+   (`ask-human`→`ask_human`, `kb`→`kb_search`, `gitlab-mr`→`open_mr`,
+   `mr-description`→`update_mr_description`, `file-followup-ticket`→`create_followup_ticket`), so no
+   skill maps onto an **SDK** tool and the investigator's missing `Bash` cannot fail it. Done means the
+   same census covers the SDK half: a skill whose recipes are shell commands is handed only to a role
+   holding `Bash`, asserted for every member of `agentRoleSchema.options`.
+
+**Depends on / owner.** Nothing blocks it. **No work package owns it**: WP-14a shipped `SKILLS_BY_ROLE`
+and recorded the mismatch deliberately rather than resolving it in a row that was about provisioning,
+`TOOLS_BY_ROLE` predates it, and no plan row owns the least-privilege tables. Nearest owner by subject:
+the next row that touches `packages/application/src/pipeline/planner.ts`.
+
+### 40. **A platform skill is provisioned by role and never by binding, and the provider skills tell the run about credentials no run has** (TODO, small — one symptom, two causes, and the second is the bigger one; **no work package owns either**; found by WP-14a, session 5)
+
+**What is wrong.** A project with no Loki binding still gets `loki-logs` in its investigator runs, and a
+project with every binding still gets skills whose opening sentences promise a credential the run's
+environment does not contain.
+
+**Is a skill a capability or prompt material? Prompt material — so mounting one widens nothing**, and
+that is read off the shipped workspace rather than assumed. The SDK's `skills` option is *"a context
+filter, not a sandbox"* and the restriction is the **copy** (`packages/application/src/ports/workspace.ts:200-209`);
+the run's egress allow-list is *the model host (or none, in `local` provider mode) plus the git host*
+(`packages/infrastructure/src/workspace/spec.ts:43`), so `logcli` and `sentry-cli` — which the runtime
+image does install (`docker/runtime.Dockerfile:138`) — have nowhere to connect even for a role that
+holds `Bash`. This entry is therefore **not** a least-privilege defect; it is about text in the model's
+context that describes a world the run is not in.
+
+**Evidence** (refiner, session 5 — file reads and one `wc -c`, no test run and no container, rule 66).
+- **Cause (a), role-driven copy.** The spec's skill list is built from the run's own list —
+  `packages/infrastructure/src/workspace/spec.ts:203` calls `platformSkillsOf(input.spec)`, which reads
+  `spec.skills` (`:146`) — and `spec.skills` is the role's row from `SKILLS_BY_ROLE`. Nothing on that
+  path reads the project's bindings, and `agentTooling()` is consulted by nobody: a grep for
+  `agentTooling` across `packages/application/src/pipeline/planner.ts`, `apps/server/src/agent.ts` and
+  `packages/infrastructure/src/workspace/spec.ts` returns nothing, so `AgentTooling.skill` is
+  documentary, which is exactly what WP-14a's note says narrowing would change.
+- **Cause (b), no run environment carries a provider CLI credential — for any project.** A production
+  run's environment is built by `agentRunEnvironment` (`apps/server/src/agent.ts:235-245`), which
+  returns `{ env: {}, secretEnvNames: [] }` unless the provider mode is `api` and otherwise exactly
+  `{ ANTHROPIC_API_KEY: options.modelApiKey }`. `LOKI_ADDR`/`LOKI_BEARER_TOKEN` are declared on
+  `LOKI_AGENT_TOOLING` (`packages/integrations/src/providers/loki/provider.ts:203-220`) and no
+  production code reads them; Sentry declares `env: { variables: [] }` on purpose
+  (`packages/integrations/src/providers/sentry/provider.ts:175-178`).
+- **So all four provider skills assert a credential the run's environment does not contain.**
+  `packages/prompts/skills/loki-logs/SKILL.md:8` — *"`logcli` is on the PATH and reads the run's Loki
+  credentials from the environment"*; `packages/prompts/skills/sentry-issue/SKILL.md:8-9` — *"The
+  credential in the environment is scoped to reading issues and events"*;
+  `packages/prompts/skills/jira-ticket/SKILL.md:24` — *"Both CLIs are authenticated for this run with a
+  read-scoped credential"*; `packages/prompts/skills/gitlab-mr/SKILL.md:8` — *"`glab` is on the PATH of
+  this workspace and is already authenticated for this run"*. The git half is the one with a real mechanism behind it — the
+  workspace sets a credential helper (`credential.helper=!agentic-cred`,
+  `packages/infrastructure/src/workspace/provider.ts:846-847`), which authenticates **git**. **Needs
+  measurement (rule 66, not run here): whether `glab` finds a credential through that helper**, since
+  `glab` reads `GITLAB_TOKEN` and nothing sets one; until somebody checks, the honest statement is that
+  the sentence is unverified rather than false.
+- **What the context actually costs**, so nobody inflates it: the ten files are **2 111–2 635 bytes**
+  each (`wc -c` over `packages/prompts/skills/*/SKILL.md`, refiner, 2026-09-13), and what enters a run
+  per skill is the frontmatter `description` — one sentence — because the CLI lists a skill's
+  description to the model (WP-14a's note, which is why no role prompt names the ten). The body is read
+  when the model opens the skill, which is where an absent binding costs a **turn** rather than a line.
+  **Needs measurement (rule 66)**: nobody has measured the listing's cost for the developer's ten-skill
+  row, nor how often a model opens a skill whose tooling is absent.
+
+**What it costs to leave, and what would make it urgent.** Nothing is broken in this repository today,
+because nothing here has run an agent against a model — every green result is through
+`FakeClaudeRunner`, which is standing rule 82's whole point, and there is no model credential. The
+trigger is the first real-model run, the same one entry **24** names. When it happens, cause (b) makes the four provider
+skills misleading for **every** project — an agent that follows them spends a turn discovering the
+credential is absent, and `ask_human` is the good outcome — while cause (a) adds one unusable
+description per unbound provider.
+
+**What "done" looks like.** The two causes are separable and should not be bundled.
+1. **(a)** The copy takes the project's binding set as well as the role, which makes
+   `AgentTooling.skill` load-bearing (the registrations already name the skill for GitLab, Loki, Sentry
+   and Jira) and needs the binding set at the place the `WorkspaceSpec` is built. The criterion that
+   fails today: a run for a project with no Loki binding has no `loki-logs` in `WorkspaceSpec.skills`.
+2. **(b)** Either a credential path for the provider CLIs — BD-025 §3's *"narrowly scoped, run-lifetime
+   tokens for git push to `agentic/*` and read-mostly CLI access"*, of which only the git half exists —
+   or the three sentences become conditional and say the credential may be absent. Note that any
+   `SKILL.md` edit moves the run's recorded digest (`skillSetVersionOf` folds the skill set into
+   `runs.prompt_version`), so the audit shows the change; no `ROLE_PROMPT_VERSIONS` bump is involved.
+
+**Depends on / owner.** **None owns either half.** (a) is the first consumer of `AgentTooling.skill`;
+(b) is a credential broker for CLIs, which no plan row owns (`workspace/broker.ts` mints run-scoped
+**git** tokens and is a different thing, as WP-15a's notes already say). Nearest by subject: the row
+that next touches the workspace spec, and entry **41**, which is the same question asked about Sentry's
+`cli: null`.
+
+### 41. **`sentry-cli` 3.7.0 has the issue commands its own documentation page does not list, and that page is a cited source of the Sentry fixture corpus** (TODO, small — a **provenance** correction, not a defect in the adapter; found by WP-14a, session 5)
+
+**What is wrong.** `SENTRY_AGENT_TOOLING.cli` is `null` and the reason recorded for it is a
+documentation read: the vendor's CLI page lists no issue commands. The binary the platform ships has
+them. The decision may still be right — what is unverified is the *environment* such a query
+authenticates with — but the **citation** behind it has been contradicted by a measurement, and a
+contradicted provenance citation is re-derived rather than left standing (CLAUDE.md's fixture-provenance
+rule: a fixture you recorded and a fixture you invented are different kinds of evidence, and the
+`SOURCES.md` beside a corpus is the statement of what it rests on, *including pages that produced no
+fixture*).
+
+**Evidence** (measured by WP-14a's implementer inside `platform-runtime:dev` on 2026-09-13 by reading
+`--help`; the refiner read the three sites and ran no container — rule 66).
+- The measurement, quoted from the provider's docblock rather than paraphrased
+  (`packages/integrations/src/providers/sentry/provider.ts:166-171`): *"`sentry-cli` **3.7.0**, the
+  version `docker/runtime.Dockerfile` installs, *does* have `issues list --query --max-rows` and
+  `events list` — read from `--help` inside `platform-runtime:dev` on 2026-09-13."*
+- The contradicted read, in the same docblock at `:147-150`: the classic `sentry-cli` documents its
+  environment *"but **no issue commands at all**: its documented sections are releases, debug files,
+  send-event, code mappings, logs, snapshots and crons"*, citing `https://docs.sentry.io/cli/` retrieved
+  2026-09-10.
+- The corpus statement carries the same claim and **has not been corrected**:
+  `test/fixtures/http/sentry/SOURCES.md:75-77` cites `https://docs.sentry.io/cli/` for *"the documented
+  command groups of `sentry-cli`"* and states **No `issues` group. No fixture; cited by the
+  agent-tooling decision.**
+- **Which fixture `source` block needs re-deriving: none, and that is the finding's shape.** No fixture
+  under `test/fixtures/http/sentry/` cites the CLI page — a grep for `docs.sentry.io/cli` in that
+  directory matches only `SOURCES.md`. The four fixtures (`issues.json`, `issue-search.json`,
+  `issue-events.json`, `organization.json`) cite API pages, and nothing measured contradicts those. So
+  what is contradicted is the corpus statement's **non-fixture** citation, which is the part the
+  provenance contract puts in `SOURCES.md` precisely because no `source` block can carry it.
+
+**What it costs to leave.** Small: a reader who follows the `SOURCES.md` line reaches the page and forms
+the same wrong belief. Not small: `cli: null` is what keeps `sentry-cli` out of the run's declared
+tooling, and the argument for it now rests partly on a claim the platform's own measurement contradicts
+— so the next person re-reads the page, agrees with it, and re-derives the same conclusion from the
+wrong reason. WP-14a corrected the **provider docblock** in place (rule 83, the sentence nearest the
+fix); the corpus statement is the copy that was missed.
+
+**What "done" looks like.**
+1. `test/fixtures/http/sentry/SOURCES.md`'s `https://docs.sentry.io/cli/` line records both facts with
+   their dates: the page (retrieved 2026-09-10) lists no `issues` group, and the pinned binary 3.7.0
+   has `issues list` and `events list` (`--help` in `platform-runtime:dev`, 2026-09-13). A citation that
+   is known to be incomplete and is kept anyway must say so on the line.
+2. The tooling decision is re-taken **from the measurement rather than from the page**: either
+   `SENTRY_AGENT_TOOLING.cli` stays `null` with the reason restated as *the environment contract is
+   unverified* — which is what the docblock now says and what WP-08 decided for Jira — or the
+   environment is verified and `cli` is declared. **Needs measurement (rule 66, not run here)**: whether
+   `sentry-cli 3.7.0 issues list` authenticates with the four documented variables
+   (`SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_URL`), which needs the binary **and** a
+   Sentry credential — neither exists in this repository, so this is the same externally-blocked shape
+   as WP-17's eval half rather than work that is merely unscheduled.
+3. Entry **40**'s cause (b) bounds what a declared `cli` would buy: a run's environment carries at most
+   `ANTHROPIC_API_KEY` today, so declaring the CLI changes nothing a run can do until a credential
+   reaches it.
+
+**Depends on / owner.** **None.** Nearest by subject: the next row that touches the Sentry adapter or
+its fixture corpus. No plan row owns provider tooling declarations, which is the same gap entry **40**
+names from the other side.
 
 ### 26. **Composing the workspace provider does not give WP-18 a checkout it can read** (**DECIDED** by architect ruling, session 5 — **TD-026**; the work is on the rewritten **WP-18** row, and this entry closes when that row merges)
 
@@ -3182,6 +3417,17 @@ resolves the binary from the repository root rather than from `$PWD`.
 - **`retentionDecision` keeps an unlabelled volume for ever by design** (rule 60), and one `verify:e2e` run
   produces exactly one unlabelled `ws-<uuid>`. The e2e sweep was fixed; the production half is a decision
   (a reserved prefix, or an orphan report), not a code change to make quietly.
+  - **Third instance, session 5, harness — and it appears only when a run is killed.** WP-14a's
+    implementer reported `agentic-e2e-{cache,ctl}-*` volumes left behind by full e2e runs; the
+    orchestrator's own completed runs returned to baseline (18563 → 18563), and the round-2 reviewer
+    read the mechanism: `test/e2e/support/docker-workspace.ts` creates those two volumes with
+    `docker volume create` and **no labels** and removes them **by name** in `afterAll`, so a run that
+    completes leaves nothing and a run killed before `afterAll` — the harness killed two of the
+    orchestrator's tonight for memory — leaves exactly those two, invisible to rule 60's
+    `label=com.agentic.run` sweep. Rule 60's shape (a resource identified only by its name), in the
+    harness. **Done** looks like: the fixture sweeps `name=agentic-e2e-` at start (the shape the
+    `ws-<uuid>` fix took), or labels the two volumes so the existing sweep sees them. Owner: none —
+    whoever next touches the fixture; cheap.
   - **The other half of the same sentence is unimplemented, and it is the opposite failure** (WP-15g's
     discovered work; refiner, session 4 — no new number, because both halves are this one line's).
     technical/05:10 reads *"keep the volume per retention (3 days default, **14 days for
@@ -7351,6 +7597,116 @@ branch degrades a prompt rather than hiding an operator error.
 
 ## WP notes — session 5 (decisions, assumptions, reviewer findings)
 
+### WP-14a — the ten skills and the provisioning copy
+
+**What exists now.** `packages/prompts/skills/<name>/SKILL.md` × 10 (product/13's list, ~2.1–2.6 kB
+each), loaded eagerly by `packages/prompts/src/skills.ts`; `SKILLS_BY_ROLE` in the planner beside the
+two other least-privilege tables; `WorkspaceSpec.skills`; a `skills-<run-id>` helper container in
+`DockerWorkspaceProvider.create` that writes them into the workspace; the same files in the fake
+provider's tree; `Options.plugins` in `runner/options.ts`; and a digest of the run's skill set folded
+into `runs.prompt_version` (`skillSetVersionOf`, `@platform/domain`).
+
+**The measurement that decided the layout, because technical/04's line does not work.** That page
+said *"copy platform skills into the workspace `.claude/skills/_platform/` at provisioning"*. Run
+against the pinned CLI (the binary `@anthropic-ai/claude-agent-sdk@0.3.267` resolves) by reading the
+`skills` field of its `system`/`init` message:
+
+| fixture | discovered? |
+|---|---|
+| `.claude/skills/flat-skill/SKILL.md` | **yes** |
+| `.claude/skills/_platform/nested-skill/SKILL.md` | **no** (twice, two fixtures) |
+| `<parent-of-cwd>/.claude/skills/parent-skill/SKILL.md`, cwd a **git root** (the shipped case) | **no** |
+| the same, cwd **not** a git repository | **yes** — so the boundary is the repository, not the depth (narrowed by the reviewer's re-derivation) |
+| plugin dir holding `skills/<name>/SKILL.md`, via `Options.plugins` | **yes**, as `agentic:<name>` |
+| `dir-name-here/SKILL.md` whose frontmatter says `name: frontmatter-name` | listed as `dir-name-here` |
+
+So the shipped layout is `<checkout>/.agentic-run/plugins/agentic/skills/<name>/SKILL.md` plus one
+`--plugin-dir`, and technical/04 carries an amendment with the table. The flat alternative — writing
+into the project's own `.claude/skills/` — was rejected twice over: the platform's ten names would
+share a namespace with the project's (a repository with its own `kb` either loses it or shadows
+ours), and the files sit where `git add -A` sweeps them into the merge request. The plugin directory
+collides with nothing, and `.git/info/exclude` (local to the clone, never committable) keeps it out
+of the checkout's status — asserted in a real container with a canary, because the first draft of
+that case asserted only that a command printed nothing.
+
+**Decisions and assumptions**
+
+- **The copy comes from the launcher's own filesystem, not from the run image.** `@platform/prompts`
+  is now a dependency of `apps/launcher`, and `docker/launcher.Dockerfile` already copies `packages/`
+  wholesale — so **no image rebuild was needed** and none was done. The reason is not packaging
+  convenience: the digest the planner records in `prompt_version` is computed from the bytes *this
+  deployment* has, and an image is separately deployable, so bytes from an image would let the audit
+  describe a file the run never saw.
+- **The restriction is the provisioning copy, not the SDK option.** `skills` is "a context filter,
+  not a sandbox … their files remain on disk and are reachable via Read/Bash" (`sdk.d.ts:2089-2098`),
+  so a role's skills are decided by what `create` writes. The option is emitted as the second lane,
+  and only when the list is non-empty — for the triager (no tools, no skills) nothing is copied and
+  no plugin is passed, which is the stronger half anyway.
+- **Q67 filed and implemented: the per-role list replaces project-skill discovery.** There is no
+  "these **and** the project's" form of the option. BD-025 trusts `.claude/` only from the default
+  branch while a re-entry checks out the task branch, so the explicit list also closes a hole an MR
+  could use. The cost is stated in the question and in the `kb` skill, which therefore does **not**
+  tell agents to prefer project skills.
+- **`SKILLS_BY_ROLE` follows product/13's least-privilege table, not the shipped `TOOLS_BY_ROLE`.**
+  The two disagree about the investigator (product/13 gives it read-only shell and observability;
+  `TOOLS_BY_ROLE` gives it no `Bash`), so `loki-logs`/`sentry-issue` name commands that role cannot
+  currently run. Recorded as discovered work rather than fixed here.
+- **Eval cases: none, and TD-016 has no place for one.** `RoleEvalSet` is per **role** and keyed by
+  an `artifact_type`; a skill produces no artifact and belongs to several roles. Writing a
+  skill-shaped case set would mean a new file shape, a new loader and a new offline schema check for
+  something no credential can run. The offline guarantee for skills is
+  `packages/prompts/src/skills.test.ts` (census off disk, frontmatter, size, the `## Never` section)
+  and `test/contract/prompts/platform-skills.contract.test.ts`.
+- **No role prompt was changed, so `ROLE_PROMPT_VERSIONS` is untouched.** The CLI lists a skill's
+  description to the model itself; naming the ten in ten prompts would duplicate that listing and
+  bind the prompts to the plugin-qualified spelling.
+- **Every CLI recipe in a skill was verified against the binary in `platform-runtime:dev`**, and two
+  were wrong as first written: `acli jira workitem view` takes the key **positionally** (not
+  `--key`), and `jira issue list/view` need `--plain` or they render an interactive table a
+  non-interactive run cannot page. `glab mr view/diff/note list`, `glab ci status/trace` and
+  `logcli query --since/--from/--to/--limit` are as written.
+- **`sentry-cli` 3.7.0 has `issues list --query --max-rows` and `events list`**, which the Sentry
+  provider's docblock — reading the vendor's documentation page on 2026-09-10 — says it does not.
+  The skill uses the measured commands and says `--help` is the authority; the provider's `cli: null`
+  is unchanged, because what is still unverified is the *environment* such a query authenticates
+  with. Discovered work.
+
+**Review round 1 (three findings, all fixed).** (1) *rules 44/86* — four skills asserted a
+credential the platform does not inject (`agentRunEnvironment` puts only `ANTHROPIC_API_KEY` into a
+run and nothing reads `AgentTooling.env`; backlog **40** cause (b)). All four are hedged to what is
+true today, and `test/contract/prompts/platform-skills.contract.test.ts` now enforces two rules with
+the defect planted in a copy to show each can fail: **no skill claims a credential**, and **a skill
+naming one of the run image's CLIs is either backed by a provider's `AgentTooling.cli` or carries
+the hedge sentence**. The second is a stated deviation from the review's literal "tied to a non-null
+`AgentTooling.cli`": `acli`, `jira` and `sentry-cli` are in the run image while Jira declares no
+tooling and Sentry no CLI, so the literal rule would delete recipes for binaries that are there and
+usable when a project's own binding supplies a credential. The residual is at the line — both checks
+read prose with regular expressions. (2) The `SKILLS_BY_ROLE` docblock now records **all three**
+mismatches with the shipped tables (no `Bash` for the investigator *or* the product manager; neither
+holds `add_ticket_comment`/`create_followup_ticket`, which `jira-ticket` names; role-driven rather
+than binding-driven), pointing at backlog **39**; the skill itself now says those tools are "when
+your tool list has them". (3) The fake no longer writes `.git/info/exclude` for a spec with no
+skills, where the provider writes nothing — no divergence remains on that line.
+
+**Review round 2 (approve with four).** Three more unbacked sentences, all found by reading the
+tree rather than by a check: `kb` sent agents to `.agentic-run/context/` (nothing writes it —
+`assemblePrompt` hedges the same sentence), `sentry-issue` said the Sentry MCP server "is mounted"
+(`mcpServers: {}` reaches every run and the integration declares none), and `ask-human` described a
+timeout for a tool `apps/server/src/platform-tools.ts` **refuses by name** today. All three now say
+what is true, and the contract test grew the two rules that would have caught the first two — a path
+under `.agentic-run/` must be hedged, and "is mounted" must be backed by an `AgentTooling.mcp` or be
+a denial — each planted on a copy. The **`ask-human` class is still unguarded** and the docblock's
+residual says so: nothing checks a claim about a platform tool, an event or a pipeline behaviour.
+
+**Sentences fixed under rule 83** (grep for the claim, not for the file): Loki's `skill: null`
+docblock (`providers/loki/provider.ts`), Sentry's "mounts no CLI, no MCP server and no skill"
+(`providers/sentry/provider.ts`), GitLab's dangling `skill.path` (`providers/gitlab/index.ts`),
+`skillRefSchema`'s "read by nothing" (now names its reader,
+`ports/integrations/common.ts`) and the planner's `skills: []`. **Left for the orchestrator**, being
+ledger- and backlog-owned: backlog entry **24** ("nothing mounts a skill"), the WP-17 notes, and
+`docs/TODO.md`'s *"Nothing mounts a platform skill"* item, which this work package closes.
+
+
 ### WP-22 — images and compose
 
 **What exists now.** Five Dockerfiles (`docker/{base,runtime,egress,app,launcher}.Dockerfile`), one
@@ -8729,6 +9085,29 @@ strongly than it reads):
 
 
 ## Discovered work — session 5 (not in plan)
+- **`TOOLS_BY_ROLE` gives the investigator no `Bash`, so two skills it owns name commands it cannot
+  run** (WP-14a — **refined into backlog 39**, where BD-025 decides the direction and the missing
+  census is rule 68's). product/13's least-privilege table gives the Investigator "read-only cmds" and
+  observability, and `SKILLS_BY_ROLE` follows the product doc — so `loki-logs` and `sentry-issue` are
+  provisioned for a role whose SDK tool list is `['Read','Glob','Grep']`. One of the two tables is
+  wrong; the planner's is the one that ships. Nobody owns it.
+- **Provisioning is role-driven, not binding-driven** (WP-14a — **refined into backlog 40**, with the
+  second cause the bullet does not name: no run environment carries a provider CLI credential at all,
+  so all four provider skills assert a credential no project's run has, not only an unbound one's). A project with no Loki binding still
+  gets `loki-logs` in its investigator runs, because the copy reads `SKILLS_BY_ROLE` and nothing
+  reads the project's bindings at plan time. Narrowing it would make `AgentTooling.skill` load-bearing
+  rather than documentary, and would need the binding set where the spec is built.
+- **`sentry-cli` 3.7.0 disagrees with the documentation the Sentry provider cites** (WP-14a,
+  measured in `platform-runtime:dev` — **refined into backlog 41**, which locates the uncorrected copy
+  of the claim in `test/fixtures/http/sentry/SOURCES.md` rather than in a fixture's `source` block):
+  the binary has `issues list --query --max-rows` and
+  `events list`; the docs page (retrieved 2026-09-10) lists no issue commands, which is the reason
+  `SENTRY_AGENT_TOOLING.cli` is `null`. Worth re-deciding with the measurement, together with the
+  environment variables such a query authenticates with — the part that is still unverified.
+- **`docs/TODO.md`'s "Nothing mounts a platform skill" item is now false** (WP-14a — **done**, session 5:
+  the item is struck with its original wording kept, and backlog **24** is RESOLVED at WP-14a pending
+  merge with the layout correction recorded as a note under it). The file is the
+  refiner's; the item should be closed the way the WP-22 items were, with the original wording kept.
 - **The proposal queue's cursor carries the same truncation the task page's did, and is safe only by
   accident** (WP-15h part 2, **latent**, measured on its sibling). `routes/kb.ts`'s
   `next_cursor` is `StoredKnowledgeProposal.createdAt`, which `postgres-proposal-store.ts:95` builds

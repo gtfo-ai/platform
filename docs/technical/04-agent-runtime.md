@@ -32,7 +32,8 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 | `tools` (the role's tool policy), `disallowedTools`, `permissionMode: 'default'`, `permissionPrompts: 'host'`, `strictMcpConfig: true`, `managedSettings` | tool policy per role (product/13 table) + command policy (BD-025) — **corrected at WP-12**, see the note below |
 | `agents` (subagents) — only for Implementation (`explorer`, `test-runner` read-only helpers) and Investigation (`log-digger`) | keeps verbose reads out of the main context (research/02) |
 | `mcpServers`: `platform` (in-process), plus per-stage provider tooling (e.g. `sentry` http with `Sentry-Bearer` header); `strictMcpConfig: true` so the workspace's own `.mcp.json` cannot add one | 06, BD-025 |
-| `skills`: platform skills mounted into `.agentic-run/skills` and discovered via `additionalDirectories`? — **decision:** copy platform skills into the workspace `.claude/skills/_platform/` at provisioning so `settingSources: ['project']` discovers them; project skills stay untouched | research/04 (skills discovered from `.claude/skills` when `project` is loaded) |
+| `skills`: the stage role's platform skills, plugin-qualified (`agentic:kb`) — **amended at WP-14a**, see the note below: the `.claude/skills/_platform/` layout this row used to specify is not discovered by the pinned CLI, and the shipped delivery is a plugin directory inside the workspace | product/13 § "Skills"; measured against `@anthropic-ai/claude-agent-sdk@0.3.267` |
+| `plugins`: one `{type:'local', path: <workspace>/.agentic-run/plugins/agentic, skipMcpDiscovery: true}`, emitted only when the role has skills | WP-14a |
 | `outputFormat: { type: 'json_schema', schema }` | artifact schema (12) |
 | `env` (explicit, never inherited): `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME=<task-id>`, telemetry/updater/auto-memory disables, provider credentials for the run only (`GITLAB_TOKEN` scoped, `LOKI_*`, `SENTRY_ACCESS_TOKEN`), `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` per provider mode | BD-025; research/05 (`env` replaces) |
 | `pathToClaudeCodeExecutable` in `local` mode | BD-004 |
@@ -85,6 +86,40 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 >    such a host should either have the admin tier set `parentSettingsBehavior: 'merge'`, or run in
 >    `platform` mode, where TD-021's container carries no host admin tier — and until one of the
 >    two holds, BD-025's default-branch rule is the only thing standing behind those two keys.
+
+> **Amendment (WP-14a, 2026-09-13) — where the platform's skills actually go, and why not where this
+> page said.** The row above used to read *"copy platform skills into the workspace
+> `.claude/skills/_platform/` at provisioning so `settingSources: ['project']` discovers them"*. It
+> was written from research/04 and never run. Measured against the pinned CLI (the `claude` binary
+> `@anthropic-ai/claude-agent-sdk@0.3.267` resolves), by asking it for a `system`/`init` message and
+> reading the `skills` it reports discovering:
+>
+>  - a skill at `.claude/skills/<name>/SKILL.md` **is** discovered; the same file one level deeper,
+>    at `.claude/skills/_platform/<name>/SKILL.md`, is **not** — twice, with two fixtures;
+>  - a `.claude/skills` in a **parent** of the checkout is not discovered when the checkout is a
+>    git root, which is the shipped condition (it *is* discovered when the working directory is not
+>    a git repository — the boundary is the repository, not the depth), so the skills cannot live
+>    beside it;
+>  - a directory holding `skills/<name>/SKILL.md`, passed as `Options.plugins`
+>    (`--plugin-dir`), **is** discovered, and its skills are namespaced: `agentic:kb`;
+>  - the **directory** name is the identity — a `SKILL.md` whose frontmatter `name` differs is listed
+>    under its directory — which is what the SDK docblock's "`SKILL.md` `name` / directory name"
+>    resolves to in this version.
+>
+> So provisioning writes `<checkout>/.agentic-run/plugins/agentic/skills/<name>/SKILL.md` and the
+> runner passes that directory as a local plugin. The flat alternative — copying into the project's
+> own `.claude/skills/` — was rejected for a reason this page should carry: the platform's ten names
+> would share a namespace with the project's, so a repository with its own `kb` skill would either
+> lose it or shadow ours, and the files would sit in a directory `git add -A` sweeps into the
+> project's merge request. The plugin directory collides with nothing and is excluded from the
+> checkout through `.git/info/exclude`, which is local to the clone and cannot be committed.
+>
+> Two consequences that are **not** packaging details. The bytes come from the **launcher's own
+> filesystem** (`@platform/prompts`), never from the run image, so the digest the platform records in
+> `runs.prompt_version` is a digest of the bytes the run was given. And the per-role list is the
+> *provisioning* decision — the SDK's `skills` option is "a context filter, not a sandbox" — which
+> means a skill a role may not use is **absent from the workspace** rather than merely hidden. That
+> the list also hides a project's own skills is a product decision, recorded as **Q67**.
 
 ## Prompt assembly (deterministic, audited)
 

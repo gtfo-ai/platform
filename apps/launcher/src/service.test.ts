@@ -16,6 +16,7 @@ import {
   type WorkspaceProvider,
 } from '@platform/application';
 import { runner, workspace } from '@platform/infrastructure';
+import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LauncherService } from './service.js';
 
@@ -77,7 +78,12 @@ beforeEach(async () => {
   revoked = 0;
   dir = await workspace.shortTempDir('agentic-launcher-');
   clock = runner.manualClock();
-  provider = new workspace.FakeWorkspaceProvider({ controlRoot: path.join(dir, 'ctl') });
+  provider = new workspace.FakeWorkspaceProvider({
+    controlRoot: path.join(dir, 'ctl'),
+    // The shipped ten, because this is `apps/launcher` — the composition root that supplies them
+    // in production does so from exactly this import.
+    skills: PLATFORM_SKILLS,
+  });
   build();
 });
 

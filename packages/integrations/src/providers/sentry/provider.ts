@@ -153,15 +153,28 @@ export type SentryProvider = ObservabilityErrorsPort;
  *
  * WP-08 answered the same question the same way for Jira, and the instruction is explicit: if a
  * CLI's environment contract cannot be verified, declare nothing rather than guess. So the spec
- * mounts no CLI, no MCP server and no skill, and declares **no environment variable** — which the
- * shared contract suite now asserts positively: a spec that mounts nothing must expose no secret.
- * What the agent gets instead is the pre-fetched event, bounded and redacted, which is what Q16
+ * mounts no CLI and no MCP server, and declares **no environment variable** — which the shared
+ * contract suite asserts positively: a spec that mounts nothing must expose no secret. What the
+ * agent gets instead is the pre-fetched event, bounded and redacted, which is what Q16
  * ("Sentry/Loki in MVP: agent tooling + bug pre-fetch only") is really buying.
+ *
+ * **`skill` is no longer `null` (WP-14a)**, and the difference between the two fields is the point:
+ * a `cli` spec is a promise the runner keeps by injecting an environment, while a skill is text the
+ * platform ships and provisioning copies. `packages/prompts/skills/sentry-issue` exists and is
+ * resolved against disk by `test/contract/prompts/platform-skills.contract.test.ts`.
+ *
+ * **And one measurement that contradicts the bullet above**, recorded rather than quietly acted on:
+ * `sentry-cli` **3.7.0**, the version `docker/runtime.Dockerfile` installs, *does* have
+ * `issues list --query --max-rows` and `events list` — read from `--help` inside `platform-runtime:dev`
+ * on 2026-09-13. The documentation page cited above (retrieved 2026-09-10) lists neither. That does
+ * not change `cli: null` here, because what is still unverified is the *environment* an issue query
+ * authenticates with; it is in the ledger's discovered work so that the next person weighs a
+ * measurement rather than re-reading the same page.
  */
 export const SENTRY_AGENT_TOOLING: AgentTooling = {
   cli: null,
   mcp: null,
-  skill: null,
+  skill: { id: 'sentry-issue', path: 'packages/prompts/skills/sentry-issue' },
   env: { variables: [] },
 };
 

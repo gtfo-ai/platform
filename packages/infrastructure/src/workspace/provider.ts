@@ -79,6 +79,7 @@ import type {
 import {
   exactSecretRedactor,
   MIN_SECRET_LENGTH,
+  PLATFORM_SKILLS_PLUGIN_DIRECTORY,
   silentLogger,
   WORKSPACE_LABELS,
   WorkspaceError,
@@ -107,6 +108,11 @@ import {
   workspaceVolumeName,
 } from './names.js';
 import { retentionDecisions } from './retention.js';
+import {
+  type PlatformSkillCatalogue,
+  WORKSPACE_GIT_EXCLUDE_ENTRY,
+  workspaceSkillFiles,
+} from './skills.js';
 import { filterTar, parseTar } from './tar.js';
 
 /**
@@ -163,6 +169,11 @@ export interface DockerWorkspaceProviderOptions {
   /** The network the egress sidecar is connected to besides the run's own. */
   readonly egressNetwork: string;
   readonly logger?: Logger;
+  /**
+   * The platform skills this deployment ships (`@platform/prompts`), which `create` provisions into
+   * the workspace. Required — see {@link PlatformSkillCatalogue}.
+   */
+  readonly skills: PlatformSkillCatalogue;
   /** `process.getuid()` in production; a number in tests. Q51: it must be 1000. */
   readonly runnerUid: number;
   readonly mintToken?: () => string;
@@ -236,6 +247,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #cacheVolume: string;
   readonly #cacheMount: string;
   readonly #helperNetwork: string;
+  readonly #skillCatalogue: PlatformSkillCatalogue;
   readonly #egressNetwork: string;
   readonly #logger: Logger;
   readonly #mintToken: () => string;
@@ -254,6 +266,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#cacheVolume = options.cacheVolume;
     this.#cacheMount = options.cacheMount ?? CONTAINER_CACHE_MOUNT;
     this.#helperNetwork = options.helperNetwork;
+    this.#skillCatalogue = options.skills;
     this.#egressNetwork = options.egressNetwork;
     this.#logger = options.logger ?? silentLogger;
     this.#mintToken = options.mintToken ?? mintRunToken;
@@ -514,6 +527,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       await this.#prepare(spec, token);
       made.controlPrepared = true;
       await this.#clone(spec);
+      await this.#provisionSkills(spec);
 
       const sidecarHost = await this.#startSidecar(spec, made);
 
@@ -692,6 +706,77 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       secrets: [],
       network: 'none',
       labels: this.#labels(spec, 'clone', spec.keepUntil),
+    });
+  }
+
+  /**
+   * The platform's skills, written into the workspace after the clone — WP-14a, technical/04's
+   * "copy platform skills into the workspace at provisioning".
+   *
+   * **After** the clone, because `git clone` refuses a target directory that already has content,
+   * and the plugin directory is inside the checkout (the CLI resolves a relative plugin path
+   * against its `cwd`, which is the checkout). As uid 1000 with `NetworkMode: none`, like the
+   * clone: this helper handles no credential and needs no network.
+   *
+   * The bytes travel as **environment**, one variable per skill, the way the egress configuration
+   * already does — the alternative, `PUT /containers/{id}/archive` into a created container, would
+   * make the copy depend on whether the daemon resolves a volume mount for a container that has
+   * never started, which is a fact about a Docker version rather than about this platform.
+   * `MAX_SKILL_BYTES` (16 KiB, against a largest shipped file of 2 588 bytes) is what keeps that
+   * transport bounded, and it is enforced where the files are read rather than here.
+   *
+   * A spec with no skills writes nothing and starts no container: a role with an empty list — the
+   * triager, which has no tools at all — should not pay for a helper, and an empty plugin directory
+   * would be a plugin the CLI loads and finds nothing in.
+   */
+  async #provisionSkills(spec: WorkspaceSpec): Promise<void> {
+    const files = workspaceSkillFiles(spec, this.#skillCatalogue);
+    if (files.length === 0) {
+      this.#logger.info(
+        { run_id: spec.runId },
+        'the run is provisioned with no platform skills: its role has none',
+      );
+      return;
+    }
+    const env: Record<string, string> = {};
+    const lines = ['set -e'];
+    for (const [index, file] of files.entries()) {
+      // The path is the spec's, and the spec's names are `platformSkillNameSchema` — lowercase,
+      // digits and dashes. Re-asserted here rather than assumed, because this string is
+      // concatenated into a shell script (standing rule 22: defence in depth, named as such).
+      const name = file.path.split('/').at(-2) as string;
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+        throw new WorkspaceError('invalid_spec', `${JSON.stringify(name)} is not a skill name`, {
+          runId: spec.runId,
+        });
+      }
+      const variable = `AGENTIC_SKILL_${String(index)}`;
+      env[variable] = file.content;
+      lines.push(
+        `mkdir -p "${WORKSPACE_WORKDIR}/${PLATFORM_SKILLS_PLUGIN_DIRECTORY}/skills/${name}"`,
+        `printf %s "$${variable}" > "${WORKSPACE_WORKDIR}/${PLATFORM_SKILLS_PLUGIN_DIRECTORY}/skills/${name}/SKILL.md"`,
+      );
+    }
+    // Local to this clone, so the Developer's `git add -A` cannot sweep the platform's directory
+    // into the project's merge request. Idempotent: a re-entry clones afresh, but a future caller
+    // that does not would otherwise append the line twice.
+    lines.push(
+      `mkdir -p "${WORKSPACE_WORKDIR}/.git/info"`,
+      `grep -qxF '${WORKSPACE_GIT_EXCLUDE_ENTRY}' "${WORKSPACE_WORKDIR}/.git/info/exclude" 2>/dev/null || ` +
+        `printf '%s\\n' '${WORKSPACE_GIT_EXCLUDE_ENTRY}' >> "${WORKSPACE_WORKDIR}/.git/info/exclude"`,
+    );
+    await this.#helper({
+      name: `skills-${spec.runId}`,
+      image: this.#images.git,
+      script: lines.join('\n'),
+      env,
+      mounts: [this.#volumeMount(workspaceVolumeName(spec.runId), '/work', false)],
+      user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
+      // Platform text, every byte of it written in this repository. Nothing here is secret, and
+      // saying so is the point of the list being required.
+      secrets: [],
+      network: 'none',
+      labels: this.#labels(spec, 'skills', spec.keepUntil),
     });
   }
 

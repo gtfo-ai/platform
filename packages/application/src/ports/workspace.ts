@@ -112,6 +112,77 @@ export const workspaceRepoSchema = z.strictObject({
 export type WorkspaceRepo = z.infer<typeof workspaceRepoSchema>;
 
 /**
+ * Where the platform's own skills are provisioned inside the workspace, and what they are called.
+ *
+ * ## Measured, because the obvious layout does not work
+ *
+ * technical/04 says *"copy platform skills into the workspace `.claude/skills/_platform/` at
+ * provisioning so `settingSources: ['project']` discovers them"*. Against the pinned CLI
+ * (`@anthropic-ai/claude-agent-sdk@0.3.267` and the `claude` binary it resolves), a skill at
+ * `.claude/skills/_platform/<name>/SKILL.md` is **not discovered**: the CLI's own `system`/`init`
+ * message lists a sibling at `.claude/skills/<name>/SKILL.md` and never the nested one. Discovery
+ * under `.claude/skills` is one level deep, and a `.claude/skills` in a *parent* of the checkout is
+ * not read either. The measurement and its second fixture are in
+ * `packages/prompts/src/skills.ts`; the amendment is on technical/04.
+ *
+ * ## So the skills are a plugin, and that is better than the alternative anyway
+ *
+ * A directory containing `skills/<name>/SKILL.md`, handed to the CLI as a plugin
+ * (`Options.plugins`, one `--plugin-dir` per entry), **is** discovered, and its skills are
+ * namespaced: `agentic:kb`. Measured the same way. Three things follow, each of which the flat
+ * copy into `.claude/skills/` would have got wrong:
+ *
+ *  - **the project's own skills are untouched** — nothing is written inside `.claude/` at all, so
+ *    there is no name to collide with and no file of the project's to overwrite;
+ *  - **the names say where they came from**: `agentic:kb` in the model's listing and in the audit
+ *    is the platform's `kb`, not a repository's;
+ *  - **nothing is added to the checkout's tracked tree** under a name a `git add -A` would sweep
+ *    up. It still lands *inside* the checkout — the CLI reads a relative plugin path against its
+ *    `cwd`, and `cwd` is the checkout — so provisioning also writes `.git/info/exclude`, which is
+ *    local to the clone and can never be committed.
+ *
+ * `.agentic-run/` is already the platform's directory inside a workspace (`CONTEXT_DIRECTORY`),
+ * which is why the plugin lives under it rather than at a new top-level name.
+ */
+export const PLATFORM_SKILLS_PLUGIN_NAME = 'agentic';
+
+/** Relative to the checkout: the plugin root, whose `skills/<name>/SKILL.md` the CLI discovers. */
+export const PLATFORM_SKILLS_PLUGIN_DIRECTORY = `.agentic-run/plugins/${PLATFORM_SKILLS_PLUGIN_NAME}`;
+
+/**
+ * A platform skill's name — which is its **directory** name.
+ *
+ * Measured: a `SKILL.md` whose frontmatter `name` differs from its directory is listed under the
+ * directory's name, and the CLI's own error text says so ("Skill names match the skill's directory
+ * name"). The alphabet is therefore the alphabet of a directory this platform creates on a shared
+ * volume, and it is narrow on purpose: the name reaches a shell as part of a path in the
+ * provisioning helper's script.
+ */
+export const platformSkillNameSchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'expected a lowercase platform skill directory name');
+
+/** `kb` → `agentic:kb`: what `RunSpec.skills` and the SDK's `skills` filter name. */
+export const qualifiedPlatformSkill = (name: string): string =>
+  `${PLATFORM_SKILLS_PLUGIN_NAME}:${name}`;
+
+/**
+ * `agentic:kb` → `kb`, and **null for anything else**.
+ *
+ * Null rather than the input, because the only caller turns a `RunSpec` into a `WorkspaceSpec`: a
+ * name that is not the platform's is a name this platform has no file for, and provisioning it as
+ * if it were would create an empty skill directory named after somebody else's skill.
+ */
+export const platformSkillOfQualified = (qualified: string): string | null => {
+  const prefix = `${PLATFORM_SKILLS_PLUGIN_NAME}:`;
+  if (!qualified.startsWith(prefix)) {
+    return null;
+  }
+  const name = qualified.slice(prefix.length);
+  return platformSkillNameSchema.safeParse(name).success ? name : null;
+};
+
+/**
  * A workspace to create.
  *
  * `readOnly` is BD-021's least privilege at the workspace level: a read-only stage gets **no git
@@ -125,6 +196,17 @@ export const workspaceSpecSchema = z.strictObject({
   egress: workspaceEgressSchema,
   runtime: workspaceRuntimeSchema,
   readOnly: z.boolean(),
+  /**
+   * The platform skills to provision into this workspace — the stage's role's list, by directory
+   * name, unqualified.
+   *
+   * It is on the **spec** rather than fixed for every workspace because the copy is the real
+   * restriction. The SDK's `skills` option is "a context filter, not a sandbox: unlisted skills are
+   * hidden from the model's listing and rejected by the Skill tool, but their files remain on disk
+   * and are reachable via Read/Bash" (`sdk.d.ts:2089-2098`), so a skill a role may not use must not
+   * be *in* the workspace — which is a decision provisioning can enforce and a run option cannot.
+   */
+  skills: z.array(platformSkillNameSchema).max(32),
   /**
    * Non-secret project variables placed in the container's environment. Integration credentials
    * never appear here (BD-025 §3); the git token arrives through the shim's credential socket.

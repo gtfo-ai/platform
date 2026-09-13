@@ -7,6 +7,7 @@
  */
 import type { Logger, RunnerClock } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
+import { PLATFORM_SKILLS } from '@platform/prompts';
 import { type LauncherConfig, readLauncherConfig } from './config.js';
 import { asLoggerPort, createLauncherLogger } from './logging.js';
 import { LauncherService } from './service.js';
@@ -90,6 +91,12 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
     helperNetwork: config.helperNetwork,
     egressNetwork: config.egressNetwork,
     logger,
+    // The ten platform skills, from **this process' own filesystem** (WP-14a). Not from the run
+    // image: the digest the planner records in `runs.prompt_version` is computed from the bytes the
+    // platform has, so the bytes a run sees have to come from the same deployment rather than from
+    // a separately built image. `@platform/prompts` throws at import when the directory is missing,
+    // which makes an incomplete image a startup failure of this process.
+    skills: PLATFORM_SKILLS,
     runnerUid: options.uid,
     maxExportBytes: config.maxExportBytes,
   });

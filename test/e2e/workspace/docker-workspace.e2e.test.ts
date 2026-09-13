@@ -28,11 +28,12 @@
  * `test/e2e/support/docker-workspace.ts` says how the images are obtained, and a missing one fails
  * the suite instead of skipping it.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { readFile, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { workspace } from '@platform/infrastructure';
+import { PLATFORM_SKILL_NAMES, PLATFORM_SKILLS } from '@platform/prompts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runWorkspaceProviderContractSuite } from '../../contract/support/workspace/provider-suite.js';
 import {
@@ -41,6 +42,8 @@ import {
   type DockerFixture,
   docker,
   exportPath,
+  GIT_IMAGE,
+  PROJECT_SKILL_FILE,
   plantInWorkspace,
   probeUnderRunContainerConfig,
   REPO_ROOT,
@@ -99,6 +102,115 @@ describe('the workspace lifecycle against a real daemon', () => {
       // technical/05 §1: the clone's objects come from the shared mirror, which is why gc is
       // disabled on it while a workspace references it.
       expect(probe.output).toContain('/cache/acme.git/objects');
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 180_000);
+
+  /**
+   * WP-14a, tier 2: **the skills are in a real container's filesystem, and they are the bytes this
+   * repository ships** — asserted by digest, so nothing here can be satisfied by a log line that
+   * merely looks right.
+   *
+   * Three properties, because only together do they mean "provisioned correctly":
+   *
+   *  1. every skill the spec names is there, byte for byte;
+   *  2. the directory holds **only** those — a provider that copied the whole catalogue would be
+   *     handing a role skills its tool policy does not back (BD-021, BD-025);
+   *  3. the project's own `.claude/skills` is exactly what the project committed, and the platform
+   *     wrote nothing inside `.claude/` at all.
+   *
+   * The fake provider passes the same suite case, and that is the point of doing it here too: it
+   * has no filesystem, no clone and no git (standing rule 82).
+   */
+  it('provisions the platform skills into the run container, byte for byte', async () => {
+    const { spec, handle } = await startRun();
+    try {
+      const expected = spec.skills.map((name) => ({
+        name,
+        digest: createHash('sha256')
+          .update(PLATFORM_SKILLS[name]?.text ?? '')
+          .digest('hex'),
+      }));
+      expect(expected.length).toBeGreaterThan(1);
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        'cd /work/repo/.agentic-run/plugins/agentic/skills && ls && sha256sum */SKILL.md',
+      );
+      expect(probe.exitCode).toBe(0);
+      for (const skill of expected) {
+        expect(probe.output).toContain(`${skill.digest}  ${skill.name}/SKILL.md`);
+      }
+      // Only those: `retro` is shipped and belongs to the facilitator, not to this spec.
+      expect(PLATFORM_SKILL_NAMES).toContain('retro');
+      expect(probe.output).not.toContain('retro');
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 180_000);
+
+  it("leaves the project's own .claude/skills exactly as the project committed it", async () => {
+    const { handle } = await startRun();
+    try {
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        'ls /work/repo/.claude/skills && sha256sum /work/repo/.claude/skills/project-own/SKILL.md',
+      );
+      expect(probe.exitCode).toBe(0);
+      expect(probe.output).toContain(createHash('sha256').update(PROJECT_SKILL_FILE).digest('hex'));
+      // Nothing of the platform's is inside `.claude/`: no `_platform` directory (the layout
+      // technical/04 described, which the pinned CLI does not discover anyway) and no skill of
+      // ours next to the project's.
+      expect(probe.output).not.toContain('_platform');
+      for (const name of PLATFORM_SKILL_NAMES) {
+        expect(probe.output, `${name} must not be in the project's own skills`).not.toContain(name);
+      }
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 180_000);
+
+  /**
+   * The plugin directory lives inside the checkout — the CLI resolves a relative plugin path
+   * against its `cwd` — so provisioning also writes `.git/info/exclude`. Without it the Developer
+   * role's `git add -A` sweeps the platform's ten files into the project's merge request, which is
+   * a thing a reviewer would see and nobody would have asked for.
+   */
+  it('leaves the checkout clean, so the platform’s directory cannot reach a commit', async () => {
+    const { handle } = await startRun();
+    try {
+      // `set -e`, and a **canary** the same `git status` must report: an assertion that a command
+      // printed nothing passes just as well when the command failed, and the first draft of this case
+      // was exactly that (its mutant — the exclude entry removed — stayed green, because the mutation
+      // was a no-op *and* the case could not have told the difference).
+      const script = [
+        'set -e',
+        'cd /work/repo',
+        'git -c safe.directory=/work/repo status --porcelain',
+        'echo ---CANARY---',
+        ': > canary-untracked.txt',
+        'git -c safe.directory=/work/repo status --porcelain',
+        'echo STATUS_END',
+      ].join('\n');
+      const probe = await probeUnderRunContainerConfig(fixture.engine, handle.containerId, script, {
+        image: GIT_IMAGE,
+      });
+      expect(probe.exitCode, probe.output).toBe(0);
+      expect(probe.output).toContain('STATUS_END');
+      const [before = '', after = ''] = probe.output.split('---CANARY---');
+      // The platform's directory is present and invisible to git...
+      expect(before).not.toContain('.agentic-run');
+      // ...and `git status` in this checkout does report an untracked file, so the line above is a
+      // statement about the exclude entry rather than about a command that said nothing.
+      expect(after).toContain('canary-untracked.txt');
+      const present = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        'test -d /work/repo/.agentic-run/plugins/agentic/skills && echo PRESENT',
+      );
+      expect(present.output).toContain('PRESENT');
     } finally {
       await fixture.provider.destroy(handle);
     }
@@ -923,6 +1035,19 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
   // What the daemon was asked to do to this run's container, recorded by the engine itself rather
   // than inferred from the port's return values.
   containerOps: (handle) => fixture.engine.opsFor(handle.containerId),
+  /**
+   * Read from **inside a container running under the run's own configuration**, so the answer is
+   * about the workspace volume rather than about anything this process holds. An absent file is
+   * `null`, not a throw: `cat` exits non-zero and the suite asks the question in both directions.
+   */
+  readWorkspaceFile: async (handle, relativePath) => {
+    const probe = await probeUnderRunContainerConfig(
+      fixture.engine,
+      handle.containerId,
+      `cat /work/repo/${relativePath}`,
+    );
+    return probe.exitCode === 0 ? probe.output : null;
+  },
   provider: async () => {
     // A mirror per case: the suite has a case that asserts `create` refuses *before* the mirror
     // exists, and a shared fixture would already have one. The fake gets a fresh provider per

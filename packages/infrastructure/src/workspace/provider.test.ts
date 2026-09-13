@@ -4,7 +4,12 @@ import path from 'node:path';
 import { WORKSPACE_LABELS, type WorkspaceHandle } from '@platform/application';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DockerEngine } from './engine.js';
-import { FIXTURE_RUN_ID, shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import {
+  FIXTURE_RUN_ID,
+  SKILL_CATALOGUE_FIXTURE,
+  shortTempDir,
+  workspaceSpecFixture,
+} from './fixtures.js';
 import { assertProjectEnv, assertRunnerUid, DockerWorkspaceProvider } from './provider.js';
 import { parseTar, writeTar } from './tar.js';
 import { FakeDockerDaemon } from './testing.js';
@@ -54,6 +59,7 @@ const providerWithSocketTimeout = (controlSocketTimeoutMs: number): DockerWorksp
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
+    skills: SKILL_CATALOGUE_FIXTURE,
     mintToken: () => TOKEN,
     now: () => new Date('2026-09-10T12:00:00.000Z'),
     controlSocketTimeoutMs,
@@ -85,6 +91,7 @@ const startDaemon = async (
     helperNetwork: 'platform',
     egressNetwork: 'platform',
     runnerUid: 1000,
+    skills: SKILL_CATALOGUE_FIXTURE,
     mintToken: () => TOKEN,
     now: () => new Date('2026-09-10T12:00:00.000Z'),
   });
@@ -171,6 +178,52 @@ describe('create', () => {
     const clone = daemon.byName(`clone-${FIXTURE_RUN_ID}`);
     expect(clone?.body.HostConfig?.NetworkMode).toBe('none');
     expect((clone?.body.Cmd ?? []).join('\n')).toContain('--shared');
+  });
+
+  /**
+   * WP-14a: the skills the spec names, written **after** the clone (`git clone` refuses a target
+   * that already has content) and inside the checkout, where the CLI resolves a relative plugin
+   * path against its `cwd`.
+   *
+   * What this asserts is the argument vector the provider sends — a string this repository wrote
+   * (standing rule 3). That the files are then in a real container's filesystem, and that the
+   * project's own `.claude/skills` survives, is `docker-workspace.e2e.test.ts`.
+   */
+  it('writes the spec’s platform skills into the workspace, as a plugin directory', async () => {
+    await provider.create(workspaceSpecFixture());
+    const skills = daemon.byName(`skills-${FIXTURE_RUN_ID}`);
+    const script = (skills?.body.Cmd ?? []).join('\n');
+    expect(script).toContain('/work/repo/.agentic-run/plugins/agentic/skills/ask-human/SKILL.md');
+    expect(script).toContain('/work/repo/.agentic-run/plugins/agentic/skills/kb/SKILL.md');
+    // Nothing is written inside the project's own `.claude/`.
+    expect(script).not.toContain('.claude/skills');
+    const env = skills?.body.Env ?? [];
+    expect(env.join('\n')).toContain('fixture kb body');
+    expect(skills?.body.User).toBe('1000:1000');
+    expect(skills?.body.HostConfig?.NetworkMode).toBe('none');
+  });
+
+  it('excludes the platform’s directory from the checkout, locally to the clone', async () => {
+    await provider.create(workspaceSpecFixture());
+    const script = (daemon.byName(`skills-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+    // `.git/info/exclude`, never `.gitignore`: the second is a file of the project's, and the
+    // Developer role's `git add -A` would otherwise sweep the platform's directory into the MR.
+    expect(script).toContain('/work/repo/.git/info/exclude');
+    expect(script).toContain("'/.agentic-run/'");
+    expect(script).not.toContain('.gitignore');
+  });
+
+  it('starts no helper at all for a role with no skills', async () => {
+    await provider.create(workspaceSpecFixture({ skills: [] }));
+    expect(daemon.byName(`skills-${FIXTURE_RUN_ID}`)).toBeUndefined();
+  });
+
+  it('refuses a spec naming a skill this deployment does not ship, before the run starts', async () => {
+    await expect(
+      provider.create(workspaceSpecFixture({ skills: ['not-a-shipped-skill'] })),
+    ).rejects.toMatchObject({ code: 'invalid_spec' });
+    // `create`'s own teardown: either a handle or nothing.
+    expect(daemon.containers.get(`ws-${FIXTURE_RUN_ID}`)?.state).not.toBe('running');
   });
 
   it('starts the run container with technical/05 hardening and the control sub-path', async () => {
@@ -587,6 +640,9 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
       'export',
       'mirror',
       'prep',
+      // WP-14a's skills copy, which this census named on its first run — the check working a
+      // second time.
+      'skills',
       'ws',
     ]);
   });

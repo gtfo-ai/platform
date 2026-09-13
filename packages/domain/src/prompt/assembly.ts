@@ -271,6 +271,54 @@ export const promptVersionOf = (role: RolePromptDefinition, systemPrompt: string
 };
 
 /**
+ * A skill the platform provisions into a run's workspace — the shape `@platform/prompts` produces.
+ *
+ * Declared structurally rather than imported: `@platform/prompts` may depend on `contracts` and
+ * nothing else (`biome.json`), so the two halves meet in the ring that may name both, exactly as
+ * {@link RolePromptDefinition} and `RolePrompt` do.
+ */
+export interface SkillDefinition {
+  readonly name: string;
+  readonly version: string;
+  readonly text: string;
+}
+
+/**
+ * The skills half of `runs.prompt_version` — WP-14a.
+ *
+ * A skill is prompt material: it is text the platform wrote, shipped into the run, and read by the
+ * model. product/13's "prompt changes are decisions" therefore covers it, and the audit needs the
+ * same two things it has for a role prompt — the **declared** versions a human bumps, and a
+ * **digest** of the bytes, which is what catches an edit that forgot to bump.
+ *
+ * It is a separate lane from {@link promptVersionOf} rather than an input to it because the skills
+ * are not in the assembled prompt at all: the CLI discovers them on disk in the workspace and shows
+ * the model their descriptions. Folding them into the same digest would make `prompt_version` claim
+ * to be "a hash of layers 1-3" (technical/04) while being a hash of four things.
+ *
+ * The set is sorted by name and each entry contributes its name, its declared version and its
+ * length before its text, so that two different sets cannot collide by concatenation. An **empty**
+ * set is `skills@none` rather than the digest of the empty string: "this run was given no skills"
+ * is a statement worth being able to read, and a digest that happens to be a constant reads as a
+ * digest of something.
+ *
+ * Not a security property, for the same reason `promptVersionOf` is not: it keys an audit row
+ * inside the platform's own database.
+ */
+export const skillSetVersionOf = (skills: readonly SkillDefinition[]): string => {
+  if (skills.length === 0) {
+    return 'skills@none';
+  }
+  const framed = [...skills]
+    .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+    .map((skill) => `${skill.name}@${skill.version}:${String(skill.text.length)}:${skill.text}`)
+    .join('\n');
+  const low = fnv1a(framed, 0x811c9dc5).toString(16).padStart(8, '0');
+  const high = fnv1a(`${framed.length}${framed}`, 0x7fffffff).toString(16).padStart(8, '0');
+  return `skills@${low}${high}`;
+};
+
+/**
  * The three values this module writes into its own prose rather than into a block: the role name,
  * the role prompt's version and the stage id.
  *

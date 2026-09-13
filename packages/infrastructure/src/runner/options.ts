@@ -8,6 +8,7 @@
  */
 import type { Options, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { RunSpec } from '@platform/application';
+import { PLATFORM_SKILLS_PLUGIN_DIRECTORY } from '@platform/application';
 import { artifactJsonSchema } from './structured-output.js';
 
 /**
@@ -150,6 +151,32 @@ export const buildQueryOptions = (spec: RunSpec, parts: QueryOptionParts): Optio
     );
   }
   if (spec.skills.length > 0) {
+    // The workspace's platform skills are a **plugin** rather than files in the project's own
+    // `.claude/skills`: measured against this SDK's pinned CLI, a skill nested under
+    // `.claude/skills/_platform/` is not discovered at all, while a directory holding
+    // `skills/<name>/SKILL.md` passed as a plugin is — and its skills are namespaced
+    // (`agentic:kb`), so nothing of the project's can collide with one of ours and nothing is
+    // written inside the checkout's `.claude/`. `PLATFORM_SKILLS_PLUGIN_DIRECTORY` carries the
+    // measurement; the path is relative to `cwd`, which is the checkout.
+    //
+    // `skipMcpDiscovery`: BD-025 keeps the choice of what a run may reach with the platform, and a
+    // plugin may declare MCP servers. This one declares none, which is exactly why the flag costs
+    // nothing and is set anyway.
+    options.plugins = [
+      {
+        type: 'local',
+        path: `${spec.workspacePath}/${PLATFORM_SKILLS_PLUGIN_DIRECTORY}`,
+        skipMcpDiscovery: true,
+      },
+    ];
+    // "A context filter, not a sandbox: unlisted skills are hidden from the model's listing and
+    // rejected by the Skill tool, but their files remain on disk" (`sdk.d.ts:2089-2098`). So this
+    // is the second lane; the first is that the workspace was only given this role's skills.
+    //
+    // Omitted when the list is empty, and **omitting is not "skills off"**: the same docblock says
+    // an absent option leaves the CLI's own defaults in place. A role with no skills is therefore
+    // protected by provisioning alone — nothing was copied, and no plugin is passed — which is the
+    // stronger of the two lanes anyway.
     options.skills = [...spec.skills];
   }
   if (spec.artifactType !== null) {

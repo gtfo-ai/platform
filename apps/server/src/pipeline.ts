@@ -94,7 +94,7 @@ import {
   createPipelineProviderRegistry,
   type PipelineProviderRegistryOptions,
 } from '@platform/integrations';
-import { ROLE_PROMPTS } from '@platform/prompts';
+import { PLATFORM_SKILLS, ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
 import { agentRunEnvironment, composeAgentRunner } from './agent.js';
 import { composePlatformTools } from './platform-tools.js';
@@ -552,6 +552,11 @@ export const composePipeline = async (
         // rather than half-read (product/13): WP-18a's default-branch read exists, but it returns
         // the indexed vault paths, and a prompt override is not one of them.
         prompts: ROLE_PROMPTS,
+        // The ten platform skills (WP-14a). The planner reads them for their **digest** — the run's
+        // `prompt_version` carries one, so a `SKILL.md` edited without a version bump is visible in
+        // the audit — while the bytes reach the workspace from the launcher's own copy of this same
+        // package.
+        skills: PLATFORM_SKILLS,
         /**
          * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32
          * hex characters `NONCE_PATTERN` requires; the delimiter contract rests on a document's
