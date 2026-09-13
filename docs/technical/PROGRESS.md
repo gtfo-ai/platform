@@ -1967,6 +1967,141 @@ in its docblock, the way the census states its own.
 **Depends on / owner.** **WP-30** (before WP-28 and WP-32). Nothing blocks it: both endpoints and
 both client halves shipped at WP-21.
 
+### 58. **`features.review_only.trigger` dropped `manual`, so a stored configuration the platform's own API accepted answers `500 invalid_stored_config` on every read — and the remedy that message names does not exist** (TODO, small — introduced by **WP-24**; **no work package owns the fix**, WP-30 is the nearest; found by WP-24's review round 2, session 5)
+Placed above the ticket-text family because it is the only entry here that breaks a **served** read
+of the platform's own stored state, and because the class behind it — a strict schema narrowed under
+rows that already exist — outlives the one value that triggered it.
+
+**What is wrong.** WP-24 narrowed `featuresConfigSchema.review_only.trigger` from
+`['label','all','manual']` to `['label','all','paths']`. Boundary schemas are strict, so the value is
+refused rather than dropped — which is right on the **write** side and wrong on the **read** side.
+`GET /api/projects/:project_id/config` re-parses the stored column through the *current* schema and
+throws `HttpError(500, 'invalid_stored_config', …)` for the **whole document** when any one key fails
+(`apps/server/src/routes/projects.ts:143-150`). The message names no key, and the remedy it offers —
+*"re-import it from the repository"* — is the endpoint backlog **44** records as unbuilt.
+
+**Evidence.** From WP-24's notes above (§ *Configuration*), quoted rather than paraphrased: *"an
+operator sending `trigger: manual` to `PUT /api/projects/:id/config` gets the body schema's **400**,
+and a project whose `projects.config` already carries it gets **500 `invalid_stored_config`** from
+`GET /api/projects/:id/config`"*, with *"Nothing on this build ever wrote the value (the key was
+added by this work package)"*.
+
+Read off the tree (refiner, session 5; no test run, rule 66): **that last clause is wrong in the way
+that matters.** `git show HEAD:packages/contracts/src/config.ts` carries `features.review_only` at
+`:174-181` with `trigger: z.enum(['label','all','manual'])` — the key is WP-21-era; what WP-24 added
+is `paths` and `max_findings`. And there **is** a writer: `PUT /api/projects/:project_id/config`
+(WP-21, `apps/server/src/routes/onboarding.ts:500-583`) stores the request body verbatim
+(`const stored: JsonObject = { ...(config as JsonObject), … }` at `:536`), and its body schema at
+HEAD accepted `manual`. So **the platform's own API is the producer of the value its own read now
+refuses.** What genuinely bounds the population is the other direction: `manual` was never a default
+and never in a document — `PLATFORM_DEFAULT_CONFIG` (`effective-config.ts:112-117` at HEAD) and
+technical/12:82 both carry `trigger: label` — so only a hand-written `.agentic/config.yml` or a
+hand-made `PUT` chose it, and no release exists yet.
+
+**The two readers of the column disagree, and neither the bullet nor the notes say so.** The API
+re-parses and refuses the document; the **pipeline does not parse at all** —
+`createProjectSettingsPort` casts the raw column (`apps/server/src/pipeline.ts:415`,
+`(row.config ?? {}) as ConfigValues`), `resolveReviewOnlySettings` passes `trigger` straight through
+(`packages/application/src/pipeline/review-only.ts:377-383`), and `matchesReviewOnly`'s `switch` ends
+in `default:` rather than `case 'paths':` (`packages/domain/src/policies/review-only.ts:91-122`), so
+a stored `manual` silently takes the **paths** branch and matches nothing. That is fail-closed, so it
+is not a leak and not the urgent half — but the same `default:` will absorb the next trigger value
+somebody adds, silently.
+
+**What it costs to leave.** Two screens call that read — `useProjectConfig` (`apps/web/src/app/queries.ts:68-72`)
+backs `features/onboarding.tsx:126` (**wizard step 4**) and `features/project-panels.tsx:245` — so one
+stale key makes the onboarding step and the project panel unopenable, with an error that names no key
+and points at an import path that does not exist. It costs more as a **class** than as an instance:
+`agenticConfigSchema` is the platform's own *stored* state, and every future narrowing (an enum value
+removed, a bound tightened, a key renamed) does this again to every project that used the old
+spelling. Rule 20 splits the two sides cleanly. `PUT` is about to *act*: refusing is right, and its
+400 already **names the key** (`toApiError` maps zod issues with `instancePath`,
+`apps/server/src/errors.ts:169-184`). The read is being *told* what the platform itself stored, and
+failing a whole document over one key is the stuck-queue shape that rule earned.
+
+**What "done" looks like — both halves, in this order.**
+1. **Read-side, and it is the general fix.** `GET /api/projects/:id/config` says *what it could not
+   parse*: the zod issue's key path and the offending value, in a typed refusal whose remedy is a
+   `PUT` the operator can actually make. It stays a **refusal** — nothing is dropped, so strictness
+   is preserved — but a named one: a `409` the wizard can render as *"this project's stored
+   configuration has `features.review_only.trigger: manual`, which this release does not accept"*.
+   Whether it is 409-with-keys or 200-with-the-offending-keys-removed is the decision to make; the
+   honest form given the wizard reads it is the named 409, because a silently pruned document would
+   be re-saved without the key the operator never saw.
+2. **Data-side, a forward-only migration** (TD-011, one new numbered file): rewrite
+   `features.review_only.trigger = 'manual'` to `'paths'` with `paths: []` — the value that
+   reproduces exactly what the pipeline already does with `manual` through the `default:` branch, so
+   the migration changes the document and **no behaviour**. Not to `label`: an *enabled* project
+   would start reviewing every labelled merge request it never asked for, which is rule 20's
+   fail-closed direction for a decision that spends money and posts to a provider.
+3. One test per half — a stored document carrying the value reads back with the key **named**, and
+   the migration is asserted over a row that carries it. Optional and cheap while the file is open:
+   `matchesReviewOnly` switches on `case 'paths':` with an exhaustive default, so the next trigger
+   added is a type error rather than a silent paths-match.
+
+**Depends on / owner.** Nothing blocks it; both halves are in shipped code. **No work package owns
+it.** **WP-30** is the nearest and the read-side half should land with or before it — that row's step
+4 is the loudest caller of this endpoint, and a wizard step that cannot open is what this produces.
+The migration is independent of it. **Needs no measurement**: everything above was read off the tree.
+What is *not* measured is whether any instance in existence holds the value; the honest answer is
+that no release exists, so the population is whatever a dogfood instance hand-wrote.
+
+### 57. **`runs.mode` is `normal` for four of technical/04's seven modes, three of which have producers today — a librarian run, a retro run and a discovery run all record themselves as ordinary runs, and the run screen says so** (TODO, small — **one cause, four owners**; found by WP-24, session 5)
+**What is wrong.** `runModeFor` (`packages/application/src/pipeline/planner.ts:414-419`) maps two of
+the seven values the `run_mode` enum ships: `shadow` from `tasks.mode` and `review_only` from the
+template. `linter`, `discovery`, `retro` and `librarian` fall through to `normal`, so the column
+cannot answer *"what kind of run was this"* for four of the kinds the platform produces.
+
+**Evidence.** The WP-24 bullet under "Discovered work — session 5", quoted: *"technical/04's mode
+table has seven values and the `run_mode` enum ships all seven; the planner mapped exactly one of
+them until this work package, and now maps two … any statistic or cost breakdown grouped by mode is
+wrong by construction … The fix is one table beside `runModeFor` … and a decision per mode about what
+the column is *for*; it was deliberately not made here, because each value belongs to the work
+package that owns the mode."*
+
+Three things read off the tree (refiner, session 5; no test run, rule 66), all of which make the item
+smaller and more urgent than the bullet reads. **(a) Three of the four have live producers, not one.**
+`retrospective` (role `facilitator`) and `librarian` (role `librarian`) are stages of the ticket
+templates' merge tail (`packages/domain/src/pipeline/templates.ts:110-123`), so every finished
+feature, bug and chore task already produces one run of each; `discovery` is WP-21's one-off task
+(`DISCOVERY_TEMPLATE`). Only **`linter`** has no producer, because WP-25 is unbuilt. **(b) It is not
+only a future statistic: there is a reader today.** `apps/web/src/features/run-detail.tsx:103` renders
+`record.mode` as a badge from `pipeline-queries.ts:141` (`mode: runs.mode`), so a discovery run's own
+screen labels it `normal` to a human now. The statistics screen does **not** group by mode
+(`apps/web/src/features/statistics.tsx` has no `mode`), so WP-41 is the future half. **(c) The change
+is a labelling change with no behavioural risk.** `RunSpec.mode` has exactly two consumers — the
+runner's log fields (`claude-runner.ts:343`) and the row the executor writes
+(`stage-executor.ts:436,452`) — so nothing branches on it; the "decision per mode" is *which producer
+maps to which value*, not what the mode does.
+
+**What it costs to leave.** Every per-mode number the platform ever publishes is wrong by
+construction, and wrong in the direction that hides work: a project's `normal` runs silently include
+its retrospectives, its librarian curations and its discovery. product/16-shaped questions
+("what did delivery cost" versus "what did upkeep cost") cannot be asked of this column at all, and
+the wrong value is already on a screen. The longer it stands the more history is mislabelled —
+`runs.mode` is written once per run and nothing backfills it, so a fix applied later leaves every run
+before it wrong unless somebody also writes a migration over `runs` joined to `task_stages.role`.
+
+**What "done" looks like.** One table beside `runModeFor` that maps the **producer** to the value, and
+each mode is a one-line decision rather than a work package:
+`facilitator` stage → `retro`; `librarian` stage → `librarian`; `DISCOVERY_TEMPLATE` → `discovery`;
+the linter's stage → `linter`. A test that walks `SHIPPED_TEMPLATES` and asserts every agent stage's
+planned mode — in the shape `templates.test.ts` already uses — so a template added later cannot
+quietly take `normal` (rule 18: the absent case must not be the quiet one). Whoever does it says in
+the same change whether the existing rows are backfilled or left, and `runs.mode`'s meaning is stated
+where the table is: *what this run was for*, not *what it was allowed to do*.
+
+**Depends on / owner.** No dependency — the column, the enum and the planner all exist. Ownership is
+the one thing to settle, and the bullet's *"each value belongs to the work package that owns the
+mode"* costs three live values an indefinite wait, because two of the three owners are M3 or unbuilt.
+The reading this entry recommends: **`retro`, `librarian` and `discovery` are one small change with
+no owner and should be taken together** (they are three lines and one test, and all three are wrong
+in production today); **`linter` is `WP-25`'s**, whose run must write `runs.mode = 'linter'` — WP-25
+has no table row in `13-implementation-plan.md`, only the M2 prose line, so this entry is where that
+obligation is recorded. **WP-36** (maintenance pipeline) and **WP-41** (statistics) are the downstream
+readers: WP-41 must not be the first row to discover this, because it would then be measuring the
+defect.
+
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
 entry 1's sentence one layer further in: *the loop starts now, and what it starts on is a ticket
@@ -11105,7 +11240,281 @@ the lockfile, development tooling included") is refused in the generator's docbl
 a notices file is a statement about distribution, and listing what is never distributed makes the
 part that matters harder to find.
 
+### WP-24 — review-only mode
+
+**What exists now.** A human's merge request opening on a project that asked for it produces a
+one-stage review task, a Reviewer run, a discussion thread per finding, one neutral summary on the
+merge request, and — when the merge request ends — one recorded observation of what became of them.
+Nine files carry it: `packages/domain/src/pipeline/templates.ts` (`REVIEW_ONLY_TEMPLATE`),
+`packages/domain/src/policies/review-only.ts` (the filter and the finding selection, pure),
+`packages/domain/src/policies/path-patterns.ts` (the glob, **moved** out of
+`infrastructure/runner/path-guard.ts` so the two readers of technical/12's path syntax share one),
+`packages/domain/src/prompt/assembly.ts` (the `kind="merge_request"` data block),
+`packages/application/src/pipeline/review-only.ts` (three handlers, three `pipeline.outbound`
+duties, the bounded snapshot), `packages/application/src/ports/integrations/git-provider.ts`
+(`getMergeRequestDiff`, and `createDiscussion` widened to a merge-request-level thread),
+`packages/integrations/src/git/fake.ts` + the GitLab adapter, migration **0020**
+(`tasks.review_subject`), and `packages/prompts/roles/reviewer/prompt.md` at version **2**.
+
+**The task shape, and why.** A review is a **task on the one-stage `review_only` template**, in
+`mode: 'normal'`, with a platform-issued ticket reference (`provider: 'platform'`, key `mr!<iid>`,
+url = the merge request's). Three reasons, all structural rather than aesthetic. `runs.task_id` is
+`not null`, so a review run needs a task whatever else is decided — WP-21's Discovery argument
+applied a second time, and it buys the admission guard, the cost ledger, the transcript sink, the
+budget cap, the conflict retry and the `needs_human` escalation with no second entry point.
+`tasks.mode` stays two-valued because technical/04's table makes `review_only` a **run** mode and
+`task_mode` is the shadow switch a security guard reads; the *planner* maps the template to
+`runs.mode` instead (`runModeFor`), and the stage executor now takes the mode from the spec rather
+than deriving it a second time. And `unique (project_id, ticket_key, mode)` is what makes the whole
+thing idempotent — a second `mr.opened` finds the row and creates nothing.
+
+**`tasks.mr_ref` is deliberately left null**, which is the decision a reviewer should check first.
+`findByMergeRequest` answers *"whose work produced this merge request"*: it is how `mr.merged`
+advances a task and how `mr.review.comment` opens BD-007's batch window. A review-only task produced
+nothing, so writing the ref would put it in the way of both **and** would make the next review-only
+check believe the merge request already belongs to the pipeline. Everything the posting duty needs
+is in the ticket key, `ticket_url` and `tasks.review_subject`.
+
+**Both verdicts go forward, and that is the template's job.** product/18 says the summary *"never
+blocks merge"*. The interpreter reads `request_changes` as "return to `return_to`, or escalate when
+the template names none", so a review-only template without one would park **every** merge request
+the Reviewer had a finding about in `needs_human`. `approve_to: done` **and** `return_to: done`, and
+the interpreter's own rule 2 (a target later in declaration order is an advance) does the rest — no
+bounded loop is consumed. Asserted against `interpret` rather than read off the data, because
+"later in declaration order" is the property that makes it true.
+
+**How the diff reaches the model.** technical/04's mode table says *"diff from provider"*, so there
+is no checkout: `GitProviderPort.getMergeRequestDiff(ref, {limit})` is new, the `review_only_check`
+duty reads it once, and `boundMergeRequestSnapshot` stores it redacted and bounded in
+`tasks.review_subject` (migration 0020) — a column of its own rather than a widening of
+`ticket_snapshot`, because a unified diff is not words a ticket has and `ticket_snapshot is null`
+already means *"not read yet"*. The prompt renders it as one `kind="merge_request"` block whose
+attributes are platform integers only. The worst case is **106 400 characters**, derived from
+`MAX_ARTIFACT_CHARS` and the ticket snapshot's own caps and *produced* by a test rather than quoted.
+It is written **once, by the insert that creates the task**, so no `update tasks` statement names the
+column and backlog 18's class cannot reach it.
+
+**Findings, and what "neutral" is.** `review_only_post` fires on `task.stage.completed` at priority
+**120** (the integrations band) and posts from a job: each finding at or above the project's
+`severity_floor`, up to `max_findings`, most severe first — the floor **before** the cap, because the
+other order lets twenty nits crowd out a blocker and still report "10 posted". Each thread carries an
+idempotency key `review_only_finding:<task>:<head_sha>:<the finding's index in the artifact>`
+through `IntegrationActionExecutor`, so a redelivered wake-up replays instead of posting twice, and a
+different revision would be a different key. **The index is round 2's correction**: round 1 keyed on
+`finding.id`, which is text the model wrote (see the review-round section below). Neutrality is three checkable things, none of them the
+model's words: the platform's own `REVIEW_SUMMARY_PREAMBLE` says it does not approve, reject or block;
+the `verdict` field is never posted; and no provider approval call is made — the port has none.
+
+**The metric, and what it can actually observe.** product/18:59 wants *"findings accepted (thread
+resolved with change) vs dismissed"*. **There is no provider event for a resolution** — GitLab's
+merge-request hook publishes `open`, `reopen`, `update`, `close`, `merge` and the four approval
+actions and nothing about discussions, and its note hook fires on a *note*, which resolving a single
+thread does not create (`test/fixtures/http/gitlab/SOURCES.md` records the page and the date under
+"pages read that produced no fixture"). So the platform polls `listDiscussions` **once**, at the
+merge request's terminal event, and appends `task.review.observed` (new in technical/02, on the task
+stream, declared `unconsumed` for WP-41). *"With a change"* is read off the head commit: a resolved
+thread on a merge request whose head moved after the review is **accepted**, on an unchanged head
+**dismissed**. Both shas are on the payload precisely so a later consumer can disagree without
+re-reading the provider. Two residuals are stated rather than implied: a human who resolves a thread
+and pushes something unrelated is counted as having accepted it; and a duplicate wake-up appends a
+second observation with the same numbers, which a consumer deduplicates on `(task_id, head_sha)` —
+guarding it would need an event-log read in the pipeline's job options, added for a statistic.
+
+**Redaction, and the one thing it does not cover.** A finding is model output going to a third party,
+so `reviewWrites.thread` redacts with the **git binding's** redactor (TD-012 step 1 over the
+binding's credentials, then step 2's patterns) before the executor sees it — the executor redacts
+what it *stores*, not what it sends. The e2e plants an `sk-ant-…`-shaped credential in the model's
+answer and reads the posted thread back: absent, placeholder present, the sentence around it intact
+(rule 42). **The residual is Q55's, and round 2 measured how wide it is**: this job runs after the
+run and holds no run-scoped secret set — but a review-only run *mints* none (the reviewer's tools are
+`['Read','Glob','Grep']`, so the run is read-only and `RunCredentialBroker.issue` returns `null`
+without calling the source, BD-021), so on this build there is nothing run-scoped to survive into a
+thread. The model's own key does not either, because `sk-ant-…` is a pattern rule. `artifacts.data` still stores the
+verdict unredacted (backlog **35**), which this work package neither closes nor widens — it adds no
+artifact-derived column, and the one place the text leaves the platform redacts it.
+
+**Configuration.** `features.review_only` gained `paths` and `max_findings`, and `trigger`'s third
+value changed from `manual` — a word no document uses and nothing read — to **`paths`**, which
+product/18 names twice. **That is a breaking change for a stored configuration that used it**, and
+boundary schemas are strict, so it is refused rather than dropped: an operator sending
+`trigger: manual` to `PUT /api/projects/:id/config` gets the body schema's **400**, and a project
+whose `projects.config` already carries it gets **500 `invalid_stored_config`** from
+`GET /api/projects/:id/config` — *"does not match the current schema; re-import it from the
+repository"* (`apps/server/src/routes/projects.ts`). The value predates this row — `trigger: 'manual'` has been in `agenticConfigSchema` since WP-01 and
+`PUT /api/projects/:project_id/config` stores a whole strict document — but the default is `label`, so only a human could have typed it, and nothing read it; the affected population is a hand-edited document (backlog **58** owns the read that now answers 500 for it). technical/12's example and `PLATFORM_DEFAULT_CONFIG` moved with it. The
+wizard's feature card (product/19:125) is **WP-30's**, not this row's: nothing in `apps/web` toggles
+the feature, and an operator turns it on in `.agentic/config.yml` or in `projects.config`.
+
+**Decisions and assumptions, each also in the code where it binds.**
+1. One review per merge request; `mr.updated` stays unconsumed; drafts are **not** excluded. Filed as
+   **Q74** with the bounded re-review shape that would fit if it is wanted, and implemented as the
+   recommendation.
+2. No WIP admission and no protected-branch check on a review-only task — the branch check exists
+   because the agent is given a push credential (Q40) and a review pushes nothing, and a queued
+   review task has no producer to dequeue it. Discovery made the same call.
+3. A provider read that **throws** fails the job rather than starting a review without a diff: unlike
+   the ticket snapshot, the diff *is* the input (rule 20's fail-closed direction for a decision to
+   spend).
+4. Labels are compared case-insensitively and after trimming, because a human types them.
+5. `documented-adapted` is used for the first time in the GitLab corpus, and `SOURCES.md` says which
+   file and why; `gitlab.contract.test.ts`'s own kind check knew two of the five labels and now reads
+   the shared vocabulary.
+
+**Sentences this made false, and where they were** (rule 83): `EVENT_CONSUMPTION`'s `mr.opened`
+(*"the pipeline learns its MR from `ImplementationNotes`; stats is WP-41"* → `handled`), its
+`ticket.status.changed` comment (*"Task sync, WP-24 (review-only mode reads it first)"* — review-only
+has no ticket at all, so the owner it named was wrong as well as pending), its `feedback.received`
+and `ticket.comment.added` comments (both attributed the feedback intake agent to WP-24; it has **no**
+owner), technical/03's feedback projection paragraph (same attribution, twice), the interpreter
+property test's hand-written three-template list (it is `SHIPPED_TEMPLATES` now, which is how
+`discovery` turned out never to have been property-tested at all), `templates.test.ts`'s shipped
+list, `apps/server/src/pipeline.test.ts`'s "the shipped four", technical/02's state-machine note and
+event table, technical/04's mode table, technical/06's port list, technical/12's config example, and
+`autonomy.ts`'s `reviewOnly` field, which is **still** unread by the pipeline — what turns the mode
+on is BD-028's opt-in key, not BD-027's preset, and that distinction is WP-30's to close.
+
+**Three guards were mutation-checked, calibrated first** (standing rules 3, 21, 77): the suite passes
+unmutated (31/31), and each mutant dies by a *named* test rather than by a timeout. Deleting the
+redaction at `reviewWrites.thread` (`const markdown = input.markdown`) fails *"keeps a planted
+credential out of every posted thread"*; replacing the severity filter with `[...findings]` fails
+*"drops everything below the floor"* **and** *"posts nothing below the severity floor"*, one in each
+ring; short-circuiting the agent-branch skip fails *"skips a merge request on the platform's own
+branch namespace"*. The mutants were applied in place and restored from a copy, and the restore was
+diffed rather than assumed.
+
+**For the orchestrator.** `CLAUDE.md` has no "Where to look" bullet for review-only mode; this
+implementer did not add one, because the session's standing instruction names that file among the
+things an agent's own message may not authorise changing. The bullet worth adding is one sentence:
+*review-only mode is `packages/application/src/pipeline/review-only.ts` (three handlers, three
+`pipeline.outbound` duties), its template is `REVIEW_ONLY_TEMPLATE`, and the merge request it reviews
+is `tasks.review_subject` (migration 0020), never a checkout.*
+
+**Review round 2:** four findings, all closed, each with a test that fails on the round-1 shape.
+
+1. **Major — an identity built from model output.** The per-finding idempotency key was
+   `review_only_finding:<task>:<head_sha>:<finding.id>`, and `reviewFindingSchema.id` is any
+   non-empty string the model wrote (`roles/reviewer/prompt.md` never asks for uniqueness). Two
+   findings sharing an id posted **one** thread — the second call replayed the first's answer — under
+   a summary saying two were posted: a `blocker` dropped while the platform claimed it was published
+   (rules 16, 79). The key is now
+   `review_only_finding:<task>:<head_sha>:<index>` — `reviewFindingIdempotencyKey`, where `index` is
+   the finding's position in the artifact, carried out of the domain as
+   `SelectedFinding.index` (`policies/review-only.ts`) because the selection reorders and drops. **No
+   part of the key is model output**, which is the second half of the finding answered by
+   construction rather than by a sentence: a model cannot author an index, so
+   `idempotencyScopeFor` has nothing to refuse and the duty cannot die half-way through the loop on a
+   planted placeholder. The one part that is not the platform's own text is the head sha, and it is
+   provider metadata that reaches the key **already bounded and redacted** through
+   `tasks.review_subject` — a placeholder is inert, because a redaction output is never re-redacted.
+   The docblock says exactly that rather than claiming the whole key is the platform's. Stated at the line: identity is *(task, revision,
+   position)*, so a re-run of the stage on an unchanged revision **replays** rather than posting a
+   second set of threads, and the cost of that (a re-run's different text at a position keeps the
+   first run's thread) is written where the key is built. The summary's number is now the size of a
+   set of discussion ids rather than a loop counter; its honest status is *defence, not the fix* (the
+   two agree on every path reachable from this file once the keys are unique), and the docblock says
+   so. Tests: *"posts two threads for two findings the model gave the same id, and counts two"*
+   (application), which also reads the keys back out of the idempotency store and asserts the model's
+   string is not in them, and *"numbers a finding by its place in the artifact"* (domain).
+2. **Minor — the metric counted the summary.** `ours` matched any thread carrying the review marker,
+   and the summary carried it too, so `threads_posted`/`_resolved`/`_accepted` were findings **plus
+   one** — the e2e pinned `threads_posted: 2` for a single posted finding. The summary now carries
+   `reviewSummaryMarkerFor` (`<!-- agentic:review-only-summary:<task> -->`), which
+   `reviewMarkerFor` is deliberately **not** a substring of, and the observation filters on the
+   finding marker; product/18:59 counts findings, and a human resolving the platform's own framing
+   has said nothing about one. The e2e's number is corrected to `1` **with the reason in the
+   assertion**, and a unit case reads back the threads the duty really posted (rather than
+   hand-written bodies, which is why the existing cases could not see this) — *"counts the findings
+   and not its own summary, even when a human resolves both"*. `taskReviewObservedEvent.threads_posted`
+   says what it counts in the contract as well.
+3. **Nit — an unreachable sentence, made a measurement (rule 86).** `reviewWrites.thread`'s docblock
+   said *"a shadow review records a `would_have` row and posts nothing"*; nothing creates one, because
+   `runReviewOnlyCheck` writes `mode: 'normal'` (`tasks.mode` is the two-valued shadow switch and
+   `review_only` is a **run** mode). The docblock now says **review-only mode has no shadow mode on
+   this build**, names why, and points at the case that holds it: *"creates the review task in
+   `normal` mode, so every thread it posts is a real one"* reads the stored row and the two
+   `create_discussion` audit rows (`status: 'ok'`, never `would_have`). Passing the task's mode stays
+   the right shape for the day a shadow review is decided.
+4. **The credential residual is narrower than round 1 stated, and the measurement is now in a test.**
+   Re-taken here rather than accepted from the review: `packages/infrastructure/src/workspace/spec.test.ts`
+   § *"is none for a review-only run"* walks `REVIEW_ONLY_TEMPLATE` → `reviewer` →
+   `TOOLS_BY_ROLE.reviewer = ['Read','Glob','Grep']` → `runIsReadOnly` → `buildWorkspaceSpec.readOnly`
+   → `RunCredentialBroker.issue`, and asserts the issue is `null` **with the credential source never
+   called** (`mints === 0`, `liveCount === 0`, `answer(...) === null`). So a review-only run mints
+   nothing and there is no run-scoped credential to leak; the gap opens only for a future role that
+   both mints and posts. The docblocks in `review-only.ts`, `integrations.ts` § `reviewWrites` and the
+   e2e's `PLANTED_IN_ANSWER`, and the discovered-work bullet above, all say that now instead of the
+   round-1 claim.
+
+**Calibration (rules 3, 21, 77).** Each fix was canaried in place on a copy and restored with a diff:
+the round-1 key plus the loop counter kills *"posts two threads …"* on "expected length 2, got 1";
+the summary written with the finding marker kills *"counts the findings and not its own summary"* on
+`threads_posted: 2` (the marker assertion was moved *after* the count assertion so the number is what
+fails, not the mechanism); creating the task in `shadow` kills *"creates the review task in `normal`
+mode"* along with twenty others. The restores were `diff`ed, not assumed.
+
+**One thing round 2 did not do.** `finding.id` is still what a *human reading a thread* has no way to
+tie back to the artifact, because the thread body carries neither the id nor the index. Nothing needs
+it today — the metric matches on the marker and the key is the platform's — so it was not added.
+
 ## Discovered work — session 5 (not in plan)
+- **`runs.mode` records `normal` for a discovery run, a retro run and a librarian run** (WP-24).
+  technical/04's mode table has seven values and the `run_mode` enum ships all seven; the planner
+  mapped exactly one of them until this work package, and now maps two — `shadow` from `tasks.mode`
+  and `review_only` from the template. `linter`, `discovery`, `retro` and `librarian` are still
+  written as `normal`, so the column cannot answer "what kind of run was this" for four of the six
+  kinds the platform already produces, and any statistic or cost breakdown grouped by mode is wrong
+  by construction. The fix is one table beside `runModeFor` (`packages/application/src/pipeline/planner.ts`)
+  and a decision per mode about what the column is *for*; it was deliberately not made here, because
+  each value belongs to the work package that owns the mode. Not a defect this work package
+  introduced — it is the one it measured while adding the second entry.
+  *Refiner (session 5): **filed as backlog 57**, with three additions — `retro` and `librarian` have
+  live producers today (both are stages of the ticket templates' merge tail), `runs.mode` already has
+  a **reader** (`run-detail.tsx:103` renders it as a badge), and `RunSpec.mode` is consumed only by a
+  log field and the row itself, so the fix is labelling with no behavioural risk. Recommendation
+  there: take `retro`/`librarian`/`discovery` together rather than waiting for three owners; `linter`
+  stays **WP-25**'s, which owes `runs.mode = 'linter'`.*
+- **A posting job holds no run-scoped secret set — and on this build a review-only run has none to
+  hold** (WP-24, **rewritten at review round 2 to what was measured**; it is **Q55**'s unfinished
+  half rather than a new gap). `reviewWrites.thread` redacts with the git binding's redactor — the
+  binding's credentials plus TD-012 step 2's patterns — which covers a provider token, an `sk-ant-…`
+  model key and every other pattern-shaped value. What it cannot cover is a token `mintCredential`
+  issued *for that run*: the posting job runs after the run, possibly in another process, and holds
+  no run-scoped secret set. **Round 1 filed that as a live leak; it is not one today.** The chain,
+  asserted in `packages/infrastructure/src/workspace/spec.test.ts` § *"is none for a review-only
+  run"*: `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's, `TOOLS_BY_ROLE.reviewer` is
+  `['Read','Glob','Grep']`, so `runIsReadOnly` is true, `buildWorkspaceSpec` marks the workspace
+  read-only, and `RunCredentialBroker.issue` answers `null` **without calling the credential source**
+  (BD-021) — and `apps/launcher` has no other source to mint from (Q52). So the gap is a *future*
+  one: the first role that both mints a credential and posts provider text inherits it, and closing
+  it then needs whatever Q55 decides about carrying a run's scope past the run — the same mechanism
+  WP-27's take-over export will want. The e2e's own residual is unchanged and narrower than it read:
+  a value that is neither the binding's nor pattern-shaped (its `PLANTED_MODEL_KEY`) reaches a posted
+  thread, which is why the redaction assertion plants an `sk-ant-…` shape.
+  *Refiner (session 5): **no new entry — folded into Q55**, whose recommendation is the mechanism
+  this needs, with round 2's measurement appended there as the trigger condition. Round 1's version
+  would have been a live-leak entry; what was measured is a latent one, and filing it twice would
+  split the evidence across a question and a backlog number.*
+- **`features.review_only` has no screen** (WP-24). The mode is configured in `.agentic/config.yml`
+  or in `projects.config` and nowhere in `apps/web`; product/19:125's wizard feature card is
+  **WP-30**'s acceptance criterion 4, which this row does not touch. Recorded here so the gap is not
+  attributed to review-only mode being unfinished.
+  *Refiner (session 5): **no new entry — folded into WP-30's plan row**, whose criterion 4 now names
+  review-only's two keys and the fact that BD-028's opt-in key, not BD-027's preset field, is what
+  turns the mode on. The second half of this bullet — `task.review.observed` has no reader, the shape
+  backlog **52** has — is **already recorded where this project records it**: `EVENT_CONSUMPTION`
+  declares it `unconsumed` with its owner named (`consumption.ts:149`, WP-41), so a backlog number
+  would be a duplicate. The unread metric is not a defect; the screen is a gap with an owner.*
+- **A stored `features.review_only.trigger: manual` makes `GET /api/projects/:id/config` answer
+  `500 invalid_stored_config`** (WP-24; lifted by the refiner out of that row's notes § *Configuration*
+  and § *Review round 2*, which state it honestly but have no bullet here). **Filed as backlog 58** —
+  a defect rather than a working-as-designed strictness, because the value was accepted by the
+  platform's **own** `PUT` since WP-21 (`config.ts:177` at HEAD is `z.enum(['label','all','manual'])`),
+  the 500 names no key, and the remedy its message offers — *"re-import it from the repository"* — is
+  backlog **44**'s unbuilt endpoint. The recommendation there is **both** halves: a read-side refusal
+  that names the key (rule 20 — the read is being *told* what the platform stored) **and** a
+  forward-only migration rewriting `manual` → `paths` with `paths: []`, which is what the pipeline
+  already does with the value through `matchesReviewOnly`'s `default:` branch, so it changes no
+  behaviour. Nearest owner **WP-30**, whose wizard step 4 is the loudest caller of that read.
 - **`compose.yml` gives the `app` service a fixed eighteen-variable `environment:` block, so `.env` is
   not the app's environment** (WP-23, measured with `printenv` in a running container).
   `APP_INTEGRATION_SECRET_ENV`, every provider credential (`GITLAB_TOKEN`, `JIRA_*`, `SLACK_*`,

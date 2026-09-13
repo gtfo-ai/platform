@@ -116,6 +116,13 @@ export const gitlabReplayContext = (
       conflicted: CONFLICTED_IID,
       unknown: UNKNOWN_IID,
     },
+    // WP-24: `merge-request-diffs.json` records three files on MR 7, the third of them `too_large`.
+    diff: {
+      iid: MR_IID,
+      path: 'src/billing/totals.ts',
+      omittedPath: 'assets/logo.bin',
+      fileCount: 3,
+    },
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
     // Provider-shaped: GitLab's log handle is the numeric job id, not the fake's `log:<id>`.

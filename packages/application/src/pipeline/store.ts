@@ -29,6 +29,7 @@ import type {
   JsonObject,
   JsonValue,
   MergeRequestRef,
+  MergeRequestSnapshot,
   PipelineTemplate,
   RunCost,
   RunStatus,
@@ -70,6 +71,16 @@ export interface StoredTask {
   readonly ticketSnapshot: TicketSnapshot | null;
   /** When {@link ticketSnapshot} was read; `null` exactly when it is (`tasks_ticket_snapshot_at_paired`). */
   readonly ticketSnapshotAt: IsoDateTime | null;
+  /**
+   * The human merge request a **review-only** task reviews (WP-24, migration 0020).
+   *
+   * `null` for every task that is not one, which is every task on a project that has not enabled
+   * the mode. It is written **once, by the `insert` that creates the task** and never updated, so
+   * it is not in `save`'s column list and no second writer exists (`tasks-column-ownership.test.ts`
+   * holds that rather than this sentence): a review is of the merge request as it was when the
+   * platform read it, and a later revision is a new review, not an edit of this one.
+   */
+  readonly reviewSubject: MergeRequestSnapshot | null;
   /**
    * The row's optimistic-concurrency token, as it was when this snapshot was read (WP-15e,
    * migration 0019).

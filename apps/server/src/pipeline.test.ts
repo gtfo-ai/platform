@@ -79,12 +79,14 @@ describe('the project settings port', () => {
       poolOf([{ config: { status_mapping: { refinement: 'In Progress' } } }]),
     ).forProject('00000000-0000-4000-8000-0000000000b1' as never);
     expect(settings.config.status_mapping).toEqual({ refinement: 'In Progress' });
-    // The shipped four since WP-21 added `discovery`; a project's own `.agentic/pipeline.yml` needs a workspace to read.
+    // The shipped five since WP-24 added `review_only` beside WP-21's `discovery`; a project's own
+    // `.agentic/pipeline.yml` needs a workspace to read.
     expect(Object.keys(settings.templates).sort()).toEqual([
       'bug',
       'chore',
       'discovery',
       'feature',
+      'review_only',
     ]);
   });
 

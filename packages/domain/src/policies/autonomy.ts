@@ -38,6 +38,16 @@ export interface AutonomyPreset {
   readonly knowledgeAutoApply: boolean;
   /** Above this estimate a maintainer approves the spend; `null` disables the gate. */
   readonly budgetApprovalThresholdUsd: number | null;
+  /**
+   * Whether the dial's level runs review-only mode (product/19 §11).
+   *
+   * **Still unread by the pipeline after WP-24, and the distinction matters.** Review-only mode is
+   * *built*: what turns it on is the project's `features.review_only.enabled` in
+   * `.agentic/config.yml` (BD-028's opt-in), which `packages/application/src/pipeline/review-only.ts`
+   * reads. What this field would add is BD-027's *preset* — "selecting Observe turns review-only on
+   * for you" — and that needs the materialised preset **WP-30** stores; until it exists, this value
+   * reaches only the wizard's audit row.
+   */
   readonly reviewOnly: boolean;
   readonly shadowMode: boolean;
   /** The readiness level this dial position expects (product/17, BD-026). */

@@ -11,6 +11,7 @@ import type { Id } from '@platform/contracts';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { CommitFilesRequest, CommitRef } from '../ports/integrations/git-provider.js';
@@ -118,6 +119,7 @@ const harness = (
             port: port as unknown as NonNullable<PipelineIntegrations['git']>['port'],
             ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git' as const },
             project: 'acme/api',
+            redactor: exactSecretRedactor([]),
           }
         : null,
     taskManagement: null,

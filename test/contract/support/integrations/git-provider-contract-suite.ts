@@ -70,6 +70,23 @@ export interface GitProviderContractContext {
     /** `mergeable: null` — the provider has not computed it yet. */
     readonly unknown: number;
   };
+  /**
+   * The merge request whose **diff** the harness has arranged, and what it should contain (WP-24).
+   *
+   * A path is named rather than counted because a count alone is satisfied by a provider that
+   * returns the wrong files, and `omittedPath` is named because the case that matters is the one an
+   * adapter is most likely to get wrong: a provider that has a patch and will not send it
+   * (GitLab's `collapsed`/`too_large`, GitHub's missing `patch`) must come back as
+   * `omitted: true`, never as an empty change. `null` when this provider's fixtures arrange no such
+   * file — a harness that cannot reach the case says so instead of the suite pretending it did.
+   */
+  readonly diff: {
+    readonly iid: number;
+    readonly path: string;
+    readonly omittedPath: string | null;
+    /** How many files the harness arranged, so the `limit` case can ask for fewer. */
+    readonly fileCount: number;
+  };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -426,6 +443,84 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
           () => port.replyToDiscussion(mrRef(context.mergeRequestIid), 'no-such-thread', 'hi'),
           'not_found',
         );
+      });
+
+      /**
+       * WP-24: a thread on the merge request itself, which is what review-only mode's neutral
+       * summary is.
+       *
+       * In the shared suite rather than in one provider's file, because BD-017's whole claim is
+       * that a new provider is trustworthy without touching the pipeline — and a GitHub adapter
+       * that quietly anchored the summary to a line, or dropped it, would pass a suite that never
+       * asked (standing rule 23, earned by exactly this omission at WP-09).
+       */
+      it('creates a thread on the merge request when there is no path and no line', async () => {
+        const ref = mrRef(context.mergeRequestIid);
+        // The anchored thread first, then the summary — which is the order the review-only duty
+        // posts them in, and the order a replay harness serving one endpoint has to be driven in.
+        const anchored = await port.createDiscussion(ref, {
+          path: 'src/parser.ts',
+          line: 42,
+          markdown: 'This branch is unreachable.',
+        });
+        expect(anchored.notes[0]?.path).toBe('src/parser.ts');
+
+        const summary = await port.createDiscussion(ref, {
+          markdown: 'A neutral summary of the whole change.',
+        });
+        expect(summary.id).not.toBe(anchored.id);
+        expect(summary.notes[0]?.path ?? null).toBeNull();
+        expect(summary.notes[0]?.line ?? null).toBeNull();
+        expect(summary.notes[0]?.body).toContain('A neutral summary');
+      });
+
+      /** Half an anchor is one no provider can place: refuse it rather than post it unanchored. */
+      it('refuses a path without a line, and a line without a path', async () => {
+        await expectIntegrationError(
+          () =>
+            port.createDiscussion(mrRef(context.mergeRequestIid), {
+              path: 'src/parser.ts',
+              markdown: 'half an anchor',
+            }),
+          'invalid_request',
+        );
+        await expectIntegrationError(
+          () =>
+            port.createDiscussion(mrRef(context.mergeRequestIid), {
+              line: 3,
+              markdown: 'the other half',
+            }),
+          'invalid_request',
+        );
+      });
+    });
+
+    describe('the merge request diff (WP-24)', () => {
+      it('returns each changed file with its patch', async () => {
+        const files = await port.getMergeRequestDiff(mrRef(context.diff.iid), { limit: 50 });
+        expect(files.length).toBeGreaterThan(0);
+        const named = files.find((file) => file.new_path === context.diff.path);
+        expect(named, `no entry for ${context.diff.path}`).toBeDefined();
+        expect(named?.omitted).toBe(false);
+        expect(named?.diff ?? '').not.toBe('');
+        expect(named?.old_path).toBeDefined();
+      });
+
+      it('applies the caller’s limit rather than trusting it', async () => {
+        const files = await port.getMergeRequestDiff(mrRef(context.diff.iid), { limit: 1 });
+        expect(files).toHaveLength(1);
+      });
+
+      it('marks a file the provider excluded as omitted, never as an empty change', async () => {
+        if (context.diff.omittedPath === null) {
+          return;
+        }
+        const files = await port.getMergeRequestDiff(mrRef(context.diff.iid), { limit: 50 });
+        const excluded = files.find((file) => file.new_path === context.diff.omittedPath);
+        expect(excluded?.omitted).toBe(true);
+        // Both directions (standing rule 42): it is marked *and* it carries no patch that would
+        // read as "this file changed by nothing".
+        expect(excluded?.diff ?? null).toBeNull();
       });
     });
 

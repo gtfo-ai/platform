@@ -14,6 +14,7 @@ import type {
   JsonObject,
   JsonValue,
   MergeRequestRef,
+  MergeRequestSnapshot,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
@@ -72,6 +73,8 @@ export const tasks = pgTable('tasks', {
   /** The ticket's own words, bounded and redacted at the write (WP-15f, migration 0015). */
   ticketSnapshot: jsonb('ticket_snapshot').$type<TicketSnapshot>(),
   ticketSnapshotAt: timestamp('ticket_snapshot_at', { withTimezone: true }),
+  /** WP-24, migration 0020: the human merge request a review-only task reviews. */
+  reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

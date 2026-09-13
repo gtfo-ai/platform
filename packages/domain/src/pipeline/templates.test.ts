@@ -1,6 +1,7 @@
 import { pipelineFileSchema, pipelineGraphIssues } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { PolicyViolationError } from '../errors.js';
+import { compilePipeline, interpret } from './interpreter.js';
 import {
   assertValidTemplate,
   BUG_TEMPLATE,
@@ -8,6 +9,7 @@ import {
   DISCOVERY_TEMPLATE,
   FALLBACK_STAGE_AGENT_DEFAULTS,
   FEATURE_TEMPLATE,
+  REVIEW_ONLY_TEMPLATE,
   SHIPPED_TEMPLATES,
   stageAgentDefaults,
   TICKET_TEMPLATES,
@@ -53,13 +55,70 @@ describe('the shipped templates', () => {
     expect(ids(CHORE_TEMPLATE)).not.toContain('business_review');
   });
 
-  it('ships the three ticket templates plus discovery, and nothing else', () => {
+  it('ships the three ticket templates plus discovery and review-only, and nothing else', () => {
     // The two maps are asserted against each other rather than each against a literal: `discovery`
     // is deliberately outside `TICKET_TEMPLATES` (it opens no merge request), and the case below
     // relies on that split being exactly this one.
     expect(Object.keys(TICKET_TEMPLATES)).toEqual(['feature', 'bug', 'chore']);
-    expect(Object.keys(SHIPPED_TEMPLATES)).toEqual(['feature', 'bug', 'chore', 'discovery']);
+    expect(Object.keys(SHIPPED_TEMPLATES)).toEqual([
+      'feature',
+      'bug',
+      'chore',
+      'discovery',
+      'review_only',
+    ]);
     expect(SHIPPED_TEMPLATES.discovery).toBe(DISCOVERY_TEMPLATE);
+    expect(SHIPPED_TEMPLATES.review_only).toBe(REVIEW_ONLY_TEMPLATE);
+  });
+
+  /**
+   * The other direction of "sends every ticket template through the same merge tail", below.
+   *
+   * It used to be one `expect(visited).toContain('librarian')` inside the interpreter's whole-task
+   * walk, which was written when that walk ran over three hand-listed templates. The walk now runs
+   * over **every** shipped template (standing rule 7), where the sentence is simply false — so the
+   * claim moved here, to the file that knows which templates have a tail, and it is asserted in
+   * both directions (standing rule 42).
+   */
+  it('gives neither non-ticket template a merge tail', () => {
+    for (const template of [DISCOVERY_TEMPLATE, REVIEW_ONLY_TEMPLATE]) {
+      const stageIds = template.stages.map((stage) => stage.id);
+      expect(stageIds).not.toContain('ready_for_merge');
+      expect(stageIds).not.toContain('librarian');
+      expect(stageIds).not.toContain('rebase_gate');
+    }
+  });
+
+  /**
+   * product/18: *"a neutral summary that **never blocks merge**"*.
+   *
+   * The interpreter reads a missing `return_to` as "escalate", so a review-only template without
+   * one would park every merge request the Reviewer had a finding about in `needs_human`. Both
+   * verdicts therefore point at `done`, and because `done` is *later* in declaration order the
+   * interpreter's rule 2 makes each an **advance** rather than a counted return — asserted here
+   * against `interpret` rather than read off the data, because "later in declaration order" is the
+   * property that makes it true and a reordering would break it silently.
+   */
+  it('sends both review verdicts forward, so a review-only task never blocks on a finding', () => {
+    expect(REVIEW_ONLY_TEMPLATE.stages.map((stage) => stage.id)).toEqual([
+      'intake',
+      'code_review',
+      'done',
+    ]);
+    const stage = REVIEW_ONLY_TEMPLATE.stages[1];
+    expect(stage?.kind).toBe('agent');
+    expect(stage?.kind === 'agent' ? stage.role : null).toBe('reviewer');
+    expect(stage?.kind === 'agent' ? stage.produces : null).toBe('ReviewVerdict');
+
+    const pipeline = compilePipeline('review_only', REVIEW_ONLY_TEMPLATE);
+    for (const verdict of ['approve', 'request_changes'] as const) {
+      const decision = interpret(pipeline, {
+        kind: 'stage_completed',
+        stage: 'code_review',
+        verdict,
+      });
+      expect(decision, verdict).toEqual({ kind: 'enter', stage: 'done' });
+    }
   });
 
   it('runs discovery as one agent stage between two system stages, producing a draft', () => {

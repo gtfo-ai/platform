@@ -161,6 +161,30 @@ export const gitlabDiscussionSchema = z.object({
 export type GitLabDiscussion = z.output<typeof gitlabDiscussionSchema>;
 
 /**
+ * One entry of `GET /projects/:id/merge_requests/:iid/diffs`
+ * (<https://docs.gitlab.com/api/merge_requests/> § "List merge request diffs"), retrieved
+ * 2026-09-13.
+ *
+ * The page publishes eleven attributes; the six the adapter reads are required here and the rest
+ * are not modelled. `collapsed` and `too_large` were **introduced in GitLab 18.4** — the page's own
+ * history note says so — so both are `nullish`: an older self-managed instance omits them, and a
+ * schema that required them would make the whole read fail there rather than answer "this file's
+ * patch was not excluded", which is what a missing flag means (standing rule 16 is the mirror —
+ * this is a field a *provider* may omit and the absent value is the safe one, `false`, because the
+ * accompanying `diff` is then present and complete).
+ */
+export const gitlabMergeRequestDiffSchema = z.object({
+  old_path: z.string(),
+  new_path: z.string(),
+  diff: z.string().nullish(),
+  new_file: z.boolean().nullish(),
+  renamed_file: z.boolean().nullish(),
+  deleted_file: z.boolean().nullish(),
+  collapsed: z.boolean().nullish(),
+  too_large: z.boolean().nullish(),
+});
+
+/**
  * Pipeline and job statuses share one vocabulary
  * (<https://docs.gitlab.com/api/pipelines/>, <https://docs.gitlab.com/api/jobs/>).
  *

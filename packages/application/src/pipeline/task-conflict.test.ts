@@ -129,6 +129,7 @@ describe('retryOnTaskConflict', () => {
         costActualUsd: 0,
         estimateUsd: null,
         ticketSnapshot: null,
+        reviewSubject: null,
         ticketSnapshotAt: null,
         version: INITIAL_TASK_VERSION,
       });
@@ -208,6 +209,7 @@ describe('escalateTaskAfterConflict', () => {
         costActualUsd: 0,
         estimateUsd: null,
         ticketSnapshot: null,
+        reviewSubject: null,
         ticketSnapshotAt: null,
         version: INITIAL_TASK_VERSION,
       });

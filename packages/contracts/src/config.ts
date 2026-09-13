@@ -171,12 +171,36 @@ export const featuresConfigSchema = z.strictObject({
       issue_types: z.array(nonEmptyStringSchema).optional(),
     })
     .optional(),
+  /**
+   * Review-only mode — product/18 § "Opt-in features", WP-24.
+   *
+   * *"The Reviewer stage on human-authored MRs (**label, path or all MRs**), posting findings as
+   * discussion threads and a neutral summary that never blocks merge … Wizard: trigger (label /
+   * all MRs / paths), severity floor for posting (default `major`), max findings per MR
+   * (default 10)"*. Every one of those five is here, and the shape is the document's rather than
+   * this file's earlier guess: `trigger` used to read `label | all | **manual**`, a third value no
+   * document names and nothing reads, while `paths` — which product/18 names twice — was missing.
+   * technical/12's own example carries no trigger but `label`, so nothing in the docs is
+   * contradicted by the swap (standing rule 8).
+   *
+   * `paths` is meaningful only for `trigger: paths`; it is not made required by the schema because
+   * a project that sets the list first and switches the trigger afterwards is writing a valid file
+   * at every step. An empty list under `trigger: paths` matches **nothing**, which is the
+   * fail-closed reading of "the paths I named" (standing rule 20).
+   */
   review_only: z
     .strictObject({
       enabled: z.boolean().optional(),
-      trigger: z.enum(['label', 'all', 'manual']).optional(),
+      trigger: z.enum(['label', 'all', 'paths']).optional(),
       label: nonEmptyStringSchema.optional(),
+      paths: z.array(pathPatternSchema).optional(),
       severity_floor: severitySchema.optional(),
+      /**
+       * product/18's *"max findings per MR (default 10)"*. Bounded above as well as below because
+       * it decides how many provider mutations one run makes: a project that typed 10 000 would
+       * spend a rate limit on one merge request.
+       */
+      max_findings: z.int().min(1).max(50).optional(),
     })
     .optional(),
   maintenance: z

@@ -58,9 +58,10 @@ import { silentLogger } from '../ports/logger.js';
 import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
 import { qualifiedPlatformSkill } from '../ports/workspace.js';
+import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
-import type { StoredArtifact } from './store.js';
+import type { StoredArtifact, StoredTask } from './store.js';
 
 /**
  * Which platform tools a role may call (technical/04: "a run is given the subset its role needs:
@@ -395,6 +396,28 @@ const promptDocument = (document: ContextPackDocument) => ({
   text: document.text,
 });
 
+/**
+ * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
+ *
+ * Two of its seven values are reachable on this build. `shadow` comes from `tasks.mode`, which is
+ * the shadow switch `IntegrationActionExecutor` reads. `review_only` comes from the **template**,
+ * because that is where "this run is the Code review stage alone, on a human merge request" is
+ * expressed (WP-24) — `tasks.mode` deliberately stays two-valued so a security guard does not grow
+ * a branch for a mode that changes nothing about it.
+ *
+ * The other four (`linter`, `discovery`, `retro`, `librarian`) are **not** mapped, and that is a
+ * statement about the build rather than a decision: a discovery run and a librarian run are both
+ * recorded `normal` today, which is a gap this work package found and did not widen. It is filed as
+ * discovered work rather than fixed here, because each needs the work package that owns the mode to
+ * say what the column is for.
+ */
+const runModeFor = (task: StoredTask): RunSpec['mode'] => {
+  if (task.task.mode === 'shadow') {
+    return 'shadow';
+  }
+  return task.task.template === REVIEW_ONLY_TEMPLATE_ID ? 'review_only' : 'normal';
+};
+
 export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRunPlanner => {
   const logger = options.logger ?? silentLogger;
   // At construction, not at the first run of the role that needs it: a skill the catalogue is
@@ -485,6 +508,9 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           // is the only source — nothing here fetches, because a provider call in the run's
           // critical path is what Q61 (1) rejected.
           ticketSnapshot: task.ticketSnapshot,
+          // WP-24: the merge request a review-only task reviews, or `null` for every other task.
+          // The row is the only source here too — nothing in the run's critical path fetches.
+          reviewSubject: task.reviewSubject ?? null,
           artifacts: latestArtifacts(request.artifacts).map((artifact) => ({
             type: artifact.type,
             version: artifact.version,
@@ -501,7 +527,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         projectId: task.task.projectId,
         stage: stage.id,
         role,
-        mode: task.task.mode === 'shadow' ? 'shadow' : 'normal',
+        mode: runModeFor(task),
         attempt: request.attempt,
         // The human's override for this attempt first (WP-15i), then the project's stage
         // configuration, then the template's default. One attempt only: the override rides the

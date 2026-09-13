@@ -11,6 +11,7 @@
  * The adapter's `fetch` is injected, so nothing here opens a socket, sleeps or reads a wall clock.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { PROVENANCE_KINDS } from '../support/integrations/fixture-provenance.js';
 import { runGitProviderContract } from '../support/integrations/git-provider-contract-suite.js';
 import {
   CLOCK_AT,
@@ -102,8 +103,15 @@ it('every recorded interaction names a vendor page, a retrieval date and a kind'
       ) {
         problems.push(`retrieved ${String(source.retrieved)} is not a date`);
       }
-      if (source.kind !== 'documented' && source.kind !== 'inferred') {
-        problems.push(`kind ${String(source.kind)} is neither documented nor inferred`);
+      // The shared vocabulary, not a shorter local copy of it: this corpus gained its first
+      // `documented-adapted` interaction at WP-24 (`merge-request-diffs.json`), and a check that
+      // knew two of the five kinds would have refused an honest label (standing rule 7 — a
+      // hand-maintained list drifts; here it drifted against the *other* list in the same tree).
+      if (!(PROVENANCE_KINDS as readonly string[]).includes(String(source.kind))) {
+        problems.push(`kind ${String(source.kind)} is not one of ${PROVENANCE_KINDS.join(', ')}`);
+      }
+      if (source.kind !== 'documented' && (source.note ?? '') === '') {
+        problems.push(`kind ${String(source.kind)} carries no note saying what was assumed`);
       }
       return problems.map((problem) => `${where}: ${problem}`);
     }),

@@ -253,6 +253,41 @@ export const taskHandedBackEvent = defineEvent('task.handed_back', {
   summary: z.string(),
 });
 
+/**
+ * What became of a review-only task's findings — product/18's metric, *"findings accepted (thread
+ * resolved with change) vs dismissed"* (WP-24).
+ *
+ * It is a `task.*` event and it sits on the **task** stream, although what it describes is a merge
+ * request: the aggregate it belongs to is the review task, its producer is the pipeline rather than
+ * a git adapter (every `mr.*` event is adapter-produced), and it can only exist for a task. The
+ * merge request is named in the payload.
+ *
+ * **It is an observation, not a conclusion.** `threads_accepted` and `threads_dismissed` are this
+ * build's reading of "with a change" — a resolved thread on a merge request whose head moved after
+ * the review was posted — and both shas are on the payload precisely so a consumer can compute a
+ * different reading without going back to the provider. `packages/application/src/pipeline/review-only.ts`
+ * states what that reading cannot distinguish.
+ */
+export const taskReviewObservedEvent = defineEvent('task.review.observed', {
+  ...taskScoped,
+  mr: mergeRequestRefSchema,
+  /** The revision the platform reviewed. */
+  head_sha_reviewed: shaSchema,
+  /** The revision the merge request ended on. */
+  head_sha_now: shaSchema,
+  /**
+   * **Finding** threads this review posted that were still on the merge request when it ended.
+   *
+   * Not the neutral summary: product/18:59 counts findings, and the summary is the platform's own
+   * framing rather than one of them (`review-only.ts` § `reviewSummaryMarkerFor`).
+   */
+  threads_posted: z.int().nonnegative(),
+  threads_resolved: z.int().nonnegative(),
+  threads_accepted: z.int().nonnegative(),
+  threads_dismissed: z.int().nonnegative(),
+  threads_unresolved: z.int().nonnegative(),
+});
+
 export const taskCancelledEvent = defineEvent('task.cancelled', {
   ...taskScoped,
   outcome: nonEmptyStringSchema,
@@ -540,6 +575,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskHandedBackEvent,
   taskCancelledEvent,
   taskCompletedEvent,
+  taskReviewObservedEvent,
   runCreatedEvent,
   runStartedEvent,
   runFinishedEvent,

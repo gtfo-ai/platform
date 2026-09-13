@@ -5,8 +5,11 @@
  * it gets a git write credential, and how long its volume outlives it. Everything else the schema
  * already refuses.
  */
+import { TOOLS_BY_ROLE } from '@platform/application';
+import { REVIEW_ONLY_TEMPLATE } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { runSpecFixture } from '../runner/fixtures.js';
+import { RunCredentialBroker } from './broker.js';
 import {
   buildWorkspaceSpec,
   DEFAULT_WORKSPACE_KEEP_DAYS,
@@ -84,6 +87,64 @@ describe('the credential a run gets', () => {
     expect(runIsReadOnly(runSpecFixture({ tools: ['Read', 'Edit'] }))).toBe(false);
     expect(runIsReadOnly(runSpecFixture({ tools: ['Read', 'Write'] }))).toBe(false);
     expect(runIsReadOnly(runSpecFixture({ tools: [] }))).toBe(true);
+  });
+
+  /**
+   * **A review-only run mints nothing, so it has no run-scoped credential to leak** (WP-24 review
+   * round 2, and the measurement behind the sentence in `pipeline/review-only.ts` and in
+   * `pipeline/integrations.ts` § `reviewWrites.thread`).
+   *
+   * The thread a review posts is redacted against the **git binding's** credentials and TD-012's
+   * patterns, and round 1 filed the gap that it is not redacted against a credential
+   * `mintCredential` issued for the run. This walks the chain that decides whether such a
+   * credential exists: `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's,
+   * `TOOLS_BY_ROLE.reviewer` has neither `Write` nor `Edit`, `runIsReadOnly` is therefore true,
+   * `buildWorkspaceSpec` marks the workspace read-only, and `RunCredentialBroker.issue` returns
+   * `null` **without calling the source** (BD-021). So on this build there is nothing run-scoped to
+   * survive into a thread; the gap opens for a future role that both mints and posts.
+   */
+  it('is none for a review-only run: the reviewer writes nothing, so the broker mints nothing', async () => {
+    const stage = REVIEW_ONLY_TEMPLATE.stages.find((entry) => entry.id === 'code_review');
+    expect(stage?.kind).toBe('agent');
+    const role = stage?.kind === 'agent' ? stage.role : null;
+    expect(role).toBe('reviewer');
+    const tools = TOOLS_BY_ROLE.reviewer;
+    // Positively, not "does not contain Write": a list that grew an `Edit` is the thing to catch.
+    expect(tools).toEqual(['Read', 'Glob', 'Grep']);
+
+    const spec = runSpecFixture({
+      stage: 'code_review',
+      role: 'reviewer',
+      mode: 'review_only',
+      tools: [...tools],
+      artifactType: 'ReviewVerdict',
+    });
+    expect(runIsReadOnly(spec)).toBe(true);
+    expect(build({ spec }).readOnly).toBe(true);
+
+    let mints = 0;
+    const broker = new RunCredentialBroker({
+      mint: async () => {
+        mints += 1;
+        throw new Error('a read-only run must not reach the credential source');
+      },
+      revoke: async () => {
+        throw new Error('nothing was minted, so nothing can be revoked');
+      },
+    });
+    const issued = await broker.issue({
+      runId: spec.runId,
+      project: 'acme/api',
+      host: 'git.example.com',
+      readOnly: build({ spec }).readOnly,
+      branchPatterns: ['agentic/*'],
+      ttlSeconds: 900,
+    });
+    expect(issued).toBeNull();
+    expect(mints).toBe(0);
+    // …and the workspace's own `cred.get` has nothing to be answered with either.
+    expect(broker.answer(spec.runId, 'git.example.com')).toBeNull();
+    expect(broker.liveCount).toBe(0);
   });
 });
 

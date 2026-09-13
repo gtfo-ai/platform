@@ -47,7 +47,7 @@
  * because `packages/prompts` is outside the domain ring's import allowance (biome enforces it) and
  * because a prompt the composition root supplies is a prompt a project can override later.
  */
-import type { ArtifactType, TicketSnapshot } from '@platform/contracts';
+import type { ArtifactType, MergeRequestSnapshot, TicketSnapshot } from '@platform/contracts';
 import { artifactDataSchemas } from '@platform/contracts';
 import {
   type DataBlock,
@@ -175,6 +175,18 @@ export interface PromptTask {
    * announces `truncated` in the marker.
    */
   readonly ticketSnapshot: TicketSnapshot | null;
+  /**
+   * The merge request a **review-only** run reviews, as `tasks.review_subject` holds it (WP-24).
+   *
+   * Required and nullable for the same reason {@link ticketSnapshot} is: `null` is *this run is
+   * not reviewing a merge request the platform read*, which is what every ordinary pipeline stage
+   * passes, and an optional field would let a review-only run mean it by forgetting.
+   *
+   * Already bounded and redacted before it reaches here — the cut happens at the write, where the
+   * store is the consumer — so this module applies no cap of its own and announces `truncated` in
+   * the marker.
+   */
+  readonly reviewSubject: MergeRequestSnapshot | null;
   readonly artifacts: readonly PromptArtifact[];
   /** `task.stage.returned.reason` — why this stage is running again. Untrusted. */
   readonly returnFeedback: string | null;
@@ -380,15 +392,16 @@ const derivedNameAttribute = (name: string, value: string): Record<string, strin
  *
  * | attribute | kind | on refusal |
  * |---|---|---|
- * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `comment_count` | platform integers | cannot refuse |
+ * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `comment_count`, `files`, `file_count` | platform integers | cannot refuse |
  * | `reason`, `artifact_type`, `truncated`, `text`, `kind` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
  * | `file` | derived from an untrusted vault path by a total fold | degrades |
  * | `path` | an untrusted vault path | degrades |
  *
  * Exactly two derive from untrusted input, and both degrade. The `ticket` block gained attributes
- * at WP-15f and **none of them derives from the ticket**: they are the counts and the cut, which
- * technical/07 requires to be unforgeable, while the key, the URL, the title and every comment stay
- * in the body — a provider that can choose a key can choose one shaped like an attribute.
+ * at WP-15f and the `merge_request` block at WP-24, and **none of theirs derives from the provider**:
+ * they are the counts and the cut, which technical/07 requires to be unforgeable, while the key, the
+ * URL, the title, every comment, every branch name and every path stay in the body — a provider that
+ * can choose a key can choose one shaped like an attribute.
  */
 const documentBlock = (document: PromptKnowledgeDocument): DataBlock => ({
   kind: document.reason === 'rules' ? 'project_rules' : 'knowledge_document',
@@ -461,6 +474,59 @@ const ticketBlock = (task: PromptTask): DataBlock => {
       'description:',
       snapshot.description,
       ...(comments.length === 0 ? [] : ['', ...comments]),
+    ].join('\n'),
+  };
+};
+
+/**
+ * The merge request under review — technical/04's `review_only` mode: *"Reviewer role on a human
+ * MR: read-only tools, **diff from provider**, findings posted as threads"* (WP-24).
+ *
+ * It is a second block rather than more lines inside the `ticket` block, because a review-only task
+ * has no ticket: its `ticket` block carries the platform-issued reference and reads `unread`, which
+ * is the honest thing for it to say. The two never both carry content on this build, and nothing
+ * here assumes that — a template that one day reviewed a merge request *for* a ticket would emit
+ * both and need no change.
+ *
+ * **Everything in the body is provider text; everything the platform says about it is in the
+ * marker.** The per-file `--- <path> ---` separators are platform words *inside* a data block,
+ * which is where they belong (the `ticket` block's comment separators make the same trade, and its
+ * docblock has the argument): a patch whose body writes `--- src/evil.ts ---` misattributes a hunk
+ * and can do nothing else. `files`, `file_count` and `truncated` are claims about the platform's
+ * own behaviour, which technical/07 requires to be unforgeable, so they are attributes — and, as on
+ * the `ticket` block, **no attribute here derives from the merge request**: the branch names, the
+ * labels, the title and every path stay in the body, because a branch a fork author chose can be
+ * shaped like an attribute.
+ */
+const reviewSubjectOf = (task: PromptTask): MergeRequestSnapshot | null =>
+  task.reviewSubject ?? null;
+
+const mergeRequestBlock = (snapshot: MergeRequestSnapshot): DataBlock => {
+  const files = snapshot.files.map((file) =>
+    [
+      `--- ${file.path} ---`,
+      file.omitted ? '(the provider did not return this file’s diff)' : file.diff,
+    ].join('\n'),
+  );
+  return {
+    kind: 'merge_request',
+    attributes: {
+      files: snapshot.files.length,
+      file_count: snapshot.file_count,
+      ...(snapshot.truncated ? { truncated: 'true' } : {}),
+    },
+    body: [
+      `title: ${snapshot.title}`,
+      `source_branch: ${snapshot.source_branch}`,
+      `target_branch: ${snapshot.target_branch}`,
+      `head_sha: ${snapshot.head_sha}`,
+      `labels: ${snapshot.labels.join(', ')}`,
+      '',
+      'description:',
+      snapshot.description,
+      '',
+      'diff:',
+      ...files,
     ].join('\n'),
   };
 };
@@ -545,6 +611,11 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
   const blocks: DataBlock[] = [
     ...input.pack.documents.map(documentBlock),
     ticketBlock(input.task),
+    // `?? null` for the reason `ticketBlock` uses one: the field is required by the type, and a
+    // caller that lost it through a cast must emit *no* block rather than throw.
+    ...(reviewSubjectOf(input.task) === null
+      ? []
+      : [mergeRequestBlock(reviewSubjectOf(input.task) as MergeRequestSnapshot)]),
     ...input.task.artifacts.map(artifactBlock),
     ...(input.task.returnFeedback === null ? [] : [feedbackBlock(input.task.returnFeedback)]),
   ];

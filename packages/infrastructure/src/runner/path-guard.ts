@@ -24,7 +24,9 @@
  * because the filesystem underneath decides which names are the same file, and it is not the one
  * asking.
  */
+
 import path from 'node:path';
+import { pathPatternToRegExp } from '@platform/domain';
 import { detectSecrets } from '../redaction/pattern-redaction.js';
 
 export type PathDecision = 'allow' | 'flag' | 'deny';
@@ -44,31 +46,6 @@ export interface PathVerdict {
  * the rules that judge it; a task that *edits* them is legitimate work that Code review must see.
  */
 export const FLAGGED_CONFIG_PATHS: readonly string[] = ['.agentic/**', '.claude/**', 'CLAUDE.md'];
-
-/**
- * Glob → RegExp for repository paths.
- *
- * `**` crosses separators, `*` and `?` do not, and a pattern that names a directory (`infra/`,
- * `infra/**` or a bare `infra`) matches that directory and everything under it — that is how
- * `protected_paths` is written in technical/12 and how an operator expects it to read.
- */
-const globToRegExp = (pattern: string): RegExp => {
-  // `infra/`, `infra/**` and `infra` are the same instruction. Trimming a trailing `/**` — not only
-  // the trailing slashes — is what makes `infra/**` cover `infra` itself, which the sentence above
-  // claims and the code did not do: the two regexes differed by the directory node.
-  const trimmed = pattern.replace(/\/+$/, '').replace(/^(.+)\/\*\*$/, '$1');
-  const escaped = trimmed.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  // A private-use code point stands in for `**` while the single-`*` pass runs. It cannot occur in
-  // a path pattern, whereas a space can — and a space as the placeholder turns `my dir/*` into
-  // `my.*dir/[^/]*`. (U+0000 would do the same job and is a control character biome rejects.)
-  const body = escaped
-    .replace(/\*\*/g, '\uE000')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/\uE000/g, '.*');
-  // `infra` also matches `infra/anything`; `infra/**` already does on its own.
-  return new RegExp(`^${body}(?:/.*)?$`);
-};
 
 /**
  * A private-use code point that stands in for a `/` **produced by the fold** rather than present in
@@ -178,8 +155,18 @@ const foldSegment = (segment: string): string =>
  */
 const foldForMatch = (value: string): string => value.split('/').map(foldSegment).join('/');
 
+/**
+ * The fold is this module's; the **glob syntax** is `@platform/domain`'s
+ * (`policies/path-patterns.ts`, moved there at WP-24 so review-only's path trigger reads
+ * `protected_paths`' syntax from one source rather than from a second copy — standing rule 41).
+ *
+ * The division of labour is the point: folding is a *security* answer measured against the
+ * filesystem and belongs here, beside the measurements that justify it; `**` crossing a separator
+ * is a *syntax* answer an operator writes in `.agentic/config.yml` and belongs wherever that file
+ * is read.
+ */
 export const matchesPathPattern = (pattern: string, relativePath: string): boolean =>
-  globToRegExp(foldForMatch(pattern)).test(foldForMatch(relativePath));
+  pathPatternToRegExp(foldForMatch(pattern)).test(foldForMatch(relativePath));
 
 const firstMatch = (patterns: readonly string[], relativePath: string): string | undefined =>
   patterns.find((pattern) => matchesPathPattern(pattern, relativePath));

@@ -29,6 +29,7 @@ import {
   narrowCommandPolicy,
   type ResolvedCommandPolicy,
 } from '../policies/command-policy.js';
+import { DEFAULT_MAX_REVIEW_FINDINGS } from '../policies/review-only.js';
 
 /** A configuration layer's values: `.agentic/config.yml` minus the file-format `version`. */
 export type ConfigValues = Omit<AgenticConfig, 'version'>;
@@ -113,7 +114,9 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       enabled: false,
       trigger: 'label',
       label: 'agentic-review',
+      paths: [],
       severity_floor: 'major',
+      max_findings: DEFAULT_MAX_REVIEW_FINDINGS,
     },
     maintenance: { enabled: false, schedule: 'weekly', chores: ['deps', 'flaky', 'docs'] },
     digest: { enabled: true, at: '09:00', quiet_hours: null },

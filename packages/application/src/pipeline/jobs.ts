@@ -93,7 +93,14 @@ export interface ReviewWindowData {
  * (TD-004: "re-validate on fire").
  */
 export interface PipelineOutboundData {
-  readonly duty: 'intake_check' | 'workpad' | 'status';
+  readonly duty:
+    | 'intake_check'
+    | 'workpad'
+    | 'status'
+    /** WP-24, review-only mode: consider a human merge request, post a review, observe the outcome. */
+    | 'review_only_check'
+    | 'review_only_post'
+    | 'review_only_observe';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -116,6 +123,9 @@ export interface PipelineOutboundData {
    * movement and the board owes a human every move in order; see `statusMappingHandler`.
    */
   readonly status?: string;
+  /** The three `review_only_*` duties: which merge request, and where it lives. */
+  readonly iid?: number;
+  readonly mr_url?: string;
   readonly [key: string]: unknown;
 }
 

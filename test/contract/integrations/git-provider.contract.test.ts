@@ -93,6 +93,18 @@ runGitProviderContract({
       hasConflicts: null,
     });
 
+    // WP-24: the diff `getMergeRequestDiff` answers, including the file the provider excluded —
+    // divergence 10 says the fake holds no repository content, so a test that wants a diff seeds it.
+    port.setDiff({
+      project: PROJECT,
+      iid: existing.ref.iid,
+      files: [
+        { path: 'src/billing/totals.ts' },
+        { path: 'src/billing/totals.test.ts' },
+        { path: 'assets/logo.bin', diff: null, omitted: true },
+      ],
+    });
+
     return {
       port,
       project: PROJECT,
@@ -116,6 +128,12 @@ runGitProviderContract({
         mergeable: mergeable.ref.iid,
         conflicted: conflicted.ref.iid,
         unknown: unknown.ref.iid,
+      },
+      diff: {
+        iid: existing.ref.iid,
+        path: 'src/billing/totals.ts',
+        omittedPath: 'assets/logo.bin',
+        fileCount: 3,
       },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,

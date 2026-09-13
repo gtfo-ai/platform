@@ -58,6 +58,7 @@ import {
   stageExecuteHandler,
 } from './jobs.js';
 import { pipelineOutboundHandler } from './outbound.js';
+import { reviewOnlyHandlers } from './review-only.js';
 import { type PipelineSagaOptions, pipelineHandlers } from './saga.js';
 import {
   createStageExecutor,
@@ -110,7 +111,14 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
   const workers: JobWorker[] = [];
 
   return {
-    handlers: pipelineHandlers(options),
+    /**
+     * The saga's handlers, plus review-only mode's three (WP-24).
+     *
+     * Registered here rather than inside `pipelineHandlers` because `review-only.ts` imports from
+     * `saga.ts` (`priorityRankOf`, `PipelineSagaOptions`), and the reverse import would close a
+     * module cycle — backlog 21's shape, which this repository has already paid for once.
+     */
+    handlers: [...pipelineHandlers(options), ...reviewOnlyHandlers(options)],
     executor,
     start: async () => {
       await declarePipelineQueues(options.jobs);

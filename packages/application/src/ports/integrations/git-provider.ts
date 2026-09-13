@@ -78,6 +78,42 @@ export const discussionSchema = z.strictObject({
   notes: z.array(discussionNoteSchema),
 });
 
+/**
+ * One file's patch, as the provider reports it (WP-24).
+ *
+ * The shape is the intersection of what a provider can answer, not one vendor's: GitLab's
+ * `GET …/merge_requests/:iid/diffs` publishes `old_path`, `new_path`, `diff`, `new_file`,
+ * `renamed_file`, `deleted_file` and — since 18.4 — `collapsed`/`too_large`; GitHub's
+ * `GET …/pulls/:n/files` publishes `filename`, `previous_filename`, `status` and `patch`, and omits
+ * `patch` for a file that is too large. So both halves of *"here is the path, and here is the patch
+ * if you may have it"* exist on both, and {@link fileDiffSchema} names them once.
+ *
+ * `diff` is **untrusted** (BD-022): it is somebody's source code, and on a fork workflow it is
+ * somebody unknown's.
+ */
+export const fileDiffSchema = z.strictObject({
+  /** The file's path after the change. */
+  new_path: nonEmptyStringSchema,
+  /** Before the change; equal to `new_path` when the file was not renamed. */
+  old_path: nonEmptyStringSchema,
+  /** The provider's patch text, or `null` when it declined to produce one — see `omitted`. */
+  diff: z.string().nullish(),
+  new_file: z.boolean(),
+  renamed_file: z.boolean(),
+  deleted_file: z.boolean(),
+  /**
+   * The provider has a patch and did not send it (GitLab `collapsed`/`too_large`, GitHub's missing
+   * `patch`).
+   *
+   * Distinct from `diff: null` only in what it lets a caller *say*: "this file changed and the
+   * platform was not shown how" is a fact a review must print, and a caller that cannot tell it
+   * from "no patch" prints nothing. Standing rule 18 — the absent case must not be the quiet one.
+   */
+  omitted: z.boolean(),
+});
+
+export type FileDiff = z.infer<typeof fileDiffSchema>;
+
 /** Terminal statuses come from `ciStatusSchema`; a pipeline can also still be in flight. */
 export const pipelineStatusValueSchema = z.enum([
   ...ciStatusSchema.options,
@@ -362,11 +398,56 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   ): Promise<Discussion>;
   /** Idempotent: resolving an already-resolved thread succeeds and changes nothing. */
   resolveDiscussion(ref: MergeRequestRefInput, discussionId: string): Promise<Discussion>;
-  /** A review finding on a diff line (technical/06: "Findings … posted as MR discussions"). */
+  /**
+   * A thread on a merge request — anchored to a diff line, or on the merge request itself.
+   *
+   * technical/06 lists it as `createDiscussion(mr, {path, line, markdown})  # review findings`, and
+   * that is still the important case. `path` and `line` became nullable at **WP-24**, because
+   * review-only mode owes the merge request *"a neutral summary"* (product/18) as well as its
+   * findings, and a summary is about the change rather than about a line of it. Both providers
+   * this contract is designed for answer both from one endpoint (GitLab posts a thread with or
+   * without a `position`; GitHub has two endpoints and an adapter picks).
+   *
+   * The two are given together or not at all: a `path` with no `line` is an anchor no provider can
+   * place, so it is `invalid_request` rather than a silently unanchored thread — a finding that
+   * quietly moved off its line is a finding a reviewer cannot act on.
+   *
+   * **It is a mutation** (technical/06): every call goes through `IntegrationActionExecutor`, so a
+   * shadow-mode caller never reaches it.
+   *
+   * @throws {IntegrationError} `invalid_request` when exactly one of `path` and `line` is given.
+   */
   createDiscussion(
     ref: MergeRequestRefInput,
-    note: { readonly path: string; readonly line: number; readonly markdown: string },
+    note: {
+      readonly path?: string | null;
+      readonly line?: number | null;
+      readonly markdown: string;
+    },
   ): Promise<Discussion>;
+
+  /**
+   * The files a merge request changes, with their patches — technical/04's *"`review_only` |
+   * Reviewer role on a human MR: read-only tools, **diff from provider**"* (WP-24).
+   *
+   * On the port rather than on one adapter for BD-017's reason: review-only mode is pipeline
+   * behaviour, and the pipeline may not know which provider it is talking to.
+   *
+   * `limit` bounds the **number of files**, and the adapter applies it: a merge request with four
+   * thousand files is a request whose size somebody else chose, and paginating all of it to throw
+   * most of it away costs the provider's rate limit rather than ours. A caller learns that it was
+   * cut by getting exactly `limit` entries back — the count the provider would have returned is
+   * **not** part of this answer, because no provider publishes it without fetching every page.
+   *
+   * It is a **read**, so it is performed in every mode (technical/06: a shadow task needs its
+   * context).
+   *
+   * @throws {IntegrationError} `not_found` when the merge request does not exist.
+   */
+  getMergeRequestDiff(
+    ref: MergeRequestRefInput,
+    options: { readonly limit: number },
+  ): Promise<readonly FileDiff[]>;
 
   /** Latest pipeline for a commit, or `null` when none has run yet. */
   getPipelineStatus(project: string, headSha: string): Promise<PipelineStatus | null>;

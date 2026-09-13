@@ -84,6 +84,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       estimateUsd: null,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
+      reviewSubject: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
     });

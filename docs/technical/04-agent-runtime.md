@@ -244,7 +244,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 | Mode | Differences |
 |---|---|
 | `shadow` | Null outbound adapters; artifacts + ShadowReport; no MR (diff kept in workspace export). |
-| `review_only` | Reviewer role on a human MR: read-only tools, diff from provider, findings posted as threads. |
+| `review_only` | Reviewer role on a human MR: read-only tools, diff from provider, findings posted as threads. **Built at WP-24**, and two details are worth reading there rather than inferring here: it is a task on the one-stage `review_only` template (`tasks.mode` stays `normal | shadow`; this is a *run* mode, chosen by the planner from the template), and the diff arrives through `GitProviderPort.getMergeRequestDiff` into `tasks.review_subject`, never through a checkout. |
 | `linter` | Product Manager role, ticket only, no repo, one comment. |
 | `discovery` | Read-only repo exploration + running verified commands; DiscoveryDraft + ReadinessReport. |
 | `retro` / `librarian` | Task history / KB access; KB writes only through proposals (Librarian commits on a knowledge branch per policy). |

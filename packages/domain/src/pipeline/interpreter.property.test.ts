@@ -29,13 +29,18 @@ import {
   type PipelineSignal,
   stageOf,
 } from './interpreter.js';
-import { BUG_TEMPLATE, CHORE_TEMPLATE, FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from './templates.js';
+import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES } from './templates.js';
 
-const TEMPLATES: readonly [string, PipelineTemplate][] = [
-  ['feature', FEATURE_TEMPLATE],
-  ['bug', BUG_TEMPLATE],
-  ['chore', CHORE_TEMPLATE],
-];
+/**
+ * **Every** shipped template, read off `SHIPPED_TEMPLATES` rather than listed here.
+ *
+ * It was a hand-written list of three until WP-24, and by then the platform shipped four:
+ * `discovery` (WP-21) was never in it, so nothing property-tested the one-agent-stage shape at all
+ * — and `review_only` would have been the second omission on the same day (standing rule 7: a
+ * guard with a hand-maintained scope drifts; standing rule 68: the member that was written is what
+ * makes the missing one look covered).
+ */
+const TEMPLATES: readonly [string, PipelineTemplate][] = Object.entries(SHIPPED_TEMPLATES);
 
 const compiled = TEMPLATES.map(([id, template]) => compilePipeline(id, template));
 
@@ -269,7 +274,11 @@ describe('a whole task, walked with arbitrary verdicts', () => {
       // …through every stage the template declares, in order: a walk that skipped the tail would
       // also "complete" (standing rule 10).
       expect(visited).toEqual(pipeline.stages.map((stage) => stage.id));
-      expect(visited).toContain('librarian');
+      // The `toContain('librarian')` that used to stand here is now implied by the equality above
+      // and was false for the two templates that have no merge tail — `discovery` and
+      // `review_only`, which this block started covering when the template list stopped being
+      // hand-written. `templates.test.ts` asserts the tail per template, which is where a
+      // statement about *which* templates have one belongs.
     },
   );
 

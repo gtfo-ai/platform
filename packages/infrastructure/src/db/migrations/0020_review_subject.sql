@@ -1,0 +1,49 @@
+-- 0020 — the merge request a review-only task reviews (WP-24).
+--
+-- product/04 § "Operating modes that reuse stages": *"Review-only mode: the Code review stage
+-- alone, on human MRs (product/18)"*. The stage is `code_review` and its ordinary input is the
+-- `ImplementationNotes` a previous stage of the same task produced; in this mode there is no
+-- previous stage and no artifact, and technical/04's mode table says where the input comes from
+-- instead: *"`review_only` | Reviewer role on a human MR: read-only tools, **diff from provider**,
+-- findings posted as threads"*.
+--
+-- So the platform reads the merge request once — title, description, branches, labels and the
+-- per-file patch — through `IntegrationActionExecutor`, before the task is created, and stores it
+-- here. The prompt assembler renders it as one `kind="merge_request"` data block.
+
+-- **A column of its own, not a widening of `ticket_snapshot`.**
+--
+-- The two are the same *kind* of thing (somebody else's document, read once, never queried field
+-- by field) and not the same thing: a ticket snapshot is the ticket's own words, and a unified
+-- diff is not words a ticket has. Folding the patch into `ticket_snapshot.description` would make
+-- one field mean two things, put a 200 kB patch behind a name that promises a paragraph, and make
+-- `ticket_snapshot is null` — which the platform reads as *"the ticket has not been read yet"* and
+-- backfills from the next agent stage (`ensureTicketSnapshot`) — ambiguous for a task that has no
+-- ticket at all.
+--
+-- The same three properties as 0015, and for the same reasons:
+--
+--  * **Untrusted external text** (BD-022), like `inbox.payload`, `kb_chunks` and `ticket_snapshot`.
+--    Stored redacted through the git binding's own redactor with `redaction_count` inside the
+--    document, which is the `inbox` precedent from migration 0014 rather than a new rule.
+--  * **Bounded at the write**, because the store is the consumer (Q54): title 512 characters,
+--    description 20 000, branch, sha and label names 256, and the first 40 files at 8 000 characters
+--    of patch each under one 80 000-character whole-diff ceiling.
+--    `packages/application/src/pipeline/review-only.ts` owns the numbers and derives them from the
+--    caps the same prompt already applies; a test **produces** the 106 400-character total rather
+--    than quoting it.
+--  * **No default, and null means "this is not a review-only task"**. There is no third state: a
+--    review-only task is created only after the read succeeded, because a review of a merge request
+--    whose diff the platform could not fetch is a run with nothing to review (standing rule 20 —
+--    this one *is* a decision to spend money, so it fails closed).
+--
+-- **Written once, by the insert that creates the task, and never updated.** That is why there is no
+-- `review_subject_at` beside it the way `ticket_snapshot_at` sits beside `ticket_snapshot`: that
+-- column exists because a ticket snapshot has a *refresh* question ("which tasks run on a snapshot
+-- older than X"), and this one does not — the review is of the revision that was read, and a later
+-- revision is a new review rather than an edit of this one. It also means no `update tasks`
+-- statement anywhere names this column, so it cannot be the subject of the lost update
+-- PROGRESS backlog 18 records (`tasks-column-ownership.test.ts` reads that off disk).
+--
+-- It dies with the task, like `ticket_snapshot`: `tasks.id` cascades from `projects`.
+alter table tasks add column review_subject jsonb;

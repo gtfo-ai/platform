@@ -321,6 +321,20 @@ const gitlabScript = (): Script => ({
     body: [gitlabMr({ merged_at: NOW, state: 'merged' })],
   },
   [`GET /projects/${P}/merge_requests/7/discussions`]: { body: [gitlabDiscussion()] },
+  // Planted in the patch text: a diff is somebody's source code, and a developer who committed a
+  // credential is exactly how one reaches this response (WP-24).
+  [`GET /projects/${P}/merge_requests/7/diffs`]: {
+    body: [
+      {
+        old_path: `src/app-${GITLAB_TOKEN}.ts`,
+        new_path: `src/app-${GITLAB_TOKEN}.ts`,
+        diff: `@@ -1 +1 @@\n-const token = 'x';\n+const token = '${GITLAB_TOKEN}';\n`,
+        new_file: false,
+        renamed_file: false,
+        deleted_file: false,
+      },
+    ],
+  },
   [`GET /projects/${P}/merge_requests/7/discussions/${DISCUSSION}`]: { body: gitlabDiscussion() },
   [`POST /projects/${P}/merge_requests/7/discussions`]: { status: 201, body: gitlabDiscussion() },
   [`POST /projects/${P}/merge_requests/7/discussions/${DISCUSSION}/notes`]: {
@@ -436,6 +450,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   list_merged_merge_requests: 'listMergedMergeRequests',
   is_branch_protected: 'isBranchProtected',
   branch_protection: 'branchProtection',
+  get_merge_request_diff: 'getMergeRequestDiff',
   instance_version: 'instanceVersion',
   verify_delivery: 'inbound.verify',
   delivery_key: 'inbound.deliveryKey',
@@ -522,6 +537,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       line: 12,
       markdown: `found ${GITLAB_TOKEN}`,
     });
+    emitted.get_merge_request_diff = await port.getMergeRequestDiff(ref, { limit: 10 });
     emitted.get_pipeline_status = await port.getPipelineStatus(PROJECT, SHA);
     emitted.get_job_log = await port.getJobLog(PROJECT, '9002');
     emitted.get_default_branch_head = await port.getDefaultBranchHead(PROJECT);

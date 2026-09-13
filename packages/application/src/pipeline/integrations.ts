@@ -40,6 +40,7 @@ import type {
   CommitAction,
   CommitRef,
   Discussion,
+  FileDiff,
   GitProviderPort,
   MergeRequest,
   MergeRequestRefInput,
@@ -62,6 +63,23 @@ export interface GitBinding {
   readonly ref: IntegrationRef;
   /** The repository path the project is bound to (`acme/api`). */
   readonly project: string;
+  /**
+   * The redactor this binding's adapter was built with — **both steps of TD-012**, in order, the
+   * same value and for the same reason {@link TaskManagementBinding.redactor} carries one.
+   *
+   * Two callers, added at WP-24, and both are places the platform handles provider text *itself*
+   * rather than handing it to a provider:
+   *
+   *  - **the merge-request snapshot** it stores on the task (`tasks.review_subject`), which is the
+   *    `ticket_snapshot` case one provider over: the executor redacts the audit row and returns
+   *    `outcome.result` unredacted (standing rule 31's note), so a sink of its own needs the
+   *    redactor of its own;
+   *  - **a review finding on its way to a discussion thread**, which is the *other* direction — a
+   *    model's words going out to a third party. `artifacts.data` holds them unredacted (PROGRESS
+   *    backlog 35, which this work package does not close and does not widen), so the redaction
+   *    happens where the text leaves the platform.
+   */
+  readonly redactor: SecretRedactor;
 }
 
 export interface TaskManagementBinding {
@@ -264,6 +282,33 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       { project: git.project, iid: ref.iid },
       context,
       async () => git.port.getMergeRequest(addressed(git, ref)),
+    );
+  },
+
+  /**
+   * The files a merge request changes, with their patches — WP-24, technical/04's *"diff from
+   * provider"*.
+   *
+   * A **read**, so it happens in every mode; `limit` is the caller's, because the caller is the one
+   * that knows how many files it can put in a prompt (`review-only.ts` derives it from the same
+   * caps the prompt already applies).
+   */
+  mergeRequestDiff: async (
+    ref: MergeRequestRefInput,
+    limit: number,
+    context: CallContext,
+  ): Promise<readonly FileDiff[] | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'get_merge_request_diff',
+      { project: git.project, iid: ref.iid, limit },
+      context,
+      async () => git.port.getMergeRequestDiff(addressed(git, ref), { limit }),
     );
   },
 
@@ -571,6 +616,98 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
       () => null as unknown as MergeRequest,
       (result) => ({ iid: result.ref.iid, url: result.web_url }),
       replayable<MergeRequest>(input.idempotencyKey),
+    );
+  },
+});
+
+/**
+ * The writes **review-only mode** makes: one thread per finding, and one thread for the summary
+ * (WP-24, product/18).
+ *
+ * Beside `ticketWrites` and `knowledgeWrites` because it is the same door — the shadow guard, the
+ * rate limiter, the idempotency record and the audit row are the executor's, and
+ * `assertOutsideTransaction` is on the path — and because putting it here is what makes "the
+ * pipeline cannot forget the executor" a property of the code.
+ *
+ * **`mode` is the task's**, unlike `knowledgeWrites` — and on this build that is always `normal`,
+ * which is a statement about review-only mode rather than about this call. `runReviewOnlyCheck`
+ * creates every review task with `mode: 'normal'` (`review-only.ts` § "the task shape": `tasks.mode`
+ * stays the two-valued shadow switch and `review_only` is a **run** mode), and nothing else creates
+ * one — so **review-only mode has no shadow mode**, the executor's `would_have` branch is
+ * unreachable from here, and the round-1 sentence claiming a shadow review "records a `would_have`
+ * row and posts nothing" described a path that does not exist. It is measured rather than asserted
+ * by reading: `packages/application/src/pipeline/review-only.test.ts` › "creates the review task in
+ * `normal` mode, so every thread it posts is a real one" reads the stored task and the audit rows the
+ * review left. Passing the task's mode is still the right shape —
+ * the day a shadow review is decided, the guard is already on the path — but until then what makes a
+ * review-only task's writes real is the mode its creator wrote, not this argument.
+ *
+ * **The markdown is redacted here, at the call**, not by the caller and not by the executor. The
+ * executor redacts what it *stores* (the audit row, the idempotency value, the thrown error) and
+ * hands the adapter the argument it was given, so a finding is a model's words on their way to a
+ * third party with nothing in between — which is exactly the reach TD-012 exists for. Doing it here
+ * rather than in the duty means a second caller cannot forget it (standing rule 44's shape: the
+ * claim is enforced by the same function that makes it).
+ *
+ * **What that redactor is, and what is left over — measured, not assumed** (WP-24 review round 2).
+ * `bindings/loader.ts` composes it as TD-012 step 1 over the *binding's* resolved credentials, then
+ * step 2, the platform's gitleaks-derived pattern rules. So a provider token, an `sk-ant-…` model
+ * key, a `glpat-…` or any other pattern-matched shape a model quoted into a finding is removed
+ * before it reaches the merge request — measured through a composed instance in
+ * `test/e2e/pipeline/review-only.e2e.test.ts`. What this call holds no copy of is the **run-scoped**
+ * secret set: it runs after the run, in a process that may not be the one that held it (Q55's
+ * unfinished half).
+ *
+ * **On this build that set is empty for a review, so there is nothing to leak.** The chain is
+ * `packages/infrastructure/src/workspace/spec.test.ts` § "is none for a review-only run":
+ * `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's, `TOOLS_BY_ROLE.reviewer` is
+ * `['Read','Glob','Grep']`, so `runIsReadOnly` is true, the workspace is read-only, and
+ * `RunCredentialBroker.issue` answers `null` **without calling the credential source** (BD-021) —
+ * and `apps/launcher` has no other source to mint from (Q52). The residual is therefore narrower
+ * than round 1 stated: it is not "a review's threads can carry the run's token", it is "the day a
+ * role both mints a credential and posts provider text, this call site will need the run's scope".
+ */
+export const reviewWrites = (integrations: PipelineIntegrations) => ({
+  /**
+   * One thread. `path`/`line` anchor it to the diff; both absent posts it on the merge request,
+   * which is what the neutral summary is.
+   *
+   * `idempotencyKey` is the caller's, and it must identify *this* thread on *this* revision: a
+   * job is at-least-once, and a retry after the provider already answered must replay rather than
+   * post a second copy of the same finding.
+   */
+  thread: async (
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly path: string | null;
+      readonly line: number | null;
+      readonly markdown: string;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<Discussion | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    const markdown = git.redactor.redactText(input.markdown).value;
+    return mutate(
+      integrations,
+      git.ref,
+      'create_discussion',
+      // The path, never the body: `integration_actions.payload` wants what was touched rather than
+      // a copy of a model's paragraph (the same rule `commit_files` follows).
+      { project: git.project, iid: input.ref.iid, path: input.path, line: input.line },
+      context,
+      async () =>
+        git.port.createDiscussion(addressed(git, input.ref), {
+          path: input.path,
+          line: input.line,
+          markdown,
+        }),
+      () => null as unknown as Discussion,
+      (result) => ({ discussion_id: result.id }),
+      replayable<Discussion>(input.idempotencyKey),
     );
   },
 });

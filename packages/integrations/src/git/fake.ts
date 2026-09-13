@@ -62,6 +62,15 @@
  *     is no merge, no rebase and no concurrent writer, so a commit can never fail because somebody
  *     else moved the branch. Whoever builds retry-on-conflict must not conclude from a green test
  *     here that the race does not exist.
+ * 10. **Different — a merge request has the diff a test gave it, and no diff otherwise.** WP-24
+ *     added `getMergeRequestDiff`, and this fake holds no repository content it could compute one
+ *     from (see divergence 9 and the working-copy paragraph above), so `setDiff` seeds it and an
+ *     unseeded merge request answers `[]`. It is **stricter** than GitLab in one way — `limit` is
+ *     applied here rather than trusted, so a caller that asked for five files gets five — and
+ *     **kinder** in two: a real provider paginates, computes `collapsed`/`too_large` from its own
+ *     size rules, and may answer `404` for a merge request whose diff has been garbage-collected.
+ *     A test that needs the omitted case seeds it (`omitted: true`), which is why the shared
+ *     contract suite drives one.
  */
 import {
   type CodeownersRules,
@@ -69,6 +78,7 @@ import {
   type CommitRef,
   type CredentialScope,
   type Discussion,
+  type FileDiff,
   type GitProviderCapabilities,
   type GitProviderInboundEvent,
   type GitProviderPort,
@@ -192,6 +202,8 @@ interface StoredMergeRequest {
   labels: string[];
   reviewers: string[];
   merged_at: string | null;
+  /** Divergence 10: what `getMergeRequestDiff` answers, seeded by `setDiff`. */
+  files: FileDiff[];
 }
 
 /** One branch of one project, with the files this fake has been asked to write on it. */
@@ -285,6 +297,26 @@ export interface FakeGitProvider extends GitProviderPort {
     readonly mergeable: boolean | null;
     readonly hasConflicts: boolean | null;
   }): MergeRequest;
+  /**
+   * Sets what `getMergeRequestDiff` answers for a merge request — divergence 10 made reachable.
+   *
+   * A `diff` of `null` together with `omitted: true` is the case a real provider produces for a
+   * file it will not render (GitLab's `collapsed`/`too_large`, GitHub's missing `patch`), and it is
+   * the one a caller is most likely to get wrong, so it is seedable rather than only describable.
+   */
+  setDiff(input: {
+    readonly project?: string;
+    readonly iid: number;
+    readonly files: readonly {
+      readonly path: string;
+      readonly oldPath?: string;
+      readonly diff?: string | null;
+      readonly newFile?: boolean;
+      readonly renamedFile?: boolean;
+      readonly deletedFile?: boolean;
+      readonly omitted?: boolean;
+    }[];
+  }): void;
   /** Moves the default branch, as a merge on another MR would. */
   moveDefaultBranch(project: string, newHead: string): void;
   /** Every commit `commitFiles` made, oldest first. */
@@ -873,6 +905,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         labels: [...draft.labels],
         reviewers: [...draft.reviewers],
         merged_at: null,
+        files: [],
       };
       project.nextIid += 1;
       mergeRequests.push(mr);
@@ -967,6 +1000,18 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     createDiscussion: async (mrRef, note) => {
       core.enter('create_discussion');
       const mr = requireMr('create_discussion', mrRef);
+      const path = note.path ?? null;
+      const line = note.line ?? null;
+      // The port's refusal, reproduced rather than tolerated: an anchor with only half of itself is
+      // one no provider can place, and a fake that accepted it would let a caller ship a finding
+      // that silently arrives unanchored (WP-24).
+      if ((path === null) !== (line === null)) {
+        throw invalidRequest(
+          PROVIDER,
+          'create_discussion',
+          'a diff note needs both a path and a line, or neither',
+        );
+      }
       discussionCounter += 1;
       noteCounter += 1;
       const discussion: StoredDiscussion = {
@@ -981,14 +1026,21 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
             author: identityOf('agentic-bot'),
             body: note.markdown,
             created_at: core.clock.now(),
-            path: note.path,
-            line: note.line,
+            path,
+            line,
             system: false,
           },
         ],
       };
       discussions.push(discussion);
       return toDiscussion(discussion);
+    },
+
+    getMergeRequestDiff: async (mrRef, options) => {
+      core.enter('get_merge_request_diff');
+      const mr = requireMr('get_merge_request_diff', mrRef);
+      // Divergence 10: `limit` is applied here, so a caller that asked for five files gets five.
+      return mr.files.slice(0, Math.max(0, options.limit)).map((file) => ({ ...file }));
     },
 
     getPipelineStatus: async (project, headSha) => {
@@ -1090,6 +1142,23 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     commits,
     fileAt: (project: string, branch: string, path: string) =>
       branchOf(project, branch)?.files.get(path) ?? null,
+
+    setDiff: (input) => {
+      const project = input.project ?? projectOf({ iid: input.iid, url: '' });
+      const mr = findMr(project, input.iid);
+      if (mr === undefined) {
+        throw notFound(PROVIDER, 'set_diff', `merge request ${project}!${input.iid}`);
+      }
+      mr.files = input.files.map((file) => ({
+        new_path: file.path,
+        old_path: file.oldPath ?? file.path,
+        diff: file.diff === undefined ? `@@ -1 +1 @@\n-old\n+new in ${file.path}\n` : file.diff,
+        new_file: file.newFile ?? false,
+        renamed_file: file.renamedFile ?? false,
+        deleted_file: file.deletedFile ?? false,
+        omitted: file.omitted ?? false,
+      }));
+    },
 
     setMergeability: (input) => {
       const only = [...projects.keys()][0];

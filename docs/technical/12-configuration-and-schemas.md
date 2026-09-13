@@ -79,7 +79,7 @@ commands:                        # BD-025 three-list policy (project may only na
   block: ["rm -rf /", "git push --force*", "docker *"]
 features:
   ticket_linter: { enabled: false, issue_types: [Story, Task, Bug] }
-  review_only: { enabled: false, trigger: label, label: agentic-review, severity_floor: major }
+  review_only: { enabled: false, trigger: label, label: agentic-review, paths: [], severity_floor: major, max_findings: 10 }
   maintenance: { enabled: false, schedule: "weekly", budget_usd: 20, chores: [deps, flaky, docs] }
   digest: { enabled: true, at: "09:00", quiet_hours: null }
   shadow_mode: { enabled: false }   # M3; added in WP-01 from product/18-19

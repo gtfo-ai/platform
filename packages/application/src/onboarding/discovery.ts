@@ -201,6 +201,7 @@ export const startProjectDiscovery = async (
       // There is no ticket to read, so there is no snapshot. `null` is exactly what
       // `ensureTicketSnapshot` reads as "the platform has not read this ticket".
       ticketSnapshot: null,
+      reviewSubject: null,
       ticketSnapshotAt: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

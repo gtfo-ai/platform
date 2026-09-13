@@ -431,7 +431,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         projectId: task.projectId,
         stage: job.stage,
         role: valid.role,
-        mode: task.mode === 'shadow' ? 'shadow' : 'normal',
+        // The planner already decided it from the task and the template (WP-24's `runModeFor`);
+        // deriving it a second time here is how the two would come apart.
+        mode: spec.mode,
         attempt: job.attempt,
         model: spec.model,
         effort: spec.effort,

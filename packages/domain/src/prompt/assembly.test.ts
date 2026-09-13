@@ -66,6 +66,7 @@ const inputWith = (
     attempt: 1,
     ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
     ticketSnapshot: null,
+    reviewSubject: null,
     artifacts: [],
     returnFeedback: null,
   },
@@ -167,6 +168,7 @@ describe('untrusted text in the assembled prompt', () => {
         attempt: 1,
         ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
         ticketSnapshot: null,
+        reviewSubject: null,
         artifacts: [{ type: 'RefinedSpec', version: 1, json: '{"goal":"ship it"}' }],
         returnFeedback: 'the acceptance criteria were not testable',
       },
@@ -177,6 +179,7 @@ describe('untrusted text in the assembled prompt', () => {
         attempt: 1,
         ticket: { provider: HOSTILE_TEXT, key: HOSTILE_TEXT, url: HOSTILE_TEXT },
         ticketSnapshot: null,
+        reviewSubject: null,
         artifacts: [{ type: 'RefinedSpec', version: 1, json: HOSTILE_TEXT }],
         returnFeedback: HOSTILE_TEXT,
       },
@@ -298,6 +301,7 @@ describe('untrusted text in the assembled prompt', () => {
           attempt: 1,
           ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/x' },
           ticketSnapshot: null,
+          reviewSubject: null,
           artifacts: [{ type: 'RefinedSpec', version: 2, json: long }],
           returnFeedback: 'y'.repeat(MAX_FEEDBACK_CHARS + 1),
         },
@@ -342,6 +346,7 @@ describe('the guards', () => {
             attempt: 1,
             ticket: { provider: 'jira', key: 'K-1', url: 'https://x.test/K-1' },
             ticketSnapshot: null,
+            reviewSubject: null,
             artifacts: [],
             returnFeedback: null,
           },
@@ -428,6 +433,7 @@ const withSnapshot = (
       attempt: 1,
       ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
       ticketSnapshot,
+      reviewSubject: null,
       artifacts: [],
       returnFeedback: null,
     },
@@ -439,6 +445,119 @@ const ticketBlockOf = (userPrompt: string) => {
   expect(block).toBeDefined();
   return { block: block as NonNullable<typeof block>, reading };
 };
+
+const MR_SNAPSHOT = {
+  title: 'Sum the invoice footer',
+  description: 'Closes the footer bug.',
+  source_branch: 'fix/footer',
+  target_branch: 'main',
+  head_sha: 'c0ffee1',
+  labels: ['agentic-review', 'billing'],
+  files: [
+    {
+      path: 'src/totals.ts',
+      diff: '@@ -1 +1 @@\n-const total = 0;\n+const total = sum(lines);\n',
+      truncated: false,
+      omitted: false,
+    },
+    { path: 'src/huge.bin', diff: '', truncated: false, omitted: true },
+  ],
+  truncated: false,
+  file_count: 2,
+  redaction_count: 0,
+} as NonNullable<AssemblePromptInput['task']['reviewSubject']>;
+
+const withReviewSubject = (
+  reviewSubject: AssemblePromptInput['task']['reviewSubject'],
+): AssemblePromptInput =>
+  inputWith(BENIGN_TEXT, {
+    task: {
+      stage: 'code_review',
+      attempt: 1,
+      ticket: {
+        provider: 'platform',
+        key: 'mr!7',
+        url: 'https://git.example.test/acme/api/-/merge_requests/7',
+      },
+      ticketSnapshot: null,
+      reviewSubject,
+      artifacts: [],
+      returnFeedback: null,
+    },
+    artifactType: 'ReviewVerdict',
+  });
+
+const mergeRequestBlockOf = (userPrompt: string) => {
+  const reading = readDataBlocks(userPrompt);
+  const block = reading.blocks.find((entry) => entry.kind === 'merge_request');
+  return { block, reading };
+};
+
+/**
+ * WP-24: the merge request a review-only run reviews reaches the model **inside a data block**.
+ *
+ * The two directions that matter (standing rule 42): a review-only task's prompt carries the block,
+ * and every other task's prompt carries **no** block at all — because a block the platform emits
+ * for a task that has no merge request would be a paragraph a model has to guess the meaning of.
+ */
+describe('the merge request block', () => {
+  it('puts the title, the branches, the labels and each file’s patch in the body', () => {
+    const { block, reading } = mergeRequestBlockOf(
+      assemblePrompt(withReviewSubject(MR_SNAPSHOT)).userPrompt,
+    );
+    expect(block).toBeDefined();
+    expect(block?.body).toContain('title: Sum the invoice footer');
+    expect(block?.body).toContain('source_branch: fix/footer');
+    expect(block?.body).toContain('target_branch: main');
+    expect(block?.body).toContain('labels: agentic-review, billing');
+    expect(block?.body).toContain('--- src/totals.ts ---');
+    expect(block?.body).toContain('+const total = sum(lines);');
+    // The platform's voice never repeats the merge request's own words.
+    expect(reading.platformVoice.join('')).not.toContain('Sum the invoice footer');
+    expect(reading.platformVoice.join('')).not.toContain('fix/footer');
+  });
+
+  it('says a file’s patch was not returned, rather than showing it as an empty change', () => {
+    const { block } = mergeRequestBlockOf(
+      assemblePrompt(withReviewSubject(MR_SNAPSHOT)).userPrompt,
+    );
+    expect(block?.body).toContain('--- src/huge.bin ---');
+    expect(block?.body).toContain('did not return');
+  });
+
+  it('emits no block at all for a task that is not reviewing a merge request', () => {
+    const { block } = mergeRequestBlockOf(assemblePrompt(withReviewSubject(null)).userPrompt);
+    expect(block).toBeUndefined();
+  });
+
+  it('puts the counts and the cut in the marker, where the merge request cannot forge them', () => {
+    const { block } = mergeRequestBlockOf(
+      assemblePrompt(withReviewSubject({ ...MR_SNAPSHOT, truncated: true, file_count: 900 }))
+        .userPrompt,
+    );
+    expect(block?.attributes.files).toBe('2');
+    expect(block?.attributes.file_count).toBe('900');
+    expect(block?.attributes.truncated).toBe('true');
+    // …and not in the body, which a patch could write for itself.
+    expect(block?.body).not.toContain('truncated');
+  });
+
+  it('keeps a hostile patch inside its block and leaves the platform voice byte-identical', () => {
+    const hostile = {
+      ...MR_SNAPSHOT,
+      title: HOSTILE_TEXT,
+      files: [{ path: 'src/evil.ts', diff: HOSTILE_TEXT, truncated: false, omitted: false }],
+    };
+    const benign = assemblePrompt(withReviewSubject(MR_SNAPSHOT));
+    const nasty = assemblePrompt(withReviewSubject(hostile));
+    const nastyReading = readDataBlocks(nasty.userPrompt);
+    expect(nastyReading.unterminated).toBe(0);
+    expect(nastyReading.blocks.find((entry) => entry.kind === 'merge_request')?.body).toContain(
+      HOSTILE_TEXT,
+    );
+    expect(nastyReading.platformVoice).toEqual(readDataBlocks(benign.userPrompt).platformVoice);
+  });
+});
 
 describe('the ticket block', () => {
   it('puts the title, the description and the thread in the body, with the identity', () => {

@@ -39,6 +39,7 @@ import type {
   IsoDateTime,
   JsonValue,
   MergeRequestRef,
+  MergeRequestSnapshot,
   PipelineTemplate,
   Slug,
   TaskState,
@@ -86,6 +87,7 @@ interface TaskRow extends Record<string, unknown> {
   estimate_usd: string | null;
   ticket_snapshot: TicketSnapshot | null;
   ticket_snapshot_at: Date | null;
+  review_subject: MergeRequestSnapshot | null;
   version: number;
   created_at: Date;
   sequence: string | number | null;
@@ -94,7 +96,8 @@ interface TaskRow extends Record<string, unknown> {
 const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.template,
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
-    t.estimate_usd, t.ticket_snapshot, t.ticket_snapshot_at, t.version, t.created_at,
+    t.estimate_usd, t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.version,
+    t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
 
@@ -131,6 +134,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   estimateUsd: row.estimate_usd === null ? null : usd(row.estimate_usd),
   ticketSnapshot: row.ticket_snapshot,
   ticketSnapshotAt: iso(row.ticket_snapshot_at),
+  reviewSubject: row.review_subject,
   version: Number(row.version),
 });
 
@@ -238,9 +242,9 @@ export const createPostgresPipelineStore = (
                             state, current_stage, priority, template_snapshot, branch, mr_ref,
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
                             cost_actual, estimate_usd, ticket_snapshot, ticket_snapshot_at,
-                            version)
+                            review_subject, version)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
-                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20::jsonb, $21, $22)`,
+                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20::jsonb, $21, $22::jsonb, $23)`,
         [
           task.id,
           task.projectId,
@@ -265,6 +269,10 @@ export const createPostgresPipelineStore = (
           // exists with it and there is no window for a concurrent writer to lose (WP-15f).
           stored.ticketSnapshot === null ? null : JSON.stringify(stored.ticketSnapshot),
           stored.ticketSnapshotAt,
+          // WP-24: written here and nowhere else. A review-only task is created with the merge
+          // request it reviews already read, so there is no update statement to lose it (migration
+          // 0020 has the argument).
+          stored.reviewSubject === null ? null : JSON.stringify(stored.reviewSubject),
           stored.version,
         ],
       );

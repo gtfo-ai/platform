@@ -17,6 +17,7 @@ import {
   gitlabCommitSchema,
   gitlabDiscussionSchema,
   gitlabJobSchema,
+  gitlabMergeRequestDiffSchema,
   gitlabMergeRequestSchema,
   gitlabPipelineSchema,
   gitlabProjectSchema,
@@ -126,6 +127,19 @@ export interface GitLabClient {
     iid: number,
     discussionId: string,
   ): Promise<z.output<typeof gitlabDiscussionSchema>>;
+  /**
+   * § "List merge request diffs" — `GET …/merge_requests/:iid/diffs`.
+   *
+   * `limit` is the number of **files**, and it becomes `per_page` on a single request rather than a
+   * paginated walk: the caller wants the first N files, and fetching every page to discard most of
+   * them spends somebody else's rate limit. GitLab's own `per_page` ceiling is 100, so a caller
+   * asking for more gets at most 100 and the adapter says so through the count it returns.
+   */
+  mergeRequestDiffs(
+    project: string,
+    iid: number,
+    limit: number,
+  ): Promise<z.output<typeof gitlabMergeRequestDiffSchema>[]>;
   /** § "Create a merge request thread". */
   createDiscussion(
     project: string,
@@ -321,6 +335,18 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           method: 'GET',
           path: `${mrPath(project, iid)}/discussions/${encodeURIComponent(discussionId)}`,
           action: 'get_discussion',
+        }),
+      ),
+
+    mergeRequestDiffs: async (project, iid, limit) =>
+      required(
+        z.array(gitlabMergeRequestDiffSchema),
+        'get_merge_request_diff',
+        http.request({
+          method: 'GET',
+          path: `${mrPath(project, iid)}/diffs`,
+          query: { per_page: Math.min(Math.max(1, limit), 100), page: 1 },
+          action: 'get_merge_request_diff',
         }),
       ),
 

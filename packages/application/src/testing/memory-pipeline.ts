@@ -111,8 +111,9 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
      * The same columns the SQL `update tasks set …` names, and the same optimistic check (WP-15e).
      *
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
-     * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `estimateUsd`,
-     * `priorityRank`, `createdAt`, `template`) belong to the narrow writers, and a fake that let a
+     * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
+     * `estimateUsd`, `priorityRank`, `createdAt`, `template`) belong to the narrow writers — or, for
+     * `reviewSubject`, to the insert alone (WP-24) — and a fake that let a
      * whole-row save carry them would answer a question the database cannot be asked — which is how
      * WP-15h found the memory store certifying behaviour PostgreSQL does not have.
      */

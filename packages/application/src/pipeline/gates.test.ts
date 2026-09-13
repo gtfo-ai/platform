@@ -63,7 +63,10 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
       timer: createVirtualTimer({ autoAdvance: true }),
       clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
     }),
-    git: git === null ? null : { port, ref: port.ref, project: 'acme/api' },
+    git:
+      git === null
+        ? null
+        : { port, ref: port.ref, project: 'acme/api', redactor: exactSecretRedactor([]) },
     taskManagement: null,
   };
 };
@@ -124,6 +127,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   costActualUsd: 0,
   estimateUsd: null,
   ticketSnapshot: null,
+  reviewSubject: null,
   ticketSnapshotAt: null,
   version: 1,
 });

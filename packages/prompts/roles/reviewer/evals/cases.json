@@ -70,6 +70,29 @@
           "value": "typeof JSON.parse(output).suspicious_inputs_noted === \"string\""
         }
       ]
+    },
+    {
+      "id": "rev-review-only-has-no-plan",
+      "description": "review-only mode: no spec and no plan, so the missing plan is not itself a finding, and the summary does not claim to block the merge",
+      "vars": {
+        "spec": "",
+        "diff": "--- a/src/billing/invoice.ts\n+++ b/src/billing/invoice.ts\n-  const total = lines.reduce((a, l) => a + l.total, 0);\n+  const total = lines.reduce((a, l) => a + l.total, 0) * (1 + taxRate);\n+  // TODO: rounding"
+      },
+      "expect_fields": ["verdict", "findings", "summary"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/review-verdict.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "!JSON.parse(output).findings.some((f) => /implementation ?plan|refined ?spec|acceptance criteri/i.test(f.explanation))"
+        },
+        {
+          "type": "javascript",
+          "value": "!/\\\\b(blocks? the merge|do not merge|merge is blocked|rejected)\\\\b/i.test(JSON.parse(output).summary)"
+        }
+      ]
     }
   ]
 }

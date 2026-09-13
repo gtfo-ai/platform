@@ -48,14 +48,18 @@ export interface ReplayInteraction {
   /** Raw body for the text endpoints (a job trace, a raw file). Wins over `body`. */
   readonly text?: string;
   /**
-   * Where this shape comes from. `documented` means a published example or attribute table;
-   * `inferred` means the documentation does not state it and the fixture is a reasoned guess,
-   * which is a different kind of evidence and is never allowed to masquerade as the first.
+   * Where this shape comes from — the shared vocabulary of
+   * `test/contract/support/integrations/fixture-provenance.ts`, narrowed to the three labels this
+   * corpus uses. `documented` means a published example or attribute table; `documented-adapted`
+   * means the shape is the vendor's and this corpus changed the values or the number of entries,
+   * with the change stated in `note`; `inferred` means the documentation does not state it and the
+   * fixture is a reasoned guess. They are different kinds of evidence and none is allowed to
+   * masquerade as another.
    */
   readonly source: {
     readonly url: string;
     readonly retrieved: string;
-    readonly kind: 'documented' | 'inferred';
+    readonly kind: 'documented' | 'documented-adapted' | 'inferred';
     readonly note?: string;
   };
 }

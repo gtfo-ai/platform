@@ -64,6 +64,13 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > nothing away from BD-007: *which* stage a task ends at is the interpreter's decision from the
 > template, and every ticket template still runs `ready_for_merge → merged → retro → done`, so no
 > ticket can reach `done` without a human merge.
+>
+> **A third shape uses the same edge since WP-24**: the **review_only** template of product/04
+> § "Operating modes that reuse stages" — `intake → code_review → done`, the Reviewer alone on a
+> human's merge request. It opens no merge request of its own (product/18 level 0), so it ends the
+> same way discovery does; and both of the Reviewer's verdicts point at `done`, because product/18
+> requires the summary to *never block merge* and the interpreter reads a missing `return_to` as
+> "escalate". `packages/domain/src/pipeline/templates.ts` carries that argument.
 
 ### Run
 `created → starting → running → (completed | failed | cancelled | budget_exceeded | timed_out | stalled)`. `running` emits `run.output` stream events (not stored in the domain log; stored in the transcript store, see 03) and heartbeats; `stalled` after no output for `stall_timeout` (default 5 min, research/01).
@@ -121,13 +128,14 @@ records the trade).
 | `task.paused` / `task.resumed` | Budget/Human | task, reason | UI, workpad |
 | `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110) |
 | `task.cancelled` / `task.completed` | Pipeline | task, outcome, totals | Ticket transition (110), Slack (210), stats (230) |
+| `task.review.observed` | Review-only (WP-24) | task, mr, head sha reviewed and now, threads posted/resolved/accepted/dismissed/unresolved | stats (230) |
 | `run.created` | Runner | run, task, stage, role, mode, attempt, run key | UI (220) |
 | `run.started` | Runner | run, model, effort, prompt version, context pack | UI (220) |
 | `run.finished` / `run.failed` | Runner | run, status, usage, cost, exit reason | Cost ledger (10), stage executor (20), UI |
 | `run.steered` | Human | run, message, author | Runner (10) |
 | `artifact.created` | Stage executor | artifact | Workpad (120), UI |
 | `workspace.provisioned` / `.destroyed` / `.exported` | Workspace manager | workspace | UI |
-| `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10), stats (230) |
+| `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10), review-only (10 on `opened`, 120 on `merged`/`closed`, WP-24), stats (230) |
 | `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30) |
 | `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10), flaky detector (15) |
 | `default_branch.moved` | git adapter | project, new head | Rebase gate (10), conflict warning (20) |

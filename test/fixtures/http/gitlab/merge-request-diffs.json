@@ -1,0 +1,82 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/7/diffs?per_page=50&page=1",
+      "status": 200,
+      "body": [
+        {
+          "old_path": "src/billing/totals.ts",
+          "new_path": "src/billing/totals.ts",
+          "a_mode": "100644",
+          "b_mode": "100644",
+          "diff": "@@ -1,3 +1,3 @@\n-const total = lines.reduce((a, l) => a + l.total, 0);\n+const total = model.lines.reduce((a, l) => a + l.total, 0);\n",
+          "collapsed": false,
+          "too_large": false,
+          "new_file": false,
+          "renamed_file": false,
+          "deleted_file": false,
+          "generated_file": false
+        },
+        {
+          "old_path": "src/billing/totals.test.ts",
+          "new_path": "src/billing/totals.test.ts",
+          "a_mode": "0",
+          "b_mode": "100644",
+          "diff": "@@ -0,0 +1,4 @@\n+it('sums the model', () => {\n+  expect(footer(invoice)).toBe('42.00');\n+});\n",
+          "collapsed": false,
+          "too_large": false,
+          "new_file": true,
+          "renamed_file": false,
+          "deleted_file": false,
+          "generated_file": false
+        },
+        {
+          "old_path": "assets/logo.bin",
+          "new_path": "assets/logo.bin",
+          "a_mode": "100644",
+          "b_mode": "100644",
+          "diff": "",
+          "collapsed": false,
+          "too_large": true,
+          "new_file": false,
+          "renamed_file": false,
+          "deleted_file": false,
+          "generated_file": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-13",
+        "kind": "documented-adapted",
+        "note": "\"List merge request diffs\" - `GET /projects/:id/merge_requests/:merge_request_iid/diffs`, its attribute table (`a_mode`, `b_mode`, `collapsed`, `deleted_file`, `diff`, `generated_file`, `new_file`, `new_path`, `old_path`, `renamed_file`, `too_large`) and its example response, which is one element shaped exactly like the first here. Adapted in two ways, both stated: the example's single `README` entry is replaced by three files of this corpus's own repository so that a `limit` of 1 has something to cut and a `too_large` file exists at all, and the page's own history note - \"collapsed and too_large response attributes introduced in GitLab 18.4\" - is why both flags are present here and are `nullish` in the adapter's schema."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/7/diffs?per_page=1&page=1",
+      "status": 200,
+      "body": [
+        {
+          "old_path": "src/billing/totals.ts",
+          "new_path": "src/billing/totals.ts",
+          "a_mode": "100644",
+          "b_mode": "100644",
+          "diff": "@@ -1,3 +1,3 @@\n-const total = lines.reduce((a, l) => a + l.total, 0);\n+const total = model.lines.reduce((a, l) => a + l.total, 0);\n",
+          "collapsed": false,
+          "too_large": false,
+          "new_file": false,
+          "renamed_file": false,
+          "deleted_file": false,
+          "generated_file": false
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-13",
+        "kind": "documented-adapted",
+        "note": "The same endpoint asked for one page of one, which is what the adapter sends when the pipeline's `limit` is 1. GitLab's `per_page` is a documented supported attribute of this endpoint; that the server honours it by returning exactly one element is the documented meaning of pagination rather than something recorded from an instance - which is why this is `documented-adapted` and not `documented`."
+      }
+    }
+  ]
+}

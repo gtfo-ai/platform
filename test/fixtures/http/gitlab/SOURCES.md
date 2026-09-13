@@ -21,7 +21,8 @@ empty `interactions` list is a failure rather than a pass.
 |---|---|
 | `documented` | GitLab's own published example or attribute table, with values replaced by obviously fake ones (BD-002) and members the adapter never reads removed. Nothing about the shape is ours. |
 | `inferred` | The documentation does **not** state this — most often the status code of an error case the endpoint's page does not publish. The fixture is a reasoned guess, the `note` says what was assumed and what the adapter does about it, and it is never allowed to masquerade as `documented`. |
-| `documented-adapted`, `composed`, `invented` | Available in the shared vocabulary; **no file here uses them**. Adding an `invented` fixture should be argued for in review rather than done quietly. |
+| `documented-adapted` | The *shape* is GitLab's published attribute table or example and this corpus changed the **values or the number of entries**, with the change stated in the `note`. `merge-request-diffs.json` is the only file using it (WP-24): the page's example is one `README` entry, and the fixture carries three files of this repository's own so that a `limit` of 1 has something to cut and a `too_large` file exists at all. |
+| `composed`, `invented` | Available in the shared vocabulary; **no file here uses them**. Adding an `invented` fixture should be argued for in review rather than done quietly. |
 
 ## The `source` blocks are checked, and here is exactly how far
 
@@ -41,7 +42,8 @@ reviewer's job.
 
 ## Sources
 
-All retrieved **2026-09-10**.
+All retrieved **2026-09-10** unless a `retrieved` date on the interaction says otherwise; two
+interactions were added on **2026-09-13** (WP-24) and carry that date.
 
 - `https://docs.gitlab.com/api/version/` — `GET /version`, the `version`/`revision`/`enterprise`
   response used to detect the instance version.
@@ -57,7 +59,8 @@ All retrieved **2026-09-10**.
   `detailed_merge_status` / `has_conflicts` table, including "the mergeability … is checked
   asynchronously … Poll this API endpoint".
 - `https://docs.gitlab.com/api/discussions/` — "List all merge request discussion items", "Create a
-  merge request thread" (with the text-diff `position` form), "Add note to a merge request thread",
+  merge request thread" (with the text-diff `position` form **and** without a `position` at all,
+  which is WP-24's merge-request-level summary thread), "Add note to a merge request thread",
   "Retrieve a merge request discussion item" and "Resolve a merge request thread".
 - `https://docs.gitlab.com/api/pipelines/` — "List project pipelines" with `sha`, `order_by` and
   `sort`, and "Retrieve a single pipeline". The empty-list case for a commit with no pipeline is
@@ -121,3 +124,23 @@ All retrieved **2026-09-10**.
    `commits.json` is labelled `inferred` and carries the observed message as illustration. What the
    contract asserts is the classification — `400` → `invalid_request` — which holds whatever the
    body says, and the adapter never reads it.
+- `https://docs.gitlab.com/api/merge_requests/` § "List merge request diffs" (retrieved
+  **2026-09-13**) — `GET /projects/:id/merge_requests/:merge_request_iid/diffs`, its `page`,
+  `per_page` and `unidiff` attributes, its eleven response attributes (`a_mode`, `b_mode`,
+  `collapsed`, `deleted_file`, `diff`, `generated_file`, `new_file`, `new_path`, `old_path`,
+  `renamed_file`, `too_large`) and its example response. The page's own history note — *"collapsed
+  and too_large response attributes introduced in GitLab 18.4"* — is why the adapter's schema makes
+  both nullish and why `merge-request-diffs.json` is labelled `documented-adapted` rather than
+  `documented`.
+
+## Pages read for WP-24 that produced no fixture
+
+Recorded because "we looked and there was nothing" is evidence too, and the alternative is a later
+reader repeating the search.
+
+- `https://docs.gitlab.com/user/project/integrations/webhook_events/` § "Merge request events" and
+  § "Comment events" — read to answer *"does GitLab announce that a discussion was **resolved**?"*.
+  The merge-request hook's `action` values are `open`, `close`, `reopen`, `update`, `approved`,
+  `unapproved`, `approval`, `unapproval` and `merge`; the note hook fires on a note. Neither
+  announces a resolution, which is why `packages/application/src/pipeline/review-only.ts` polls
+  `listDiscussions` at the merge request's terminal event instead of consuming a webhook.

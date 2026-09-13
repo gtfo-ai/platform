@@ -136,6 +136,7 @@
         "task.handed_back",
         "task.cancelled",
         "task.completed",
+        "task.review.observed",
         "run.created",
         "run.started",
         "run.finished",

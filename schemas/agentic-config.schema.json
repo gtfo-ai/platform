@@ -289,14 +289,25 @@
               "enum": [
                 "label",
                 "all",
-                "manual"
+                "paths"
               ]
             },
             "label": {
               "$ref": "#/$defs/NonEmptyString"
             },
+            "paths": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PathPattern"
+              }
+            },
             "severity_floor": {
               "$ref": "#/$defs/Severity"
+            },
+            "max_findings": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
             }
           },
           "additionalProperties": false

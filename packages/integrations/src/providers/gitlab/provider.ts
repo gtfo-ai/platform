@@ -661,6 +661,22 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
 
     createDiscussion: async (mrRef, note) => {
       const project = projectOf(mrRef, 'create_discussion');
+      const path = note.path ?? null;
+      const line = note.line ?? null;
+      if ((path === null) !== (line === null)) {
+        throw new IntegrationError(
+          'invalid_request',
+          GITLAB_PROVIDER_ID,
+          'a diff note needs both a path and a line, or neither',
+          { action: 'create_discussion' },
+        );
+      }
+      if (path === null || line === null) {
+        // A thread on the merge request itself — WP-24's neutral summary. GitLab's "Create a merge
+        // request thread" takes `body` alone when there is no `position`, which is why this needs
+        // no second endpoint and no second client method.
+        return toDiscussion(await client.createDiscussion(project, mrRef.iid, note.markdown));
+      }
       const mergeRequest = await client.mergeRequest(project, mrRef.iid);
       const refs = mergeRequest.diff_refs;
       if (refs?.base_sha == null || refs.head_sha == null || refs.start_sha == null) {
@@ -676,13 +692,43 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         head_sha: refs.head_sha,
         start_sha: refs.start_sha,
         position_type: 'text',
-        new_path: note.path,
-        old_path: note.path,
-        new_line: note.line,
+        new_path: path,
+        old_path: path,
+        new_line: line,
       };
       return toDiscussion(
         await client.createDiscussion(project, mrRef.iid, note.markdown, position),
       );
+    },
+
+    /**
+     * WP-24 — § "List merge request diffs".
+     *
+     * `diff` is dropped for a file GitLab excluded, rather than reported as an empty patch: the
+     * page says `collapsed` means *"File diffs are excluded but can be fetched on request"* and
+     * `too_large` *"File diffs are excluded and cannot be retrieved"*, and both are "the platform
+     * was not shown this change", which the port spells `omitted: true`. An empty string would read
+     * as "this file changed by nothing".
+     *
+     * The two flags were introduced in GitLab 18.4, so an older instance reports neither and every
+     * file comes back with its patch — which is the behaviour this adapter had before they existed
+     * and is why `omitted` falls back to `false` rather than to "unknown".
+     */
+    getMergeRequestDiff: async (mrRef, options) => {
+      const project = projectOf(mrRef, 'get_merge_request_diff');
+      const files = await client.mergeRequestDiffs(project, mrRef.iid, options.limit);
+      return files.slice(0, Math.max(0, options.limit)).map((file) => {
+        const omitted = file.collapsed === true || file.too_large === true;
+        return {
+          new_path: file.new_path,
+          old_path: file.old_path,
+          diff: omitted ? null : (file.diff ?? null),
+          new_file: file.new_file ?? false,
+          renamed_file: file.renamed_file ?? false,
+          deleted_file: file.deleted_file ?? false,
+          omitted,
+        };
+      });
     },
 
     getPipelineStatus: async (project, headSha): Promise<PipelineStatus | null> => {

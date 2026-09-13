@@ -407,6 +407,54 @@ export const ticketSnapshotSchema = z.strictObject({
   ticket_updated_at: isoDateTimeSchema.nullable(),
 });
 
+// ── The merge request under review (WP-24) ──────────────────────────────────
+
+/** One file of {@link mergeRequestSnapshotSchema}. `path` and `diff` are untrusted (BD-022). */
+export const mergeRequestFileDiffSchema = z.strictObject({
+  /** The file's path after the change; the pre-image path for a deletion. */
+  path: z.string(),
+  /** The provider's own patch text for this file, already bounded and redacted. */
+  diff: z.string(),
+  /** True when this file's own patch was cut, which is a different fact from the list being cut. */
+  truncated: z.boolean(),
+  /** The provider excluded the patch itself (GitLab's `collapsed`/`too_large`). */
+  omitted: z.boolean(),
+});
+
+/**
+ * `tasks.review_subject` — the human merge request a review-only task reviews (WP-24).
+ *
+ * Review-only mode (product/18, product/04 § "Operating modes that reuse stages") runs the Code
+ * review stage alone on a merge request nobody on the platform wrote, so the stage's *input* is the
+ * merge request rather than a prior artifact. technical/04's mode table says where it comes from:
+ * *"`review_only` | Reviewer role on a human MR: read-only tools, **diff from provider**, findings
+ * posted as threads"* — so the platform reads it once, through `IntegrationActionExecutor`, and
+ * stores it on the task the way {@link ticketSnapshotSchema} stores a ticket.
+ *
+ * It is a **separate column from `ticket_snapshot` and not a widening of it**: a ticket snapshot is
+ * "the ticket's own words" and a diff is not words a ticket has; folding the patch into
+ * `description` would make one field mean two things and would put a 200 kB patch behind a name
+ * that promises a paragraph.
+ *
+ * The same three honesty fields as a ticket snapshot, for the same reasons: `truncated` when
+ * anything at all was cut (a field, a file's patch, or a file that did not make the window),
+ * `file_count` as the provider reported it before the window so `files.length < file_count` says
+ * how many were dropped, and `redaction_count` counted over the text as it was **read**.
+ */
+export const mergeRequestSnapshotSchema = z.strictObject({
+  title: z.string(),
+  description: z.string(),
+  source_branch: z.string(),
+  target_branch: z.string(),
+  head_sha: z.string(),
+  /** The provider's labels on the merge request, bounded; what a `label` trigger matched on. */
+  labels: z.array(z.string()),
+  files: z.array(mergeRequestFileDiffSchema),
+  truncated: z.boolean(),
+  file_count: z.int().nonnegative(),
+  redaction_count: z.int().nonnegative(),
+});
+
 // ── Usage and cost ───────────────────────────────────────────────────────────
 
 /** Token usage split by cache kind, as stored on `runs` and `cost_entries` (technical/03). */
@@ -469,6 +517,8 @@ export type MergeRequestRef = z.infer<typeof mergeRequestRefSchema>;
 export type WorkpadRef = z.infer<typeof workpadRefSchema>;
 export type TicketSnapshotComment = z.infer<typeof ticketSnapshotCommentSchema>;
 export type TicketSnapshot = z.infer<typeof ticketSnapshotSchema>;
+export type MergeRequestFileDiff = z.infer<typeof mergeRequestFileDiffSchema>;
+export type MergeRequestSnapshot = z.infer<typeof mergeRequestSnapshotSchema>;
 export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 export type RunCost = z.infer<typeof runCostSchema>;

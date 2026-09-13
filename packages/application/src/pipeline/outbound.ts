@@ -42,6 +42,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { PipelineOutboundData } from './jobs.js';
+import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
@@ -73,6 +74,15 @@ export const pipelineOutboundHandler = (
         return;
       case 'status':
         await runStatusTransition(options, data);
+        return;
+      case 'review_only_check':
+        await runReviewOnlyCheck(options, data);
+        return;
+      case 'review_only_post':
+        await runReviewOnlyPost(options, data);
+        return;
+      case 'review_only_observe':
+        await runReviewOnlyObservation(options, data);
         return;
       default:
         logger.warn(

@@ -89,6 +89,17 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'mr.closed': 'handled',
   'mr.review.comment': 'handled',
 
+  // ── Review-only mode (WP-24), registered by `reviewOnlyHandlers` ─────────────
+  /**
+   * A human merge request opens, and the platform decides whether the project asked for a review.
+   *
+   * This line used to read `'unconsumed', // The pipeline learns its MR from ImplementationNotes
+   * (WP-15); stats is WP-41.` Both halves are still true of the *pipeline's own* merge requests —
+   * `pipeline.review.only` skips any merge request a task already owns — and neither is a reason
+   * for the event to have no consumer any more (standing rule 83).
+   */
+  'mr.opened': 'handled',
+
   // ── The cost ledger (WP-19), registered by `costHandlers` ────────────────────
   'run.finished': 'handled',
   'run.failed': 'handled',
@@ -96,8 +107,11 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'artifact.created': 'handled',
 
   // ── Declared unconsumed in this build, with the work package that changes it ──
-  'ticket.comment.added': 'unconsumed', // WP-31 ask-the-task; feedback intake is WP-24's.
-  'ticket.status.changed': 'unconsumed', // Task sync, WP-24 (review-only mode reads it first).
+  'ticket.comment.added': 'unconsumed', // WP-31 ask-the-task; feedback intake has no owner.
+  // Review-only mode does **not** read it — it has no ticket at all (WP-24) — so the owner this
+  // line used to name was wrong as well as pending. Task sync is technical/02's consumer and no
+  // work package owns it; PROGRESS's discovered work says so.
+  'ticket.status.changed': 'unconsumed', // Task sync (technical/02); no owner.
   'task.taken_over': 'unconsumed', // WP-27 take-over/hand-back owns both.
   'task.handed_back': 'unconsumed', // WP-27.
   'run.created': 'unconsumed', // UI band, WP-20's realtime projection.
@@ -106,7 +120,6 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'workspace.provisioned': 'unconsumed', // UI band, WP-20.
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.
-  'mr.opened': 'unconsumed', // The pipeline learns its MR from `ImplementationNotes` (WP-15); stats is WP-41.
   'mr.updated': 'unconsumed', // WP-41 statistics.
   // WP-19 *emits* these three from the budgets projection; technical/02's consumers are a
   // notification (Slack, WP-10) and the UI band (WP-20). What stops a new run is a **read** of
@@ -114,7 +127,7 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'budget.threshold.reached': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
   'budget.exhausted': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
   'budget.reset': 'unconsumed', // WP-20. Nothing emits it in this build either (`cost/window.ts`).
-  'feedback.received': 'unconsumed', // Feedback intake agent, WP-24.
+  'feedback.received': 'unconsumed', // Feedback intake agent; no work package owns it (WP-24 is review-only mode).
   // Emitted since WP-18b, and unconsumed **by decision** rather than by omission. technical/02's
   // column names "Index rebuild (40), UI" for all three; the index rebuild is the one that has to be
   // argued. It does not belong on `applied`: the platform commits a knowledge page to an
@@ -133,6 +146,7 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // and the backfill. They have no work package, which is why no number is named here.
   'integration.action.performed': 'unconsumed', // Audit and health projections; unowned.
   'integration.action.failed': 'unconsumed', // As above.
+  'task.review.observed': 'unconsumed', // WP-41 statistics: product/18's accepted-vs-dismissed.
   'shadow.report.created': 'unconsumed', // WP-34 shadow mode.
 };
 

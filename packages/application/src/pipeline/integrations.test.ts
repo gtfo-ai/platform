@@ -84,6 +84,9 @@ const linesMatching = (text: string, pattern: RegExp): readonly number[] => {
 const DOOR_SITES: Readonly<Record<string, number>> = {
   'gates.ts': 1,
   'jobs.ts': 1,
+  // WP-24's three duties each resolve the project's bindings once: the check before it creates the
+  // task, the post before it writes the threads, the observation before it reads them back.
+  'review-only.ts': 3,
   'saga.ts': 1,
   'ticket-snapshot.ts': 1,
   'workpad.ts': 2,
@@ -152,6 +155,7 @@ const integrationsDouble = (): PipelineIntegrations => ({
     } as unknown as GitProviderPort,
     ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git' },
     project: 'acme/api',
+    redactor: exactSecretRedactor([]),
   },
   taskManagement: {
     port: {

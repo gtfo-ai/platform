@@ -197,6 +197,11 @@ export interface HarnessOptions {
   readonly taskManagement?: Partial<TaskManagementPort> | null;
   /** The binding's redactor, for a test that plants a secret in a ticket (WP-15f). */
   readonly ticketRedactor?: SecretRedactor;
+  /**
+   * The **git** binding's redactor, for a test that plants a secret in a merge request or in a
+   * review finding (WP-24). Same default and same reasoning as {@link ticketRedactor}.
+   */
+  readonly gitRedactor?: SecretRedactor;
   readonly reviewCommentWindowMs?: number;
   /**
    * The knowledge index the planner's context pack is built from.
@@ -430,7 +435,15 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       clock: { now: () => clock.now() },
       idempotencyStore: idempotency,
     }),
-    git: gitPort === null ? null : { port: gitPort, ref: gitPort.ref, project: 'acme/api' },
+    git:
+      gitPort === null
+        ? null
+        : {
+            port: gitPort,
+            ref: gitPort.ref,
+            project: 'acme/api',
+            redactor: options.gitRedactor ?? exactSecretRedactor([]),
+          },
     taskManagement:
       taskManagementPort === null
         ? null

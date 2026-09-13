@@ -289,6 +289,9 @@ export const createPipelineIntegrationsLoader = (
                 port: git.built.port,
                 ref: git.built.port.ref,
                 project: await options.gitProjectPath(projectId),
+                // WP-24: the same value the adapter was built with, for the two sinks the pipeline
+                // owns itself — `tasks.review_subject` and a finding on its way to a thread.
+                redactor: git.built.redactor,
               },
         taskManagement:
           taskManagement === null

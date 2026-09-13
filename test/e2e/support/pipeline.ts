@@ -51,6 +51,7 @@ import {
   createFakeGitProvider,
   createFakeTaskManagement,
   createIntegrationRegistry,
+  FAKE_GIT_PROVIDER_ID,
   FAKE_TASK_MANAGEMENT_PROVIDER_ID,
   fakeGitRegistration,
   fakeTaskManagementRegistration,
@@ -222,6 +223,18 @@ export interface PipelineE2E {
    * parser, the real loader, the real signature check and the real `inbox`.
    */
   deliver(delivery: {
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body: string;
+  }): Promise<{ readonly status: number; readonly body: unknown }>;
+  /**
+   * The same door, for the **git** integration (WP-24).
+   *
+   * {@link deliver} is hard-wired to the task-management binding because it was written for the one
+   * delivery WP-15c had. Review-only mode starts from a merge request, so its e2e has to post a
+   * signed *git* delivery — through the same unauthenticated route, the same raw-body parser and
+   * the same registry lookup; only the `:provider/:integrationId` pair differs.
+   */
+  deliverGit(delivery: {
     readonly headers: Readonly<Record<string, string>>;
     readonly body: string;
   }): Promise<{ readonly status: number; readonly body: unknown }>;
@@ -814,6 +827,20 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       : `event ${stuck.event_position} is stuck in the dispatch queue: ${stuck.error ?? 'no error recorded'}`;
   };
 
+  const deliverTo = async (
+    provider: string,
+    integrationId: Id,
+    delivery: { readonly headers: Readonly<Record<string, string>>; readonly body: string },
+  ): Promise<{ readonly status: number; readonly body: unknown }> => {
+    const response = await fetch(`${instance.baseUrl}/webhooks/${provider}/${integrationId}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...delivery.headers },
+      body: delivery.body,
+    });
+    const text = await response.text();
+    return { status: response.status, body: text === '' ? null : JSON.parse(text) };
+  };
+
   const task = async (): Promise<TaskSnapshot> => {
     const { rows } = await pool.query<TaskSnapshot>(
       `select id, state, current_stage, cost_actual, size, estimate_usd, iteration_counters,
@@ -1008,18 +1035,9 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       const { rows } = await pool.query(sql, params === undefined ? undefined : [...params]);
       return rows as never;
     },
-    deliver: async (delivery) => {
-      const response = await fetch(
-        `${instance.baseUrl}/webhooks/${FAKE_TASK_MANAGEMENT_PROVIDER_ID}/${TICKETS_INTEGRATION_ID}`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...delivery.headers },
-          body: delivery.body,
-        },
-      );
-      const text = await response.text();
-      return { status: response.status, body: text === '' ? null : JSON.parse(text) };
-    },
+    deliver: async (delivery) =>
+      deliverTo(FAKE_TASK_MANAGEMENT_PROVIDER_ID, TICKETS_INTEGRATION_ID, delivery),
+    deliverGit: async (delivery) => deliverTo(FAKE_GIT_PROVIDER_ID, GIT_INTEGRATION_ID, delivery),
     inbox: async () => {
       const { rows } = await pool.query<{
         provider: string;

@@ -60,7 +60,7 @@ export const ROLE_PROMPT_VERSIONS = {
   investigator: '1',
   architect: '1',
   developer: '1',
-  reviewer: '1',
+  reviewer: '2',
   acceptance_tester: '1',
   facilitator: '1',
   librarian: '2',

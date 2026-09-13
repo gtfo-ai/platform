@@ -52,10 +52,17 @@
   `stage` and `artifact_id` to the schema because `submitFeedbackRequestSchema` has carried both
   since WP-20 — so a table built from this line could not hold the record the event carries. And
   the platform's **own** persistence for a record with no reader is the append-only event log:
-  `POST /api/tasks/:id/feedback` emits `feedback.received`, which is what WP-24's feedback intake
-  agent reads, and nothing in this build queries feedback by any other key. So the projection is
-  still unbuilt and is now owed to the **reader** that needs one (WP-24), which is also what will
-  settle the column list — from the published record rather than from this line.
+  `POST /api/tasks/:id/feedback` emits `feedback.received`, which is what a **feedback intake
+  agent** would read, and nothing in this build queries feedback by any other key. So the projection
+  is still unbuilt and is owed to the **reader** that needs one, which is also what will settle the
+  column list — from the published record rather than from this line.
+
+  **Corrected at WP-24, which is the work package these two sentences named.** WP-24 is *review-only
+  mode* (13's M2 list and product/04 § "Operating modes that reuse stages"), and it neither reads
+  `feedback.received` nor needs this projection. The attribution was inherited from an early
+  reading of product/07 and was repeated in `events/consumption.ts`; both say "no owner" now, which
+  is a statement a later session can act on (standing rule 83 — a sentence naming the wrong owner is
+  worse than one naming none, because it looks discharged).
 - `approvals(id, task_id, kind, status, requested_at, deadline_at, decided_by_user_id, decided_at, reason)`.
 - `workspaces(id, task_id, runner_id, path, status, base_commit, disk_bytes, retention_until, exported_blob_id, created_at, destroyed_at)`.
 - `human_actions(id, task_id, user_id, action, params jsonb, created_at)` — append-only.

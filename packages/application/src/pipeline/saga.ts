@@ -338,6 +338,8 @@ export const runIntakeCheck = async (
       version: INITIAL_TASK_VERSION,
       ticketSnapshot,
       ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
+      // Never a review-only task: this is the ticket path (WP-24's is `review-only.ts`).
+      reviewSubject: null,
     };
     await options.store.tasks.insert(scope.tx, stored);
 

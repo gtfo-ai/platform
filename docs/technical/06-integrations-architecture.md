@@ -45,7 +45,8 @@ openMergeRequest({branch, target, title, description, draft, labels, reviewers})
 updateMergeRequest(mr, {description?, draft?, labels?, reviewers?, title?})
 getMergeRequest(mr) -> {state, draft, headSha, mergeable, diffStats, coverage?}
 listDiscussions(mr) ; replyToDiscussion(mr, discussionId, markdown) ; resolveDiscussion(mr, discussionId)
-createDiscussion(mr, {path, line, markdown})          # review findings
+createDiscussion(mr, {path?, line?, markdown})         # review findings; both absent = a thread on the MR (WP-24's neutral summary)
+getMergeRequestDiff(mr, {limit}) -> [{oldPath, newPath, diff?, newFile, renamedFile, deletedFile, omitted}]  # review-only mode (WP-24)
 getPipelineStatus(headSha) -> {status, url, jobs[{name, status, logRef}]}
 getJobLog(jobId, {tailBytes}) -> string
 getDefaultBranchHead(project) -> sha

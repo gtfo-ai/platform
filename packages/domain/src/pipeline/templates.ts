@@ -314,6 +314,57 @@ export const DISCOVERY_TEMPLATE: PipelineTemplate = {
 };
 
 /**
+ * product/04 § "Operating modes that reuse stages": *"**Review-only mode:** the Code review stage
+ * alone, on human MRs (product/18)"* — WP-24.
+ *
+ * **One agent stage, and the same one.** The role, the artifact type, the verdict channel and the
+ * prompt are `code_review`'s, because product/04 says *the Code review stage*, not "a reviewing
+ * stage": a second stage id would give the Reviewer two prompts, two eval corpora and two sets of
+ * stage defaults to keep in step, and a project that tunes `stages.code_review.model` would tune
+ * one of them.
+ *
+ * ## Why both verdicts go forward, and why that is the template's job
+ *
+ * product/18 says the summary *"never blocks merge"*. The interpreter reads `request_changes` as
+ * "return to `return_to`, or escalate when the template names none" — so a review-only template
+ * with no `return_to` would park **every** merge request the Reviewer had a finding about in
+ * `needs_human`, which is precisely the blocking this mode promises not to do. The template
+ * therefore names `done` for both, and the interpreter's rule 2 does the rest: *"a target that sits
+ * later, or at the same index, is an advance"*, so `return_to: done` consumes no bounded loop and
+ * produces an ordinary advance with the reason `requested changes`.
+ *
+ * It is expressed in the template rather than as a branch in the interpreter on purpose. "A
+ * pipeline is data, not code": the fact that this mode does not block is a property of *this*
+ * graph, and a project that wanted a blocking review-only mode would say so by editing it.
+ *
+ * ## What it deliberately does not contain
+ *
+ * No `intake` classification, no rebase gate, no `ready_for_merge`, no merged gate and no
+ * retrospective: nothing here produces a commit, so there is nothing to rebase, nothing to merge
+ * and no delivery to learn from. The task ends when the review has been posted, which is the whole
+ * of what product/18 level 0 (*"No agent MRs"*) permits.
+ *
+ * The merge request itself is **not** a `requires` artifact — no stage of this template produces
+ * one, and `pipelineGraphIssues` would refuse it. It reaches the prompt as `tasks.review_subject`,
+ * read from the provider before the task is created (`application/pipeline/review-only.ts`).
+ */
+export const REVIEW_ONLY_TEMPLATE: PipelineTemplate = {
+  stages: [
+    { id: 'intake', kind: 'system' },
+    {
+      id: 'code_review',
+      kind: 'agent',
+      role: 'reviewer',
+      produces: 'ReviewVerdict',
+      requires: [],
+      approve_to: 'done',
+      return_to: 'done',
+    },
+    { id: 'done', kind: 'system' },
+  ],
+};
+
+/**
  * The templates that run a **ticket** to a merge request — product/04's three.
  *
  * Separate from {@link SHIPPED_TEMPLATES} because the merge tail is a property of these three and
@@ -330,6 +381,7 @@ export const TICKET_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
 export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   ...TICKET_TEMPLATES,
   discovery: DISCOVERY_TEMPLATE,
+  review_only: REVIEW_ONLY_TEMPLATE,
 };
 
 /**
