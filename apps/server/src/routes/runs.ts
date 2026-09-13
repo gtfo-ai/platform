@@ -67,10 +67,9 @@ export const registerRunRoutes = async (
       findProjectRole(options.database, projectId, userId),
   };
   const scope = scopeToProject({
-    database: options.database,
     param: 'run_id',
     what: 'run',
-    projectOf: findRunProjectId,
+    projectOf: async (runId) => findRunProjectId(options.database, runId),
   });
 
   typed.get(

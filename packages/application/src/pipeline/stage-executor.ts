@@ -43,6 +43,7 @@ import type {
   ArtifactRef,
   ContextPackRecord,
   DomainEvent,
+  Effort,
   Id,
   JsonValue,
   Slug,
@@ -95,6 +96,11 @@ export interface StageRunRequest {
   readonly settings: ProjectSettings;
   /** Why the task came back to this stage, when it did (`task.stage.returned.reason`). */
   readonly returnFeedback: string | null;
+  /** This attempt's model and effort, when a human chose them ({@link StageExecutionJob}). */
+  readonly overrides?: {
+    readonly model?: string;
+    readonly effort?: Effort;
+  };
 }
 
 /** What a planner returns: the spec the runner is given, and the audit record of what went in. */
@@ -202,6 +208,18 @@ export interface StageExecutionJob {
    * Absent is zero — the ordinary first attempt.
    */
   readonly startAttempts?: number;
+  /**
+   * The model and effort a human chose for **this attempt** (WP-15i, `POST /api/runs/:id/retry`).
+   *
+   * Per attempt rather than per task: it rides the `stage.execute` payload and is gone the next
+   * time the stage is entered, so one operator's "try this on the bigger model" does not become the
+   * project's configuration. `undefined` is the ordinary case and the planner falls back to the
+   * project's stage configuration and then to the template's defaults.
+   */
+  readonly overrides?: {
+    readonly model?: string;
+    readonly effort?: Effort;
+  };
 }
 
 /**
@@ -442,6 +460,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         cost: null,
         wallMs: 0,
         createdAt: context.clock.now(),
+        // The domain's clock, not the database's: the same instant stamps `run.started`, and a
+        // run ended from another process computes its wall time from this column (WP-15i).
+        startedAt: context.clock.now(),
       });
       await scope.events.append([...starting.events, ...running.events]);
       return { kind: 'ready', spec, stage: valid.stage, stored, run: running.aggregate };
@@ -469,6 +490,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       artifacts: admission.artifacts,
       settings,
       returnFeedback: admission.returnFeedback,
+      ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
     });
     return startTheRun(job, plan, runId);
   };
@@ -634,6 +656,24 @@ const record = async (
   const spent = Number.isFinite(outcome.cost.usd) ? Math.max(0, outcome.cost.usd) : 0;
   const withCost: StoredTask = { ...stored, costActualUsd: stored.costActualUsd + spent };
 
+  /**
+   * **The task stopped while this run was in flight** (WP-15i).
+   *
+   * A human can pause, cancel or send a task back over HTTP at any moment, and the only thing that
+   * had ever moved a task out from under a running stage before was the executor itself. Every
+   * write below assumes the task is still running at this stage: `completeStage` throws for a
+   * paused one and `pauseTask` throws for a task that is already paused, and either exception fails
+   * the job into pg-boss's retry — which would re-run the *stage*, not the write, and eventually
+   * dead-letter a run that had already produced its answer.
+   *
+   * So the run is recorded and the stage is not completed. The spend is not lost (it is the
+   * platform's own record of money) and the human's decision stands: `revalidate` is what admits
+   * the next attempt when they resume.
+   */
+  if (!isRunnableTaskState(stored.task.state)) {
+    return recordOntoStoppedTask(scope, input, withCost, context);
+  }
+
   if (outcome.status !== 'completed') {
     return recordUnsuccessful(scope, input, withCost, context);
   }
@@ -650,7 +690,7 @@ const record = async (
     },
     context,
   );
-  await store.runs.finish(scope.tx, {
+  const owned = await store.runs.finish(scope.tx, {
     runId: run.id,
     status: 'completed',
     terminalReason: outcome.terminalReason,
@@ -660,6 +700,9 @@ const record = async (
     cost: outcome.cost,
     wallMs: outcome.wallMs,
   });
+  if (!owned) {
+    return lostTheRun(input);
+  }
 
   const events: DomainEvent[] = [...finished.events];
   let artifactRef: ArtifactRef | null = null;
@@ -755,6 +798,90 @@ const record = async (
   return { kind: 'ran', runId: run.id, verdict };
 };
 
+/**
+ * Somebody else ended this run while it was in flight, so this process writes nothing (WP-15i).
+ *
+ * `RunRepository.finish` is conditional on the run still being live, and the only other writer is
+ * `POST /api/runs/:run_id/cancel`. Losing that race is not a failure: the human's decision is the
+ * one that stands, and the transaction is abandoned with no run row rewritten, no stage completed
+ * and no second terminal event in the log.
+ *
+ * **The residual, which is a real cost and is stated rather than implied:** the tokens this run had
+ * already spent are *not* recorded, because the cancel wrote the row's terminal status with the
+ * spend it knew about — none. So a cancelled attempt understates the project's spend by whatever it
+ * burned before the human stopped it. The alternative is letting this process write its cost over a
+ * row a human has terminated, which is the lost update WP-15e closed, one table across. Closing it
+ * needs a way to record spend against an already-terminal run (a cost correction), which no event
+ * in technical/02's catalogue carries; it is in `PROGRESS.md` under discovered work.
+ */
+const lostTheRun = (input: { readonly run: Run }): StageExecutionOutcome => ({
+  kind: 'skipped',
+  reason: `run ${input.run.id} was ended by another writer while it was in flight, so its outcome was discarded`,
+});
+
+/**
+ * The run ended and the task is no longer running at this stage: record the run, stop there.
+ *
+ * The caller's docblock has the reasoning. What this function is careful about is the *order*: the
+ * run's row is written first and everything else depends on having won it, so a lost race leaves
+ * this transaction with nothing in it.
+ */
+const recordOntoStoppedTask = async (
+  scope: TransactionScope,
+  input: RecordInput,
+  withCost: StoredTask,
+  context: CommandContext,
+): Promise<StageExecutionOutcome> => {
+  const { options, outcome, run } = input;
+  const { store } = options;
+  const decision =
+    outcome.status === 'failed' || outcome.status === 'stalled'
+      ? failRun(
+          run,
+          {
+            status: outcome.status,
+            terminalReason: outcome.terminalReason,
+            error: outcome.error ?? outcome.terminalReason,
+            usage: outcome.usage,
+            cost: outcome.cost,
+          },
+          context,
+        )
+      : finishRun(
+          run,
+          {
+            status: outcome.status,
+            terminalReason: outcome.terminalReason,
+            usage: outcome.usage,
+            modelUsage: outcome.modelUsage,
+            cost: outcome.cost,
+            numTurns: outcome.numTurns,
+          },
+          context,
+        );
+  const owned = await store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: outcome.status,
+    terminalReason: outcome.terminalReason,
+    sessionId: outcome.sessionId,
+    numTurns: outcome.numTurns,
+    usage: outcome.usage,
+    cost: outcome.cost,
+    wallMs: outcome.wallMs,
+  });
+  if (!owned) {
+    return lostTheRun(input);
+  }
+  // The spend, and nothing else: `withCost` is the row this transaction read, so the save carries
+  // the state the human left it in rather than one this process decided.
+  await store.tasks.save(scope.tx, withCost);
+  await scope.events.append(decision.events);
+  return {
+    kind: 'skipped',
+    reason: `the task is "${withCost.task.state}" at "${withCost.task.currentStage ?? 'no stage'}", so the run was recorded and the stage was not completed`,
+  };
+};
+
 /** A run that did not complete: budget, fault, timeout, stall or cancellation. */
 const recordUnsuccessful = async (
   scope: TransactionScope,
@@ -794,7 +921,7 @@ const recordUnsuccessful = async (
           context,
         );
 
-  await store.runs.finish(scope.tx, {
+  const owned = await store.runs.finish(scope.tx, {
     runId: run.id,
     status: outcome.status,
     terminalReason: outcome.terminalReason,
@@ -804,6 +931,9 @@ const recordUnsuccessful = async (
     cost: outcome.cost,
     wallMs: outcome.wallMs,
   });
+  if (!owned) {
+    return lostTheRun(input);
+  }
 
   if (overspent) {
     // BD-010: a task budget pauses the task; a human may raise the cap and resume it.
@@ -898,7 +1028,7 @@ const recordUnstarted = async (
     },
     context,
   );
-  await options.store.runs.finish(scope.tx, {
+  const owned = await options.store.runs.finish(scope.tx, {
     runId: run.id,
     status: 'failed',
     terminalReason: 'error_during_execution',
@@ -908,6 +1038,11 @@ const recordUnstarted = async (
     cost: NO_COST,
     wallMs: 0,
   });
+  if (!owned) {
+    // A human cancelled the run between its insert and this failure (WP-15i). Neither ending
+    // applies: there is nothing to retry and nothing to escalate about a run somebody stopped.
+    return lostTheRun({ run });
+  }
   if (input.retryable) {
     // The task is untouched — still `active`, still at this stage, still on this attempt — so the
     // re-enqueue the caller makes finds exactly the state `revalidate` admits. Nothing is written

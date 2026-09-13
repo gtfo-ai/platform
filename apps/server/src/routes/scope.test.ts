@@ -12,11 +12,17 @@
  * ## What this check is, and what it is not
  *
  * It is **syntactic**: it reads the route modules off disk — tracked *and* untracked, so a file
- * that is not committed yet is still in scope (standing rule 85) — finds every `preHandler:` value
- * and asserts the two implications inside each one. It cannot see a preHandler assembled elsewhere,
- * a `project:` hook written inline as `(request) => request.scopedProjectId`, or a guard reached
- * through a variable. Those are the honest holes; what it does catch is the shape this repository
- * actually writes, which is rule 48's requirement of a syntactic guard.
+ * that is not committed yet is still in scope (standing rule 85) — finds every `preHandler:` **and
+ * `preValidation:`** value and asserts the two implications inside each one. It cannot see a hook
+ * assembled elsewhere, a `project:` hook written inline as `(request) => request.scopedProjectId`,
+ * or a guard reached through a variable. Those are the honest holes; what it does catch is the
+ * shape this repository actually writes, which is rule 48's requirement of a syntactic guard.
+ *
+ * **`preValidation` was outside the scope until WP-15i**, and that was a hole rather than a
+ * decision: the wizard's routes moved there at WP-21 (a body-carrying route must refuse an
+ * anonymous caller before Fastify describes its shape) and left this check reading a position they
+ * no longer used. The eleven command routes are registered the same way, which is what made the
+ * omission worth closing rather than noting.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -42,7 +48,7 @@ const routeModules = (): string[] => {
 };
 
 /**
- * Every `preHandler:` value in a module, as source text.
+ * Every `preHandler:` and `preValidation:` value in a module, as source text.
  *
  * Both spellings this repository uses: an array (`[scope, requirePermission(…)]`) and a bare call
  * (`requirePermission(…)`). The bare form is read to the end of its line, which is what `org.ts`
@@ -50,7 +56,7 @@ const routeModules = (): string[] => {
  */
 export const preHandlers = (source: string): string[] => {
   const found: string[] = [];
-  const pattern = /preHandler:\s*(\[[\s\S]*?\]|[^\n]*)/g;
+  const pattern = /(?:preHandler|preValidation):\s*(\[[\s\S]*?\]|[^\n]*)/g;
   for (const match of source.matchAll(pattern)) {
     const value = match[1];
     if (value !== undefined) {
@@ -73,6 +79,11 @@ describe('the project-scope preHandler and the permission guard travel together'
     // …and the extraction finds something in them, which a regex that silently matched nothing
     // would not.
     expect(sources.flatMap(preHandlers).length).toBeGreaterThanOrEqual(7);
+    // …and it finds the `preValidation` position too, which it did not read until WP-15i.
+    expect(
+      sources.flatMap(preHandlers).some((handler) => /requirePermission\(/.test(handler)),
+    ).toBe(true);
+    expect(sources.some((source) => source.includes('preValidation:'))).toBe(true);
   });
 
   it('never resolves a project without deciding a permission, and never the reverse', () => {
@@ -80,7 +91,9 @@ describe('the project-scope preHandler and the permission guard travel together'
     for (const path of routeModules()) {
       const source = readFileSync(join(repositoryRoot, path), 'utf8');
       for (const handler of preHandlers(source)) {
-        const resolves = /\bscope\b/.test(handler);
+        // `scope`, `scopeRun`, `scopeTask` — any identifier this repository names a resolver, but
+        // **not** `scopedProject`, which is the guard's reader rather than the resolver.
+        const resolves = /\bscope(?!dProject\b)\w*/.test(handler);
         const decides = /requirePermission\(/.test(handler);
         const scoped = /\bscopedProject\b/.test(handler);
         // The dangerous direction: a project is looked up and nobody asks what the caller may do.

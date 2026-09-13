@@ -61,31 +61,20 @@ const WEB_SOURCES = 'apps/web/src';
  * which is standing rule 7's corollary.
  */
 const ADMITTED_GAPS: Readonly<Record<string, string>> = {
-  // Every remaining gap is a **command**. The seven reads WP-15h's row attributed to a later
-  // iteration — the running-agents, inbox, integrations, setup-guide, projects, readiness and
-  // task-list screens — left this list at part 2, which is what makes the "serves this
-  // iteration's" cases below the other half of the same check (standing rule 10).
+  // **One gap left.** Twelve commands were listed here until WP-15i; eleven of them landed with
+  // that row and are asserted positively below (standing rule 10 — "not in the gap list" is also
+  // satisfied by a path the sweep failed to find at all).
   //
-  // **The wizard's seven were never on this list**, and that is worth saying because the sentence
-  // "every remaining gap is a command" reads as if it were about all of them. WP-21 added the
-  // client's calls and the server's routes in one change, so the two halves were never out of step
-  // and there was nothing to admit; they are asserted positively below instead (standing rule 10
-  // again — "not in the gap list" is also satisfied by a path the sweep failed to find).
+  // **The wizard's seven were never on this list**, which is worth saying because a list of
+  // commands reads as if it were about all of them. WP-21 added the client's calls and the
+  // server's routes in one change, so the two halves were never out of step and there was nothing
+  // to admit; they too are asserted positively below.
   //
-  // Commands. Every one of these writes, so each needs the aggregate, a `human_actions` row and an
-  // `Idempotency-Key`, which is a different work package from a read API (technical/08 § Tasks).
-  '/api/tasks/{}/pause': 'the task command surface — not this row',
-  '/api/tasks/{}/resume': 'the task command surface — not this row',
-  '/api/tasks/{}/cancel': 'the task command surface — not this row',
-  '/api/tasks/{}/retry-stage': 'the task command surface — not this row',
-  '/api/tasks/{}/return-to-stage': 'the task command surface — not this row',
-  '/api/tasks/{}/rework': 'the task command surface — not this row',
-  '/api/tasks/{}/feedback': 'the task command surface — not this row',
-  '/api/tasks/{}/questions/{}/answer': 'the task command surface — not this row',
-  '/api/tasks/{}/approvals/{}/decide': 'the task command surface — not this row',
-  '/api/runs/{}/steer': 'the run command surface — not this row',
-  '/api/runs/{}/retry': 'the run command surface — not this row',
-  '/api/runs/{}/cancel': 'the run command surface — not this row',
+  // Steering is the one that is genuinely a different work package rather than a later iteration
+  // of this one: it pushes a user turn into a **live session**, which needs the transport to a
+  // running run that Q52 leaves unbuilt — the same reason `POST /api/runs/:id/cancel` can end a
+  // run as a record and cannot interrupt it.
+  '/api/runs/{}/steer': 'the run steering surface — WP-27 (take-over, hand-back and steer)',
 };
 
 /**
@@ -198,6 +187,7 @@ beforeAll(async () => {
     // refuse an anonymous caller, which is what this census probes (the 503 is behind the guard).
     knowledge: null,
     onboarding: null,
+    commands: null,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
@@ -369,6 +359,56 @@ describe('the client’s endpoint list against the server’s router', () => {
       const body = response.json() as { error?: { code?: string } };
       expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
         `${method} ${path} -> 401 unauthenticated`,
+      );
+    }
+  });
+
+  it('serves the eleven task and run commands WP-15i took off the gap list', async () => {
+    // Named positively, and this is the case that makes the gap list's shrinking mean something:
+    // the equality above is also satisfied by a path the client sweep failed to find (standing
+    // rule 10). Eleven, not twelve — `…/steer` is WP-27's and is the list's one remaining entry.
+    for (const path of [
+      '/api/tasks/{}/pause',
+      '/api/tasks/{}/resume',
+      '/api/tasks/{}/cancel',
+      '/api/tasks/{}/retry-stage',
+      '/api/tasks/{}/return-to-stage',
+      '/api/tasks/{}/rework',
+      '/api/tasks/{}/feedback',
+      '/api/tasks/{}/questions/{}/answer',
+      '/api/tasks/{}/approvals/{}/decide',
+      '/api/runs/{}/retry',
+      '/api/runs/{}/cancel',
+    ]) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('refuses an anonymous caller on every command, by POST and before validating the body', async () => {
+    /**
+     * The hole this closes is the one WP-21's review found for the wizard, one family later: these
+     * routes all take a **body**, and Fastify validates it before `preHandler` — so a guard in the
+     * wrong position answers an anonymous caller `400` describing the route's shape instead of
+     * `401`. Every command below is therefore asked by its own method with **no body at all**: a
+     * route whose guard slipped back to `preHandler` fails here with a 400.
+     */
+    for (const path of [
+      '/api/tasks/{}/pause',
+      '/api/tasks/{}/resume',
+      '/api/tasks/{}/cancel',
+      '/api/tasks/{}/retry-stage',
+      '/api/tasks/{}/return-to-stage',
+      '/api/tasks/{}/rework',
+      '/api/tasks/{}/feedback',
+      '/api/tasks/{}/questions/{}/answer',
+      '/api/tasks/{}/approvals/{}/decide',
+      '/api/runs/{}/retry',
+      '/api/runs/{}/cancel',
+    ]) {
+      const response = await app.inject({ method: 'POST', url: probeUrl(path) });
+      const body = response.json() as { error?: { code?: string } };
+      expect(`POST ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `POST ${path} -> 401 unauthenticated`,
       );
     }
   });

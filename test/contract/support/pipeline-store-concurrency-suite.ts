@@ -26,7 +26,7 @@
  */
 import type { PipelineStore, StoredTask, Transaction } from '@platform/application';
 import { INITIAL_TASK_VERSION } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -333,6 +333,87 @@ export const runPipelineStoreConcurrencyContract = (
       expect(after.branch).toBe('agentic/race-1');
       expect(after.task.currentStage).toBe('code_review');
       expect(after.version).toBe(INITIAL_TASK_VERSION + 2);
+    });
+
+    /**
+     * Two writers ending one run — WP-15i's other race, and the reason `RunRepository.finish` is
+     * conditional.
+     *
+     * The stage executor ends the run it started; `POST /api/runs/:run_id/cancel` ends it from an
+     * HTTP request in whichever process is serving the API. Without the predicate the second write
+     * silently replaces the first, and the one that loses is whichever committed earlier — which
+     * for a human pressing cancel means their decision is overwritten by the outcome of the run
+     * they cancelled.
+     *
+     * There is no version column here and none is needed: a terminal status is terminal, so "is it
+     * still live" and "did I move it" are the same question. Against PostgreSQL the losing `update`
+     * re-evaluates its `where` clause against the committed row and matches nothing.
+     */
+    it('lets exactly one of two transactions end a live run', async () => {
+      const stored = await givenCommittedTask();
+      const runId = nextId();
+      const opening = await begin();
+      await store.tasks.recordStageEntered(opening.tx, {
+        taskId: stored.task.id,
+        stage: 'refinement' as Slug,
+        attempt: 1,
+        causedByEventId: null,
+      });
+      await store.runs.insert(opening.tx, {
+        id: runId,
+        taskId: stored.task.id,
+        projectId,
+        stage: 'refinement' as Slug,
+        role: 'product_manager',
+        mode: 'normal',
+        attempt: 1,
+        model: 'claude-opus-5',
+        effort: 'medium',
+        promptVersion: 'race@1',
+        status: 'running',
+        terminalReason: null,
+        sessionId: null,
+        numTurns: 0,
+        usage: null,
+        cost: null,
+        wallMs: 0,
+        createdAt: '2026-06-01T09:00:00.000Z',
+        startedAt: '2026-06-01T09:00:01.000Z',
+      });
+      await opening.commit();
+
+      const outcome = (status: 'cancelled' | 'completed') => ({
+        runId,
+        status,
+        terminalReason: status === 'cancelled' ? ('cancelled' as const) : ('success' as const),
+        sessionId: null,
+        numTurns: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: { usd: 0, is_estimate: true, price_list_id: null },
+        wallMs: 5,
+      });
+
+      // The human cancels and commits…
+      const human = await begin();
+      expect(await store.runs.finish(human.tx, outcome('cancelled'))).toBe(true);
+      await human.commit();
+
+      // …and the executor, whose run has just returned, finds the row already terminal.
+      const executor = await begin();
+      expect(await store.runs.finish(executor.tx, outcome('completed'))).toBe(false);
+      await executor.commit();
+
+      const after = await begin();
+      const loaded = await store.runs.load(after.tx, runId);
+      await after.rollback();
+      expect(loaded?.status).toBe('cancelled');
+      expect(loaded?.terminalReason).toBe('cancelled');
     });
 
     it('still refuses a save for a task that does not exist, and not as a conflict', async () => {

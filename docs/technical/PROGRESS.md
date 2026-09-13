@@ -1652,6 +1652,178 @@ M2 row that needs a project command) and whichever row composes the provisioner.
 decides which *SDK tool* a role holds and argues that widening is bounded because the three-list policy
 governs the shell — this entry is what that policy actually grants.
 
+### 50. **A cancelled run's spend reaches no `cost_entries` row, no rollup and no budget window — and the invariant WP-19 is measured by stays true while it is lost** (TODO — **no work package owns it**; found by WP-15i, session 5; the product half is **Q70** (b))
+Placed beside **49** because it is the same shape one table across: a path every tier passes, and a
+number no acceptance criterion sums.
+
+**What is wrong, in the order the question was asked.** *Does a cancelled run emit an event the
+ledger consumes?* **Yes.** `cancelRunCommand` calls `finishRun` with `status: 'cancelled'`
+(`packages/application/src/pipeline/commands.ts:779`), and `finishRun` emits `run.finished` for every
+terminal status it accepts — the event type is not a parameter
+(`packages/domain/src/aggregates/run.ts:266`) — which is one of the two types the ledger subscribes
+to (`packages/application/src/cost/ledger.ts:197`). *Is the spend recorded?* **No.** The payload
+carries zero tokens and a zero cost, so the ledger takes its `no_spend` branch and writes nothing at
+all — not a ledger row, not a rollup delta, not a `run_model_usage` row, and **not a budget**.
+
+**Evidence** (read at HEAD `9b0b7b0` plus WP-15i's uncommitted working tree; no test run — rule 66):
+- **The payload is zeros, and neither fallback in the cancel is what makes it so.** The command sends
+  `usage: run.usage ?? NO_USAGE` and `cost: run.cost ?? { usd: 0, is_estimate: true, price_list_id: null }`
+  (`packages/application/src/pipeline/commands.ts:766`, `:769`). The row it loaded answers
+  `usage: null` unconditionally, and while `runs.usd_reported` is null it answers
+  `{ usd: usd(row.usd_estimated), is_estimate: true, price_list_id: null }`
+  (`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:811`, `:814`) over a column
+  declared `numeric(12, 6) not null default 0` that nothing updates while a run is live
+  (`packages/infrastructure/src/db/migrations/0004_pipeline.sql:100`; the only writer of `runs`' cost
+  columns is `RunRepository.finish`, `postgres-pipeline-store.ts:539-546`). So a run that has burned
+  two dollars hands the ledger a zero, and the `??` fallbacks never fire.
+- **The branch it then takes.** `ledgerEntriesForRun` computes `anyTokens` false and `reportedTotal`
+  null — an `is_estimate: true` total is never counted as a reported one — and returns
+  `nothing('no_spend')` (`packages/domain/src/cost/ledger.ts:288-291`). That module's enumerated
+  branch table describes the case as a run that never started not being a free run
+  (`packages/domain/src/cost/ledger.ts:14`). **A cancelled run is the case the table does not have**:
+  one that started, spent, and reported nothing.
+- **What the handler skips.** `derived.entries.length === 0` returns before `appendEntries`, before
+  `applyRollups` and before `chargeBudgets` (`packages/application/src/cost/ledger.ts:256-261`,
+  `:269-277`, `:281`), and `derived.modelUsage` is empty on that path. The only trace is one `debug`
+  log line.
+- **The process that knows the number is refused the write, deliberately.** `lostTheRun`
+  (`packages/application/src/pipeline/stage-executor.ts:817`) abandons the executor's transaction
+  when `runs.finish` reports the run was ended by somebody else, which is WP-15e's lost update
+  refused one table across.
+
+**Why the ledger's own invariant cannot see it (rule 79's frame).** WP-19's headline property is
+`sum(cost_entries) = sum(cost_rollup_daily)`; both sides are written in the same transaction from the
+same derivation, so a run that contributes nothing to one contributes nothing to the other and the
+equality **holds** — it is true and blind. The quantity that would catch this is the one rule 79
+names: a derived total compared against something outside the ledger, here the run's own reported
+tokens.
+
+**What it costs to leave.** Three consequences, and the third is not in the WP-15i bullet or in Q70:
+1. `cost_entries`, `cost_rollup_daily` and `run_model_usage` understate a cancelled attempt by
+   whatever it burned, against BD-011's rule that provider-reported cost is truth.
+2. `tasks.cost_actual` understates it too, so `estimateAccuracy` (Q65) is computed against a total
+   with a hole in it — and the hole is in exactly the tasks a human intervened in.
+3. **No budget moves.** `chargeBudgets` is not reached, so the spend never lands in
+   `budget_windows.spent_usd`, never crosses `notify_pct` and never emits `budget.exhausted`. A run
+   cancelled at 90 % of a daily cap leaves the cap looking untouched and the next run starts against
+   a budget that has forgotten the money — so cancelling is the one human action that spends a
+   project's budget without charging it (product/09, BD-006). That is a governance statement, not an
+   accounting one.
+
+**What would make it urgent.** Latent today for the reason entry **49** is: no production run has
+executed at all — `startRuntime` composes `unavailableClaudeRunner` unless a `RunWorkspaceProvisioner`
+is present, and every green result in this repository is `FakeClaudeRunner`, whose spend is a
+fixture's. It becomes live the first time a human cancels a real run, and it is silent when it does.
+
+**Needs measurement, and it cannot be produced by reading** (rule 39): how much a real cancelled
+attempt loses. Nothing in this repository has ever cancelled a run with non-zero usage — the e2e holds
+a run open with `onAgentSpec` and cancels it, and a fake's usage is whatever the fixture says. Do not
+quote a figure for this entry until one exists.
+
+**What "done" looks like.** Q70 (b) picks the mechanism; both shapes are small. Either a narrow
+`runs.recordCost` write the losing process may make against an already-terminal row — one port
+method, no migration, and it makes a row's status and its cost two different writers, which is rule
+79's own warning — or a cost-correction event, which the technical/02 catalogue does not have and
+which needs a second ledger branch. Whichever is taken, done includes: the cancelled run's tokens
+reach `cost_entries`, the rollup **and** `chargeBudgets`; the entry is labelled as a late or estimated
+report rather than merged into the original; and the assertion is a sum across the task's runs
+compared with what the runner reported, because the ledger's own invariant cannot fail on this.
+
+**Depends on / owner.** **None today.** Cheapest home is **WP-19**'s owner — `cost_entries`, the
+rollup and the budgets are its tables and `CostStore` is where a late write lands; the alternative
+owner is whichever row composes the provisioner, because that is when the loss becomes real. Q70
+blocks (b) only; (a), pausing the task, is answered and implemented.
+
+### 51. **`rework` resets the task and leaves the merge request open on the provider — and the port it would need has no way to close one** (TODO, latent — **no work package owns it**; found by WP-15i, session 5)
+**What is wrong.** product/04:86 makes human rejection a reset with two halves, and only the first is
+built. The second half reads:
+
+> the old MR is closed, a fresh branch is created and the new plan must state what will be done differently
+
+`reworkStageCommand` (`packages/application/src/pipeline/commands.ts:583-617`) does the first half —
+`resetAgentIterations` plus an `applyDecision` of kind `return` carrying the human's redacted
+instructions — and nothing anywhere does the second. Three layers, and the outer one is the surprise:
+- **No caller.** `pipeline.outbound` knows three duties — `intake_check`, `workpad`, `status`
+  (`packages/application/src/pipeline/outbound.ts:67-76`) — and none touches a merge request. The
+  rework command enqueues a stage, not an outbound duty.
+- **No operation to call.** `GitProviderPort` has `openMergeRequest`, `updateMergeRequest` and
+  `getMergeRequest` (`packages/application/src/ports/integrations/git-provider.ts:353-355`), and
+  `mergeRequestUpdateSchema` is a strict object of `title`, `description`, `draft`, `labels`,
+  `reviewers` (`packages/application/src/ports/integrations/git-provider.ts:212-218`). **There is no
+  state field**, so no adapter, fake or contract suite in this tree can close a merge request at all.
+  This is a port gap before it is a pipeline gap.
+- **No fresh branch either.** Nothing re-derives `tasks.branch` on a return, so the branch a later
+  developer run would push to is the one the rejected merge request already tracks — which makes the
+  reset look, on the provider, exactly like the patching product/04 rules out.
+
+**Why it is latent, and the trigger.** Nothing in this build opens a **code** merge request. The only
+caller of `openMergeRequest` is the librarian's knowledge branch
+(`packages/application/src/pipeline/integrations.ts:532`), and the developer's own tool refuses by
+name — `open_mr` answers that opening a merge request from inside a run is unbuilt
+(`apps/server/src/platform-tools.ts:80-81`). So today a reworked task has no merge request to leave
+open. It goes live the moment the developer stage can open one, which is also the first thing that
+will write `tasks.mr_ref` for code (`packages/contracts/src/records.ts:217`).
+
+**What it costs to leave.** A provider-side residual created by the human's own action: an obsolete
+merge request stays open against the default branch with its reviewers, its CI schedule and its
+notifications, and `ci_gate` settles from a pipeline on a branch the new plan may not use. A customer
+meets it the first time they rework anything, so if it ships unfixed it is a sentence **WP-23**'s user
+guide owes them rather than a surprise.
+
+**What "done" looks like**, in dependency order. (1) The port gains a close — a `state` field on
+`mergeRequestUpdateSchema` or a `closeMergeRequest` operation — with the fake, the shared contract
+suite and the GitLab adapter's fixture, because rule 23 puts a new port obligation in the shared
+suite. (2) A **fourth** `pipeline.outbound` duty makes the call, so nothing reaches a provider from
+the command's transaction (WP-15d), and it is idempotent: closing an already-closed merge request
+succeeds. (3) The branch question is decided in product/04 rather than assumed in a saga — whether a
+rework pushes a new `agentic/*` branch or force-updates the old one. Until (1) exists none of the rest
+can be built.
+
+**Depends on / owner.** **None today.** Nearest by subject: whichever row builds the developer's
+`open_mr`, since that is the row that makes this live; **WP-23** owns the written-down residual if it
+ships unfixed.
+
+### 52. **Eighteen commands write `human_actions` and nothing reads it but the idempotency guard, while technical/08 promises an audit of every human action** (TODO, small — **no work package owns it**; found by WP-15i, session 5)
+**What is wrong.** WP-21's seven wizard commands and WP-15i's eleven task and run commands each write
+one row per performed command, and no read surface serves any of them. `GET /api/org/audit` reads a
+**different table**: `listAuditEntries` selects from `configAudit` and nothing else
+(`apps/server/src/queries/identity-queries.ts:154-175`), and the client calls that one path
+(`apps/web/src/api/endpoints.ts:234`). The only read of `human_actions` in the tree is
+`findIdempotentAttempt` (`apps/server/src/queries/onboarding-queries.ts:749-766`), which fetches one
+row by key on the write path — that is the guard, not a reader.
+
+**It is a defect against the document, not only a missing feature.** `docs/technical/08-api-and-realtime.md:8`
+promises audit of every human action and `:118` names both tables:
+
+> all human actions recorded in `human_actions` and `config_audit`
+
+One audit endpoint is published (`docs/technical/08-api-and-realtime.md:14`) and it serves one of the
+two tables. So the eleven commands that move a task are absent from the only audit surface the product
+has, while configuration changes are present.
+
+**Why the recurrence guard cannot see it, which is the half worth carrying** (the same measurement
+entry **37** records for `kb_health_reports`): `apps/server/src/routes/client-census.test.ts` compares
+the **client's** paths against the router in both directions, so a table whose read has no path on
+either side is invisible to it. This is entry 37's shape with the endpoint missing too.
+
+**What it costs to leave.** Small and real: every assertion about who did what is a SQL read inside a
+test rather than something an operator can ask for, so *"who cancelled this run"* has no answer in the
+product. Nothing is lost — the rows are written correctly and the table is `append_only` — which is
+why this is a nit-sized reader rather than a data-integrity finding.
+
+**What "done" looks like.** The cheapest honest shape is task-scoped rather than a second org-wide
+log: the index `human_actions_task_id_idx` is already `(task_id, created_at desc)`
+(`packages/infrastructure/src/db/migrations/0004_pipeline.sql:219`), so a page over one task's actions
+costs a query and a DTO. Two things are part of done: `params` carries client-supplied JSON and a
+client-chosen `Idempotency-Key`, so it renders through the untrusted path like everything else
+(BD-022); and technical/08 gains the published path first — an orchestrator edit, since a refiner
+writes no technical document — or `GET /api/org/audit` is widened to cover both tables and its DTO
+says which table a row came from.
+
+**Depends on / owner.** **None today.** It is the successor shape of entry **29** — the read surface
+nobody's work package owned — and belongs with whichever row builds the task screen's activity feed;
+**WP-15j** serves the SPA and adds no reads.
+
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
 entry 1's sentence one layer further in: *the loop starts now, and what it starts on is a ticket
@@ -3636,6 +3808,36 @@ the three sentences above, which are then the fix's to make true (rule 83).
 `packages/application/src/knowledge/apply.ts:335`) and a retention decision, which is a product
 question about how long a key is honoured. WP-21's seven commands should be migrated onto it in the
 same change or the divergence stated.
+
+**Update (refiner, session 5, after WP-15i): the concurrency window is this one, widened — folded in
+here rather than filed again.** WP-15i shipped the eleven commands without closing the entry: the
+header is now required on seven of them and optional on four, and the digest mechanism moved to
+`apps/server/src/routes/idempotency.ts`, where the whole record is still one `human_actions` row. The
+answer to *what do two simultaneous requests with the same key do* is **a double effect** — not a 500
+and not a 409. Both calls reach `idempotentReplay`, both `findIdempotentAttempt` reads return null
+under READ COMMITTED before either transaction commits, so both report `replayed: false` and both
+perform; `human_actions` has no unique index to stop the second row
+(`packages/infrastructure/src/db/migrations/0004_pipeline.sql:209-219`). What bounds the damage is
+never the header:
+- a wizard create is still stopped by its unique key, so only the 409 is lost (stated at
+  `findIdempotentAttempt`, `apps/server/src/queries/onboarding-queries.ts:731-747`);
+- a **task command has no unique key underneath it**, which is why the window is wider than WP-21's.
+  Two concurrent `retry-stage` calls are bounded by the aggregate and the queue instead —
+  `tasks.version` makes one of them re-read (WP-15e) and `stage.execute` is `stately` per task with
+  the executor re-validating the attempt, so the pair yields one extra attempt number and one run;
+- `answer` and `decide` are refused the second time by the aggregate (a question that is not open, an
+  approval already decided), so those two answer 409 by accident of their own state machine rather
+  than by the header;
+- `feedback` has neither, so two identical submissions under one key record two `feedback.received`
+  events.
+
+So the class is: a command whose aggregate cannot refuse a repeat is performed twice under one key.
+Closing it is the same stored-attempt record this entry already asks for, plus the ordering the
+route's docblock names — a unique index on `(action, params->>'idempotency_key')` **and** writing the
+row before the effect, which trades a double-perform for a key that claims a command nobody performed
+(`apps/server/src/routes/idempotency.ts:28-39`). That trade is a decision for whoever builds the
+table, not a defect to be fixed in passing. Nobody owns it; the window is unchanged in kind since
+WP-21 measured it, so no new entry.
 
 ### 48. **A binding's host is whatever the caller typed, and the platform process has no outbound allow-list — so the credential the API is designed never to reveal can be sent to a host the caller chose** (TODO — **no work package owns it**; found by WP-21's round-1 reviewer, session 5)
 **What is wrong.** Every provider takes its host from `config` as a free-form URL and nothing
@@ -8201,6 +8403,137 @@ branch degrades a prompt rather than hiding an operator error.
 
 ## WP notes — session 5 (decisions, assumptions, reviewer findings)
 
+### WP-15i — the task and run command surface
+
+**What exists now.** Eleven `POST` routes (`apps/server/src/routes/commands.ts`), the nine new
+application commands beside the two that already existed (`packages/application/src/pipeline/commands.ts`),
+the Feedback aggregate (`packages/domain/src/aggregates/feedback.ts`), a `TaskCommands` port composed
+in `apps/server/src/commands.ts`, and the shared `Idempotency-Key` mechanism moved out of the
+wizard's route module into `apps/server/src/routes/idempotency.ts`. The census's admitted-gap list is
+down to **one** entry — `POST /api/runs/:id/steer`, WP-27's — and the eleven are named positively in
+two cases of their own (served, and 401 by their own method with no body).
+
+**The eleven, with the aggregate operation each calls and the state that refuses it.**
+`pause` → `pauseTask` (refused from `paused`, `done`, `cancelled`, `queued`); `resume` and
+`retry-stage` → `applyDecision {kind:'enter'}` → `enterStage`/`markReadyForMerge`… (refused when the
+task's state has no edge to that stage's — a task paused at `ready_for_merge` is the worked example —
+and `retry-stage` additionally refuses a stage the task is not at, `stage_not_current`);
+`cancel` → `cancelTask` with the runs' real totals (refused from `done`/`cancelled`);
+`return-to-stage` and `rework` → `applyDecision {kind:'return'}` → `returnToStage` (refused from any
+state with no `returned` edge — including `needs_human`, which is a **hand-back**, WP-27's — and
+refused with `iteration_limit_reached` when BD-008's `human_rounds` is spent); `feedback` →
+`recordFeedback` (refused when the scope names no subject); `answer` → `answerQuestion` (refused for a
+question that is not open); `decide` → `decideApproval` (refused for a decided approval);
+`run retry` → the run's stage re-entered as a new attempt (refused for a live run, `run_not_live`, and
+for a stage the task has left); `run cancel` → `finishRun(status: 'cancelled')` (refused for a
+terminal run).
+
+**Six decisions, each of which could have gone the other way.**
+1. **The guard asks the role; the aggregate asks the state.** `requirePermission` is given no
+   `subject`, so a wrong role is **403** and a wrong state is **409**. Handing the state to `can()`
+   would have made "you may not do that" and "not to this, not now" the same answer.
+2. **No HTTP request escalates a task.** Two paths could have. A spent `human_rounds` loop is
+   refused *before* `returnToStage` is called, because that function's own ending for a spent loop is
+   `needs_human`; and an exhausted `retryOnTaskConflict` bound reaches the caller as `409
+   task_conflict` rather than calling `escalateTaskAfterConflict` the way the pipeline's jobs do.
+   BD-008's ceiling still holds either way — the counter never passes its limit and the task never
+   goes round again.
+3. **The `Idempotency-Key` is required exactly where a repeat would create a second thing** (answer,
+   decide, retry-stage, return-to-stage, rework, feedback, run retry) and optional on the four state
+   assertions the aggregate already refuses twice over (pause, resume, task cancel, run cancel). The
+   replay answers `performed: false` from the `human_actions` row, which is the store technical/08's
+   header implies and which WP-21 built; there is still no stored response.
+4. **`run cancel` ends the run as a record and pauses its task**, and cannot stop the session (Q52).
+   The `runs` row is the arbiter: `RunRepository.finish` is now conditional on the run still being
+   live and answers whether this caller won, so the executor discards its own outcome when a human
+   won. The cost of that is real and stated at three places plus **Q70**: a cancelled attempt's spend
+   is not accounted for.
+5. **`budget_usd` on run retry is refused by name** (`409 budget_override_unsupported`): raising a
+   run's cap is BD-006's budget approval, which is WP-28's. `model` and `effort` *are* honoured, and
+   they ride the `stage.execute` payload — one attempt only, never written to the project.
+6. **Feedback is persisted as its event, and no `feedback` table was created.** technical/03's row
+   shape and `feedbackRecordSchema` had already diverged, nothing reads feedback by any key, and the
+   append-only log is the platform's own persistence; the projection is owed to WP-24's reader.
+   technical/03's line is amended with the whole argument.
+
+**What the tests are, and what each tier can see.** `packages/application/src/pipeline/human-commands.test.ts`
+drives all nine new commands against the pipeline harness from a state that admits each and a state
+that refuses it (rule 42), including the conflict ending and the "no queue" refusal;
+`apps/server/src/routes/commands.test.ts` drives all eleven **routes** through the real router
+against injected functions — the key policy, the per-command 401 and 403, the replay's countable
+effect, and which refusal maps to which status; `test/e2e/server/command-api.e2e.test.ts` drives them
+against a real instance and a task the pipeline created, holding a run open with `onAgentSpec` so a
+human can pause and cancel one *while it is running*.
+
+**Two guards the executor gained, because a human command can now land beside a running stage.**
+`record` stops when the task is no longer runnable — the run and its spend are recorded and the stage
+is **not** completed, where before `completeStage` would have thrown and failed the job into
+pg-boss's retry — and it writes nothing at all when `runs.finish` reports the run was ended by
+somebody else. Both are asserted by patching `runs.insert` to make the human's write from inside the
+transaction that starts the run, which is the ordering rather than load (rule 76).
+
+**Two checks were widened rather than worked around.** `routes/scope.test.ts` now reads
+`preValidation:` as well as `preHandler:` — the wizard's routes moved there at WP-21 and left the
+pairing check reading a position they no longer used, so WP-21's seven were uncovered too; the
+widened check was calibrated with a planted offending file, which it reported and which a clean tree
+does not. And `pipeline-store-suite.ts` / `pipeline-store-concurrency-suite.ts` gained the
+conditional `finish`'s two directions (rule 23: a new port obligation lands in the shared suite).
+
+**One thing a reviewer should look at first.** `apps/server/src/routes/commands.ts` was written
+against the database and could not be unit-tested at all; the injected `CommandQueries` and the
+`TaskCommands` port exist because the branch-coverage threshold refused the change — and the test
+that became possible then found four refusals mapping to **500** (`StageNotCurrentError`,
+`IterationLimitReachedError`, `RunNotLiveError`, `CommandsUnavailableError`), one of which the e2e
+asserted as a 409 and would have failed on. The threshold was the instrument that found them.
+
+**Pre-merge fix round** (three minors and three nits from the review that approved it):
+
+1. **An `Idempotency-Key` is scoped to the caller.** The lookup was `(action, key)` — installation-wide
+   — so a key string another organisation's operator had used answered this caller `409
+   idempotency_key_reused`: a refusal of a legitimate command *and* an oracle for a stranger's key.
+   technical/08 is silent about who owns the header, and the caller is the only honest answer (the
+   string is generated per attempt by a client, so nothing distinguishes one account's `retry-1` from
+   another's), so `findIdempotentAttempt` now takes `{userId, action, key}` and its `where` carries
+   `human_actions.user_id`. Stated in three places: that function's docblock (with what the narrower
+   scope gives up — two accounts under one key perform two commands, which the *aggregate* refuses,
+   and a row whose user was deleted frees its key rather than refusing it), `routes/idempotency.ts`'s
+   module note, and a new paragraph in technical/08 beside WP-21's "two mechanisms". The route reads
+   the actor **before** the replay, which it has to now. Asserted twice: `routes/commands.test.ts`
+   sends the same key from two accounts to all eleven commands and both perform (and each caller's
+   own replay is still a replay), and `test/integration/server/onboarding.integration.test.ts` reads
+   the SQL predicate itself — one user finds the attempt, another finds `null`, and the case is
+   self-canarying, because the row's existence is proved by the first read.
+2. **Both run commands name their task.** `human_actions.task_id` was null for `run.retry` and
+   `run.cancel` although both results carry it, and `human_actions_task_id_idx` is the table's only
+   index — a row no reader of the table will find. `command()`'s `taskId` now also takes a function of
+   the result, which is where a run command learns its task. Asserted in the unit tier over all eleven
+   and in the e2e over the two, whose comment said the row "carries the run rather than the task" and
+   now says what it does.
+3. **The two older commands redact their free text.** The module note claimed every command redacts
+   what it stores and three of the five did: a question's `answer` and an approval's `reason` went to
+   the row and the event verbatim, and the answer is read back into the next prompt of the stage that
+   asked. `redactor` moved from `HumanCommandDependencies` to `TaskCommandDependencies` (the harness
+   arms both from one `commandSecrets` list, so `saga.test.ts`'s commands measure the real path too),
+   and both commands now redact. Two cases plant a credential and read the stored aggregate *and* the
+   event.
+4. Nit: `feedbackIdOf`'s docblock described a `''` the function never returns (rule 86) — it refuses.
+5. Nit: the nine aggregate refusals mapped to 409/404/503 for **every** route, so a genuine bug
+   elsewhere stopped being logged as unexpected — and `PolicyViolationError` is also what a malformed
+   **shipped** pipeline template raises. Narrowed rather than explained: `errors.ts` exports
+   `commandRefusal`, `routes/commands.ts` applies it around the command it issues (`performing`), and
+   `toApiError` answers the same classes `500 internal_error, unexpected: true` everywhere else.
+   `errors.test.ts` asserts both directions. The status choices stay in `errors.ts`, so its "the only
+   place a status code is chosen" claim survives.
+6. Nit: the different-body case accepted `[400, 409]`, which **measured** (a probe over the eleven, on
+   a copy) `rework`, `feedback`, `answer` and `run-retry` answering **400** — the reuse 409 was
+   unexercised for four of the eleven, because those four schemas are strict objects with no `reason`.
+   Each command now carries an `otherBody` its own schema accepts and that differs meaningfully, and
+   the assertion is exactly `409 idempotency_key_reused`.
+
+**Mutation, on copies (rule 77), each calibrated green first:** dropping `taskId` from the two run
+routes kills case 2 by name; passing a constant user to `idempotentReplay` kills the scope case and
+two replay cases; removing either `redactText` kills both cases of item 3.
+
 ### WP-14a — the ten skills and the provisioning copy
 
 **What exists now.** `packages/prompts/skills/<name>/SKILL.md` × 10 (product/13's list, ~2.1–2.6 kB
@@ -10145,6 +10478,56 @@ project) and `gitProjects` (the fake git provider has to know the path
 `repositoryPathOf(projects.repo_url)` derives for a fixture repository on disk).
 
 ## Discovered work — session 5 (not in plan)
+- **A cancelled run's spend is never recorded** (WP-15i). `POST /api/runs/:id/cancel` writes the
+  row's cost as `0, is_estimate: true` because the request cannot know what the session had burned,
+  and the run's own process — which knows exactly — is refused the write by the conditional
+  `RunRepository.finish` that stops it from overwriting the human's `cancelled` with its own
+  `completed`. So a cancelled attempt understates the project's spend, in `runs`, in `cost_entries`
+  (the ledger reads `run.finished`, which carries the zero) and in `tasks.cost_actual`. Closing it
+  needs a narrow `runs.recordCost` the losing process may make, or a cost-correction event the
+  catalogue does not have; the first belongs with WP-19's owner. Stated at `lostTheRun`
+  (`packages/application/src/pipeline/stage-executor.ts`), at `cancelRunCommand` and in **Q70**.
+  *Refiner (session 5): **refined into backlog 50**, with the branch traced and two consequences this
+  bullet does not carry. The ledger does receive the event and discards it at `no_spend`
+  (`packages/domain/src/cost/ledger.ts:288-291`), so `sum(cost_entries) = sum(cost_rollup_daily)` —
+  the invariant WP-19 is measured by — **stays true while the money is lost** (rule 79). And
+  `chargeBudgets` is never reached, so no budget window moves: cancelling is the one human action
+  that spends a project's budget without charging it.*
+- **`rework` does not close the old merge request or create a fresh branch** (WP-15i). product/04's
+  "human rejection = reset, not patching" has two halves: the task returns with the human's
+  reasoning and the agent-to-agent counters reset (both done), *and* "the old MR is closed, a fresh
+  branch is created". Neither outbound call is made — they belong to the `pipeline.outbound` duty
+  shape of WP-15d rather than to the command's transaction, and the task keeps the merge request it
+  has. Stated at `reworkStageCommand`; nobody owns it.
+  *Refiner (session 5): **refined into backlog 51**, with the layer under it that the bullet does not
+  name — `mergeRequestUpdateSchema` has **no state field**
+  (`packages/application/src/ports/integrations/git-provider.ts:212-218`), so no adapter in this tree
+  can close a merge request at all; it is a port gap before it is a missing duty. And it is **latent**:
+  nothing opens a code merge request today (`open_mr` refuses by name,
+  `apps/server/src/platform-tools.ts:80-81`), so the trigger is the row that builds it.*
+- **`human_actions` has no reader** (WP-15i). WP-21 gave the table its first writer and this row
+  gave it eleven more, and nothing serves it: `GET /api/org/audit` reads `config_audit`, which is a
+  different table with a different shape. Every assertion about who did what is therefore a SQL read
+  in a test. technical/08's Org row has no endpoint for it either — the honest place is probably a
+  `GET /api/tasks/:id/events`-shaped read on the task screen, which is also unserved. Nobody owns it.
+  *Refiner (session 5): **refined into backlog 52**, and one clause is sharper than the bullet has it —
+  technical/08 does publish an audit endpoint and promises an audit of every human action
+  (`docs/technical/08-api-and-realtime.md:8`, `:14`, `:118`), so this is a **defect against the
+  document** rather than an unbuilt feature: one endpoint serves one of the two tables that sentence
+  names.*
+- **Two concurrent requests carrying the same `Idempotency-Key` are both performed** (WP-15i,
+  inherited from WP-21's `findIdempotentAttempt` residual and now wider, because a task command has
+  no unique key underneath it). Both read "no previous attempt" before either commits. What bounds
+  the damage is the aggregate and the queue rather than the header — `tasks.version` makes one of
+  two `retry-stage` calls re-read, and the `stage.execute` queue is `stately` per task with the
+  executor re-validating the attempt, so the pair produces one extra attempt number and one run.
+  Closing it needs a unique index on `(action, params->>'idempotency_key')` **plus** writing the row
+  before the effect, which trades a double-perform for a key that claims a command nobody performed.
+  Stated in `routes/idempotency.ts`; nobody owns it.
+  *Refiner (session 5): **folded into backlog 47** rather than filed again — it is WP-21's window, not
+  a second one. The answer to "what do two simultaneous requests do" is a **double effect**, not a 500
+  and not a 409, except where the aggregate itself refuses the repeat (`answer`, `decide`); the
+  per-command breakdown and the ordering trade are in 47's update.*
 - **A discovery run whose enqueue is lost leaves the task `active` at a stage nothing runs, and
   every retry answers `already_started`** (WP-21 review round 3). `startProjectDiscovery`
   (`packages/application/src/onboarding/discovery.ts`) commits the task, the pipeline row and the

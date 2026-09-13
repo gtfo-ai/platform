@@ -794,3 +794,45 @@ export const listProjectTasks = async (
       : {}),
   };
 };
+
+/**
+ * Where a task stands **now** — the answer every task command gives back (WP-15i).
+ *
+ * Re-read after the command's transaction rather than returned from the aggregate it wrote, so a
+ * replay and a first call answer from the same source, and so the answer is the row's rather than
+ * one writer's belief about it. It is two columns on purpose: `taskDetailResponseSchema` is five
+ * queries, and a command that answered it would make every button re-read the whole screen.
+ */
+export const findTaskPosition = async (
+  database: Database,
+  taskId: string,
+): Promise<{ readonly state: TaskState; readonly currentStage: string | null } | null> => {
+  const rows = await database
+    .select({ state: tasks.state, currentStage: tasks.currentStage })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  const row = rows[0];
+  return row === undefined ? null : { state: row.state, currentStage: row.currentStage };
+};
+
+/** The same for a run command: the run's status and the task it belongs to (WP-15i). */
+export const findRunPosition = async (
+  database: Database,
+  runId: string,
+): Promise<{
+  readonly status: RunStatus;
+  readonly taskId: string;
+  readonly taskState: TaskState;
+} | null> => {
+  const rows = await database
+    .select({ status: runs.status, taskId: runs.taskId, taskState: tasks.state })
+    .from(runs)
+    .innerJoin(tasks, eq(tasks.id, runs.taskId))
+    .where(eq(runs.id, runId))
+    .limit(1);
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : { status: row.status, taskId: row.taskId, taskState: row.taskState };
+};

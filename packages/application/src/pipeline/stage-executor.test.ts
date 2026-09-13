@@ -395,6 +395,20 @@ describe('a stage write that lost every race with another writer', () => {
     const harness = harnessWith({
       runs: { refinement: { status: 'completed', terminalReason: 'success', costUsd: 0.4 } },
     });
+    /**
+     * The in-memory store does not roll back (its divergence 4), and since WP-15i the executor's
+     * `runs.finish` is **conditional on the run still being live** — so on the second attempt the
+     * fake would answer "somebody else ended it" for a write this same transaction made and then
+     * abandoned. A real database rolls that write back with the transaction; here the harness does
+     * it, which is what keeps this case about the bound rather than about the fake. The conditional
+     * write's own behaviour is asserted in `pipeline-store-concurrency-suite.ts`, against both.
+     */
+    const runRepository = harness.store.runs as { finish: typeof harness.store.runs.finish };
+    const realFinish = runRepository.finish.bind(harness.store.runs);
+    runRepository.finish = async (tx, outcome) => {
+      await realFinish(tx, outcome);
+      return true;
+    };
     const repository = harness.store.tasks as {
       save: typeof harness.store.tasks.save;
     };
@@ -429,5 +443,107 @@ describe('a stage write that lost every race with another writer', () => {
     // Nothing was written from the stale snapshot: the spend the losing transaction carried is not
     // on the row, because its transaction rolled back every time.
     expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+});
+
+/**
+ * A human command landing **while a run is in flight** (WP-15i).
+ *
+ * Both cases patch `runs.insert` — the write that marks the moment the run starts — and make the
+ * human's write from inside that same transaction. That is the window under test, expressed as an
+ * ordering rather than as load (standing rule 76): a wall-clock race would reproduce it rarely and
+ * on somebody else's machine.
+ */
+describe('a task a human stopped while its stage was running', () => {
+  const harnessThatStopsMidRun = (
+    stop: (
+      harness: PipelineHarness,
+      tx: Parameters<PipelineHarness['store']['tasks']['save']>[0],
+      runId: string,
+    ) => Promise<void>,
+  ): PipelineHarness => {
+    const harness = harnessWith({
+      runs: {
+        refinement: { status: 'completed', terminalReason: 'success', costUsd: 0.4 },
+      },
+    });
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const real = repository.insert.bind(harness.store.runs);
+    repository.insert = async (tx, run) => {
+      await real(tx, run);
+      await stop(harness, tx, run.id);
+    };
+    return harness;
+  };
+
+  /** Which stages emitted `task.stage.completed` — `intake` always does; it is a system stage. */
+  const completedStages = (harness: PipelineHarness): string[] =>
+    harness
+      .events()
+      .filter((event) => event.type === 'task.stage.completed')
+      .map((event) => (event.payload as { stage: string }).stage);
+
+  it('records the run and its spend, and does not complete the stage', async () => {
+    const harness = harnessThatStopsMidRun(async (instance, tx) => {
+      const [stored] = instance.store.snapshot();
+      if (stored === undefined || stored.task.state !== 'active') {
+        return;
+      }
+      // What `POST /api/tasks/:id/pause` writes, in the one window that used to break the job:
+      // `completeStage` throws for a paused task, which failed the job into pg-boss's retry.
+      await instance.store.tasks.save(tx, {
+        ...stored,
+        task: { ...stored.task, state: 'paused' },
+      });
+    });
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.task.state).toBe('paused');
+    expect(task.task.currentStage).toBe('refinement');
+    // The run is recorded, so the money is accounted for…
+    expect(task.costActualUsd).toBeCloseTo(0.4, 6);
+    expect(harness.types()).toContain('run.finished');
+    // …and the stage is not completed, so the pipeline does not advance past the human. `intake`
+    // is in the list because it is a system stage that completes the moment it is entered.
+    expect(completedStages(harness)).toEqual(['intake']);
+  });
+
+  it('writes nothing at all when the run was ended by somebody else first', async () => {
+    let cancelled: string | null = null;
+    const harness = harnessThatStopsMidRun(async (instance, tx, runId) => {
+      // What `POST /api/runs/:id/cancel` writes: the row moves to a terminal status, which is the
+      // predicate `RunRepository.finish` carries. The executor must then discard its own outcome
+      // rather than overwriting the human's decision with it.
+      cancelled = runId;
+      await instance.store.runs.finish(tx, {
+        runId,
+        status: 'cancelled',
+        terminalReason: 'cancelled',
+        sessionId: null,
+        numTurns: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: { usd: 0, is_estimate: true, price_list_id: null },
+        wallMs: 0,
+      });
+    });
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    // The task is untouched: still active at the stage, with no spend from a run it did not own.
+    expect(task.task.currentStage).toBe('refinement');
+    expect(task.costActualUsd).toBe(0);
+    expect(completedStages(harness)).toEqual(['intake']);
+    // And the human's terminal status survived (the executor's `completed` never landed).
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, cancelled as unknown as string),
+    );
+    expect(run?.status).toBe('cancelled');
   });
 });

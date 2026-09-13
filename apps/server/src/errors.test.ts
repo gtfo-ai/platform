@@ -1,8 +1,14 @@
+import { StageNotCurrentError, UnknownAggregateError } from '@platform/application';
 import { apiErrorSchema } from '@platform/contracts';
-import { PermissionDeniedError } from '@platform/domain';
+import {
+  IllegalTransitionError,
+  PermissionDeniedError,
+  PolicyViolationError,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
   BadRequestError,
+  commandRefusal,
   ForbiddenError,
   HttpError,
   NotFoundError,
@@ -83,5 +89,51 @@ describe('toApiError', () => {
     expect(mapped.statusCode).toBe(500);
     expect(mapped.body.error.code).toBe('invalid_stored_config');
     expect(mapped.unexpected).toBe(false);
+  });
+
+  it('treats an aggregate refusal it was not handed by a command route as a bug', () => {
+    // The narrowing (WP-15i's pre-merge round): these classes are the caller's fault only where
+    // the caller chose the transition. `PolicyViolationError` is also what a malformed shipped
+    // pipeline template raises, and answering that 409 `policy_violation` would tell an operator
+    // their request was wrong and log the platform's own defect at `info`.
+    for (const error of [
+      new IllegalTransitionError('Task', 'paused', 'paused'),
+      new PolicyViolationError('pipeline.template', 'template "ticket" is malformed'),
+      new StageNotCurrentError('implementation' as never, 'refinement' as never),
+      new UnknownAggregateError('question does not exist'),
+    ]) {
+      const mapped = map(error);
+      expect(`${error.name} ${mapped.statusCode} ${String(mapped.unexpected)}`).toBe(
+        `${error.name} 500 true`,
+      );
+    }
+  });
+});
+
+describe('commandRefusal', () => {
+  it('answers the status each refusal is to a caller who chose the transition', () => {
+    // The other side of the narrowing (rule 42): translated, the same classes are 4xx/503 with a
+    // code a client branches on. `routes/commands.test.ts` drives eight of the nine through the
+    // router; `PolicyViolationError` is the one no shipped command has been made to raise (a
+    // command compiles the task's template, and `compilePipeline` raises it for a malformed one),
+    // so it is driven here and nowhere else — standing rule 22, said rather than implied.
+    expect(commandRefusal(new IllegalTransitionError('Task', 'paused', 'paused'))).toMatchObject({
+      statusCode: 409,
+      code: 'illegal_transition',
+    });
+    expect(commandRefusal(new UnknownAggregateError('question x'))).toMatchObject({
+      statusCode: 404,
+      code: 'not_found',
+    });
+    expect(commandRefusal(new PolicyViolationError('budget.limit', 'negative'))).toMatchObject({
+      statusCode: 409,
+      code: 'policy_violation',
+    });
+  });
+
+  it('answers null for everything else, so a real failure stays a 500', () => {
+    expect(commandRefusal(new Error('connect ECONNREFUSED'))).toBeNull();
+    expect(commandRefusal(new NotFoundError('task x'))).toBeNull();
+    expect(commandRefusal(undefined)).toBeNull();
   });
 });

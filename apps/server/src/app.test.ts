@@ -78,6 +78,7 @@ const build = async (
     webhooks: null,
     knowledge: null,
     onboarding: null,
+    commands: null,
     readiness: async () => {
       if (harness.readinessError !== null) {
         throw harness.readinessError;

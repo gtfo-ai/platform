@@ -33,9 +33,12 @@
  * - **A retry is cheap because of the unique key** — `projects.key`,
  *   `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)`. The command finds
  *   the row and answers with it, so there is no stored *response* to keep consistent.
- * - **A repeat with a different body is refused**, by {@link idempotencyGuard}: every performed
+ * - **A repeat with a different body is refused**, by `idempotencyGuard` (`./idempotency.ts`, which
+ *   is where the whole mechanism moved when WP-15i gave it eleven more callers): every performed
  *   command records a digest of its canonical request in the `human_actions` row beside the key,
- *   and a later request under that key whose digest differs is `409 idempotency_key_reused`. A
+ *   and a later request **from that caller** under that key whose digest differs is
+ *   `409 idempotency_key_reused` — the lookup is scoped `(user_id, action, key)`, so another
+ *   account's identical string is not this caller's attempt (`findIdempotentAttempt`). A
  *   unique key alone cannot do this — a changed `name` on an existing project key is a silent
  *   replay, and `createIntegration` has no comparable key at all — and four places in this
  *   repository claim it can, so it is implemented rather than the sentences being narrowed.
@@ -63,7 +66,7 @@
  * is what an operator needs to reconstruct what was configured (BD-002, BD-003).
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   apiErrorSchema,
@@ -95,7 +98,6 @@ import {
   ensureOrganisation,
   environmentSecretSource,
   ForbiddenSecretNameError,
-  findIdempotentAttempt,
   findProjectById,
   listProjectBindings,
   MissingSecretError,
@@ -104,6 +106,7 @@ import {
   writeIntegrationHealth,
   writeProjectConfig,
 } from '../queries/onboarding-queries.js';
+import { configHashOf, idempotencyGuard, requireIdempotencyKey } from './idempotency.js';
 
 export interface OnboardingRoutesOptions {
   readonly database: Database;
@@ -135,9 +138,6 @@ const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
 const integrationParamsSchema = z.strictObject({ integration_id: z.uuid() });
 
-/** Longest `Idempotency-Key` this server stores in an audit row. */
-export const MAX_IDEMPOTENCY_KEY_CHARS = 200;
-
 /**
  * How long `POST /api/integrations/:id/test` waits for the account's rate-limit budget.
  *
@@ -146,105 +146,6 @@ export const MAX_IDEMPOTENCY_KEY_CHARS = 200;
  * the provider call — the provider's own timeout is the adapter's.
  */
 export const PROBE_TIMEOUT_MS = 10_000;
-
-/**
- * The `Idempotency-Key` of technical/08 § "Principles", required on a POST that creates.
- *
- * Client-chosen text on its way to a `human_actions` row, so it is bounded and its character set is
- * fixed rather than escaped: a key is an identity, and anything outside the set is refused rather
- * than rewritten (the argument `idempotencyScopeFor` makes for a provider key, one layer out).
- */
-export const readIdempotencyKey = (request: FastifyRequest): string => {
-  const raw = request.headers['idempotency-key'];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (value === undefined || value.length === 0) {
-    throw new HttpError(
-      400,
-      'idempotency_key_required',
-      'this command creates something, so it needs an Idempotency-Key header: send the same key when you retry (technical/08)',
-    );
-  }
-  if (value.length > MAX_IDEMPOTENCY_KEY_CHARS || !/^[A-Za-z0-9._:-]+$/.test(value)) {
-    throw new HttpError(
-      400,
-      'invalid_request',
-      `the Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_CHARS} characters of A-Z a-z 0-9 . _ : -`,
-    );
-  }
-  return value;
-};
-
-/**
- * Refuses a request that reuses a key with a **different** body, and passes anything else.
- *
- * The decision, separated from the read so it can be driven directly: it has three branches and
- * two of them are "do nothing", which is exactly the shape that reads as tested because the happy
- * path runs constantly (standing rule 67).
- *
- * The digest is over the canonical JSON of whatever the command considers its request — the body
- * for a create, the path's project for a command whose body is empty — so key ordering does not
- * make two identical requests look different (`configHashOf` uses the same serialiser and says
- * why).
- *
- * Absent is not an error: a key nobody has used is the first attempt, and a row written before this
- * guard existed carries no digest and is treated as one (there is nothing to compare it to, and
- * refusing would break a retry of a command that already succeeded).
- */
-export const assertIdempotentRequest = (input: {
-  readonly action: string;
-  readonly key: string;
-  /** The digest recorded by a previous attempt under this key, or `null` when there was none. */
-  readonly previousDigest: string | null;
-  readonly digest: string;
-}): void => {
-  if (input.previousDigest !== null && input.previousDigest !== input.digest) {
-    throw new HttpError(
-      409,
-      'idempotency_key_reused',
-      `Idempotency-Key "${input.key}" was already used for a ${input.action} with different arguments; use a new key, or send the request you sent the first time`,
-    );
-  }
-};
-
-const idempotencyGuard = async (
-  database: Database,
-  input: { readonly action: string; readonly key: string; readonly request: unknown },
-): Promise<string> => {
-  const digest = configHashOf(input.request);
-  const previous = await findIdempotentAttempt(database, input.action, input.key);
-  assertIdempotentRequest({
-    action: input.action,
-    key: input.key,
-    previousDigest: previous?.bodyDigest ?? null,
-    digest,
-  });
-  return digest;
-};
-
-/**
- * `projects.config_hash` — a digest of the stored document, over its canonical JSON.
- *
- * It is what `GET …/config` publishes as `hash` and what a later `PUT` may send back as
- * `base_hash`, so the two have to be the same function; it is computed here because the write is
- * the only thing that produces one. Keys are sorted so that a document and the same document with
- * its keys in another order hash alike — a client that round-trips through `JSON.parse` must not
- * be told its configuration moved.
- */
-export const configHashOf = (config: unknown): string =>
-  createHash('sha256').update(canonicalJson(config)).digest('hex').slice(0, 32);
-
-const canonicalJson = (value: unknown): string => {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`;
-  }
-  return JSON.stringify(value ?? null);
-};
 
 export const registerOnboardingRoutes = async (
   app: FastifyInstance,
@@ -309,13 +210,15 @@ export const registerOnboardingRoutes = async (
       },
     },
     async (request, reply) => {
-      const key = readIdempotencyKey(request);
+      const key = requireIdempotencyKey(request);
+      // The actor first: a key is scoped to the caller who used it (`./idempotency.ts`).
+      const actor = actorOf(request);
       const digest = await idempotencyGuard(options.database, {
+        userId: actor.userId,
         action: 'project.create',
         key,
         request: request.body,
       });
-      const actor = actorOf(request);
       // Created on demand: `bootstrapAdministrator` makes the first user and no organisation, so
       // a fresh instance had an administrator who could not create a project (`ensureOrganisation`
       // has the reasoning and the lock).
@@ -378,13 +281,14 @@ export const registerOnboardingRoutes = async (
       },
     },
     async (request, reply) => {
-      const key = readIdempotencyKey(request);
+      const key = requireIdempotencyKey(request);
+      const actor = actorOf(request);
       const digest = await idempotencyGuard(options.database, {
+        userId: actor.userId,
         action: 'integration.create',
         key,
         request: request.body,
       });
-      const actor = actorOf(request);
       const orgId = await ensureOrganisation(options.database);
       const provider = findShippedProvider(request.body.provider);
       if (provider === undefined) {
@@ -699,16 +603,17 @@ export const registerOnboardingRoutes = async (
       },
     },
     async (request, reply) => {
-      const key = readIdempotencyKey(request);
+      const key = requireIdempotencyKey(request);
       const projectId = request.params.project_id;
       // The body is empty, so the request *is* the project the path names: a key reused for a
       // different project is the reuse this guard exists to catch.
+      const actor = actorOf(request);
       const digest = await idempotencyGuard(options.database, {
+        userId: actor.userId,
         action: 'project.discovery.start',
         key,
         request: { project_id: projectId },
       });
-      const actor = actorOf(request);
       if ((await findProjectById(options.database, projectId)) === null) {
         throw new NotFoundError(`project ${projectId}`);
       }

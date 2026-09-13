@@ -19,7 +19,7 @@
 import type { ArtifactType, Id, Slug } from '@platform/contracts';
 import { workpadRefSchema } from '@platform/contracts';
 import type { Approval, Question, QueuedTask } from '@platform/domain';
-import { countsAsActive, countsInPipeline } from '@platform/domain';
+import { countsAsActive, countsInPipeline, isActiveRunStatus } from '@platform/domain';
 import type {
   ApprovalRepository,
   ArtifactRepository,
@@ -278,10 +278,14 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
       );
       runs.set(run.id, clone({ ...run, stage: linked ? run.stage : null }));
     },
+    /** Conditional on the run still being live, exactly as the SQL adapter's `where` clause is. */
     finish: async (_tx, outcome) => {
       const run = runs.get(outcome.runId);
       if (run === undefined) {
         throw new PipelineStoreError(`run ${outcome.runId} does not exist`);
+      }
+      if (!isActiveRunStatus(run.status)) {
+        return false;
       }
       runs.set(outcome.runId, {
         ...run,
@@ -293,6 +297,7 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
         cost: outcome.cost,
         wallMs: outcome.wallMs,
       });
+      return true;
     },
     load: async (_tx, runId) => {
       const run = runs.get(runId);

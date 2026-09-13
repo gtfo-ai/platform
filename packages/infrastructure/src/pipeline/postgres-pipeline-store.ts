@@ -512,7 +512,7 @@ export const createPostgresPipelineStore = (
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
-                 $4, $5, $6, $7, $8, $9, $10, now())`,
+                 $4, $5, $6, $7, $8, $9, $10, $12)`,
         [
           run.id,
           run.taskId,
@@ -525,9 +525,17 @@ export const createPostgresPipelineStore = (
           run.promptVersion,
           run.status,
           run.stage,
+          // The caller's clock rather than `now()`, so the column and the `run.started` event agree
+          // and so the in-memory store can answer the same value (WP-15i).
+          run.startedAt,
         ],
       );
     },
+    /**
+     * Conditional on the run still being live — the port's own contract, and the reasoning is
+     * there. The predicate is `ACTIVE_RUN_STATUSES`, passed as a parameter rather than inlined so
+     * the SQL and the domain's table cannot drift apart.
+     */
     finish: async (tx, outcome) => {
       const result = await sqlOf(tx).query(
         `update runs
@@ -535,7 +543,7 @@ export const createPostgresPipelineStore = (
                 input_tokens = $6, output_tokens = $7, cache_write_5m_tokens = $8,
                 cache_write_1h_tokens = $9, cache_read_tokens = $10, usd_reported = $11,
                 wall_ms = $12, ended_at = now()
-          where id = $1`,
+          where id = $1 and status = any($13::run_status[])`,
         [
           outcome.runId,
           outcome.status,
@@ -549,17 +557,28 @@ export const createPostgresPipelineStore = (
           outcome.usage.cache_read_tokens,
           outcome.cost.is_estimate ? null : outcome.cost.usd,
           outcome.wallMs,
+          [...ACTIVE_RUN_STATUSES],
         ],
       );
-      if (result.rowCount === 0) {
+      if (result.rowCount !== 0) {
+        return true;
+      }
+      // Nothing was written: either the run is already terminal (somebody else ended it) or it
+      // does not exist. They are different facts and the caller branches on them differently, so
+      // the losing path pays for one extra read rather than the winning path paying for a join.
+      const { rows } = await sqlOf(tx).query<{ id: string }>('select id from runs where id = $1', [
+        outcome.runId,
+      ]);
+      if (rows.length === 0) {
         throw new PipelineRowMissingError(`run ${outcome.runId} does not exist`);
       }
+      return false;
     },
     load: async (tx, runId) => {
       const { rows } = await sqlOf(tx).query<RunRow>(
         `select r.id, r.task_id, r.project_id, s.stage, r.role, r.mode, r.attempt, r.model,
                 r.effort, r.prompt_version, r.status, r.terminal_reason, r.session_id, r.num_turns,
-                r.usd_reported, r.usd_estimated, r.wall_ms, r.created_at
+                r.usd_reported, r.usd_estimated, r.wall_ms, r.created_at, r.started_at
            from runs r
            left join task_stages s on s.id = r.task_stage_id
           where r.id = $1`,
@@ -771,6 +790,7 @@ interface RunRow extends Record<string, unknown> {
   usd_estimated: string;
   wall_ms: string | number;
   created_at: Date;
+  started_at: Date | null;
 }
 
 const toStoredRun = (row: RunRow): StoredRun => ({
@@ -795,6 +815,8 @@ const toStoredRun = (row: RunRow): StoredRun => ({
       : { usd: usd(row.usd_reported), is_estimate: false, price_list_id: null },
   wallMs: Number(row.wall_ms),
   createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
+  startedAt:
+    row.started_at === null ? null : (new Date(row.started_at).toISOString() as IsoDateTime),
 });
 
 const QUESTION_SELECT = `select q.id, q.task_id, q.stage, q.run_id, q.text, q.options, q.blocking,

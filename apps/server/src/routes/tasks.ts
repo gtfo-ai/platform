@@ -5,8 +5,8 @@
  * composite, so this route is where the projections of five tables meet the DTO the SPA parses. The
  * *commands* of technical/08 § "Tasks" (`pause`, `resume`, `retry-stage`, `answer`, …) are not
  * here — each of them writes, and a write needs the aggregate, the human-action audit row and an
- * idempotency key rather than a query. They belong to the work package that gives the pipeline an
- * HTTP mutation surface; this row was scoped to the reads (`13-implementation-plan.md`, WP-15h).
+ * idempotency key rather than a query. They are **served since WP-15i**, next door in
+ * `routes/commands.ts`; this row was scoped to the reads (`13-implementation-plan.md`, WP-15h).
  *
  * `checks` is the other absence worth naming: `taskDetailResponseSchema` has no field for them, so
  * there is nothing here to omit — the Checks panel names the same gap in its own docblock.
@@ -38,10 +38,9 @@ export const registerTaskRoutes = async (
       findProjectRole(options.database, projectId, userId),
   };
   const scope = scopeToProject({
-    database: options.database,
     param: 'task_id',
     what: 'task',
-    projectOf: findTaskProjectId,
+    projectOf: async (taskId) => findTaskProjectId(options.database, taskId),
   });
 
   typed.get(

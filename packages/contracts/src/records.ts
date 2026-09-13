@@ -109,7 +109,15 @@ export const workspaceRecordSchema = z.strictObject({
   retention_until: isoDateTimeSchema.nullish(),
 });
 
-/** Feedback aggregate (technical/02). Unverified authors are recorded, never acted on (BD-022). */
+/**
+ * Feedback aggregate (technical/02). Unverified authors are recorded, never acted on (BD-022).
+ *
+ * `stage` and `artifact_id` were added at WP-15i, when `POST /api/tasks/:id/feedback` became the
+ * first writer: `submitFeedbackRequestSchema` has carried both since WP-20 and this record had
+ * nowhere to put them, so feedback scoped to a stage would have been stored as feedback about the
+ * task. Both are nullish because three of the four scopes have no stage and none but `artifact` has
+ * an artifact — the scope says which of them is meaningful, and neither is enforced here.
+ */
 export const feedbackRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -117,6 +125,8 @@ export const feedbackRecordSchema = z.strictObject({
   author_user_id: idSchema.nullish(),
   author_identity: externalIdentitySchema.nullish(),
   scope: z.enum(['task', 'stage', 'artifact', 'project']),
+  stage: stageIdSchema.nullish(),
+  artifact_id: idSchema.nullish(),
   text: nonEmptyStringSchema,
   rating: z.int().min(1).max(5).nullish(),
   source_channel: answerChannelSchema,

@@ -8,7 +8,8 @@
  * can be held to:
  *
  *  - the `Idempotency-Key` guard, which is the one place a client-chosen string reaches a stored
- *    audit row;
+ *    audit row. It lives in `./idempotency.ts` since WP-15i, which gave it eleven more callers;
+ *    this file is still where its decisions are driven directly;
  *  - `configHashOf`, which two endpoints have to agree about — `GET …/config` publishes it and
  *    `PUT …/config` compares `base_hash` against it — so a hash that moved for a reason other than
  *    the document moving would tell an operator their configuration had changed when it had not.
@@ -21,20 +22,22 @@ import {
   assertIdempotentRequest,
   configHashOf,
   MAX_IDEMPOTENCY_KEY_CHARS,
-  readIdempotencyKey,
-} from './onboarding.js';
+  requireIdempotencyKey,
+} from './idempotency.js';
 
 const request = (value: string | string[] | undefined): FastifyRequest =>
   ({ headers: value === undefined ? {} : { 'idempotency-key': value } }) as FastifyRequest;
 
 describe('the Idempotency-Key guard', () => {
   it('returns the key a client sent', () => {
-    expect(readIdempotencyKey(request('wizard-step-1.attempt-2'))).toBe('wizard-step-1.attempt-2');
+    expect(requireIdempotencyKey(request('wizard-step-1.attempt-2'))).toBe(
+      'wizard-step-1.attempt-2',
+    );
   });
 
   it('refuses a request with no key, because an optional header is one production omits', () => {
     try {
-      readIdempotencyKey(request(undefined));
+      requireIdempotencyKey(request(undefined));
       expect.unreachable('a creating command must require the header');
     } catch (error) {
       expect(error).toBeInstanceOf(HttpError);
@@ -44,23 +47,23 @@ describe('the Idempotency-Key guard', () => {
   });
 
   it('refuses an empty key, which is not a key (standing rule 18)', () => {
-    expect(() => readIdempotencyKey(request(''))).toThrow(HttpError);
+    expect(() => requireIdempotencyKey(request(''))).toThrow(HttpError);
   });
 
   it('bounds the key and fixes its character set rather than escaping it', () => {
     // Both sides of the bound (rule 42): exactly at the cap is accepted, one past it is not.
     const exact = 'a'.repeat(MAX_IDEMPOTENCY_KEY_CHARS);
-    expect(readIdempotencyKey(request(exact))).toBe(exact);
-    expect(() => readIdempotencyKey(request(`${exact}a`))).toThrow(HttpError);
+    expect(requireIdempotencyKey(request(exact))).toBe(exact);
+    expect(() => requireIdempotencyKey(request(`${exact}a`))).toThrow(HttpError);
     // A key is an identity, so anything outside the set is refused and never rewritten — rewriting
     // would answer one client's call with another's key (the argument `idempotencyScopeFor` makes).
     for (const hostile of ['key with spaces', 'key/../..', 'key\nsecond', 'key%00', '🙂']) {
-      expect(() => readIdempotencyKey(request(hostile)), hostile).toThrow(HttpError);
+      expect(() => requireIdempotencyKey(request(hostile)), hostile).toThrow(HttpError);
     }
   });
 
   it('takes the first of a repeated header rather than joining them', () => {
-    expect(readIdempotencyKey(request(['first', 'second']))).toBe('first');
+    expect(requireIdempotencyKey(request(['first', 'second']))).toBe('first');
   });
 });
 

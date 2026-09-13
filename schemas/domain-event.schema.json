@@ -4430,6 +4430,26 @@
             "project"
           ]
         },
+        "stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Slug"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "text": {
           "$ref": "#/$defs/NonEmptyString"
         },

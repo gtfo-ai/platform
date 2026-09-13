@@ -45,6 +45,17 @@
 > the contract.
 
 - `feedback(id, task_id, project_id, source, external_ref, author, body text, sentiment, received_at, processed_at)` — idx `(task_id)`, `(project_id, received_at)`. *(Added at WP-03: technical/02 defines the `feedback.received` event and `contracts/records.ts` defines `feedbackRecordSchema`, but this document had no table. The table is created by the WP that first persists feedback; the row shape is fixed here so the contract and the schema cannot diverge.)*
+  **Amended at WP-15i, which gave feedback its first writer and did *not* create this table.** Two
+  things had already happened to the sentence above. The row shape and `feedbackRecordSchema` had
+  **diverged** — the schema has `scope`, `rating`, `author_user_id`, `author_identity` and
+  `source_channel` where the row has `source`, `author`, `body` and `sentiment`, and WP-15i added
+  `stage` and `artifact_id` to the schema because `submitFeedbackRequestSchema` has carried both
+  since WP-20 — so a table built from this line could not hold the record the event carries. And
+  the platform's **own** persistence for a record with no reader is the append-only event log:
+  `POST /api/tasks/:id/feedback` emits `feedback.received`, which is what WP-24's feedback intake
+  agent reads, and nothing in this build queries feedback by any other key. So the projection is
+  still unbuilt and is now owed to the **reader** that needs one (WP-24), which is also what will
+  settle the column list — from the published record rather than from this line.
 - `approvals(id, task_id, kind, status, requested_at, deadline_at, decided_by_user_id, decided_at, reason)`.
 - `workspaces(id, task_id, runner_id, path, status, base_commit, disk_bytes, retention_until, exported_blob_id, created_at, destroyed_at)`.
 - `human_actions(id, task_id, user_id, action, params jsonb, created_at)` — append-only.

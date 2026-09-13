@@ -15,17 +15,39 @@
  */
 import type { FastifyRequest } from 'fastify';
 import { NotFoundError, UnauthorizedError } from '../errors.js';
-import type { Database } from '../queries/identity-queries.js';
 
 export interface ScopeOptions {
-  readonly database: Database;
   /** The URL parameter holding the resource id. */
   readonly param: string;
   /** What the id names, for the 404 message: `run`, `task`. */
   readonly what: string;
-  /** The project the resource belongs to, or `null` when there is no such resource. */
-  readonly projectOf: (database: Database, id: string) => Promise<string | null>;
+  /**
+   * The project the resource belongs to, or `null` when there is no such resource.
+   *
+   * A closure over whatever reads it rather than `(database, id)`, so a route module can be driven
+   * without one — the argument `requirePermission`'s `projectRole` makes, and what lets
+   * `routes/commands.test.ts` exercise eleven routes against plain functions.
+   */
+  readonly projectOf: (id: string) => Promise<string | null>;
+  /**
+   * Tolerate a path segment that is not a uuid, for a hook registered at `preValidation`.
+   *
+   * Every command route is (WP-15i): Fastify validates the **body** before `preHandler`, so a route
+   * that takes one would answer an anonymous caller `400` describing its own shape instead of
+   * `401`. The cost is that this hook then sees an unvalidated segment, and handing a non-uuid to a
+   * `uuid` column turns a 400 into a 500. So it is left unresolved: `requirePermission` reads the
+   * absent value as "organisation-scoped" and still refuses a caller who may not act, and the 400
+   * arrives from the validator a moment later. The same shape `routes/kb.ts` and
+   * `routes/onboarding.ts` use for their own `project` hooks.
+   *
+   * `false` (the default) is for a `preHandler`, where the id has already been validated and an
+   * unparseable one cannot arrive.
+   */
+  readonly lenient?: boolean;
 }
+
+/** A uuid, as the route schemas spell it; used only to decide whether a lookup is safe to make. */
+const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export const scopeToProject =
   (options: ScopeOptions) =>
@@ -34,7 +56,10 @@ export const scopeToProject =
       throw new UnauthorizedError('this endpoint needs an authenticated session');
     }
     const id = (request.params as Record<string, string>)[options.param] ?? '';
-    const projectId = await options.projectOf(options.database, id);
+    if (options.lenient === true && !UUID.test(id)) {
+      return;
+    }
+    const projectId = await options.projectOf(id);
     if (projectId === null) {
       throw new NotFoundError(`${options.what} ${id}`);
     }

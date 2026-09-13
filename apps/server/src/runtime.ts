@@ -55,6 +55,7 @@ import { agentRunEnvironment } from './agent.js';
 import { buildApp } from './app.js';
 import { createAuth } from './auth/better-auth.js';
 import { bootstrapAdministrator } from './auth/bootstrap.js';
+import { createTaskCommands } from './commands.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
@@ -460,6 +461,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         })
       : null;
 
+    /**
+     * The task and run command surface for the API half (WP-15i).
+     *
+     * Composed for every process that serves the API. `jobs` is what decides how much of it works:
+     * without a queue, pausing, cancelling, answering and deciding are all served, and the four
+     * commands that start a stage refuse by name rather than moving a task to a stage nothing runs.
+     */
+    const taskCommands = capabilities.api
+      ? createTaskCommands({ eventing, jobs, logger: loggerPort })
+      : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -568,6 +580,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       webhooks,
       knowledge: knowledgeCommands,
       onboarding: onboardingCommands,
+      commands: taskCommands,
       version: buildInfo(env),
       readiness: createReadinessCheck({
         database: database.db,

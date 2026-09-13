@@ -20,6 +20,7 @@ import {
   MAX_PROPOSAL_DELTA_BYTES,
   nonEmptyStringSchema,
   pathPatternSchema,
+  runStatusSchema,
   sequenceSchema,
   severitySchema,
   slugSchema,
@@ -368,16 +369,73 @@ export const taskDetailResponseSchema = z.strictObject({
   runs: z.array(runRecordSchema),
 });
 
-export const pauseTaskRequestSchema = z.strictObject({ reason: z.string().optional() });
-export const resumeTaskRequestSchema = z.strictObject({ reason: z.string().optional() });
-export const cancelTaskRequestSchema = z.strictObject({ reason: z.string().optional() });
+/**
+ * What a task command answers with (WP-15i).
+ *
+ * technical/08 fixes every command's *request* and leaves its response open, so this is a choice
+ * rather than a transcription — and it is the smallest thing a caller cannot get otherwise: where
+ * the task is **now**, read back from the row the command wrote, plus whether this particular
+ * request is what moved it.
+ *
+ * `performed: false` is an `Idempotency-Key` replay: a request whose key has already performed this
+ * command is answered with the task's current position and **nothing is performed twice**. It is
+ * not a stored response — the position is re-read, so a replay and a first call answer the same
+ * shape from the same source.
+ */
+export const taskCommandResponseSchema = z.strictObject({
+  task_id: idSchema,
+  state: taskStateSchema,
+  current_stage: stageIdSchema.nullable(),
+  performed: z.boolean(),
+});
+
+/** What a run command answers with: the run, and where its task now stands (WP-15i). */
+export const runCommandResponseSchema = z.strictObject({
+  run_id: idSchema,
+  task_id: idSchema,
+  status: runStatusSchema,
+  task_state: taskStateSchema,
+  performed: z.boolean(),
+});
+
+/** `POST /api/tasks/:id/feedback` — the feedback the command recorded (WP-15i). */
+export const submitFeedbackResponseSchema = z.strictObject({
+  feedback_id: idSchema,
+  task_id: idSchema,
+  performed: z.boolean(),
+});
+
+/**
+ * How much free text one command body may carry (WP-15i).
+ *
+ * Every `reason`, `instructions`, `answer` and feedback `text` below was an **unbounded** string
+ * until the routes that read them existed, and each of them is persisted: a reason reaches
+ * `task_stages.return_reason` and the `task.stage.returned` event, an answer reaches
+ * `questions.answer` and from there the next prompt, and a `human_actions` row carries whichever
+ * one the command was given. An unbounded string on a boundary is an unbounded row.
+ *
+ * 8 000 characters, the same number the prompt assembler caps return feedback at
+ * (`MAX_FEEDBACK_CHARS`), because that is where most of this text ends up. It is a **refusal**
+ * rather than a truncation: the client can show the writer their own text and let them shorten it,
+ * where a server that silently halves a sentence changes what it means. `steerRunRequestSchema`'s
+ * 10 000 is the precedent for bounding a command's text at all; it keeps its own number because a
+ * steer message is a turn in a conversation rather than a stored note.
+ */
+export const MAX_COMMAND_TEXT_CHARS = 8_000;
+
+const commandTextSchema = z.string().max(MAX_COMMAND_TEXT_CHARS);
+const requiredCommandTextSchema = nonEmptyStringSchema.max(MAX_COMMAND_TEXT_CHARS);
+
+export const pauseTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
+export const resumeTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
+export const cancelTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const retryStageRequestSchema = z.strictObject({
   stage: stageIdSchema,
-  reason: z.string().optional(),
+  reason: commandTextSchema.optional(),
 });
 export const returnToStageRequestSchema = z.strictObject({
   stage: stageIdSchema,
-  reason: nonEmptyStringSchema,
+  reason: requiredCommandTextSchema,
 });
 export const takeOverRequestSchema = z.strictObject({ reason: z.string().optional() });
 export const handBackRequestSchema = z.strictObject({
@@ -386,22 +444,22 @@ export const handBackRequestSchema = z.strictObject({
 });
 export const reworkRequestSchema = z.strictObject({
   stage: stageIdSchema,
-  instructions: nonEmptyStringSchema,
+  instructions: requiredCommandTextSchema,
 });
 
 export const answerQuestionRequestSchema = z.strictObject({
-  answer: nonEmptyStringSchema,
+  answer: requiredCommandTextSchema,
   option: nonEmptyStringSchema.optional(),
 });
 
 export const decideApprovalRequestSchema = z.strictObject({
   decision: z.enum(['approve', 'reject']),
-  reason: z.string().optional(),
+  reason: commandTextSchema.optional(),
 });
 
 export const submitFeedbackRequestSchema = z.strictObject({
   scope: z.enum(['task', 'stage', 'artifact', 'project']),
-  text: nonEmptyStringSchema,
+  text: requiredCommandTextSchema,
   rating: z.int().min(1).max(5).optional(),
   stage: stageIdSchema.optional(),
   artifact_id: idSchema.optional(),
@@ -445,10 +503,18 @@ export const steerRunRequestSchema = z.strictObject({
   message: nonEmptyStringSchema.max(10_000),
 });
 
-export const cancelRunRequestSchema = z.strictObject({ reason: z.string().optional() });
+export const cancelRunRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 
 export const retryRunRequestSchema = z.strictObject({
-  model: nonEmptyStringSchema.optional(),
+  /**
+   * The model to run the new attempt on, bounded at 128 characters (WP-15i).
+   *
+   * The platform publishes no list of model ids — `agenticConfigSchema`'s `model` is a free string,
+   * because a project may pin a model this build has never heard of — so the override cannot be an
+   * enum. The bound is the cost ledger's own: `MAX_LEDGER_MODEL_ID_LENGTH` is 128, and a name past
+   * it is refused a price row, so a longer one would produce a run whose spend cannot be ledgered.
+   */
+  model: nonEmptyStringSchema.max(128).optional(),
   effort: effortSchema.optional(),
   budget_usd: usdSchema.optional(),
 });
@@ -750,6 +816,9 @@ export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type AnswerQuestionRequest = z.infer<typeof answerQuestionRequestSchema>;
 export type DecideApprovalRequest = z.infer<typeof decideApprovalRequestSchema>;
 export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;
+export type TaskCommandResponse = z.infer<typeof taskCommandResponseSchema>;
+export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
+export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema>;
 export type TaskExportResponse = z.infer<typeof taskExportResponseSchema>;
 export type RunMessagesQuery = z.infer<typeof runMessagesQuerySchema>;
 export type RunMessagesResponse = z.infer<typeof runMessagesResponseSchema>;

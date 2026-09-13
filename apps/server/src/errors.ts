@@ -13,9 +13,26 @@
  *   know what to fix.
  * - **Validation failures are field-level.** `fastify-type-provider-zod` raises the zod issue list,
  *   which maps straight onto `details[]` — the shape `apiErrorSchema` already publishes.
+ * - **An error class is not a status on its own.** A domain refusal means "the caller chose a
+ *   transition the state machine has not" on the command surface and "this build has a bug"
+ *   anywhere else, so {@link commandRefusal} translates it for the routes that issue commands and
+ *   {@link toApiError} keeps answering `500 internal_error` for everyone else.
  */
+import {
+  CommandsUnavailableError,
+  IterationLimitReachedError,
+  RunNotLiveError,
+  StageNotCurrentError,
+  TaskConflictExhaustedError,
+  UnknownAggregateError,
+} from '@platform/application';
 import type { ApiError } from '@platform/contracts';
-import { PermissionDeniedError } from '@platform/domain';
+import {
+  IllegalTransitionError,
+  InvariantViolationError,
+  PermissionDeniedError,
+  PolicyViolationError,
+} from '@platform/domain';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 
 export class HttpError extends Error {
@@ -73,6 +90,73 @@ export class TooManyRequestsError extends HttpError {
     this.name = 'TooManyRequestsError';
   }
 }
+
+/**
+ * The refusals an **aggregate** or a command use case raises, as the answer they are to a caller
+ * who chose the transition (WP-15i; narrowed at the pre-merge round).
+ *
+ * `routes/commands.ts` calls it around the command it issues, and nothing else does — that call is
+ * the narrowing. Before it, `toApiError` recognised these nine classes for **every** route, which
+ * reads well for the command surface and badly everywhere else: `PolicyViolationError` is also what
+ * a malformed shipped pipeline template raises (`domain/pipeline/templates.ts`) and what a budget
+ * policy raises, and mapping those globally would answer `409 policy_violation` and log the
+ * platform's own bug at `info` as a refusal the caller earned. So `toApiError` still ends at
+ * `500 internal_error`, `unexpected: true`, for every one of them, and a route that means "the
+ * caller chose this transition" says so by translating first.
+ *
+ * The mapping itself stays here rather than in the route module, because this file is where a
+ * status code is chosen (see the module note).
+ *
+ * `409` for the state-machine four: the request is well-formed and the resource's current state is
+ * what conflicts with it. `PolicyViolationError` is in the list because a command compiles the
+ * task's template (`compilePipeline`) and a project's budget policy is a policy too — inside a
+ * command those are "your project's configuration refuses this", which a person can act on; on a
+ * route that reads, the same class is a malformed **shipped** template, which they cannot. The `code` names the *kind* of refusal and the message names the
+ * transition or the invariant, which is what a client branches on rather than parsing prose. The
+ * three that are not state-machine edges each name their own code, because they are three different
+ * things to tell a person: you asked about a stage the task has left, the loop you are spending is
+ * spent, and that run is not in a status this command can act on. `UnknownAggregateError` is the
+ * 404 of the same family — a command for a question or a run that does not exist.
+ *
+ * `CommandsUnavailableError` is `503` and not `500`: the request is fine and *this instance* cannot
+ * serve it, the same answer `routes/kb.ts` and `routes/onboarding.ts` give for a collaborator their
+ * process did not compose.
+ *
+ * `TaskConflictExhaustedError` is `409` (WP-15e, WP-15i): the pipeline's own jobs answer a spent
+ * write-conflict bound by escalating the task, because a job has nobody to tell. An HTTP request
+ * does — the caller is a person who can press the button again, and escalating from a request would
+ * park a task in `needs_human` for a race the human never saw.
+ */
+export const commandRefusal = (error: unknown): HttpError | null => {
+  if (error instanceof IllegalTransitionError) {
+    return new HttpError(409, 'illegal_transition', error.message);
+  }
+  if (error instanceof InvariantViolationError) {
+    return new HttpError(409, 'invariant_violation', error.message);
+  }
+  if (error instanceof PolicyViolationError) {
+    return new HttpError(409, 'policy_violation', error.message);
+  }
+  if (error instanceof StageNotCurrentError) {
+    return new HttpError(409, 'stage_not_current', error.message);
+  }
+  if (error instanceof IterationLimitReachedError) {
+    return new HttpError(409, 'iteration_limit_reached', error.message);
+  }
+  if (error instanceof RunNotLiveError) {
+    return new HttpError(409, 'run_not_live', error.message);
+  }
+  if (error instanceof TaskConflictExhaustedError) {
+    return new HttpError(409, 'task_conflict', error.message);
+  }
+  if (error instanceof UnknownAggregateError) {
+    return new HttpError(404, 'not_found', error.message);
+  }
+  if (error instanceof CommandsUnavailableError) {
+    return new HttpError(503, 'commands_unavailable', error.message);
+  }
+  return null;
+};
 
 export interface MappedError {
   readonly statusCode: number;

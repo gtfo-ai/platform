@@ -333,10 +333,39 @@ export interface StoredRun {
   readonly cost: RunCost | null;
   readonly wallMs: number;
   readonly createdAt: IsoDateTime;
+  /**
+   * When the run's session was started, or `null` for a row that never reached `starting`.
+   *
+   * Read since WP-15i, because `POST /api/runs/:run_id/cancel` ends a run from **another process**
+   * than the one executing it: the executor has the `Run` aggregate it created in memory and can
+   * compute the wall time from it, and a cancelling request has only the row. Without this the
+   * cancelled run's `wall_ms` would have to be written as `0`, which is a measurement nobody made.
+   *
+   * The SQL adapter writes `started_at = now()` in the insert, so a caller does not supply it; it
+   * is on this type because `load` answers it.
+   */
+  readonly startedAt: IsoDateTime | null;
 }
 
 export interface RunRepository {
   insert(tx: Transaction, run: StoredRun): Promise<void>;
+  /**
+   * Moves a **live** run to a terminal status, and answers whether this caller is the one that did.
+   *
+   * `false` means the row was already terminal when the statement ran: somebody else ended this run
+   * first. Since WP-15i there really are two candidates — the stage executor, which ends the run it
+   * started, and `POST /api/runs/:run_id/cancel`, which a human can fire while that run is in
+   * flight — so an unconditional `update … where id = $1` is the read-modify-write race standing
+   * rule 79 names, with the human's decision as the value that gets overwritten. The predicate is
+   * the run's own state machine (`ACTIVE_RUN_STATUSES`), which is why this needs no version column:
+   * a terminal status is terminal, so "did I move it" and "was it still live" are the same question.
+   *
+   * A caller that loses **must not** write the rest of what it was going to write — the executor
+   * returns `skipped` rather than completing a stage on a run a human cancelled, and the cancel
+   * command answers 409 rather than reporting a cancellation that did not happen.
+   *
+   * @throws when the run does not exist at all, which is a different fact from "already finished".
+   */
   finish(
     tx: Transaction,
     outcome: {
@@ -349,7 +378,7 @@ export interface RunRepository {
       readonly cost: RunCost;
       readonly wallMs: number;
     },
-  ): Promise<void>;
+  ): Promise<boolean>;
   load(tx: Transaction, runId: Id): Promise<StoredRun | null>;
   /**
    * What the task's runs add up to — the `totals` of `task.completed` / `task.cancelled`.

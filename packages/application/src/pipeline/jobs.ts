@@ -25,6 +25,7 @@
  * scheduled.
  */
 import type { Id, Slug } from '@platform/contracts';
+import { effortSchema } from '@platform/contracts';
 import { compilePipeline, interpret, isRunnableTaskState, stageOf } from '@platform/domain';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -59,6 +60,18 @@ export interface StageExecuteData {
    * is an unbounded retry — the same reasoning as `gate_checks` two lines up.
    */
   readonly start_attempts?: number;
+  /**
+   * The model and effort this **one attempt** runs on, when a human chose them (WP-15i).
+   *
+   * `POST /api/runs/:run_id/retry` is technical/08's "retry (model/effort override)", and the
+   * override has to travel on the wake-up because that is the only thing that reaches the process
+   * that plans the run. Absent is the ordinary case and means "whatever the project's configuration
+   * and the template say" — the override is **not** written to the project, so the next attempt of
+   * the same stage is back to the configured model rather than silently inheriting one human's
+   * choice.
+   */
+  readonly model?: string;
+  readonly effort?: string;
   readonly [key: string]: unknown;
 }
 
@@ -186,6 +199,8 @@ export const enqueueStage = async (
       attempt: job.attempt,
       ...(job.gateChecks === undefined ? {} : { gate_checks: job.gateChecks }),
       ...(job.startAttempts === undefined ? {} : { start_attempts: job.startAttempts }),
+      ...(job.overrides?.model === undefined ? {} : { model: job.overrides.model }),
+      ...(job.overrides?.effort === undefined ? {} : { effort: job.overrides.effort }),
     },
   });
 };
@@ -284,12 +299,20 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
   const gates = createGateEvaluator(options.integrations);
 
   return async (job) => {
+    // The payload is a boundary, so the one field with a closed set of values is parsed rather
+    // than cast: `effort` reaches the SDK, and a payload written by an older build (or by hand)
+    // must not become a spec nobody validated.
+    const overrides = {
+      ...(job.data.model === undefined ? {} : { model: job.data.model }),
+      ...(job.data.effort === undefined ? {} : { effort: effortSchema.parse(job.data.effort) }),
+    };
     const request: StageExecutionJob = {
       taskId: job.data.task_id,
       projectId: job.data.project_id,
       stage: job.data.stage,
       attempt: job.data.attempt,
       ...(job.data.start_attempts === undefined ? {} : { startAttempts: job.data.start_attempts }),
+      ...(Object.keys(overrides).length === 0 ? {} : { overrides }),
     };
 
     // The task travels out of the transaction beside the stage it resolved, because the next step

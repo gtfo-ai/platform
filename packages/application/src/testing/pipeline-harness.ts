@@ -30,9 +30,9 @@ import { createBudgetGuard } from '../cost/guard.js';
 import { costHandlers } from '../cost/runtime.js';
 import { EventBus } from '../events/event-bus.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
-import { exactSecretRedactor } from '../integrations/redaction.js';
+import { exactSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
-import type { TaskCommandDependencies } from '../pipeline/commands.js';
+import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipeline/commands.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
@@ -216,6 +216,15 @@ export interface HarnessOptions {
    * own** `runs` and `tasks` rows, so a ledger test charges the runs the pipeline really made.
    */
   readonly cost?: boolean;
+  /**
+   * Secrets the **command** surface's redactor knows (WP-15i) — `InjectedSecret`s, as
+   * `exactSecretRedactor` takes them.
+   *
+   * A test that plants one in an answer, an approval reason, a return reason or a piece of feedback
+   * proves the redaction really happens at the command rather than being asserted about a redactor
+   * nobody wired in.
+   */
+  readonly commandSecrets?: readonly InjectedSecret[];
 }
 
 export interface PipelineHarness {
@@ -237,8 +246,17 @@ export interface PipelineHarness {
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** Every spec the runner was started with, in order. */
   readonly specs: readonly RunSpec[];
-  /** What `answerTaskQuestion` and friends need (`../pipeline/commands.js`). */
+  /**
+   * What `answerTaskQuestion` and friends need (`../pipeline/commands.js`), redactor included.
+   *
+   * The redactor is `exactSecretRedactor` over {@link HarnessOptions.commandSecrets} rather than a
+   * do-nothing double, so a test that plants a credential in an answer, an approval reason, a
+   * return reason or a piece of feedback measures the real path (standing rule 31: an optional
+   * security dependency is an absent one).
+   */
   readonly commands: TaskCommandDependencies;
+  /** The same, plus what the HTTP command surface needs (WP-15i): the queue and the event store. */
+  readonly humanCommands: HumanCommandDependencies;
   script(stage: string, run: ScriptedRun): void;
   /** Appends the events and dispatches everything, running stage jobs until the loop is quiet. */
   publish(events: readonly DomainEvent[]): Promise<void>;
@@ -606,6 +624,17 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       correlationId,
       causeEventId: null,
     }),
+    // One redactor for both shapes, because `answerTaskQuestion` and `decideTaskApproval` store
+    // free text too (WP-15i's pre-merge round): a harness that armed only `humanCommands` would
+    // leave the two commands `saga.test.ts` drives measuring nothing.
+    redactor: exactSecretRedactor(options.commandSecrets ?? []),
+  };
+
+  const humanCommands: HumanCommandDependencies = {
+    ...commands,
+    jobs,
+    eventStore: memory.store,
+    logger: silentLogger,
   };
 
   return {
@@ -614,6 +643,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     store,
     jobs,
     commands,
+    humanCommands,
     runtime,
     clock,
     ids,

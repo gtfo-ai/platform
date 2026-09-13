@@ -44,8 +44,9 @@
 > `/context-pack` established. **WP-21 gave that table its writer**, so the read answers **200**
 > for an evaluated project and keeps the 409, with the row count, for one whose discovery run has
 > not happened; what a projection over `projects.readiness_level` could answer is still refused,
-> because `evaluated_at` and `criteria` would be invented. What is still missing from this document's tables is **most of** the
-> command surface and three more reads — `GET /api/org`, `GET /api/org/stats` and `GET …/stats`.
+> because `evaluated_at` and `criteria` would be invented. What is still missing from this document's tables is **part of** the
+> command surface (the list two paragraphs down) and three more reads — `GET /api/org`,
+> `GET /api/org/stats` and `GET …/stats`.
 >
 > **WP-21 served the onboarding wizard's seven** (product/06): `POST /api/projects`,
 > `POST /api/integrations`, `POST /api/integrations/:id/test`, `GET/PUT /api/projects/:id/bindings`,
@@ -55,16 +56,59 @@
 > (`projects.key`, `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)`), and
 > a **different** request under a used key is refused `409 idempotency_key_reused` by comparing a
 > digest of the canonical request recorded in the `human_actions` row beside the key. There is no
-> stored *response*: a legitimate retry is answered by re-reading the resource. What is still unbuilt on those two rows: `PATCH /api/org`,
-> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`
-> and `GET/PUT /api/projects/:id/budgets`, plus the twelve task and run commands.
+> stored *response*: a legitimate retry is answered by re-reading the resource.
+>
+> **An `Idempotency-Key` belongs to the caller.** Every lookup, for the wizard's three creates and
+> for the eleven commands below, is scoped `(user_id, action, key)` — the acting user, the command,
+> the string. This paragraph is where that is decided, because the tables above say only that the
+> header goes on a command a client may retry: the string is generated per attempt by a client, so
+> nothing distinguishes one account's `retry-1` from another's, and an installation-wide lookup
+> would refuse a legitimate command because a stranger used the same word and would tell the caller
+> that the stranger's command exists. What the scope gives up is stated at
+> `findIdempotentAttempt`: two accounts sending one key perform two commands, which the aggregate,
+> not the header, is what refuses.
+>
+> **WP-15i served the eleven task and run commands** — `POST /api/tasks/:id/{pause,resume,cancel,
+> retry-stage,return-to-stage,rework,feedback}`, `POST /api/tasks/:id/questions/:qid/answer`,
+> `POST /api/tasks/:id/approvals/:aid/decide` and `POST /api/runs/:id/{retry,cancel}`. Each loads
+> the aggregate and lets it decide: a move the state machine does not have is **409** naming the
+> transition (`illegal_transition`, plus `stage_not_current`, `iteration_limit_reached`,
+> `run_not_live` and `task_conflict` for the refusals that are not edges), and each accepted command
+> writes one `human_actions` row — **none** for a refused one — carrying the acting user, the
+> command's shape and the `Idempotency-Key`, never its free text, and naming the **task** in
+> `task_id` even for the two commands whose path names a run (that column carries the table's only
+> index, so a row without it is one no reader of the table will find). The header is **required** on the
+> seven where a repeat would create a second thing (answer, decide, retry-stage, return-to-stage,
+> rework, feedback, run retry) and **optional** on the four that are state assertions the aggregate
+> already refuses twice over (pause, resume, task cancel, run cancel); a replay under a used key
+> performs nothing and answers `performed: false` with the resource's current position. The guard
+> asks the **role** and the aggregate asks the **state**, which is why a wrong role is 403 and a
+> wrong state is 409. Those refusals are translated **at these routes** and not globally: the same
+> `IllegalTransitionError` on a route that reads is this build's bug, not the caller's request, and
+> stays a `500` (`apps/server/src/errors.ts`'s `commandRefusal`). Every piece of free text the
+> commands store — a question's answer, an approval's reason, a return's reason, rework instructions
+> and feedback — is redacted (TD-012) at the command that writes it, because the answer is read
+> back into the next prompt and the rest into events any projection carries.
+>
+> Two limits of that surface are the product's rather than the code's. `POST /api/runs/:id/cancel`
+> ends the run **as a record** and pauses its task; it cannot interrupt the model's session, because
+> reaching a live run from another process is Q52's unbuilt transport — the session ends on its own
+> and its outcome is then discarded, which is also why a cancelled run's spend is not accounted for.
+> And **no HTTP request escalates a task**: a spent iteration loop and an exhausted write-conflict
+> bound are both answered to the caller rather than parking the task in `needs_human`.
+>
+> What is still unbuilt on those rows: `PATCH /api/org`,
+> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`,
+> `GET/PUT /api/projects/:id/budgets`, `POST /api/tasks/:id/{take-over,hand-back,ask}` (WP-27 and
+> WP-31) and `POST /api/runs/:id/steer` (WP-27).
 >
 > **Only part of that list is kept true by a test, and the boundary is worth knowing.** The census is
-> **client-driven**: it compares the paths `apps/web/src` names against the router, so it holds the
-> twelve task and run commands the SPA calls and does not serve — each with the row that owns it —
-> and is blind to everything no client calls. WP-21's seven were never on that list: the client's
+> **client-driven**: it compares the paths `apps/web/src` names against the router, so its admitted
+> gaps are the paths the SPA calls and the server does not serve — each with the row that owns it —
+> and it is blind to everything no client calls. Since WP-15i there is **one**: `POST
+> /api/runs/:id/steer`, which is WP-27's. WP-21's seven were never on that list: the client's
 > calls and the routes landed in one change, so there was nothing to admit, and they are asserted
-> **positively** in the census instead. The four reads above, the writes no screen fires, and any route served but uncalled
+> **positively** in the census instead, as the eleven commands now are. The four reads above, the writes no screen fires, and any route served but uncalled
 > (`kb/health` is the shipped example) are outside it **by construction**, not by omission. This
 > paragraph is the only record of those, so it is the one to correct when one of them lands.
 >
@@ -74,7 +118,9 @@
 >
 > **The knowledge guards run at `preValidation`, not `preHandler`** — Fastify validates before
 > `preHandler`, so a route with a required query parameter or a non-uuid path segment would answer
-> an anonymous caller `400` describing its own shape instead of `401`. Every other guarded route
+> an anonymous caller `400` describing its own shape instead of `401`. The wizard's commands (WP-21)
+> and the eleven task and run commands (WP-15i) are there for the same reason one step further: they
+> all take a **body**, which Fastify validates before `preHandler` too. Every remaining guarded route
 > takes only uuids and never noticed.
 
 ## SSE contract

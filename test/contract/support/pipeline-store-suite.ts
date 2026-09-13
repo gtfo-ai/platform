@@ -508,6 +508,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           cost: null,
           wallMs: 0,
           createdAt: '2026-06-01T09:00:00.000Z',
+          startedAt: '2026-06-01T09:00:01.000Z',
         });
         await store.runs.finish(tx, {
           runId,
@@ -528,6 +529,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
         const loaded = await store.runs.load(tx, runId);
         expect(loaded?.status).toBe('completed');
+        // The instant the run started, stored as the caller gave it (WP-15i). It is what a run
+        // ended from another process — `POST /api/runs/:id/cancel` — computes its wall time from,
+        // and a store that answered `null` would make that a zero nobody measured.
+        expect(loaded?.startedAt).toBe('2026-06-01T09:00:01.000Z');
         // The stage the caller passed comes back (WP-15h). It had never been asserted, and it had
         // never been true: the SQL adapter dropped the field on insert and answered `stage: null`
         // on load, so `RunRecord.stage` — a required field of the published DTO — had no source at
@@ -581,11 +586,77 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           cost: null,
           wallMs: 0,
           createdAt: '2026-06-01T09:00:00.000Z',
+          startedAt: '2026-06-01T09:00:01.000Z',
         });
 
         const loaded = await store.runs.load(tx, runId);
         expect(loaded?.attempt).toBe(2);
         expect(loaded?.stage).toBeNull();
+      });
+
+      /**
+       * The predicate `RunRepository.finish` carries, from both sides (standing rule 42).
+       *
+       * It is what makes `POST /api/runs/:id/cancel` safe beside a running stage: two writers can
+       * end one run and the row decides which of them did, so the loser writes nothing rather than
+       * overwriting the human's decision with its own outcome. A store that ignored the predicate
+       * would answer `true` twice here and the second `finish` would silently replace the first.
+       */
+      it('finishes a live run once, and answers false for a second finisher', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'refinement' as Slug,
+          attempt: 1,
+          causedByEventId: null,
+        });
+        const runId = nextId();
+        await store.runs.insert(tx, {
+          id: runId,
+          taskId: stored.task.id,
+          projectId,
+          stage: 'refinement' as Slug,
+          role: 'product_manager',
+          mode: 'normal',
+          attempt: 1,
+          model: 'claude-opus-5',
+          effort: 'medium',
+          promptVersion: 'basic@1+product_manager',
+          status: 'running',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: '2026-06-01T09:00:00.000Z',
+          startedAt: '2026-06-01T09:00:01.000Z',
+        });
+
+        const outcome = (status: 'cancelled' | 'completed') => ({
+          runId,
+          status,
+          terminalReason: status === 'cancelled' ? ('cancelled' as const) : ('success' as const),
+          sessionId: null,
+          numTurns: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          cost: { usd: 0, is_estimate: true, price_list_id: null },
+          wallMs: 10,
+        });
+
+        expect(await store.runs.finish(tx, outcome('cancelled'))).toBe(true);
+        expect(await store.runs.finish(tx, outcome('completed'))).toBe(false);
+        // …and the second attempt changed nothing, which is the half a boolean alone would not say.
+        const loaded = await store.runs.load(tx, runId);
+        expect(loaded?.status).toBe('cancelled');
+        expect(loaded?.terminalReason).toBe('cancelled');
       });
 
       it('refuses to finish a run it has never seen', async () => {

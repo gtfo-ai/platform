@@ -103,6 +103,18 @@ export interface ApplyOptions {
   readonly context: CommandContext;
   readonly causedByEventId: Id | null;
   readonly logger?: Logger;
+  /**
+   * What to do when the state machine refuses the move — `escalate` (the default) or `throw`.
+   *
+   * The default is the module docblock's argument and it is right for every caller that is
+   * reacting to an **event**: letting the error out would fail the handler, and the dispatcher
+   * retries it behind its stream for ever. A **human command** is the other case (WP-15i): there is
+   * a caller waiting for an answer, and parking the task in `needs_human` because somebody pressed
+   * a button the task was not in a state for would be the platform inventing an escalation nobody
+   * asked for. Those callers pass `throw`, catch the error and answer `409` naming the transition —
+   * so the task is exactly where the human found it.
+   */
+  readonly onIllegalTransition?: 'escalate' | 'throw';
 }
 
 /**
@@ -114,6 +126,9 @@ export const applyDecision = async (options: ApplyOptions): Promise<AppliedDecis
     return await apply(options);
   } catch (error) {
     if (!(error instanceof IllegalTransitionError)) {
+      throw error;
+    }
+    if (options.onIllegalTransition === 'throw') {
       throw error;
     }
     return applyEscalation(

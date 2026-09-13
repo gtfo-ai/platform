@@ -503,8 +503,11 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         role,
         mode: task.task.mode === 'shadow' ? 'shadow' : 'normal',
         attempt: request.attempt,
-        model: configured?.model ?? defaults.model,
-        effort: configured?.effort ?? defaults.effort,
+        // The human's override for this attempt first (WP-15i), then the project's stage
+        // configuration, then the template's default. One attempt only: the override rides the
+        // `stage.execute` payload and is never written to the project.
+        model: request.overrides?.model ?? configured?.model ?? defaults.model,
+        effort: request.overrides?.effort ?? configured?.effort ?? defaults.effort,
         providerMode: options.providerMode ?? 'api',
         // Two lanes, joined: the assembled prompt's version (technical/04's "hash of layers 1-3")
         // and a digest of the skill files this run's workspace was provisioned with, so an edit to

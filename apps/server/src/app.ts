@@ -33,6 +33,7 @@ import {
 } from 'fastify-type-provider-zod';
 import type { Auth } from './auth/better-auth.js';
 import { authPlugin } from './auth/plugin.js';
+import type { TaskCommands } from './commands.js';
 import type { ServerConfig } from './config.js';
 import { toApiError } from './errors.js';
 import type { KnowledgeCommands } from './knowledge.js';
@@ -47,7 +48,10 @@ import {
   findTaskProjectId,
   projectExists,
 } from './queries/identity-queries.js';
+import { findIdempotentAttempt, recordHumanAction } from './queries/onboarding-queries.js';
+import { findRunPosition, findTaskPosition } from './queries/pipeline-queries.js';
 import { roleCapabilities } from './role.js';
+import { registerCommandRoutes } from './routes/commands.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
@@ -101,6 +105,14 @@ export interface BuildAppOptions {
    * served either way, because they are database writes this process can always make.
    */
   readonly onboarding: OnboardingCommands | null;
+  /**
+   * The task and run command surface (WP-15i), or `null` for a process that composed no pipeline.
+   *
+   * Nullable like the two above and for the same reason. Note the finer distinction this one
+   * carries **inside** the value: a process that serves the API without workers composes commands
+   * with no queue, and the four that must start a stage refuse by name (`commands.ts`).
+   */
+  readonly commands: TaskCommands | null;
 }
 
 /** Event-loop delay above which the process reports itself degraded rather than healthy. */
@@ -267,6 +279,21 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       knowledge: options.knowledge,
     });
     await registerTaskRoutes(app, { database: options.database });
+    await registerCommandRoutes(app, {
+      // The seven functions the command routes need, bound to this process's database here so
+      // that module names none (`routes/commands.ts`'s `CommandQueries`).
+      queries: {
+        taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
+        runProjectId: async (runId) => findRunProjectId(options.database, runId),
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        taskPosition: async (taskId) => findTaskPosition(options.database, taskId),
+        runPosition: async (runId) => findRunPosition(options.database, runId),
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+      commands: options.commands,
+    });
     await registerRunRoutes(app, { database: options.database });
     await registerSseRoutes(app, {
       hub: options.hub,

@@ -18,6 +18,7 @@
 // Aggregates
 export * from './aggregates/approval.js';
 export * from './aggregates/budget.js';
+export * from './aggregates/feedback.js';
 export * from './aggregates/question.js';
 export * from './aggregates/run.js';
 export * from './aggregates/task.js';

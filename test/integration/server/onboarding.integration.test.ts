@@ -32,6 +32,7 @@ import {
   createProject,
   ensureOrganisation,
   environmentSecretSource,
+  findIdempotentAttempt,
   findOrganisationId,
   listProjectBindings,
   MissingSecretError,
@@ -442,5 +443,39 @@ describe('the audit row', () => {
     );
     expect(rows[0]?.action).toBe('project.create');
     expect(rows[0]?.params.idempotency_key).toBe('wizard-1');
+  });
+
+  it('finds an attempt only for the caller who made it, which only the `where` can decide', async () => {
+    // The scope of an `Idempotency-Key` is `(user_id, action, key)`. A unit tier answers this from
+    // whatever its double keys a `Map` by; the predicate is SQL, so this is the tier that reads it.
+    const second = await pool.query<{ id: string }>(
+      "insert into users (email, name) values ('second@example.test', 'Second') returning id",
+    );
+    const otherUserId = second.rows[0]?.id as string;
+    await recordHumanAction(db, {
+      userId,
+      action: 'task.pause',
+      params: { task_id: null, idempotency_key: 'shared-key', body_digest: 'digest-one' },
+    });
+
+    const mine = await findIdempotentAttempt(db, {
+      userId,
+      action: 'task.pause',
+      key: 'shared-key',
+    });
+    expect(mine?.bodyDigest).toBe('digest-one');
+    // The same string, the same command, another account: no attempt, so their command performs
+    // rather than being refused `idempotency_key_reused` for a key they have never seen.
+    expect(
+      await findIdempotentAttempt(db, {
+        userId: otherUserId,
+        action: 'task.pause',
+        key: 'shared-key',
+      }),
+    ).toBeNull();
+    // …and the action is still part of the scope (rule 42), so one client's key per step is safe.
+    expect(
+      await findIdempotentAttempt(db, { userId, action: 'task.resume', key: 'shared-key' }),
+    ).toBeNull();
   });
 });
