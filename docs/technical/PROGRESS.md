@@ -1110,6 +1110,100 @@ worktree this session is **unverified** by the pre-commit half, not that it was 
 **Depends on.** Nothing. One file (`scripts/gitleaks.mjs`), owned by no work package — whoever next
 touches the hook, and before the next session that runs agents in worktrees.
 
+### 54. **`compose.yml` writes the `app` service's environment out by hand, so twenty of the thirty-six variables the server reads never reach the process — and on a stock instance no integration can be created and no `_FILE` secret can be used** (TODO — **no work package owns it**; found by WP-23's dogfood run, session 5)
+**What is wrong.** The `app` service passes an explicit `environment:` map (`compose.yml:101-125`).
+Everything else an operator puts in `.env` interpolates `${…}` **inside the compose file** and stops
+there: `.env` is compose's environment, not the container's. The list is hand-maintained and nothing
+compares it with what the process reads, which is the `.gitignore`-anchoring class the implementer
+named — *"a list that silently drops what it does not name"*.
+
+**Evidence.** Measured by WP-23's dogfood run with `printenv` in a running container (project
+`wp23dogfood`, Docker 29.7.2 / Compose v5.5.1), quoted from the note: *"`APP_INTEGRATION_SECRET_ENV`,
+every provider credential, `APP_TRUST_PROXY`, `APP_METRICS_*` … never arrive — they sit in compose's
+environment, where they interpolate `${…}`, and nowhere else"*, with the symptom being *"a refusal
+that reads like a configuration mistake: `secret_name_not_permitted … (declared: none)` with the
+variable set in `.env`"*.
+
+Counted off the tree (refiner, reading only): the block is **eighteen** keys, not sixteen — and the
+operator guide's own enumeration of it lists eighteen while its sentence says sixteen
+(`docs/operator-guide.md:95-101`). `apps/server/src/config.ts` reads **36** variable names
+(`SOURCE_VARIABLE` at `:28-60` plus the `env.APP_*` reads below it) and **20** of them are absent from
+the container: `APP_INTEGRATION_SECRET_ENV`, `APP_TRUST_PROXY`, `APP_METRICS_USERNAME`,
+`APP_METRICS_PASSWORD`, `APP_SESSION_TTL_DAYS`, `APP_HTTP_BODY_LIMIT_BYTES`,
+`APP_SHUTDOWN_TIMEOUT_MS`, `APP_INTAKE_RECONCILE_INTERVAL_MS`, `APP_CLAUDE_BINARY`, the three
+`APP_ARGON2_*` and the eight `APP_SSE_*`. That is `config.ts` alone: `packages/infrastructure/src/db/config.ts:41`,
+`events/config.ts:14` and `jobs/config.ts:48` read `APP_DB_*`, `APP_DISPATCH_*` and `APP_JOBS_*` from
+the same environment and none of those is in the block either — so the pool-floor knobs the dispatcher
+refuses to start without (`events/index.ts:62`, backlog **22**) cannot be turned on a compose instance.
+`.env.example` declares **140** variables in all; many belong to `db`, `launcher` or the runlet and
+are correctly not the app's, which is exactly why the honest denominator is what the server reads.
+
+**Two things the report says that this tree does not support** (rule 39 — a wrong clause attached to a
+true finding). `OTEL_EXPORTER_OTLP_ENDPOINT` and `SENTRY_DSN` are named in the bullet as variables
+that never arrive; neither appears in `.env.example` nor in any source file under `apps/` or
+`packages/`, so this build neither documents nor reads them and they are not evidence for anything.
+The rest of the bullet stands.
+
+**What it costs to leave.** **An operator who follows the shipped guide cannot complete the product's
+front door without writing a second compose file.** TD-020's whole mechanism for integration
+credentials is "the server reads the variable itself, the name is allow-listed"
+(`apps/server/src/queries/onboarding-queries.ts:291-311`), and on a stock instance the allow-list is
+always empty, so `POST /api/integrations` refuses **every** name with `declared: none` — a message that
+reads as the operator's mistake when it is the compose file's. Two further consequences follow from the
+same cause and are not cosmetic: **TD-020's `_FILE` convention is unusable for any variable**, because
+the `_FILE` names are themselves environment variables and not one of them is in the block — and for
+`APP_SECRET_KEY` it is worse than unusable, since `APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env}`
+(`compose.yml:106`, and `:89` for `migrate`) makes compose **refuse to start** for the operator who did
+what TD-020 says and set only `APP_SECRET_KEY_FILE`. And `APP_METRICS_USERNAME`/`_PASSWORD` cannot be
+set, so `/metrics` on a compose instance is served **unauthenticated** and cannot be made otherwise
+(`config.ts:667-669` is the both-or-neither check; unset is the documented open case). BD-020 says a
+single `docker compose` starts a complete instance; technical/11:46 and technical/12:7 both present
+`.env.example` as the instance's configuration surface. This is a **defect against those documents**,
+not a missing feature.
+
+**What "done" looks like, with a recommendation.** Three shapes were on the table and they are not
+equal:
+
+1. **`env_file` on the service, in `compose.yml` itself** — `env_file: [{path: .env, required: false}]`
+   on `app` (and `migrate`), keeping `environment:` for the values compose must *compute*
+   (`DATABASE_URL` from `POSTGRES_*`, `ROLE`/`HOST`/`PORT`, the two data-directory paths), since
+   `environment:` still wins over `env_file:`.
+2. **A curated passthrough list held to the code by a test** — the explicit block stays and a check
+   fails when a name `config.ts` reads is missing from it.
+3. **`_FILE` secrets from a mounted directory** — Docker secrets, `APP_*_FILE` pointing into
+   `/run/secrets`.
+
+**Recommendation: (1), with (2) as the guard for the computed remainder.** Option 2 cannot be
+complete *in principle*: `APP_INTEGRATION_SECRET_ENV` is **operator-declared**, so the set of
+credential variable names the app must read is unknowable when the compose file is written — a
+curated list would fix the platform's own settings and leave the original symptom in place. Option 3
+does not fix it either, for the reason above: a `_FILE` variant is a variable and needs the same
+passthrough; it is a *complement* to (1), not an alternative. The residual of (1) is worth stating
+rather than discovering: the `app` container would then also see `POSTGRES_PASSWORD` (no new exposure
+— `DATABASE_URL` already carries it), `DOCKER_HOST` and `RUNLET_*` (inert there: the service joins no
+network that reaches the socket proxy, and TD-021's amendment forbids *constructing a Docker client*,
+which an unreachable variable does not do). If a reviewer refuses that trade, the fallback is (1)
+scoped to a second file — `env_file: [.env, .env.app]` — rather than (2) alone.
+
+**Acceptance.** (a) A fresh `git clone` + `cp .env.example .env` + one `docker compose up` reaches a
+created integration with **no override file**, driven the way WP-23's guide drives it. (b) A test in
+the shape of `test/e2e/compose/compose-config.e2e.test.ts` — which already reads `docker compose
+config` and asserts the `app` service's environment (`:91-100`) — compares the effective environment
+against the names the server reads, **in both directions** so the list cannot go stale, with any
+deliberate omission named in the test. (c) The `_FILE` half is asserted for at least `APP_SECRET_KEY`:
+an instance configured with only `APP_SECRET_KEY_FILE` starts. (d) Rule 83: `docs/operator-guide.md`
+§2 (the override and its "sixteen") and §4 step 1, and `docs/user-guide.md` if it repeats it, are
+corrected in the same change — the guide currently *teaches* the workaround.
+
+**Depends on / owner.** **None today.** It is the compose file's, which no row owns: WP-22 built the
+images and `compose.yml`, and is DONE; WP-23 is documentation and correctly refused to change a
+shipped file to make its own guide shorter. Nearest homes are **WP-30** (which needs a real
+integration created through the UI for its settings mirror, and will meet this the moment it is
+driven end to end) and **WP-32** (Slack is the first *credentialed* provider a notification path
+needs). It blocks nothing in a test tier — every tier supplies its own environment — which is
+precisely why it survived twenty-three work packages: **the only thing that exercises `compose.yml`'s
+environment is an operator**.
+
 ### 0. **CI was red from WP-14 to session 3** — `e2e-fake-claude` on Linux (ci-fix, RESOLVED)
 Six consecutive red runs on `main`, `34509491314` (WP-14's merge) through `34572185799`, every other job
 green. **Three** independent clean-environment defects stacked behind one another; see rule 71 and the
@@ -1827,6 +1921,51 @@ nobody's work package owned — and belongs with whichever row builds the task s
 **Why it matters.** The seven wizard commands and the seven task/run commands that create are exactly the ones a user retries after a slow response (rule 20's asymmetry runs the other way here: a second `POST /api/tasks` is a second task, a second `POST /api/integrations` is a unique-key 409 the user reads as a failure). WP-15i's e2e proves the replay path on the server with a key the test holds; no ui or web-e2e test holds one across two sends, so the gap is invisible to every tier.
 **What to do.** Mint the key **per mutation attempt-set**, not per request: at the call site that owns the user's intent (the `useMutation` wrapper or the form submit), and pass it down so a retry of the same intent carries the same key; a *new* intent (the user edits the form and submits again) mints a new one. Assert in the ui tier that two sends of one mutation carry one key and two mutations carry two (rule 42), and in `verify:web-e2e` that a double-click yields one `POST` the fake backend counts as performed. Keep `newIdempotencyKey` injectable. The server's scope for the key is stated at `apps/server/src/routes/idempotency.ts` (WP-15i's fix round) — read it before choosing where the client holds one.
 **Acceptance.** A double-click on any creating command produces one performed effect, asserted end to end through the fake backend's count; the docblock at `http.ts:15` is a measurement.
+
+### 55. **No screen creates an integration, the two screens that could host the control each point at the other, and a client call no component makes passes every check in this repository** (TODO, small — owned by **WP-30**, acceptance criterion 6; found by WP-23's dogfood run, session 5)
+**What is wrong.** `POST /api/integrations` is served (WP-21), the client half exists twice —
+`endpoints.createIntegration` (`apps/web/src/api/endpoints.ts:137-138`, `:295-298`) and
+`useOnboardingCommands().createIntegration` (`apps/web/src/app/queries.ts:406-413`) — and **no
+component calls either**: a grep for `createIntegration` over `apps/web/src/features` and
+`apps/web/src/routes` returns nothing. The two screens that could host the control each attribute it
+to the other, in prose: `apps/web/src/features/onboarding.tsx:235` tells the operator *"Add one from
+the Integrations screen, then come back — the wizard binds what exists rather than creating
+credentials here"*, while `apps/web/src/features/integrations.tsx:4-7` says creating *"is driven from
+the **onboarding wizard** … this screen has not grown the buttons yet"*. The wizard's own docblock is
+the third statement and it is simply false — `onboarding.tsx:13-14` claims *"Step 1 (connect) creates
+the project, **creates integrations from credentials already in the server's environment**, tests
+them, and binds them"*, and step 1 renders a project form, a list of existing integrations, a "Test
+connection" button and "Bind" (`:195-250`).
+
+**What it costs to leave.** The product's front door has one step that can only be taken with `curl`,
+which `docs/operator-guide.md:271-300` now documents rather than hides — and the request needs a
+trusted `Origin` **and** `x-requested-with` (403 without either), so it is not a one-liner an operator
+guesses. Combined with backlog **54**, a stock instance needs an override file *and* a hand-built
+request before a project can have a binding at all. Nothing is broken server-side: this is a missing
+control, not a defect in the API.
+
+**Why every guard is green, which is the half worth carrying.** `apps/server/src/routes/client-census.test.ts`
+asserts `['POST', '/api/integrations']` positively (`:352`) and is right to — the census compares
+paths the **client names** with paths the server serves, and this path is named by the client's API
+layer, which is the half that is wired. The general form the implementer stated is worth keeping in
+those words: *"a client that carries a call no component makes passes every check in this
+repository"* — `verify:ui` renders components, `verify:web-e2e` drives the built bundle against a
+fake backend that answers whatever is asked, and neither asks whether an exported endpoint has a
+caller.
+
+**What "done" looks like.** The create control lands where product/18:55 puts it — *"settings pages
+mirror the wizard one-to-one"* — which is **WP-30**, whose plan row already names *"the integrations
+create and test buttons"* and whose acceptance criterion 6 already puts them in its mirror census.
+This entry is that row's evidence, not a second obligation. Two things are additions to it: the three
+prose statements above are corrected in the same change (rule 83) — a docblock that claims a
+capability the file does not have is rule 86 in a comment; and the recurrence guard is worth its one
+test, in the census's own shape: **every member of the `endpoints` object is reached from outside
+`api/` and `app/queries.ts`, or is an admitted gap with the row that owns it**. That check is a
+judgement call about indirection (a member passed as a value would defeat it) and its limits belong
+in its docblock, the way the census states its own.
+
+**Depends on / owner.** **WP-30** (before WP-28 and WP-32). Nothing blocks it: both endpoints and
+both client halves shipped at WP-21.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -4168,6 +4307,24 @@ any WP that touches `packages/infrastructure/src/events/` or `test/e2e/support/`
 fresh worktree cannot commit at all until `pnpm install` has run in it, and the orchestration
 protocol tells every future session to use worktrees. One line in `CONTRIBUTING.md`, or a hook that
 resolves the binary from the repository root rather than from `$PWD`.
+
+### 56. **The CSRF refusal borrows the role-capability error, so a cross-site 403 is one ungrammatical sentence** (nit, TODO — **no work package owns it**; found by WP-23's dogfood run, session 5)
+Measured on a request with no `Origin` (WP-23): `role cross-site request: Origin (absent) is not a
+trusted origin may not perform POST /api/integrations`. The cause is a parameter reused rather than a
+message composed — `ForbiddenError(action, role)` renders `role ${role} may not perform ${action}`
+(`apps/server/src/errors.ts:66-69`) and the CSRF hook calls it with the violation sentence in the
+**role** slot and `"${method} ${url}"` in the action slot (`apps/server/src/auth/plugin.ts:193-197`).
+Both facts are there and the reader reconstructs the grammar, so it is a nit, not a defect: no status
+code, no `error.code` and no behaviour changes. It is worth a line because this message is the first
+thing an operator meets when they follow `docs/operator-guide.md:271-300` and omit a header — the
+guide quotes the refusal as the thing that tells you what you forgot. Cheapest shape: a second
+constructor (or a `ForbiddenError.crossSite(...)`) that keeps `403 forbidden` and writes its own
+sentence; the existing 403 assertions read the status and the `error.code` and not the prose
+(`apps/server/src/routes/commands.test.ts:342-345`), and `auth/plugin.test.ts:21-31` matches the
+*violation* half by substring, so nothing pins the concatenation. One thing to move with it: the
+Playwright fake backend composes the same string itself (`test/web-e2e/support/fake-backend.ts:273`)
+and already differs from production — it omits the `role … may not perform …` wrapper entirely — so
+the browser tier has never seen the sentence this entry is about.
 
 ### 7. Carried, not yet scheduled
 - **Nit (WP-21, session 5): a credential sealed by `POST /api/integrations` has never been opened by
@@ -10814,7 +10971,191 @@ And `startPipeline` gained two seams for this file only: `seedProject: false` (t
 project) and `gitProjects` (the fake git provider has to know the path
 `repositoryPathOf(projects.repo_url)` derives for a fixture repository on disk).
 
+### WP-23 — the guides and the notices
+
+**What exists now.** `docs/operator-guide.md` (install, the compose override an instance needs,
+integrations, upgrade, backup, security posture, provider mode, day-to-day, known limits),
+`docs/user-guide.md` (the wizard's five steps, the board, a task, a run, the inbox, knowledge,
+budgets, and one table of everything that is not built), `THIRD_PARTY_NOTICES.md` **generated** by
+`scripts/notices.mjs` with `notices:check` as a step of `verify:static` — so CI's lint job runs it
+and rule 34 is discharged by construction rather than by a second list — plus `scripts/notices.d.mts`
+(the `os-artefacts.d.mts` precedent: a `.mjs` a `.test.ts` imports needs declarations) and
+`scripts/notices.test.ts`. `docker/base.Dockerfile` and `docker/egress.Dockerfile` copy the notices
+in, which is what `base.Dockerfile:59` had said WP-23 would do. Rule 83's sweep moved four sentences
+in `README.md`, one in `CONTRIBUTING.md`, three in `CLAUDE.md` and a row in `docs/README.md`.
+
+**The dogfood run: 63 seconds, and it found five defects in the guide it was measuring.** A fresh
+`git clone` into a throwaway directory (never this checkout), following **only** the guide, on
+Docker 29.7.2 / Compose v5.5.1, project `wp23dogfood`, port 18080. **T0 → a green `/readyz` was
+63 s** — `{"status":"ok","checks":{"database":"ok","migrations":"ok","queue":"ok","dispatch":"ok"}}`,
+200. Then the browser half: Playwright drove `/` → `/sign-in` → sign-in as the bootstrap
+administrator → the wizard → **step 1 complete** (project created, integration bound), then all eight
+top-level screens and the board, with **0 page errors and 0 CSP violations**.
+
+| what | measured |
+|---|---|
+| `git clone` → green `/readyz` | **63 s** |
+| of which `docker compose up -d` (four services, prebuilt images) | 21 s |
+| the first image **build** | **not timed** — rule 66: the Docker VM was at 98 % with 4.2 G free, so the `dev` images already on the daemon were used with `--no-build`. A stranger's first build is the one number this run does not have |
+| `pg_dump -Fc` of the fresh instance | 305 766 B, exit 0 |
+| `docker compose run --rm migrate`, re-run | exit 0, `applied: []`, `already_applied: 19` |
+| `docker compose -p wp23dogfood down -v` | every container, volume **and** network gone, `agentic-ctl` included |
+
+**The five guide defects the run found, each fixed in the guide.**
+
+1. **`APP_SECRET_KEY=$(openssl rand -base64 48)` in a `.env` block, and the first correction of it
+   was itself a prediction (rule 86, caught before the commit).** A `.env` file is read literally, so
+   `docker compose config` shows the app receiving the string verbatim. I wrote that it "passes the
+   `min(32)` check, so the instance runs on a key everybody has" — then measured it: the string is
+   **26** characters and `loadServerConfig` **refuses to start**, naming the minimum in a message
+   that reads oddly given what the operator typed. The refusal is luck rather than a guard, and the
+   guide now says exactly that, with the falsifying case measured too: the same mistake with a longer
+   command, `$(head -c 48 /dev/urandom | base64)` at **35** characters, is **accepted** and becomes
+   the key. Rule 18's shape in prose, and rule 86's shape in my own first fix.
+2. **`compose.yml` passes the `app` service a fixed list of eighteen variables, and `.env` is not the
+   app's environment.** Measured with `printenv` in the container: `APP_INTEGRATION_SECRET_ENV`,
+   every provider credential, `APP_TRUST_PROXY`, `APP_METRICS_*`, `OTEL_EXPORTER_OTLP_ENDPOINT` and
+   `SENTRY_DSN` never arrive — they sit in *compose's* environment, where they interpolate `${…}`,
+   and nowhere else. The symptom is a refusal that reads like a configuration mistake:
+   `secret_name_not_permitted … (declared: none)` with the variable set in `.env`. The guide now
+   ships a four-line `compose.override.yml` (`env_file: [.env]`), verified end to end, and warns that
+   an explicit `-f` suppresses compose's automatic pick-up of it. Filed as discovered work.
+3. **No screen creates an integration.** The wizard's own hint points at the Integrations screen;
+   that screen has no add control; `createIntegration` exists in `apps/web/src/api/endpoints.ts` and
+   `app/queries.ts` and **no component calls it**. The operator guide now creates one with a request
+   — including the two headers the run discovered are mandatory, a trusted `Origin` **and**
+   `x-requested-with` (403 `forbidden` without either) — and the user guide says step 1 *binds and
+   tests* rather than creates. Filed as discovered work.
+4. **The project key is `^[a-z][a-z0-9_]*$` and the browser refuses it before sending.** `DOGFOOD`
+   produced **no request at all** (the client parses the strict contract first), which reads as a
+   button that did nothing; the app log has no `POST /api/projects`. The user guide states the rule
+   and the symptom.
+5. **The migrate exit codes were guessed and one example was invented.** Measured: exit **2** is
+   `invalid database configuration` (nothing attempted); exit **1** is `migration failed` with the
+   driver's own message, and an unparseable `DATABASE_URL` is **1**, not 2, because pg accepts it as a
+   hostname. The invented `relation "tasks" already exists` line is replaced by the two lines that
+   were actually printed.
+
+**Two measurements the run could not take, stated rather than implied** (rule 86). The `launcher`
+service never started: **`platform-launcher:dev` is not on this daemon** and rule 66 forbids building
+one, so the guide's "app/launcher running" line is unverified for the second half. And the
+`platform:dev` image predates WP-15j's round-3 CSP: it served `content-security-policy:
+frame-ancestors 'none'` only, while the guide quotes the full ten-directive policy — which is correct
+for **this tree** and is asserted by `apps/server/src/web/web-serving.test.ts`'s `EXPECTED_POLICY`
+inside `verify`, not by the dogfood. The guide's ghcr block was proved on the smallest published
+image (`docker pull ghcr.io/gtfo-ai/platform-egress:edge`, retag, remove) plus
+`docker manifest inspect ghcr.io/gtfo-ai/platform:edge` and `gh attestation verify
+oci://ghcr.io/gtfo-ai/platform:edge --repo gtfo-ai/platform` (exit 0, a Sigstore bundle); pulling all
+four images was refused on disk grounds. Nothing but the `dev` tags was left behind, and
+`docker system df` after teardown is identical to before (230 images, 126 volumes, 40 containers).
+
+**`THIRD_PARTY_NOTICES.md` is generated, and four decisions shaped it.**
+
+- **Scope is what the artefacts ship, from two sources, neither a hand list.** npm: every package
+  reachable from an importer's `dependencies`/`optionalDependencies` in `pnpm-lock.yaml`,
+  transitively — **318** packages plus **48** per-platform builds. Non-npm: every
+  `ARG …_VERSION|_IMAGE|_URL` in `docker/*.Dockerfile` and every image `compose.yml` names (21
+  artefacts), compared with a declared table **in both directions**, so a new pinned binary fails the
+  generator by name and a table entry no build file mentions fails too.
+- **`devDependencies` are not walked, and the list still contains vitest — which is correct, and was
+  measured rather than reasoned.** `better-auth` declares `vitest` an *optional peer*, pnpm's default
+  `autoInstallPeers: true` applies, and `pnpm install --prod` resolves it. `docker run --rm
+  platform:dev ls /app/node_modules/.pnpm` shows **312** entries including `vitest@5.0.0`,
+  `vite@8.2.2` and `@rolldown/binding-linux-arm64-gnu@1.2.7`, and **no** biome, playwright, tailwind
+  or typescript. The first draft of the file claimed "development tooling is not listed"; the image
+  falsified it, and the sentence is now the measurement.
+- **A per-platform package's own manifest is never read, on any host.** Only the host's build is
+  installed, so reading it would make the output depend on the machine that generated it and
+  `notices:check` would fail on whichever of macOS and CI's Linux had not produced it. The variants
+  are listed from the lockfile — byte-identical everywhere — under the package that declares them,
+  and the **family is read off the lockfile rather than guessed from the name**: `@rolldown/binding-*`
+  belongs to `rolldown`, which no prefix rule says. A variant two packages declare is refused.
+- **A licence nobody read is refused rather than published.** A `license` field that is not an SPDX
+  expression fails the generator unless it has an entry stating what was measured. Two do:
+  `awilix-manager@7.0.1` ships **no `license` field** and an MIT `LICENSE` file (a licence tool
+  reading the manifest answers `Unknown`), and `@anthropic-ai/claude-agent-sdk` declares
+  `SEE LICENSE IN README.md` while the README has no licence section and `LICENSE.md` reads in full
+  *"© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here:
+  https://code.claude.com/docs/en/legal-and-compliance."* — so **TD-018's open item is stated as
+  `[unverified]`, not resolved**, and the same for `acli`, whose product page names no terms at all.
+  Every non-npm licence carries the URL it was read from and the date (2026-09-13); `sentry-cli` is
+  **FSL-1.1-MIT** and `@sentry/mcp-server` **FSL-1.1-ALv2**, neither OSI-approved, and `logcli` is
+  **AGPL-3.0-only** — three answers the assumption ("BSD", "MIT") would have got wrong.
+
+**Mutation checks** (rules 3, 33, with rule 77's copy recipe and rule 21's canary — a planted `throw`
+in `productionClosure` was reported as **4** named failures before any mutant was believed; the copied
+test also has its `GUARD` path rewritten, so the CLI cases mutate too). Walk only `dependencies` → 5
+named failures; walk `devDependencies` as well → 5; nothing is platform-bound → 6; drop the
+both-directions comparison's stale half → 1; publish a non-SPDX declaration verbatim → 1; keep the
+digest in the compose key → 4; let a variant have two declarers → 1. Seven mutants, seven deaths.
+
+**Verdicts, from each target's own last line with the exit status beside it** (rules 61, 75).
+`PASS: verify` exit 0 (298 files, **5508 passed | 14 skipped**; `notices:check` inside it reports
+*318 npm packages, 21 pinned artefacts, up to date*). `docker build --check` on the two changed
+Dockerfiles: *Check complete, no warnings found*, both. The integration, e2e, ui and web-e2e tiers
+were **not** re-run: no file under `apps/`, `packages/` or `test/` changed, and the only executable
+this row adds is a `scripts/*.mjs` covered by the unit tier (rule 80's sound form — a claim about the
+dependency graph, not about a directory).
+
+**Assumption, stated because the docs are ambiguous.** technical/11 § "Repository layout" lists
+`THIRD_PARTY_NOTICES.md` at the repository root and says `platform-base` copies it in; it says
+nothing about *which* dependencies it covers. The scope chosen is "what a published artefact ships"
+— the production closure plus the pinned binaries and images — and the alternative ("everything in
+the lockfile, development tooling included") is refused in the generator's docblock with the reason:
+a notices file is a statement about distribution, and listing what is never distributed makes the
+part that matters harder to find.
+
 ## Discovered work — session 5 (not in plan)
+- **`compose.yml` gives the `app` service a fixed eighteen-variable `environment:` block, so `.env` is
+  not the app's environment** (WP-23, measured with `printenv` in a running container).
+  `APP_INTEGRATION_SECRET_ENV`, every provider credential (`GITLAB_TOKEN`, `JIRA_*`, `SLACK_*`,
+  `SENTRY_*`, `LOKI_*`), `APP_TRUST_PROXY`, `APP_METRICS_USERNAME`/`_PASSWORD`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` and `SENTRY_DSN` are all in `.env.example` and none of them reaches
+  the process — they interpolate `${…}` inside the compose file and stop there. The consequence is
+  not cosmetic: **no integration can be created on a stock compose instance**, because the credential
+  the server is asked to seal is not in its environment, and the refusal
+  (`secret_name_not_permitted … declared: none`) names the variable the operator did set. WP-23's
+  guide works around it with `compose.override.yml` (`env_file: [.env]`, verified end to end); the
+  fix is a decision about `compose.yml` — `env_file` on the service, or an explicit passthrough list
+  that `.env.example` and a test are held to — and belongs to whoever owns the compose file. It is
+  the same class as the `.gitignore` anchoring rule: a list that silently drops what it does not
+  name.
+  *Refiner (session 5): **filed as backlog 54**, with the denominator counted (`config.ts` reads 36
+  names and **20** never arrive; the block is eighteen keys, not sixteen — the guide's own
+  enumeration lists eighteen), two consequences this bullet does not carry (**no `_FILE` secret works
+  at all**, and `${APP_SECRET_KEY:?…}` makes compose *refuse to start* for an operator who followed
+  TD-020 and set only `APP_SECRET_KEY_FILE`; `/metrics` can never be given credentials), one clause
+  **falsified** (`OTEL_EXPORTER_OTLP_ENDPOINT` and `SENTRY_DSN` are in no source file and not in
+  `.env.example`), and a recommendation among the three fixes: **`env_file` in `compose.yml`
+  itself**, because a curated list cannot cover the operator-declared credential names and `_FILE` is
+  a complement rather than an alternative.*
+- **No screen creates an integration, and the wizard's own text points at the screen that does not**
+  (WP-23). `POST /api/integrations` is served (WP-21), `endpoints.createIntegration` and
+  `queries.useOnboardingCommands().createIntegration` both exist, and grep finds **no component that
+  calls it**; `features/onboarding.tsx:235` reads *"Add one from the Integrations screen, then come
+  back"*, and `features/integrations.tsx` has no add control and says so in its own docblock. So the
+  product's front door has one step that can only be taken with `curl` — which the operator guide now
+  documents rather than hides. The census cannot see this: it compares paths the client *names* with
+  paths the server serves, and this path is named by the client's API layer, which is exactly the
+  half that is wired. The general form is worth a thought: **a client that carries a call no
+  component makes passes every check in this repository.**
+  *Refiner (session 5): **filed as backlog 55 and attributed to WP-30**, whose plan row already names
+  *"the integrations create and test buttons"* and whose criterion 6 puts them in its mirror census —
+  so this is that row's evidence rather than a new obligation. Two things the bullet does not carry:
+  `features/integrations.tsx:4-7` attributes the control to the **wizard** while the wizard's text
+  attributes it to that screen, so the two point at each other; and `onboarding.tsx:13-14` claims in
+  its docblock that step 1 *"creates integrations from credentials already in the server's
+  environment"*, which is false in this build. The recurrence guard is named there too — every
+  `endpoints` member reached from outside `api/` and `app/queries.ts`, or an admitted gap.*
+- **A mutating request refused for two different reasons produces one ungrammatical message** (WP-23,
+  nit). `role cross-site request: Origin (absent) is not a trusted origin may not perform POST
+  /api/integrations` — the capability sentence and the CSRF sentence are concatenated without a
+  connective. Both facts are there and the reader has to reconstruct the grammar; one line in the
+  error composer.
+  *Refiner (session 5): **filed as backlog 56** (nit), with the cause named — `ForbiddenError(action,
+  role)` (`errors.ts:66-69`) is called with the violation in the **role** slot
+  (`auth/plugin.ts:193-197`) — and the check that nothing pins the wording, plus the second copy that
+  must move with it (`test/web-e2e/support/fake-backend.ts:273`, which already omits the wrapper).*
 - **Every SPA navigation is one `route="unknown"` sample in the HTTP histogram** (WP-15j). The
   fallback runs in the not-found handler, so `request.routeOptions.url` is `undefined` and
   `routeLabel` (`apps/server/src/metrics.ts:107`) labels it `unknown` — the same bucket a scanner's

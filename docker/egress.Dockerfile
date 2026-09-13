@@ -52,6 +52,10 @@ RUN addgroup -g 1000 agentic && adduser -D -u 1000 -G agentic agentic
 # always mounts the rendered allow-list here (`EGRESS_CONFIG_MOUNT`), so the declaration would buy
 # nothing and cost that.
 #
+# This image is the one that is *not* built on `platform-base`, so it needs its own copy: the
+# tinyproxy it ships is GPL-2.0, which is the strongest notice obligation of any artefact here.
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/platform/
+
 # `EGRESS_PORT`. Documentation only: the run network is internal and nothing is published.
 EXPOSE 8888
 

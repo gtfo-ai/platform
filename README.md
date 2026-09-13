@@ -2,7 +2,7 @@
 
 An open-source, self-hosted platform that turns a ticket into a reviewed, mergeable merge request through a pipeline of role-specialised Claude Code agents, with a per-project knowledge base that improves with every task.
 
-**Status:** early implementation. The product and technical definition is complete and lives in [`docs/`](docs/README.md). The database, the event store, the job runtime and the HTTP server are built; there are no integrations, no agent runner and no UI yet, so no ticket has been through the pipeline. Follow [`docs/technical/PROGRESS.md`](docs/technical/PROGRESS.md) for what is built.
+**Status:** early implementation, and it runs. The product and technical definition is complete and lives in [`docs/`](docs/README.md). A ticket reaches the platform through a provider webhook, walks the pipeline, and is watched and driven from a browser application the server itself serves; five integration providers, the knowledge base, the cost ledger and the task and run commands are built. **One thing is deliberately missing from a stock instance: there is no transport between the API process and the launcher container, so no agent stage runs** — see the [operator guide](docs/operator-guide.md) §10 and the [user guide](docs/user-guide.md). Follow [`docs/technical/PROGRESS.md`](docs/technical/PROGRESS.md) for what is built.
 
 ## Quick start (contributors)
 
@@ -18,10 +18,13 @@ To run the server itself against a local database, copy `.env.example` to `.env`
 
 ```bash
 pnpm db:migrate                       # forward-only SQL migrations, advisory-locked
-pnpm dev                              # apps/server on $PORT; apps/web arrives in WP-20
+pnpm dev                              # apps/server on $PORT, and the Vite dev server for apps/web
 ```
 
-Running a whole instance (`docker compose up`) arrives with the images in WP-22.
+To run a **whole instance** instead — five containers, the browser application included — read the
+[operator guide](docs/operator-guide.md). The short version is `cp .env.example .env`, set
+`APP_SECRET_KEY` and the bootstrap administrator, add the four-line `compose.override.yml` the guide
+gives, and `docker compose up -d --build`.
 
 ## Layout
 
@@ -39,6 +42,8 @@ apps/launcher            workspace provider service
 
 ## Documentation
 
+- **Running an instance:** [operator guide](docs/operator-guide.md) — install, integrations, upgrade, backup, security posture
+- **Using the product:** [user guide](docs/user-guide.md) — the wizard, the board, a task, a run, the inbox, the knowledge base, budgets
 - Start here: [`docs/README.md`](docs/README.md)
 - Product definition: [`docs/product/`](docs/product/)
 - Technical design: [`docs/technical/`](docs/technical/)
@@ -54,4 +59,4 @@ This project is built in public. No secrets are ever committed; see [BD-002](doc
 
 ## Licence
 
-[Apache-2.0](LICENSE). Bundled third-party CLIs keep their own licences and are executed, never linked; the notice file ships with the images.
+[Apache-2.0](LICENSE). Everything else the images and the browser bundle ship is accounted for in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which is generated from the lockfile and the build files (`pnpm notices`) and ships inside every image; bundled CLIs keep their own licences and are executed, never linked.

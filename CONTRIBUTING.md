@@ -66,7 +66,11 @@ Run the same two checks locally with `pnpm run -s verify:commits`; it takes `--f
 
 - Commit a secret, token, or customer data — in code, docs, tests, fixtures or CI logs (BD-002). Fixtures use obviously fake values (`xoxb-FAKE-…`).
 - Rewrite pushed history or force-push `main`.
-- Add a dependency without checking its licence against the allow-list (TD-017).
+- Add a dependency without checking its licence against the allow-list (TD-017). A new dependency also
+  changes [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): run `pnpm run -s notices` and commit the
+  result, or `pnpm run -s verify` fails on `notices:check`. A package whose `license` field is not an
+  SPDX expression is **refused by name** until somebody reads its terms and records what they read in
+  `scripts/notices.mjs` — that refusal is the licence check, made mechanical.
 
 ## Security
 

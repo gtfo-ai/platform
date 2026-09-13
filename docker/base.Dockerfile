@@ -56,9 +56,13 @@ RUN groupmod -n agentic node \
  && mkdir -p /home/agentic \
  && chown agentic:agentic /home/agentic
 
-# WP-23 adds THIRD_PARTY_NOTICES.md beside this; the licence is what exists today, and an image
-# that shipped neither would be the wrong default.
-COPY LICENSE /usr/share/doc/platform/LICENSE
+# The platform's own licence and the notices for everything else it ships (technical/11 § Images).
+# `THIRD_PARTY_NOTICES.md` is generated — `pnpm notices` — and `pnpm notices:check` fails the build
+# when it and its sources disagree, so what lands here cannot be a stale copy of a list somebody
+# maintained by hand. Both are here rather than only in the product image because every image built
+# on this one ships third-party code: `platform-runtime` carries six CLIs and the `claude` binary,
+# and the notices are the only place that says under what terms.
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/platform/
 
 USER agentic
 WORKDIR /home/agentic

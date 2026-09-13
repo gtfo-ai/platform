@@ -16,6 +16,8 @@ This directory is the single source of truth for **what** we are building and **
 | `technical/` | Round 2 working area: constraints, candidates, architecture | Tech lead |
 | `OPEN-QUESTIONS.md` | Questions that block or shape decisions, each with a recommended answer | Anyone |
 | `TODO.md` | Product-level backlog for the definition phase and pre-implementation | Anyone |
+| `operator-guide.md` | Installing, running, upgrading, backing up and securing an instance | Implementation |
+| `user-guide.md` | Using the product, screen by screen, and what is not built yet | Implementation |
 | `GLOSSARY.md` | Ubiquitous language. If a word is not here, do not use it in code | Anyone |
 
 ## Reading order (first time)

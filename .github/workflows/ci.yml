@@ -31,7 +31,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Every static check `pnpm run -s verify` runs, as one command derived from the same table
       # (scripts/verify-targets.ts): biome, the generated JSON Schemas, the .gitignore guard, the
-      # NUL-byte guard and the merge-conflict-marker guard. Listing them here instead was a second
+      # NUL-byte guard, the merge-conflict-marker guard and the third-party notices check. Listing
+      # them here instead was a second
       # copy of the list, and it had
       # drifted — `ignored:check` was in `verify` and in no CI job at all, so a guard that had
       # already caught two live defects gated nothing on a push. `scripts/verify.test.ts` fails
