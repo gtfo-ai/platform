@@ -5,10 +5,12 @@ import {
   assertValidTemplate,
   BUG_TEMPLATE,
   CHORE_TEMPLATE,
+  DISCOVERY_TEMPLATE,
   FALLBACK_STAGE_AGENT_DEFAULTS,
   FEATURE_TEMPLATE,
   SHIPPED_TEMPLATES,
   stageAgentDefaults,
+  TICKET_TEMPLATES,
 } from './templates.js';
 
 describe('the shipped templates', () => {
@@ -51,8 +53,32 @@ describe('the shipped templates', () => {
     expect(ids(CHORE_TEMPLATE)).not.toContain('business_review');
   });
 
-  it('sends every template through the same merge tail', () => {
-    for (const template of Object.values(SHIPPED_TEMPLATES)) {
+  it('ships the three ticket templates plus discovery, and nothing else', () => {
+    // The two maps are asserted against each other rather than each against a literal: `discovery`
+    // is deliberately outside `TICKET_TEMPLATES` (it opens no merge request), and the case below
+    // relies on that split being exactly this one.
+    expect(Object.keys(TICKET_TEMPLATES)).toEqual(['feature', 'bug', 'chore']);
+    expect(Object.keys(SHIPPED_TEMPLATES)).toEqual(['feature', 'bug', 'chore', 'discovery']);
+    expect(SHIPPED_TEMPLATES.discovery).toBe(DISCOVERY_TEMPLATE);
+  });
+
+  it('runs discovery as one agent stage between two system stages, producing a draft', () => {
+    expect(DISCOVERY_TEMPLATE.stages.map((stage) => stage.id)).toEqual([
+      'intake',
+      'discovery',
+      'done',
+    ]);
+    const stage = DISCOVERY_TEMPLATE.stages[1];
+    expect(stage?.kind).toBe('agent');
+    expect(stage?.kind === 'agent' ? stage.role : null).toBe('discovery');
+    expect(stage?.kind === 'agent' ? stage.produces : null).toBe('DiscoveryDraft');
+    // The other direction of the merge-tail case (rule 10): discovery reaches no merge request, so
+    // "every ticket template ends in the tail" is a claim about three templates and not four.
+    expect(DISCOVERY_TEMPLATE.stages.map((stage) => stage.id)).not.toContain('ready_for_merge');
+  });
+
+  it('sends every ticket template through the same merge tail', () => {
+    for (const template of Object.values(TICKET_TEMPLATES)) {
       const ids = template.stages.map((stage) => stage.id);
       expect(ids.slice(-6)).toEqual([
         'rebase_gate',
@@ -84,6 +110,15 @@ describe('stage agent defaults (product/04 § "Stage defaults", BD-013)', () => 
       maxTurns: 200,
     });
     expect(stageAgentDefaults('business_review').model).toBe('claude-sonnet-5');
+  });
+
+  it('gives discovery the cheap Sonnet defaults product/06 asks for', () => {
+    expect(stageAgentDefaults('discovery')).toEqual({
+      model: 'claude-sonnet-5',
+      effort: 'medium',
+      maxTurns: 40,
+    });
+    expect(stageAgentDefaults('discovery')).not.toEqual(FALLBACK_STAGE_AGENT_DEFAULTS);
   });
 
   it('falls back for a stage the table does not name', () => {

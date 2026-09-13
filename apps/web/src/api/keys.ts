@@ -20,6 +20,7 @@ export const queryKeys = {
   project: (id: string) => ['project', id] as const,
   projectConfig: (id: string) => ['project', id, 'config'] as const,
   projectReadiness: (id: string) => ['project', id, 'readiness'] as const,
+  projectBindings: (id: string) => ['project', id, 'bindings'] as const,
   projectBudgets: (id: string) => ['project', id, 'budgets'] as const,
   projectTasks: (id: string, filters: Readonly<Record<string, unknown>> = {}) =>
     ['project', id, 'tasks', filters] as const,

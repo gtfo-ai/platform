@@ -12,10 +12,12 @@
  * list: `project.read` is `viewer` at organisation level anyway, and a per-project filter here would
  * be the only place in the server that answers a different question from `can()`.
  *
- * Writing the configuration, exporting it to the repository and recomputing the merge from the
- * repository's `.agentic/config.yml` are WP-15's; `packages/domain`'s `mergeEffectiveConfig` is
- * already there for it. `POST /api/projects` and `POST …/discovery` are writes and belong with the
- * command surface.
+ * **The writes moved next door.** `POST /api/projects`, `PUT …/config`, `GET/PUT …/bindings` and
+ * `POST …/discovery` are served by `routes/onboarding.ts` since WP-21 — a command needs an audit
+ * row and an `Idempotency-Key` a read does not. What is still unbuilt is `POST …/config/export`
+ * (the configuration as a merge request on the repository) and recomputing the merge from a
+ * repository's own `.agentic/config.yml`; `packages/domain`'s `mergeProjectConfig` is there for
+ * both.
  */
 import {
   agenticConfigSchema,
@@ -245,11 +247,9 @@ export const registerProjectRoutes = async (
       schema: {
         summary: 'The project’s readiness evaluation',
         description:
-          'Refuses with 409 `readiness_not_evaluated` while nothing writes `readiness_evaluations`.',
+          'product/17’s fourteen criteria as the last evaluation found them, with the level they add up to and the three cheapest improvements next. `unlocks` is platform text; `evidence` is the Discovery agent’s own words for the eleven criteria it answers (BD-022) — render it, never execute it. Refuses with 409 `readiness_not_evaluated` for a project nothing has evaluated yet, which is a project whose discovery run has not happened.',
         tags: ['projects'],
         params: projectParamsSchema,
-        // `200` is the shape this endpoint answers with once an evaluator exists; today it answers
-        // `409` and nothing else, so both are published (the precedent is `/context-pack`).
         response: { 200: readinessResponseSchema, 409: apiErrorSchema },
       },
     },
@@ -259,23 +259,24 @@ export const registerProjectRoutes = async (
       if (!readiness.found) {
         throw new NotFoundError(`project ${projectId}`);
       }
+      if (readiness.recorded) {
+        return readiness.response;
+      }
       /**
-       * **The refusal is the answer, and it is a statement about the writer rather than the row.**
+       * **The refusal is a statement about this project, not about the build.**
        *
-       * `readinessResponseSchema` publishes the level, the instant it was evaluated **and the
-       * criteria** — what passed, the evidence, what it unlocks. Only `readiness_evaluations`
-       * (migration 0008) can hold those, and nothing in this repository inserts into it: BD-027's
-       * ladder is its own work package. `projects.readiness_level` is `not null default 0`, so a
-       * projection could answer `{level: 0, evaluated_at: <now>, criteria: []}` — and two of those
-       * three would be invented. An empty criteria list renders as "nothing passed", which is a
-       * claim about the project; `evaluated_at` would be the time of the *read*. The row count is in
-       * the message so an operator can tell "no producer yet" from "a producer exists and this
-       * reader was never written for it".
+       * It used to be the latter — nothing wrote `readiness_evaluations` at all — and WP-21's
+       * evaluator changed which sentence is true. What has not changed is why a projection is
+       * refused in its place: `readinessResponseSchema` publishes the criteria, the evidence and
+       * the instant of an evaluation, and `projects.readiness_level` carries none of those, so
+       * `{level: 0, evaluated_at: <now>, criteria: []}` would invent two of the three. The row
+       * count stays in the message because it is what distinguishes "nothing has evaluated this
+       * project" from "rows exist and this reader could not read them".
        */
       throw new HttpError(
         409,
         'readiness_not_evaluated',
-        `project ${projectId} has no readiness evaluation (${readiness.rows} readiness_evaluations rows): nothing in this build writes that table, and the published record needs the criteria, the evidence and the instant of an evaluation — none of which projects.readiness_level carries. Giving this endpoint an answer is the readiness evaluator (BD-027), not a reader`,
+        `project ${projectId} has no readiness evaluation (${readiness.rows} readiness_evaluations rows): run discovery on it (POST /api/projects/${projectId}/discovery), which is what records one. The published record needs the criteria, the evidence and the instant of an evaluation, none of which projects.readiness_level carries`,
       );
     },
   );

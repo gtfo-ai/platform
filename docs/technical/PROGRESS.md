@@ -82,7 +82,10 @@ discovery and readiness; brief drafted in the orchestrator's scratchpad, to be r
 product/06 and /17 if lost) and **WP-23** (the guides and the notices; brief drafted). Then M2, starting
 with WP-24 (brief drafted). Rows the census still names as unowned: the twelve task and run **commands**
 (backlog 29's remainder) and serving the SPA (backlog 33) — both should precede WP-23's user guide, and
-neither has a row; the orchestrator files them before starting M2.
+neither has a row; the orchestrator files them before starting M2. **Both rows now exist** (refiner, session
+5): **WP-15i** is the eleven task and run commands — `POST /api/runs/:run_id/steer` stays WP-27's — and
+**WP-15j** is serving the SPA from the bundle the product image already carries, both in M1 after WP-15h,
+both with acceptance criteria, and WP-23 now depends on both.
 
 **CI went RED on `38f3d82` (run `34692908462`, a docs-only commit) and is GREEN again at `58503b5`
 (run `34696889564`, read as `completed success`).** Ten jobs were green; `integration` failed with **every
@@ -1380,7 +1383,7 @@ What done looks like is small and worth naming so it is not re-derived: the WP t
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
 
-### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1; **every read the SPA calls is served** after WP-19, WP-18b and WP-15h part 2 — what remains in the census's admitted gaps is the **command** surface, twelve writes, unowned; serving the SPA itself is backlog **33**)
+### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1; **every read the SPA calls is served** after WP-19, WP-18b and WP-15h part 2 — what remains in the census's admitted gaps is the **command** surface, twelve writes, now **WP-15i** — eleven of them; `/api/runs/:run_id/steer` is WP-27's deliverable and stays there; serving the SPA itself is backlog **33**, now **WP-15j**)
 
 > **Session 5.** The recurrence is closed by `apps/server/src/routes/client-census.test.ts`, which fails on a
 > path the client names and the server does not serve, over tracked **and** untracked client files, in both
@@ -1434,7 +1437,21 @@ from the routes (`apps/server/src/app.ts:241`), so it can be the server's half b
 the screens, and no row owned the surface between them. Now **WP-15h**, which depends on WP-06, WP-15g and
 WP-20 (all landed) and is blocked by neither Q52 nor WP-22 — it is Node and Postgres work, no daemon.
 
-### 33. **Nothing serves the SPA, and since WP-22 the bundle is in the image** (TODO — **no work package owned serving it**; the same shape as entry 29, one layer out)
+> **Session 5 (refiner): the write half now has a row of its own, `WP-15i`.** The reads are served and the
+> census's admitted gaps are commands only — eleven of the twelve belong to that row, and the twelfth,
+> `POST /api/runs/:run_id/steer`, is WP-27's deliverable and stays there. The measurements the row is built
+> on, none of them re-derived here: the domain functions exist (`packages/domain/src/aggregates/task.ts:407`
+> is `pauseTask`, `:584` `cancelTask`, `:281` `returnToStage`, `:336` `resumeStage`;
+> `packages/domain/src/aggregates/question.ts:156` `answerQuestion`;
+> `packages/domain/src/aggregates/approval.ts:110` `decideApproval`) while the whole server registers **two**
+> POST routes, `apps/server/src/routes/kb.ts:295` and `apps/server/src/routes/webhooks.ts:122`;
+> `human_actions` has existed since `packages/infrastructure/src/db/migrations/0004_pipeline.sql:210` with
+> **no writer anywhere** under `packages/` or `apps/`, so technical/08:73's recording clause is vacuous; and
+> no request-level idempotency store exists, while the client already sends `Idempotency-Key` on eight of the
+> twelve (`apps/web/src/api/endpoints.ts:177-188`). WP-15e's refusal makes a seventh criterion necessary: a
+> command landing beside a running stage retries through `retryOnTaskConflict` or surfaces the conflict.
+
+### 33. **Nothing serves the SPA, and since WP-22 the bundle is in the image** (TODO — **now WP-15j**, filed by a refiner in session 5; until then no work package owned serving it; the same shape as entry 29, one layer out)
 **What is wrong.** technical/09 and `apps/web/vite.config.ts` both say the app process serves the built
 bundle; no route does. So a `docker compose up` instance ships the SPA and answers 404 for it.
 
@@ -1462,6 +1479,18 @@ WP-20 built the bundle, WP-22 packaged it, and no row owned the process that han
 documentation and cannot own a route. **Recommendation: it belongs to WP-15h part 2**, which is open, already
 owns `apps/server/src/routes/` and already carries the client-route census — a sentence has been added to
 that row. The fallback rule is an engineering decision, not a product one; it needs no open question.
+
+> **Session 5 (refiner): the recommendation above is spent — WP-15h part 2 merged without this half, and it
+> is now `WP-15j`**, a row of its own in M1 after WP-15h, depending on WP-20, WP-22 and WP-15h (all landed)
+> and landing **before WP-23**, whose dogfood criterion cannot be met while `/` answers 404. Two things the
+> row adds to the evidence above. The fallback must not answer for an `/api/*` path **no route serves**, or
+> it turns off the instrument that found this whole class: `apps/server/src/routes/client-census.test.ts`
+> decides "not served" by the not-found handler's own JSON body (`:219-231`), so the census passing
+> **unchanged** is a criterion. And the bundle's directory must be **one constant**: `docker/app.Dockerfile`
+> copies it to `/app/apps/web/dist` (`:100`) and the server will read it from somewhere, and the two are held
+> equal by a check that reads the Dockerfile rather than by a 404 that only appears inside the image.
+> The compose-level statement **needs measurement** and needs a daemon (rule 66): nobody has yet requested
+> `/` against the built product image.
 
 ### 37. **The KB health report is written nightly, ~~read by nobody~~ (read by `GET /api/projects/:id/kb/health` since WP-15h part 2 — an endpoint no screen calls yet), and cannot contain two of the findings its own documents promise** (the reader half **RESOLVED** at WP-15h part 2; the invalid-documents half TODO — **no work package owns it**; found by WP-18b and WP-18a, session 5)
 **What is wrong.** Two halves, both about the same report, and they have **different causes** — which is why
@@ -1515,6 +1544,110 @@ finding ends up owned by a row that cannot do it. Related: entry **31** (the thi
 package — a knowledge merge request nobody merges is invisible — is **not** filed here: it is a product
 decision first and is recorded on **Q66**, whose last paragraph asks whether an un-merged knowledge MR
 should expire.
+
+### 49. **No run of any role can execute a project command — "the project's declared commands" is the one clause of product/19 §3's Implementation allow-list that nothing ships** (TODO — **no work package owns it**; found by WP-21's review round 2, session 5; the product half is **Q69**)
+Placed here because it is entry **23** one ring further out: 23 was the platform never reading the
+ticket, this is the platform never running the project — both are capabilities every role's prompt
+assumes, and neither was any work package's.
+
+**What is wrong.** A run's three-list policy is
+`narrowCommandPolicy(commandBaselineFor(role), settings.config.commands)`. The maximum it narrows is a
+**shipped constant**, a project may only *narrow* it (BD-025 §2), and the constant names no test, lint,
+format, build, typecheck or setup command — so a project that declares `commands.allow: ["npm test"]`
+has the entry **dropped**, the command falls to the `ask` fallback, and an unattended `ask` is a deny.
+It is not a property of the discovery role that found it: it is every role, every stage, every project,
+and it predates WP-21 by every work package that shipped a prompt or a stage.
+
+**Evidence** (WP-21's implementer at review round 2, and the refiner re-reading the same sites; no test
+run — rule 66. Line numbers in `planner.ts` and `criteria.ts` are WP-21's **working tree**, uncommitted
+at the time of writing; the rest are `c33529f`.)
+- The narrowing: `packages/domain/src/policies/command-policy.ts:1273-1290` — an `allow` entry the
+  maximum does not grant is filtered out and reported in `ignoredAllow`.
+- The maximum: `DEFAULT_COMMAND_POLICY` (`command-policy.ts:343-347`) is `DEFAULT_IMPLEMENTATION_ALLOW`
+  (`:189-201`), which is `DEFAULT_READ_ONLY_ALLOW`'s sixteen read entries (`:164-186`) plus ten more —
+  `git add|commit|rebase|fetch`, `git push origin agentic/*`, `npm ci`,
+  `pnpm install --frozen-lockfile`, `pip install -r *`. **No project command of any kind.** `npm test`
+  is technical/12:76's *example* `.agentic/config.yml`, which a project writes.
+- The fallback: an unmatched command is `ask`, never `allow` (`command-policy.ts:26`, and a caller may
+  not pass `allow` as the fallback at all — `:1155-1160`), and an `ask` with nobody to ask denies
+  (`packages/application/src/ports/runner.ts:82-83`, BD-025).
+- Nothing widens it. `organisationCommandMaximum`
+  (`packages/domain/src/config/effective-config.ts:168-174`) exists so an organisation can **replace**
+  `allow`; its only caller is `mergeProjectConfig` (`:207`), whose only callers in the tree are its own
+  tests. Production reads `projects.config` straight out of the row
+  (`apps/server/src/pipeline.ts:403-417`), so technical/12:148's
+  `effective = merge(defaults, org, project, repo)` has **no production caller** and no `org` or `repo`
+  layer exists to merge.
+- The drop is **silent**: `ignoredAllow` and `ignoredAllowCommands` are read nowhere outside the two
+  unit tests that assert them (grep over `apps/`, `packages/`, `docs/`), so nothing logs, publishes or
+  shows the entry a project declared and the platform ignored. That is the smaller defect inside this
+  one, and it is the reason the gap survived: the platform discards the declaration without a word.
+
+**It contradicts an accepted product document, and the document wins.** product/19:36 defines the
+Implementation list as *"allow the project's declared commands (`how-to-run.md`: test, lint, format,
+build, typecheck), `git add/commit/push origin agentic/*`, `git rebase`, `git fetch`, package manager
+install from lockfile … `make *` targets listed in the KB"*, and product/19:35 allows *"the project's
+test/lint commands (review stages only)"* at read-only stages. The shipped constant implements every
+clause of that sentence except the first and the last, while its own docblock
+(`command-policy.ts:188`) claims the sentence in full. So this is an **under-implementation of a
+decided document**, not an undecided design — which is why it is a defect here, and why **Q69** is only
+about *how* a project's declared command reaches the list.
+
+**What it costs to leave, by the criteria it hollows.** No row below failed its own acceptance: each
+was accepted against a fake that runs nothing.
+1. **WP-17's role prompts ask two roles to do what the policy denies.** The developer's says *"Run the
+   project's checks from `technical/how-to-run.md`. Record the exact commands and their results in
+   `commands_run`"* (`packages/prompts/roles/developer/prompt.md:15-16`), and its `ImplementationNotes`
+   carries `commands_run[]` (`:23`). The acceptance tester's says *"You may run the project's tests
+   and, where the project documents how, the application itself"*, and *"Prefer running something to
+   reading something. A passing test you ran is evidence; a test you read is a claim"*
+   (`packages/prompts/roles/acceptance_tester/prompt.md`). product/13:72 grants the Developer
+   allow-listed commands and product/13:74 grants the Acceptance Tester *"tests/app cmds"* (working
+   tree). On this build both artifacts can only carry an empty list or a list of refusals, and an
+   `AcceptanceVerdict`'s `evidence` is by construction a test the agent **read**.
+2. **WP-15's gates are *not* hollowed, and saying so is the honest half.** `ci_gate` settles from the
+   git provider's own pipeline (`packages/application/src/pipeline/gates.ts:133`), so "tests green" in
+   the loop is CI's answer and never a workspace command. Neither is **WP-26**'s rebase gate: `git
+   rebase` and `git fetch` are both on the shipped list.
+3. **WP-21's readiness ladder reads three criteria for something weaker than product/17 words**, which
+   is how the finding surfaced. R1, R2 and R6 are detected from the CI configuration
+   (`packages/domain/src/readiness/criteria.ts:76`, `:86`, `:115`) where product/17:15-16,20 and
+   product/19:53,58 word them as executed in the workspace; R1 is a **level 1** requirement, and
+   `suggestedAutonomyCap` (`packages/domain/src/policies/autonomy.ts:144`) turns the level into the
+   platform's suggested autonomy. The ladder that shapes autonomy therefore rests on a file read.
+4. **Two M2 rows inherit it.** **WP-24** review-only is exactly the mode product/19:35 grants the
+   project's test/lint commands for, and on this build it will have none. **WP-30** (autonomy dial +
+   wizard step 4 + settings mirror) inherits an affordance that cannot exist — WP-21's step 4
+   deliberately ships **no** `commands.allow` editor, because a project may only narrow and an editor
+   would be an affordance that cannot do what an operator expects — and the dial's feature cards rest
+   on the weakened R1/R2/R6 of point 3.
+
+**What would make it urgent.** It is latent today for one reason: no production run has executed at
+all. `startRuntime` composes `unavailableClaudeRunner` unless a `RunWorkspaceProvisioner` is present,
+and every green result in this repository is `FakeClaudeRunner`, which runs no command — so no tier can
+notice. It becomes live the first time a real agent run reaches a real repository, i.e. the moment
+WP-15g's provisioner is composed, and the first thing to fail is the developer stage's first act.
+
+**What "done" looks like.** Q69 picks between the two shapes WP-21's implementer named; both are small
+once picked. **(a) A wider organisation maximum shipped as a default that projects narrow** —
+`DEFAULT_IMPLEMENTATION_ALLOW` carries product/19:36's project-command clause as patterns, and
+`organisationCommandMaximum` gets a production caller plus an admin surface. **(b) A per-role declared
+baseline the project may narrow** — `COMMAND_BASELINE_BY_ROLE` (WP-21's third least-privilege table) is
+the seed: today it selects between two shipped lists, and the same shape extends to a per-role list in
+which the acceptance tester's is product/13:74's *"tests/app cmds"* and a read-only role's is not.
+Whichever is taken, three things are part of done: a declared `allow` entry the platform ignores is
+**reported** rather than dropped (`ignoredAllow` gets a reader — a log line and a field on the
+effective-config DTO); an e2e proves a stage run actually executing a fixture repository's test
+command, because a fake that runs nothing is how this survived every work package that shipped a
+prompt or a stage; and R1/R2/R6's
+`detection` lines and product/17's wording are reconciled in whichever direction Q69 goes.
+
+**Depends on / owner.** **None today**, and that is the finding: no plan row owns the *content* of the
+command policy. Q69 is the blocker; the code is `packages/domain/src/policies/command-policy.ts` and
+`packages/application/src/pipeline/planner.ts`; the nearest owners by subject are **WP-24** (the first
+M2 row that needs a project command) and whichever row composes the provisioner. Related: entry **39**
+decides which *SDK tool* a role holds and argues that widening is bounded because the three-list policy
+governs the shell — this entry is what that policy actually grants.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -2512,7 +2645,9 @@ undermines nothing today — `sweep.failed` is read in one place outside `outbox
 uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
 *trusting* `SweepReport`.
 
-### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO — **second instance at session 5**, closed for one census and still open here; **four guards share the hole**, counted under “Scope”)
+### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO — **second instance at session 5**, closed for one census and still open here; **four guards share the hole**, counted under “Scope” —
+where the **mirror hole** is now a second column: a census that *dies* on a path that vanished between
+the listing and the read, **eleven censuses, six of them unguarded**, WP-21, session 5)
 **What is wrong.** The guard's scope is `git ls-files` (CLAUDE.md says so), so a **new** source file
 carrying a literal NUL passes `verify` until it is staged.
 
@@ -2552,6 +2687,49 @@ open-ended worry (rules 44/63):
   `packages/integrations/src/providers/delivery-key-redaction.test.ts:107` read **disk** (`readdirSync`)
   rather than the index, so an untracked file is in scope for both. So does
   `test/contract/integrations/fixture-provenance.contract.test.ts:25`.
+
+**A second column, and the mirror hole: tolerates a vanished path** (refiner, session 5; grep only,
+rule 66; found by WP-21's implementer while WP-21 was in review, in a file that is WP-15e's). A census
+asks git for a list and then reads the paths, and a path can stop existing in between — a concurrent
+editor, a rebase in another worktree, or a fixture another test in the same run plants and deletes.
+Measured rather than reasoned: `tasks-column-ownership.test.ts` failed a `verify` with
+`ENOENT … .vitest-scope-23805-egp4di/plain/ordinary.e2e.test.ts`, planted by
+`scripts/nested-checkouts.test.ts:92`, and **the failure mode is the bad one** — the census reports
+nothing at all rather than reporting one file it could not read, so a guard that exists to enumerate
+answers with a crash. Fixed in place there with a one-line `existsSync`; the class is open. The method
+is the same grep for `ls-files` over `.ts`, `.tsx`, `.mjs` and `.js` that produced the list above, so
+the same floor applies: a census that shells out through a variable or a helper is invisible to it.
+**Eleven censuses today** — the count above says six because it was taken at `19da103`, and five of
+these arrived at or after it (`19da103` added two, `2fa285c` one, `e4eaf8a` two), which is the shape
+worth noticing: the class grows about one census per work package, so eleven repairs is the wrong
+answer and a shared helper is the right one.
+
+| census, at the line it lists | scope | tolerates a vanished path |
+|---|---|---|
+| `packages/infrastructure/src/db/pool-errors.test.ts:161-162` | tracked + untracked | **yes** — `existsSync` at `:171`, with the reasoning at the line; the shape to copy |
+| `packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts:89-90` | tracked + untracked | **yes** — `existsSync` at `:162` (WP-21's fix, uncommitted at the time of writing) |
+| `scripts/check-nul.mjs:57` | tracked only | **yes**, incidentally — the `try`/`catch` at `:110-113` is written for a symlink to nowhere or a gitlink, and catches this too |
+| `scripts/check-conflict.mjs:119` | tracked only | **yes**, incidentally — the same `try`/`catch` at `:211-214`, same stated reason |
+| `scripts/check-ignored.mjs:101` | tracked + disk walk | **n/a** — it reads no file's contents; the list is piped to `git check-ignore` at `:209`, and both `readdirSync` walks already `catch` (`:157`, `:170`) |
+| `apps/server/src/routes/client-census.test.ts:113-114` | tracked + untracked | **no** — unguarded reads at `:256`, `:268`, `:389`, `:399` |
+| `apps/server/src/routes/scope.test.ts:38-39` | tracked + untracked | **no** — unguarded reads at `:72`, `:81` |
+| `packages/application/src/pipeline/task-save-sites.test.ts:73-74` | tracked + untracked | **no** — unguarded read at `:106`; WP-15e's other census, and the sibling of the one that crashed |
+| `scripts/workspace-deps.test.ts:67` | tracked + untracked | **no** — unguarded reads at `:90` (a manifest) and `:99` |
+| `apps/launcher/src/docker-access.test.ts:55` | tracked only | **no** — unguarded read at `:95` |
+| `scripts/citations.test.ts:76` | tracked only | **no** — unguarded read at `:229`, and it runs at *collection* time inside the `describe` body, so a throw takes the whole file rather than one case |
+
+**The two columns are not independent, and the interesting cell is the overlap.** A census that unions
+`ls-files --others --exclude-standard` is the one exposed to this race in practice, because the paths
+that vanish are untracked temp fixtures — so the four unguarded unions (`client-census`, `scope`,
+`task-save-sites`, `workspace-deps`) are the live ones, and the two unguarded tracked-only censuses
+(`docker-access`, `citations`) need a concurrent git operation instead, which is rarer. Closing the
+untracked hole in `check-nul.mjs` and `check-conflict.mjs` — this entry's own "done" — **moves them
+into the exposed group**, which is why the two fixes belong in one change: their `try`/`catch` already
+tolerates the read, but a `--others` sweep is where the race starts happening. **Done for this column**
+is the same union of the two lists carrying the same `existsSync` (or a `catch` that *reports* the
+unreadable path rather than skipping it in silence, which is the better answer and the one neither
+script takes today), and ideally one shared helper — `git ls-files` plus `--others`, minus what
+vanished — so the twelfth census inherits both fixes instead of repeating both holes.
 
 **Evidence.** WP-16's implementer wrote literal NULs into two brand-new files — `knowledge/globs.ts`,
 where a NUL is the *right* sentinel and CLAUDE.md asks for the escape `\0`, and `kb-search.test.ts`,
@@ -3281,6 +3459,251 @@ producer of it is worth an entry rather than a note.
 it. Related: entry **1** (no production load, so no producer today), and WP-15c's own unbounded-retry
 fix, which closed this shape for the **inbound** path only.
 
+### 44. **The wizard's step 5 commits the drafted knowledge pages and never the configuration, and nothing can fill the `repo` layer the API publishes** (TODO — **no work package owns it**; found by WP-21, session 5)
+**What is wrong.** product/06 § "Step 5" asks for one merge request carrying two artefacts:
+*"One MR to the repository adding `.agentic/` with the accepted content (or a direct commit if the
+project allows), plus a one-line pointer in `CLAUDE.md` to the KB index (proposed)"*. WP-21's step 5
+is WP-18b's proposal queue, which commits the drafted **knowledge pages**; `.agentic/config.yml`
+itself stays in `projects.config` and never reaches the repository. The reverse is missing for the
+same reason — the platform never reads a repository's own `.agentic/config.yml` back.
+
+**Evidence** (WP-21's implementer, session 5, quoted from the report rather than paraphrased):
+*"`POST /api/projects/:id/config/export` — the configuration as its own merge request — is **not**
+built"*, and *"`.agentic/config.yml` itself is stored in `projects.config` and never reaches the
+repository, and the reverse (re-merging a repository's own `.agentic/config.yml` into the effective
+configuration) is also unbuilt. `mergeProjectConfig` and the commit path both exist."* Three
+citations, each checked here. The endpoint is named twice in the API document —
+`docs/technical/08-api-and-realtime.md:16` names it *"(to repo MR)"* and `:58` lists it among the
+writes still unbuilt. `mergeProjectConfig` applies layers in `default < org < project < repo` order
+(`packages/domain/src/config/effective-config.ts:187`) and **no producer of a `repo` layer exists**:
+`grep -rn "source: 'repo'" packages apps` returns nothing, and the function's only mention outside
+the domain ring is a docblock sentence at `apps/server/src/routes/projects.ts:19` saying so. The
+published DTO nevertheless admits the value — `configSourceSchema` is
+`z.enum(['default', 'org', 'project', 'repo'])` (`packages/contracts/src/records.ts:247`) and
+`effectiveConfigResponseSchema.sources` is a record of it (`packages/contracts/src/api.ts:184`) — so
+`GET /api/projects/:project_id/config` offers a fourth source no response can ever carry.
+
+**What it costs to leave.** The configuration a team agreed to in the wizard exists only in the
+platform's database: it is not reviewable in a merge request, not in the repository's history, and a
+project that edits `.agentic/config.yml` by hand changes nothing. That is the opposite of product/12's
+claim that the project owns its `.agentic/` directory, and it is the half of BD-028's *"every setting
+is mirrored in project settings"* that faces the **repository** rather than the UI.
+
+**What done looks like.** `POST /api/projects/:project_id/config/export` writes `.agentic/config.yml`
+(plus the `CLAUDE.md` pointer) through WP-18b's existing apply path — an `agentic/*` branch and a
+merge request, never a direct commit onto the default branch unless the project allows it, with an
+`Idempotency-Key` and a `human_actions` row like the wizard's other six commands; and a `repo` layer
+is fed into `mergeProjectConfig` from the default-branch file, so `GET /api/projects/:project_id/config` can answer `repo`
+for a key. The two halves may land separately; the export is the one product/06 § "Step 5" names.
+
+**Depends on.** The read half needs a vault read of a path outside the four indexed ones — the same
+widening the WP-18a bullet *"A project's own `.agentic/pipeline.yml` and `prompts/<stage>.md` are
+still unread, for a new reason"* is blocked on, so whoever widens `VaultSource` gets both. The write
+half depends on nothing that does not exist. **Not WP-30's**: that row's *"settings mirror"* is
+BD-028's UI mirror of wizard step 4, not a commit to the repository.
+
+### 45. **The business interview is the one wizard step of five that no work package owns, and without it repository readiness cannot reach level 3** (TODO — **no work package owns it**; found by WP-21, session 5)
+**What is wrong.** product/06 § "Step 3" is a conversational form driven by the Product Manager role
+whose *"Answers become `business/*.md` pages plus glossary entries"*. Nothing in this build runs one.
+WP-21's plan row is titled *"Onboarding wizard steps 1–5 incl. discovery agent and readiness
+evaluation (product/06, /17)"* — so the row **named** step 3 — but its acceptance criteria are
+*"wizard completes on fixture repo; readiness report produced"*, which step 3 is not needed for, and
+the wizard shipped naming the gap instead. Of the other four steps, **step 4** is WP-30's (*"autonomy
+dial + wizard step 4 + settings mirror"*) and **step 3b**, the history bootstrap, is **WP-35**'s in M3
+(`docs/technical/13-implementation-plan.md:62`; `docs/technical/08-api-and-realtime.md:33` attributes
+`POST /api/projects/:project_id/kb/bootstrap` to it). Step 3 is attributed to nobody.
+
+**Evidence** (WP-21's implementer, session 5, quoted from the report): *"Step 3 (the business
+interview) is not built, and the wizard says so. product/06 describes a conversational form driven by
+the Product Manager role; nothing in this build runs one, and a form that collected answers nobody
+reads would be worse than an honest gap. The screen links to the knowledge browser instead."* That
+part is the system working as designed. What the report does not carry is the **consequence**, which
+is **derived here from two documents and one table rather than measured**: the Discovery agent's own
+prompt opens *"you draft the technical knowledge base a human will correct"* and its output section
+says *"draft technical pages"* (`packages/prompts/roles/discovery/prompt.md`), while only **three** of
+the ten sections scored by `KNOWLEDGE_COMPLETENESS_SECTIONS` are technical ones
+(`packages/domain/src/readiness/criteria.ts:237`). So a fresh project's completeness after onboarding
+is bounded at **3/10** by the platform's own producers, against R12's threshold of **0.7**
+(`KNOWLEDGE_COMPLETENESS_THRESHOLD`, `packages/domain/src/readiness/criteria.ts:271`).
+
+**What it costs to leave.** R12 gates readiness **level 3** (product/17), and the level is what
+`suggestedAutonomyCap(readinessLevel)` reads (`packages/domain/src/policies/autonomy.ts:144`) — so
+every onboarded project is capped below the autonomy its repository may well deserve, and the only way
+out is a human hand-writing six `business/*.md` pages at paths Q68 says are not documented anywhere.
+The platform is conservative by design (product/17 § "What it is not"), but this is conservatism
+caused by a missing screen rather than by the repository.
+
+**What done looks like.** Step 3 exists and writes its answers to the six `business/*` paths of Q68's
+table through the **proposal queue** (never a silent commit, the rule WP-21 held for the discovery
+draft), the answers are untrusted text and go through the same bounds and redaction
+`ticket-snapshot.ts` states at its caps, and a project that completes step 3 on the fixture repository
+reaches a completeness above R12's 0.7 — asserted as a number, because *"the pages were drafted"* and
+*"the score moved"* are different claims. **Needs measurement** (rule 66, not run here): whether a
+discovery run drafts any `business/*` path in practice; the prompt says technical pages only, and the
+wizard e2e's `kb_proposals` rows would settle it.
+
+**Depends on.** Q68 — the six business paths are that question's open half, and a form that writes to
+invented paths inherits the problem. Product Manager role prompt and evals exist
+(`packages/prompts/roles/product_manager/`). Nothing else.
+
+### 46. **Readiness is evaluated once, at discovery, and product/17 asks for a re-check after every merged task** (TODO — **no work package owns it**; found by WP-21, session 5)
+**What is wrong.** product/17:11: criteria are *"detected automatically by the Discovery agent at
+onboarding and re-checked after every merged task (cheap: mostly file and CI-event inspection)"*. Only
+the first half is built. The second producer is anticipated everywhere and written nowhere:
+`readiness_evaluations.source` is `text not null`
+(`packages/infrastructure/src/db/migrations/0008_knowledge.sql:115`) and the port names both values —
+`packages/application/src/onboarding/ports.ts:34` documents the column as *"which producer wrote it
+(`discovery`, `recheck`)"* — while `recheck` has no writer.
+
+**Evidence** (WP-21's implementer, session 5, quoted from the report): *"`readiness_evaluations.source`
+exists for exactly that second producer (`discovery` today, `recheck` tomorrow), `ReadinessStore.latest`
+already orders by instant, and `evaluateReadiness` is a pure fold that would take the same inputs — what
+is missing is the trigger and a way to answer the eleven agent-detected criteria **without** a run.
+Nobody owns it."*
+
+**What it costs to leave.** A project's level is frozen at whatever its first discovery run measured,
+and `suggestedAutonomyCap(readinessLevel)` (`packages/domain/src/policies/autonomy.ts:144`) keeps
+suggesting the cap that level implies — so a team that adds the test suite R1 wanted is never told,
+which inverts product/17's stated purpose (*"what the cheapest next improvement is"*). It is also the
+slow direction of the same asymmetry WP-21 kept deliberately: an unanswered criterion is `false`, so a
+stale evaluation can only under-report.
+
+**What done looks like.** A `task.merged`-shaped trigger writes a `readiness_evaluations` row with
+`source: 'recheck'` and the narrow `projects.readiness_level` update in the one transaction
+`PostgresReadinessStore` already performs, and the level a project sees changes when its repository
+changes — asserted by merging a task on a fixture repository that has gained a criterion, not by
+calling the evaluator directly. The open engineering question is the **eleven agent-detected
+criteria**: product/17 calls the re-check *"cheap: mostly file and CI-event inspection"*, which is a
+claim that most of them need no model — so the row either moves what is file-inspectable onto
+`PlatformReadinessSignals` (WP-18a's `VaultSource.read` answers `repoPaths` at a commit with no
+checkout, which is the mechanism) or it spends a discovery run per merged task, which product/17's
+word *"cheap"* refuses. **Needs measurement**: which of R1–R14 are answerable from the tree and the
+provider's CI events alone. Whoever takes it should state the split rather than re-derive it later.
+
+**Depends on / owner. None.** **Not WP-25's**: that row is the *ticket* readiness linter of BD-028 and
+product/18, a different subject from BD-026 repository readiness. WP-21 built the fold, the store and
+the API; this is a producer and a trigger.
+
+### 47. **`Idempotency-Key` is required, validated and audited, and never consulted — so "same key, different body" is refused in exactly one case, and WP-15i's eleven commands cannot reuse the answer** (TODO — **WP-15i** meets it first; found by WP-21, session 5)
+**What is wrong.** technical/08:7 asks for *"idempotent where a client may retry (`Idempotency-Key`
+header on POSTs that create)"* and asks for nothing more, so this is a **documentation gap before it
+is a defect**: the document names a header and never says what it buys. WP-21 required the header on
+its three creating POSTs and made the commands idempotent on the **unique key underneath** each one —
+`projects.key`, `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)` — with no
+stored-response table. The header's value is bounded and character-checked
+(`readIdempotencyKey`, `apps/server/src/routes/onboarding.ts:111`), recorded in
+`human_actions.params.idempotency_key`, and read by nothing.
+
+**Is "same key, different body" refused today?** Measured against the tree at `c33529f`, and the
+answer is **no, except in one case**. `POST /api/projects` is the case: `createProject` does
+`onConflictDoNothing({ target: projects.key })` and re-reads
+(`apps/server/src/queries/onboarding-queries.ts:176`), and the route turns `status: 'exists'` with a
+**different `repo_url`** into a 409 (`apps/server/src/routes/onboarding.ts:230`). Everything else
+falls through: the same body key with a different `name`, `default_branch` or `knowledge_dir` answers
+**200 with the first project's row** and the new values are dropped; `POST /api/integrations` answers
+200 with the existing row for any second call on `(org_id, type, name)` whatever its `config` or
+`secret_refs` say, and the query's own comment states the intent —
+`apps/server/src/queries/onboarding-queries.ts:334` reads *"Nothing is re-sealed and no secret row is
+orphaned"*; and because the header is not part of any key, the **same** `Idempotency-Key` with a
+**different** `key` in the body simply creates a second project. So the claim repeated in three places
+— `docs/technical/08-api-and-realtime.md:56`, the docblock at `apps/server/src/routes/onboarding.ts:22`
+and the one at `apps/server/src/queries/onboarding-queries.ts:27` — is true of one route and one field.
+
+**What it costs to leave.** Two clients that pick the same key are indistinguishable, a retry with a
+corrected body is silently answered with the stale resource, and an operator who fixes a wrong Sentry
+`base_url` by re-submitting step 1 is told it worked while nothing changed. The audit row makes the
+double-click legible, which is what WP-21 bought; it does not make the second call safe.
+
+**Why WP-15i cannot reuse WP-21's answer, which is the reason this entry exists here.** WP-15i's
+acceptance criterion (3) already requires that *"the same key with a different body is refused rather
+than served the first result"* for its eleven commands. Those commands are **actions, not creates**:
+`pause`, `resume`, `cancel`, `retry-stage`, `return-to-stage`, `rework`, `feedback` have no uniquely
+keyed row to conflict on, so there is no unique key underneath them to be idempotent on and the
+criterion can only be met by a stored record of what was answered. WP-15i is therefore the row that
+has to build it, and this entry is the evidence it should not re-derive.
+
+**What done looks like.** A request-level idempotency record — key, scope, request digest, response —
+with (a) a stated **scope** (user, route, resource; `idempotencyScopeFor` carries the reasoning for
+the outbound analogue, and WP-15b's store is deliberately scoped to provider calls), (b) a stated
+**retention** and what happens to a key after it, (c) a replay returning the first response, and (d) a
+different request digest under a used key refused with a code that says so. Closing it also falsifies
+the three sentences above, which are then the fix's to make true (rule 83).
+
+**Depends on.** A table (nothing exists: the only other key in the tree is a provider-action key at
+`packages/application/src/knowledge/apply.ts:335`) and a retention decision, which is a product
+question about how long a key is honoured. WP-21's seven commands should be migrated onto it in the
+same change or the divergence stated.
+
+### 48. **A binding's host is whatever the caller typed, and the platform process has no outbound allow-list — so the credential the API is designed never to reveal can be sent to a host the caller chose** (TODO — **no work package owns it**; found by WP-21's round-1 reviewer, session 5)
+**What is wrong.** Every provider takes its host from `config` as a free-form URL and nothing
+constrains which host that may be. Five instances, one shape, read off the schemas:
+`base_url` at `packages/integrations/src/providers/sentry/config.ts:37`,
+`packages/integrations/src/providers/gitlab/config.ts:33`,
+`packages/integrations/src/providers/loki/config.ts:40` and
+`packages/integrations/src/providers/slack/config.ts:38`, and `site_url` at
+`packages/integrations/src/providers/jira-cloud/config.ts:20`. Each refines the *path* — Sentry and
+GitLab reject a base URL that already carries `/api/0` or `/api/v4`, Loki rejects `/loki/api/v1`, all
+reject a trailing slash — and **none refines the host**. None refines the **scheme** either: all five
+are `z.url()`, which standing rule 44 and Q49 already record as accepting `javascript:`, `data:`,
+`vbscript:` and `file:`; that half is inert for an adapter that hands the value to `fetch`, and it is
+named here so the next reader does not have to re-check it. The value is handed straight to the client
+the binding's credential is built into: `packages/integrations/src/providers/sentry/provider.ts:213`
+passes `baseUrl: config.base_url` into the same `createSentryHttp` call that takes `token`, and the
+GitLab adapter goes one step further at
+`packages/integrations/src/providers/gitlab/provider.ts:465`, where `buildCloneUrl` puts the
+credential **into** a URL for that host.
+
+**Why WP-21 made it worth filing rather than leaving as a property of the providers.** WP-21 gave the
+host a **command surface**: `POST /api/integrations` is served to an `integration.write` caller
+(WP-21's decision 2), takes `config` as provider-shaped JSON, takes `secret_refs` as the *names* of
+environment variables the **server** resolves, and `POST /api/integrations/:integration_id/test`
+probes the result immediately. The docblock at `apps/server/src/routes/onboarding.ts:37` states the
+confidentiality claim this undermines — *"A token is never typed into a browser, never travels
+through this API, and never appears in a `human_actions` row"*. An administrator who may name a host
+and a credential field, but who by design never sees the credential's value, can have the platform
+send it somewhere they do read. **The round-2 fix narrows the other half, not this one**: constraining
+which environment-variable *names* a `secret_refs` entry may reference stops an arbitrary variable
+being read; it leaves the provider's own credential going to the caller's host.
+
+**The platform process has no egress control at all, and that is the asymmetry.** technical/05 §
+"Network policy" gives the **run container** an allow-list — *"Workspace has no default route; the
+sidecar allows: Anthropic API host (or the configured Bedrock/Vertex/proxy host), the git host,
+package registries for the project's ecosystems (from discovery), read-only observability hosts when
+the stage may use them; everything else denied and logged"*. The server process that holds every
+decrypted credential has nothing equivalent: a grep for an egress or host allow-list under
+`packages/integrations/src` and `packages/application/src` finds the concept only on
+`packages/application/src/ports/workspace.ts`, which is the container's.
+
+**What is hypothesis rather than reading** (rule 39). That an operator would actually be surprised by
+this is a judgement, not a measurement: in a self-hosted single-organisation instance (product/01) the
+`integration.write` role may be the same person who set the environment variables, in which case the
+finding is a defence-in-depth gap and not a privilege escalation. **Needs measurement** (rule 66, not
+run here): whether `testConnection` on each of the five providers actually reaches the network with
+the credential attached before any other validation — read as true for Sentry from the composition
+above, **not** checked for the other four. Nothing here has been demonstrated by an exploit.
+
+**What it costs to leave.** BD-002's promise is about the repository; this is the runtime equivalent,
+and the audit cannot see it: `integration_actions` records the action and redacts the secret, so a
+credential delivered to an attacker's host looks exactly like a successful provider call.
+
+**What done looks like.** An **operator-declared** allow-list of provider hosts — instance
+configuration under `APP_*` (TD-020), not per-project and not settable through the API, because a
+list a caller can extend is not a list — enforced in **two** places and asserted in both: at **write
+time**, so `POST /api/integrations` with a `base_url` naming an undeclared host is refused with a code
+that names the host and the setting; and at **call time**, in the one place every outbound provider
+call already goes through (`IntegrationActionExecutor`), so a row written before the list existed, or
+edited by a future `PATCH /api/integrations/:id`, cannot slip past the write check. The refusal is
+asserted for a host that is *adjacent* to an allowed one, not only for an obviously hostile one — the
+lesson `renderEgressConfig`'s pattern tests already record (`evil-gitlab.example.com`,
+`gitlab.example.com.evil.test`, `gitlab.example.com.`). An empty or absent list must **fail closed or
+be explicitly declared open**, with the choice stated: rule 18 says an empty allow-list that admits
+everything is spelled the same as a scan of zero bytes.
+
+**Depends on / owner. None.** It touches five provider config schemas, the executor and one
+configuration variable, so it is nobody's provider row and nobody's route row — which is how it
+reached five adapters. Related: entry **41** (the Sentry corpus's provenance) is the same file and a
+different question; WP-15b owns the executor this would be enforced in, and is merged.
+
 ### 26. **Composing the workspace provider does not give WP-18 a checkout it can read** (**DECIDED** by architect ruling, session 5 — **TD-026**; the work is on the rewritten **WP-18** row, and this entry closes when that row merges)
 
 > **Ruling recorded under "Architect ruling (WP-18 / backlog 26, session 5)"**: shape (a), sharpened — a
@@ -3538,8 +3961,17 @@ protocol tells every future session to use worktrees. One line in `CONTRIBUTING.
 resolves the binary from the repository root rather than from `$PWD`.
 
 ### 7. Carried, not yet scheduled
-- **Needs measurement (WP-18b, one test): the knowledge apply job's idempotency has never been driven
-  twice.** Nothing is known to be wrong — this is a claim asserted less strongly than it reads (rule 44).
+- **Nit (WP-21, session 5): a credential sealed by `POST /api/integrations` has never been opened by
+  the binding loader in any tier.** The two halves are each exercised and never joined, and the reason
+  is by design rather than an oversight: `SHIPPED_PROVIDERS` deliberately excludes the fakes — it is
+  the list an operator may configure — so the wizard e2e creates a **Sentry** integration through the
+  route (which seals a token into `secrets` and is then only read back as a redaction assertion) while
+  the two integrations the pipeline actually calls are seeded by `seedWorld`, whose docblock says it
+  seals *"with the **real** envelope under the instance's own `APP_SECRET_KEY`"*. So the route's
+  choice of envelope and the loader's are never compared end to end. Nothing is known to be wrong
+  (rule 44): both call `deriveSecretKey` over the same configured key. Trigger: any change to either
+  side's key derivation or envelope version. Cheapest closure is one assertion, not a new tier — a
+  binding attached to an integration **created through the route** making one provider call. Nothing is known to be wrong — this is a claim asserted less strongly than it reads (rule 44).
   The keys `knowledge_commit:<branch>` and `knowledge_mr:<branch>` go through the same `IdempotencyPlan`
   machinery the ticket writes use, and `applyKnowledgeProposals` is called exactly once per batch in every
   tier, so a second call has never happened. The implementer left the recipe and it should not be
@@ -3681,8 +4113,10 @@ resolves the binary from the repository root rather than from `$PWD`.
 | WP-15c | **Webhook ingress + the `inbox`, and the inbound redaction door** | WP-15b, WP-08, WP-09 | no | DONE | `38ea686` | 1 review round (APPROVE) + a pre-merge round, and **an architect ruling taken before the first `delivery_id` was written**. **Production can start a ticket.** `webhook-ingress.e2e.test.ts` › *"starts a ticket nothing seeded and drives it to task.completed"* — a signed delivery to a running `apps/server` instance, **no seeded row**. The ingress asks four questions in order (which binding · is it authentic · which delivery · what does it mean), `verify` runs over the bytes **as they arrived** and `normalise` runs **outside any transaction**; one transaction then writes the `inbox` row and appends its events. That is a **deliberate deviation from technical/06**, which had the work happen in a job and so could lose a delivery it had already recorded as performed — the doc is amended with the reason **and** with the sweep-shaped alternative it was weighed against (rule 8: amend the doc, then point at it). **The ruling is implemented, not merely recorded**, and its real finding is closed: `inbox(headers, payload)` had carried raw deliveries since `0005_events.sql:113`, TD-012's write list never named the table, and **GitLab's legacy scheme sends the binding's own webhook secret as plaintext in `X-Gitlab-Token`** — so migration **0014** adds `redaction_count` and `verified`, both columns are stored redacted *after* `verify` and *after* the key is computed, the verdict is **persisted** because a redacted payload cannot be re-verified, and an integration test reads the row back out of PostgreSQL and asserts the credential is not in it. `redaction_count` is the **summed** count over all three redactions, pinned exactly by `toBe(2)`/`toBe(3)`, so a headers-only count fails — the dead-signal failure the ruling named. **Backlog 20 discharged by the next work package after the one that created it**: a matched ticket with no task row is **re-emitted**, not merely detected — the reconciler appends a **new** `ticket.matched` and leaves `inbox(provider, delivery_id)` untouched, which is how it coexists with the replay criterion (dedup is about a *delivery*, recovery about a *task*); two tasks are impossible because `runIntakeCheck` re-reads `findByTicket` inside its write transaction; and the grace is **data-relative**, not a sleep (rule 2). **Q52 decided rather than deferred**: no fourth task state — a throwing runner `start` fails the run and escalates to `needs_human`, and the reviewer independently agreed, because only the error *class name* reaches `events.payload` and `RunnerUnavailableError` distinguishes *the platform is unfinished* from *this task needs a person*. Filed **Q59**; **Q60** for the rate limit this public endpoint does not yet have. Reviewer mutations on copies, calibrated 21/21 green first: `verify → accept` kills **three** named tests including `packages/application/src/integrations/inbound.test.ts` › *"verifies the bytes as they arrived, before anything is redacted"*; header `redactJson → identity` kills two; dropping the `!isNew` early return kills the racing-deduplication test. The insert **is** the arbiter (`on conflict (provider, delivery_id) do nothing` + `rowCount`, in the caller's transaction — no check-then-insert). `PROVIDER_DIRECTORIES` is `readdirSync` (rules 7, 68). **`verify` was red in the orchestrator's shell after the pre-merge round** — the citation guard caught an ambiguous `inbound.test.ts` basename across three tracked files (rule 59). The implementer's targeted files were green and its report was accurate about them; the **target** is a different question (rule 61). Left behind: **backlog 22**. |
 | WP-15f | **The ticket's own words** — the platform read no ticket text | WP-15c, WP-17 | no | DONE | `b6793aa` | **2 review rounds (the second by fresh eyes) + a comment round.** The finding that stopped "M1 complete" being written: `tasks` stored `ticket_provider`/`key`/`url` and nothing else, `ticketBlock` was those same three lines, `get_task_context` **refused**, and `readTicket` — which already returned `title`, `description`, `comments[]`, `epic`, `siblings`, `attachments_text` — had **zero production callers**. The refinement stage was asked to spec a ticket nobody opened and retrieval's query was `extractQueryTerms('ACME-1')` → `["acme"]`. `readTicket` is now called from **two ordered points**, both outside every transaction and through `IntegrationActionExecutor`: intake's call phase puts the snapshot in the `insert` that creates the task, `stage.execute` backfills when a row has none. **A fourth `pipeline.outbound` duty was measured and rejected** — Q61 recommended one, but `enqueueStage` runs on the line after the commit (`saga.ts:385-388`), so a duty woken by `task.created` waits for the outbox sweep, two reads, a decryption and a round trip, and *"the criterion would be held by luck"*. **It did not join backlog 18**: a narrow `tasks.saveTicketSnapshot`, **no new `save` site**, and `save`'s column list **omits** `ticket_snapshot`, so the twenty whole-row writers are structurally unable to clobber it; the contract case dies on the **derived cost total** (rule 79), `expected +0 to be close to 4.25`. **Budget derived, not inherited** (Q61's numbers were a stated proposal): title 512, description 20 000, newest 20 comments × 1 000 +128 id +128 author = **45 632** chars / **182 528** B / **11 408** tokens, **additive to** the 12 000 pack budget rather than inside it, **292×** under Q54's measured 53 284 565, and **produced by a test rather than quoted** (rule 39). **Two majors, both fixed rather than argued down.** A blanket `catch` swallowed `TransactionOpenError`, disarming WP-15d's guard on **both** call sites — probed `{"threw":false,"value":null}` where the docblock *and this ledger* claimed a refusal; it is terminal now at both refusal points, re-probed `{"threw":true,"ctor":"TransactionOpenError"}` twice, fail-open for a provider that is down unchanged. And a credential pasted into a description was pattern-redacted in the audit row of **the same call** and stored **verbatim**, because `inbox` gets TD-012 step 2 and the pipeline loader had no equivalent — **the filing misstated its own precedent**, and it was **closed** rather than re-filed: `platformRedactor` composed after the binding's own, held in **production** by the ingress e2e, and verified by a reviewer planting its **own** credential shapes, one straddling the cap. **The implementer refused two of my instructions and was right both times** (rule 27): sub-decision (b)'s *"last provider signal"* is not a quantity this build holds (`consumption.ts:89-90` both `unconsumed`, `events.ts:134,145` nullish `task_id`, `inbound.ts:180` project stream), so my brief demanded the consumer change it forbade in the same paragraph. Rule **83** was earned here. Left behind: backlog **25**. |
 | WP-15g | **Compose a production `ClaudeRunner` and the run's workspace** | WP-15f | no | DONE | `5b01f73` | **1 review round + an architect ruling taken before the brief.** `apps/server/src/agent.ts` composes `createWorkspaceClaudeRunner` over the **real** `createClaudeRunner`, with the production `run_messages` sink, `unattendedToolApprovals` (BD-025 deny) and a per-run TD-012 redactor from `RunSpec.secretEnvNames`; it takes a `RunWorkspaceProvisioner` and **never a Docker client**. **The ruling changed the design before an implementer met it**: composing the launcher in `apps/server` would have contradicted TD-021, and no Docker client is needed because **TD-025 §2 already gives the runner a socket-free path** — `WorkspaceAttachment` is *"a path in the runner process' own filesystem"* (`ports/workspace.ts:182-188`) and the only daemon call in `attach` is a liveness probe the socket connect supersedes. It also found **there is no `ROLE=launcher`** (TD-021 and `.env.example` both said so; both corrected) and that **`parseDockerHost(undefined)` returned `/var/run/docker.sock`** — *absence of configuration granting the unfiltered daemon TD-021 deploys a proxy to remove*, rule 55's shape, now a **startup error**. **Criterion 1 defeats rule 82 rather than satisfying it**: the assertion is on the bytes the **CLI received** (`FakeCli.stdin`/`spawnOptions`), never the `RunSpec` the fake ignores — `test/e2e/pipeline/agent-run.e2e.test.ts` › *"sends the ticket’s own title to the process, and stores a redacted transcript"*. A measurement corrected the plan: with SDK **0.3.267** *both* prompt halves are on **stdin** (the append inside the `initialize` control request) and **neither** in argv, asserted both ways. It proves nothing about the real binary, container, shim or model, and says so. **`run_messages` has its first writer since `0006_transcripts.sql` created the table** — planted credential absent, placeholder **present**, control text present, `sum(redaction_count) > 0`. Writing one exposed a constraint nothing had ever exercised, `check (seq >= 1)` against a zero-based producer → migration **0016**, which **lowers** the bound without dropping it (the parity test excludes check constraints, so what holds it is the e2e insert). **Composing it found a live defect**: `attach` did not wait for the shim's control socket. **Review then found the fix half-tested**, which was the better finding — a one-look mutant (`deadline = Date.now() - 1`) left `provider.test.ts` at **37/37** because every success case opened the socket *before* `attach`, while deleting the call died in 8 ms; rule **42** on the very wait added to close the other side. A late-booting-shim case now holds it, and the blast radius is stated **as measured** — one failed `runs` row and one 30 s retry per task, absorbed by Q59(a) — not *"every task lost"*, which was true of the code before the wait. **Q59 answered both halves**: (a) `RunStartError.retryable` + 3 × 30 s, terminal escalates on attempt 1; (b) the refusal **kept and made configuration-conditional** — provisioner absent → no agent runner, missing piece named, and the gates, status mapping and workpad still run. **The `attach` deviation was upheld**: a runner-side `readLocalAttachment` would have had **no caller** until Q52's transport (backlog 11's shape), and the prohibition holds **structurally at the repository level** rather than by configuration. TD-021 carries an as-built note. Left behind: **Q62**, four discovered-work items, and the fact that **no tier exercises the real `attach`** until WP-22. |
-| WP-15h | **The read API the SPA already calls, and the `run:<id>` SSE topic** — run endpoints, `GET /api/tasks/:id`, the transcript bridge, the client-vs-routes census | WP-06, WP-15g, WP-20 | no | DONE (**parts 1 and 2** — every read the SPA calls is served; the row's serving-the-SPA half is backlog **33**, unowned) | `19da103` + `d1a5116` | **1 review round (APPROVE, four minors and a nit, all fixed pre-merge).** Backlog **29**'s *cause* is closed: `apps/server/src/routes/client-census.test.ts` reads the client's paths off every file git knows about under `apps/web/src` — tracked **and** untracked (rule 85) — and the server's half is a real unauthenticated request through the real router, so the same probe is the per-route auth assertion; equality holds in **both** directions and the reviewer re-derived three mutations on copies. A second census, `apps/server/src/routes/scope.test.ts`, replaced a docblock claim the review found unasserted (rule 44). `run:<id>` has its first publisher: the sink announces a stored entry's **position** on one dotted broadcast topic and `apps/server/src/sse/transcript-bridge.ts` reads the rows back into its own hub — only for a watched run (TD-014), one pump per run so positional replay cannot skip, `stop()` waiting for in-flight pumps — asserted against two real `LISTEN` sessions, so `ROLE=api` serves what `ROLE=worker` produced. **Rule 82 held by construction**: `FakeClaudeRunner` is composed with a no-op sink, so the e2e drives the real runner over the fake CLI and asserts the planted secret **both ways on two paths** (the HTTP page and the SSE frame): `test/e2e/server/run-api.e2e.test.ts` › *"serves the run, its transcript, its task — and the live frames — without the run’s secret"*. Where a column has no writer the route **refuses by name** (409 `prompt_not_recorded`; 409 `context_pack_not_recorded` — `run_context_pack` has no `budget_tokens` column and no writer; a `blob_id` row is `row_not_projectable`). Round 1's sharpest finding: a **fabricated** `budget_tokens: total` that a screen would have rendered as *budget equals total*, pinned by its own integration case — removed, and the refusal now carries the row count so a producer that arrives before the schema is fixed is visible. **Two defects found by the first reader of two columns**: `RunRecord.stage` had never been stored (`runs.task_stage_id` never written; `load` returned the literal null for every run this repository ever stored) and `tasks.workpad_ref` stored a `marker_id` the DTO rejects, so `GET /api/tasks/:id` answered 500 for every task with a workpad — both fixed at the writer with contract cases, no new `tasks.save` site. One biome **warning** (not an error) survives in the census fixture at `client-census.test.ts:330`, a template placeholder inside a deliberately plain string; nit. Left behind: part 2 (eleven paths), and the dead-table findings routed to the refiner. **Part 2 at `d1a5116`** (1 review round, APPROVE, + a pre-merge round; CI `34725765067` and `image` `34725765044`, read as `completed success`). The seven reads the census attributed to a later iteration — `/api/org/agents` (runs ⋈ non-terminal task stages), `/api/org/inbox` (open questions + pending approvals), `/api/integrations` (with the provider's declared credential fields **stripped** — a token pasted into `integrations.config` works through the loader's merge and would otherwise be served to any `integration.read` holder; an unshipped provider publishes `{}` and logs the row, fail closed), `/api/integrations/:id/setup-guide` (the shipped `.md`, 409 otherwise), `/api/projects`, `/api/projects/:id/readiness` (**409 `readiness_not_evaluated`** — nothing writes `readiness_evaluations`, and two of the three fields a projection could answer would be invented), `/api/projects/:id/tasks` (keyset-paged, 404 on an unknown project like its siblings) — plus `/api/projects/:id/kb/health`, the read the census cannot see. `ADMITTED_GAPS` is now **commands only** (twelve writes). **A defect the first reader found**: the task keyset carried node-postgres' parsed `Date` (milliseconds) against a `timestamptz` (microseconds), so the cursor was strictly earlier than the row it was built from and excluded it — three tasks in, two out, invisible from outside because a short page and the last page look alike; the cursor now carries the database's own six-digit rendering, pinned by a regex so the fix is not tested against millisecond data (rule 4); the proposal-queue cursor (WP-18b) has the same latent truncation, **filed** not silently fixed. Rule 82 audited: no shipped fake scenario asks a question, so the inbox case overrides refinement to `decision: 'ask'` through the harness; `kb_health_reports` is written only by the hygiene cron, so the e2e enqueues it. **Backlog 35 is live on `/api/org/inbox`** (`questions.text` is artifact-derived and unredacted), stated at the line, the fix belonging at the write. Pre-merge: a technical/08 clause overstating the census's scope (it is client-driven; a served-but-uncalled route is outside it by construction), a stale ledger sentence, and a 200 where sibling routes answer 404. Residuals: `agents`/`inbox` refuse the whole list on one unprojectable row (fail closed, asserted; an orphaned non-terminal run with a null `task_stage_id` blanks the agents list until an operator fixes the row); money summed as JS floats in `listProjectSummaries`; no wrong-role 403 case for `/api/integrations`. |
+| WP-15h | **The read API the SPA already calls, and the `run:<id>` SSE topic** — run endpoints, `GET /api/tasks/:id`, the transcript bridge, the client-vs-routes census | WP-06, WP-15g, WP-20 | no | DONE (**parts 1 and 2** — every read the SPA calls is served; the row's serving-the-SPA half is backlog **33**, now **WP-15j**, and its command half is **WP-15i**) | `19da103` + `d1a5116` | **1 review round (APPROVE, four minors and a nit, all fixed pre-merge).** Backlog **29**'s *cause* is closed: `apps/server/src/routes/client-census.test.ts` reads the client's paths off every file git knows about under `apps/web/src` — tracked **and** untracked (rule 85) — and the server's half is a real unauthenticated request through the real router, so the same probe is the per-route auth assertion; equality holds in **both** directions and the reviewer re-derived three mutations on copies. A second census, `apps/server/src/routes/scope.test.ts`, replaced a docblock claim the review found unasserted (rule 44). `run:<id>` has its first publisher: the sink announces a stored entry's **position** on one dotted broadcast topic and `apps/server/src/sse/transcript-bridge.ts` reads the rows back into its own hub — only for a watched run (TD-014), one pump per run so positional replay cannot skip, `stop()` waiting for in-flight pumps — asserted against two real `LISTEN` sessions, so `ROLE=api` serves what `ROLE=worker` produced. **Rule 82 held by construction**: `FakeClaudeRunner` is composed with a no-op sink, so the e2e drives the real runner over the fake CLI and asserts the planted secret **both ways on two paths** (the HTTP page and the SSE frame): `test/e2e/server/run-api.e2e.test.ts` › *"serves the run, its transcript, its task — and the live frames — without the run’s secret"*. Where a column has no writer the route **refuses by name** (409 `prompt_not_recorded`; 409 `context_pack_not_recorded` — `run_context_pack` has no `budget_tokens` column and no writer; a `blob_id` row is `row_not_projectable`). Round 1's sharpest finding: a **fabricated** `budget_tokens: total` that a screen would have rendered as *budget equals total*, pinned by its own integration case — removed, and the refusal now carries the row count so a producer that arrives before the schema is fixed is visible. **Two defects found by the first reader of two columns**: `RunRecord.stage` had never been stored (`runs.task_stage_id` never written; `load` returned the literal null for every run this repository ever stored) and `tasks.workpad_ref` stored a `marker_id` the DTO rejects, so `GET /api/tasks/:id` answered 500 for every task with a workpad — both fixed at the writer with contract cases, no new `tasks.save` site. One biome **warning** (not an error) survives in the census fixture at `client-census.test.ts:330`, a template placeholder inside a deliberately plain string; nit. Left behind: part 2 (eleven paths), and the dead-table findings routed to the refiner. **Part 2 at `d1a5116`** (1 review round, APPROVE, + a pre-merge round; CI `34725765067` and `image` `34725765044`, read as `completed success`). The seven reads the census attributed to a later iteration — `/api/org/agents` (runs ⋈ non-terminal task stages), `/api/org/inbox` (open questions + pending approvals), `/api/integrations` (with the provider's declared credential fields **stripped** — a token pasted into `integrations.config` works through the loader's merge and would otherwise be served to any `integration.read` holder; an unshipped provider publishes `{}` and logs the row, fail closed), `/api/integrations/:id/setup-guide` (the shipped `.md`, 409 otherwise), `/api/projects`, `/api/projects/:id/readiness` (**409 `readiness_not_evaluated`** — nothing writes `readiness_evaluations`, and two of the three fields a projection could answer would be invented), `/api/projects/:id/tasks` (keyset-paged, 404 on an unknown project like its siblings) — plus `/api/projects/:id/kb/health`, the read the census cannot see. `ADMITTED_GAPS` is now **commands only** (twelve writes). **A defect the first reader found**: the task keyset carried node-postgres' parsed `Date` (milliseconds) against a `timestamptz` (microseconds), so the cursor was strictly earlier than the row it was built from and excluded it — three tasks in, two out, invisible from outside because a short page and the last page look alike; the cursor now carries the database's own six-digit rendering, pinned by a regex so the fix is not tested against millisecond data (rule 4); the proposal-queue cursor (WP-18b) has the same latent truncation, **filed** not silently fixed. Rule 82 audited: no shipped fake scenario asks a question, so the inbox case overrides refinement to `decision: 'ask'` through the harness; `kb_health_reports` is written only by the hygiene cron, so the e2e enqueues it. **Backlog 35 is live on `/api/org/inbox`** (`questions.text` is artifact-derived and unredacted), stated at the line, the fix belonging at the write. Pre-merge: a technical/08 clause overstating the census's scope (it is client-driven; a served-but-uncalled route is outside it by construction), a stale ledger sentence, and a 200 where sibling routes answer 404. Residuals: `agents`/`inbox` refuse the whole list on one unprojectable row (fail closed, asserted; an orphaned non-terminal run with a null `task_stage_id` blanks the agents list until an operator fixes the row); money summed as JS floats in `listProjectSummaries`; no wrong-role 403 case for `/api/integrations`. |
 | WP-15e | **Whole-row `tasks.save` loses a concurrent writer's update — the class, not the instance** (backlog 18) | WP-15d | no | DONE | `e4eaf8a` | **1 review round (APPROVE) + a pre-merge round; CI `34734001501` and `image` `34734001547`, read as `completed success`.** Added to this table in session 5 — the plan row had existed since WP-15d with no milestone row. **Shape (b), optimistic concurrency, chosen on a measurement**: the sites were recounted off the tree — **21**, not 20 (`stage-executor.ts` gained a fifth; the reviewer's own count is 22 with `task-conflict.ts`'s) — and **all of them can interleave**, because the dispatcher orders per `(stream_type, stream_id)`, WP-15c puts provider events on the *project* stream while task events are on the *task* stream, and three job workers are unordered against it; a narrow write per writer is only cheaper while the list is short, and this list is the whole set. **And the narrow shape had already failed to compose**: `save` still named `workpad_ref`, so the executor clobbered the workpad WP-15d's narrow method had protected — measured on PostgreSQL, two named cases fail with it restored. Migration **0019** adds `tasks.version`; `save` refuses a write over a moved row with a typed conflict and now **returns the saved snapshot** (a public port change); **the column partition ships beside it** (`save` no longer names `workpad_ref`), held by a column-ownership guard and a site census both read off disk including untracked files (rule 85) — a version alone would not have found that half. Retry by transaction owner: jobs use `retryOnTaskConflict` and escalate to `needs_human` on exhaustion (bound 3); handlers let the conflict escape and `EventBus` re-runs the handler, because catching inside a handler would duplicate side effects such as `approvals.insert` — the re-run rolls back the `handler_executions` claim inside the inner transaction while the dispatch claim sits in the outer one, so it is not a second dispatch, and after the bound `retryLater` backs off 5 s → 5 min and stays queued: **rate-bounded, not a live hole** (backlog **43**). `version` lives on `StoredTask`, not the domain `Task` (argued at the line: not a state transition). Asserted by a shared concurrency suite (seven cases, two driven transactions) against the memory store **and** PostgreSQL 18, per column for `cost_actual` and `stage`, and the bound at and past; every mutant re-derived by the reviewer died by name. Nits stated as residuals: a pre-WP-15e binary's unpredicated write would win silently and leave `version` unbumped (no rolling-deploy shape exists — one artefact, `migrate` then `server`; in technical/03 and `store.ts`, never in the applied migration); `inTaskTransaction`'s `null` means both "nothing to do" and "escalated"; an escalation that itself exhausts the bound escapes to pg-boss. **Two things the implementer recorded against itself** (rule 61's refinement): a parameter-property construct `tsc` accepts and Node's strip-only loader refuses reached only the runlet contract suite after being twice misread as machine load — backlog **42** — and a `git stash` confirmation it described never ran. |
+| WP-15i | **The task and run command surface** — the eleven commands the SPA calls and nothing serves (backlog **29**'s write half) | WP-02, WP-06, WP-15, WP-15e, WP-15h | no | TODO | — | Filed by a refiner in session 5. `POST /api/runs/:run_id/steer` stays WP-27's; `human_actions` has no writer today; before WP-23, WP-27, WP-28 and WP-31. |
+| WP-15j | **Serving the SPA** — the bundle the product image carries and no route hands to a browser (backlog **33**) | WP-20, WP-22, WP-15h | no (shares `apps/server/src/app.ts` with WP-15i) | TODO | — | Filed by a refiner in session 5. Before WP-23, whose dogfood criterion cannot be met while `/` answers 404. |
 | WP-16 | Context packs + KB indexer (phase 1 FTS) + code map (ctags + PageRank) | WP-03, WP-12 | no | DONE | `8454fca` | **3 rounds.** Acceptance **produced, not quoted**: pack **10 552** tokens against a 12 000 default the same test asserts equals the shipped config, on an **18 886**-token vault, pinned again on PostgreSQL as two literals so a divergence names its store. Round 2 found what round 1 hid: `websearch_to_tsquery` **ANDs** bare words, so the acceptance query matched **0 documents on PostgreSQL** while the fake returned **15** — rule 1, in the most consequential place available. **No relevance floor ships**, both candidates rejected by measurement (absolute is backwards; relative is store-dependent and the author's own 0.3 dropped the right page); the residue is **Q58**. A **hostile KB document** is now in the vault (BD-022): control characters and bidi overrides replaced and counted, hostile words byte-identical and asserted, WP-17 named at the line. `ctags` **absent** → typed `unavailable`, **Q57**. Round 3 found a documented "unreachable" line **not in the tree**; corrected tally **54 mutants, 54 dead** (52 harness, 2 by hand). *The retrieval layer is built and no prompt uses it* — WP-17/WP-18. |
 | WP-17 | **Role prompts + the delimiter contract + the real context pack** | WP-12, WP-16 | yes | DONE | `1497fe9` | **2 review rounds (the second by fresh eyes on round 2's fixes) + a pre-merge round.** The delimiter landed **in the same change as the wiring**, which is what backlog 12 required: a block is `<untrusted-data-<nonce> kind="…">` … `</untrusted-data-<nonce>>`, nonce 32 hex from `randomUUID` drawn **per prompt**, and the rule inside it is that *every byte of the prompt is either text the platform wrote or is inside a block*. Body **byte-identical** — no sanitiser, nothing for a later transform to undo (`apps/web/src/ui/untrusted.tsx`'s answer to the same question). Nothing untrusted reaches a **marker**: a value outside `SAFE_ATTRIBUTE_VALUE` is **refused**, a body containing the nonce is refused after four draws, and the reviewer established the part that actually closes it — the degradation renders a **closed set of three platform literals**, so **no input renders attacker bytes in a marker**. Nothing persists the nonce (`runs.system_prompt`/`user_prompt` exist and nothing writes them). **The ledger was wrong and is corrected at the source**: two of the ten hostile constructs do *not* flow byte-identical — `sanitiseDocumentText` replaces each control/bidi character with one `U+FFFD` and counts it, **2 per construct** as written and **4** over `HOSTILE_TEXT` (backlog 12 amended). The four zero-width characters do arrive untouched and buy nothing **against the structural parse** — a spliced nonce fails `NONCE_PATTERN` for the reader too — which is one word narrower than the implementer first claimed, because the reader is a parse and the model is not. **Round 1 found a live veto**: a vault path past the marker alphabet **threw**, failing `plan()`, failing the run and escalating to `needs_human` — *one deeply nested KB page stopping every task on the project*, measured at 476 renders / 568 throws with `.agentic/knowledge/<255>/<255>` reaching 530. Both names derived from a vault path now degrade independently; the implementer audited the attribute **set** unprompted (rule 68) and found no third asymmetry, and the reviewer re-derived the set off the code rather than off its table. **Three wrong causes attached to correct numbers** in one work package (rule **81**), all three found by re-deriving the cause rather than re-checking the figure. **Backlog 13 closed** (`.max(200_000)`); **backlog 14's unit half closed** — `ceil(utf8Bytes/4)`, 48 000 CJK 12 000 → 36 000, ASCII unchanged, and the new property **fails** for a wrong ratio where the old two could not; the ratio stays a **hypothesis**, labelled with a vendor datum. Backlog 15/Q58 deliberately not taken. **The ten platform skills were refused and the refusal was upheld**: `skills?: string[] | 'all'` is *a context filter, not a sandbox* (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`), mounted at provisioning, which needs a `WorkspaceProvider` the pipeline does not compose — ten files nothing reads is backlog 11's shape. Now **WP-14a**. **Eval half externally BLOCKED** and nothing stubbed: `pnpm eval` exists and **exits 1** naming what is missing, and `scripts/eval.test.ts` holds it there including rule 18's empty-key case. See "Blocker briefs needing a human". Left behind: backlog **23**, which is why M1 is not complete. |
 | WP-18a | **The git-backed vault read path and the `KnowledgeIndexer` job** (TD-026) — part a of WP-18 | WP-16, WP-17, WP-15c, WP-15a; TD-026 | no | DONE | `79cb3f9` | **1 review round (APPROVE) + a pre-merge round.** CI `34714681328` and `image` `34714681356`, read as `completed success`. **The index reads a bare mirror the platform owns**: `packages/infrastructure/src/knowledge/git-vault.ts` is a second `VaultSource` over `git rev-parse`, `git ls-tree -r -z` and one `git cat-file --batch` — no working tree, no Docker client, never the launcher's `repo-cache` — the application-ring port unchanged; the mirror lives at `mirrorCacheKeyFor(projectId)` under `APP_KNOWLEDGE_MIRROR_ROOT`, **no default** (absent → no source composed, `/readyz` ok, the job refuses by name, the index untouched); the fetch credential travels bindings → `SecretStore` → the env of the **two network commands only**, through a credential helper, never inside a URL. **All seven read-path criteria asserted on rows** after a real `git clone --mirror` from a seeded remote, through real pg-boss (`test/integration/knowledge/git-vault-index.integration.test.ts`): no working tree; `repoPaths` is the tree; a `120000` symlink to `/etc/passwd` and a `160000` gitlink listed and never read; a later push indexed with no manual fetch; an unreachable remote → `vault_unavailable` with the count unchanged and non-zero; an `agentic/*` head refused by `merge-base --is-ancestor`; absent config refuses by name. **The singleton, measured**: the first version passed with pg-boss's singleton key deleted — pg-boss folds a null key too — so the case now demands that a second project's enqueue be admitted while the first is queued; the reviewer re-derived it without mutating the tree. Triggers: `task.created`; `mr.merged` **unpinned** and `default_branch.moved` **pinned**, because `mr.merged` names only the source branch. **The fetch writes no `integration_actions` row**, judged defensible: technical/06 scopes the executor to provider-port actions, the git transport has no port and nothing to replay, `updateMirror` is the precedent, and BD-003 is satisfied by `knowledge.index.rebuilt` — now stated in technical/07. `ROLE=indexer` is a worker (the WP-15g argument); the pool floor recomputed. Pre-merge: the credential env had been attached to **every** git child (least privilege, and a "password really supplied" assertion passing off local plumbing); `projectId` became a path with no shape check (rule 55's shape); a docblock claimed a branch pattern "refuses `..` by construction" when `.` was in the class (git refused the path anyway — the outcome was safe and the sentence false, rule 44); `unchanged` was "free" while its early exit sits after the full read; a `SECRET_MARKER` assertion that could not fail (rule 43: git stores a symlink's target *path*, never its bytes). **Needs measurement, stated in the notes**: the in-flight half of the singleton (one active run plus two triggers → one trailing run) is asserted only on the in-memory adapter; a `file://` fetch never invokes the credential helper, so proving the credential path needs `git http-backend` over `http://` with auth. Q63 annotated (no ceiling on the mirror; no storage gauge). **The machine got two votes during this row**: the orchestrator's wait loop and then its detached `verify:e2e` were killed by the harness for low memory (`memory_pressure` said 53 % free — the harness's own threshold); the killed e2e left two containers, a network and about a dozen anonymous volumes, removed by hand, and the rerun passed with the count two above baseline. |
@@ -9384,7 +9818,440 @@ refiner records the evidence and stops. The engineering half of the same inciden
 **42**.
 
 
+### WP-21 — the onboarding wizard, discovery and readiness
+
+**Where the discovery run lives, decided: it is a stage of a one-off task.** `runs.task_id` is
+`not null` (migration 0004) and `RunSpec.taskId` is required, so a discovery run needs a task
+whatever else is decided; the only question was whether to build a second path that creates a run,
+charges it, transcribes it, re-validates it and ends it. `DISCOVERY_TEMPLATE`
+(`packages/domain/src/pipeline/templates.ts`) is one agent stage between two system stages, so the
+WP-19 admission guard, the cost ledger, the `run:<id>` stream, the budget cap, the conflict retry
+and the `needs_human` escalation all apply with **no second entry point** —
+`createStageRunPlanner` already carried a `discovery` row in each of BD-021's three least-privilege
+tables. WP-18b's `librarian` stage is the precedent for a stage entered outside the ticket flow's
+own decisions. The task carries a **platform-issued** ticket (`platform` / `onboarding-discovery` /
+the project's page), and `unique (project_id, ticket_key, mode)` is what makes
+`POST …/discovery` idempotent — a second call spends no second budget.
+
+**The state machine could not express a template that finishes without a merge, and that is a gap
+this row closed rather than worked around.** The only edge into `done` was `retro → done`, so
+`interpret`'s `complete` decision was refused and `applyDecision` escalated the task to
+`needs_human` with a blocker brief blaming the template. Two shipped shapes need it: `discovery`,
+and product/04's **spike** template, which "ends at a human with no MR" and has therefore never been
+runnable. `active → done` is added to `TASK_TRANSITIONS` and technical/02's diagram is amended with
+the same sentence (standing rule 8). It takes nothing from BD-007: *which* stage a task ends at is
+the interpreter's decision from the template, and every ticket template still runs
+`ready_for_merge → merged → retro → done`, so no ticket can reach `done` without a human merge.
+`TICKET_TEMPLATES` is the new name for the three that do, so the merge-tail rule stays a true
+sentence about a set rather than being weakened to cover four.
+
+**`readiness_evaluations` has its first writer, and the 409 narrowed rather than disappeared.**
+`PostgresReadinessStore` writes the row **and** the narrow `projects.readiness_level` update in one
+transaction (one method, because a build that wrote one without the other would show a level no
+evaluation supports), driven by the `onboarding.discovery` job. `GET /api/projects/:id/readiness`
+answers **200** for an evaluated project and keeps **409 `readiness_not_evaluated`**, with the row
+count, for one whose discovery run has not happened — a projection over `projects.readiness_level`
+is still refused because `evaluated_at` and `criteria` would be invented. Both states are asserted:
+`read-api.integration.test.ts` › *"refuses a project nothing has evaluated and answers one that has
+been"*, and the e2e asserts the 409 before the run and the 200 after it.
+
+**Three readiness criteria are the platform's own answer and a model's claim about them is
+dropped.** R9 (protected default branch, a git-provider read), R11 (observability bindings, a
+`bindings` row) and R12 (knowledge completeness, the index) are answered from
+`PlatformReadinessSignals`; `evaluateReadiness` builds its agent-answerable set by filtering
+`READINESS_CRITERIA`, so a criterion that moves column stops being taken from the model with no
+change at the call site. The hostile case is a test and an e2e assertion: the draft claims R9 passes
+and the git provider says it does not, and the stored evidence is the platform's sentence.
+`unlocks` is platform text in every row and is re-read from the table at the API boundary, so a
+release that improves the wording improves it everywhere. A criterion nobody answered is `false` —
+readiness only ever makes the platform more conservative (product/17 § "What it is not").
+
+**Byte budgets, stated (rule 63).** Readiness `evidence` is capped at
+`MAX_READINESS_EVIDENCE_CHARS` = 600 **per criterion**, so one evaluation's model prose is at most
+`14 × 600 = 8 400` characters — 33 600 bytes at four bytes a character, the worst case for astral
+text. A drafted page is capped by the curator's existing `MAX_PROPOSAL_DELTA_BYTES` (64 KiB) and the
+number of pages by `MAX_DISCOVERY_DOCUMENTS`, which **is** `MAX_PROPOSALS_PER_RUN` (20) rather than
+a second number beside it — the first draft set it to 40 and the curator's 20 made it a cap that
+could never bite (rule 41). Both caps are applied **after** redaction, for the reason
+`ticket-snapshot.ts` states at its own: an exact-match redactor cannot find a secret a cut has
+already halved.
+
+**The report is stored through narrow writes with the run's redactor, and backlog 35 gains no
+fourth instance.** The `DiscoveryDraft` artifact is re-parsed from the row (it may have been written
+by an older build), redacted once, and written to two places: `readiness_evaluations` +
+`projects.readiness_level`, and `kb_proposals` with source `bootstrap` — the queue product/06 asks
+for in as many words (*"the draft is shown as a diff … nothing is committed without acceptance"*).
+`DISCOVERY_PROPOSAL_THRESHOLDS` is **forced**, not read from the project, so a project with
+`auto_apply: true` still gets a queue: BD-018's band is a judgement about a Librarian that has
+watched a project deliver, and a discovery run is the platform's first look at a repository.
+
+**Review round 1 (REQUEST_CHANGES) — the four majors, and what each one was.**
+
+1. **The probe was the one outbound provider call that bypassed `IntegrationActionExecutor`**, which
+   is a CLAUDE.md non-negotiable, and `action-executor.ts` names `testConnection` in the very
+   docblock of the field it needed (`ReadActionRequest.mode`). It wrote no `integration_actions`
+   row, took no rate limit, and it is the product's **only HTTP-triggered** outbound call — while
+   `runtime.ts` argued the R9 read went through the executor for exactly that reason. It goes
+   through it now as `mutating: false`, `projectId`/`taskId` null, `action: 'test_connection'`, with
+   the verdict (not the provider's prose) as the audit evidence. Asserted against a **real**
+   executor: the row, `mutating: false`, a failed connection audited as a *successful call*, and the
+   rate limit as the **wait the limiter asked the timer for** — the limiter delays rather than
+   refusing, which is what the first draft of that assertion got wrong.
+2. **`secret_refs` read any environment variable the process had.** An `integration.write` caller
+   could name `APP_SECRET_KEY`, `DATABASE_URL` or `ANTHROPIC_API_KEY`; combined with a
+   caller-chosen provider `base_url`, that is two API calls to send the envelope key to a host the
+   caller picked. It is now an **operator-declared allow-list**, `APP_INTEGRATION_SECRET_ENV`, empty
+   by default — an allow-list and not a deny-list of the platform's own names, which is standing
+   rule 55 one ring out from paths. The refusal is `403 secret_name_not_permitted` and says nothing
+   about whether the variable **exists**, because a message that distinguished the two would make
+   the endpoint an oracle for the process's environment. TD-020's `_FILE` convention applies to the
+   declared name, so `APP_SECRET_KEY_FILE` stays unreadable. Asserted with all three platform names
+   planted *with values*, in the unit tier and against a real instance in the e2e. **The residual is
+   stated at the line and filed as discovered work**: nothing constrains a provider's `base_url`, so
+   a caller who *is* allowed to read `GITLAB_TOKEN` can still point the integration at a host they
+   control.
+3. **"A different body under a used key is a 409" was claimed in four places and implemented in
+   one.** Only `projects.repo_url` was compared; a changed `name` replayed silently and
+   `createIntegration` had no check at all. Every performed command now records a digest of its
+   canonical request in the `human_actions` row beside the key, and `findIdempotentAttempt` +
+   `assertIdempotentRequest` refuse a later request whose digest differs. No table and no migration:
+   `human_actions` is append-only and already carried the key. The decision is an exported pure
+   function because two of its three branches are "do nothing" (rule 67), and the e2e asserts the
+   409 on a request that differs **only** in `name` — the case a unique key cannot see. What is
+   still absent is a stored *response*, which the discovered-work bullet (and backlog **47**) carries.
+4. **The discovery role had no shell and the readiness criteria required one.** product/06 § "Step
+   2" marks a command `verified` "only if the agent actually ran it", and product/17 detects R1 and
+   R6 "executed in the workspace" and R2 "measured" — so a read-only Discovery agent could never
+   verify R1, which is a **level 1** requirement, and no real repository could exceed readiness 0.
+   `TOOLS_BY_ROLE.discovery` gains **`Bash`**. What bounds it is what bounds the developer's shell,
+   not a promise: BD-025's three-list command policy reaches the run on the same spec, an unmatched
+   command falls to `ask` and an unattended `ask` denies, the workspace is the same hardened
+   container, and its egress allow-list has no registry host — so a discovery run cannot install
+   anything. **The shipped `allow` list is narrower than the criteria want, and the first draft of
+   this fix got that wrong**: `DEFAULT_IMPLEMENTATION_ALLOW` is read-only verbs plus git writes and
+   lockfile installs, with **no test command on it** — `npm test` is technical/12's *example*
+   `.agentic/config.yml`, which a **project** writes. The e2e asserted the example as if it were the
+   default and failed, which is rule 86 caught by a test rather than by a reader. So the honest
+   statement is: a discovery run can *read* with a shell by default, and R1/R2/R6 become reachable
+   the moment the project declares its own `commands.allow` — which is what the wizard's step 4
+   writes. Without `Bash` they would be unreachable for ever, which is the comparison that decided
+   it; the prompt now tells the agent to record a refused command as "not permitted by this
+   project's command policy" rather than as a failing suite. It gains no way to
+   keep what the shell produced: no `Write`, no `Edit`, no mutating platform tool, all asserted in
+   `planner.test.ts` › *"names exactly the roles that may run a command and the roles that may
+   write"*. **product/13's least-privilege table has no Discovery row at all** — the role is
+   described in § "Discovery agent" and missing from § "Tools per role" — so this is a row the
+   table never had rather than a disagreement with it; filed as discovered work for the orchestrator
+   to amend. The prompt gained a "What you may run" section so the agent does not spend turns on
+   commands that will be refused.
+
+**And two defects the review's own fixes found.** Asking the census for `PUT` by method (minor 7)
+showed `PUT …/bindings` answering an anonymous caller **400**, not 401: Fastify validates the body
+before `preHandler`, so the route described its own shape before refusing — `routes/kb.ts`'s finding
+for a query parameter, at a body. All seven guards moved to `preValidation` with the uuid-checked
+`projectOf`, and the census now asks each command **by its own method**, which is also what stops a
+PUT from passing on its GET sibling's answer. The second: `createIntegration` inserted `secrets`
+outside the `integrations` insert's transaction (nit 9), so a failure between them orphaned
+ciphertext that the module's own comment calls unrotatable — one transaction now, with the
+credential **read** before it opens so no pooled connection is held across a file read.
+
+**The other minors.** The page budget is derived from the constants and pinned by a test (1.25 MiB,
+not the 2.5 MiB the docblock claimed while the constant said 20 — backlog 22's shape); the
+organisation advisory lock has a two-concurrent-requests case on a database of its own; Q68's
+heading, body and the domain docblock agree on four named and six mapped.
+
+**Review round 2 (REQUEST_CHANGES) — and the finding underneath three of the six.**
+
+**A project cannot widen the organisation command maximum, so no run on this build can execute a
+project command.** `narrowCommandPolicy` drops an `allow` entry the maximum does not grant and
+reports it in `ignoredAllow`; the maximum is `DEFAULT_COMMAND_POLICY`, which contains no test, lint
+or setup command; and nothing in this build lets an operator widen it. Round 1's fix and its ledger
+sentence both said R1 becomes reachable "the moment the project declares its own `commands.allow`",
+which is **false** — that declaration is ignored. Measured by reading `narrowCommandPolicy:1284`
+after the reviewer's major 2 pointed at the wizard. Three consequences, taken rather than smoothed:
+
+1. **R1, R2 and R6 are read for what a run can establish**, and each says so at its own `detection`
+   line in `READINESS_CRITERIA`: a test command found in the CI configuration with a job that runs
+   it, a documented duration or a CI timeout, a documented one-command setup. product/17 words all
+   three as things an agent *executes*. Read literally, R1 — a level-1 requirement — is unreachable
+   for every repository and the ladder is decorative. Closing the gap properly is a product decision
+   (widen the maximum, or reword product/17) and is filed as discovered work.
+2. **The discovery role's shell is narrowed to `DEFAULT_READ_ONLY_ALLOW`** by a new third
+   least-privilege table, `COMMAND_BASELINE_BY_ROLE`. Round 1 left it on the implementation
+   baseline, which also allows `git add|commit|fetch|rebase`, `git push origin agentic/*`, `npm ci`
+   and `pip install -r *` — the push stopped only by a read-only run minting no git credential,
+   which is a second mechanism doing a first mechanism's job (the reviewer's minor 3). It is a
+   **table rather than a derived rule** because the obvious derivation ("no `Write` ⇒ read-only")
+   would also narrow the acceptance tester, whose product/13 row is "tests/app cmds"; changing
+   another role's policy inside a review round is not a narrowing anybody decided.
+   **The answer for product/13's Discovery row: `Read`/`Glob`/`Grep` plus a read-only shell** — `ls`,
+   `cat`, `grep`, `rg`, `find`, `git log|diff|show|blame|status` — no write, no push, no
+   observability, no KB write, no `ask_human`.
+3. **The prompt and the eval cases say so.** "What you may run" lists the ten commands and states
+   that a project command cannot be run on this platform; `commands[].verified` is therefore false
+   for every command, with the evidence naming the file the command was read in; and a refused
+   command is recorded as evidence about the platform rather than as a failing suite. A new eval
+   case pins that.
+
+**Major 1 — a credential could be stored in plaintext through `config`.** `secret_refs` was checked
+against `provider.secretFields` and `config` was not, so `POST /api/integrations` with
+`config: { auth_token: "…" }` wrote a plaintext credential into `integrations.config` — a value
+`SecretStore` does not know about, that rotation (which walks `integrations.secret_ids`) never
+touches, and that the binding loader and the prober merge into the adapter anyway. It was invisible
+from the API because `publishableConfig` strips exactly those keys on the *read*, which is standing
+rule 22's shape: the only layer was the one that hides the value. `assertNoCredentialInConfig`
+refuses it at the write with `400 credential_in_config` naming `secret_refs` as the place for it,
+`createIntegration` is the only writer of that column in the repository (verified by grep —
+`writeIntegrationHealth` names `health` and `PATCH /api/integrations/:id` is unbuilt), and the check
+is asserted over **every shipped provider's** `secretFields` in both directions, plus against a live
+instance in the e2e. The read-side strip stays, with its docblock saying which layer it is.
+
+**Major 2 — the wizard's step 4 overwrote the stored configuration.** It sent `{ version: 1 }` with
+no `base_hash`, so every other key a project had was discarded and a concurrent edit was a lost
+update rather than a 409. It now sends the document `GET …/config` returned plus its `hash`, and
+the button is disabled until that read lands — asserted by a ui case that plants a key the screen
+has never heard of and requires it to survive. A `commands.allow` editor was **not** added and the
+screen says why: a project may only narrow, so an editor would be an affordance that cannot do what
+an operator would expect of it. The **level 0 → 1 transition through the shipped commands** is what
+the e2e asserts — created at 0, and 1 after a discovery run whose draft claims R1 and R3 from files.
+
+**Minor 4 — the idempotency digest was written outside the effect's transaction.** For the two
+creates whose effect is a write in this module it is now written **inside** it (`createProject` and
+`createIntegration` take the `human_actions` row and insert it in the same transaction). The two
+residuals are named at `findIdempotentAttempt`: `POST …/discovery` cannot join a pipeline
+transaction the route does not hold, and two concurrent requests with the same key both read "no
+previous attempt" before either commits — in both cases what is lost is a 409, never a second
+effect, and closing the second needs a unique index on `(action, params->>'idempotency_key')` and a
+migration.
+
+**Nits.** `knowledge_dir` is `pathPatternSchema` plus "relative, no `.` or `..` segment" — it is the
+directory a model-chosen page path is joined onto — and `default_branch` is bounded at 255; the
+probe now races the account's rate-limit budget against a 10 s deadline and answers
+`429 probe_busy` with `Retry-After` rather than holding a browser connection behind an unbounded
+queue, with the call left to finish and record its verdict in `integrations.health`.
+
+**One flake, diagnosed rather than filed as load.** `runlet/conformance.contract.test.ts` failed one
+`verify` with `ECONNREFUSED … c.sock` at load 14.3 and passed alone. Rule 61's WP-15e refinement
+says that message is *also* how a strip-only TypeScript syntax error presents, and this change
+touches `packages/contracts`, which the shim imports — so it was ruled out by measurement rather
+than by the retry: `node --import ./scripts/ts-source-resolver.mjs` loads `@platform/contracts` and
+`apps/runlet/src/index.ts`, and the shim gets as far as refusing a missing `RUNLET_CONTROL_SOCKET`.
+
+**Seven commands, audited, with a required `Idempotency-Key` on the three that create.**
+`POST /api/projects`, `POST /api/integrations`, `POST /api/integrations/:id/test`,
+`GET/PUT /api/projects/:id/bindings`, `PUT /api/projects/:id/config` and
+`POST /api/projects/:id/discovery`. Every write records a `human_actions` row after it succeeds,
+carrying the idempotency key. **What the header buys, and what it does not**: the idempotency is the
+**unique key** underneath each command (`projects.key`, `(integrations.org_id, type, name)`,
+`(tasks.project_id, ticket_key, mode)`), not a stored-response table — so a retry finds the row and
+answers with it, and a *different* body under a used key is a 409 naming the conflict rather than a
+replay of the first answer. That residual is in Discovered work rather than implied away.
+`POST /api/integrations` takes `secret_refs` as **field → environment-variable name**, never a
+value: the server reads it from its own environment (or the `_FILE` companion, TD-020) and seals it
+with the envelope the binding loader opens, so no credential crosses the API and the audit row
+carries only the field names.
+
+**`createIntegrationRequestSchema.secret_refs` changed from a list to a record**, and the reason is
+that a list cannot configure a provider with two credential fields — GitLab declares `token`,
+`webhook_secret_token` and `webhook_signing_token`. No client existed before this row.
+
+**The census gaps did not move, and that is the honest answer.** `ADMITTED_GAPS` has always been the
+twelve **task and run** commands; the wizard's seven were never on it, because the client's calls and
+the routes landed in one change and there was nothing to admit. They are asserted **positively**
+instead — `client-census.test.ts` › *"serves the seven onboarding commands WP-21 added"* — and the
+gap list's comment now says so, so "every remaining gap is a command" no longer reads as a claim
+about all of them.
+
+**Three sentences elsewhere were made true (rule 83)**: `CLAUDE.md`'s readiness paragraph,
+technical/08's *"while nothing writes `readiness_evaluations`"* note and its *"four more reads"*
+list, `routes/integrations.ts`'s *"they belong to the work package that gives the settings screen a
+command surface"* and its `health.status` description, `routes/projects.ts`'s *"`POST /api/projects`
+and `POST …/discovery` are writes and belong with the command surface"*, `queries/project-queries.ts`'s
+docblock, and `apps/web/src/features/integrations.tsx`'s *"routes no work package has built"*.
+**Orchestrator-owned and reported rather than edited**: the WP-15h row in the milestone table and
+the WP-15h part 2 notes both say `readiness` answers 409 "while nothing writes
+`readiness_evaluations`", and backlog entry 29's paragraph says the same.
+
+**A defect the wizard's own e2e found in WP-21's code**: `readArtifact` selected `run_id` from
+`artifacts`, whose column is `produced_by_run_id`. The job failed, pg-boss retried it with a 30 s
+backoff, and **nothing in any other tier could see it** — the unit tier drives
+`recordDiscoveryFindings` with a function, so the SQL was exercised for the first time by the e2e.
+The pg-boss row's `output` carried the error; the ledger records the diagnosis because the next
+reader of a job that never runs should look there first.
+
+**A second defect the same run found, in the shared contract suite**: `runReadinessStoreContract`
+cleaned up only in `beforeEach`, so the **last** case's PostgreSQL transaction stayed open, holding a
+row lock on `projects.readiness_level`. The next file in the same worker that updated that project
+blocked for the full 120 s timeout. It has an `afterAll` now, and the docblock says why — a suite
+that leaks a handle is untidy, and one that leaks a *lock* is a time bomb for whatever runs next.
+
+**Decisions and assumptions.**
+
+1. **The organisation is created on the first project.** `bootstrapAdministrator` creates the first
+   *user* and no organisation, and every row that needs an `org_id` is written by a later command —
+   so a fresh instance had an administrator who could not create a project, which this is the first
+   row to notice. `ensureOrganisation` reads, then inserts under a transaction-scoped advisory lock
+   (there is no unique column to conflict on, and two concurrent first requests would both see an
+   empty table). product/01 says a self-hosted instance *has* one organisation; the name is a
+   placeholder an administrator renames.
+2. **`POST /api/integrations/:id/test` is `integration.write` (admin), not `integration.read`.** The
+   probe spends a request against a third party with the organisation's credential and product/11
+   gives integrations to the admin. It mutates nothing — that is every `testConnection`'s promise —
+   but read-only is not the same as free.
+3. **`PUT /api/projects/:id/config` is the whole document and both stores.** `projects.autonomy_level`
+   is the column the board badge and `suggestedAutonomyCap` read, `policies.autonomy` is what a
+   repository may also set, and a request whose two disagree is refused rather than silently
+   resolved. The dial is materialised through `applyAutonomyPreset` (BD-027) and the audit row
+   records the preset version and two of the materialised policies, so the audit says what the dial
+   *meant* rather than only which word was chosen.
+4. **`requiresBudgetApproval` is still unconsumed, and that is WP-28's.** Q65 already records it:
+   WP-19 produces the estimate, nothing reads `AutonomyPreset.budgetApprovalThresholdUsd`, and the
+   gate belongs with the approval work rather than with the wizard. This row sets the dial; it does
+   not build the gate the dial configures.
+5. **Step 3 (the business interview) is not built, and the wizard says so.** product/06 describes a
+   conversational form driven by the Product Manager role; nothing in this build runs one, and a
+   form that collected answers nobody reads would be worse than an honest gap. The screen links to
+   the knowledge browser instead.
+6. **Step 5 (commit) is the proposal queue** rather than a new endpoint: approving a `bootstrap`
+   proposal commits it on an `agentic/knowledge/*` branch with a merge request through WP-18b's
+   existing apply path, never onto the default branch. `POST /api/projects/:id/config/export` — the
+   configuration as its own merge request — is **not** built and is in Discovered work.
+7. **The ten completeness section paths are Q68**, filed with the recommendation implemented: six
+   are named by product/05 and product/06, four are this row's mapping, and product/06's *"explicitly
+   marked 'not applicable'"* has nowhere to be stored.
+   *Refiner correction (session 5, rule 39): the two counts are the wrong way round here and in Q68's
+   headline — **four** paths are named by the documents (`technical/overview.md`,
+   `technical/how-to-run.md`, `technical/conventions.md`, `business/direction.md`) and **six** are
+   this row's mapping. The shipped docblock at `packages/domain/src/readiness/criteria.ts:226` has it
+   right, and so does Q68's own enumeration; only the summary sentences are inverted. The finding is
+   unaffected and backlog 45 rests on the six.*
+8. **No migration.** `readiness_evaluations` (0008), `projects.readiness_level` (0003),
+   `kb_proposals` (0008), `integrations.health` (0003) and `human_actions` (0004) all already
+   existed; the last applied migration is still **0019**.
+9. **`POOL_RESERVATIONS.onboarding` is 1**, so the floor at `ROLE=all` and concurrency 1 is **17**
+   (`2N + 15`) and `.env.example` ships 18. `test/e2e/support/instance.ts` carries the floor and
+   found it, as it is meant to.
+
+**For the reviewer, two things worth checking.** The e2e's integration **rows** are seeded rather
+than created through `POST /api/integrations` — `SHIPPED_PROVIDERS` deliberately excludes the fakes,
+because it is the list an operator may configure — so the create is exercised against Sentry and the
+pipeline's two bindings are fakes the wizard's own `PUT …/bindings` attaches; the assertion that the
+binding is real is the webhook delivery reaching `ticket.matched` on the project the wizard created.
+And `startPipeline` gained two seams for this file only: `seedProject: false` (the wizard creates the
+project) and `gitProjects` (the fake git provider has to know the path
+`repositoryPathOf(projects.repo_url)` derives for a fixture repository on disk).
+
 ## Discovered work — session 5 (not in plan)
+- **A discovery run whose enqueue is lost leaves the task `active` at a stage nothing runs, and
+  every retry answers `already_started`** (WP-21 review round 3). `startProjectDiscovery`
+  (`packages/application/src/onboarding/discovery.ts`) commits the task, the pipeline row and the
+  `project.discovery.started` event, then enqueues the first `stage.execute` on the line after the
+  commit — an `afterCommit` enqueue, so a crash, an OOM kill or a pg-boss outage between the two
+  drops the only wake-up. The task is then `active` with a pipeline pointing at a stage no worker
+  holds; the wizard's step 2 button returns `already_started` for ever, because the guard reads the
+  task's existence rather than its progress, and there is **no reconciler for a stage**. The shape
+  of a fix is already in the tree one layer up: `pipeline.intake.reconcile`
+  (`packages/application/src/pipeline/intake-reconcile.ts`, backlog **20**) sweeps matched tickets
+  whose intake wake-up was lost and appends a *new* `ticket.matched`, bounded to one attempt per
+  ticket by the system actor it stamps. The stage-level equivalent would sweep tasks that are
+  `active` with no `stage.execute` job and no run, and re-enqueue — which needs a way to ask the job
+  store "is this job pending", the piece backlog 20 did not need. Stated at the function; nobody
+  owns it.
+- **A census that reads `git ls-files` and then `readFileSync` crashes on a path that vanished in
+  between** (found while WP-21 was in review; the file is WP-15e's). `tasks-column-ownership.test.ts`
+  failed a `verify` with `ENOENT … .vitest-scope-23805-egp4di/plain/ordinary.e2e.test.ts` — a
+  fixture another test in the same run plants and deletes — and the failure mode is the bad one: the
+  census reports **nothing at all** rather than reporting one file it could not read. Fixed in place
+  with the one-line `existsSync` guard its sibling `db/pool-errors.test.ts` already documents and
+  explains. **The class is open**: every guard that walks `git ls-files` and reads has the same
+  hole, and `scripts/check-ignored.ts`, `scripts/nul-check.mjs` and `scripts/conflict-check.mjs` are
+  the ones to audit. Backlog **10** is the neighbouring class (a guard blind to an untracked file);
+  this is its mirror — a guard that *dies* on a file that stopped existing. Nobody owns it.
+  *Refiner (session 5): **refined into backlog 10**, as a second column on its scope block — eleven
+  censuses enumerated, **six** unguarded, and the three named here are not among them. The three
+  names are also spelled wrong, which matters because a reader greps them: they are
+  `scripts/check-ignored.mjs`, `scripts/check-nul.mjs` and `scripts/check-conflict.mjs`, and the
+  audit they ask for is done — the two check scripts already tolerate it by a `try`/`catch` written
+  for a different reason, and `check-ignored.mjs` reads no file's contents at all.*
+- **No run can execute a project command, and product/17 detects three criteria by executing one**
+  (WP-21 review round 2). `narrowCommandPolicy` lets a project only *narrow* the organisation
+  maximum, the maximum (`DEFAULT_COMMAND_POLICY`) contains no test, lint or setup command, and
+  nothing in this build lets an operator widen it — so R1 ("executed in the workspace"), R2
+  ("measured") and R6 ("executed in the workspace") cannot be detected as product/17 words them, and
+  `READINESS_CRITERIA` reads all three from the CI configuration instead. Two ways out and both are
+  product decisions: an **operator-settable organisation command maximum** (`organisationCommandMaximum`
+  already exists in the domain ring and nothing composes it), which would also give the acceptance
+  tester the "tests/app cmds" product/13 promises it; or **rewording product/17's detection column**
+  to what a sandboxed run can establish. Nobody owns either. Until one lands, a project's
+  `commands.allow` is silently ignored — `narrowCommandPolicy` reports it in `ignoredAllow` and
+  **nothing reads that field**, which is the smaller defect inside this one.
+  *Refiner (session 5): **refined into backlog 49**, whose product half is **Q69** — with the third
+  consequence this bullet does not carry, that the gap is not WP-21's and not only readiness's:
+  product/19:36 already decides that the Implementation list allows the project's declared commands,
+  so the shipped constant is an under-implementation of an accepted document, and WP-17's developer
+  and acceptance-tester prompts instruct two roles to run commands no run can run.*
+- **Nothing constrains a provider's `base_url`, so an operator-permitted credential can still be
+  sent to a caller-chosen host** (WP-21 review round 1). `APP_INTEGRATION_SECRET_ENV` closed the
+  half where the credential is the **platform's own** (`APP_SECRET_KEY`, `DATABASE_URL`), which is
+  the one no provider configuration should ever reach. The other half is open: `POST
+  /api/integrations` takes `config` as an opaque `jsonObjectSchema`, every provider's schema accepts
+  its own base URL (`packages/integrations/src/providers/sentry/provider.ts:213`, GitLab's
+  self-managed URL, Loki's address) with no host check, and `POST /api/integrations/:id/test` then
+  sends the sealed credential there. The caller needs `integration.write` (admin), so it is
+  privilege *retention* rather than escalation — but an admin who should not be able to exfiltrate a
+  token to an arbitrary host is exactly what a host allow-list is for. Cheapest shape: an
+  `APP_INTEGRATION_HOST_ALLOWLIST` beside the credential one, checked where the config is validated
+  rather than once per provider. Nobody owns it.
+- **product/13's least-privilege table has no Discovery row** (WP-21 review round 1). The role is
+  described in § "Discovery agent (onboarding, Step 2)" and is absent from § "Tools per role", so
+  `TOOLS_BY_ROLE.discovery` — `Read`, `Glob`, `Grep` and, since WP-21, `Bash` — is a decision the
+  tree records and the product document does not. The amendment is one table row plus the sentence
+  about what bounds the shell (BD-025's command policy, the hardened workspace, an egress
+  allow-list with no registry host). The orchestrator owns it; a refiner writes no product document.
+  Backlog **39** is the same shape for the investigator and is unchanged by this.
+- **`Idempotency-Key` has no stored-response table, so a replayed key with a *different* body is a
+  409 rather than the first answer** (WP-21 — **refined into backlog 47**, which measures the claim:
+  the refusal exists on `POST /api/projects` when `repo_url` differs and nowhere else, and **WP-15i's
+  eleven commands cannot reuse the unique-key answer** because an action has no uniquely keyed row).
+  technical/08 § "Principles" asks for the header on
+  POSTs that create and WP-21 requires it on all three, but what makes those commands idempotent is
+  the **unique key** underneath them, not a record of what was answered. The honest consequence: a
+  client that retries with a changed body is told the key is taken instead of being handed the
+  original resource, and two different clients using the same key are indistinguishable. A stored
+  response needs a table, a retention policy and a decision about how long a key is honoured;
+  nobody owns it.
+- **`POST /api/projects/:id/config/export` is unbuilt, so the wizard's step 5 commits the knowledge
+  pages and not the configuration** (WP-21 — **refined into backlog 44**, with the second half the
+  bullet names: nothing produces a `repo` configuration layer, which the published DTO nevertheless
+  offers. **Not WP-30's** — that row's *"settings mirror"* is BD-028's UI mirror of wizard step 4).
+  technical/08 names the endpoint ("to repo MR") and
+  product/06 § "Step 5" asks for *"one MR to the repository adding `.agentic/` with the accepted
+  content, plus a one-line pointer in `CLAUDE.md`"*. The drafted **pages** go through WP-18b's
+  knowledge MR flow; `.agentic/config.yml` itself is stored in `projects.config` and never reaches
+  the repository, and the reverse (re-merging a repository's own `.agentic/config.yml` into the
+  effective configuration) is also unbuilt. `mergeProjectConfig` and the commit path both exist.
+- **The business interview (product/06 § "Step 3") and the history bootstrap (§ "Step 3b") are not
+  built** (WP-21 — **two owners, and only one of them exists**: the history bootstrap is **WP-35**'s
+  in M3, and the business interview is **refined into backlog 45**, the one wizard step of five no row
+  owns — with the consequence the bullet does not carry, that the six `business/*` sections have no
+  producer at all, so R12's 70 % completeness cannot be reached and the readiness level that gates it
+  caps the suggested autonomy). The wizard names both as gaps rather than collecting answers nobody reads;
+  `POST /api/projects/:id/kb/bootstrap` is already recorded in technical/08 as its own work package.
+- **Readiness is evaluated once, at discovery, and product/17 asks for a re-check after every merged
+  task** (WP-21 — **refined into backlog 46**; **not WP-25's**, which is the *ticket* readiness linter
+  of BD-028 and product/18, a different subject from BD-026 repository readiness).
+  `readiness_evaluations.source` exists for exactly that second producer
+  (`discovery` today, `recheck` tomorrow), `ReadinessStore.latest` already orders by instant, and
+  `evaluateReadiness` is a pure fold that would take the same inputs — what is missing is the
+  trigger and a way to answer the eleven agent-detected criteria **without** a run. Nobody owns it.
+- **The integrations screen has no create or test button, although both endpoints now exist**
+  (WP-21 — **owned by WP-30**, no entry of its own: product/18:55 says *"Settings pages mirror the
+  wizard one-to-one, so nothing is only reachable during onboarding"*, and WP-30 is the only row that
+  carries a settings mirror. **Say which mirror when WP-30 is planned**: BD-028's wording covers step
+  4's settings, product/18:55 covers all five steps, and the difference is exactly whether these two
+  buttons are in the row). They are driven from the onboarding wizard; `features/integrations.tsx`
+  says so at the top rather than leaving the claim that the routes are unbuilt. Small, and it is a UI
+  change only.
 - **Nothing refuses a TypeScript construct Node's type stripping cannot strip, and the one check that
   finds it says "socket never appeared"** (WP-15e). A parameter property
   (`constructor(readonly x: T)`) passes `tsc`, passes biome and passes every vitest tier, and breaks

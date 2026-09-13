@@ -223,6 +223,11 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
     ).toBe(404);
 
     // ── /api/projects/:id/readiness — the refusal, which is the honest answer ─
+    //
+    // Still a refusal, and since WP-21 it is a statement about **this project** rather than about
+    // the build: `readiness_evaluations` has a writer (the `onboarding.discovery` job), and this
+    // project's discovery run has not happened. The 200 branch is asserted where a project has been
+    // evaluated — `test/e2e/onboarding/wizard.e2e.test.ts`, on both sides of the run.
     const readiness = await client.json<{ error: { code: string; message: string } }>(
       `/api/projects/${pipeline.projectId}/readiness`,
     );

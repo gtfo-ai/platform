@@ -32,6 +32,22 @@ describe('loadServerConfig', () => {
     expect(config.sseRetryMs).toBe(1_000);
     // Open registration is off unless an operator asks for it.
     expect(config.allowSignUp).toBe(false);
+    // And no environment variable is readable as an integration credential until an operator
+    // declares one: the name is caller-chosen, so the empty default is the security property
+    // (`queries/onboarding-queries.ts` carries the argument).
+    expect(config.integrationSecretEnv).toEqual([]);
+  });
+
+  it('reads the integration credential allow-list as a list, and drops what cannot be a name', () => {
+    expect(
+      load({ APP_INTEGRATION_SECRET_ENV: ' GITLAB_TOKEN , JIRA_API_TOKEN ,GITLAB_TOKEN' })
+        .integrationSecretEnv,
+    ).toEqual(['GITLAB_TOKEN', 'JIRA_API_TOKEN']);
+    // An entry that cannot be an environment variable name is dropped rather than admitted: this
+    // is an allow-list, so the failure direction that matters is letting something in.
+    expect(
+      load({ APP_INTEGRATION_SECRET_ENV: 'GITLAB_TOKEN,not a name,*,' }).integrationSecretEnv,
+    ).toEqual(['GITLAB_TOKEN']);
   });
 
   it('refuses a missing secret rather than inventing one', () => {
@@ -184,6 +200,7 @@ describe('pool sizing', () => {
         POOL_RESERVATIONS.jobs +
         POOL_RESERVATIONS.pipeline +
         POOL_RESERVATIONS.knowledge +
+        POOL_RESERVATIONS.onboarding +
         POOL_RESERVATIONS.http +
         POOL_RESERVATIONS.maintenance,
     );
@@ -221,9 +238,9 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Sixteen since WP-18b: thirteen (WP-15c's fourth pipeline worker and WP-18a's `knowledge.index`)
-    // plus the Librarian's three — `knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`.
-    expect((thrown as UndersizedPoolError).required).toBe(16);
+    // Seventeen since WP-21: sixteen (WP-15c's fourth pipeline worker, WP-18a's `knowledge.index`
+    // and WP-18b's three Librarian queues) plus `onboarding.discovery`.
+    expect((thrown as UndersizedPoolError).required).toBe(17);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 

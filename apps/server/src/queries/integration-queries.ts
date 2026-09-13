@@ -26,11 +26,12 @@
  * credential**, so it publishes no configuration at all and says which row it did that to. Fail
  * closed: the alternative is a guess about a field list nobody here has.
  *
- * ## `integrations.health` has no writer either, and `unknown` is not an invention
+ * ## `integrations.health` has a writer since WP-21, and `unknown` is still not an invention
  *
- * `POST /api/integrations/:id/test` — the thing that would write it — does not exist, so the column
- * is `{}` for every row. The published enum has a spelling for exactly this: `status: 'unknown'`
- * with `checked_at: null` says *nobody has checked*, which is true. A stored value that is not the
+ * `POST /api/integrations/:id/test` writes it (`queries/onboarding-queries.ts`), so a row somebody
+ * has probed carries `ok` or `down` with the instant it was checked. A row **nobody** has probed is
+ * `{}`, and the published enum has a spelling for exactly that: `status: 'unknown'` with
+ * `checked_at: null` says *nobody has checked*, which is true. A stored value that is not the
  * published shape is refused by name rather than coerced.
  */
 import type { Id, IntegrationSummary, IntegrationType, JsonObject } from '@platform/contracts';
@@ -110,6 +111,14 @@ export const healthOf = (row: IntegrationRow): IntegrationSummary['health'] => {
  *
  * `undefined` for `provider` means this build does not ship it; the answer is then `{}` rather than
  * a filtered document, because the filter would be a guess.
+ *
+ * **It is the second layer, not the only one** (standing rule 22). Since WP-21's review round 2 the
+ * *write* refuses a `config` key that names a credential field
+ * (`queries/onboarding-queries.ts` → `assertNoCredentialInConfig`), so a row created through the
+ * API cannot carry one. This strip still matters for the rows that did not come through it: one
+ * written before that check existed, or one an operator wrote with `psql`. A guard whose only layer
+ * is the one that *hides* the value is how the leak stayed invisible from the API in the first
+ * place.
  */
 export const publishableConfig = (
   config: JsonObject,

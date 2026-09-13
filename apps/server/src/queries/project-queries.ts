@@ -4,17 +4,22 @@
  * Projections onto the published DTOs, like `pipeline-queries.ts` beside them, and with the same
  * rule about a column nothing writes.
  *
- * ## `readiness_evaluations` has no writer, so the endpoint refuses by name
+ * ## `readiness_evaluations` has a writer since WP-21, and the refusal is now the *absence* of a run
  *
  * `readinessResponseSchema` publishes a level, the instant it was evaluated and the **criteria** —
- * "what passed, what it unlocks, and the evidence". Only `readiness_evaluations` (migration 0008)
- * could hold that, and **nothing in this repository inserts into it**: BD-027's readiness ladder is
- * its own work package. `projects.readiness_level` exists and is `not null default 0`, so a
- * projection *could* answer `{level: 0, evaluated_at: now, criteria: []}` — and every part of that
- * after the level would be invented. `evaluated_at` would be the time of the read rather than of an
- * evaluation, and an empty `criteria` list renders as "nothing passed", which is a claim about the
- * project rather than about the schema. {@link findProjectReadiness} therefore reports the row count
- * and the route refuses, which is the precedent `findRunContextPack` set at part 1.
+ * what passed, the evidence and what it unlocks. Only `readiness_evaluations` (migration 0008) can
+ * hold those, and until WP-21 **nothing in this repository inserted into it**, so this read answered
+ * `409 readiness_not_evaluated` with the row count for every project. `PostgresReadinessStore` is
+ * that writer now: the `onboarding.discovery` job records an evaluation when a Discovery agent's
+ * draft is stored, and {@link findProjectReadiness} answers `recorded: true` from the newest row.
+ *
+ * **The 409 did not disappear — its meaning narrowed**, and that is deliberate. A project whose
+ * discovery has not run yet still has no evaluation, and the alternatives are both worse:
+ * `projects.readiness_level` is `not null default 0`, so a projection *could* answer
+ * `{level: 0, evaluated_at: now, criteria: []}` — and two of those three would be invented
+ * (`evaluated_at` would be the time of the *read*, and an empty criteria list renders as "nothing
+ * passed", which is a claim about the project). The row count stays in the message so an operator
+ * can still tell "nothing has evaluated this project" from "this reader cannot read what is there".
  *
  * ## `spent_usd_30d` is the rollup, not the ledger
  *
@@ -25,9 +30,17 @@
  * rollup is for — it is the projection WP-19 keeps reconciled with the entries.
  */
 import { rollupDay } from '@platform/application';
-import type { Id, IsoDateTime, ProjectSummary, ProjectsResponse } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  ProjectSummary,
+  ProjectsResponse,
+  ReadinessResponse,
+} from '@platform/contracts';
+import { readinessResponseSchema } from '@platform/contracts';
+import { findReadinessCriterion, nextReadinessImprovements } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
 import { CLOSED_TASK_STATES } from './pipeline-queries.js';
 
 const { costRollupDaily, organizations, projects, readinessEvaluations, tasks } = dbAdapters.schema;
@@ -138,15 +151,24 @@ export const listProjectSummaries = async (
 
 export type ProjectReadiness =
   | { readonly found: false }
-  /** The project exists; `rows` is how many evaluations it has (`0` while nothing writes them). */
-  | { readonly found: true; readonly recorded: false; readonly rows: number };
+  /** The project exists and nothing has evaluated it; `rows` is how many evaluations it has. */
+  | { readonly found: true; readonly recorded: false; readonly rows: number }
+  | { readonly found: true; readonly recorded: true; readonly response: ReadinessResponse };
 
 /**
- * `GET /api/projects/:id/readiness` — and, like the context pack, it has **no success branch**.
+ * `GET /api/projects/:id/readiness` — the newest evaluation, or the reason there is none.
  *
- * The row count goes with the refusal so the two states are distinguishable: `0` is "no producer
- * yet", anything else is "a producer exists and this reader was never written for it". Giving this
- * endpoint an answer is the readiness evaluator (BD-027), not a reader.
+ * **`unlocks` and `title` come from `READINESS_CRITERIA`, not from the row.** The stored criterion
+ * carries the platform's text already (`PostgresReadinessStore` writes it), and this read prefers
+ * the table's current wording over the copy: a release that improves what a criterion says it
+ * unlocks should improve it everywhere, and the value proposition is platform prose that no model
+ * ever wrote. `evidence` is the opposite — it is the Discovery agent's own words for eleven of the
+ * fourteen criteria (BD-022) — so it is served exactly as stored and rendered as text.
+ *
+ * A criterion in the row that the current table does not have (a release that dropped one) is
+ * **dropped** rather than served with an invented `unlocks`; a criterion the table has and the row
+ * does not is **not** invented either, because a criterion nobody evaluated is not a criterion that
+ * failed. The level is the stored one: it is what the evaluator decided from the criteria it had.
  */
 export const findProjectReadiness = async (
   database: Database,
@@ -161,8 +183,57 @@ export const findProjectReadiness = async (
     return { found: false };
   }
   const rows = await database
-    .select({ id: readinessEvaluations.id })
+    .select({
+      id: readinessEvaluations.id,
+      level: readinessEvaluations.level,
+      criteria: readinessEvaluations.criteria,
+      evaluatedAt: readinessEvaluations.evaluatedAt,
+      source: readinessEvaluations.source,
+    })
     .from(readinessEvaluations)
-    .where(eq(readinessEvaluations.projectId, projectId));
-  return { found: true, recorded: false, rows: rows.length };
+    .where(eq(readinessEvaluations.projectId, projectId))
+    .orderBy(desc(readinessEvaluations.evaluatedAt), desc(readinessEvaluations.id));
+  const newest = rows[0];
+  if (newest === undefined) {
+    return { found: true, recorded: false, rows: 0 };
+  }
+
+  const stored = Array.isArray(newest.criteria) ? newest.criteria : [];
+  const criteria: ReadinessResponse['criteria'] = [];
+  const passed = new Set<string>();
+  for (const entry of stored) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const criterion = typeof record.id === 'string' ? findReadinessCriterion(record.id) : undefined;
+    if (criterion === undefined || typeof record.passed !== 'boolean') continue;
+    criteria.push({
+      id: criterion.id,
+      passed: record.passed,
+      evidence: typeof record.evidence === 'string' ? record.evidence : '',
+      unlocks: criterion.unlocks,
+      detected_by: criterion.detectedBy,
+    });
+    if (record.passed) {
+      passed.add(criterion.id);
+    }
+  }
+
+  return {
+    found: true,
+    recorded: true,
+    response: readinessResponseSchema.parse({
+      level: Number(newest.level),
+      evaluated_at: newest.evaluatedAt.toISOString(),
+      source: newest.source,
+      criteria,
+      // product/17 § "Onboarding wizard": "the initial level and the three cheapest criteria to
+      // improve next". Derived here rather than stored, so a release that reorders the ladder
+      // changes the advice without a re-evaluation.
+      next_improvements: nextReadinessImprovements(passed).map((criterion) => ({
+        id: criterion.id,
+        title: criterion.title,
+        unlocks: criterion.unlocks,
+      })),
+    }),
+  };
 };

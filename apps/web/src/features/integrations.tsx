@@ -2,10 +2,11 @@
  * Integrations (product/10: "per-type cards with health, test connection, project-level settings").
  *
  * The cards and the setup guide are here. "Test connection" (`POST /api/integrations/:id/test`) and
- * creating an integration (`POST /api/integrations`) are **not**: both are mutations against routes
- * no work package has built, and a button that always fails is worse than a button that is not
- * there. The setup guide is what an operator actually needs first, and every provider already
- * ships one (technical/06).
+ * creating an integration (`POST /api/integrations`) are served since WP-21 and are driven from the
+ * **onboarding wizard** (`features/onboarding.tsx`), which is where an operator meets them first;
+ * this screen has not grown the buttons yet, which is a gap in *this file* rather than in the API.
+ * The setup guide is what an operator actually needs first, and every provider already ships one
+ * (technical/06).
  */
 import { type ReactElement, useState } from 'react';
 import { useIntegrations } from '../app/queries.js';

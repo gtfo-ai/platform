@@ -1407,6 +1407,29 @@
               "items": {
                 "$ref": "#/$defs/ArtifactQuestion"
               }
+            },
+            "readiness": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/NonEmptyString"
+                  },
+                  "passed": {
+                    "type": "boolean"
+                  },
+                  "evidence": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "passed",
+                  "evidence"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [

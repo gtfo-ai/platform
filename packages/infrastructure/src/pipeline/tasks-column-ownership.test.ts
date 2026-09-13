@@ -37,7 +37,7 @@
  *    its divergence register says so explicitly.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -144,10 +144,77 @@ const statementsIn = (file: string, source: string): Statement[] => {
   return found;
 };
 
-const allStatements = (): Statement[] =>
-  sources().flatMap((file) => statementsIn(file, readFileSync(path.join(REPO_ROOT, file), 'utf8')));
+/**
+ * Every `update tasks` statement in the tree.
+ *
+ * A path is re-checked with `existsSync` between the listing and the read, which is the hole its
+ * sibling census already names: *"a path can disappear between `ls-files` and here (a concurrent
+ * editor, a temp file); a census that crashed on that would be a census people turn off"*
+ * (`db/pool-errors.test.ts`). Measured here rather than reasoned — this file failed a `verify` with
+ * `ENOENT … .vitest-scope-23805-egp4di/plain/ordinary.e2e.test.ts`, a fixture another test in the
+ * same run plants and deletes, and it is a **crash** rather than a finding: the census reports
+ * nothing at all rather than reporting one file it could not read. Found while WP-21 was in review;
+ * the file is WP-15e's and nothing about it changed except this guard.
+ */
+/** A path the listing named and the read could not find — see {@link allStatements}. */
+const dropped: string[] = [];
+
+const allStatements = (): Statement[] => {
+  dropped.length = 0;
+  const found: Statement[] = [];
+  for (const file of sources()) {
+    const full = path.join(REPO_ROOT, file);
+    if (!existsSync(full)) {
+      dropped.push(file);
+      continue;
+    }
+    found.push(...statementsIn(file, readFileSync(full, 'utf8')));
+  }
+  return found;
+};
+
+/**
+ * Is this dropped path genuinely gone — untracked and absent — or a **tracked** file this census
+ * failed to read?
+ *
+ * The difference is the whole point of reporting them: a temp file another test planted and deleted
+ * is a race to tolerate, and a tracked file that is missing is a hole in the census, which would
+ * otherwise be indistinguishable from "this file contains no `update tasks`".
+ */
+const isTracked = (file: string): boolean =>
+  execFileSync('git', ['ls-files', '--error-unmatch', '--', file], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+    .split('\n')
+    .some((line) => line.trim() === file);
 
 describe('`tasks` column ownership (WP-15e)', () => {
+  it('drops only paths that are genuinely gone, and says which', () => {
+    // The `existsSync` filter above tolerates a race; silently, it would also tolerate a **tracked**
+    // file this census cannot read, which looks exactly like a file with no `update tasks` in it.
+    // Nothing is expected here on a quiet tree — the assertion is that whatever *is* dropped was
+    // untracked, and the path is in the message so a real gap names itself.
+    // Calibrate the instrument before believing its verdict (standing rule 21): a predicate that
+    // answered `false` for everything would make the assertion below vacuous.
+    expect(isTracked('packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts')).toBe(
+      true,
+    );
+    expect(() => isTracked('packages/infrastructure/src/pipeline/not-a-file.ts')).toThrow();
+
+    allStatements();
+    const trackedButMissing = dropped.filter((file) => {
+      try {
+        return isTracked(file);
+      } catch {
+        // `--error-unmatch` exits non-zero for a path git does not track: genuinely gone.
+        return false;
+      }
+    });
+    expect(trackedButMissing).toEqual([]);
+  });
+
   it('parses every `update tasks` statement it finds into plain column names', () => {
     // Fail closed: a set clause this guard cannot read is a statement whose columns cannot be
     // attributed, and reporting it as "no columns" would be a silent hole (standing rule 20).

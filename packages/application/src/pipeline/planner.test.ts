@@ -18,6 +18,9 @@ import type { Id, IsoDateTime, TicketSnapshot } from '@platform/contracts';
 import { agentRoleSchema } from '@platform/contracts';
 import {
   DATA_BLOCK_TAG,
+  DEFAULT_COMMAND_POLICY,
+  DEFAULT_READ_ONLY_ALLOW,
+  evaluateCommand,
   extractQueryTerms,
   HOSTILE_CONSTRUCTS,
   type RolePromptDefinition,
@@ -31,9 +34,12 @@ import { silentLogger } from '../ports/logger.js';
 import { FIXTURE_HOSTILE_PATH, FIXTURE_ZERO_WIDTH } from '../testing/fixture-vault.js';
 import { indexedFixtureVault } from '../testing/memory-knowledge.js';
 import {
+  COMMAND_BASELINE_BY_ROLE,
+  commandBaselineFor,
   createStageRunPlanner,
   PLATFORM_TOOLS_BY_ROLE,
   SKILLS_BY_ROLE,
+  TOOLS_BY_ROLE,
   taskTextOf,
 } from './planner.js';
 import type { StageRunRequest } from './stage-executor.js';
@@ -394,6 +400,86 @@ describe('the platform skills a stage is planned with', () => {
     expect([...new Set(Object.values(SKILLS_BY_ROLE).flat())].sort()).toEqual(
       Object.keys(testSkills).sort(),
     );
+  });
+
+  /**
+   * The three roles that may run a command, named — and the three that may write, named beside them
+   * (standing rule 68: enumerate what you branch on).
+   *
+   * `discovery` gained `Bash` at WP-21 because product/17 R1/R2/R6 are detected by *executing*
+   * something and R1 is a level-1 requirement, so without it no repository could exceed readiness 0.
+   * It is the widest change in that work package, so it is asserted rather than left to a docblock:
+   * a role added to either list has to come through this case.
+   */
+  it('starts each role from the command baseline its table names', () => {
+    // The third least-privilege table, enumerated (standing rule 68). `discovery` is the only
+    // read-only row, and the assertion is on the **list it resolves to**, not on the word: a table
+    // entry that stopped selecting `DEFAULT_READ_ONLY_ALLOW` would pass a word comparison.
+    expect(
+      Object.entries(COMMAND_BASELINE_BY_ROLE)
+        .filter(([, baseline]) => baseline === 'read_only')
+        .map(([role]) => role),
+    ).toEqual(['discovery']);
+    expect(commandBaselineFor('discovery').allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
+    expect(commandBaselineFor('developer').allow).toEqual(DEFAULT_COMMAND_POLICY.allow);
+
+    // What the narrowing actually removes, named rather than implied: the round-1 baseline gave
+    // discovery these, and a read-only run is not stopped from pushing by having no credential.
+    for (const entry of ['git add *', 'git commit *', 'git push origin agentic/*', 'npm ci']) {
+      expect(DEFAULT_COMMAND_POLICY.allow, entry).toContain(entry);
+      expect(commandBaselineFor('discovery').allow, entry).not.toContain(entry);
+    }
+    // …and the refusals are untouched: a narrowing must not drop an `ask` or a `block`.
+    expect(commandBaselineFor('discovery').ask).toEqual(DEFAULT_COMMAND_POLICY.ask);
+    expect(commandBaselineFor('discovery').block).toEqual(DEFAULT_COMMAND_POLICY.block);
+  });
+
+  it('refuses a write command under the discovery policy, at the fallback a run really uses', () => {
+    /**
+     * The list is not the guarantee — the **evaluation** is (standing rule 10). A baseline asserted
+     * only as an array would still pass if the evaluator read it differently, and the fallback is
+     * the part that decides what an *unmatched* command becomes: a run's is `ask`, and an
+     * unattended `ask` denies (`questionTimeoutMs`), which is what makes "not on the allow list"
+     * equivalent to "refused" for a discovery run nobody is watching.
+     *
+     * `command-policy.test.ts` already has a read-only case, with fallback `block`; this one uses
+     * the fallback a run actually passes, so it measures the arrangement that ships.
+     */
+    const policy = commandBaselineFor('discovery');
+    expect(evaluateCommand({ command: 'git log -5' }, policy, 'ask').verdict).toBe('allow');
+    expect(evaluateCommand({ command: 'cat package.json' }, policy, 'ask').verdict).toBe('allow');
+    for (const command of [
+      'git push origin agentic/x',
+      'git commit -m x',
+      'npm ci',
+      'npm test',
+      'pip install -r requirements.txt',
+    ]) {
+      expect(evaluateCommand({ command }, policy, 'ask').verdict, command).not.toBe('allow');
+    }
+    // The same commands on the implementation baseline *are* allowed, so the case above is about
+    // this role's narrowing rather than about the evaluator refusing everything (rule 42).
+    for (const command of ['git push origin agentic/x', 'git commit -m x', 'npm ci']) {
+      expect(
+        evaluateCommand({ command }, commandBaselineFor('developer'), 'ask').verdict,
+        command,
+      ).toBe('allow');
+    }
+  });
+
+  it('names exactly the roles that may run a command and the roles that may write', () => {
+    const withTool = (tool: string) =>
+      Object.entries(TOOLS_BY_ROLE)
+        .filter(([, tools]) => tools.includes(tool))
+        .map(([role]) => role)
+        .sort();
+    expect(withTool('Bash')).toEqual(['acceptance_tester', 'developer', 'discovery']);
+    expect(withTool('Write')).toEqual(['developer', 'librarian']);
+    // …and the shell does not come with a way to keep what it produced: discovery writes nothing
+    // to the workspace and holds no mutating platform tool.
+    expect(TOOLS_BY_ROLE.discovery).not.toContain('Write');
+    expect(TOOLS_BY_ROLE.discovery).not.toContain('Edit');
+    expect(PLATFORM_TOOLS_BY_ROLE.discovery).toEqual(['report_progress', 'kb_search']);
   });
 
   /**

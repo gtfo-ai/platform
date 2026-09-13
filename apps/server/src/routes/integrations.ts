@@ -4,17 +4,19 @@
  *   GET /api/integrations
  *   GET /api/integrations/:integration_id/setup-guide
  *
- * The other three on that row — `POST /api/integrations`, `PATCH …/:id` and `POST …/:id/test` —
- * write, and a write needs the audit row and the idempotency key a read does not have. They belong
- * to the work package that gives the settings screen a command surface; `routes/client-census.test.ts`
- * carries what the client calls and this server does not serve.
+ * Two of the other three on that row — `POST /api/integrations` and `POST …/:id/test` — are served
+ * by `routes/onboarding.ts` since WP-21, with the audit row and the `Idempotency-Key` a read does
+ * not have. `PATCH …/:id` is still unbuilt: editing an integration's configuration in place is the
+ * settings screen's command, not the wizard's, and it needs `config_audit`'s diff to be worth
+ * having. `routes/client-census.test.ts` carries what the client calls and this server does not
+ * serve.
  *
  * ## Organisation-scoped, at `maintainer`
  *
  * `integration.read` is `maintainer` (`packages/domain/src/permissions.ts`, Q36) and an integration
  * belongs to the organisation rather than to a project, so there is no project hook here: a binding
  * is what attaches one to a project, and `GET /api/projects/:id/bindings` is a different endpoint
- * nobody has built. The SPA already tells the reader as much — *"Reading integration configuration
+ * (`routes/onboarding.ts` since WP-21) scoped by the project rather than by the organisation. The SPA already tells the reader as much — *"Reading integration configuration
  * needs the maintainer role (Q36)"* — so the level was fixed before the route existed.
  *
  * ## Nothing on either response is a credential, and that is enforced rather than promised
@@ -82,7 +84,7 @@ export const registerIntegrationRoutes = async (
       schema: {
         summary: 'The organisation’s integrations',
         description:
-          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for every row until something writes `integrations.health` — nothing does in this build, and `POST /api/integrations/:id/test` is the endpoint that would.',
+          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked.',
         tags: ['org'],
         response: { 200: integrationsResponseSchema },
       },

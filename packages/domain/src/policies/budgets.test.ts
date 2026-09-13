@@ -37,6 +37,8 @@ describe('documented defaults', () => {
       business_review: 3,
       retrospective: 2,
       librarian: 2,
+      // product/06 § "Step 2": the Discovery agent is cheap and bounded (WP-21).
+      discovery: 2,
     });
   });
 });

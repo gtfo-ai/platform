@@ -39,6 +39,7 @@ import type { KnowledgeCommands } from './knowledge.js';
 import { type PinoLogger, withLogContext } from './logging.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
+import type { OnboardingCommands } from './onboarding.js';
 import type { Database } from './queries/identity-queries.js';
 import {
   findProjectRole,
@@ -49,6 +50,7 @@ import {
 import { roleCapabilities } from './role.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
+import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -90,6 +92,15 @@ export interface BuildAppOptions {
    * would read as "wrong URL").
    */
   readonly knowledge: KnowledgeCommands | null;
+  /**
+   * The onboarding wizard's commands (WP-21), or `null` for a process that composed no pipeline.
+   *
+   * Nullable like `knowledge` and for the same reason: which collaborators exist is a property of
+   * the ROLE, and the routes that need one answer `503` by name rather than disappearing. The
+   * routes that need **no** collaborator — creating a project, writing a configuration — are
+   * served either way, because they are database writes this process can always make.
+   */
+  readonly onboarding: OnboardingCommands | null;
 }
 
 /** Event-loop delay above which the process reports itself degraded rather than healthy. */
@@ -245,6 +256,12 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       await registerWebhookRoutes(app, { ingress: options.webhooks });
     }
     await registerProjectRoutes(app, { database: options.database });
+    await registerOnboardingRoutes(app, {
+      database: options.database,
+      secretKey: config.secretKey,
+      onboarding: options.onboarding,
+      integrationSecretEnv: config.integrationSecretEnv,
+    });
     await registerKbRoutes(app, {
       database: options.database,
       knowledge: options.knowledge,

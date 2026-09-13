@@ -60,6 +60,8 @@ export * from './policies/wip.js';
 export * from './prompt/assembly.js';
 export * from './prompt/data-block.js';
 export * from './prompt/read-data-blocks.js';
+// Repository readiness — product/17's criteria and its ladder (WP-21)
+export * from './readiness/criteria.js';
 // A test fixture, exported for the same reason `FIXTURE_VAULT` is: four tiers assert over the same
 // set of hostile constructs, and a second copy of the set is a set that drifts (rule 68).
 export * from './testing/hostile-text.js';

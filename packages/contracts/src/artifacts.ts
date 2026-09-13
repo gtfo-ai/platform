@@ -318,6 +318,31 @@ export const discoveryDraftDataSchema = z.strictObject({
     z.strictObject({ path: pathPatternSchema, reason: nonEmptyStringSchema }),
   ),
   questions: z.array(artifactQuestionSchema),
+  /**
+   * The Discovery agent's readiness assessment — product/17 § "What it measures": *"detected
+   * automatically by the Discovery agent at onboarding"* (WP-21).
+   *
+   * Three fields and not four: the model reports **which** criterion and **whether** it passed,
+   * with the evidence it has, and the platform supplies `unlocks` from `READINESS_CRITERIA`. A
+   * criterion's value proposition is platform text, so a model cannot rewrite what passing it
+   * claims to buy — and the three criteria the platform detects for itself (R9, R11, R12) are
+   * **ignored** here even when the model names them, because a git-provider fact is not something
+   * to take a model's word for. `evaluateReadiness` states that rule at the place it is applied.
+   *
+   * Optional, so a draft written before this field existed still parses: an absent assessment is
+   * "reported nothing", which fails every agent-detected criterion — the conservative direction,
+   * since readiness only ever makes the platform stricter (product/17 § "What it is not").
+   */
+  readiness: z
+    .array(
+      z.strictObject({
+        /** `R1` … `R14`. An id outside the table is dropped rather than refused (rule 20). */
+        id: nonEmptyStringSchema,
+        passed: z.boolean(),
+        evidence: z.string(),
+      }),
+    )
+    .optional(),
 });
 
 /** `artifact_type` → the schema for that type's `data`. */

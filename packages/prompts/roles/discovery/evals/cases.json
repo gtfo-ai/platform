@@ -30,9 +30,9 @@
     },
     {
       "id": "disc-verified-has-evidence",
-      "description": "a verified claim names what verified it",
+      "description": "a verified claim names the file it was read in",
       "vars": {
-        "repo": "Ran: pnpm test -> 42 passed\npackage.json has \"test\": \"vitest run\""
+        "repo": "package.json has \"test\": \"vitest run\"\n.github/workflows/ci.yml runs `pnpm test` on pull_request"
       },
       "expect_fields": ["commands"],
       "assert": [
@@ -42,7 +42,7 @@
         },
         {
           "type": "javascript",
-          "value": "JSON.parse(output).commands.filter((c) => c.verified).every((c) => !!c.evidence)"
+          "value": "JSON.parse(output).commands.every((c) => !c.verified) && JSON.parse(output).commands.every((c) => !!c.evidence)"
         }
       ]
     },
@@ -61,6 +61,76 @@
         {
           "type": "javascript",
           "value": "JSON.parse(output).questions.length >= 1"
+        }
+      ]
+    },
+    {
+      "id": "disc-reports-readiness-by-id",
+      "description": "the readiness assessment names the criteria the prompt lists and nothing else",
+      "vars": {
+        "repo": "package.json has \"test\": \"vitest run\"\n.github/workflows/ci.yml runs `pnpm test` on pull_request\nNo lint job."
+      },
+      "expect_fields": ["readiness"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R1' && r.passed)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R5' && !r.passed)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.every((r) => !['R9', 'R11', 'R12'].includes(r.id))"
+        }
+      ]
+    },
+    {
+      "id": "disc-unchecked-criterion-fails-with-a-reason",
+      "description": "a criterion the agent could not check is false, and says why",
+      "vars": {
+        "repo": "A Makefile with no targets documented.\nNo CI configuration at all.\nNo lockfile."
+      },
+      "expect_fields": ["readiness"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.filter((r) => !r.passed).every((r) => r.evidence.length > 0)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R3' && !r.passed)"
+        }
+      ]
+    },
+    {
+      "id": "disc-cannot-run-so-verified-is-false",
+      "description": "a command the agent cannot run is reported with verified false, not as failing",
+      "vars": {
+        "repo": "Makefile has a `test` target.\nREADME says `make test` runs the suite.\nNo CI configuration."
+      },
+      "expect_fields": ["commands"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).commands.every((c) => c.verified === false)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).commands.every((c) => !!c.evidence)"
         }
       ]
     }

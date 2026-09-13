@@ -22,6 +22,7 @@ import {
   pathPatternSchema,
   sequenceSchema,
   severitySchema,
+  slugSchema,
   stageIdSchema,
   taskModeSchema,
   taskStateSchema,
@@ -150,8 +151,19 @@ export const createIntegrationRequestSchema = z.strictObject({
   provider: nonEmptyStringSchema,
   name: nonEmptyStringSchema,
   config: jsonObjectSchema,
-  /** Names of secrets to read from the environment or the secret store — never values. */
-  secret_refs: z.array(nonEmptyStringSchema).optional(),
+  /**
+   * Credential **field** → the name of the environment variable holding its value. Never a value.
+   *
+   * A record and not a list, which is a change WP-21 made when it served the route: a list says
+   * *which* names to read and not which field each one fills, and a provider with two credential
+   * fields — GitLab's API token and its webhook secret — cannot be configured from one. The server
+   * reads each name from its own environment (or the `_FILE` companion, TD-020) and seals the
+   * value into `secrets`, so no credential crosses this API (BD-002).
+   *
+   * A field the provider does not declare is refused rather than sealed: it would store a value
+   * the binding loader will never merge.
+   */
+  secret_refs: z.record(nonEmptyStringSchema, nonEmptyStringSchema).optional(),
 });
 
 export const testIntegrationResponseSchema = z.strictObject({
@@ -174,10 +186,26 @@ export const effectiveConfigResponseSchema = z.strictObject({
   computed_at: isoDateTimeSchema,
 });
 
+/**
+ * `PUT /api/projects/:id/config` — the whole document, never a patch (WP-21 serves it).
+ *
+ * `config` is the **whole** `.agentic/config.yml` through the strict schema: the wizard never
+ * hand-builds a document and the server never merges a delta, so an unknown key is refused here
+ * rather than stored and ignored (technical/12 § "Unknown keys are errors").
+ *
+ * `autonomy_level` travels **beside** the document rather than only inside
+ * `config.policies.autonomy`, because the column and the document are two stores:
+ * `projects.autonomy_level` is what the board badge and `suggestedAutonomyCap` read, and
+ * `policies.autonomy` is what a repository may also set. The route materialises the dial through
+ * the domain preset (`applyAutonomyPreset`) and **refuses** a document whose `policies.autonomy`
+ * disagrees with it, so the two cannot drift apart. Optional, because a caller that is only
+ * editing the pipeline limits should not have to restate the dial.
+ */
 export const updateProjectConfigRequestSchema = z.strictObject({
   config: agenticConfigSchema,
   /** Optimistic concurrency: the hash the client last read. */
   base_hash: nonEmptyStringSchema.optional(),
+  autonomy_level: autonomyLevelSchema.optional(),
 });
 
 export const projectSummarySchema = projectRecordSchema.extend({
@@ -195,6 +223,84 @@ export const projectsResponseSchema = z.strictObject({
   items: z.array(projectSummarySchema),
 });
 
+/**
+ * `POST /api/projects` — the wizard's step 1 (WP-21, product/06 § "Step 1 — Connect").
+ *
+ * Only the facts an operator types. `autonomy_level` is **not** here: the dial is step 4 and it is
+ * materialised through `applyAutonomyPreset`, so accepting it beside the repository URL would give
+ * a project two places to be configured from and one of them would skip the preset.
+ */
+export const createProjectRequestSchema = z.strictObject({
+  key: slugSchema,
+  name: nonEmptyStringSchema,
+  repo_url: urlSchema,
+  /** A branch name, bounded: it is concatenated into git arguments and into an audit row. */
+  default_branch: z.string().min(1).max(255).optional(),
+  /**
+   * Where the vault lives inside the repository, **bounded and relative**.
+   *
+   * The same `pathPatternSchema` every other repository path on the wire uses, plus the two things
+   * a *directory the platform joins to* has to be: not absolute, and with no `..` segment. The
+   * value ends up in `projects.knowledge_dir`, which `curateProposals` joins a model-chosen page
+   * path onto and which the vault reader walks — the join already refuses a path that would land
+   * outside, and refusing the *directory* too is the narrowing direction (BD-025).
+   */
+  knowledge_dir: pathPatternSchema
+    .refine(
+      (value) =>
+        !value.startsWith('/') &&
+        !value.split('/').some((segment) => segment === '..' || segment === '.'),
+      'must be a repository-relative directory with no "." or ".." segment',
+    )
+    .optional(),
+});
+
+/**
+ * `PUT /api/projects/:id/bindings` — which of the organisation's integrations this project uses.
+ *
+ * The whole set, not a delta: a binding that disappears from the list is removed, which is what
+ * makes the request idempotent and what lets the wizard's step 1 be re-submitted. `config` is the
+ * per-project override `ProjectBinding` describes (a narrower pick-up rule, a project path).
+ */
+export const projectBindingSummarySchema = z.strictObject({
+  integration_id: idSchema,
+  type: integrationTypeSchema,
+  provider: nonEmptyStringSchema,
+  name: nonEmptyStringSchema,
+  config: jsonObjectSchema,
+});
+
+export const projectBindingsResponseSchema = z.strictObject({
+  items: z.array(projectBindingSummarySchema),
+});
+
+export const putProjectBindingsRequestSchema = z.strictObject({
+  items: z.array(z.strictObject({ integration_id: idSchema, config: jsonObjectSchema.optional() })),
+});
+
+/**
+ * `POST /api/projects/:id/discovery` — the wizard's step 2.
+ *
+ * The answer is the **task** the discovery run belongs to (WP-21: discovery is a stage of a
+ * one-off task, `DISCOVERY_TEMPLATE`), so a client follows it with `GET /api/tasks/:id` like any
+ * other task rather than needing a shape of its own. `started` is false when the project already
+ * had a discovery task — the command is idempotent on the project, and re-running it would spend a
+ * second budget for the same answer.
+ */
+export const startDiscoveryResponseSchema = z.strictObject({
+  task_id: idSchema,
+  started: z.boolean(),
+  detail: z.string(),
+});
+
+/**
+ * `GET /api/projects/:id/readiness` — the evaluation, since WP-21 wrote the first one.
+ *
+ * `criteria` is product/17's table: what passed, the evidence and **what it unlocks**. `unlocks` is
+ * platform text from `READINESS_CRITERIA` and is never copied out of an artifact, so nothing a
+ * model writes can change what a criterion claims to buy. `evidence` **is** untrusted (BD-022) for
+ * the eleven criteria the Discovery agent answers: render it, never execute it.
+ */
 export const readinessResponseSchema = z.strictObject({
   level: z.int().min(0).max(5),
   evaluated_at: isoDateTimeSchema,
@@ -203,6 +309,18 @@ export const readinessResponseSchema = z.strictObject({
       id: nonEmptyStringSchema,
       passed: z.boolean(),
       evidence: z.string(),
+      unlocks: z.string(),
+      /** Who answered it — `platform` for R9, R11 and R12, `agent` for the other eleven. */
+      detected_by: z.enum(['agent', 'platform']),
+    }),
+  ),
+  /** `readiness_evaluations.source`: which producer wrote this row (`discovery`, `recheck`). */
+  source: nonEmptyStringSchema,
+  /** product/17: the three cheapest criteria to improve next, in the wizard's order. */
+  next_improvements: z.array(
+    z.strictObject({
+      id: nonEmptyStringSchema,
+      title: nonEmptyStringSchema,
       unlocks: z.string(),
     }),
   ),
@@ -613,10 +731,18 @@ export type OrgAuditResponse = z.infer<typeof orgAuditResponseSchema>;
 export type EventsQuery = z.infer<typeof eventsQuerySchema>;
 export type IntegrationSummary = z.infer<typeof integrationSummarySchema>;
 export type IntegrationsResponse = z.infer<typeof integrationsResponseSchema>;
+export type CreateIntegrationRequest = z.infer<typeof createIntegrationRequestSchema>;
+export type TestIntegrationResponse = z.infer<typeof testIntegrationResponseSchema>;
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
+export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigRequestSchema>;
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
 export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;
+export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
+export type ProjectBindingSummary = z.infer<typeof projectBindingSummarySchema>;
+export type ProjectBindingsResponse = z.infer<typeof projectBindingsResponseSchema>;
+export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
+export type StartDiscoveryResponse = z.infer<typeof startDiscoveryResponseSchema>;
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
 export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;

@@ -40,15 +40,31 @@
 > and `GET /api/org/{users,audit}` at part 1, and at part 2 `GET /api/org/agents`,
 > `GET /api/org/inbox`, `GET /api/integrations`, `GET /api/integrations/:id/setup-guide`,
 > `GET /api/projects`, `GET /api/projects/:id/{readiness,tasks}` — with `readiness` answering
-> **409 `readiness_not_evaluated`** while nothing writes `readiness_evaluations`, the shape
-> `/context-pack` established. What is still missing from this document's tables is the **command**
-> surface (every `POST`, plus `PATCH` and `PUT`) and four more reads — `GET /api/org`,
-> `GET /api/org/stats`, `GET …/bindings`, `GET …/stats`.
+> **409 `readiness_not_evaluated`** while nothing wrote `readiness_evaluations`, the shape
+> `/context-pack` established. **WP-21 gave that table its writer**, so the read answers **200**
+> for an evaluated project and keeps the 409, with the row count, for one whose discovery run has
+> not happened; what a projection over `projects.readiness_level` could answer is still refused,
+> because `evaluated_at` and `criteria` would be invented. What is still missing from this document's tables is **most of** the
+> command surface and three more reads — `GET /api/org`, `GET /api/org/stats` and `GET …/stats`.
+>
+> **WP-21 served the onboarding wizard's seven** (product/06): `POST /api/projects`,
+> `POST /api/integrations`, `POST /api/integrations/:id/test`, `GET/PUT /api/projects/:id/bindings`,
+> `PUT /api/projects/:id/config` and `POST /api/projects/:id/discovery`. Each of the three that
+> **create** requires an `Idempotency-Key` and each of the writes records a `human_actions` row.
+> Idempotency is **two** mechanisms: a retry is answered from the unique key underneath the command
+> (`projects.key`, `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)`), and
+> a **different** request under a used key is refused `409 idempotency_key_reused` by comparing a
+> digest of the canonical request recorded in the `human_actions` row beside the key. There is no
+> stored *response*: a legitimate retry is answered by re-reading the resource. What is still unbuilt on those two rows: `PATCH /api/org`,
+> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`
+> and `GET/PUT /api/projects/:id/budgets`, plus the twelve task and run commands.
 >
 > **Only part of that list is kept true by a test, and the boundary is worth knowing.** The census is
 > **client-driven**: it compares the paths `apps/web/src` names against the router, so it holds the
-> twelve commands the SPA calls — each with the row that owns it — and is blind to everything no
-> client calls. The four reads above, the writes no screen fires, and any route served but uncalled
+> twelve task and run commands the SPA calls and does not serve — each with the row that owns it —
+> and is blind to everything no client calls. WP-21's seven were never on that list: the client's
+> calls and the routes landed in one change, so there was nothing to admit, and they are asserted
+> **positively** in the census instead. The four reads above, the writes no screen fires, and any route served but uncalled
 > (`kb/health` is the shipped example) are outside it **by construction**, not by omission. This
 > paragraph is the only record of those, so it is the one to correct when one of them lands.
 >

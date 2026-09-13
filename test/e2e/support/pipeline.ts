@@ -207,6 +207,13 @@ export interface PipelineE2E {
   awaitingDispatch(eventId: string): Promise<boolean>;
   /** How many task rows exist, for a measurement that publishes more than one ticket. */
   taskCount(): Promise<number>;
+  /** The two fake-provider integrations, without their bindings — WP-21's onboarding e2e. */
+  seedIntegrations(projectId: Id): Promise<void>;
+  /** One arbitrary query, for an assertion the harness has no accessor for. */
+  query<T extends Record<string, unknown>>(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<readonly T[]>;
   /**
    * Posts a provider delivery to the instance's own `/webhooks/:provider/:integrationId` (WP-15c).
    *
@@ -448,6 +455,27 @@ export interface StartPipelineOptions {
    * `ticket.matched` instead of consuming it. See `uncomposed.e2e.test.ts`.
    */
   readonly reuse?: { readonly database: MigratedDatabase; readonly projectId: Id };
+  /**
+   * Seed the organisation, the project and the two fake integrations before the test runs.
+   *
+   * `false` is WP-21's onboarding e2e and nothing else: that file's whole point is that the
+   * **wizard** creates the project, so a seeded one would be the harness standing where the
+   * command should be (the argument `webhook-ingress.e2e.test.ts` makes about the door). In that
+   * mode {@link PipelineE2E.projectId} is the empty string — the test is expected to use the id the
+   * wizard answered with — and {@link PipelineE2E.seedIntegrations} is how it gets the two fake
+   * provider rows the pipeline needs.
+   */
+  readonly seedProject?: boolean;
+  /**
+   * Extra repository paths the fake git provider knows about, beside {@link GIT_PROJECT}.
+   *
+   * The provider is addressed by the path `repositoryPathOf(projects.repo_url)` derives, so a test
+   * whose project is **not** the seeded one — WP-21's wizard creates its own, pointing at a fixture
+   * repository on disk — has to tell the fake which path to answer for, or every git read the
+   * pipeline makes finds no such project. It is a seam for the *double*, not for production: the
+   * derivation itself is `apps/server/src/pipeline.ts`'s and is untouched.
+   */
+  readonly gitProjects?: readonly string[];
 }
 
 /**
@@ -462,7 +490,6 @@ export const seedWorld = async (
   pool: pg.Pool,
   config: JsonObject,
 ): Promise<{ projectId: Id; userId: Id }> => {
-  const key = secretAdapters.deriveSecretKey(APP_SECRET_KEY);
   const seed = await pool.query<{ project_id: string; user_id: string }>(
     `with org as (insert into organizations (name) values ('e2e') returning id),
           project as (
@@ -478,7 +505,26 @@ export const seedWorld = async (
   );
   const projectId = seed.rows[0]?.project_id as Id;
   const userId = seed.rows[0]?.user_id as Id;
+  await seedIntegrations(pool, projectId);
+  return { projectId, userId };
+};
 
+/**
+ * The two fake-provider integrations and their bindings, for one project.
+ *
+ * Split out of {@link seedWorld} at WP-21 so the onboarding e2e can create its project **through
+ * the wizard** and still get the two bindings the pipeline needs. It is deliberately not a wizard
+ * command: `POST /api/integrations` refuses a provider `SHIPPED_PROVIDERS` does not name, and the
+ * fakes are not in that catalogue by design — the catalogue is the list an operator may configure.
+ * The wizard's own `PUT …/bindings` is what attaches them, which is the part that has to be real.
+ */
+export const seedIntegrations = async (
+  pool: pg.Pool,
+  projectId: Id,
+  /** Leave `bindings` empty, so the wizard's own `PUT …/bindings` is what attaches them (WP-21). */
+  skipBindings = false,
+): Promise<void> => {
+  const key = secretAdapters.deriveSecretKey(APP_SECRET_KEY);
   const orgId = (
     await pool.query<{ org_id: string }>('select org_id from projects where id = $1', [projectId])
   ).rows[0]?.org_id as string;
@@ -515,10 +561,12 @@ export const seedWorld = async (
         secret.rows[0]?.id,
       ],
     );
-    await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
-      projectId,
-      integrationId,
-    ]);
+    if (!skipBindings) {
+      await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+        projectId,
+        integrationId,
+      ]);
+    }
   };
 
   await bind(
@@ -537,14 +585,15 @@ export const seedWorld = async (
     {},
     TICKET_BINDING_TOKEN,
   );
-
-  return { projectId, userId };
 };
 
 export const startPipeline = async (options: StartPipelineOptions): Promise<PipelineE2E> => {
   const git = createFakeGitProvider({
     integrationId: GIT_INTEGRATION_ID,
-    projects: [{ path: GIT_PROJECT, defaultBranch: 'main' }],
+    projects: [
+      { path: GIT_PROJECT, defaultBranch: 'main' },
+      ...(options.gitProjects ?? []).map((path) => ({ path, defaultBranch: 'main' })),
+    ],
   });
   const tickets = createFakeTaskManagement({
     integrationId: TICKETS_INTEGRATION_ID,
@@ -720,7 +769,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
       // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`).
-      APP_DB_POOL_MAX: '19',
+      APP_DB_POOL_MAX: '20',
       // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
       // planted rather than absent precisely so the redaction assertions have something to look for.
       ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),
@@ -737,9 +786,14 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   const pool = createTestPool(instance.database.connectionString, { max: 4 });
   const { projectId, userId } =
-    options.reuse === undefined
-      ? await seedWorld(pool, options.config ?? {})
-      : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
+    options.seedProject === false
+      ? // The wizard creates the project; `projectId` is meaningless in this mode and the one file
+        // that uses it (`test/e2e/onboarding/wizard.e2e.test.ts`) reads the id the command answered
+        // with instead.
+        { projectId: '' as Id, userId: '' as Id }
+      : options.reuse === undefined
+        ? await seedWorld(pool, options.config ?? {})
+        : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
 
   // An inbound adapter's half of the append: a webhook endpoint writes the normalised events in a
   // transaction of its own and the instance's outbox worker picks them up. WP-15a does not build
@@ -948,6 +1002,11 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     taskCount: async () => {
       const { rows } = await pool.query<{ count: number }>('select count(*)::int from tasks');
       return rows[0]?.count ?? 0;
+    },
+    seedIntegrations: async (id) => seedIntegrations(pool, id, true),
+    query: async (sql, params) => {
+      const { rows } = await pool.query(sql, params === undefined ? undefined : [...params]);
+      return rows as never;
     },
     deliver: async (delivery) => {
       const response = await fetch(

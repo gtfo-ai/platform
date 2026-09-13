@@ -64,7 +64,7 @@ export const ROLE_PROMPT_VERSIONS = {
   acceptance_tester: '1',
   facilitator: '1',
   librarian: '2',
-  discovery: '1',
+  discovery: '2',
 } as const satisfies Record<AgentRole, string>;
 
 const promptsRoot = new URL('../roles/', import.meta.url);

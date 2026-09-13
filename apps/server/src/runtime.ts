@@ -59,6 +59,7 @@ import { loadServerConfig, type ServerConfig } from './config.js';
 import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
+import { composeOnboardingRecording, createOnboardingCommands } from './onboarding.js';
 import {
   composeIntegrationStack,
   composePipeline,
@@ -358,6 +359,34 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           eventing.bus.register(handler);
         }
         stopCallbacks.unshift({ name: 'knowledge-index', stop: knowledge.stop });
+
+        /**
+         * Recording what a discovery run found (WP-21): the readiness evaluation and the drafted
+         * pages.
+         *
+         * Beside the Librarian's curation and for the same reason — an `artifact.created` handler
+         * that enqueues, and a job that reads the index and the git provider before it writes. It
+         * needs the pipeline's own loader, because R9 is *"is the default branch protected?"* and
+         * that is a provider read which has to go through the one `IntegrationActionExecutor` this
+         * process composed.
+         */
+        const onboarding = await composeOnboardingRecording({
+          pool: database.pool,
+          eventing,
+          jobs: jobsRuntime.jobs,
+          integrations: pipeline.integrations,
+          runEnvironment: agentRunEnvironment({
+            providerMode: config.providerMode,
+            modelApiKey: config.modelApiKey,
+          }),
+          logger: loggerPort,
+        });
+        for (const handler of onboarding.runtime.handlers) {
+          eventing.bus.register(handler);
+        }
+        await onboarding.runtime.start();
+        stopCallbacks.unshift({ name: 'onboarding', stop: onboarding.runtime.stop });
+
         if (knowledge.missing.length > 0) {
           logger.warn(
             { missing: knowledge.missing },
@@ -407,6 +436,30 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * nullable `Jobs` on purpose — with one, the commit happens now; without one, the decision is
      * recorded and the nightly hygiene pass applies it.
      */
+    /**
+     * The onboarding wizard's commands for the API half (WP-21).
+     *
+     * Composed for every process that serves the API. `jobs` is the one that decides what it can
+     * do: a discovery start **needs** a queue (the task would sit at a stage nothing runs), so the
+     * command refuses by name on a process with none rather than creating a task that never moves.
+     */
+    const onboardingCommands = capabilities.api
+      ? createOnboardingCommands({
+          pool: database.pool,
+          eventing,
+          jobs,
+          baseUrl: config.baseUrl,
+          secretKey: config.secretKey,
+          // Non-null on this branch by construction: `composeIntegrationStack` runs whenever the
+          // role serves the API, which is the condition of this ternary.
+          registry: (stack as NonNullable<typeof stack>).registry,
+          // The process's one executor, so the wizard's probe is audited and rate-limited like
+          // every other outbound call and shares one budget per account with the pipeline's.
+          executor: (stack as NonNullable<typeof stack>).executor,
+          logger: loggerPort,
+        })
+      : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -514,6 +567,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       hub,
       webhooks,
       knowledge: knowledgeCommands,
+      onboarding: onboardingCommands,
       version: buildInfo(env),
       readiness: createReadinessCheck({
         database: database.db,

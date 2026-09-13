@@ -22,6 +22,7 @@ const NAV = [
   { to: '/agents', label: 'Agents' },
   { to: '/inbox', label: 'Inbox' },
   { to: '/integrations', label: 'Integrations' },
+  { to: '/onboarding', label: 'Onboarding' },
   { to: '/stats', label: 'Statistics' },
   { to: '/audit', label: 'Audit log' },
   { to: '/settings', label: 'Settings' },

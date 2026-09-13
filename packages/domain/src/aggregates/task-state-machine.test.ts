@@ -37,7 +37,8 @@ import {
 const EXPECTED_TASK_EDGES = {
   // "queued ─► active" and "queued └─► cancelled"; plus escalation, which is universal.
   queued: ['active', 'needs_human', 'cancelled'],
-  // "active ─► …" plus the four branches under it, and the stage-to-stage self edge.
+  // "active ─► …" plus the four branches under it, the stage-to-stage self edge, and — since
+  // WP-21 — the edge a template with no merge ends on (discovery, and product/04's spike).
   active: [
     'active',
     'returned',
@@ -46,6 +47,7 @@ const EXPECTED_TASK_EDGES = {
     'paused',
     'needs_human',
     'ready_for_merge',
+    'done',
     'cancelled',
   ],
   // "returned(stage) ─► active" (the return lands and the stage is re-entered).
@@ -118,6 +120,16 @@ describe('Task transition table', () => {
       }
       expect(canTransitionTask(state, 'cancelled')).toBe(true);
     }
+  });
+
+  it('lets a template with no merge finish, and still refuses the merge shortcut', () => {
+    // WP-21: `active → done` is what a one-stage template (discovery) and product/04's spike need.
+    // Both directions (rule 42): the edge exists, and the edges BD-007 rests on are unchanged —
+    // nothing may reach `merged` or `retro` without passing through the stage that produces it.
+    expect(canTransitionTask('active', 'done')).toBe(true);
+    expect(canTransitionTask('active', 'merged')).toBe(false);
+    expect(canTransitionTask('active', 'retro')).toBe(false);
+    expect(canTransitionTask('ready_for_merge', 'done')).toBe(false);
   });
 
   it('throws a typed error for an illegal transition', () => {

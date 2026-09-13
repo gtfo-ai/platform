@@ -642,7 +642,15 @@ describe('the list projections', () => {
     expect(project?.readiness_level).toBe(0);
   });
 
-  it('refuses a readiness read, with the row count that says which reason it is', async () => {
+  /**
+   * **Both states, on either side of the row WP-21's evaluator writes.**
+   *
+   * The refusal used to be a statement about the *build* — nothing wrote `readiness_evaluations` at
+   * all — and this case asserted it in both directions for that reason. WP-21 narrowed it to a
+   * statement about the *project*, so the second half now asserts the **success** branch, and the
+   * two together are what stop either from being satisfied vacuously (standing rule 42).
+   */
+  it('refuses a project nothing has evaluated and answers one that has been', async () => {
     expect(await findProjectReadiness(drizzled, projectId)).toEqual({
       found: true,
       recorded: false,
@@ -650,17 +658,30 @@ describe('the list projections', () => {
     });
     await pool.query(
       `insert into readiness_evaluations (project_id, level, criteria, source)
-       values ($1, 2, '[]'::jsonb, 'test')`,
-      [projectId],
+       values ($1, 1, $2::jsonb, 'discovery')`,
+      [
+        projectId,
+        JSON.stringify([
+          { id: 'R1', passed: true, evidence: 'ran the suite', detected_by: 'agent', unlocks: '' },
+          { id: 'R3', passed: true, evidence: 'CI runs on MRs', detected_by: 'agent', unlocks: '' },
+          // An id no release has: dropped rather than served with an invented `unlocks`.
+          { id: 'R99', passed: true, evidence: 'invented', detected_by: 'agent', unlocks: '' },
+        ]),
+      ],
     );
     try {
-      // With a row present, which is the direction a refusal can get wrong silently: the answer is
-      // still a refusal, and the count now says "a producer exists".
-      expect(await findProjectReadiness(drizzled, projectId)).toEqual({
-        found: true,
-        recorded: false,
-        rows: 1,
-      });
+      const answered = await findProjectReadiness(drizzled, projectId);
+      expect(answered.found).toBe(true);
+      expect(answered.found && answered.recorded).toBe(true);
+      const response = answered.found && answered.recorded ? answered.response : null;
+      expect(response?.level).toBe(1);
+      expect(response?.source).toBe('discovery');
+      expect(response?.criteria.map((entry) => entry.id)).toEqual(['R1', 'R3']);
+      // `unlocks` comes from the platform's table, not from the stored copy — the row above wrote
+      // an empty string and the read publishes product/17's sentence.
+      expect(response?.criteria[0]?.unlocks).toContain('Implementation self-check');
+      // R1 and R3 pass, so the next rung is level 2 and the advice names its criteria.
+      expect(response?.next_improvements.map((entry) => entry.id)).toEqual(['R2', 'R4', 'R5']);
     } finally {
       await pool.query('delete from readiness_evaluations where project_id = $1', [projectId]);
     }

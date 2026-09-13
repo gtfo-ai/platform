@@ -387,6 +387,14 @@ export const JOB_QUEUES = {
   knowledgeApply: 'knowledge.apply',
   /** The nightly KB hygiene pass (cron, technical/07 § "Librarian pipeline" step 6). */
   knowledgeHygiene: 'knowledge.hygiene',
+  /**
+   * One discovery run's findings: the readiness evaluation and the drafted pages (WP-21).
+   *
+   * Policy `standard` for the reason `knowledgeProposals` is: each wake-up carries a **different**
+   * artifact, so a coalescing policy would silently drop one project's onboarding in favour of
+   * another's. The work is a handful of rows in one transaction.
+   */
+  discoveryRecord: 'onboarding.discovery',
   /** Monthly partition creation and transcript retention (cron, technical/03). */
   partitionMaintenance: 'db.partitions.maintain',
 } as const;

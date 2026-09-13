@@ -56,6 +56,12 @@ export * from './knowledge/kb-search.js';
 export * from './knowledge/librarian.js';
 export * from './knowledge/ports.js';
 export * from './knowledge/runtime.js';
+// Onboarding: the wizard's discovery run and the readiness evaluation (WP-21)
+export * from './onboarding/discovery.js';
+export * from './onboarding/evaluate-readiness.js';
+export * from './onboarding/ports.js';
+export * from './onboarding/record.js';
+export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';
 export * from './pipeline/gates.js';
@@ -109,5 +115,6 @@ export * from './testing/memory-integrations.js';
 export * from './testing/memory-knowledge.js';
 export * from './testing/memory-pipeline.js';
 export * from './testing/memory-proposals.js';
+export * from './testing/memory-readiness.js';
 
 export const packageId = '@platform/application' as const;

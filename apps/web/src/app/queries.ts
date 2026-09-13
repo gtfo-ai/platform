@@ -75,6 +75,30 @@ export const useProjectConfig = (projectId: string | null) => {
   });
 };
 
+/** `GET /api/projects/:id/readiness` — 409 until a discovery run has evaluated the project. */
+export const useProjectReadiness = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectReadiness(projectId ?? ''),
+    queryFn: () => endpoints.projectReadiness(projectId ?? ''),
+    enabled: projectId !== null,
+    // A 409 is an answer, not a transport failure: retrying it would poll the server while an
+    // operator reads the step that tells them to run discovery.
+    retry: false,
+    ...FOREVER,
+  });
+};
+
+export const useProjectBindings = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectBindings(projectId ?? ''),
+    queryFn: () => endpoints.projectBindings(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
 export const useProjectBudgets = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -361,4 +385,72 @@ export const useKbProposalCommands = (projectId: string) => {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.kbProposals(projectId) }),
   });
+};
+
+/**
+ * The onboarding wizard's commands (WP-21, product/06).
+ *
+ * One hook rather than six, so a screen that walks the steps holds one object and every mutation
+ * invalidates what it could have changed — the projects list after a create, the integration list
+ * after a create or a test, the bindings and the configuration after a write.
+ */
+export const useOnboardingCommands = () => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  return {
+    createProject: useMutation({
+      mutationFn: (input: { key: string; name: string; repo_url: string }) =>
+        endpoints.createProject(input),
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] }),
+    }),
+    createIntegration: useMutation({
+      mutationFn: (input: {
+        type: 'task_management' | 'git' | 'communication' | 'logs' | 'errors';
+        provider: string;
+        name: string;
+        config: Record<string, unknown>;
+        secret_refs: Record<string, string>;
+      }) => endpoints.createIntegration(input),
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
+    }),
+    testIntegration: useMutation({
+      mutationFn: (integrationId: string) => endpoints.testIntegration(integrationId),
+      // The probe writes `integrations.health`, which the integration list publishes.
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
+    }),
+    putBindings: useMutation({
+      mutationFn: (input: { projectId: string; integrationIds: readonly string[] }) =>
+        endpoints.putProjectBindings(input.projectId, {
+          items: input.integrationIds.map((id) => ({ integration_id: id })),
+        }),
+      onSuccess: async (_result, input) => {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.projectBindings(input.projectId),
+        });
+      },
+    }),
+    writeConfig: useMutation({
+      mutationFn: (input: {
+        projectId: string;
+        config: Record<string, unknown>;
+        autonomy_level: 'observe' | 'assist' | 'supervised' | 'autonomous';
+        base_hash?: string;
+      }) =>
+        endpoints.updateProjectConfig(input.projectId, {
+          config: input.config as never,
+          autonomy_level: input.autonomy_level,
+          ...(input.base_hash === undefined ? {} : { base_hash: input.base_hash }),
+        }),
+      onSuccess: async (_result, input) => {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.projectConfig(input.projectId) });
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
+      },
+    }),
+    startDiscovery: useMutation({
+      mutationFn: (projectId: string) => endpoints.startDiscovery(projectId),
+      onSuccess: async (_result, projectId) => {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.projectReadiness(projectId) });
+      },
+    }),
+  };
 };

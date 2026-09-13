@@ -3,6 +3,7 @@ import {
   answerQuestionRequestSchema,
   apiErrorSchema,
   auditEntrySchema,
+  createProjectRequestSchema,
   createTaskRequestSchema,
   decideApprovalRequestSchema,
   effectiveConfigResponseSchema,
@@ -14,14 +15,19 @@ import {
   orgAuditResponseSchema,
   orgUsersResponseSchema,
   paginationQuerySchema,
+  projectBindingsResponseSchema,
   projectsResponseSchema,
   putKbDocRequestSchema,
+  putProjectBindingsRequestSchema,
+  readinessResponseSchema,
   runMessagesQuerySchema,
   sseFrameSchema,
   sseTopicSchema,
+  startDiscoveryResponseSchema,
   startShadowRunsRequestSchema,
   steerRunRequestSchema,
   tasksResponseSchema,
+  updateProjectConfigRequestSchema,
   updateSubscriptionsRequestSchema,
   webhookDeliverySchema,
 } from './api.js';
@@ -364,5 +370,158 @@ describe('the list envelopes and the KB health report', () => {
       }).success,
     ).toBe(false);
     expect(kbHealthResponseSchema.safeParse({ ...report, unexpected: 1 }).success).toBe(false);
+  });
+});
+
+describe('the onboarding wizard’s DTOs (WP-21, product/06)', () => {
+  it('creates a project from the facts an operator types, and nothing else', () => {
+    expect(
+      createProjectRequestSchema.parse({
+        key: 'acme_api',
+        name: 'ACME API',
+        repo_url: 'https://git.example.test/acme/api.git',
+      }),
+    ).toEqual({
+      key: 'acme_api',
+      name: 'ACME API',
+      repo_url: 'https://git.example.test/acme/api.git',
+    });
+    // The dial is step 4, through the preset: accepting it here would give a project a second way
+    // to be configured, and that one would skip `applyAutonomyPreset`.
+    expect(
+      createProjectRequestSchema.safeParse({
+        key: 'acme_api',
+        name: 'ACME API',
+        repo_url: 'https://git.example.test/acme/api.git',
+        autonomy_level: 'autonomous',
+      }).success,
+    ).toBe(false);
+    // A key is a slug: it ends up in URLs and in a branch name.
+    expect(
+      createProjectRequestSchema.safeParse({
+        key: 'ACME API',
+        name: 'ACME API',
+        repo_url: 'https://git.example.test/acme/api.git',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('bounds the knowledge directory and keeps it repository-relative', () => {
+    const project = {
+      key: 'acme_api',
+      name: 'ACME API',
+      repo_url: 'https://git.example.test/acme/api.git',
+    };
+    // The value the platform joins a model-chosen page path onto, so it is the directory itself
+    // that has to be relative and bounded — both sides asserted (rule 42).
+    expect(
+      createProjectRequestSchema.parse({ ...project, knowledge_dir: '.agentic/knowledge' })
+        .knowledge_dir,
+    ).toBe('.agentic/knowledge');
+    for (const bad of ['/etc', '../outside', 'a/../../b', './here', 'x'.repeat(513), '']) {
+      expect(
+        createProjectRequestSchema.safeParse({ ...project, knowledge_dir: bad }).success,
+        bad,
+      ).toBe(false);
+    }
+    // …and a branch name is bounded too: it reaches git arguments and an audit row.
+    expect(
+      createProjectRequestSchema.safeParse({ ...project, default_branch: 'x'.repeat(256) }).success,
+    ).toBe(false);
+  });
+
+  it('takes the whole binding set rather than a delta, so the step is re-submittable', () => {
+    expect(
+      putProjectBindingsRequestSchema.parse({
+        items: [
+          { integration_id: uuid(1) },
+          { integration_id: uuid(2), config: { project: 'acme/api' } },
+        ],
+      }).items,
+    ).toHaveLength(2);
+    // An empty list is legal and means "this project is bound to nothing" — a fact, not a mistake.
+    expect(putProjectBindingsRequestSchema.parse({ items: [] }).items).toEqual([]);
+    expect(
+      projectBindingsResponseSchema.parse({
+        items: [
+          {
+            integration_id: uuid(1),
+            type: 'git',
+            provider: 'gitlab',
+            name: 'acme gitlab',
+            config: { project: 'acme/api' },
+          },
+        ],
+      }).items[0]?.provider,
+    ).toBe('gitlab');
+  });
+
+  it('writes a whole config document with the dial beside it, and refuses an unknown key', () => {
+    const body = { config: { version: 1 }, autonomy_level: 'supervised' as const };
+    expect(updateProjectConfigRequestSchema.parse(body).autonomy_level).toBe('supervised');
+    // The dial is optional: editing the limits should not force a caller to restate it.
+    expect(updateProjectConfigRequestSchema.parse({ config: { version: 1 } }).autonomy_level).toBe(
+      undefined,
+    );
+    expect(
+      updateProjectConfigRequestSchema.safeParse({ ...body, autonomy_level: 'yolo' }).success,
+    ).toBe(false);
+    expect(
+      updateProjectConfigRequestSchema.safeParse({ config: { version: 1, nope: true } }).success,
+    ).toBe(false);
+  });
+
+  it('answers a discovery start with the task the run belongs to', () => {
+    expect(
+      startDiscoveryResponseSchema.parse({
+        task_id: uuid(3),
+        started: true,
+        detail: 'discovery queued',
+      }).started,
+    ).toBe(true);
+    // `started: false` is the idempotent answer, not an error: a second call must not spend a
+    // second budget on the same question.
+    expect(
+      startDiscoveryResponseSchema.parse({
+        task_id: uuid(3),
+        started: false,
+        detail: 'this project already has a discovery task',
+      }).started,
+    ).toBe(false);
+  });
+
+  it('publishes a readiness evaluation with who detected each criterion', () => {
+    const response = {
+      level: 2,
+      evaluated_at: AT,
+      source: 'discovery',
+      criteria: [
+        {
+          id: 'R1',
+          passed: true,
+          evidence: 'ran `pnpm test`: 42 passed',
+          unlocks: 'Implementation self-check',
+          detected_by: 'agent' as const,
+        },
+        {
+          id: 'R9',
+          passed: false,
+          evidence: 'the default branch is not protected',
+          unlocks: 'Human merge guarantee (BD-007)',
+          detected_by: 'platform' as const,
+        },
+      ],
+      next_improvements: [{ id: 'R9', title: 'Protected default branch', unlocks: 'BD-007' }],
+    };
+    expect(readinessResponseSchema.parse(response).level).toBe(2);
+    // `detected_by` is the field that says whether a model's word was taken for a criterion, so a
+    // row without it is not a readiness record.
+    expect(
+      readinessResponseSchema.safeParse({
+        ...response,
+        criteria: [{ id: 'R1', passed: true, evidence: '', unlocks: '' }],
+      }).success,
+    ).toBe(false);
+    expect(readinessResponseSchema.safeParse({ ...response, level: 9 }).success).toBe(false);
   });
 });

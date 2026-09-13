@@ -33,6 +33,12 @@ export const DEFAULT_STAGE_RUN_BUDGET_USD: Readonly<Record<string, number>> = {
   business_review: 3,
   retrospective: 2,
   librarian: 2,
+  /**
+   * product/06 § "Step 2": the Discovery agent is *"automatic, ~minutes, cheap"* with a **bounded
+   * budget**. Two dollars is the same cap the other Sonnet stages carry (retrospective,
+   * librarian), and it is a cap rather than an estimate: the run stops at it.
+   */
+  discovery: 2,
 };
 
 /**

@@ -34,6 +34,18 @@ import { IllegalTransitionError } from '../errors.js';
  *    would either have to move the task back to `active` (which `retro` has no edge to, by design:
  *    a merged task never goes back to work) or run outside the pipeline entirely.
  *  - `ready_for_merge → returned` is the human-MR-comment path (BD-007).
+ *  - **`active → done` was added at WP-21**, and it closes a gap rather than widening a guarantee.
+ *    Until then the only edge into `done` was `retro → done`, so a template that finishes without a
+ *    merge could not finish at all: the pipeline asked for `complete`, the machine refused, and
+ *    `applyDecision` escalated the task to `needs_human` with a blocker brief blaming the template.
+ *    Two shipped shapes need it — the **discovery** template (product/06 § "Step 2": one read-only
+ *    agent stage that drafts a knowledge base, with no ticket, no branch and no merge request) and
+ *    product/04's **spike** template, which "ends at a human with no MR" and has therefore never
+ *    been shippable. It takes nothing away from BD-007: *which* stage a task ends at is the
+ *    **interpreter's** decision from the template, and every ticket template (`TICKET_TEMPLATES`)
+ *    still runs `ready_for_merge → merged → retro → done`, so no ticket can reach `done` without a
+ *    human merge. technical/02's diagram is amended with the same sentence (standing rule 8: docs
+ *    win, so the doc changes rather than the code being written around it).
  */
 export const TASK_TRANSITIONS = {
   queued: ['active', 'needs_human', 'cancelled'],
@@ -45,6 +57,7 @@ export const TASK_TRANSITIONS = {
     'paused',
     'needs_human',
     'ready_for_merge',
+    'done',
     'cancelled',
   ],
   returned: ['active', 'needs_human', 'paused', 'cancelled'],

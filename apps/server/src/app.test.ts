@@ -77,6 +77,7 @@ const build = async (
     // `›` (PROGRESS backlog 3).
     webhooks: null,
     knowledge: null,
+    onboarding: null,
     readiness: async () => {
       if (harness.readinessError !== null) {
         throw harness.readinessError;

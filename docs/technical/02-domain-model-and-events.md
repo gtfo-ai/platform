@@ -36,6 +36,8 @@
 ### Task
 ```
 queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged ─► retro ─► retro ─► done
+   │           │  ▲                     │                                      ▲
+   │           │  └───────────────────────── (a template with no merge) ───────┘
    │           │  ▲                     │
    │           │  └── returned(stage) ◄─┘ (human comments / rework)
    │           ├─► waiting_answers ─► active
@@ -51,6 +53,17 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and
 > both run with the task in `retro`. The alternative would have been moving the task back to
 > `active`, which `retro` deliberately has no edge to: a merged task never goes back to work.
+>
+> **`active → done` was added at WP-21**, and it closes a gap rather than widening a guarantee. The
+> diagram above has only one edge into `done` (`retro → done`), so a template that finishes without
+> a merge could not finish at all: the interpreter asked for `complete`, the machine refused, and
+> the task was escalated to `needs_human` with a blocker brief blaming the template. Two shipped
+> shapes need it — the **discovery** template of product/06 § "Step 2" (one read-only agent stage
+> that drafts a knowledge base; no ticket, no branch, no merge request) and product/04's **spike**
+> template, which "ends at a human with no MR" and has therefore never been runnable. It takes
+> nothing away from BD-007: *which* stage a task ends at is the interpreter's decision from the
+> template, and every ticket template still runs `ready_for_merge → merged → retro → done`, so no
+> ticket can reach `done` without a human merge.
 
 ### Run
 `created → starting → running → (completed | failed | cancelled | budget_exceeded | timed_out | stalled)`. `running` emits `run.output` stream events (not stored in the domain log; stored in the transcript store, see 03) and heartbeats; `stalled` after no output for `stall_timeout` (default 5 min, research/01).

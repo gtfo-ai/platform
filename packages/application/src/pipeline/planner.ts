@@ -41,6 +41,7 @@ import {
   assemblePrompt,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
+  DEFAULT_READ_ONLY_ALLOW,
   narrowCommandPolicy,
   PLATFORM_DEFAULT_CONFIG,
   type PromptContextPack,
@@ -89,7 +90,59 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
   discovery: ['report_progress', 'kb_search'],
 };
 
-/** SDK tools per role: only the developer writes to the workspace or runs a command (BD-021). */
+/**
+ * Which **command baseline** a role's run starts from, before the project narrows it (BD-025).
+ *
+ * A third least-privilege table beside {@link TOOLS_BY_ROLE} and {@link PLATFORM_TOOLS_BY_ROLE},
+ * added at WP-21's review round 2, and a **table rather than a derived rule** on purpose. The
+ * obvious derivation — "a role with no `Write`/`Edit` gets the read-only list" — would also narrow
+ * the **acceptance tester**, whose product/13 row is "tests/app cmds" and which installs to boot the
+ * app; silently changing another role's policy inside a review round is not a narrowing anybody
+ * decided. So the roles are listed, and `planner.test.ts` enumerates them.
+ */
+export const COMMAND_BASELINE_BY_ROLE: Readonly<Record<AgentRole, 'read_only' | 'implementation'>> =
+  {
+    triager: 'implementation',
+    product_manager: 'implementation',
+    investigator: 'implementation',
+    architect: 'implementation',
+    developer: 'implementation',
+    reviewer: 'implementation',
+    acceptance_tester: 'implementation',
+    facilitator: 'implementation',
+    librarian: 'implementation',
+    // The one role that reads a repository nobody has reviewed yet, at first contact.
+    discovery: 'read_only',
+  };
+
+/**
+ * SDK tools per role: only the developer writes to the workspace, and two roles run a command
+ * (BD-021).
+ *
+ * **`discovery` has `Bash`, on the read-only command baseline** (WP-21, narrowed at its review
+ * round 2). {@link COMMAND_BASELINE_BY_ROLE} gives it `DEFAULT_READ_ONLY_ALLOW` — `ls`, `cat`,
+ * `grep`, `rg`, `find` and `git log|diff|show|blame|status` — so the shell reads a repository and
+ * writes nothing. Round 1 left it on the implementation baseline, which also allows
+ * `git add|commit|fetch|rebase`, `git push origin agentic/*`, `npm ci` and `pip install -r *`; the
+ * push was stopped only by a read-only run minting no git credential, which is a second mechanism
+ * doing a first mechanism's job. What it gains over `Read`/`Glob`/`Grep` is the git history — the
+ * commit convention R10 is about, and the activity a newcomer reads first.
+ *
+ * **What no run of any role can do on this build, stated because product/17 assumes otherwise.**
+ * Run the project's test, lint or setup command. The **org maximum** is `DEFAULT_COMMAND_POLICY`
+ * and a project may only *narrow* it (`narrowCommandPolicy`: an `allow` entry the maximum does not
+ * grant is dropped and reported in `ignoredAllow`), the maximum contains no test command —
+ * `npm test` is technical/12's *example* `.agentic/config.yml`, not a platform default — and
+ * nothing in this build lets an operator widen the maximum. product/17 detects R1 and R6 "executed
+ * in the workspace" and R2 "measured"; none of the three is possible. `READINESS_CRITERIA` says at
+ * each of them what a run can establish instead, and the gap between that reading and product/17's
+ * wording is `PROGRESS.md`'s discovered work rather than a sentence smoothed over here.
+ *
+ * **product/13's least-privilege table had no Discovery row** when this was written — the role is
+ * described in § "Discovery agent (onboarding, Step 2)" and was missing from § "Tools per role".
+ * The orchestrator owns that amendment; the row is `Read`/`Glob`/`Grep` plus a **read-only** shell,
+ * no write, no push, no observability, no KB write, no `ask_human`.
+ */
 export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   triager: [],
   product_manager: ['Read', 'Glob', 'Grep'],
@@ -100,7 +153,9 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   acceptance_tester: ['Read', 'Glob', 'Grep', 'Bash'],
   facilitator: ['Read', 'Glob', 'Grep'],
   librarian: ['Read', 'Glob', 'Grep', 'Edit', 'Write'],
-  discovery: ['Read', 'Glob', 'Grep'],
+  // `Bash` under BD-025's command policy — see the docblock. It writes nothing: no `Edit`, no
+  // `Write`, and `PLATFORM_TOOLS_BY_ROLE.discovery` carries no mutating platform tool.
+  discovery: ['Read', 'Glob', 'Grep', 'Bash'],
 };
 
 /**
@@ -241,6 +296,18 @@ export interface StageRunPlannerOptions {
   readonly clock: { now(): IsoDateTime };
   readonly logger?: Logger;
 }
+
+/**
+ * The organisation maximum this role's run starts from.
+ *
+ * `read_only` keeps the shipped `ask` and `block` lists and replaces only `allow`: an entry that
+ * moves out of `allow` becomes unmatched, falls to the `ask` fallback and is **denied** unattended,
+ * which is the direction a narrowing has to fail in.
+ */
+export const commandBaselineFor = (role: AgentRole) =>
+  COMMAND_BASELINE_BY_ROLE[role] === 'read_only'
+    ? { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW }
+    : DEFAULT_COMMAND_POLICY;
 
 const limitsFor = (settings: ProjectSettings, stage: string, role: AgentRole): RunLimits => {
   const defaults = stageAgentDefaults(stage);
@@ -390,7 +457,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const role = stage.role ?? 'developer';
       const defaults = stageAgentDefaults(stage.id);
       const configured = settings.config.stages?.[stage.id];
-      const policy = narrowCommandPolicy(DEFAULT_COMMAND_POLICY, settings.config.commands);
+      const policy = narrowCommandPolicy(commandBaselineFor(role), settings.config.commands);
       const protectedPaths =
         settings.config.policies?.protected_paths ??
         PLATFORM_DEFAULT_CONFIG.policies?.protected_paths ??

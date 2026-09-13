@@ -39,6 +39,7 @@ import { BoardScreen } from '../features/board.js';
 import { DashboardScreen } from '../features/dashboard.js';
 import { InboxScreen } from '../features/inbox.js';
 import { IntegrationsScreen } from '../features/integrations.js';
+import { OnboardingScreen } from '../features/onboarding.js';
 import { BudgetsScreen, KnowledgeScreen, PipelineScreen } from '../features/project-panels.js';
 import { SettingsScreen } from '../features/settings.js';
 import { SignInScreen } from '../features/sign-in.js';
@@ -91,6 +92,7 @@ const integrationsRoute = route('/integrations', IntegrationsScreen);
 const statsRoute = route('/stats', StatisticsScreen);
 const auditRoute = route('/audit', AuditScreen);
 const settingsRoute = route('/settings', SettingsScreen);
+const onboardingRoute = route('/onboarding', OnboardingScreen);
 
 const boardRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
@@ -163,6 +165,7 @@ export const routeTree = rootRoute.addChildren([
     statsRoute,
     auditRoute,
     settingsRoute,
+    onboardingRoute,
     boardRoute,
     projectTaskRoute,
     taskRoute,

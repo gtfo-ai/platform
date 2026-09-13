@@ -30,6 +30,8 @@ import {
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
   contextPackRecordSchema,
+  createIntegrationRequestSchema,
+  createProjectRequestSchema,
   decideApprovalRequestSchema,
   decideKbProposalRequestSchema,
   effectiveConfigResponseSchema,
@@ -41,7 +43,10 @@ import {
   orgAuditResponseSchema,
   orgUsersResponseSchema,
   pauseTaskRequestSchema,
+  projectBindingsResponseSchema,
+  projectRecordSchema,
   projectsResponseSchema,
+  putProjectBindingsRequestSchema,
   readinessResponseSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
@@ -52,10 +57,13 @@ import {
   runPromptResponseSchema,
   runRecordSchema,
   setupGuideResponseSchema,
+  startDiscoveryResponseSchema,
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
   taskDetailResponseSchema,
   tasksResponseSchema,
+  testIntegrationResponseSchema,
+  updateProjectConfigRequestSchema,
   versionResponseSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
@@ -111,6 +119,38 @@ export interface Endpoints {
     path: string,
   ) => Promise<z.output<typeof kbDocResponseSchema>>;
   readonly kbProposals: (projectId: string) => Promise<z.output<typeof kbProposalsResponseSchema>>;
+  readonly projectBindings: (
+    projectId: string,
+  ) => Promise<z.output<typeof projectBindingsResponseSchema>>;
+
+  /**
+   * The onboarding wizard's commands (WP-21, product/06).
+   *
+   * Unlike the task and run commands below, these **parse their answer**: technical/08 leaves a
+   * command's response open, and these four fix one — the project that was created, the health of
+   * an integration, the bindings that are now in force, the task a discovery run belongs to. A
+   * wizard that could not read what it just made would have nothing to show the next step.
+   */
+  readonly createProject: (
+    body: z.input<typeof createProjectRequestSchema>,
+  ) => Promise<z.output<typeof projectRecordSchema>>;
+  readonly createIntegration: (
+    body: z.input<typeof createIntegrationRequestSchema>,
+  ) => Promise<{ readonly id: string; readonly provider: string; readonly name: string }>;
+  readonly testIntegration: (
+    integrationId: string,
+  ) => Promise<z.output<typeof testIntegrationResponseSchema>>;
+  readonly putProjectBindings: (
+    projectId: string,
+    body: z.input<typeof putProjectBindingsRequestSchema>,
+  ) => Promise<z.output<typeof projectBindingsResponseSchema>>;
+  readonly updateProjectConfig: (
+    projectId: string,
+    body: z.input<typeof updateProjectConfigRequestSchema>,
+  ) => Promise<{ readonly hash: string; readonly autonomy_level: string }>;
+  readonly startDiscovery: (
+    projectId: string,
+  ) => Promise<z.output<typeof startDiscoveryResponseSchema>>;
 
   // Commands (technical/08 § Principles: imperative names, audited).
   readonly pauseTask: (
@@ -237,6 +277,49 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     kbProposals: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/kb/proposals`, {
         schema: kbProposalsResponseSchema,
+      }),
+    projectBindings: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/bindings`, {
+        schema: projectBindingsResponseSchema,
+      }),
+
+    // The wizard's commands. The three that **create** carry an `Idempotency-Key` (technical/08 §
+    // Principles); a double-clicked "Create project" that made two projects is the failure the
+    // header exists for, and the server refuses the request without one.
+    createProject: (body) =>
+      client.command('/api/projects', {
+        schema: projectRecordSchema,
+        body: createProjectRequestSchema.parse(body),
+        idempotent: true,
+      }),
+    createIntegration: (body) =>
+      client.command('/api/integrations', {
+        schema: z.object({ id: z.string(), provider: z.string(), name: z.string() }),
+        body: createIntegrationRequestSchema.parse(body),
+        idempotent: true,
+      }),
+    testIntegration: (integrationId) =>
+      client.command(`/api/integrations/${seg(integrationId)}/test`, {
+        schema: testIntegrationResponseSchema,
+        body: {},
+      }),
+    putProjectBindings: (projectId, body) =>
+      client.command(`/api/projects/${seg(projectId)}/bindings`, {
+        method: 'PUT',
+        schema: projectBindingsResponseSchema,
+        body: putProjectBindingsRequestSchema.parse(body),
+      }),
+    updateProjectConfig: (projectId, body) =>
+      client.command(`/api/projects/${seg(projectId)}/config`, {
+        method: 'PUT',
+        schema: z.object({ hash: z.string(), autonomy_level: z.string() }),
+        body: updateProjectConfigRequestSchema.parse(body),
+      }),
+    startDiscovery: (projectId) =>
+      client.command(`/api/projects/${seg(projectId)}/discovery`, {
+        schema: startDiscoveryResponseSchema,
+        body: {},
+        idempotent: true,
       }),
 
     pauseTask: (taskId, body) =>

@@ -54,6 +54,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   trustProxy: 'APP_TRUST_PROXY',
   providerMode: 'APP_PROVIDER_MODE',
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
+  integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
   modelApiKey: 'ANTHROPIC_API_KEY',
   claudeBinary: 'APP_CLAUDE_BINARY',
 };
@@ -218,6 +219,29 @@ const serverConfigFields = z.strictObject({
     )
     .nullable(),
 
+  /**
+   * The environment-variable names `POST /api/integrations` may read a credential out of.
+   *
+   * **An operator-declared allow-list, empty by default, and that is the whole security property.**
+   * The command takes `secret_refs` as *field → variable name* so that no credential crosses the
+   * API — but the name is chosen by an `integration.write` caller, so without this list the caller
+   * could name `APP_SECRET_KEY`, `DATABASE_URL` or `ANTHROPIC_API_KEY` and have the platform seal
+   * its own secret into a row a provider adapter is then handed. Combined with a caller-chosen
+   * provider `base_url`, that is two API calls to send the envelope key to a host the caller picked.
+   *
+   * An **allow-list** rather than a deny-list of the platform's own names, which is standing rule
+   * 55's lesson one ring out: a deny-list is a claim about every name the platform will ever use,
+   * and it is wrong the first time a variable is added. Empty means *nothing is readable* and the
+   * command refuses by name, telling the operator which variable to declare — fail closed, the
+   * direction `APP_KNOWLEDGE_MIRROR_ROOT` also fails in.
+   *
+   * TD-020's `_FILE` convention is honoured on the declared name: declaring `GITLAB_TOKEN` also
+   * permits `GITLAB_TOKEN_FILE`. Declaring the companion directly does not work, so
+   * `APP_SECRET_KEY_FILE` is unreadable unless an operator declares `APP_SECRET_KEY`, which is a
+   * thing they would have to type on purpose.
+   */
+  integrationSecretEnv: z.array(z.string().min(1)).readonly(),
+
   argon2: argon2ConfigSchema,
   database: db.databaseConfigSchema,
   dispatch: eventing.dispatchConfigSchema,
@@ -288,19 +312,20 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
  * that nobody has to reassemble it from five docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 4` knowledge workers `+ 2` HTTP
- * `+ 1` maintenance = **16**, against `.env.example`'s `APP_DB_POOL_MAX=17`. The *shape* is
- * **`2N + 14`** since WP-18b registered the Librarian's three beside WP-18a's index worker, and the
- * changes behind it are
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 4` knowledge workers
+ * `+ 1` onboarding worker `+ 2` HTTP `+ 1` maintenance = **17**, against `.env.example`'s
+ * `APP_DB_POOL_MAX=18`. The *shape* is **`2N + 15`** since WP-21 registered
+ * `onboarding.discovery` beside them, and the changes behind it are
  * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
  * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
  * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
  * `2N + 9`, which agreed with the old one at N=1 (both 11). WP-15c then added a **fourth** flat
  * job worker (`pipeline.intake.reconcile`), making it `2N + 10`, and WP-18a added the knowledge
  * index worker: `2N + 11` — 13 at N=1. WP-18b added the Librarian's three
- * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`): **`2N + 14`** — 16 at N=1, and
- * **22 at N=4** where `3N + 8` would have been 20. The shape crossing over at high concurrency is
- * the honest consequence of flat workers: they do not scale with dispatch, and they are real.
+ * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`): `2N + 14` — 16 at N=1. WP-21
+ * added `onboarding.discovery`: **`2N + 15`** — **17 at N=1**, and **23 at N=4** where `3N + 8`
+ * would have been 20. The shape crossing over at high concurrency is the honest consequence of flat
+ * workers: they do not scale with dispatch, and they are real.
  */
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
@@ -358,6 +383,19 @@ export const POOL_RESERVATIONS = {
    */
   knowledge: 4,
   /**
+   * The onboarding worker — **one connection**, at concurrency 1 (WP-21).
+   *
+   * `onboarding.discovery` records what a discovery run found: the readiness evaluation and the
+   * drafted pages, in one write transaction. Everything before that transaction is a read — the
+   * project row, the artifact, the index, and the git-provider call R9 needs — and both
+   * `integrations.forProject` and the executor refuse to run inside a transaction, so the term is
+   * flat like the pipeline's four and the knowledge base's four rather than per dispatch.
+   *
+   * Counted under `worker` and unconditionally, for the reason the other two are: a reservation
+   * that shrank with a setting would be a floor an operator could lower by accident.
+   */
+  onboarding: 1,
+  /**
    * The audit write a **dispatch** nests inside the handler's transaction — **zero since WP-15d**,
    * and this constant is the receipt.
    *
@@ -394,12 +432,14 @@ export const requiredPoolConnections = (config: ServerConfig): number => {
   const jobsReserve = capabilities.worker ? POOL_RESERVATIONS.jobs : 0;
   const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
   const knowledgeReserve = capabilities.worker ? POOL_RESERVATIONS.knowledge : 0;
+  const onboardingReserve = capabilities.worker ? POOL_RESERVATIONS.onboarding : 0;
   const httpReserve = capabilities.api ? POOL_RESERVATIONS.http : 0;
   return (
     dispatcher +
     jobsReserve +
     pipelineReserve +
     knowledgeReserve +
+    onboardingReserve +
     httpReserve +
     POOL_RESERVATIONS.maintenance
   );
@@ -412,7 +452,7 @@ export class UndersizedPoolError extends Error {
 
   constructor(poolMax: number, required: number, role: string) {
     super(
-      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's four job workers, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
+      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's four job workers, the knowledge base's four, the onboarding worker, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
     );
     this.name = 'UndersizedPoolError';
     this.poolMax = poolMax;
@@ -456,6 +496,23 @@ const nullableString = (raw: string | undefined): string | null => {
   const value = raw?.trim();
   return value === undefined || value === '' ? null : value;
 };
+
+/**
+ * A comma-separated list of environment-variable names, de-duplicated and in the order declared.
+ *
+ * Unparseable entries are **dropped rather than accepted**: this list is an allow-list, so the
+ * failure direction that matters is admitting a name nobody meant. An entry that is not a plausible
+ * variable name (`A-Z a-z 0-9 _`) cannot be one, and keeping it would only make the refusal message
+ * quote something the operator never typed.
+ */
+const nameListFromEnv = (raw: string | undefined): readonly string[] => [
+  ...new Set(
+    (raw ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry)),
+  ),
+];
 
 export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
   const problems: string[] = [];
@@ -532,6 +589,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     modelApiKey: nullableString(readSecret('ANTHROPIC_API_KEY', env)),
     claudeBinary: nullableString(env.APP_CLAUDE_BINARY),
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
+    integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,

@@ -66,6 +66,12 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // task-list screens — left this list at part 2, which is what makes the "serves this
   // iteration's" cases below the other half of the same check (standing rule 10).
   //
+  // **The wizard's seven were never on this list**, and that is worth saying because the sentence
+  // "every remaining gap is a command" reads as if it were about all of them. WP-21 added the
+  // client's calls and the server's routes in one change, so the two halves were never out of step
+  // and there was nothing to admit; they are asserted positively below instead (standing rule 10
+  // again — "not in the gap list" is also satisfied by a path the sweep failed to find).
+  //
   // Commands. Every one of these writes, so each needs the aggregate, a `human_actions` row and an
   // `Idempotency-Key`, which is a different work package from a read API (technical/08 § Tasks).
   '/api/tasks/{}/pause': 'the task command surface — not this row',
@@ -191,6 +197,7 @@ beforeAll(async () => {
     // The commands a process with no pipeline composes: the routes are still registered and still
     // refuse an anonymous caller, which is what this census probes (the 503 is behind the guard).
     knowledge: null,
+    onboarding: null,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
@@ -213,12 +220,17 @@ interface Probe {
  *
  * "Not served" is the not-found handler's **own** body (`app.ts`'s `setNotFoundHandler`), not a bare
  * 404: a route that exists and answers 404 — `GET /api/runs/<unknown>` does — must not be read as a
- * route that does not exist. A command route is registered for POST only, so a path that answers
- * not-found to GET is asked again with POST before it is called missing.
+ * route that does not exist. A command route is registered for one method only, so a path that
+ * answers not-found to GET is asked again with POST and then with **PUT** before it is called
+ * missing.
+ *
+ * `PUT` was added at WP-21 and it was not cosmetic: `PUT /api/projects/:id/bindings` and
+ * `PUT /api/projects/:id/config` both have a GET sibling on the same path, so they passed on the
+ * *sibling's* answer and this census could not have told a missing PUT from a present one.
  */
 const probe = async (path: string): Promise<Probe> => {
   const url = probeUrl(path);
-  for (const method of ['GET', 'POST'] as const) {
+  for (const method of ['GET', 'POST', 'PUT'] as const) {
     const response = await app.inject({ method, url });
     const body = response.json() as { error?: { code?: string } };
     const code = body.error?.code ?? null;
@@ -311,6 +323,53 @@ describe('the client’s endpoint list against the server’s router', () => {
       '/api/projects/{}/tasks',
     ]) {
       expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('serves the seven onboarding commands WP-21 added', async () => {
+    // The wizard's whole surface, named (standing rule 10). Six of the seven **write** — only
+    // `…/readiness` is a read, and `…/bindings` is both — so this case is also the other half of
+    // the auth assertion below: a command registered without `requirePermission` would answer
+    // something other than 401 there.
+    for (const path of [
+      '/api/projects',
+      '/api/integrations',
+      '/api/integrations/{}/test',
+      '/api/projects/{}/bindings',
+      '/api/projects/{}/config',
+      '/api/projects/{}/discovery',
+      '/api/projects/{}/readiness',
+    ]) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('refuses an anonymous caller on every wizard command, by its own method', async () => {
+    /**
+     * Two holes this closes, both found by the WP-21 review and by this case itself.
+     *
+     * **The method.** `probe()` tried GET then POST, so a path with a GET sibling —
+     * `…/bindings` and `…/config` both have one — was reported "served" whatever happened to its
+     * PUT, and the anonymous-401 sweep below judged it on the sibling's answer.
+     *
+     * **The hook.** Asked by its own method, `PUT …/bindings` answered **400** rather than 401:
+     * Fastify validates the body before `preHandler`, so an unauthenticated caller was told the
+     * route's shape before being refused. The guards moved to `preValidation`, which is exactly
+     * what `routes/kb.ts` did for a query parameter. A route that slips back fails here.
+     */
+    for (const [method, path] of [
+      ['POST', '/api/projects'],
+      ['POST', '/api/integrations'],
+      ['POST', '/api/integrations/{}/test'],
+      ['PUT', '/api/projects/{}/bindings'],
+      ['PUT', '/api/projects/{}/config'],
+      ['POST', '/api/projects/{}/discovery'],
+    ] as const) {
+      const response = await app.inject({ method, url: probeUrl(path) });
+      const body = response.json() as { error?: { code?: string } };
+      expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${path} -> 401 unauthenticated`,
+      );
     }
   });
 

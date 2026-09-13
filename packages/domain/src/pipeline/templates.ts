@@ -58,6 +58,12 @@ export const STAGE_AGENT_DEFAULTS: Readonly<Record<string, StageAgentDefaults>> 
   business_review: { model: 'claude-sonnet-5', effort: 'medium', maxTurns: 40 },
   retrospective: { model: 'claude-sonnet-5', effort: 'medium', maxTurns: 30 },
   librarian: { model: 'claude-sonnet-5', effort: 'medium', maxTurns: 30 },
+  /**
+   * product/06 § "Step 2 — Technical discovery": *"a Discovery agent (Sonnet 5, read-only, bounded
+   * budget) inspects the repository"*. The turn count is the fallback's; the model and the effort
+   * are the document's, and the budget is `DEFAULT_STAGE_RUN_BUDGET_USD.discovery`.
+   */
+  discovery: { model: 'claude-sonnet-5', effort: 'medium', maxTurns: 40 },
 } as const;
 
 /** The fallback for a stage the table above does not name (a project's custom agent stage). */
@@ -276,10 +282,54 @@ export const CHORE_TEMPLATE: PipelineTemplate = {
   ],
 };
 
-export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
+/**
+ * product/06 § "Step 2 — Technical discovery", as a pipeline template (WP-21).
+ *
+ * **Discovery is a stage of a one-off task, not a job with a `RunSpec` of its own**, and the
+ * reason is structural rather than stylistic: `runs.task_id` is `not null` (migration 0004) and
+ * `RunSpec.taskId` is required, so a discovery run needs a task whatever else is decided. Making
+ * it a template means the run is created, budgeted, transcribed, cost-accounted, re-validated and
+ * escalated by exactly the code every other run goes through — `createStageRunPlanner` already
+ * has a `discovery` row in all three least-privilege tables, and the admission guard, the ledger
+ * and the `run:<id>` stream need no second entry point. The precedent is WP-18b's `librarian`
+ * stage, which is likewise entered outside the ticket flow's decisions and is still a stage.
+ *
+ * There is no ticket, so the task the wizard creates carries a **platform-issued** ticket
+ * reference rather than a provider's (`startProjectDiscovery` builds it), and the template ends
+ * one stage after it starts: discovery produces a draft for a human, and nothing it finds moves
+ * any code.
+ */
+export const DISCOVERY_TEMPLATE: PipelineTemplate = {
+  stages: [
+    { id: 'intake', kind: 'system' },
+    {
+      id: 'discovery',
+      kind: 'agent',
+      role: 'discovery',
+      produces: 'DiscoveryDraft',
+      requires: [],
+    },
+    { id: 'done', kind: 'system' },
+  ],
+};
+
+/**
+ * The templates that run a **ticket** to a merge request — product/04's three.
+ *
+ * Separate from {@link SHIPPED_TEMPLATES} because the merge tail is a property of these three and
+ * not of every template the platform ships: `discovery` never opens a merge request, so a rule
+ * written about "every shipped template" would either be false or would have to be weakened until
+ * it stopped saying anything.
+ */
+export const TICKET_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   feature: FEATURE_TEMPLATE,
   bug: BUG_TEMPLATE,
   chore: CHORE_TEMPLATE,
+};
+
+export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
+  ...TICKET_TEMPLATES,
+  discovery: DISCOVERY_TEMPLATE,
 };
 
 /**
