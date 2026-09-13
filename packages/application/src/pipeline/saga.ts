@@ -73,7 +73,7 @@ import {
 import type { ProjectSettingsPort } from './settings.js';
 import { templateForIssueType } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
-import { PIPELINE_ACTOR } from './store.js';
+import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { readTicketSnapshot } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 import { reviewFindingSignature } from './verdicts.js';
@@ -335,6 +335,7 @@ export const runIntakeCheck = async (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      version: INITIAL_TASK_VERSION,
       ticketSnapshot,
       ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
     };
@@ -669,8 +670,9 @@ const recordMergeRequest = async (
       head_sha: typeof record.head_sha === 'string' ? record.head_sha : null,
     },
   };
-  await options.store.tasks.save(context.scope.tx, next);
-  return next;
+  // The saved snapshot: this handler writes the task again a few lines later, through
+  // `applyDecision`, and the second write carries the version this one consumed (WP-15e).
+  return options.store.tasks.save(context.scope.tx, next);
 };
 
 // ── Questions and approvals ──────────────────────────────────────────────────

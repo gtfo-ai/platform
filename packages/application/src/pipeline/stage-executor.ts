@@ -79,6 +79,11 @@ import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { ProjectSettings } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type { PipelineStore, StoredArtifact, StoredTask } from './store.js';
+import {
+  escalateTaskAfterConflict,
+  retryOnTaskConflict,
+  TaskConflictExhaustedError,
+} from './task-conflict.js';
 import { artifactQuestions, rawVerdict, stageVerdict } from './verdicts.js';
 
 export interface StageRunRequest {
@@ -128,6 +133,14 @@ export type StageExecutionOutcome =
   | { readonly kind: 'paused'; readonly reason: string }
   /** The run ended without a usable result; the pipeline escalates on the event. */
   | { readonly kind: 'failed'; readonly runId: Id; readonly reason: string }
+  /**
+   * Every attempt to write the task lost a race, so the task is parked for a human (WP-15e).
+   *
+   * An **outcome** kind and not a task state: the task is in `needs_human`, which is the state that
+   * already means "a human must act" (Q59's answer, reused rather than re-spelled). The caller logs
+   * it and does not re-enqueue — the escalation is the ending.
+   */
+  | { readonly kind: 'escalated'; readonly reason: string }
   /**
    * The run could not be **started** for a transport reason and the task is untouched: the caller
    * re-enqueues the stage (Q59(a), WP-15g).
@@ -297,6 +310,21 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   const logger = options.logger ?? silentLogger;
   const budgets = options.budgets ?? noBudgetGuard;
 
+  /**
+   * Every transaction this executor opens that writes the task, on a bound (WP-15e).
+   *
+   * The executor owns its transactions, so it owns the retry: a refused `save` re-runs the whole
+   * unit in a *new* transaction, which rolls the previous attempt's writes back and re-reads the
+   * task — the property a retry inside one transaction could not give, because `record` inserts an
+   * artifact and a question before it saves.
+   */
+  const writing = async <T>(
+    taskId: Id,
+    what: string,
+    fn: (scope: TransactionScope) => Promise<T>,
+  ): Promise<T> =>
+    retryOnTaskConflict({ taskId, what, logger }, async () => unitOfWork.transaction(fn));
+
   /** `Paused: budget` — product/09's answer to a cap, whichever scope reached it. */
   const pause = async (
     scope: TransactionScope,
@@ -311,7 +339,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
 
   /** Transaction 1a: may this job run at all, and what does the planner need to plan it? */
   const admit = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Admission> =>
-    unitOfWork.transaction(async (scope): Promise<Admission> => {
+    writing(job.taskId, 'admitting a stage run', async (scope): Promise<Admission> => {
       const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
       if (valid.kind === 'skipped') return valid;
       const { stored } = valid;
@@ -445,98 +473,131 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     return startTheRun(job, plan, runId);
   };
 
-  return {
-    execute: async (job) => {
-      const settings = await options.settings(job.projectId);
-      const prepared = await prepare(job, settings);
-      if (prepared.kind !== 'ready') {
-        logger.info(
-          {
-            task_id: job.taskId,
-            stage: job.stage,
-            outcome: prepared.kind,
-            reason: prepared.reason,
-          },
-          'stage execution did not start',
-        );
-        return prepared;
-      }
+  /**
+   * The ending for a write that lost every race (WP-15e, criterion 4).
+   *
+   * The executor has no outer retry that would re-read for it — `stage.execute` re-fires into
+   * pg-boss's own limit, whose exhaustion is a dead letter no screen shows — so the bound ends
+   * here, in the state whose whole meaning is *a human must act*. Never a silent drop: what was
+   * lost is a run's recorded result, which is the platform's own record of spend.
+   */
+  const escalateOnConflict = async (
+    failure: TaskConflictExhaustedError,
+  ): Promise<StageExecutionOutcome> => {
+    logger.error(
+      { task_id: failure.taskId, attempts: failure.attempts, what: failure.what, err: failure },
+      'a stage write lost every race against another writer; the task is escalated',
+    );
+    await escalateTaskAfterConflict(
+      { unitOfWork, store, context: options.context, logger },
+      failure,
+    );
+    return { kind: 'escalated', reason: failure.message };
+  };
 
-      let outcome: RunOutcome;
-      try {
-        const handle = runner.start(prepared.spec);
-        outcome = await handle.outcome;
-      } catch (error) {
-        // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
-        //
-        // Transaction 1 has already created the `runs` row and emitted `run.created`/`run.started`,
-        // so an error thrown by `start` — or a rejection of `handle.outcome` — left a run `running`
-        // for ever, a task sitting at a stage nothing would move, and a `stage.execute` job that
-        // exhausted its retries into pg-boss where no screen shows it. Nothing told a human.
-        //
-        // It is not hypothetical from the day a webhook can reach the pipeline: this build composes
-        // `unavailableClaudeRunner`, whose `start` **throws** because there is no transport to the
-        // launcher (Q52), so the first real ticket to reach an agent stage lands here.
-        //
-        // The ending is the one the executor already has for "the run produced no usable result":
-        // the run is failed and the task is **escalated to `needs_human`**, an existing state whose
-        // whole meaning is *a human must act*. No new task state — a third spelling of "stuck" that
-        // no template, query or screen knows about would be worse than the one that exists. `unavailableClaudeRunner`
-        // is unchanged and still refuses rather than fabricating a `RunOutcome`: what changed is
-        // that its refusal now has somewhere to land.
-        //
-        // **WP-15g splits that cost in two** (Q59(a)). A *transport* failure — the runner could not
-        // reach the workspace's control socket — is retried a bounded number of times before it
-        // escalates, because escalation happens on the first failure and a transport that flaps
-        // would otherwise park one task and need one human per flap. Everything else still
-        // escalates immediately, which is the fail-closed default: a failure shape nobody has
-        // classified tells somebody rather than spinning. `retry-stage` remains the human's answer
-        // either way (product/04).
-        stopReasons.forget(prepared.spec.runId);
-        const startAttempts = (job.startAttempts ?? 0) + 1;
-        const retryable = isRetryableStartFailure(error) && startAttempts < MAX_RUN_START_ATTEMPTS;
-        logger.error(
-          {
-            err: error,
-            task_id: job.taskId,
-            stage: job.stage,
-            run_id: prepared.run.id,
-            start_attempts: startAttempts,
-            retryable,
-          },
-          retryable
-            ? 'the runner could not start this stage; the run is failed and the stage will be retried'
-            : 'the runner could not start this stage; the run is failed and the task escalated',
-        );
-        return unitOfWork.transaction(async (scope) =>
-          recordUnstarted(scope, {
-            job,
-            run: prepared.run,
-            options,
-            // The **class name**, never the message: an error thrown out of a runner may quote a
-            // provider, a URL or a credential, and this string is written to `events.payload`
-            // (`run.failed`) and into the escalation's blocker brief, both of which TD-012 covers
-            // and neither of which passes a redactor here. The message is in the log line above.
-            errorName: error instanceof Error ? error.name : 'unknown error',
-            startAttempts,
-            retryable,
-          }),
-        );
-      }
-      const stopReason = stopReasons.reasonFor(prepared.spec.runId);
+  const runStage = async (job: StageExecutionJob): Promise<StageExecutionOutcome> => {
+    const settings = await options.settings(job.projectId);
+    const prepared = await prepare(job, settings);
+    if (prepared.kind !== 'ready') {
+      logger.info(
+        {
+          task_id: job.taskId,
+          stage: job.stage,
+          outcome: prepared.kind,
+          reason: prepared.reason,
+        },
+        'stage execution did not start',
+      );
+      return prepared;
+    }
+
+    let outcome: RunOutcome;
+    try {
+      const handle = runner.start(prepared.spec);
+      outcome = await handle.outcome;
+    } catch (error) {
+      // **A start that throws used to escape both endings** (WP-15c, Q52/Q59).
+      //
+      // Transaction 1 has already created the `runs` row and emitted `run.created`/`run.started`,
+      // so an error thrown by `start` — or a rejection of `handle.outcome` — left a run `running`
+      // for ever, a task sitting at a stage nothing would move, and a `stage.execute` job that
+      // exhausted its retries into pg-boss where no screen shows it. Nothing told a human.
+      //
+      // It is not hypothetical from the day a webhook can reach the pipeline: this build composes
+      // `unavailableClaudeRunner`, whose `start` **throws** because there is no transport to the
+      // launcher (Q52), so the first real ticket to reach an agent stage lands here.
+      //
+      // The ending is the one the executor already has for "the run produced no usable result":
+      // the run is failed and the task is **escalated to `needs_human`**, an existing state whose
+      // whole meaning is *a human must act*. No new task state — a third spelling of "stuck" that
+      // no template, query or screen knows about would be worse than the one that exists. `unavailableClaudeRunner`
+      // is unchanged and still refuses rather than fabricating a `RunOutcome`: what changed is
+      // that its refusal now has somewhere to land.
+      //
+      // **WP-15g splits that cost in two** (Q59(a)). A *transport* failure — the runner could not
+      // reach the workspace's control socket — is retried a bounded number of times before it
+      // escalates, because escalation happens on the first failure and a transport that flaps
+      // would otherwise park one task and need one human per flap. Everything else still
+      // escalates immediately, which is the fail-closed default: a failure shape nobody has
+      // classified tells somebody rather than spinning. `retry-stage` remains the human's answer
+      // either way (product/04).
       stopReasons.forget(prepared.spec.runId);
-
-      return unitOfWork.transaction(async (scope) =>
-        record(scope, {
+      const startAttempts = (job.startAttempts ?? 0) + 1;
+      const retryable = isRetryableStartFailure(error) && startAttempts < MAX_RUN_START_ATTEMPTS;
+      logger.error(
+        {
+          err: error,
+          task_id: job.taskId,
+          stage: job.stage,
+          run_id: prepared.run.id,
+          start_attempts: startAttempts,
+          retryable,
+        },
+        retryable
+          ? 'the runner could not start this stage; the run is failed and the stage will be retried'
+          : 'the runner could not start this stage; the run is failed and the task escalated',
+      );
+      return writing(job.taskId, 'recording a run that could not start', async (scope) =>
+        recordUnstarted(scope, {
           job,
-          settings,
-          stage: prepared.stage,
           run: prepared.run,
-          outcome,
-          stopReason,
           options,
+          // The **class name**, never the message: an error thrown out of a runner may quote a
+          // provider, a URL or a credential, and this string is written to `events.payload`
+          // (`run.failed`) and into the escalation's blocker brief, both of which TD-012 covers
+          // and neither of which passes a redactor here. The message is in the log line above.
+          errorName: error instanceof Error ? error.name : 'unknown error',
+          startAttempts,
+          retryable,
         }),
       );
+    }
+    const stopReason = stopReasons.reasonFor(prepared.spec.runId);
+    stopReasons.forget(prepared.spec.runId);
+
+    return writing(job.taskId, "recording a run's result", async (scope) =>
+      record(scope, {
+        job,
+        settings,
+        stage: prepared.stage,
+        run: prepared.run,
+        outcome,
+        stopReason,
+        options,
+      }),
+    );
+  };
+
+  return {
+    execute: async (job) => {
+      try {
+        return await runStage(job);
+      } catch (error) {
+        if (!(error instanceof TaskConflictExhaustedError)) {
+          throw error;
+        }
+        return escalateOnConflict(error);
+      }
     },
   };
 };

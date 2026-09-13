@@ -33,6 +33,7 @@ import type {
   TaskRepository,
   Transaction,
 } from '@platform/application';
+import { TaskConcurrentModificationError } from '@platform/application';
 import type {
   Id,
   IsoDateTime,
@@ -85,6 +86,7 @@ interface TaskRow extends Record<string, unknown> {
   estimate_usd: string | null;
   ticket_snapshot: TicketSnapshot | null;
   ticket_snapshot_at: Date | null;
+  version: number;
   created_at: Date;
   sequence: string | number | null;
 }
@@ -92,7 +94,7 @@ interface TaskRow extends Record<string, unknown> {
 const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.template,
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
-    t.estimate_usd, t.ticket_snapshot, t.ticket_snapshot_at, t.created_at,
+    t.estimate_usd, t.ticket_snapshot, t.ticket_snapshot_at, t.version, t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
 
@@ -129,6 +131,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   estimateUsd: row.estimate_usd === null ? null : usd(row.estimate_usd),
   ticketSnapshot: row.ticket_snapshot,
   ticketSnapshotAt: iso(row.ticket_snapshot_at),
+  version: Number(row.version),
 });
 
 /**
@@ -234,9 +237,10 @@ export const createPostgresPipelineStore = (
         `insert into tasks (id, project_id, ticket_provider, ticket_key, ticket_url, template, mode,
                             state, current_stage, priority, template_snapshot, branch, mr_ref,
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
-                            cost_actual, estimate_usd, ticket_snapshot, ticket_snapshot_at)
+                            cost_actual, estimate_usd, ticket_snapshot, ticket_snapshot_at,
+                            version)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
-                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20::jsonb, $21)`,
+                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20::jsonb, $21, $22)`,
         [
           task.id,
           task.projectId,
@@ -261,6 +265,7 @@ export const createPostgresPipelineStore = (
           // exists with it and there is no window for a concurrent writer to lose (WP-15f).
           stored.ticketSnapshot === null ? null : JSON.stringify(stored.ticketSnapshot),
           stored.ticketSnapshotAt,
+          stored.version,
         ],
       );
     },
@@ -280,9 +285,10 @@ export const createPostgresPipelineStore = (
     },
 
     saveWorkpad: async (tx, taskId, workpad) => {
-      // One column. `save` writes the whole row, and the workpad is written from a job that runs
-      // beside the stage executor's transactions (WP-15d), so a whole-row write from there is a
-      // lost update of whatever it did not read.
+      // One column, and since WP-15e `save` does not name it at all: the workpad is written from a
+      // job that runs beside the stage executor's transactions (WP-15d), so a whole-row write from
+      // here would be a lost update of whatever it did not read — and a `save` that named
+      // `workpad_ref` was a lost update in the other direction, which is what WP-15e closed.
       //
       // **Parsed before it is written** (WP-15h). `workpad_ref` is `jsonb`, so the column accepts
       // any document and the disagreement only surfaces when something *reads* it: `upsertWorkpad`
@@ -300,32 +306,59 @@ export const createPostgresPipelineStore = (
       }
     },
 
+    /**
+     * The aggregate's columns, and only over the row this snapshot was read from (WP-15e).
+     *
+     * `where … and version = $10` with `version = version + 1` in the same statement is the whole
+     * of the optimistic check: PostgreSQL's READ COMMITTED re-evaluates the predicate against the
+     * row a concurrent writer left behind, so a write that raced one matches nothing rather than
+     * winning. `workpad_ref` is **not** in the set list and must not be — it belongs to
+     * `saveWorkpad`, and naming it here is exactly how the executor used to put back the `null` the
+     * workpad job had just filled in (migration 0019's docblock has the measurement).
+     */
     save: async (tx, stored) => {
       const { task } = stored;
-      const result = await sqlOf(tx).query(
+      const sql = sqlOf(tx);
+      const result = await sql.query<{ version: number }>(
         `update tasks
             set state = $2::task_state, current_stage = $3, branch = $4, mr_ref = $5::jsonb,
-                workpad_ref = $6::jsonb, stage_attempts = $7::jsonb,
-                iteration_counters = $8::jsonb, cost_actual = $9, updated_at = now(),
+                stage_attempts = $6::jsonb, iteration_counters = $7::jsonb, cost_actual = $8,
+                version = version + 1, updated_at = now(),
                 completed_at = case when $2::text in ('done', 'cancelled') then now() else completed_at end
-          where id = $1`,
+          where id = $1 and version = $9
+        returning version`,
         [
           task.id,
           task.state,
           task.currentStage,
           stored.branch,
           stored.mr === null ? null : JSON.stringify(stored.mr),
-          stored.workpad === null ? null : JSON.stringify(stored.workpad),
           JSON.stringify(task.stageAttempts),
           JSON.stringify(task.iterationCounters),
           stored.costActualUsd,
+          stored.version,
         ],
       );
-      if (result.rowCount === 0) {
-        // A save that wrote nothing is how a state machine silently stops advancing; the in-memory
-        // store refuses the same way, which is what makes the two interchangeable.
-        throw new PipelineRowMissingError(`task ${task.id} does not exist`);
+      const written = result.rows[0];
+      if (written === undefined) {
+        // Two different failures share one empty result, and telling them apart is the difference
+        // between "retry against a fresh read" and "stop, there is nothing to write". The extra
+        // query runs only on the path that is already going to throw.
+        const { rows } = await sql.query<{ version: number }>(
+          'select version from tasks where id = $1',
+          [task.id],
+        );
+        const current = rows[0];
+        if (current === undefined) {
+          // A save that wrote nothing is how a state machine silently stops advancing; the
+          // in-memory store refuses the same way, which is what makes the two interchangeable.
+          throw new PipelineRowMissingError(`task ${task.id} does not exist`);
+        }
+        throw new TaskConcurrentModificationError(task.id, stored.version, Number(current.version));
       }
+      // The version the row now carries, read back rather than assumed: a caller that saves twice
+      // in one transaction needs the value the first write consumed.
+      return { ...stored, version: Number(written.version) };
     },
 
     counts: async (tx, projectId) => {

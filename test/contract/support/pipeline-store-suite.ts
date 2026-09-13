@@ -12,6 +12,7 @@
  * rollback means anything.
  */
 import type { PipelineStore, StoredTask, Transaction } from '@platform/application';
+import { INITIAL_TASK_VERSION } from '@platform/application';
 import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -83,6 +84,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       estimateUsd: null,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
+      version: INITIAL_TASK_VERSION,
       ...overrides,
     });
 

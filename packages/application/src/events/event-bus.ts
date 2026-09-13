@@ -52,6 +52,7 @@ import {
 } from '../ports/handler-executions.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { isConcurrencyConflict, MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from './concurrency.js';
 import type { EventHandler, HandlerContext } from './handler.js';
 import { HandlerRegistry } from './handler.js';
 import { withOpenTransaction } from './open-transaction.js';
@@ -335,6 +336,24 @@ export class EventBus {
    *
    * The rollback is the point. A handler that throws leaves no effect *and* no execution record,
    * so the retry is a clean re-run rather than a partial replay.
+   *
+   * ## A handler that lost a race is re-run here, immediately (WP-15e)
+   *
+   * A repository that refuses to write over a row another transaction moved throws a
+   * {@link isConcurrencyConflict} error, and the unit that has to run again is this whole
+   * transaction: a retry *inside* it would leave the failed attempt's non-idempotent writes behind
+   * (`planApprovalGate` inserts an approval with a fresh id before it saves the task). A handler
+   * therefore lets the conflict escape, and the bus re-runs it against a clean re-read —
+   * {@link MAX_CONCURRENCY_CONFLICT_ATTEMPTS} times.
+   *
+   * It is here rather than left to `retryLater` because that path costs the **whole stream** five
+   * seconds and doubles from there ({@link DEFAULT_RETRY_DELAY_MS}), for a loss whose winner has
+   * already committed: the row the retry reads is settled before the first attempt even returns.
+   * Exhausting the bound falls through to the ordinary failure path, which records the failure and
+   * re-queues the event — never a drop.
+   *
+   * `emitted` and `afterCommit` are rebuilt per attempt, because a rolled-back attempt's events
+   * were never appended and its callbacks were never owed.
    */
   async #runHandler(
     event: StoredEvent,
@@ -342,6 +361,35 @@ export class EventBus {
     remaining: readonly HandlerRef[],
     chained: StoredEvent[],
   ): Promise<HandlerOutcome> {
+    let outcome = await this.#runHandlerOnce(event, handler, remaining, chained);
+    for (
+      let attempt = 2;
+      attempt <= MAX_CONCURRENCY_CONFLICT_ATTEMPTS && outcome.conflict === true;
+      attempt += 1
+    ) {
+      this.#logger.warn(
+        {
+          position: event.position,
+          type: event.event.type,
+          handler: handler.name,
+          attempt,
+          attempts: MAX_CONCURRENCY_CONFLICT_ATTEMPTS,
+          error: outcome.error,
+        },
+        'a handler lost a race with another writer; re-running it against a fresh read',
+      );
+      outcome = await this.#runHandlerOnce(event, handler, remaining, chained);
+    }
+    const { conflict: _conflict, ...result } = outcome;
+    return result;
+  }
+
+  async #runHandlerOnce(
+    event: StoredEvent,
+    handler: EventHandler,
+    remaining: readonly HandlerRef[],
+    chained: StoredEvent[],
+  ): Promise<HandlerOutcome & { conflict?: true }> {
     const ref = toHandlerRef(handler);
     const emitted: StoredEvent[] = [];
     const afterCommit: (() => Promise<void> | void)[] = [];
@@ -402,7 +450,12 @@ export class EventBus {
       }
       return { handler: handler.name, result: 'ran' };
     } catch (error) {
-      return { handler: handler.name, result: 'failed', error: describeError(error) };
+      return {
+        handler: handler.name,
+        result: 'failed',
+        error: describeError(error),
+        ...(isConcurrencyConflict(error) ? { conflict: true as const } : {}),
+      };
     }
   }
 

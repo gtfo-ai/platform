@@ -32,6 +32,7 @@ export * from './cost/runtime.js';
 export * from './cost/window.js';
 // Event dispatch (TD-005)
 export * from './errors.js';
+export * from './events/concurrency.js';
 export * from './events/consumption.js';
 export * from './events/event-bus.js';
 export * from './events/handler.js';
@@ -69,6 +70,7 @@ export * from './pipeline/settings.js';
 export * from './pipeline/stage-executor.js';
 export * from './pipeline/stop-reasons.js';
 export * from './pipeline/store.js';
+export * from './pipeline/task-conflict.js';
 export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';
 export * from './pipeline/verdicts.js';

@@ -132,12 +132,13 @@ const applyEscalation = async (
   const { stored, context, logger } = options;
   try {
     const escalated = escalateTask(stored.task, { reason, blockerBrief }, context);
-    await options.store.tasks.save(options.tx, { ...stored, task: escalated.aggregate });
-    return {
-      stored: { ...stored, task: escalated.aggregate },
-      events: escalated.events,
-      work: null,
-    };
+    // The saved snapshot, not the one that went in: `save` advances `tasks.version`, and the
+    // caller may write the task again in this same transaction (WP-15e).
+    const saved = await options.store.tasks.save(options.tx, {
+      ...stored,
+      task: escalated.aggregate,
+    });
+    return { stored: saved, events: escalated.events, work: null };
   } catch (error) {
     if (!(error instanceof IllegalTransitionError)) {
       throw error;
@@ -168,8 +169,7 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
         context,
       );
       const next = { ...stored, task: finished.aggregate };
-      await store.tasks.save(tx, next);
-      return { stored: next, events: finished.events, work: null };
+      return { stored: await store.tasks.save(tx, next), events: finished.events, work: null };
     }
 
     case 'return': {
@@ -195,8 +195,7 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
         // `returnToStage` escalated instead: the loop is spent (BD-008). The counter stays where
         // it is, which is what makes "counters never exceed their limits" true.
         const next = { ...stored, task: returned.aggregate };
-        await store.tasks.save(tx, next);
-        return { stored: next, events: returned.events, work: null };
+        return { stored: await store.tasks.save(tx, next), events: returned.events, work: null };
       }
       const entered = await enter(
         { ...options, stored: { ...stored, task: returned.aggregate } },
@@ -224,8 +223,7 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
       context,
     );
     const next = { ...stored, task: finished.aggregate };
-    await store.tasks.save(tx, next);
-    return { stored: next, events: finished.events, work: null };
+    return { stored: await store.tasks.save(tx, next), events: finished.events, work: null };
   }
 
   const command = enterCommand(stage);
@@ -270,9 +268,8 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
   }
 
   const next = { ...stored, task };
-  await store.tasks.save(tx, next);
   return {
-    stored: next,
+    stored: await store.tasks.save(tx, next),
     events,
     work:
       entered?.kind === 'agent' || entered?.kind === 'gate'

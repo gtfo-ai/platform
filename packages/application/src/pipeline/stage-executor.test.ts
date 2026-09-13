@@ -21,6 +21,8 @@ import {
   runBudgetUsd,
   taskBudgetExhausted,
 } from './stage-executor.js';
+import { TaskConcurrentModificationError } from './store.js';
+import { MAX_TASK_CONFLICT_ATTEMPTS } from './task-conflict.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 
@@ -373,5 +375,59 @@ describe('a run whose start failed for a transport reason', () => {
     expect(serialised).toContain('RunStartError');
     expect(serialised).not.toContain('FAKE-PLANTED-secret-0123456789');
     expect(serialised).not.toContain('ctl.sock');
+  });
+});
+
+/**
+ * **A write that lost every race** — WP-15e, criterion 4.
+ *
+ * `save` refuses a snapshot another transaction has moved, which is the whole of backlog 18's fix,
+ * and a refusal with no ending is the same lost update wearing a stack trace. The executor owns its
+ * transactions, so it owns the retry; when the bound is spent the task is parked for a human rather
+ * than left at a stage whose run has already been paid for.
+ *
+ * The conflict is planted at the one site that raises `cost_actual` — transaction 2 — because that
+ * is the write whose loss was measured (2.40 where 2.80 was owed) and because it leaves the
+ * escalation's own save, which reads a task at cost 0, free to succeed.
+ */
+describe('a stage write that lost every race with another writer', () => {
+  const harnessThatAlwaysConflicts = (): { harness: PipelineHarness; conflicts: () => number } => {
+    const harness = harnessWith({
+      runs: { refinement: { status: 'completed', terminalReason: 'success', costUsd: 0.4 } },
+    });
+    const repository = harness.store.tasks as {
+      save: typeof harness.store.tasks.save;
+    };
+    const real = repository.save.bind(harness.store.tasks);
+    let conflicts = 0;
+    repository.save = async (tx, stored) => {
+      if (stored.costActualUsd > 0) {
+        conflicts += 1;
+        throw new TaskConcurrentModificationError(
+          stored.task.id,
+          stored.version,
+          stored.version + 1,
+        );
+      }
+      return real(tx, stored);
+    };
+    return { harness, conflicts: () => conflicts };
+  };
+
+  it('re-reads and re-decides exactly as many times as the bound allows', async () => {
+    const { harness, conflicts } = harnessThatAlwaysConflicts();
+    await harness.publish([ticketMatched()]);
+    expect(conflicts()).toBe(MAX_TASK_CONFLICT_ATTEMPTS);
+  });
+
+  it('parks the task for a human instead of dropping the run it could not record', async () => {
+    const { harness } = harnessThatAlwaysConflicts();
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(escalationOf(harness)?.payload.reason).toContain('another writer won');
+    // Nothing was written from the stale snapshot: the spend the losing transaction carried is not
+    // on the row, because its transaction rolled back every time.
+    expect(taskOf(harness).costActualUsd).toBe(0);
   });
 });

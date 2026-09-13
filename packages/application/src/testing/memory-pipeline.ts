@@ -12,7 +12,8 @@
  * | 1 | `insert` throws on a duplicate `(project, ticket_key, mode)`; PostgreSQL raises a unique-violation the caller sees as an error too. | **same** | The unique index is `tasks_project_id_ticket_key_mode`; both refuse. Asserted by the shared suite's `refuses a second task for the same ticket`. |
  * | 2 | `save` throws when the task was never inserted; the SQL `update` would affect zero rows and say nothing. | **stricter** | A save that writes nothing is how a state machine silently stops advancing. The SQL implementation therefore checks `rowCount` and throws the same error, which is the only reason the two agree. Asserted by `refuses to save a task it has never seen`. |
  * | 3 | Everything is returned by structural clone, so a caller mutating what it read cannot change the store. Postgres cannot be mutated that way either. | **stricter** | A shared object graph makes a test pass for the wrong reason: the aggregate is immutable by design, and a fake that hands out live references would hide a mutation. |
- * | 5 | The whole-row `save` writes `ticketSnapshot`/`ticketSnapshotAt`; the SQL `save` does not name those two columns at all (WP-15f). | **stricter** | A whole-row write in the fake therefore *can* clobber a snapshot a concurrent writer set, where PostgreSQL cannot — so a `save` that should have been the narrow `saveTicketSnapshot` fails here and would pass there, which is the direction rule 1 asks for. The narrow write's own property is asserted for both by the shared suite's `writes the ticket snapshot without writing anything else, so a concurrent cost survives`, which is on a derived total rather than on the column (standing rule 79). |
+ * | 5 | ~~The whole-row `save` writes `ticketSnapshot`/`ticketSnapshotAt`; the SQL `save` does not name those two columns at all (WP-15f).~~ **Closed at WP-15e**: `save` now writes exactly the column set the SQL statement names, in both stores, and the divergence is gone rather than justified. | **same** | It was filed as *stricter* and it was, but a fake that can clobber a column the database cannot is a fake that answers a question production never asks — and the same shape one work package later (`save` clobbering `workpad_ref`, which PostgreSQL **could** do) was a live defect. The partition is now enforced off disk by `tasks-column-ownership.test.ts`. |
+ * | 6 | `save` refuses a write over a row whose `version` has moved, exactly as the SQL `where … and version = $n` does (WP-15e). | **same** | The fake compares a number where PostgreSQL compares a predicate, and both throw `TaskConcurrentModificationError`. Asserted for both by `pipeline-store-concurrency-suite.ts`, which drives two transactions over one committed row. The fake's `version` is still only as good as divergence 4: with no isolation, the interleaving it reproduces is the *ordering*, not the locking. |
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  */
 import type { ArtifactType, Id, Slug } from '@platform/contracts';
@@ -31,6 +32,7 @@ import type {
   StoredTask,
   TaskRepository,
 } from '../pipeline/store.js';
+import { TaskConcurrentModificationError } from '../pipeline/store.js';
 
 export class PipelineStoreError extends Error {
   override readonly name = 'PipelineStoreError';
@@ -105,11 +107,36 @@ export const createMemoryPipelineStore = (): MemoryPipelineStore => {
       }
       tasks.set(stored.task.id, clone(stored));
     },
+    /**
+     * The same columns the SQL `update tasks set …` names, and the same optimistic check (WP-15e).
+     *
+     * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
+     * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `estimateUsd`,
+     * `priorityRank`, `createdAt`, `template`) belong to the narrow writers, and a fake that let a
+     * whole-row save carry them would answer a question the database cannot be asked — which is how
+     * WP-15h found the memory store certifying behaviour PostgreSQL does not have.
+     */
     save: async (_tx, stored) => {
-      if (!tasks.has(stored.task.id)) {
+      const current = tasks.get(stored.task.id);
+      if (current === undefined) {
         throw new PipelineStoreError(`task ${stored.task.id} does not exist`);
       }
-      tasks.set(stored.task.id, clone(stored));
+      if (current.version !== stored.version) {
+        throw new TaskConcurrentModificationError(stored.task.id, stored.version, current.version);
+      }
+      const written: StoredTask = {
+        ...current,
+        task: stored.task,
+        branch: stored.branch,
+        mr: stored.mr,
+        costActualUsd: stored.costActualUsd,
+        version: current.version + 1,
+      };
+      tasks.set(stored.task.id, clone(written));
+      // The caller's own snapshot at the new version, so a second save in the same unit is not a
+      // conflict with the first: `{ ...stored }` rather than `{ ...current }`, because the columns
+      // this write ignored are the store's and the ones it took are the caller's.
+      return clone({ ...stored, version: written.version });
     },
     saveWorkpad: async (_tx, taskId, workpad) => {
       const current = tasks.get(taskId);

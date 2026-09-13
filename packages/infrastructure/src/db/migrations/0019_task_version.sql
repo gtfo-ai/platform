@@ -1,0 +1,38 @@
+-- 0019 — `tasks.version`: a whole-row `save` may no longer land on a row that moved (WP-15e).
+--
+-- `TaskRepository.save` writes the whole row, which is correct only while nothing else writes it —
+-- a fact about the *callers*, not about the method. WP-15d made it false in the ordinary course of
+-- moving a provider call out of a transaction, and the loss was measured rather than reasoned: a
+-- bug ticket walked all seven agent stages and finished with `cost_actual` **2.40** instead of
+-- **2.80**, and a feature ticket sat at `ci_gate` until the 90 s settle gave up. One cause, two
+-- columns, and the second is the one that generalises — a lost update reaches columns the racing
+-- writer never meant to touch, so a task simply stops moving with no error anywhere.
+--
+-- WP-15d fixed one writer with a narrow column write (`saveWorkpad`). Twenty-one production
+-- `tasks.save` sites remained, and **every one of them can interleave with another writer**: the
+-- dispatcher orders events per `(stream_type, stream_id)` only, WP-15c puts every inbound provider
+-- event on the **project** stream while a task's own events are on the **task** stream, and the
+-- three job workers (`stage.execute`, `mr.comment.debounce`, `pipeline.outbound`) are not ordered
+-- against the dispatcher at all. A narrow method per writer is only cheaper while that list is
+-- short; it is not short, and it had already failed to compose — `save` still named `workpad_ref`,
+-- so the executor put back the `null` the workpad job had just filled in.
+--
+-- So: optimistic concurrency on the row. `save` becomes
+-- `update tasks set …, version = version + 1 where id = $1 and version = $n`; a write that matches
+-- no row is either a task that does not exist or one that moved, and the second is refused with a
+-- typed error the caller retries against a fresh read.
+--
+-- **Why an integer column rather than the event stream's own head.** `tasks.sequence` is derived
+-- from `max(events.stream_seq)` and would have been free — but not every `save` appends a task
+-- event (the intake check's WIP queueing does not), so a check against it would pass exactly where
+-- two writers disagree silently. A column with one writer is the arbiter (standing rule 9).
+--
+-- `default 1` and `not null`: every existing row is at version 1 the moment this runs, which is the
+-- version a `load` issued after this migration reports, so no in-flight `save` can be refused for a
+-- version it never saw. The *old-binary* case — a pre-WP-15e process whose `save` has no predicate
+-- and does not bump the token — is a residual of the **deployment** rather than of this statement,
+-- and it is stated in `technical/03` and on `TaskRepository.save`, which can be edited when it is
+-- closed. This file cannot: forward-only (TD-011).
+alter table tasks add column version integer not null default 1;
+
+alter table tasks add constraint tasks_version_positive check (version >= 1);

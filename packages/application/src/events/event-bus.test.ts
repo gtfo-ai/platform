@@ -10,6 +10,7 @@ import { DISPATCH_MARKER } from '../ports/handler-executions.js';
 import { silentLogger } from '../ports/logger.js';
 import { streamId, taskDequeued, taskQueued } from '../testing/fixtures.js';
 import { faultsAt, MemoryEventing, SimulatedCrashError } from '../testing/memory-eventing.js';
+import { MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from './concurrency.js';
 import { EventBus } from './event-bus.js';
 import type { EventHandler } from './handler.js';
 
@@ -590,5 +591,81 @@ describe('afterCommit', () => {
     expect(result.status).toBe('dispatched');
     expect(result.handlers[0]?.result).toBe('ran');
     expect((errors[0] as Error).message).toBe('pg-boss is down');
+  });
+});
+
+/**
+ * A handler that lost a race is re-run here, not five seconds later behind its whole stream
+ * (WP-15e).
+ *
+ * The bound is {@link MAX_CONCURRENCY_CONFLICT_ATTEMPTS} and it is asserted from both sides
+ * (standing rule 42): a handler that conflicts up to the bound and then succeeds leaves its effect,
+ * and one that conflicts every time falls through to the ordinary failure path — which records the
+ * failure and re-queues the event rather than dropping it.
+ */
+describe('a handler that loses a race with another writer', () => {
+  class Conflict extends Error {
+    readonly concurrencyConflict = true as const;
+  }
+
+  const conflicting = (attempts: { count: number }, until: number): EventHandler => ({
+    name: 'core.conflict',
+    priority: 10,
+    eventTypes: ['task.queued'],
+    handle: async () => {
+      attempts.count += 1;
+      if (attempts.count <= until) {
+        throw new Conflict('task moved');
+      }
+    },
+  });
+
+  it('re-runs it against a fresh transaction, up to the bound', async () => {
+    const { memory, bus } = harness();
+    const attempts = { count: 0 };
+    bus.register(conflicting(attempts, MAX_CONCURRENCY_CONFLICT_ATTEMPTS - 1));
+    const stored = await appendOne(memory);
+
+    const result = await bus.dispatch(stored);
+
+    expect(attempts.count).toBe(MAX_CONCURRENCY_CONFLICT_ATTEMPTS);
+    expect(result.status).toBe('dispatched');
+    expect(result.handlers).toEqual([{ handler: 'core.conflict', result: 'ran' }]);
+  });
+
+  it('stops at the bound and leaves the event queued, rather than retrying for ever', async () => {
+    const { memory, bus } = harness();
+    const attempts = { count: 0 };
+    bus.register(conflicting(attempts, Number.POSITIVE_INFINITY));
+    const stored = await appendOne(memory);
+
+    const result = await bus.dispatch(stored);
+
+    expect(attempts.count).toBe(MAX_CONCURRENCY_CONFLICT_ATTEMPTS);
+    expect(result.status).toBe('failed');
+    // Not a drop: the queue row is still there, with the failure on it.
+    const queued = memory.pending;
+    expect(queued.map((entry) => entry.eventPosition)).toContain(stored.position);
+    expect(queued[0]?.error).toContain('task moved');
+  });
+
+  it('does not re-run a handler whose failure is not a conflict', async () => {
+    const { memory, bus } = harness();
+    let attempts = 0;
+    bus.register({
+      name: 'core.boom',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        attempts += 1;
+        throw new Error('boom');
+      },
+    });
+    const stored = await appendOne(memory);
+
+    const result = await bus.dispatch(stored);
+
+    expect(attempts).toBe(1);
+    expect(result.status).toBe('failed');
   });
 });

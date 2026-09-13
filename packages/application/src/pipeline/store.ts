@@ -41,6 +41,7 @@ import type {
   WorkpadRef,
 } from '@platform/contracts';
 import type { Approval, Question, QueuedTask, Task } from '@platform/domain';
+import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
 
 /** A task as the pipeline holds it: the aggregate plus the row's own columns. */
@@ -69,6 +70,56 @@ export interface StoredTask {
   readonly ticketSnapshot: TicketSnapshot | null;
   /** When {@link ticketSnapshot} was read; `null` exactly when it is (`tasks_ticket_snapshot_at_paired`). */
   readonly ticketSnapshotAt: IsoDateTime | null;
+  /**
+   * The row's optimistic-concurrency token, as it was when this snapshot was read (WP-15e,
+   * migration 0019).
+   *
+   * It is a column of the row rather than a field of the aggregate, for the reason every other
+   * field here is: it is not a state transition. Putting it on `Task` would make all thirty-odd
+   * domain commands responsible for incrementing a storage token, in a ring that has no I/O and
+   * cannot see the write it is guarding — and the guarantee would then be only as good as the
+   * command that remembered. The store owns it because the store owns the write, and every
+   * `save` call site gets it for free through the `{ ...stored, task: … }` spread it already
+   * writes.
+   */
+  readonly version: number;
+}
+
+/** The version every task row starts at (`tasks.version` defaults to it in SQL too). */
+export const INITIAL_TASK_VERSION = 1;
+
+/**
+ * A `save` that landed on a row another transaction has moved since it was read.
+ *
+ * The caller must re-read the task and re-decide; it must **never** re-apply the snapshot it was
+ * holding, which is the lost update this exists to refuse. `retryOnTaskConflict`
+ * (`./task-conflict.ts`) is the bounded loop that does it, and `EventBus` re-runs a handler's whole
+ * transaction on one.
+ */
+export class TaskConcurrentModificationError extends Error implements ConcurrencyConflict {
+  override readonly name = 'TaskConcurrentModificationError';
+  /** The marker `EventBus` and `retryOnTaskConflict` branch on — see `events/concurrency.ts`. */
+  readonly concurrencyConflict = true as const;
+  readonly taskId: Id;
+  readonly expectedVersion: number;
+  readonly actualVersion: number | null;
+
+  // Fields and assignments, **never** a TypeScript parameter property. `readonly x: T` in a
+  // constructor signature is one of the few constructs Node's strip-only type stripping refuses
+  // (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`), and this repository runs its sources that way: `pnpm dev`,
+  // `pnpm db:migrate` and the runlet shim all go through `scripts/ts-source-resolver.mjs`. It
+  // typechecks, it lints, and every vitest tier passes because esbuild compiles it — the only thing
+  // that finds it is a test that spawns a real `node` on the sources, which is how this comment
+  // exists (WP-15e; `runlet/conformance.contract.test.ts` failed with "c.sock never appeared").
+  constructor(taskId: Id, expectedVersion: number, actualVersion: number | null) {
+    super(
+      `task ${taskId} was modified concurrently: expected version ${expectedVersion}, found ` +
+        `${actualVersion === null ? 'no row' : actualVersion}`,
+    );
+    this.taskId = taskId;
+    this.expectedVersion = expectedVersion;
+    this.actualVersion = actualVersion;
+  }
 }
 
 export interface TaskRepository {
@@ -90,19 +141,61 @@ export interface TaskRepository {
   /** Every task of a project sitting at `stage`, whatever its state. */
   listAtStage(tx: Transaction, projectId: Id, stage: Slug): Promise<readonly StoredTask[]>;
   insert(tx: Transaction, stored: StoredTask): Promise<void>;
-  save(tx: Transaction, stored: StoredTask): Promise<void>;
+  /**
+   * Writes the aggregate's own columns, and only if the row is still at `stored.version`.
+   *
+   * Two halves, and they close the two halves of PROGRESS backlog 18 (WP-15e):
+   *
+   * 1. **It refuses a stale write.** `update … where id = $1 and version = $n`, bumping the version
+   *    with the same statement. A write that matches no row is either a task that does not exist
+   *    (`PipelineRowMissingError`, as before) or one another transaction has moved since this
+   *    snapshot was read, and the second throws {@link TaskConcurrentModificationError} for the
+   *    caller to retry against a fresh read. Silently winning is the lost update that put a task's
+   *    recorded spend back from 2.80 to 2.40 and left a feature ticket sitting at `ci_gate`.
+   * 2. **It writes only what it owns.** `workpad_ref`, `ticket_snapshot`, `ticket_snapshot_at`,
+   *    `size` and `estimate_usd` belong to the narrow writers below and to
+   *    `CostStore.saveEstimate`; `save` does not name them, so it cannot put back a `null` one of
+   *    them filled in. That direction was live until WP-15e: `saveWorkpad` stopped the workpad job
+   *    from clobbering the executor, and nothing stopped the executor from clobbering the workpad.
+   *
+   * The partition is enforced rather than described: `tasks-column-ownership.test.ts` reads the SQL
+   * of every `update tasks` statement in the tree off disk and fails when two of them name the same
+   * column (standing rule 44 — a scope claim is a checkable claim).
+   *
+   * **The residual, which is about the *other* binary rather than about this code.** The predicate
+   * protects a writer that carries a version. A **pre-WP-15e process** writes `where id = $1` with
+   * no predicate and no `version = version + 1`, so it wins silently *and* leaves the token
+   * unmoved — which means a concurrent new-process `save` succeeds too, and both updates land with
+   * one lost. Nothing in this build produces that shape: the image runs `migrate` and then
+   * `server` from one artefact, and there is no rolling deploy of two versions of this code. It is
+   * stated because an optimistic check is a claim about *every* writer of the row, and the claim
+   * is only true while every writer is this one. technical/03 carries the same sentence beside the
+   * column; migration 0019 does not, because an applied migration is never edited (TD-011) and a
+   * residual that can be closed must live where it can be.
+   *
+   * **It returns the snapshot at its new version, and a caller that writes twice must use it.**
+   * Two saves in one transaction are an ordinary shape here — `recordMergeRequest` records the MR
+   * and then `applyDecision` moves the stage — and the second one carries the version the first
+   * one consumed unless the value travels. The saga's own tests found this within minutes of the
+   * check existing, which is the argument for returning it rather than documenting the hazard.
+   */
+  save(tx: Transaction, stored: StoredTask): Promise<StoredTask>;
   /**
    * Writes **only** `workpad_ref` — the one column a writer outside the pipeline's own ordering
    * touches.
    *
-   * `save` writes the whole row, which is correct for a saga step: the aggregate it writes is the
-   * one it read in the same transaction, and the pipeline orders those. The workpad is different
-   * since WP-15d: the render happens in a `pipeline.outbound` job, concurrently with the stage
-   * executor's own transactions, so a `save` from there is a read-modify-write of *every* column
-   * against a snapshot somebody else has already moved on from. **Measured** rather than reasoned:
-   * a bug ticket walked all seven agent stages and finished with `cost_actual` 2.40 instead of
-   * 2.80, because the workpad's whole-row write landed between the executor's read and its write
-   * and put a stale cost back. One column, one update, and the class is gone.
+   * `save` writes the aggregate's columns, which is correct for a saga step: the aggregate it
+   * writes is the one it read in the same transaction, and the pipeline orders those. The workpad
+   * is different since WP-15d: the render happens in a `pipeline.outbound` job, concurrently with
+   * the stage executor's own transactions, so a `save` from there is a read-modify-write of *every*
+   * column against a snapshot somebody else has already moved on from. **Measured** rather than
+   * reasoned: a bug ticket walked all seven agent stages and finished with `cost_actual` 2.40
+   * instead of 2.80, because the workpad's whole-row write landed between the executor's read and
+   * its write and put a stale cost back. One column, one update, and that direction is gone.
+   *
+   * It does **not** bump `tasks.version`, and that is the point of the partition: this column is
+   * not one `save` writes, so a bump here would refuse an in-flight aggregate write that never
+   * touched the workpad.
    *
    * @throws when the task does not exist, like `save` — a write that hit no row is how a projection
    * silently stops being written.
@@ -120,7 +213,8 @@ export interface TaskRepository {
    *
    * The two columns move together because migration 0015's
    * `tasks_ticket_snapshot_at_paired` check says they must: a snapshot with no read time cannot say
-   * how old it is, and a read time with no snapshot claims a read that produced nothing.
+   * how old it is, and a read time with no snapshot claims a read that produced nothing. Like
+   * {@link saveWorkpad}, it does not bump `tasks.version`.
    *
    * @throws when the task does not exist, like `save` and `saveWorkpad`.
    */

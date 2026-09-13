@@ -125,6 +125,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   estimateUsd: null,
   ticketSnapshot: null,
   ticketSnapshotAt: null,
+  version: 1,
 });
 
 const MR: StoredTask['mr'] = {

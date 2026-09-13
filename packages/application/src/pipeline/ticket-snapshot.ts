@@ -53,7 +53,12 @@
  *    ticket_snapshot = …, ticket_snapshot_at = …`, exactly as `saveWorkpad` does.
  *
  * There is **no new `tasks.save` call site**. `save`'s own column list does not include
- * `ticket_snapshot`, so the twenty existing `save` sites cannot overwrite it either.
+ * `ticket_snapshot`, so no `save` site can overwrite it either — and since WP-15e that is a
+ * property the build **checks** rather than states: `tasks-column-ownership.test.ts` reads every
+ * `update tasks` statement off disk and fails when two of them name one column, and
+ * `task-save-sites.test.ts` counts the `save` sites so a new one is a decision rather than a
+ * commit. (The count in this sentence used to be "twenty"; it was already twenty-one when WP-15e
+ * read it, which is why it is now produced by a test instead of quoted here — standing rule 63.)
  *
  * ## Freshness — what Q61 (b) asks for, and what this build can hold
  *

@@ -117,6 +117,21 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   `tasks.saveTicketSnapshot`), because a whole-row
   `save` from a job that runs beside the stage executor is a lost update — measured, at 0.40 USD of a
   task's recorded spend.
+  **WP-15e closed the class the narrow method only closed one instance of.** `tasks` carries a
+  `version` (migration 0019): `TaskRepository.save` writes `… , version = version + 1 where id = $1
+  and version = $n`, so a write over a row another transaction moved is **refused**
+  (`TaskConcurrentModificationError`) rather than silently winning, and it **returns the snapshot at
+  its new version** — a caller that saves twice in one transaction must use it. The retry is the
+  transaction owner's: a job retries through `retryOnTaskConflict`
+  (`packages/application/src/pipeline/task-conflict.ts`) and escalates the task to `needs_human` when
+  the bound is spent, while an event handler **lets the conflict escape** because `EventBus` owns its
+  transaction and re-runs the whole handler on one — catching it inside a handler would leave the
+  failed attempt's non-idempotent writes behind. The row's columns are **partitioned by writer** and
+  the partition is checked off disk (`tasks-column-ownership.test.ts`), because the version alone
+  would not have found the live half of the defect: `save` still named `workpad_ref`, so the
+  executor put back the `null` the workpad job had just filled in. The `save` site census is
+  `task-save-sites.test.ts`, so a new whole-row writer is a decision somebody makes rather than a
+  line somebody adds.
   **The prompt gets the ticket's own words** (WP-15f): `packages/application/src/pipeline/ticket-snapshot.ts`
   reads the ticket once through `readTicket`, bounds and redacts it and stores it as `tasks.ticket_snapshot`
   (migration 0015) — at **intake**, inside the `intake_check` duty's call phase, and again from the

@@ -89,6 +89,15 @@ export const tasks = pgTable('tasks', {
   estimateUsd: numeric('estimate_usd', { precision: 12, scale: 6 }),
   riskClasses: text('risk_classes').array().notNull().default(emptyArray),
   blockedBy: text('blocked_by').array().notNull().default(emptyArray),
+  /**
+   * The row's optimistic-concurrency token (WP-15e, migration 0019).
+   *
+   * Bumped by `TaskRepository.save` and by nothing else: the narrow writes
+   * (`saveWorkpad`, `saveTicketSnapshot`, `saveEstimate`) own columns `save` does not name, so
+   * bumping it there would refuse an in-flight write over a column that writer does not touch.
+   * The disjointness is enforced rather than asserted — see `tasks-column-ownership.test.ts`.
+   */
+  version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),

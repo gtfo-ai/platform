@@ -14,7 +14,8 @@
  * in an **event handler**, concurrently with the `stage.execute` job that owns the task row, so it
  * touches `tasks` through exactly one narrow write ({@link CostStore.saveEstimate}, two columns
  * nothing else writes) and keeps everything else in tables of its own. It is deliberately **not** a
- * twenty-first `tasks.save` site.
+ * `tasks.save` site — a count `task-save-sites.test.ts` now produces rather than a number stated
+ * here, because it had already moved by the time WP-15e read it (standing rule 63).
  */
 import type {
   BudgetScope,

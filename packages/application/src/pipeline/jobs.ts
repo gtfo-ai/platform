@@ -30,11 +30,16 @@ import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
+import {
+  escalateTaskAfterConflict,
+  retryOnTaskConflict,
+  TaskConflictExhaustedError,
+} from './task-conflict.js';
 import { ensureTicketSnapshot } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 
@@ -215,6 +220,60 @@ export interface PipelineJobOptions extends PipelineSagaOptions {
 }
 
 /**
+ * A job's own transaction that writes a task, on the conflict bound (WP-15e).
+ *
+ * A job owns its transaction, so it owns the retry: a `save` refused because another writer moved
+ * the row re-runs the **whole** unit in a new transaction, which rolls back what the failed attempt
+ * wrote and re-reads the task. Exhausting the bound escalates the task rather than dropping the
+ * decision — the same ending the stage executor gives, and for the same reason (`task-conflict.ts`).
+ *
+ * **`null` means two different things and the signature cannot tell them apart**: either `fn`
+ * itself returned `null` — "there is nothing to do", the shape both callers already use for a task
+ * that moved — or the bound was spent and the task has just been **escalated**. Both callers want
+ * the same behaviour today (enqueue no follow-up work), which is why this is one nullable return
+ * rather than a discriminated result; the cost of the conflation is that a caller which one day
+ * needs to act on the escalation cannot, and would have to widen this first. The escalation is
+ * never silent either way: it is logged here and it is a `task.escalated` event.
+ */
+const inTaskTransaction = async <T>(
+  options: PipelineJobOptions,
+  taskId: Id,
+  what: string,
+  fn: (scope: TransactionScope) => Promise<T>,
+): Promise<T | null> => {
+  try {
+    return await retryOnTaskConflict(
+      { taskId, what, ...(options.logger === undefined ? {} : { logger: options.logger }) },
+      async () => options.unitOfWork.transaction(fn),
+    );
+  } catch (error) {
+    if (!(error instanceof TaskConflictExhaustedError)) {
+      throw error;
+    }
+    (options.logger ?? silentLogger).error(
+      { task_id: taskId, what, attempts: error.attempts, err: error },
+      'a job lost every race writing this task; it is escalated',
+    );
+    await escalateTaskAfterConflict(
+      {
+        unitOfWork: options.unitOfWork,
+        store: options.store,
+        context: (id) => ({
+          ids: options.ids,
+          actor: { kind: 'system', component: 'pipeline' },
+          clock: options.clock as never,
+          correlationId: id,
+          causeEventId: null,
+        }),
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      error,
+    );
+    return null;
+  }
+};
+
+/**
  * `stage.execute`: an agent stage runs, a platform gate is evaluated, anything else is skipped.
  *
  * Every path re-validates: the task may have moved on, been paused or been cancelled between the
@@ -359,7 +418,14 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
   };
 };
 
-/** Applies a decision from outside a handler: its own transaction, its own follow-up enqueue. */
+/**
+ * Applies a decision from outside a handler: its own transaction, its own follow-up enqueue.
+ *
+ * The transaction is this job's, so the retry on a refused write is this job's too (WP-15e):
+ * `retryOnTaskConflict` re-runs the whole unit, which re-reads the task and re-interprets the
+ * signal against whatever the other writer left. Nothing outside the transaction is repeated — the
+ * `enqueueStage` below runs once, after it commits.
+ */
 const settle = async (
   options: PipelineJobOptions,
   request: StageExecutionJob,
@@ -372,35 +438,44 @@ const settle = async (
       }
     | { readonly kind: 'escalate'; readonly reason: string; readonly blockerBrief: string },
 ): Promise<void> => {
-  const work = await options.unitOfWork.transaction(async (scope) => {
-    const stored = await options.store.tasks.load(scope.tx, request.taskId);
-    if (stored === null || stored.task.currentStage !== request.stage) {
-      return null;
-    }
-    const pipeline = compilePipeline(stored.task.template, stored.template);
-    const decision =
-      signal.kind === 'escalate'
-        ? ({ kind: 'escalate', reason: signal.reason, blockerBrief: signal.blockerBrief } as const)
-        : interpret(pipeline, signal);
-    const applied = await applyDecision({
-      store: options.store,
-      pipeline,
-      tx: scope.tx,
-      stored,
-      decision,
-      context: {
-        ids: options.ids,
-        actor: { kind: 'system', component: 'pipeline' },
-        clock: options.clock as never,
-        correlationId: stored.task.id,
-        causeEventId: null,
-      },
-      causedByEventId: null,
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
-    });
-    await scope.events.append(applied.events);
-    return applied.work;
-  });
+  const work = await inTaskTransaction(
+    options,
+    request.taskId,
+    'settling a gate',
+    async (scope) => {
+      const stored = await options.store.tasks.load(scope.tx, request.taskId);
+      if (stored === null || stored.task.currentStage !== request.stage) {
+        return null;
+      }
+      const pipeline = compilePipeline(stored.task.template, stored.template);
+      const decision =
+        signal.kind === 'escalate'
+          ? ({
+              kind: 'escalate',
+              reason: signal.reason,
+              blockerBrief: signal.blockerBrief,
+            } as const)
+          : interpret(pipeline, signal);
+      const applied = await applyDecision({
+        store: options.store,
+        pipeline,
+        tx: scope.tx,
+        stored,
+        decision,
+        context: {
+          ids: options.ids,
+          actor: { kind: 'system', component: 'pipeline' },
+          clock: options.clock as never,
+          correlationId: stored.task.id,
+          causeEventId: null,
+        },
+        causedByEventId: null,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      });
+      await scope.events.append(applied.events);
+      return applied.work;
+    },
+  );
   if (work !== null) {
     await enqueueStage(options.jobs, work);
   }
@@ -467,37 +542,42 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
       return;
     }
 
-    const work = await options.unitOfWork.transaction(async (scope) => {
-      const current = await options.store.tasks.load(scope.tx, job.data.task_id);
-      if (current === null || current.task.state !== 'ready_for_merge') {
-        return null;
-      }
-      const pipeline = compilePipeline(current.task.template, current.template);
-      const decision = interpret(pipeline, {
-        kind: 'event',
-        stage: current.task.currentStage ?? 'ready_for_merge',
-        event: 'mr.review.comment',
-        detail: `${unresolved.length} unresolved review thread${unresolved.length === 1 ? '' : 's'}`,
-      });
-      const applied = await applyDecision({
-        store: options.store,
-        pipeline,
-        tx: scope.tx,
-        stored: current,
-        decision,
-        context: {
-          ids: options.ids,
-          actor: { kind: 'system', component: 'pipeline' },
-          clock: options.clock as never,
-          correlationId: current.task.id,
-          causeEventId: null,
-        },
-        causedByEventId: null,
-        ...(options.logger === undefined ? {} : { logger: options.logger }),
-      });
-      await scope.events.append(applied.events);
-      return applied.work;
-    });
+    const work = await inTaskTransaction(
+      options,
+      job.data.task_id,
+      'returning a task for review comments',
+      async (scope) => {
+        const current = await options.store.tasks.load(scope.tx, job.data.task_id);
+        if (current === null || current.task.state !== 'ready_for_merge') {
+          return null;
+        }
+        const pipeline = compilePipeline(current.task.template, current.template);
+        const decision = interpret(pipeline, {
+          kind: 'event',
+          stage: current.task.currentStage ?? 'ready_for_merge',
+          event: 'mr.review.comment',
+          detail: `${unresolved.length} unresolved review thread${unresolved.length === 1 ? '' : 's'}`,
+        });
+        const applied = await applyDecision({
+          store: options.store,
+          pipeline,
+          tx: scope.tx,
+          stored: current,
+          decision,
+          context: {
+            ids: options.ids,
+            actor: { kind: 'system', component: 'pipeline' },
+            clock: options.clock as never,
+            correlationId: current.task.id,
+            causeEventId: null,
+          },
+          causedByEventId: null,
+          ...(options.logger === undefined ? {} : { logger: options.logger }),
+        });
+        await scope.events.append(applied.events);
+        return applied.work;
+      },
+    );
     if (work !== null) {
       await enqueueStage(options.jobs, work);
     }

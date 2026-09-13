@@ -9,7 +9,13 @@
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Session 5 so far.** `main` is at **`dcc1f21`** (WP-14a: `ci` `34730606133` and `image` `34730606129`
+**Session 5 so far.** `main` is at **`5121d73`** (docs: `ci` `34730928549` success; `image` `34730928533`
+**failed once** at the arm64 push with GHCR answering `unknown blob` while mounting layers across
+repositories — a registry-side transient on a docs-only commit whose images had pushed green minutes
+earlier — and was **rerun with `--failed` to `completed success`**, all five manifest lists published;
+recorded rather than hidden, because rule 84 is about reading the verdict and this one was read twice;
+if it recurs the fix is a bounded retry around the push in `image.yml`, not another rerun); `dcc1f21`
+WP-14a: `ci` `34730606133` and `image` `34730606129`
 success; `5cd4557` docs: `ci` `34726051140` and `image` `34726051212` success; `d1a5116` WP-15h part 2:
 `ci` `34725765067` and `image` `34725765044` success; `93ffb32` ci-fix: `ci` `34724884638` and `image` `34724884600` success; `3eaf34b`
 docs: `ci` `34722271238` **failure** — the librarian e2e flake below — and `image` `34722271241` success;
@@ -772,6 +778,20 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    not "distrust the report" — the report was written in good faith and its three substantive fixes were all
    genuine. It is that **a verification step skipped once is not a step that runs 90% of the time; it is the
    step that is missing exactly when a report is confident enough to make skipping it feel safe.**
+
+   **Refined at WP-15e (session 5), from an implementer's own report against itself, which is the form
+   this rule is most useful in.** Two admissions, quoted in the WP-15e notes under "For the orchestrator":
+   a parameter-property construct that `tsc` accepts and Node's strip-only loader refuses was caught only
+   by the runlet contract suite (which starts the real shim) and was **twice misread as machine load**
+   before being read as a failure; and a `git stash` "confirmation" the implementer *described* in its
+   working notes **never ran**. The first is rule 64's shape in reverse — under a machine policy that
+   teaches agents to expect load-induced failures, a real failure gets filed as load, and the remedy is
+   the one rule 62 gives: read the failing *test's name and message* before classifying, because a
+   timeout and a syntax error do not print the same line. The second is this rule's own shape one step
+   earlier than the orchestrator: a step written down as done in the middle of the work is as absent as
+   one skipped, and it is the more dangerous of the two because the writer believes it. Both were caught
+   by the implementer and reported, which is the behaviour the ledger exists to produce; recorded here so
+   the next agent recognises the two shapes in itself.
 60. **A resource identified only by its name is invisible to a label sweep, and "keep when unlabelled" makes
    that invisibility permanent.** Measured: one `verify:e2e` run leaves exactly one `ws-<uuid>` volume with
    `labels=map[]`, matching neither the `com.agentic.run` label filter nor any name filter the cleanup uses
@@ -1623,6 +1643,9 @@ live the day ticket text reaches a query), entries **15**/**16** below, **Q48** 
 `title`, seen from the board), **Q54** (the byte bound this work package has to pick).
 
 ### 18. **Every other `tasks.save` is a whole-row write, and a concurrent writer silently puts stale state back** (TODO — now **WP-15e**)
+
+> **RESOLVED at WP-15e pending merge — see the row** (the milestone table's **WP-15e** row and *"WP-15e — the whole-row save class, and the shape the measurement chose"* under `## WP notes — session 5`; the change is uncommitted at the time of writing, and this heading, standing rule **79** and the WP-15e plan row are orchestrator-owned and left as they are).
+
 **What is wrong.** `TaskRepository.save` (`packages/application/src/pipeline/store.ts:80`) writes the
 **whole** row. That is correct for a saga step — the aggregate it writes is the one it read in the same
 transaction, and the pipeline orders those — and it stopped being correct the moment a writer appeared
@@ -3117,6 +3140,140 @@ fix); the corpus statement is the copy that was missed.
 **Depends on / owner.** **None.** Nearest by subject: the next row that touches the Sentry adapter or
 its fixture corpus. No plan row owns provider tooling declarations, which is the same gap entry **40**
 names from the other side.
+
+### 42. **Nothing refuses a TypeScript construct Node's strip-only type stripping cannot strip, and the shipped containers run TypeScript sources** (TODO, small — **no work package owns it**; found by WP-15e, session 5)
+
+**What is wrong.** `verify` is green on code that `pnpm dev`, `pnpm db:migrate`, the server image and
+the launcher image cannot load. `tsc` accepts a parameter property, biome accepts it, and vitest
+transpiles it away with esbuild; Node's **strip-only** type stripping refuses it — and strip-only is
+how this repository's entrypoints run, from source through `scripts/ts-source-resolver.mjs`. The
+construct set is small and not exotic: enums, namespaces with values, `declare` fields, parameter
+properties.
+
+**Evidence.** Quoted from WP-15e's note rather than paraphrased:
+
+> "It is also one of the few constructs Node's **strip-only** type stripping refuses, and this
+> repository runs its sources that way — `pnpm dev`, `pnpm db:migrate` and the runlet shim all go
+> through `scripts/ts-source-resolver.mjs`."
+
+> "The only thing that found it was `runlet/conformance.contract.test.ts`, which spawns a real `node`
+> on `apps/runlet/src/index.ts`: six cases failing with `c.sock never appeared`, an error that names
+> nothing."
+
+Run by hand, the shim printed
+`SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript parameter property is not supported in strip-only mode`.
+The construct was `TaskConcurrentModificationError`, whose class now lives at
+`packages/application/src/pipeline/store.ts:99`; all 5 154 unit and contract tests passed with it.
+
+Read off disk by the refiner (reading only, rule 66 — no tier and no container run):
+- The accidental guard's message really is about a file, not about syntax:
+  `packages/infrastructure/src/runlet/conformance.contract.test.ts:76` throws `` `${file} never appeared` ``.
+- **The blast radius is wider than the shim, which the note does not say.** `docker/app.Dockerfile:130`
+  is `ENTRYPOINT ["node", "--import", "./scripts/ts-source-resolver.mjs"]` with
+  `CMD ["apps/server/src/main.ts"]` at `:131`; `compose.yml:86` runs the migrate service as
+  `command: ['apps/server/src/migrate.ts']`; `docker/launcher.Dockerfile:85-86` is the same pair over
+  `apps/launcher/src/index.ts`. So the **product images** load `.ts` under strip-only, not only the
+  developer commands.
+- Exempt, and worth knowing before scoping a fix: `apps/web` is bundled by Vite, and the runlet's own
+  image ships the Vite bundle (`docker/runtime.Dockerfile:154` runs `/usr/local/bin/agentic-runlet`,
+  built by `apps/runlet/package.json`'s `build`). A repo-wide ban is therefore broader than the runtime
+  strictly requires — and is still the cheap direction.
+- `tsconfig.base.json` sets `verbatimModuleSyntax: true` and does **not** set `erasableSyntaxOnly`;
+  `package.json:74` pins `"typescript": "7.0.2"`.
+
+**What it costs to leave.** Rule 71's shape one layer in: local and CI green rest on the fact that every
+tier transpiles, and the one check that does not is a contract test whose failure names a missing
+socket. WP-15e's implementer read that failure as machine load **twice** before running the process by
+hand. The failure mode is loud when it arrives — a container that exits at startup, or `pnpm dev`
+refusing to boot — and completely invisible until then, so the cost is paid by whoever is furthest from
+the change: a reviewer, CI's Docker jobs, or an operator.
+
+**What "done" looks like.** Either shape, both scoped to `verify:static` so CI's lint job runs it
+(CLAUDE.md's verification contract: a step cannot be in `verify` and missing from CI; the list is
+`scripts/verify-targets.ts:33`).
+1. `erasableSyntaxOnly: true` in `tsconfig.base.json`, inherited by every ring. **Needs verification,
+   not asserted**: the option is documented from TypeScript 5.8 and this repository pins **7.0.2**, so
+   whether `tsc --noEmit -p tsconfig.json` accepts it at that version, and what it reports over the
+   existing sources, is a `pnpm typecheck` run the refiner did not make (rule 66). If supported, the
+   criterion is the flag on, `pnpm typecheck` clean, and a **planted** parameter property failing it by
+   name (rule 85's calibration).
+2. If the option is unavailable at 7.0.2: a step that starts each strip-only entrypoint under
+   `node --import ./scripts/ts-source-resolver.mjs` and fails on `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`.
+   The entrypoints are discoverable rather than listed by hand — the Dockerfile `CMD`s plus
+   `compose.yml`'s migrate command. Weaker than (1): it only covers what an entrypoint actually
+   imports at startup, so a module loaded later is not checked.
+
+**Depends on / owner.** **None** — no plan row owns the toolchain configuration, which is why a
+`tsconfig` flag nobody set has survived every work package. Nearest by subject: **WP-22** owns the
+images and is the row that would otherwise discover this the expensive way. Nothing blocks it; (1) is
+one line plus its calibration.
+
+### 43. **A handler that keeps failing is retried for ever, and exhausting WP-15e's conflict bound is a second way in** (TODO — **no work package owns it**; recorded as a WP-04 note since session 1 and never given an entry; restated by WP-15e, session 5)
+
+**What is wrong.** WP-15e bounded the *conflict* retry at three attempts. What happens after the third
+is the bus's ordinary failure path, and **that** path has no bound: the failure is recorded, the event
+stays queued, the delay doubles to a ceiling, and the sweep picks it up again indefinitely with the
+stream's later events behind it. The bound WP-15e added is therefore a bound on *re-running the
+handler*, not on the event.
+
+**Evidence.** Quoted from WP-15e's discovered-work bullet:
+
+> "A handler that exhausts `MAX_CONCURRENCY_CONFLICT_ATTEMPTS` falls through to `retryLater`, which has
+> no limit and no dead-letter state (WP-04's note, repeated in `transitions.ts`)."
+
+Read by the refiner to settle which of the three shapes it is — the answer is **unbounded in count,
+bounded in rate** (reading only, rule 66; no tier run):
+- `packages/application/src/events/event-bus.ts:301-322` records the failure and calls
+  `retryLater(position, failure.error, this.#backoff)`. No attempt count is consulted, and nothing
+  escalates.
+- `packages/infrastructure/src/events/postgres-event-store.ts:300-313` is the write:
+  `set attempts = attempts + 1, error = $2, available_at = now() + least(base × 2^least(attempts,10), maxMs)`.
+  The row is never deleted and no cap is compared.
+- The sweep re-selects it at `packages/infrastructure/src/events/postgres-event-store.ts:153`, whose
+  predicate is `where h.rn = 1 and h.available_at <= now()`.
+- The ceiling at the shipped defaults is `maxRetryDelayMs` **300 000 ms** over `retryDelayMs` **5 000**
+  (`packages/infrastructure/src/events/config.ts:63-64`), so a permanently poisoned event is
+  re-dispatched roughly **12 times an hour, for ever**.
+- The class is already written down, in the WP-04 notes:
+  > "Dispatch has no dead-letter state (WP-04). An event whose handler keeps failing is retried with
+  > exponential backoff for ever and blocks its stream."
+
+  That note ends *"WP-15 should decide what a permanently poisoned event does to its task"* — and no
+  WP-15x row carries that criterion, which is how the sentence survived seven of them.
+
+**Hypothesis, labelled as one (rule 39).** A *persistent* task-version conflict is an implausible
+producer: a conflict needs a second writer committing between this transaction's read and its write,
+and `MAX_CONCURRENCY_CONFLICT_ATTEMPTS`'s own docblock argues that the shipped configuration cannot
+produce three in a row (`APP_DISPATCH_MAX_CONCURRENCY` 1, every pipeline job worker at concurrency 1).
+So WP-15e adds a **second door into an old room** rather than a new live defect. **Needs measurement**
+(not run here): no tier asserts what the dispatcher does after a fixed number of failures, so the
+"for ever" above is read from the code and the defaults, not observed.
+
+**What would make it urgent.** A producer that fails **deterministically** — a payload no handler can
+process, a schema change under a queued event, an integration permanently answering 403. Backlog
+entry **1** (nothing produces production load yet) is the only reason this is scheduled rather than
+live.
+
+**What it costs to leave.** The stream stalls and the signal is thin: `handler_executions.status = 'failed'`
+and the `event_dispatch_pending` gauge (`apps/server/src/metrics.ts:76`), which cannot tell one poisoned
+event apart from a busy queue. For a task stream that is a task that stops moving with no error on it —
+the same symptom rule 79's measurement produced from a different cause, which is exactly why a second
+producer of it is worth an entry rather than a note.
+
+**What "done" looks like.** Two halves, and only the first is engineering.
+1. A bound on the dispatch attempt itself: a maximum `attempts` after which the event leaves the queue
+   into a terminal state rather than being rescheduled, asserted by a test that fails a handler a fixed
+   number of times and shows the stream moving on afterwards.
+2. **What a human sees** is a product decision and is the part to put in `docs/OPEN-QUESTIONS.md` when
+   someone schedules this — filed here rather than there so the evidence stays in one place.
+   **Recommendation, stated strongly enough to implement without a further round**: reuse Q59's answer
+   rather than inventing a state — the task escalates to `needs_human` with a brief naming the event and
+   the handler, exactly as `escalateTaskAfterConflict` already does for an exhausted conflict, and the
+   dead event is visible in the ops view. **No new task state**, and no new escalation vocabulary.
+
+**Depends on / owner.** **None.** WP-04 produced the behaviour and pointed at "WP-15"; no WP-15 row took
+it. Related: entry **1** (no production load, so no producer today), and WP-15c's own unbounded-retry
+fix, which closed this shape for the **inbound** path only.
 
 ### 26. **Composing the workspace provider does not give WP-18 a checkout it can read** (**DECIDED** by architect ruling, session 5 — **TD-026**; the work is on the rewritten **WP-18** row, and this entry closes when that row merges)
 
@@ -9088,7 +9245,155 @@ strongly than it reads):
    unit test that passes `jobs: null`.
 
 
+### WP-15e — the whole-row save class, and the shape the measurement chose
+
+**The decision, and the measurement that made it.** The plan row left two shapes open — a narrow
+write per writer, or optimistic concurrency on the row — and said to measure which of the call sites
+can actually interleave before choosing (rule 27). Two measurements decided it, and the second is the
+one that mattered.
+
+*First, the census.* **Twenty-one** production `tasks.save` sites, not the twenty backlog 18 counted
+(`saga.ts` 11, `transitions.ts` 5, **`stage-executor.ts` 5** — it gained one since the entry was
+filed). Every one of them can interleave with another writer, and the reason is structural rather
+than probabilistic: the dispatcher orders events per `(stream_type, stream_id)` only
+(`DispatchQueue.hasEarlierPending`), WP-15c's inbound normaliser writes **every** provider event on
+the **project** stream (`inbound.ts:180`) while a task's own events are on the **task** stream, and
+the three job workers (`stage.execute`, `mr.comment.debounce`, `pipeline.outbound`) are not ordered
+against the dispatcher at all. So the "is the list short?" question the row asks answers *no*: it is
+every site, and a narrow method per writer would have been twenty-one methods plus a discipline
+nothing enforces.
+
+*Second, and this is the one that settled it: the narrow write had **already** failed to compose, and
+the failure was live on `main` at `5121d73`.* WP-15d gave the workpad job `saveWorkpad` so it would
+stop clobbering the executor's cost — and `save` still named `workpad_ref`, so the executor went on
+clobbering the **workpad**. One direction fixed, one direction not, one work package later, with the
+rule already written down. Measured on a real PostgreSQL 18 rather than argued: with `workpad_ref`
+restored into `save`'s set list, `pipeline-store-concurrency.integration.test.ts` fails
+*"does not put back a workpad another writer filled in while it was deciding"* (`expected undefined to
+be 'comment-1'`) and *"keeps every stage's spend when a job writes the row inside each write window"*
+(`comment-7`); with it removed, 7/7 pass. **That is the argument for (b)**: the property option (a)
+lacks is not theoretical, it had already been lost.
+
+**Shipped: both halves, because the version column alone would not have found the live one.**
+- **Migration 0019** adds `tasks.version integer not null default 1` with a positive check. `save` is
+  `update … set …, version = version + 1 where id = $1 and version = $n returning version`; a write
+  that matches no row is told apart from an absent task by one extra query on the throwing path.
+- **The columns are partitioned by writer.** `save` writes the aggregate's own (`state`,
+  `current_stage`, `branch`, `mr_ref`, `stage_attempts`, `iteration_counters`, `cost_actual`) and no
+  longer names `workpad_ref`; `saveWorkpad`, `saveTicketSnapshot` and `CostStore.saveEstimate` own
+  theirs and deliberately do **not** bump the version, because a bump for a column `save` does not
+  write is a false conflict. `packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts`
+  reads every `update tasks` statement off disk (tracked *and* untracked, rules 7 and 85) and fails on
+  a contested column — it is what makes rule 44 true here rather than a docblock.
+
+**Assumption recorded, against the brief.** The brief said *"if (b) … the aggregate carries the
+version"*. It does not: `version` is on `StoredTask`, not on domain `Task`. The reasoning is the one
+`StoredTask`'s own docblock already makes for the template snapshot, the MR and the spend — it is not
+a state transition. Putting it on `Task` would make thirty-odd pure domain commands responsible for
+incrementing a storage token in a ring that cannot see the write it guards, and the guarantee would
+be only as good as the command that remembered; on `StoredTask` every one of the twenty-one sites
+gets it for free through the `{ ...stored, task: … }` spread it already writes.
+
+**The API change the saga's own tests found within minutes.** `save` returns the **saved snapshot**,
+not `void`. Two saves in one transaction are an ordinary shape — `recordMergeRequest` records the MR
+and then `applyDecision` moves the stage — and the second one carried the version the first had
+consumed. Thirty-one saga cases went red with `expected version 10, found 11` on the first run.
+Documenting the hazard would have been the cheaper fix and the wrong one.
+
+**Where the retry lives, and why it is two places rather than one.** It depends on who owns the
+transaction, and the difference is load-bearing:
+- **Jobs own theirs**, so `retryOnTaskConflict` (`pipeline/task-conflict.ts`) re-runs the *whole*
+  unit in a new transaction — the previous attempt is rolled back and the re-read is clean. Used by
+  the stage executor's three writing transactions and by `jobs.ts`'s `settle` and review window.
+- **Handlers do not**, so they **let the conflict escape** and `EventBus` re-runs the handler's whole
+  transaction (`events/concurrency.ts`, `event-bus.ts`). Catching it *inside* a handler would leave
+  the failed attempt's non-idempotent writes behind: `planApprovalGate` inserts an approval with a
+  fresh `ids.next()` id **before** it saves the task, so an in-transaction retry writes a second
+  approval row. That is the whole reason the bus had to learn about it, and it is a structural marker
+  (`concurrencyConflict: true`) rather than an `instanceof`, so generic dispatch machinery does not
+  import a repository's error class.
+- Both use **one** bound, `MAX_CONCURRENCY_CONFLICT_ATTEMPTS = 3` (rule 63: two numbers for one
+  policy is drift). Exhaustion is `TaskConflictExhaustedError`, and the executor's ending is
+  `escalateTaskAfterConflict` → `needs_human` with a brief. **No new task state** (Q59's answer,
+  reused). The bus's ending is its ordinary failure path — the failure is recorded and the event stays
+  queued — which is not a drop, and it is the honest limit of the bound on that side.
+
+**A defect this work package introduced and the contract tier caught — worth more than the fix.**
+`TaskConcurrentModificationError` was first written with TypeScript **parameter properties**
+(`constructor(readonly taskId: Id, …)`). It typechecks, it lints, and all 5 154 unit and contract
+tests pass because vitest transpiles with esbuild. It is also one of the few constructs Node's
+**strip-only** type stripping refuses, and this repository runs its sources that way — `pnpm dev`,
+`pnpm db:migrate` and the runlet shim all go through `scripts/ts-source-resolver.mjs`. The only thing
+that found it was `runlet/conformance.contract.test.ts`, which spawns a real `node` on
+`apps/runlet/src/index.ts`: six cases failing with `c.sock never appeared`, an error that names
+nothing. Run by hand the shim says
+`SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript parameter property is not supported in
+strip-only mode`. Two lessons: the constructs `tsc` accepts and Node strips are **different sets**,
+and a test whose failure message is about a socket needs its cause re-derived rather than blamed on
+the machine — I called it a load flake twice before running the process by hand (rule 81, and rule 4:
+audit the instrument). It is filed as discovered work, because nothing refuses the shape.
+
+**A false "confirmation" I have to own, because it nearly ended the investigation.** To decide whether
+the runlet failures were mine I ran `git stash push -u … && echo stashed`, and reported "it fails on a
+clean HEAD too". **The stash never happened** — no `stashed` line was printed, and I read the FAIL
+lines without checking for it. Rule 75's shape one level up: I gated on a command's *output* and never
+on whether the command I depended on had run at all.
+
+**What was verified.** `pnpm run -s verify` **PASS** (5 160 passed, 14 skipped);
+`pnpm run -s verify:integration` and `pnpm run -s verify:e2e` — see the verdicts in the WP report.
+The mutant — restoring `workpad_ref` into `save`'s set list — is killed by name in two tiers:
+`tasks-column-ownership.test.ts` › "gives every column exactly one writing statement", and
+`pipeline-store-concurrency-suite.ts` › "does not put back a workpad another writer filled in while
+it was deciding" on PostgreSQL. The census is calibrated by planting an untracked `tasks.save` site
+and watching both of its cases fail (rule 85), then removing it.
+
+**Rule 83 sweep — every sentence that described the class as open.** Fixed here:
+`postgres-pipeline-store.ts:288` (*"`save` writes the whole row"* — now false),
+`ticket-snapshot.ts` (*"the twenty existing `save` sites"* — a count that had already moved; it now
+points at the test that produces it), `cost/ports.ts` (*"a twenty-first `tasks.save` site"*, same),
+`memory-pipeline.ts`'s divergence register row **5** (closed rather than justified — `save` now writes
+the same column set in both stores — and a new row **6** for the refusal), `CLAUDE.md`'s "narrow
+repository method" paragraph, and `docs/technical/03-data-model.md`'s `tasks` row (migration 0019 and
+the writer partition). **TD-004 and TD-005 say nothing about `save`** and needed no amendment — checked,
+not assumed. **Orchestrator-owned and left alone, as the brief says**: PROGRESS backlog entry **18**
+and standing rule **79** still describe the class as open, and the **WP-15e plan row** still says
+"twenty production `tasks.save` call sites remain".
+
+#### For the orchestrator
+
+**Two admissions in this section are process findings, not engineering ones, and the refiner files
+neither as a backlog entry — the rules are yours (rule 61's family).** Both are the implementer's own
+words. First, a failure read as machine load twice: *"a test whose failure message is about a socket
+needs its cause re-derived rather than blamed on the machine — I called it a load flake twice before
+running the process by hand (rule 81, and rule 4: audit the instrument)."* Second, and the one with no
+rule covering it exactly: *"To decide whether the runlet failures were mine I ran `git stash push -u … &&
+echo stashed`, and reported 'it fails on a clean HEAD too'. **The stash never happened** — no `stashed`
+line was printed, and I read the FAIL lines without checking for it. Rule 75's shape one level up: I
+gated on a command's *output* and never on whether the command I depended on had run at all."* The
+second is the more expensive shape: the first cost re-derivation time, the second produced a
+**confirmation that was never performed** and would have ended the investigation with the defect still
+in the tree. Whether that earns a standing rule — the family is 61 (a right number attached to a wrong
+verdict), 81 (a right number attached to a wrong cause) and 75 — is an orchestrator decision; the
+refiner records the evidence and stops. The engineering half of the same incident is backlog entry
+**42**.
+
+
 ## Discovered work — session 5 (not in plan)
+- **Nothing refuses a TypeScript construct Node's type stripping cannot strip, and the one check that
+  finds it says "socket never appeared"** (WP-15e). A parameter property
+  (`constructor(readonly x: T)`) passes `tsc`, passes biome and passes every vitest tier, and breaks
+  `pnpm dev`, `pnpm db:migrate` and the runlet shim — everything that goes through
+  `scripts/ts-source-resolver.mjs` — with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. The accidental guard is
+  `runlet/conformance.contract.test.ts` spawning a real `node`, whose failure names a missing socket
+  and not the syntax. `verbatimModuleSyntax` is already on; the missing setting is
+  `erasableSyntaxOnly` (TypeScript 5.8+), which refuses exactly this set at typecheck time — enums,
+  namespaces with values, `declare` fields and parameter properties. Cheap, one `tsconfig` flag, and
+  it would have to be measured against the existing sources first.
+- **The bus's conflict retry is bounded; its *failure* path still is not** (WP-15e). A handler that
+  exhausts `MAX_CONCURRENCY_CONFLICT_ATTEMPTS` falls through to `retryLater`, which has no limit and
+  no dead-letter state (WP-04's note, repeated in `transitions.ts`). That is the same unbounded retry
+  WP-15c closed for a different path, and it is not this work package's: nothing here made it worse,
+  and a dead-letter state is a product decision about what a human sees.
 - **`TOOLS_BY_ROLE` gives the investigator no `Bash`, so two skills it owns name commands it cannot
   run** (WP-14a — **refined into backlog 39**, where BD-025 decides the direction and the missing
   census is rule 68's). product/13's least-privilege table gives the Investigator "read-only cmds" and
