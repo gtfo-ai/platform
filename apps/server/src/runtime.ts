@@ -44,7 +44,12 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Jobs, Logger, WebhookIngress } from '@platform/application';
-import { createLiveRuns, sweepReadiness } from '@platform/application';
+import {
+  createLiveRuns,
+  SHADOW_BATCH_BLOCKED_DETAIL,
+  shadowBatchBlocker,
+  sweepReadiness,
+} from '@platform/application';
 import {
   cost as costAdapters,
   db as dbAdapters,
@@ -68,11 +73,14 @@ import {
   composeIntegrationStack,
   composePipeline,
   composeWebhookIngress,
+  createProjectIntegrationsPort,
+  createProjectSettingsPort,
   type PipelineComposition,
 } from './pipeline.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
+import { createShadowCommands } from './shadow.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
@@ -522,6 +530,40 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       logger: loggerPort,
     });
 
+    /**
+     * Shadow mode's API half (WP-34): the batch command and the gate the read endpoint publishes.
+     *
+     * The **gate** is composed for every API process, including one with no queue: whether a
+     * project may start a batch is a question about its settings, and answering it needs no worker.
+     * The **command** needs `jobs` for `startDiscovery`'s reason and refuses by name without one.
+     */
+    const shadowCommands = capabilities.api
+      ? createShadowCommands({
+          pool: database.pool,
+          eventing,
+          jobs,
+          integrations: createProjectIntegrationsPort({
+            pool: database.pool,
+            secretKey: config.secretKey,
+            registry: (stack as NonNullable<typeof stack>).registry,
+            executor: (stack as NonNullable<typeof stack>).executor,
+          }),
+          logger: loggerPort,
+        })
+      : null;
+    const shadowGate = capabilities.api
+      ? async (projectId: string) => {
+          const settings = await createProjectSettingsPort(database.pool, loggerPort).forProject(
+            projectId as never,
+          );
+          const blocker = shadowBatchBlocker(settings);
+          return {
+            canStart: blocker === null,
+            blockedReason: blocker === null ? null : SHADOW_BATCH_BLOCKED_DETAIL[blocker],
+          };
+        }
+      : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -630,6 +672,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       webhooks,
       knowledge: knowledgeCommands,
       onboarding: onboardingCommands,
+      shadow: shadowCommands,
+      shadowGate,
       commands: taskCommands,
       asks,
       /**

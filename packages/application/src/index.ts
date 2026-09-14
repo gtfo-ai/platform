@@ -126,9 +126,15 @@ export * from './ports/secrets.js';
 export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
 export * from './ports/workspace.js';
-// Scheduling (WP-05)
 export * from './scheduling/working-calendar.js';
 export * from './scheduling/zoned-time.js';
+// Scheduling (WP-05)
+// Shadow mode — product/18:24, product/19 §13 (WP-34)
+export * from './shadow/batch.js';
+export * from './shadow/human-merge-request.js';
+export * from './shadow/ports.js';
+export * from './shadow/report.js';
+export * from './shadow/reviewer-minutes.js';
 // Test doubles (technical/10: fakes are first-class code)
 export * from './testing/fixture-vault.js';
 export * from './testing/fixtures.js';
@@ -142,5 +148,6 @@ export * from './testing/memory-notifications.js';
 export * from './testing/memory-pipeline.js';
 export * from './testing/memory-proposals.js';
 export * from './testing/memory-readiness.js';
+export * from './testing/memory-shadow.js';
 
 export const packageId = '@platform/application' as const;

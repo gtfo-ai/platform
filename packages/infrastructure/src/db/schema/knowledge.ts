@@ -8,6 +8,7 @@ import {
   date,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   real,
@@ -147,6 +148,46 @@ export const shadowReports = pgTable('shadow_reports', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * One shadow batch — the tickets somebody selected on one day (WP-34, migration 0029).
+ *
+ * `budgetUsd` is the per-feature cap **as it stood when the batch was created**, copied rather than
+ * read back through the settings, so the figure shown beside the batch's actual spend is the one
+ * that applied to it.
+ */
+export const shadowBatches = pgTable('shadow_batches', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  projectId: uuid('project_id').notNull(),
+  requestedBy: uuid('requested_by'),
+  budgetUsd: numeric('budget_usd', { precision: 12, scale: 6 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+});
+
+/**
+ * One ticket of a batch. `taskId` is null exactly when `refusedReason` is not (migration 0029's
+ * check constraint): Q82 (a) refuses a ticket whose comparison base cannot be resolved rather than
+ * running it against today's default branch.
+ */
+export const shadowBatchTickets = pgTable(
+  'shadow_batch_tickets',
+  {
+    batchId: uuid('batch_id').notNull(),
+    ticketKey: text('ticket_key').notNull(),
+    taskId: uuid('task_id'),
+    baseSha: text('base_sha'),
+    humanMrRef: jsonb('human_mr_ref').$type<MergeRequestRef>(),
+    humanMrSource: text('human_mr_source'),
+    /** product/19 §16's *"to merge"* instant, so the report needs no fourth provider read. */
+    humanMrMergedAt: timestamp('human_mr_merged_at', { withTimezone: true }),
+    /** How many merged merge requests matched; the report's `notes` states it when it is > 1. */
+    humanMrCandidates: integer('human_mr_candidates'),
+    refusedReason: text('refused_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.batchId, table.ticketKey] })],
+);
+
 export type KbDocument = typeof kbDocuments.$inferSelect;
 export type KbChunk = typeof kbChunks.$inferSelect;
 export type KbProposal = typeof kbProposals.$inferSelect;
@@ -155,3 +196,5 @@ export type CodeMap = typeof codeMaps.$inferSelect;
 export type ReadinessEvaluation = typeof readinessEvaluations.$inferSelect;
 export type KbHealthReport = typeof kbHealthReports.$inferSelect;
 export type ShadowReport = typeof shadowReports.$inferSelect;
+export type ShadowBatch = typeof shadowBatches.$inferSelect;
+export type ShadowBatchTicket = typeof shadowBatchTickets.$inferSelect;

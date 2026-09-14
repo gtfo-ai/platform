@@ -261,20 +261,107 @@ export const librarianProposalsDataSchema = z.strictObject({
   summary: z.string(),
 });
 
+/**
+ * product/19 §13's per-ticket report — *"agent artifacts (spec, plan, diff stats, tests added),
+ * human MR (if any): files touched, size; comparison: file-overlap Jaccard, size ratio, tests added
+ * ratio, acceptance criteria the human MR covers vs the agent's; Reviewer findings the human MR
+ * would have received (posted nowhere); predicted cost vs shadow cost; reviewer minutes estimate
+ * (from MR events); confidence note"* (WP-34).
+ *
+ * ## What is absent, and why each absence is a refusal rather than an omission
+ *
+ * Three of the document's fields are answerable on this build and are here — `tests_added_ratio`
+ * inside {@link shadowReportDataSchema.shape.overlap}, `shadow_cost` beside `predicted_cost`, and
+ * `reviewer_minutes_estimate`. The fourth is **not**, and it is named rather than invented (standing
+ * rule 16, and WP-15h's `/context-pack` precedent — summing rows into a budget publishes a fact):
+ *
+ * > *"acceptance criteria the human MR covers vs the agent's"*
+ *
+ * The agent's half exists (`AcceptanceVerdict.criteria`, one status per criterion). The **human's**
+ * half is a semantic judgement about somebody else's diff against a ticket's acceptance criteria,
+ * and nothing on this build makes it: no stage reviews the human merge request against the ticket,
+ * no artifact records such a judgement, and deriving it from file overlap would be publishing a
+ * similarity number under a coverage heading. A field carrying only the agent's side would read as
+ * a comparison when it is a single measurement, so there is no field. The work is a Reviewer run
+ * over the human merge request with the ticket's criteria in its prompt, which is a stage this
+ * template does not have.
+ *
+ * ## Two fields that became nullable, and the rule is the same one
+ *
+ * `agent_diff_stats` and `overlap` were required. Both are now nullish, because both rest on
+ * reading a diff that may not exist:
+ *
+ *  - the **agent's** diff is read from the merge request the Developer stage reported
+ *    (`tasks.mr_ref`), which a shadow task has only when the run produced one — a read, so it is
+ *    performed in every mode (technical/06: *"a shadow task needs its context"*);
+ *  - the **human's** merge request is `null` for a ticket that has none, and Q82's recommendation
+ *    is explicit that such a ticket still produces a report with **no overlap block at all** rather
+ *    than an overlap of zero, *"which reads as 'the agent built something completely different'"*.
+ *
+ * So `overlap` is present exactly when both diffs are, and `notes` says which side was missing.
+ */
 export const shadowReportDataSchema = z.strictObject({
   ticket: nonEmptyStringSchema,
   human_mr: mergeRequestRefSchema.nullish(),
-  agent_diff_stats: z.strictObject({
-    files_changed: z.int().nonnegative(),
-    insertions: z.int().nonnegative(),
-    deletions: z.int().nonnegative(),
-  }),
-  overlap: z.strictObject({
-    files_jaccard: unitIntervalSchema,
-    size_ratio: z.number().nonnegative().finite(),
-  }),
-  agent_review_of_human_mr: z.array(reviewFindingSchema),
-  predicted_cost: usdSchema,
+  /** Null when the task recorded no merge request, so the platform has no diff of its own to read. */
+  agent_diff_stats: z
+    .strictObject({
+      files_changed: z.int().nonnegative(),
+      insertions: z.int().nonnegative(),
+      deletions: z.int().nonnegative(),
+    })
+    .nullish(),
+  /** Present exactly when **both** diffs were read; never a zero standing in for a missing side. */
+  overlap: z
+    .strictObject({
+      files_jaccard: unitIntervalSchema,
+      /**
+       * The agent's changed lines over the human's, and `null` when the human side has none.
+       *
+       * The same refusal `tests_added_ratio` makes below, for the same reason and with the same
+       * reachable cause: a provider that declined to render a patch (`collapsed`, `too_large`, a
+       * null body) publishes the path and no lines, so the denominator is zero for a merge request
+       * that plainly changed something. `0` was the first answer here and the Shadow screen printed
+       * it as *"size ratio: 0.00"* — the agent's work divided by a denominator nobody has (standing
+       * rule 16). `notes` says which side was not rendered.
+       */
+      size_ratio: z.number().nonnegative().finite().nullish(),
+      /**
+       * product/19 §13's *"tests added ratio"*: the agent's test-file count over the human's.
+       *
+       * `null` when the human merge request added **no** test file, because the ratio is then a
+       * division by zero and "infinitely better" is not a measurement. The two counts the ratio is
+       * taken from are beside it, so a reader is never handed the quotient alone.
+       */
+      tests_added_ratio: z.number().nonnegative().finite().nullish(),
+      agent_test_files: z.int().nonnegative(),
+      human_test_files: z.int().nonnegative(),
+    })
+    .nullish(),
+  /**
+   * product/19 §13's *"Reviewer findings the human MR would have received (posted nowhere)"*.
+   *
+   * `null` on this build, and the distinction is the point: `[]` would say *"a reviewer read the
+   * human merge request and found nothing"*, which is a claim no run has made. Nothing reviews the
+   * **human's** diff during a shadow task — the shadow task's own `code_review` stage reviews what
+   * the *agent* wrote — and the feature that does review a human merge request is review-only mode
+   * (product/18, WP-24), which is a different task on a different template. Producing this field
+   * means giving the shadow batch a Reviewer run over the human merge request; until then the
+   * report says *"not looked at"* rather than *"nothing found"* (standing rules 16, 18).
+   */
+  agent_review_of_human_mr: z.array(reviewFindingSchema).nullish(),
+  /** `tasks.estimate_usd` — WP-28's point estimate, or `null` for a task that never got one. */
+  predicted_cost: usdSchema.nullish(),
+  /** What the shadow run actually spent (`tasks.cost_actual`), so the pair can be compared. */
+  shadow_cost: usdSchema,
+  /**
+   * product/19 §16's review arithmetic applied to the **human** merge request's own notes.
+   *
+   * `null` when there is no human merge request, or when its discussions carry no non-system note
+   * — an empty set of activities is not zero minutes of review, it is no evidence of review.
+   */
+  reviewer_minutes_estimate: z.number().nonnegative().finite().nullish(),
+  /** product/19 §13's *"confidence note"*: platform text saying what this comparison rests on. */
   notes: z.string(),
 });
 

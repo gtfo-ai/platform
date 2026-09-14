@@ -274,8 +274,14 @@ describe('one getMergeRequest, with the provider hostile in every string it cont
       '$.web_url',
     ]);
     // Produced, not quoted. Q54 carried 1,180,271 and a reviewer re-measuring it got 1,179,811
-    // over the same nine paths; this fixture gives 1,180,284. Three numbers for one claim is what
-    // a figure nobody can re-run looks like, so the figure now comes from here.
-    expect(bytesOf(JSON.stringify(mergeRequest) ?? '')).toBe(1_180_284);
+    // over the same nine paths; this fixture gave 1,180,284. Three numbers for one claim is what
+    // a figure nobody can re-run looks like, so the figure comes from here.
+    //
+    // **It moved by exactly 54 at WP-34, and the cause is re-derived rather than assumed** (rule
+    // 81): `MergeRequest` gained `base_sha`, and `,"base_sha":"<40 hex>"` is 13 + 40 + 1 = 54
+    // bytes. The **list of unbounded paths above did not move**, which is the assertion that
+    // matters here — the new field is a `shaSchema`, so it is bounded by construction and a
+    // hostile provider cannot grow it.
+    expect(bytesOf(JSON.stringify(mergeRequest) ?? '')).toBe(1_180_338);
   });
 });

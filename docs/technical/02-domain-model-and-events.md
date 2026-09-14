@@ -188,7 +188,7 @@ records the trade).
 | `readiness.evaluated` | Discovery / CI gate | project, level, criteria | Policy suggestions (20), UI |
 | `config.changed` | Settings / repo sync | scope, diff (secrets redacted), actor | Audit (0), effective config rebuild (10) |
 | `integration.action.performed` / `.failed` | adapters | integration, action, payload (redacted), result | Audit (0), health (20) |
-| `shadow.report.created` | Shadow runner | task, comparison | UI |
+| `shadow.report.created` | Shadow report duty (WP-34) | task, artifact ref | Batch completion (40), UI |
 
 **Amendment (WP-26): the conflict warning is a consumer of `task.stage.entered`, not of `default_branch.moved`.** This table listed *"conflict warning (20)"* against the default branch moving, which is one of the two moments product/04 S6b names and not the other: a warning is also owed *before Ready*, when two open merge requests touch the same files and nothing has moved. Both moments are the same stage entry — `ready_for_merge`'s `on` list sends a moved default branch back to `rebase_gate`, so the gate is entered in both cases — so `pipeline.conflict.warning` listens to `task.stage.entered` and filters on the gate (priority 120, the integrations band, because it tells the outside world about a transition the core band has decided). The row above now names the consumer this build actually registers for that event. The KB indexer (WP-18a) is the other one.
 

@@ -27,10 +27,11 @@
  * technical/02's "Core consumers" column is the normative source and the amendment makes it so, with
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
- * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **28**
+ * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **29**
  * of them — 22 from the pipeline, 3 from the cost ledger (WP-19), the 2 budget events the
- * notification band added (WP-32; its other six types were already handled by the saga) and
- * `ticket.comment.added`, whose first consumer is ask-the-task (WP-31). A table
+ * notification band added (WP-32; its other six types were already handled by the saga),
+ * `ticket.comment.added`, whose first consumer is ask-the-task (WP-31), and
+ * `shadow.report.created`, whose first consumer is WP-34's batch completion. A table
  * transcribed from the
  * column would therefore stop the outbox
  * worker in every build that exists today, including the one whose e2e walks a ticket to
@@ -249,7 +250,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // without a second provider read, which is why neither has a projection of its own here.
   'task.rebase.checked': 'unconsumed',
   'task.conflict.warned': 'unconsumed',
-  'shadow.report.created': 'unconsumed', // WP-34 shadow mode.
+  // WP-34's first consumer: `shadow.batch.completion` (`shadow/report.ts`) marks a batch finished
+  // once every task of it has a report. Small on purpose — product/19 §13's aggregate is a
+  // projection over the batch's rows, not a number a handler accumulates.
+  'shadow.report.created': 'handled',
 };
 
 /** Every type this build says something must handle, in this table's declaration order. */

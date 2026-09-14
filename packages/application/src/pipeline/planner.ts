@@ -550,6 +550,26 @@ export const RUN_MODE_BY_TEMPLATE: Readonly<Record<string, RunSpec['mode']>> = {
 };
 
 /**
+ * What this run's workspace checks out — PROGRESS backlog **71**, Q82 (a) (WP-34).
+ *
+ * Two producers and one default, in order:
+ *
+ *  1. a **shadow** task uses the merge base the batch resolved for its ticket
+ *     (`StageRunRequest.checkoutBase`), because the whole point of the comparison is that both
+ *     diffs are taken against the same tree;
+ *  2. every other task uses **its own branch** (`tasks.branch`), which is technical/05 §2's
+ *     *"checkout of the task branch for re-entries"* and product/19 §19's *"the platform
+ *     re-provisions a workspace from the branch"*;
+ *  3. `null` — the default branch — for a task that has no branch yet, which is every task before
+ *     its Developer stage has pushed one.
+ *
+ * The shadow case wins over the branch case and cannot collide with it: a shadow task never opens a
+ * merge request, so `tasks.branch` stays `null` for one.
+ */
+const checkoutRefOf = (request: StageRunRequest): string | null =>
+  request.checkoutBase ?? request.task.branch ?? null;
+
+/**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
  *
  * `shadow` comes from `tasks.mode`, which is the shadow switch `IntegrationActionExecutor` reads and
@@ -712,6 +732,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         systemPromptAppend: prompt.systemPrompt,
         userPrompt: prompt.userPrompt,
         workspacePath: options.workspacePath(task.task.id),
+        checkoutRef: checkoutRefOf(request),
         contextPack: [...pack.runContextPack],
         limits: limitsFor(settings, stage.id, role),
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],

@@ -162,6 +162,29 @@ export const runSpecSchema = z.strictObject({
   userPrompt: nonEmptyStringSchema,
   /** Absolute path of the task's workspace; the only writable tree (BD-021, TD-021). */
   workspacePath: nonEmptyStringSchema,
+  /**
+   * What the workspace checks out — technical/05 §2's *"checkout of the task branch for
+   * re-entries"*, which had no carrier at all until WP-34 (PROGRESS backlog **71**).
+   *
+   * A branch name or a commit sha. `null` means the repository's default branch, which is what the
+   * *first* run of a task gets: the task's branch does not exist on the remote yet, and a
+   * provisioner that failed on it would fail every task's first stage.
+   *
+   * Two producers, both in `pipeline/planner.ts`: an ordinary task checks out its **own branch**
+   * (`tasks.branch`), so a returned `implementation` run sees what the previous attempt pushed and
+   * a `code_review` stage reviews the tree the merge request is about; a **shadow** task checks out
+   * the **merge base of the human merge request** it is being compared with (Q82 (a)), because a
+   * diff written against today's tree and a human diff written against the tree six months ago
+   * measure drift rather than similarity.
+   *
+   * **Nothing honours it yet, and that is stated rather than implied.** `WorkspaceSpec.repo
+   * .checkoutBranch` exists and the Docker provider obeys it, but no production
+   * `RunWorkspaceProvisioner` is composed on this build (WP-15g: `startRuntime` installs
+   * `unavailableClaudeRunner`), so the value travels and is asserted and is not yet acted on. It is
+   * carried now rather than later for the reason backlog 71 gives: it is cheapest to fix *before*
+   * the provisioner exists, because afterwards every run silently starts from the default branch.
+   */
+  checkoutRef: nonEmptyStringSchema.nullable(),
   contextPack: z.array(runContextDocumentSchema),
   limits: runLimitsSchema,
   /**

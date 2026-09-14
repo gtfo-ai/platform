@@ -86,11 +86,17 @@ import {
 } from './queries/identity-queries.js';
 import {
   findIdempotentAttempt,
+  findProjectById,
   recordHumanAction,
   writeProjectAutonomy,
 } from './queries/onboarding-queries.js';
 import { findRunPosition, findTaskPosition } from './queries/pipeline-queries.js';
 import { findProjectAutonomy, listProjectAudit } from './queries/project-queries.js';
+import {
+  findShadowBatch,
+  findShadowBatchProjectId,
+  listShadowBatches,
+} from './queries/shadow-queries.js';
 import { roleCapabilities } from './role.js';
 import { registerAskRoutes } from './routes/asks.js';
 import { registerCommandRoutes } from './routes/commands.js';
@@ -102,8 +108,10 @@ import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
+import { registerShadowRoutes } from './routes/shadow.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
+import type { ShadowCommands } from './shadow.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
 import { type ClientFallback, createClientFallback } from './web/fallback.js';
@@ -149,6 +157,23 @@ export interface BuildAppOptions {
    * served either way, because they are database writes this process can always make.
    */
   readonly onboarding: OnboardingCommands | null;
+  /**
+   * Shadow mode's batch command (WP-34), or `null` for a process that composed no pipeline.
+   *
+   * Nullable like `onboarding` and for the same reason: which collaborators exist is a property of
+   * the `ROLE`, and the route answers `503` by name rather than disappearing.
+   */
+  readonly shadow: ShadowCommands | null;
+  /**
+   * Whether a project may start a shadow batch — the same predicate the command refuses with.
+   *
+   * Separate from `shadow` because the **read** endpoint publishes it and a process that serves the
+   * API without workers can still answer it. `null` when this process cannot read project settings,
+   * which the route turns into a named `can_start: false` rather than a guess.
+   */
+  readonly shadowGate:
+    | ((projectId: string) => Promise<{ canStart: boolean; blockedReason: string | null }>)
+    | null;
   /**
    * The task and run command surface (WP-15i), or `null` for a process that composed no pipeline.
    *
@@ -402,6 +427,24 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       secretKey: config.secretKey,
       onboarding: options.onboarding,
       integrationSecretEnv: config.integrationSecretEnv,
+    });
+    // WP-34: shadow mode's one command and two reads (product/10:20). The seven database functions
+    // are bound here so the route module names none of them (`routes/shadow.ts`'s `ShadowQueries`).
+    await registerShadowRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectExists: async (projectId) =>
+          (await findProjectById(options.database, projectId)) !== null,
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+        listBatches: async (projectId, gate) =>
+          listShadowBatches(options.database, projectId, gate),
+        findBatch: async (batchId) => findShadowBatch(options.database, batchId),
+        projectOfBatch: async (batchId) => findShadowBatchProjectId(options.database, batchId),
+      },
+      shadow: options.shadow,
+      gate: options.shadowGate,
     });
     await registerSettingsRoutes(app, {
       // The nine reads and writes the settings surface needs, bound to this process's database

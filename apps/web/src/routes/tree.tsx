@@ -43,6 +43,7 @@ import { OnboardingScreen } from '../features/onboarding.js';
 import { BudgetsScreen, KnowledgeScreen, PipelineScreen } from '../features/project-panels.js';
 import { ProjectSettingsScreen } from '../features/project-settings.js';
 import { SettingsScreen } from '../features/settings.js';
+import { ShadowScreen } from '../features/shadow.js';
 import { SignInScreen } from '../features/sign-in.js';
 import { StatisticsScreen } from '../features/statistics.js';
 import { TaskDetailScreen } from '../features/task-detail.js';
@@ -141,6 +142,16 @@ const pipelineRoute = createRoute({
   },
 });
 
+/** product/10:20's Shadow screen (WP-34). */
+const shadowRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/projects/$key/shadow',
+  component: function Shadow() {
+    const { key } = shadowRoute.useParams();
+    return <ShadowScreen projectKey={key} />;
+  },
+});
+
 const budgetsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/projects/$key/budgets',
@@ -183,6 +194,7 @@ export const routeTree = rootRoute.addChildren([
     knowledgeRoute,
     pipelineRoute,
     budgetsRoute,
+    shadowRoute,
     projectSettingsRoute,
     runRoute,
   ]),

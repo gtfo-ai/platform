@@ -341,6 +341,10 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         branch: source.source_branch,
         head_sha: headSha,
       },
+      // WP-34: the merge base, from `diff_refs`. GitLab documents it as *"empty when the merge
+      // request is created, and populates asynchronously"*, and the **list** endpoint does not
+      // publish it at all — so `null` is an ordinary answer here, not a fault.
+      base_sha: source.diff_refs?.base_sha ?? null,
       state: mapMergeRequestState(source.state),
       // `draft` is authoritative when present; `work_in_progress` is its deprecated alias, and the
       // title prefix is the last resort for an instance older than either.

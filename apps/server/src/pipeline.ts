@@ -95,6 +95,7 @@ import {
   pipeline as pipelineAdapters,
   redaction as redactionAdapters,
   secrets as secretAdapters,
+  shadow as shadowAdapters,
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import {
@@ -540,27 +541,31 @@ export interface ComposedPipeline {
   stop(): Promise<void>;
 }
 
-export const composePipeline = async (
-  options: ComposePipelineOptions,
-): Promise<ComposedPipeline> => {
-  const { composition, stack } = options;
-  const ids = { next: (): Id => randomUUID() as Id };
-  const { executor, registry } = stack;
-  /**
-   * The labelled seam of {@link PipelineComposition.jobs}, applied once and used everywhere below,
-   * so that a test disarming an enqueue disarms the same object the pipeline really enqueues
-   * through. Absent — every production path — is the identity.
-   */
-  const jobs = composition.jobs === undefined ? options.jobs : composition.jobs(options.jobs);
-
-  const integrations = createPipelineIntegrationsLoader({
+/**
+ * The binding loader — `bindings` joined to `integrations`, credentials decrypted from `secrets`,
+ * adapters built **per call** so the redactor carries the call's run-scoped credentials (WP-15a,
+ * Q55).
+ *
+ * Extracted at WP-34 because a **second** composition root needs it: the shadow batch command is
+ * the API half of a feature whose reads (the ticket, the merged merge requests, the merge base) are
+ * provider calls, and it is composed for a process that may run no pipeline at all. Two loaders
+ * would be two sets of adapters over one account — the duplication `composeIntegrationStack`'s own
+ * docblock argues against — so both call this.
+ */
+export const createProjectIntegrationsPort = (options: {
+  readonly pool: pg.Pool;
+  readonly secretKey: string;
+  readonly registry: IntegrationRegistry;
+  readonly executor: IntegrationActionExecutor;
+}): PipelineIntegrationsPort =>
+  createPipelineIntegrationsLoader({
     repository: secretAdapters.createPostgresBindingRepository(options.pool),
     secrets: secretAdapters.createPostgresSecretStore({
       sql: options.pool,
       key: secretAdapters.deriveSecretKey(options.secretKey),
     }),
-    registry,
-    executor,
+    registry: options.registry,
+    executor: options.executor,
     // TD-012 step 2, beside each binding's own exact-match redactor — the same line
     // `composeWebhookIngress` passes, and now for the second sink: WP-15f writes the ticket's text
     // to `tasks.ticket_snapshot`, which is read into every prompt. No task DTO serves it yet.
@@ -576,6 +581,26 @@ export const composePipeline = async (
       }
       return repositoryPathOf(repoUrl);
     },
+  });
+
+export const composePipeline = async (
+  options: ComposePipelineOptions,
+): Promise<ComposedPipeline> => {
+  const { composition, stack } = options;
+  const ids = { next: (): Id => randomUUID() as Id };
+  const { executor, registry } = stack;
+  /**
+   * The labelled seam of {@link PipelineComposition.jobs}, applied once and used everywhere below,
+   * so that a test disarming an enqueue disarms the same object the pipeline really enqueues
+   * through. Absent — every production path — is the identity.
+   */
+  const jobs = composition.jobs === undefined ? options.jobs : composition.jobs(options.jobs);
+
+  const integrations = createProjectIntegrationsPort({
+    pool: options.pool,
+    secretKey: options.secretKey,
+    registry,
+    executor,
   });
 
   const stopReasons = createRunStopReasons();
@@ -639,6 +664,11 @@ export const composePipeline = async (
     // required by `PipelineRuntimeOptions` rather than optional, because a process that composed
     // the pipeline without them would run the notify band on nothing.
     notifications: notifyAdapters.createPostgresNotificationStore(),
+    // WP-34: shadow mode's batches, tickets and reports. Required rather than optional for the
+    // reason `notifications` is — `EVENT_CONSUMPTION` declares `shadow.report.created` handled, so
+    // a process that composed the pipeline without it would sweep an event it promised a consumer
+    // for. A deployment that runs no shadow batch simply never produces one.
+    shadow: new shadowAdapters.PostgresShadowStore(),
     timezone: options.timezone,
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,

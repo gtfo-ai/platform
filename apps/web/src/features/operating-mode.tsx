@@ -154,7 +154,7 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     cost: '~$5–15 per ticket, from a separate budget',
     touches: 'nothing external',
     caveat:
-      'The switch and its budget are stored; nothing in this build starts a shadow batch, so turning it on changes no behaviour yet.',
+      'This toggle and the autonomy dial both have to allow it: shadow runs are what the Observe position runs, so a project past Observe answers “not allowed” even with this on. Start a batch from the project’s Shadow screen.',
   },
   {
     key: 'ticket_linter',
@@ -614,6 +614,11 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
  * runs while running runs finish. The shadow and maintenance budgets are a different thing and are
  * shown as such: they are per-feature caps in the configuration document
  * (`features.shadow_mode.budget_usd`, `features.maintenance.budget_usd`), not `budgets` rows.
+ *
+ * Since WP-34 the **shadow** one has a reader: the stage executor checks it at every shadow run's
+ * admission, against this project's shadow spend for the calendar month
+ * (`shadowBudgetUsdOf`, `ShadowStore.shadowSpendSince`). The maintenance one still has none, and
+ * the copy below says which is which.
  */
 export const Budgets = ({
   projectId,
@@ -717,9 +722,11 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
             : formatUsd(features.maintenance.budget_usd)}
         </p>
         <p className="text-fg-muted">
-          These are per-feature caps in <code>.agentic/config.yml</code>, not budget rows: neither
-          feature has a runner in this build, so a cap here would bound nothing. They are shown so
-          that a document that sets them is visible rather than silently ignored.
+          These are per-feature caps in <code>.agentic/config.yml</code>, not budget rows. The
+          shadow cap is enforced: a shadow run is refused when this project’s shadow spend for the
+          calendar month plus what the stage may spend would pass it, and the task pauses exactly as
+          it does for an organisation or project budget. The maintenance cap has no runner in this
+          build and bounds nothing yet.
         </p>
       </Card>
     </>

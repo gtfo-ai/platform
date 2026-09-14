@@ -25,6 +25,10 @@ export const queryKeys = {
   projectBudgets: (id: string) => ['project', id, 'budgets'] as const,
   projectAutonomy: (id: string) => ['project', id, 'autonomy'] as const,
   projectAudit: (id: string) => ['project', id, 'audit'] as const,
+  /** WP-34: under the project's prefix, so a `project:<id>` frame refreshes the Shadow screen. */
+  shadowBatches: (id: string) => ['project', id, 'shadow-batches'] as const,
+  shadowBatch: (projectId: string, batchId: string) =>
+    ['project', projectId, 'shadow-batches', batchId] as const,
   projectTasks: (id: string, filters: Readonly<Record<string, unknown>> = {}) =>
     ['project', id, 'tasks', filters] as const,
   kbTree: (id: string) => ['project', id, 'kb', 'tree'] as const,

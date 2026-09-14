@@ -136,6 +136,9 @@ runGitProviderContract({
       },
       mergeRequestIid: existing.ref.iid,
       missingMergeRequestIid: 4242,
+      // Divergence 14: the fake records the target branch's head when a merge request is opened, so
+      // the one it opened above has a merge base and the suite may demand a sha.
+      mergeBaseIid: existing.ref.iid,
       mergeability: {
         mergeable: mergeable.ref.iid,
         conflicted: conflicted.ref.iid,

@@ -14,6 +14,7 @@ import {
   artifactSchema,
   askAnswerCitationSchema,
   kbHealthFindingSchema,
+  shadowReportDataSchema,
 } from './artifacts.js';
 import {
   agentRoleSchema,
@@ -23,11 +24,13 @@ import {
   integrationTypeSchema,
   isoDateTimeSchema,
   MAX_PROPOSAL_DELTA_BYTES,
+  mergeRequestRefSchema,
   nonEmptyStringSchema,
   pathPatternSchema,
   runStatusSchema,
   sequenceSchema,
   severitySchema,
+  sizeSchema,
   slugSchema,
   stageIdSchema,
   taskModeSchema,
@@ -361,6 +364,146 @@ export const readinessResponseSchema = z.strictObject({
       unlocks: z.string(),
     }),
   ),
+});
+
+// ── Shadow mode (product/10:20, product/18:24, WP-34) ────────────────────────
+
+/**
+ * How many closed tickets one batch may name.
+ *
+ * product/18's own configuration column is *"pick N recent closed tickets (default 10)"*, and
+ * product/19 §21's dogfood Phase A is *"shadow mode on 10 closed tickets each"*. Twenty-five is
+ * two and a half of those, which is the bound this platform draws for the same reason every other
+ * request bound is drawn: a list whose length somebody else chooses is a request whose cost
+ * somebody else chooses. Each entry is a whole delivery pipeline at product/19 §12's *"~$5–15 per
+ * ticket"*, so the cap is also a spend an operator can reason about — and the **budget** is what
+ * actually stops a batch (`features.shadow_mode.budget_usd`), not this number.
+ */
+export const MAX_SHADOW_BATCH_TICKETS = 25;
+
+export const startShadowBatchRequestSchema = z.strictObject({
+  /**
+   * The closed tickets to shadow, by key. product/18:24's parenthesis — *"or on new tickets in
+   * parallel with humans"* — is deliberately not expressible: Q82 (c) rules it a later feature,
+   * because it needs a shadow task and a live task for the same ticket on the same project, which
+   * is two answers to one question.
+   */
+  ticket_keys: z.array(nonEmptyStringSchema.max(200)).min(1).max(MAX_SHADOW_BATCH_TICKETS),
+});
+
+/** Which of Q82 (b)'s two lookups found the human merge request this ticket is compared with. */
+export const shadowHumanMrSourceSchema = z.enum(['ticket_link', 'title_scan']);
+
+/**
+ * One ticket of a batch, as the Shadow screen reads it.
+ *
+ * `task_id` is null exactly when `refused_reason` is not — Q82 (a)'s refusal, which is a ticket the
+ * platform declined to run rather than one that failed. `similarity` is the report's own
+ * `overlap.files_jaccard` and is null while the task is still running, when it produced no diff, or
+ * when the ticket has no human merge request to compare against; the three are different facts and
+ * `report.notes` says which.
+ */
+export const shadowBatchTicketSchema = z.strictObject({
+  ticket_key: nonEmptyStringSchema,
+  task_id: idSchema.nullable(),
+  task_state: taskStateSchema.nullable(),
+  refused_reason: z.string().nullable(),
+  base_sha: nonEmptyStringSchema.nullable(),
+  human_mr: mergeRequestRefSchema.nullable(),
+  human_mr_source: shadowHumanMrSourceSchema.nullable(),
+  /** `tasks.size` — the size band the aggregate's cost-per-size table is keyed by. */
+  size: sizeSchema.nullable(),
+  cost_usd: usdSchema,
+  predicted_cost_usd: usdSchema.nullable(),
+  similarity: unitIntervalSchema.nullable(),
+  report: shadowReportDataSchema.nullable(),
+});
+
+/**
+ * product/19 §13's second sentence, as a **projection** over the batch's `shadow_reports` rows:
+ * *"predicted cost per ticket by size, similarity distribution, list of 'high similarity + low
+ * cost' tickets as the launch candidates"*.
+ *
+ * Nothing here is stored. A fifth number kept in step with four others is a number that stops being
+ * in step, and the rows it is computed from are already the record.
+ */
+export const shadowBatchAggregateSchema = z.strictObject({
+  /** One row per size band that has at least one reported ticket; absent bands are absent. */
+  cost_by_size: z.array(
+    z.strictObject({
+      size: sizeSchema,
+      tickets: z.int().positive(),
+      median_cost_usd: usdSchema,
+      median_predicted_cost_usd: usdSchema.nullable(),
+    }),
+  ),
+  /**
+   * The similarity histogram, five fixed buckets of `files_jaccard` — `[0,0.2)`, `[0.2,0.4)`,
+   * `[0.4,0.6)`, `[0.6,0.8)`, `[0.8,1]`. Fixed rather than derived so two batches can be compared.
+   */
+  similarity_distribution: z.array(
+    z.strictObject({
+      from: unitIntervalSchema,
+      to: unitIntervalSchema,
+      tickets: z.int().nonnegative(),
+    }),
+  ),
+  /** product/19 §13's *"launch candidates"*: high similarity, low cost, most similar first. */
+  launch_candidates: z.array(
+    z.strictObject({
+      ticket_key: nonEmptyStringSchema,
+      task_id: idSchema,
+      similarity: unitIntervalSchema,
+      cost_usd: usdSchema,
+    }),
+  ),
+  /** How many of the batch's tickets have a report yet; the denominator of everything above. */
+  reported: z.int().nonnegative(),
+  compared: z.int().nonnegative(),
+});
+
+export const shadowBatchSummarySchema = z.strictObject({
+  id: idSchema,
+  project_id: idSchema,
+  created_at: isoDateTimeSchema,
+  completed_at: isoDateTimeSchema.nullable(),
+  budget_usd: usdSchema.nullable(),
+  spent_usd: usdSchema,
+  tickets: z.int().nonnegative(),
+  refused: z.int().nonnegative(),
+});
+
+export const shadowBatchesResponseSchema = z.strictObject({
+  items: z.array(shadowBatchSummarySchema),
+  /**
+   * Whether the project may start a batch at all, and the sentence to show when it may not.
+   *
+   * The dial's `shadowMode` policy decides (product/19 §11: Observe is the only shipped position
+   * where it is true), and `features.shadow_mode.enabled` is BD-028's opt-in. Both are published
+   * here so the screen states the reason rather than offering a button that answers 409.
+   */
+  can_start: z.boolean(),
+  blocked_reason: z.string().nullable(),
+});
+
+export const shadowBatchResponseSchema = z.strictObject({
+  batch: shadowBatchSummarySchema,
+  tickets: z.array(shadowBatchTicketSchema),
+  aggregate: shadowBatchAggregateSchema,
+});
+
+export const startShadowBatchResponseSchema = z.strictObject({
+  batch_id: idSchema,
+  /** One entry per key the caller named, in the order they were named, refusals included. */
+  tickets: z.array(
+    z.strictObject({
+      ticket_key: nonEmptyStringSchema,
+      task_id: idSchema.nullable(),
+      refused_reason: z.string().nullable(),
+    }),
+  ),
+  started: z.int().nonnegative(),
+  refused: z.int().nonnegative(),
 });
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
@@ -1219,3 +1362,11 @@ export type AutonomyOverride = z.infer<typeof autonomyOverrideSchema>;
 export type PutBudgetsRequest = z.infer<typeof putBudgetsRequestSchema>;
 export type ProjectAuditEntry = z.infer<typeof projectAuditEntrySchema>;
 export type ProjectAuditResponse = z.infer<typeof projectAuditResponseSchema>;
+export type StartShadowBatchRequest = z.infer<typeof startShadowBatchRequestSchema>;
+export type StartShadowBatchResponse = z.infer<typeof startShadowBatchResponseSchema>;
+export type ShadowHumanMrSource = z.infer<typeof shadowHumanMrSourceSchema>;
+export type ShadowBatchTicket = z.infer<typeof shadowBatchTicketSchema>;
+export type ShadowBatchAggregate = z.infer<typeof shadowBatchAggregateSchema>;
+export type ShadowBatchSummary = z.infer<typeof shadowBatchSummarySchema>;
+export type ShadowBatchesResponse = z.infer<typeof shadowBatchesResponseSchema>;
+export type ShadowBatchResponse = z.infer<typeof shadowBatchResponseSchema>;

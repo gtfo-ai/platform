@@ -111,6 +111,9 @@ export const gitlabReplayContext = (
     },
     mergeRequestIid: MR_IID,
     missingMergeRequestIid: MISSING_MR_IID,
+    // `merge-requests.json`'s recorded `GET /merge_requests/7` carries `diff_refs.base_sha`, so
+    // this harness publishes a merge base and the suite asserts a sha rather than tolerating null.
+    mergeBaseIid: MR_IID,
     mergeability: {
       mergeable: MERGEABLE_IID,
       conflicted: CONFLICTED_IID,

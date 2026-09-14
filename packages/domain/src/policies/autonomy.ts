@@ -449,9 +449,8 @@ export const AUTONOMY_POLICY_READERS = {
     why: "the dial only recommends: `features.review_only.enabled` is the opt-in switch BD-028 specifies and WP-24 reads, and the wizard's card writes that key. Two switches for one feature would be two answers",
   },
   picksUpNewTickets: {
-    kind: 'unread',
-    owner: 'none',
-    why: 'intake would refuse to create a task for a new ticket on an Observe project; today `intake_check` asks the ticket label and the WIP limits and nothing else',
+    kind: 'read',
+    by: 'packages/application/src/pipeline/saga.ts — runIntakeCheck (WP-34)',
   },
   stopAfterStage: {
     kind: 'unread',
@@ -479,8 +478,7 @@ export const AUTONOMY_POLICY_READERS = {
     why: "WP-18b's apply policy reads `policies.knowledge_apply` out of the configuration document, so the dial's value is a preselection the wizard writes there rather than a second switch",
   },
   shadowMode: {
-    kind: 'unread',
-    owner: 'none',
-    why: 'shadow mode has no runner in this build; `tasks.mode` is chosen by whoever creates the task',
+    kind: 'read',
+    by: 'packages/application/src/shadow/batch.ts — startShadowBatch (WP-34)',
   },
 } as const satisfies Record<keyof AutonomyPreset, AutonomyPolicyReader>;

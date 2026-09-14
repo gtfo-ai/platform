@@ -157,9 +157,17 @@ const DATA: Record<ArtifactType, unknown> = {
     ticket: 'PROJ-123',
     human_mr: mr,
     agent_diff_stats: { files_changed: 6, insertions: 180, deletions: 40 },
-    overlap: { files_jaccard: 0.5, size_ratio: 1.2 },
+    overlap: {
+      files_jaccard: 0.5,
+      size_ratio: 1.2,
+      tests_added_ratio: 0.5,
+      agent_test_files: 1,
+      human_test_files: 2,
+    },
     agent_review_of_human_mr: [finding],
     predicted_cost: 8.5,
+    shadow_cost: 6.25,
+    reviewer_minutes_estimate: 42.5,
     notes: '',
   },
   ReadinessReport: {

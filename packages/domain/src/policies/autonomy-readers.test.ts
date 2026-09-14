@@ -119,25 +119,30 @@ describe('the dial’s reader table (standing rule 18)', () => {
     expect(Object.keys(AUTONOMY_POLICY_READERS)).toHaveLength(15);
   });
 
-  it('splits into the six policies something reads and the nine it does not', () => {
+  it('splits into the eight policies something reads and the seven it does not', () => {
     const byKind = (kind: 'read' | 'unread'): string[] =>
       Object.entries(AUTONOMY_POLICY_READERS)
         .filter(([, entry]) => entry.kind === kind)
         .map(([policy]) => policy)
         .sort();
-    // The plan-approval gate's five, and since WP-28 the budget gate's one.
+    // The plan-approval gate's five, the budget gate's one (WP-28), and WP-34's two: intake asks
+    // `picksUpNewTickets` before it creates a task, and the shadow batch command asks `shadowMode`
+    // before it creates any. Those two are backlog 72 (c) — *"the only pairing in this entry that
+    // is a single piece of work"* — and this list is the recurrence guard the entry asked for.
     // `suggestedReadinessMin` is **not** among them: the document it travels in is published, and
     // the *suggestion* the screen shows is `suggestedAutonomyCap` over `projects.readiness_level` —
     // a separate function that never reads this field.
     expect(byKind('read')).toEqual([
       'budgetApprovalThresholdUsd',
+      'picksUpNewTickets',
       'planApproval',
       'planApprovalForRiskClasses',
       'planApprovalSizeThreshold',
       'probation',
       'probationTasks',
+      'shadowMode',
     ]);
-    expect(byKind('unread')).toHaveLength(9);
+    expect(byKind('unread')).toHaveLength(7);
   });
 
   it('never leaves an absence unexplained', () => {

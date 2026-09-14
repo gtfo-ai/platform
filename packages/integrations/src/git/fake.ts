@@ -105,6 +105,16 @@
  *     `getPipelineStatus` for both sides and ignores the payload field entirely
  *     (`packages/application/src/pipeline/coverage.ts`). Anything else that reaches for
  *     `coverage_pct` on a delivery owes itself the same check.
+ * 14. **Different — `base_sha` is the target branch's head at the moment the merge request was
+ *     created, and never moves afterwards.** WP-34 added the field to the port because a shadow
+ *     run has to be checked out at the commit the human branched from (Q82 (a)), and this fake has
+ *     no commit graph to compute a merge base from (divergence 9). So `openMergeRequest` records
+ *     the target branch's current head and `seedMergedMergeRequest` takes one explicitly. It is
+ *     **kinder** than GitLab in one way that is worth knowing before trusting a green test: a real
+ *     `diff_refs` is *"empty when the merge request is created, and populates asynchronously"*, so
+ *     production sees `base_sha: null` for a window this fake never has — which is exactly why the
+ *     shadow batch's refusal branch is driven here explicitly (`seedMergedMergeRequest` with
+ *     `baseSha: null`) rather than left to arise.
  */
 import {
   type CodeownersRules,
@@ -246,6 +256,8 @@ interface StoredMergeRequest {
   labels: string[];
   reviewers: string[];
   merged_at: string | null;
+  /** Divergence 14: the target branch's head when the merge request was created. */
+  base_sha: string | null;
   /** Divergence 10: what `getMergeRequestDiff` answers, seeded by `setDiff`. */
   files: FileDiff[];
 }
@@ -363,6 +375,29 @@ export interface FakeGitProvider extends GitProviderPort {
       readonly omitted?: boolean;
     }[];
   }): void;
+  /**
+   * A merge request a **human** merged, already in the past — WP-34's shadow comparison.
+   *
+   * `listMergedMergeRequests` only ever answered merge requests this fake opened and then saw an
+   * `mr.merged` event for, which are the agent's own: a shadow batch compares against somebody
+   * else's history, and there was no way to give the fake any. `baseSha` is explicitly nullable so
+   * that Q82 (a)'s refusal — a merge request whose merge base the provider does not publish — is a
+   * case a test can drive rather than one that has to be waited for (divergence 14).
+   */
+  seedMergedMergeRequest(input: {
+    readonly project?: string;
+    readonly title: string;
+    readonly branch: string;
+    readonly mergedAt: string;
+    readonly baseSha?: string | null;
+    readonly headSha?: string;
+    readonly diffStats?: DiffStats | null;
+    readonly files?: readonly {
+      readonly path: string;
+      readonly diff?: string | null;
+      readonly omitted?: boolean;
+    }[];
+  }): MergeRequest;
   /** Moves the default branch, as a merge on another MR would. */
   moveDefaultBranch(project: string, newHead: string): void;
   /** Every commit `commitFiles` made, oldest first. */
@@ -553,6 +588,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       source_branch: mr.source_branch,
       target_branch: mr.target_branch,
       head_sha: mr.head_sha,
+      base_sha: mr.base_sha,
       mergeable: mr.mergeable,
       has_conflicts: mr.has_conflicts,
       diff_stats: mr.diff_stats,
@@ -973,6 +1009,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         labels: [...draft.labels],
         reviewers: [...draft.reviewers],
         merged_at: null,
+        // Divergence 14: no commit graph, so the target branch's head now *is* the merge base.
+        base_sha: branchOf(draft.project, draft.target)?.head ?? project.head,
         files: [],
       };
       project.nextIid += 1;
@@ -1278,6 +1316,46 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       };
       pipelines.push(pipeline);
       return toPipeline(pipeline);
+    },
+
+    seedMergedMergeRequest: (input) => {
+      const only = [...projects.keys()][0];
+      const projectPath = input.project ?? only;
+      if (projectPath === undefined) {
+        throw invalidRequest(PROVIDER, 'seed_merged_merge_request', 'no project is configured');
+      }
+      const project = requireProject('seed_merged_merge_request', projectPath);
+      const mr: StoredMergeRequest = {
+        project: projectPath,
+        iid: project.nextIid,
+        state: 'merged',
+        draft: false,
+        title: input.title,
+        description: '',
+        source_branch: input.branch,
+        target_branch: project.defaultBranch,
+        head_sha: input.headSha ?? nextSha(),
+        mergeable: true,
+        has_conflicts: false,
+        diff_stats: input.diffStats === undefined ? null : input.diffStats,
+        coverage_pct: null,
+        labels: [],
+        reviewers: [],
+        merged_at: input.mergedAt,
+        base_sha: input.baseSha === undefined ? project.head : input.baseSha,
+        files: (input.files ?? []).map((file) => ({
+          new_path: file.path,
+          old_path: file.path,
+          diff: file.diff ?? null,
+          new_file: false,
+          renamed_file: false,
+          deleted_file: false,
+          omitted: file.omitted ?? false,
+        })),
+      };
+      project.nextIid += 1;
+      mergeRequests.push(mr);
+      return toMergeRequest(mr);
     },
 
     moveDefaultBranch: (project, newHead) => {

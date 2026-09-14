@@ -284,6 +284,36 @@ export const runIntakeCheck = async (
   }
 
   const settings = await options.settings.forProject(projectId);
+
+  /**
+   * **Observe means Observe** — product/18's level 0 is *"No agent MRs"*, and its preset says so
+   * as `picksUpNewTickets: false` (WP-34, PROGRESS backlog 72 (c)).
+   *
+   * Asked **here**, before the bindings are resolved and before the ticket is read, so an Observe
+   * project makes no provider call at all for a ticket it is not going to take: the cheapest
+   * refusal is the one that happens before the work.
+   *
+   * It is the *materialised* preset (BD-027:14) with the project's own overrides on top, which is
+   * what `autonomyPresetFor` answers. A project whose dial was **never materialised** keeps the
+   * pre-WP-34 behaviour and picks the ticket up — `null` is *"this project's dial has never been
+   * applied"* and not *"observe"*, and substituting a preset for it is the read-time re-derivation
+   * BD-027:14 forbids. Migration 0021 backfilled every row that existed and all three writers
+   * supply one, so that branch is reachable only from a harness.
+   *
+   * What it refuses is **creating a task**, which is the whole of what "picks up new tickets"
+   * means: the ticket is left exactly as it was, nothing is posted on it, and a maintainer who
+   * wants it delivered turns the dial. Shadow mode is the other half of the same decision and is
+   * the only thing that runs at this position (`shadow/batch.ts`).
+   */
+  const preset = autonomyPresetFor(settings);
+  if (preset !== null && !preset.picksUpNewTickets) {
+    (options.logger ?? silentLogger).info(
+      { project_id: projectId, ticket_key: ticket.key },
+      'this project’s autonomy dial does not pick up new tickets, so no task was created',
+    );
+    return;
+  }
+
   // One resolution for both reads of this job. Outside a run, so the call's scope holds no minted
   // credential (Q55, `noRunScopedSecrets`); outside every transaction, which
   // `integrationsForProject` refuses to be otherwise.
@@ -652,6 +682,28 @@ const planApprovalGate = async (
   signal: PipelineSignal,
 ): Promise<boolean> => {
   if (signal.kind !== 'stage_completed' || signal.verdict !== 'approve') {
+    return false;
+  }
+  /**
+   * **A shadow task is not gated on plan approval** (WP-34), and the reason is what the gate is
+   * for.
+   *
+   * product/04 S2 asks for a human decision *"before implementation"* because implementation is
+   * what produces a merge request somebody has to live with. A shadow task produces none: every
+   * mutating provider call it makes is refused and recorded as `would_have`
+   * (`assertMutatingActionAllowed`), so there is nothing for an approval to protect.
+   *
+   * It is also the difference between a feature and a nuisance. `shadowMode` is true at exactly one
+   * dial position, **Observe**, whose preset is `planApproval: 'always'` — so without this branch a
+   * ten-ticket batch would stop on ten approval requests and product/19 §21's Phase A
+   * (*"shadow mode on 10 closed tickets each"*) would be ten human clicks before any comparison
+   * existed. Measured: the first walk of this work package's own e2e stopped at
+   * `task.approval.requested` with nothing else to do.
+   *
+   * The **probation** counter is untouched by this: it counts the project's completed tasks, and a
+   * shadow task never completes.
+   */
+  if (stored.task.mode === 'shadow') {
     return false;
   }
   const settings = await options.settings.forProject(stored.task.projectId);

@@ -59,6 +59,11 @@ const EXPECTED_TABLES = [
   'runs',
   'secrets',
   'sessions',
+  // WP-34, migration 0029: the set of tickets somebody selected on one day, and what each was
+  // compared against. `shadow_reports` is a row per **task** and cannot express a batch, which is
+  // what product/19 §13's *"aggregate report per shadow batch"* is about.
+  'shadow_batch_tickets',
+  'shadow_batches',
   'shadow_reports',
   // WP-31 (migration 0024): the ask-the-task thread product/10:57 asks for. `questions` is a
   // *stage's* request for human input (technical/02:24), the opposite direction, so a human's

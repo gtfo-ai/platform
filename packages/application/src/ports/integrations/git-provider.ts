@@ -45,6 +45,22 @@ export const mergeRequestSchema = z.strictObject({
   source_branch: nonEmptyStringSchema,
   target_branch: nonEmptyStringSchema,
   head_sha: shaSchema,
+  /**
+   * The commit this merge request's diff is taken **against** — the merge base (WP-34).
+   *
+   * On the single merge request and deliberately not on {@link mergedMergeRequestSchema}: GitLab
+   * publishes `diff_refs` on *"Retrieve a merge request"* and **not** on *"List project merge
+   * requests"* (measured against docs.gitlab.com/api/merge_requests on 2026-09-14), so a field on
+   * the list shape would be a field every adapter had to invent. A caller that needs the base pays
+   * one request per merge request, which is what `shadow/batch.ts` does for the one it selected.
+   *
+   * `null` is a first-class answer and must not be an exception: GitLab's own documentation says
+   * `diff_refs` is *"empty when the merge request is created, and populates asynchronously"*, and a
+   * provider that publishes no base at all is a provider this field simply cannot answer for. The
+   * shadow batch **refuses the ticket by name** when it is null (Q82 (a)) rather than falling back
+   * to the default branch, which would measure drift instead of similarity.
+   */
+  base_sha: shaSchema.nullish(),
   mergeable: z.boolean().nullish(),
   has_conflicts: z.boolean().nullish(),
   diff_stats: diffStatsSchema.nullish(),

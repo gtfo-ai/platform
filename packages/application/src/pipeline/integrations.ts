@@ -50,6 +50,7 @@ import type {
   Discussion,
   FileDiff,
   GitProviderPort,
+  MergedMergeRequest,
   MergeRequest,
   MergeRequestRefInput,
   PipelineStatus,
@@ -347,6 +348,32 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       { project: git.project, iid: ref.iid, limit },
       context,
       async () => git.port.getMergeRequestDiff(addressed(git, ref), { limit }),
+    );
+  },
+
+  /**
+   * Merge requests a human already merged — WP-34's shadow comparison, and `listMergedMergeRequests`'
+   * first caller since it was built at WP-09.
+   *
+   * A **read**, so it happens in every mode; `since` and `limit` are the caller's, because how far
+   * back a comparison should look is a property of the batch rather than of the provider.
+   */
+  mergedMergeRequests: async (
+    since: string,
+    limit: number,
+    context: CallContext,
+  ): Promise<readonly MergedMergeRequest[] | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'list_merged_merge_requests',
+      { project: git.project, since, limit },
+      context,
+      async () => git.port.listMergedMergeRequests(git.project, since, limit),
     );
   },
 

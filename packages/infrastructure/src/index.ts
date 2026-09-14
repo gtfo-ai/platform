@@ -14,7 +14,9 @@
  * price-table maintenance job (`cost/`). WP-32 added the notification outbox's `NotificationStore`
  * (`notify/`), which is what lets quiet hours defer a message rather than drop it. WP-29 added the
  * human-time projection's `HumanTimeStore` (`human-time/`), the first and only writer of a table
- * that has had a schema since migration 0007. Later work packages add the rest.
+ * that has had a schema since migration 0007. WP-34 added shadow mode's `ShadowStore`
+ * (`shadow/`) — the batch tables of migration 0029, and the first writer of `shadow_reports`, which
+ * has had a schema since migration 0008. Later work packages add the rest.
  */
 export * as ask from './ask/index.js';
 export * as broadcast from './broadcast/index.js';
@@ -32,6 +34,7 @@ export * as redaction from './redaction/index.js';
 export * as runlet from './runlet/index.js';
 export * as runner from './runner/index.js';
 export * as secrets from './secrets/index.js';
+export * as shadow from './shadow/index.js';
 export * as workspace from './workspace/index.js';
 
 export const packageId = '@platform/infrastructure' as const;

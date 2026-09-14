@@ -69,7 +69,11 @@ import {
   runRecordSchema,
   setAutonomyRequestSchema,
   setupGuideResponseSchema,
+  shadowBatchesResponseSchema,
+  shadowBatchResponseSchema,
   startDiscoveryResponseSchema,
+  startShadowBatchRequestSchema,
+  startShadowBatchResponseSchema,
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
   taskAskListSchema,
@@ -120,6 +124,16 @@ export interface Endpoints {
   readonly projectAudit: (
     projectId: string,
   ) => Promise<z.output<typeof projectAuditResponseSchema>>;
+  /** WP-34, product/10:20 — the project's shadow batches and whether another may start. */
+  readonly shadowBatches: (
+    projectId: string,
+  ) => Promise<z.output<typeof shadowBatchesResponseSchema>>;
+  readonly shadowBatch: (batchId: string) => Promise<z.output<typeof shadowBatchResponseSchema>>;
+  readonly startShadowBatch: (
+    projectId: string,
+    body: z.input<typeof startShadowBatchRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof startShadowBatchResponseSchema>>;
   readonly projectTasks: (
     projectId: string,
     query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
@@ -309,6 +323,19 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/projects/${seg(projectId)}/autonomy`, { schema: autonomyResponseSchema }),
     projectAudit: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/audit`, { schema: projectAuditResponseSchema }),
+    shadowBatches: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/shadow-batches`, {
+        schema: shadowBatchesResponseSchema,
+      }),
+    shadowBatch: (batchId) =>
+      client.get(`/api/shadow-batches/${seg(batchId)}`, { schema: shadowBatchResponseSchema }),
+    startShadowBatch: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/shadow-batches`, {
+        method: 'POST',
+        schema: startShadowBatchResponseSchema,
+        body: startShadowBatchRequestSchema.parse(body),
+        idempotencyKey,
+      }),
     projectTasks: (projectId, query) =>
       client.get(`/api/projects/${seg(projectId)}/tasks`, {
         schema: tasksResponseSchema,

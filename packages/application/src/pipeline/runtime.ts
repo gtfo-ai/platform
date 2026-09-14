@@ -55,6 +55,8 @@ import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { ShadowStore } from '../shadow/ports.js';
+import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
 import { dependencyGateHandlers } from './dependency-gate.js';
@@ -108,6 +110,16 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * `APP_DEPENDENCY_REGISTRY_HOSTS` names a host.
    */
   readonly dependencyMetadata?: DependencyMetadataPort;
+  /**
+   * Shadow mode's store (WP-34) — `shadow_batches`, `shadow_batch_tickets` and `shadow_reports`.
+   *
+   * Required rather than optional, unlike {@link PipelineRuntimeOptions.dependencyMetadata}: the
+   * report handler is registered unconditionally and `EVENT_CONSUMPTION` declares
+   * `shadow.report.created` **handled**, so a runtime composed without it would sweep an event it
+   * had promised a consumer for (the sweeper completeness property `consumption.ts` exists to
+   * keep). A deployment that runs no shadow batch simply never produces the event.
+   */
+  readonly shadow: ShadowStore;
 }
 
 export interface PipelineRuntime {
@@ -136,6 +148,10 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     unitOfWork,
     store: options.store,
     settings: async (projectId) => options.settings.forProject(projectId),
+    // WP-34: the separate shadow budget and the comparison base. Supplied here rather than left to
+    // the composition root's `execution` block, because the same store is what makes a shadow task
+    // exist at all — see `StageExecutorOptions.shadow`.
+    shadow: options.shadow,
     ...(logger === undefined ? {} : { logger }),
   });
 
@@ -166,7 +182,11 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ...(options.dependencyMetadata === undefined
       ? {}
       : { dependencyMetadata: options.dependencyMetadata }),
+    shadow: options.shadow,
   };
+  // WP-34: the two shadow handlers and the `shadow_report` duty share one options object, because
+  // they are the deciding and the calling halves of the same feature (WP-15d's shape).
+  const shadowOptions: ShadowReportOptions = { ...options, unitOfWork, shadow: options.shadow };
   const workers: JobWorker[] = [];
 
   return {
@@ -190,6 +210,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...coverageHandlers(options),
       // WP-38: the dependency gate, on the Developer stage's own completion (product/04:58).
       ...dependencyGateHandlers(options),
+      // WP-34: the shadow report at the human stage, and the batch's own completion.
+      ...shadowHandlers(shadowOptions),
       // The notify band (WP-32), TD-005 priority 210 — the one handler outside the core and
       // integrations bands, and the reason `EVENT_CONSUMPTION`'s two budget entries are `handled`.
       ...notifyHandlers(options),

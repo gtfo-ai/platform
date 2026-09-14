@@ -273,6 +273,9 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         systemPromptAppend: prompt.systemPrompt,
         userPrompt: prompt.userPrompt,
         workspacePath: options.workspacePath(task.task.id),
+        // An ask reads the task's record and explains it; it writes nothing and touches no branch,
+        // so the default branch is the only sensible tree (PROGRESS backlog 71's field, WP-34).
+        checkoutRef: null,
         contextPack: [...runContextPack],
         limits: {
           ...runLimitsDefaults,

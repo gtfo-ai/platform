@@ -56,6 +56,17 @@ export interface GitProviderContractContext {
   readonly mergeRequestIid: number;
   readonly missingMergeRequestIid: number;
   /**
+   * A merge request whose **merge base** this harness's fixtures publish, or `null` when none does.
+   *
+   * Named the way {@link GitProviderContractContext.diff}`.omittedPath` is, and for the same
+   * reason: a harness that cannot reach a case says so instead of the suite pretending it did. Both
+   * harnesses shipped with this field name one today — the fake records the target branch's head
+   * when a merge request is opened (divergence 14) and GitLab's recorded `GET
+   * /merge_requests/7` carries `diff_refs.base_sha` — so the suite asserts a **sha**, not a
+   * tolerance (WP-34 review round 2).
+   */
+  readonly mergeBaseIid: number | null;
+  /**
    * Three merge requests whose mergeability the harness has arranged.
    *
    * The third one is the reason this is in the contract at all: a provider that has not finished
@@ -644,6 +655,34 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         // Standing rule 20's direction for a *notification*: a stale CODEOWNERS line must cost a
         // reviewer that is not assigned, never a failed job with a retry behind it.
         expect(await port.resolveUserId(context.reviewer.unknownHandle)).toBeNull();
+      });
+
+      /**
+       * WP-34, Q82 (a): the commit a merge request's diff is taken against.
+       *
+       * **Non-null where the harness arranged one**, which is what round 2 changed: the first
+       * version accepted *"a sha or `null`"* for every harness, and `shaSchema` already refuses an
+       * empty string, a branch name and a truncated sha at the port's own parse — so the case was a
+       * tautology, and a `base_sha: null` mutant in the GitLab adapter passed it while refusing
+       * every real ticket from a shadow batch (`shadow/batch.ts`'s `no_comparison_base`). A harness
+       * whose fixtures publish none says so with `mergeBaseIid: null` and gets the tolerant
+       * assertion, because GitLab documents `diff_refs` as *"empty when the merge request is
+       * created, and populates asynchronously"* and a suite that demanded one would be demanding a
+       * fixture nobody can honestly record. The **refusal** that rests on this is the platform's,
+       * not the adapter's.
+       */
+      it('answers a merge base for the merge request the harness published one for', async () => {
+        const mr = await port.getMergeRequest(
+          mrRef(context.mergeBaseIid ?? context.mergeRequestIid),
+        );
+        if (context.mergeBaseIid === null) {
+          expect(mr.base_sha === null || mr.base_sha === undefined || mr.base_sha.length >= 7).toBe(
+            true,
+          );
+          return;
+        }
+        expect(typeof mr.base_sha).toBe('string');
+        expect(mr.base_sha ?? '').toMatch(/^[0-9a-f]{7,}$/);
       });
 
       it('lists merged merge requests since an instant', async () => {

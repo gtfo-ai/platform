@@ -122,6 +122,54 @@ export const useProjectAutonomy = (projectId: string | null) => {
   });
 };
 
+/** `GET /api/projects/:id/shadow-batches` — the batches and whether another may start (WP-34). */
+export const useShadowBatches = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.shadowBatches(projectId ?? ''),
+    queryFn: () => endpoints.shadowBatches(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
+/** `GET /api/shadow-batches/:id` — one batch's tickets and its computed aggregate (WP-34). */
+export const useShadowBatch = (projectId: string | null, batchId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.shadowBatch(projectId ?? '', batchId ?? ''),
+    queryFn: () => endpoints.shadowBatch(batchId ?? ''),
+    enabled: projectId !== null && batchId !== null,
+    ...FOREVER,
+  });
+};
+
+/**
+ * `POST /api/projects/:id/shadow-batches` (WP-34).
+ *
+ * The key is minted per **intent**, like every other command in this file: starting a batch creates
+ * N tasks, so a double-click must not create 2N. `app/idempotency.ts` carries the argument.
+ */
+export const useShadowCommands = (mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return {
+    startBatch: useMutation({
+      mutationFn: (input: { projectId: string; ticket_keys: readonly string[] }) =>
+        endpoints.startShadowBatch(
+          input.projectId,
+          { ticket_keys: [...input.ticket_keys] },
+          intents.keyFor(['shadow.start', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['shadow.start', input]);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+      },
+    }),
+  };
+};
+
 /** `GET /api/projects/:id/audit` — who changed this project's settings (product/18:5). */
 export const useProjectAudit = (projectId: string | null) => {
   const { endpoints } = useServices();

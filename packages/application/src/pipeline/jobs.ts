@@ -124,6 +124,11 @@ export interface PipelineOutboundData {
      * `allow | ask | block`, and record what it found for the Checks panel.
      */
     | 'dependency_gate'
+    /**
+     * WP-34, shadow mode: compare what a shadow task produced with the human merge request the
+     * batch resolved for its ticket, and write the one `shadow_reports` row.
+     */
+    | 'shadow_report'
     /** WP-32, the notify band: say one thing in the project's chat channel. */
     | 'notify'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */

@@ -2917,7 +2917,7 @@ mirror census (`apps/server/src/routes/settings-mirror.test.ts`) compares the wi
 settings page's command sets and a take-over button belongs to neither screen. So this is now a small
 row of its own, and the two hand-written cases in `client-census.test.ts` stay until it lands.*
 
-### 71. **A run's workspace has no way to say which branch to check out, so technical/05 §2's *"checkout of the task branch for re-entries"* has no carrier — and product/19 § 19's hand-back re-provision is unimplementable as written** (TODO, latent — **no work package owns it**; found while judging WP-27's hand-back, session 5)
+### 71. **A run's workspace has no way to say which branch to check out, so technical/05 §2's *"checkout of the task branch for re-entries"* has no carrier — and product/19 § 19's hand-back re-provision is unimplementable as written** (TODO, latent — **no work package owns it**; found while judging WP-27's hand-back, session 5. **Half built at WP-34**, session 5: `RunSpec.checkoutRef` exists and the planner fills it; one mapping at the provisioner remains, measured at the end of this entry)
 **What is wrong.** `RunWorkspaceProvisioner.provision(spec: RunSpec)`
 (`packages/infrastructure/src/runner/workspace-runner.ts:104-106`) is the whole interface through
 which a run gets a workspace, and `runSpecSchema` (`packages/application/src/ports/runner.ts:145`)
@@ -2966,7 +2966,30 @@ prerequisite of that row and is named on it in `13-implementation-plan.md`. That
 entry an owner — WP-34 depends on it, it does not contain it — but it does mean a second row now
 fails without it, and both of them are downstream of the same production provisioner.
 
-### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (TODO — **no work package owns any of the three**; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
+**Half built at WP-34, session 5 (refiner) — the carrier exists, the chain has exactly one missing
+link, and it is measured.** The field this entry asked for is `RunSpec.checkoutRef`
+(`packages/application/src/ports/runner.ts:187`, `nonEmptyStringSchema.nullable()`), and the planner
+fills it: `checkoutRefOf` is `request.checkoutBase ?? request.task.branch ?? null`
+(`packages/application/src/pipeline/planner.ts:569-570`, used at `:735`), where `checkoutBase` is the
+shadow batch's recorded merge base for a shadow task (`stage-executor.ts:508-513`, through
+`shadow.checkoutBaseFor`) and `tasks.branch` for every other — which is technical/05 §2's *"checkout
+of the task branch for re-entries"* and product/19 §19's re-provision, sourced at last. **What remains
+is one mapping**, read off disk (greps only, rule 66): `checkoutRef` occurs outside its own docblocks
+in exactly six places — `ports/runner.ts:187`, `planner.ts:569,735`, `ask/planner.ts:278` (`null`, an
+ask has no workspace), `pipeline/live-runs.test.ts:43` and `infrastructure/src/runner/fixtures.ts:53`
+— and **`checkoutBranch` occurs in none of them**, so the two halves of the chain still never meet:
+`WorkspaceSpec.repo.checkoutBranch` (`ports/workspace.ts:107`) is set only by `buildWorkspaceSpec`
+(`infrastructure/src/workspace/spec.ts:199`), which still has **no production caller**, and the Docker
+provider honours it (`provider.ts:676,700`). The field's own docblock states that nothing honours it
+(`ports/runner.ts:178-186`), so nothing here is implied. **What "done" looks like** narrows to:
+whoever composes the production `RunWorkspaceProvisioner` passes `spec.checkoutRef` into
+`buildWorkspaceSpec({checkoutBranch})` and answers the *"branch not on the remote"* question in the
+same change; the rest of this entry's remedy is built and asserted. **Owner unchanged: none** — still
+Q52's transport half or WP-15g's successor — and the second consumer is now measured rather than
+predicted, because a shadow batch that silently started from the default branch would publish a
+similarity figure that measures drift, which is the one number the feature exists for.
+
+### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (TODO for **(a)** and **(b)** — **no work package owns either**; **(c) RESOLVED** at `<sha>`, WP-34, session 5 — `picksUpNewTickets` and `shadowMode` both read, and `autonomy-readers.test.ts`'s split assertion moved with them to **eight** read / **seven** unread; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
 **What is wrong.** WP-30 materialised the dial and gave five policies a reader; the enumeration it
 left behind says the rest out loud. The discovered-work bullet, quoted: *"six are read by the
 plan-approval gate and the read endpoint, `budgetApprovalThresholdUsd` is **WP-28's** (its row names
@@ -3047,6 +3070,17 @@ future row takes it, (b) is a small row of its own whose acceptance is already w
 **blocked on a product answer for one of its two halves**: *what "park after architecture" means for a
 task that has produced its plan and will produce nothing else*, filed as **Q79** with a
 recommendation. `businessReview` is not blocked on anything.
+
+**(c) — RESOLVED at `<sha>`, WP-34 (session 5; the change is uncommitted at the time of writing and
+the sha is the one WP-34's plan row carries).** `picksUpNewTickets` is read in `runIntakeCheck`
+(`packages/application/src/pipeline/saga.ts`), before the project's bindings are resolved, so an
+Observe project makes no provider call for a ticket it is not taking; `shadowMode` is read by
+`startShadowBatch` (`packages/application/src/shadow/batch.ts`). Both `AUTONOMY_POLICY_READERS`
+entries are `kind: 'read'` with a citation, and `autonomy-readers.test.ts`'s split assertion moved
+with them — **eight** read, **seven** unread — which is the recurrence guard this paragraph asked
+for. A dial that was never materialised keeps the pre-WP-34 behaviour on both, because `null` is
+*"never applied"* and not *"observe"* (BD-027:14). **(a) and (b) are still unowned.** The original
+entry follows.
 
 **(c) Two are what *Observe* means, and they belong to shadow mode.** `picksUpNewTickets` (nothing in
 intake asks it; the `intake_check` duty asks the ticket label and the WIP limits) and `shadowMode`
@@ -4785,6 +4819,201 @@ platform-owned outbound call — and the trigger that makes it urgent is exactly
 one is where an unstated convention becomes two inconsistent ones. Related: **Q84** records WP-38's
 deviation and its reasoning (and should not be re-litigated here); backlog **48** is the egress-policy
 half and stays open for bindings; WP-38's plan row carries the deviation against its own criterion 4.
+
+### 98. **A GitLab fixture publishes `diff_refs` on the *list* merge-requests response, which the vendor documents on the single merge request only — and the same over-claim at a second site is the one the adapter actually reads** (TODO, small — a **provenance** correction, not a defect in the adapter; **no work package owns it**; found by WP-34, session 5; cheapest owner **WP-35**)
+**What is wrong.** One cause at two sites: a recorded body carries a field the cited page does not
+publish *for that endpoint*, under the label `documented`. That is what standing rule 17 exists for —
+a fixture that documents a field the vendor does not publish invites the next adapter to read it.
+
+**Evidence.** Quoted from WP-34's discovered-work bullet:
+
+> *"The interaction is labelled `kind: documented` against `https://docs.gitlab.com/api/merge_requests/`,
+> and that page's "List project merge requests" example carries no `diff_refs` — the object is
+> documented on "Retrieve a merge request" only, with the note that it is "empty when the merge
+> request is created, and populates asynchronously" (read 2026-09-14)."*
+
+Read off disk while filing (refiner, session 5; file reads and greps only, rule 66):
+
+- **Site 1, the list.** `test/fixtures/http/gitlab/history.json`, interaction 0 —
+  `GET /projects/acme%2Fapi/merge_requests?state=merged&updated_after=…` — carries
+  `diff_refs: {base_sha, head_sha, start_sha}` in its body, under
+  `source: {url: "https://docs.gitlab.com/api/merge_requests/", retrieved: "2026-09-10",
+  kind: "documented", note: "\"List project merge requests\" with the documented state,
+  updated_after, order_by and sort attributes"}`. The note names **four attributes** and does not
+  name this object.
+- **Nothing reads it, which is what makes site 1 latent.** `listMergedMergeRequests`
+  (`packages/integrations/src/providers/gitlab/provider.ts:860-917`) does **not** call
+  `toMergeRequest`: it builds `MergedMergeRequest` by hand and takes `head_sha: mr.sha ?? null`.
+  `diff_refs` appears in the adapter at three lines only — `:326`, `:347`, `:685` — all on the
+  single-merge-request path.
+- **Site 2, the create response — and this one *is* read.** The bullet does not name it.
+  `test/fixtures/http/gitlab/merge-requests.json` interaction 0
+  (`POST /projects/acme%2Fapi/merge_requests`) is labelled `documented` with the note *"\"Create a
+  merge request\" example response"* and carries a **populated** `diff_refs.base_sha`, while the
+  field mapped out of it is documented as *"empty when the merge request is created, and populates
+  asynchronously"* — quoted from the fake's own divergence register
+  (`packages/integrations/src/git/fake.ts:110-118`, divergence **14**: *"production sees
+  `base_sha: null` for a window this fake never has"*). `toMergeRequest` maps
+  `base_sha: source.diff_refs?.base_sha ?? null` (`provider.ts:347`) and the create path goes through
+  it (`:605`).
+- **No test is falsely green today**, which is why this is provenance and not a defect: the contract
+  case asserts *"a sha or `null`, never a fabricated value"*
+  (`test/contract/support/integrations/git-provider-contract-suite.ts:661-665`).
+
+**Which label, and is the `source` block honest?** The block is honest about *where the document came
+from* and over-claims *what the cited page publishes there*, and the suite cannot tell the two apart —
+it says so itself, under *"What it cannot assert"*: *"That the body actually matches the cited example
+… a reviewer comparing the file with the page is the only thing that catches that"*, and *"That the
+label is honest"* (`test/contract/support/integrations/fixture-provenance.ts:83-96`). So the remedy is
+the **label**, not a new check, and no new check is owed: detecting this mechanically means encoding
+which fields each endpoint publishes, which is a second copy of the vendor's page (rule 7). One line
+per site. **Site 1 — delete the `diff_refs` object** from the list body and keep `kind: documented`:
+nothing reads it, and a recorded conversation should be what GitLab sends. **Site 2 — relabel
+`documented-adapted`** with a note saying the merge base was populated so the create path has one to
+map and that production may answer `null` for a window; the suite requires a note for every label that
+is not plain `documented` (its assertion 8), which is the whole difference between the labels.
+
+**What it costs to leave.** The next adapter reads `diff_refs` off the **list** and saves N requests —
+and against a real instance the field is absent, so `base_sha` is `null` for every entry and
+`startShadowBatch` refuses **every** ticket of every batch by name (`no_comparison_base`), which reads
+as *"no ticket in this project has a merge base"* rather than as a bad read. That is precisely the
+cheap wrong answer WP-34 declined: it pays one `GET` per selected merge request instead.
+
+**What "done" looks like.** The two `source` blocks say what their bodies are;
+`test/fixtures/http/gitlab/SOURCES.md` gains the sentence that the list response publishes no merge
+base (today it says only that the `state`/`updated_after`/`order_by`/`sort` attributes come from the
+three examples, `:58`); the contract tier stays green, because nothing asserts the deleted field.
+**Needs measurement: none** — what it needs is one human re-read of
+`https://docs.gitlab.com/api/merge_requests/`, which also renews the `retrieved` dates and which no
+local check can do.
+
+**Depends on / owner.** No dependency. **No work package owns it.** Cheapest owner: **WP-35** (history
+bootstrap), whose subject is the first production caller of `listMergedMergeRequests` and which reads
+this very fixture; failing that, whoever next touches the GitLab corpus. Related and distinct: backlog
+**41** is the same class at another provider (a cited page that does not list what the fixture claims).
+
+### 99. **A replayed shadow-batch command performs nothing and leaves two rows saying it did something, because it is the one command surface on this build that does not answer the previous attempt** (TODO, small — WP-34's own assumption (d), reversible in one function swap; **no work package owns it**; found by WP-34, session 5)
+**What is wrong.** `POST /api/projects/:id/shadow-batches` guards its `Idempotency-Key` with
+`assertIdempotentRequest` (refuse a different body) where every other command on this build uses
+`idempotentReplay` (refuse a different body **and** answer the first attempt). The effect the row's
+criterion named is unchanged; two durable artefacts are not.
+
+**Evidence.** Quoted from WP-34's discovered-work bullet:
+
+> *"A replay with the same body performs nothing twice — the unique index `(project_id, ticket_key,
+> mode)` turns every ticket into an `already_shadowed` refusal, and the task count is unchanged — but
+> it does leave a second `shadow_batches` row whose tickets are all refusals, which a founder sees on
+> the Shadow screen as a batch that did nothing."*
+
+Read off disk while filing (refiner, session 5; no test run, rule 66):
+
+- **A replay leaves two rows, not one.** The handler reaches `commands().startBatch(...)` on every
+  accepted request (`apps/server/src/routes/shadow.ts:186-193`) — a second `shadow_batches` row — and
+  then records a second audit row unconditionally (`recordAction`, `:204-215`). WP-15i's rule for the
+  command surface is *"every accepted command leaves one `human_actions` row and none is left for a
+  refused one"*; a replay is accepted, performs nothing, and leaves one.
+- **The counting assertion exists for the neighbouring case and not for this one.** *"refuses a
+  different body under a used key, and performs nothing"* asserts *"one call to the command and one
+  audit row, not two"* (`apps/server/src/routes/shadow.test.ts:199-208`); *"accepts a replay of the
+  same body under the same key"* asserts `statusCode === 202` and **no count at all** (`:210-214`).
+  So the row's criterion 1 — *"`Idempotency-Key` performing nothing twice asserted on a **countable**
+  effect (N tasks, one `human_actions` row)"* — was met on the effect it named and is untested on the
+  two it did not.
+- **The close needs no new read and has three precedents.** `idempotentReplay` already answers the
+  previous attempt's `params` — *"so its answer can carry what it made"*
+  (`apps/server/src/routes/idempotency.ts:166-201`) — and returns before any effect, writing no second
+  audit row (`apps/server/src/routes/commands.ts:377-398`); `settings.ts:200` and `asks.ts:180` are the
+  other two users. The shadow route **already performs the same read** (`options.queries.previousAttempt`,
+  `shadow.ts:172-176`) and already records `batch_id` in the row it would read back (`:205-215`). So the
+  change is which helper the handler calls, plus answering the first batch's id.
+- **It is not an oversight, and the docblock argues for what shipped**: *"a replay creates a batch
+  **row** whose tickets are all refusals, which is honest (somebody asked twice, and the second ask ran
+  nothing) and is countable"* (`shadow.ts:16-26`), citing `routes/onboarding.ts`'s *"there is no stored
+  **response**"*. The distinction this entry draws is that answering the previous attempt's **id** from
+  `human_actions` is not a stored response — it is the mechanism WP-15i already ships — so the trade
+  WP-21 declined is not the trade being made here.
+
+**What it costs to leave.** Live, and small: a founder who double-submits sees a batch that did nothing
+on the Shadow screen (the bullet's own cost), the audit reads as two commands where one was performed,
+and `spent_usd` on the list gains a row of zeros. Nothing is lost and no task is created twice. It gets
+worse only if a batch id is ever used as an identity by something outside the screen.
+
+**What "done" looks like.** A same-key, same-body replay answers **202** with the **first** batch's
+`batch_id` and its ticket outcomes, creates no second `shadow_batches` row and writes no second
+`human_actions` row — asserted as counts beside the existing different-body case (rule 79's shape: the
+assertion is on the count, not on the status code). The different-body refusal is unchanged. **Needs
+measurement: none.**
+
+**Depends on / owner.** No dependency. **No work package owns it.** Cheapest owner: whoever next opens
+`apps/server/src/routes/shadow.ts`; the same reading would confirm no other command surface still uses
+`assertIdempotentRequest` where `idempotentReplay` is available. Related: backlog **47** (the general
+`Idempotency-Key` gap WP-15i closed) is the ancestor of the mechanism, not of this entry.
+
+### 100. **Two of product/19 §13's shadow-report items have no producer, and both want the same missing thing — a Reviewer pass over the *human* merge request; one is refused by name and the other is a field that is `null` on every report** (TODO — **no work package owns it**; found by WP-34, session 5)
+**What is wrong.** One cause, two symptoms. The shadow report compares what the agent built against
+what the human merged, and nothing on this build ever *reads* the human's merge request for meaning —
+only for its diff. So the two items that are judgements about the human's work are absent: one as a
+missing field, one as a field that is always `null`.
+
+**Evidence** (refiner, session 5; file reads only, rule 66). product/19:132, quoted:
+
+> *"comparison: file-overlap Jaccard, size ratio, tests added ratio, **acceptance criteria the human
+> MR covers vs the agent's**; **Reviewer findings the human MR would have received (posted nowhere)**"*
+
+- **Symptom 1 — refused by name, correctly.** `shadowReportDataSchema`'s docblock, quoted:
+  *"The agent's half exists (`AcceptanceVerdict.criteria`, one status per criterion). The **human's**
+  half is a semantic judgement about somebody else's diff against a ticket's acceptance criteria, and
+  nothing on this build makes it … A field carrying only the agent's side would read as a comparison
+  when it is a single measurement, so there is no field. The work is a Reviewer run over the human
+  merge request with the ticket's criteria in its prompt, which is a stage this template does not
+  have"* (`packages/contracts/src/artifacts.ts:267-292`).
+- **Symptom 2 — a field that exists and is never filled.** `agent_review_of_human_mr` is on the schema
+  and the writer sets it unconditionally: `const findings: readonly ReviewFinding[] | null = null;`
+  (`packages/application/src/shadow/report.ts:388,401`), with a note pushed onto **every** report —
+  *"no reviewer looked at the human merge request: nothing in this build reviews somebody else's diff
+  during a shadow task"* (`:384-386`). The schema says the same and says why `[]` would be worse
+  (`artifacts.ts`, the `agent_review_of_human_mr` docblock).
+- **The agent's half needs no derivation**: `acceptanceVerdictDataSchema.criteria[]` is
+  `{id, status: 'met' | 'not_met' | 'untestable', evidence}` (`packages/contracts/src/artifacts.ts:164-176`).
+- **The capability exists on a different template.** Review-only mode is a one-stage
+  `REVIEW_ONLY_TEMPLATE` task, in `mode: 'normal'`, that runs the Reviewer over a **human-authored**
+  merge request and stores a `ReviewVerdict` (`packages/application/src/pipeline/review-only.ts:8,113-114,856`).
+  So the missing piece is not a reviewer — it is a reviewer run *inside* a shadow batch whose findings
+  are stored and posted nowhere, which the shadow guard already guarantees
+  (`assertMutatingActionAllowed`).
+
+**Is it a defect?** No — it is the system working as designed and the **specification being ahead of
+the build**, stated at both lines rather than implied. What makes it worth an entry is that the report
+is the feature's whole output: product/18:24 sells shadow as *"the demo and the calibration tool"* and
+*"how close"* is currently answered by file overlap alone, which counts *where* the two diffs touched
+and never *whether either met the ticket*. Two of the six comparison items product/19 §13 lists are
+missing, and the `notes` string is the only place a reader is told.
+
+**What it costs to leave, and what makes it urgent.** Nothing today: no shadow batch has run against a
+real board. The trigger is product/19 §21's Phase A — the first ten-ticket batch a founder reads — and
+the risk is that a similarity number with no criteria coverage beside it is read as *"the agent got it
+80 % right"*, which is a claim the report does not make.
+
+**What "done" looks like.** One reviewer run per shadow ticket over the human merge request, its
+findings stored in `shadow_reports` and posted nowhere, and the criteria comparison published as
+**two sides or not at all** (rule 16). One decision the implementer must take rather than discover, with
+a recommendation: **whose criteria are the yardstick.** The only structured list the platform holds is
+`RefinedSpec.acceptance_criteria` (`packages/contracts/src/artifacts.ts:72`) — the ticket's own criteria
+are unstructured text inside `tasks.ticket_snapshot` — so use the **agent's** list, say so in the
+report's `notes` and on the screen, and never publish *"the human missed N criteria"* without that
+label, because the list was written by the run being measured. The cost is already bounded by the
+existing cap: a second run per ticket is spend the shadow budget counts (`shadowSpendSince`). **Needs
+measurement**: what a reviewer pass over a human merge request costs per ticket — WP-24's number,
+never measured in a batch — which is the same unknown as product/18:24's *"~$5–15 per ticket"* (in
+`docs/TODO.md`).
+
+**Depends on / owner.** Depends on nothing new. **No work package owns it.** Cheapest owner: whoever
+next opens `packages/application/src/shadow/report.ts`, and the adjacency is **WP-24**'s template
+rather than a new stage. Related and distinct: backlog **95** names *"acceptance criteria met"* for the
+**Checks panel** — same words, different surface, different missing half (there the verdict exists and
+the projection is missing; here the human side has no producer at all). **WP-45** (proposed on the M3
+page, backlog **91**) is the only row that opens the reviewer's prompt and its eval cases, so if the
+run needs prompt text it is the cheapest place to put it.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -17043,7 +17272,259 @@ and both reviewer-record writes → *"records no assignment when the provider re
 is about"* and *"records a shadow task's assignment as would_have…"*.
 
 
+### WP-34 — shadow mode, the ShadowReport and the Shadow screen
+
+**What shipped**: the producer for a guard that had been complete since WP-07 and had never been
+reached. A batch command in WP-15i's shape, N ordinary tasks with `mode = 'shadow'`, the report
+`shadow_reports` has waited twenty-six migrations for, its first consumer, the separate budget with a
+carrier, both of backlog 72 (c)'s dial policies, and the Shadow screen. Migration **0029**
+(`shadow_batches`, `shadow_batch_tickets`).
+
+**1. A batch is N tasks and there is no second entry point.** `POST /api/projects/:id/shadow-batches`
+→ `startShadowBatch` → one `tasks` row per key on the project's own ticket templates. Everything after
+that is the machinery every run goes through: the admission guard, the cost ledger, the transcript,
+the budget cap, the conflict retry, the escalation — `onboarding/discovery.ts`'s argument, taken a
+second time. The **guard** was already complete (`assertMutatingActionAllowed`,
+`IntegrationActionExecutor`'s `would_have` branch, `runModeFor`); this row is what drives a task
+through it, which is why WP-37's *"no tier drove a shadow task through this write"* note is now false.
+
+**2. The e2e counts what reached the provider, from both sides.** A two-ticket batch walks both
+templates and leaves **only** `would_have` on every mutating action (`upsert_workpad`, `transition`,
+…) and no comment on either ticket, read out of `integration_actions` and out of the fake board's own
+store; the unit tier holds the other direction — a normal task in the same harness records `ok` on the
+same actions. `runs.mode = 'shadow'` is asserted in both tiers; nothing had ever driven it.
+
+**3. Observe means Observe, both ways.** `picksUpNewTickets` is read in `runIntakeCheck`, **before**
+the bindings are resolved, so an Observe project makes no provider call for a ticket it is not taking;
+`shadowMode` is read by the batch command. Both `AUTONOMY_POLICY_READERS` entries moved to
+`kind: 'read'` and the split assertion in `autonomy-readers.test.ts` moved with them (eight read, seven
+unread), which is the recurrence guard backlog 72 (c) asked for. A dial that was **never materialised**
+keeps the pre-WP-34 behaviour on both: `null` is *"never applied"* and not *"observe"*.
+
+**4. A shadow task is not gated on plan approval, and that was measured rather than reasoned.** The
+first walk of this row's own harness stopped at `task.approval.requested` with nothing else to do:
+`shadowMode` is true at exactly one dial position and that position's preset is `planApproval:
+'always'`, so a ten-ticket batch would have been ten human clicks before any comparison existed —
+product/19 §21's Phase A, unusable. `planApprovalGate` now returns early for `mode === 'shadow'`, with
+the reason at the line: the gate protects a merge request, and a shadow task's is refused by
+construction. **An assumption a reviewer may reverse**, and the cheapest reversal is deleting three
+lines.
+
+**5. The report's four missing fields: three added, one refused by name.** `shadowReportDataSchema`
+gains `overlap.tests_added_ratio` (with both counts beside it, because the ratio is `null` when the
+human added no test file), `shadow_cost` beside `predicted_cost`, and `reviewer_minutes_estimate`
+(product/19 §16's arithmetic, `human-time/minutes.ts`'s own functions, applied to the human merge
+request's non-system notes). *"Acceptance criteria the human MR covers vs the agent's"* has **no
+field**: the agent's half exists and the human's is a semantic judgement no run on this build makes,
+and a field carrying one side would read as a comparison. Three fields also became **nullable** —
+`agent_diff_stats`, `overlap` and `agent_review_of_human_mr` — each with the reason at the line; `[]`
+for the findings would claim a reviewer looked.
+
+**6. The batch report is a projection, not a fifth stored number.** `summariseShadowBatch`
+(`packages/domain/src/shadow/comparison.ts`) over the batch's rows, computed on every read:
+cost-by-**median**-per-size (absent bands absent, not zero), a **fixed** five-bucket similarity
+histogram so two batches can be compared, and the launch candidates with both of product/19 §13's
+undefined words defined at the code — *high* is the 0.6 bucket boundary, *low* is at or below this
+batch's own median cost.
+
+**7. `shadow_reports` has a writer and `shadow.report.created` a consumer.** The trigger is
+`task.stage.entered` for a stage the compiled pipeline calls `kind: 'human'`, because **a shadow task
+never finishes**: `ready_for_merge` advances on `mr.merged`, which cannot arrive for a merge request
+the platform was refused permission to open. Keyed on the stage's *kind* rather than on the id, since
+the pipeline is data. The duty is `pipeline.outbound` (three provider reads), writes the row, the same
+document as a `ShadowReport` artifact and the event in **one** transaction, and `insertReport` answers
+whether it wrote — so a redelivery appends no second event. The consumer marks the batch complete once
+every task of it has a report.
+
+**8. The separate budget is the executor's own check, and the reason it is not a `budgets` row is
+stated.** `features.shadow_mode.budget_usd` lives in `.agentic/config.yml`, the window is fixed at the
+month by product/18's own wording, and the spend is grouped by `tasks.mode` — which is a filter, not a
+`budget_scope`. So it sits beside `taskBudgetExhausted` in `stage-executor.ts`, asked only for a shadow
+task, summed from `cost_entries`. The e2e proves it end to end at a cap chosen so it bites on the
+**second** admission (2.50: `refinement` may spend 2, `architecture` 5, each scripted run costs 0.40),
+which is what leaves a ledger row to read; a cap below 2 would only prove a number was compared with
+zero. UTC rather than the organisation's zone, stated at the call.
+
+**9. Q82 implemented as its recommendation.** (a) the merge base from `MergeRequest.base_sha` — a
+**new port field**, mapped from GitLab's `diff_refs` on the *single* merge request because the list
+endpoint does not publish it (measured against the vendor's page, 2026-09-14), with a contract-suite
+case, the fake's divergence **14** and `seedMergedMergeRequest`; a ticket whose base is null is refused
+**by name** and gets no task. (b) links first, then a title/branch scan, with the source recorded and
+shown. The link path compares the provider's own `ref.url` with the link before accepting it, which is
+what stops `other/project!7` being resolved against this project's `!7`. (c) is structural. The
+**boundary rule in `mentionsTicketKey` was measured, not reasoned**: `\b` matches `PROJ-1` inside
+`PROJ-12`, and treating `-` as part of the key makes `feature/proj-1-totals` miss — so the class is
+`[A-Za-z0-9_]` and both cases are in the test.
+
+**10. Backlog 71's carrier exists.** `RunSpec.checkoutRef`: the shadow base for a shadow task, else
+`tasks.branch`, else `null` (the default branch). **Nothing honours it yet** and the field says so —
+no production `RunWorkspaceProvisioner` is composed (WP-15g) — and it is carried now for the reason
+backlog 71 gives: after a provisioner exists, every run silently starts from the default branch.
+
+**11. Rule 83.** The feature card's caveat (*"nothing in this build starts a shadow batch"*) is gone,
+the budgets panel's *"neither feature has a runner"* sentence now says which of the two does,
+`EVENT_CONSUMPTION`'s entry and its "28 of them" arithmetic are corrected, and the two
+`AUTONOMY_POLICY_READERS` `why` strings are replaced by citations.
+
+**Assumptions a reviewer may reverse.** (a) The plan-approval skip in point 4. (b) **Both** gates must
+say yes — `features.shadow_mode.enabled` (BD-028's opt-in) *and* the dial — rather than WP-30's
+*"the opt-in key wins"*; they answer different questions and each refuses by its own name. (c) The
+batch skips the **WIP admission**, for `review-only.ts`'s and `ticket-lint.ts`'s reason: a queued task
+is dequeued on `task.completed`, which a shadow task never reaches, so a parked batch would be parked
+for ever. What bounds the spend is the shadow budget and `MAX_SHADOW_BATCH_TICKETS` (25). (d) A
+**replay** of the batch command under the same key creates a batch row whose tickets are all
+`already_shadowed` refusals rather than answering the first batch: there is no stored response, the
+unique index does the deciding, and the countable effect (N tasks) is unchanged. (e) `spent_usd` on the
+list is summed from `tasks.cost_actual` and can lag the ledger; the **budget** is enforced against
+`cost_entries`, where lagging would be a defect.
+
+**Needs measurement (rule 66, not run here).** Q82 (a)'s **refusal rate** — how many of ten real
+closed tickets have a human merge request whose merge base a provider will publish — which is the
+thing the open question asks a human to confirm. And product/18:24's *"~$5–15 per ticket"*: the e2e's
+figures are the fake runner's 0.40 per stage.
+
+**12. Eleven canaries, each file restored to its pre-mutation md5** (rules 3, 21, 62, 77; the
+harness is in the scratchpad and each mutant was applied in place and reverted, with `md5 -q` read
+before and after). Dropping Q82 (a)'s refusal → *"refuses a ticket whose human merge request
+publishes no merge base"*. Putting `-` back into the token boundary → *"matches a whole token …
+never a longer key"* **and** the branch scan. Dropping the link's URL confirmation → *"refuses a link
+whose iid resolves to a different merge request"*. Disabling the shadow cap → *"stops a shadow run
+when the month's shadow spend has reached the cap"*. Firing the report at every stage → *"writes one
+row and announces it once"*. Removing the `picksUpNewTickets` refusal → *"creates no task for a new
+ticket on an Observe project"*. Skipping the idempotency assertion on the route → *"refuses a
+different body under a used key"*. Handing on an unreadable report → *"drops a document the schema
+refuses"*. Rendering a report-less ticket as measured → the screen's four-reason case.
+
+**Two canaries survived, and both changed the code rather than the comment.** (a) `if (false) { return
+false; }` in place of the report duty's `if (!inserted)` left every test green: the *store's* answer
+was asserted and the duty's **use** of it was not, so a redelivery would have written a second
+artifact and appended a second `shadow.report.created`. A case that fires `runShadowReport` twice
+now kills it (rules 3 and 68 — the half nobody notices is missing). (b) `filesJaccard` opened with
+`if (a.size === 0 && b.size === 0) return 1` **and** ended with `union === 0 ? 1 : …`, and deleting
+the first changed nothing — standing rule 41's *"a value bounded twice has two untestable guards"*.
+The opening is gone and the ending is the single source; the mutant on it dies by name.
+
+**For CLAUDE.md's "Where to look", if the orchestrator wants it** (this file is the orchestrator's, so
+the wording is here rather than there): *"**Shadow mode** (WP-34): a batch is N ordinary tasks with
+`mode = 'shadow'` — `packages/application/src/shadow/batch.ts` is the only thing that creates one, and
+the guard it drives (`assertMutatingActionAllowed`, the executor's `would_have` branch) shipped at
+WP-07 and had never been reached. Q82 is implemented as its recommendation: the comparison is anchored
+at the **human merge request's merge base** (`MergeRequest.base_sha`, GitLab's `diff_refs` on the
+single merge request — the list endpoint does not publish it) and a ticket whose base cannot be
+resolved is **refused from the batch by name** rather than run against today's tree;
+`shadow/human-merge-request.ts` finds the merge request by the ticket's links first and a title/branch
+scan second, and records which. The report is `shadow/report.ts`, written at the one `kind: 'human'`
+stage a shadow task reaches because it never finishes, and the **aggregate is a projection** —
+`summariseShadowBatch` in `packages/domain/src/shadow/comparison.ts`, computed on every read rather
+than stored. The separate budget (`features.shadow_mode.budget_usd`) is the stage executor's own check
+against `cost_entries` grouped by `tasks.mode`, not a `budgets` row, and `stage-executor.ts` says why.
+`RunSpec.checkoutRef` is backlog 71's carrier and nothing honours it yet."*
+
+
+**Review round 2:** one major, five minors and a nit, each closed by making the code true rather
+than the sentence smaller; eight canaries, every file restored to its pre-mutation md5 (rules 3,
+21, 62, 77).
+
+- **The invented zero is gone** (major). `size_ratio` answered `0` whenever the human side had no
+  countable line — reachable on every merge request whose patches a provider declines to render,
+  since `report.ts` counts an omitted patch as zero lines — and the Shadow screen printed *"size
+  ratio: 0.00"*, which reads as *"the agent changed nothing"* (rule 16). It is now **nullish**
+  like `tests_added_ratio`, in the domain, in `shadowReportDataSchema` (regenerated) and on the
+  screen (*"no countable human lines"*), and the **both-empty** case that the code answered `1`
+  for while its own docblock claimed `0` is `null` too: two empty diffs being identical is
+  `filesJaccard`'s answer, not a ratio's. Both docblocks were corrected and both directions are
+  asserted. An unrendered patch is now **announced**: `summarise` counts the files that carried no
+  counted line and `notes` names the side and the count, so an absent number is a measurement and
+  not a gap. Canaries: the old ternary restored (kills the domain and the report case); the
+  screen's `?? 0` restored (kills the ui case).
+- **`candidates` is carried rather than claimed** (minor 1, rule 86). The resolver's docblock
+  justified *"most recently merged wins"* by *"`notes` says how many candidates there were"* while
+  the count was computed and discarded. It is now a column (`shadow_batch_tickets.human_mr_candidates`,
+  written by `startShadowBatch`) and a sentence in `notes` when it is more than one, naming the
+  direction of the error. A canary that wrote `null` for both new fields **survived** the first
+  time — the store suite proved the round-trip and nothing proved the *writer* — so `batch.test.ts`
+  now asserts both on the row, and the canary dies.
+- **The merge instant is used** (minor 4). `reviewerMinutesFromDiscussions` was always given
+  `until: null`, so product/19 §16's *"to merge"* half never applied and every figure under-counted.
+  `match.mergedAt` now rides on the same row (`human_mr_merged_at`) and the duty passes it; the gap
+  rule still refuses a merge a week after the last comment, and all three cases are asserted.
+  Both columns went into migration **0029** itself rather than a 0030: it is this work package's
+  own file and has never been applied outside a test container (TD-011 is about an *applied*
+  migration), and a second file for a table created in the same uncommitted change would be
+  archaeology.
+- **The `base_sha` contract case is no longer a tautology** (minor 2). `shaSchema` already refuses
+  an empty string, a branch name and a short sha, so *"a sha or null"* asserted nothing: the
+  measured proof is that a `base_sha: null` mutant in the GitLab adapter **passed** it while
+  refusing every real ticket from a batch. The context gained `mergeBaseIid` (the
+  `diff.omittedPath` shape: a harness that cannot reach the case says so), both shipped harnesses
+  publish one, and the case now demands a sha. The same mutant now dies by name.
+- **The batch read is project-scoped** (minor 3). Its docblock cited `GET /api/runs/:id` as *"the
+  same position"*, which runs have not been in since WP-15h — they use `scopeToProject` plus a
+  project-scoped permission. It now does the same (`projectOfBatch`, one column, read before the
+  guard), so a membership in the batch's project promotes and the 404 for a batch nobody has comes
+  from the resolver before any permission is decided. `routes/scope.test.ts`'s pairing census
+  covers the new hook by construction.
+- **The plan-approval skip has a test** (minor 5, rule 42). The pair isolates the **mode**: one
+  policy document — Observe's, the only position `shadow_mode` is true at and whose `plan_approval`
+  is `always` — with `picks_up_new_tickets` overridden true, so the same dial produces a shadow
+  task (no `task.approval.requested`, and the walk asserted so rule 10 holds) and an ordinary one
+  (exactly one). Deleting the three lines the notes offer as the reversal now fails by name.
+- **The nit**: the Shadow screen's docblock claimed it renders the human merge request's title.
+  `MergeRequestRef` carries none, so the claim is corrected rather than a field invented.
+- **Two small things found on the way, neither fixed here.** (a) `harnessWith` in `saga.test.ts`
+  spreads `...options` after its own `git` defaults, so a test that overrides one git method loses
+  the rest — restored explicitly in the new case, stated here because the next test to override
+  `git` will meet it. (b) The pipeline harness's default `readTicket` **echoes the ref it is
+  handed**, and `startShadowBatch` addresses a ticket by key with `url: ''`, which `createTask`
+  refuses — so any harness-driven batch needs a `readTicket` override. That is the fake being
+  kinder than the adapter in a way rule 1 asks to be stated; it is a test-double gap, not a
+  product one, and no work package owns it.
+
+
 ## Discovered work — session 5 (not in plan)
+- **`test/fixtures/http/gitlab/history.json` claims `diff_refs` on the *list* merge-requests
+  response, and GitLab does not publish it there** (WP-34). The interaction is labelled
+  `kind: documented` against `https://docs.gitlab.com/api/merge_requests/`, and that page's *"List
+  project merge requests"* example carries no `diff_refs` — the object is documented on *"Retrieve a
+  merge request"* only, with the note that it is *"empty when the merge request is created, and
+  populates asynchronously"* (read 2026-09-14). Nothing is wrong today: no adapter reads `diff_refs`
+  from the list shape — WP-34 deliberately pays a per-merge-request `GET` for the merge base
+  precisely because the list cannot answer it — so the fixture is an over-claim rather than a defect
+  in the product. It is a **provenance** problem of exactly the kind standing rule 17 exists for: a
+  fixture that documents a field the vendor does not publish invites the next adapter to read it.
+  The fix is one of two lines — delete the `diff_refs` block from that interaction, or relabel the
+  interaction `documented-adapted` with a note saying which fields were added and why.
+  **No work package owns it.**
+  *Refiner (session 5): **filed as backlog 98**, with a second site of the same cause the bullet does
+  not name and which is the one that matters — `merge-requests.json` interaction 0 (the **create**
+  response) is labelled `documented` and carries a **populated** `diff_refs.base_sha`, while the field
+  is documented as *"empty when the merge request is created, and populates asynchronously"* (the
+  fake's divergence 14 says so, `git/fake.ts:110-118`) — and that one **is** read, through
+  `toMergeRequest` (`gitlab/provider.ts:347,605`). The entry recommends a different line per site
+  (delete on the list, `documented-adapted` on the create), records that no test is falsely green
+  (`git-provider-contract-suite.ts:661-665` is null-tolerant) and that **no new check is owed** — the
+  suite's own docblock names label honesty and body-versus-page as what it cannot assert. Cheapest
+  owner named: **WP-35**, the first production caller of `listMergedMergeRequests`.*
+- **The batch command's `Idempotency-Key` replay creates an empty batch row** (WP-34). A replay with
+  the same body performs nothing twice — the unique index `(project_id, ticket_key, mode)` turns
+  every ticket into an `already_shadowed` refusal, and the task count is unchanged — but it does
+  leave a second `shadow_batches` row whose tickets are all refusals, which a founder sees on the
+  Shadow screen as a batch that did nothing. The alternative is a stored response, which WP-21
+  weighed and declined for the wizard's three creates (*"there is no stored **response**"*), so this
+  is the same trade one row further on rather than an oversight. Cheapest close: answer the
+  **previous** batch's id when the digest matches, which needs the id in `human_actions.params`
+  (it already is) and one read. **No work package owns it.**
+  *Refiner (session 5): **filed as backlog 99**, and it is cheaper than the bullet says — the read is
+  **already in the handler** (`options.queries.previousAttempt`, `routes/shadow.ts:172-176`) and
+  `idempotentReplay` already answers a previous attempt's `params` and returns before any effect
+  (`routes/idempotency.ts:166-201`, used by `commands.ts:377`, `settings.ts:200`, `asks.ts:180`), so
+  the change is which helper the handler calls. Two measurements the bullet does not carry: a replay
+  also writes a **second `human_actions` row** (`shadow.ts:204-215` runs unconditionally), against
+  WP-15i's *"one row per accepted command"*; and the replay case asserts a status code and **no count**
+  (`shadow.test.ts:210-214`) while the different-body case beside it asserts *"one call to the command
+  and one audit row, not two"* (`:199-208`) — so criterion 1 was met on the effect it named (N tasks)
+  and is untested on the two it did not. Answering the first batch's id is **not** the stored response
+  WP-21 declined.*
 - **Six of product/10:38's eleven Checks items have a producer and no projection, and no work
   package owns adding one** (WP-38). The census the panel is now held to
   (`apps/web/src/features/checks-panel.test.tsx`) names them: *acceptance criteria met*, *CI green*,

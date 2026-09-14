@@ -45,6 +45,7 @@ import type {
   DomainEvent,
   Effort,
   Id,
+  IsoDateTime,
   JsonValue,
   Slug,
 } from '@platform/contracts';
@@ -76,6 +77,7 @@ import {
   type RunOutcome,
   type RunSpec,
 } from '../ports/runner.js';
+import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import type { ProjectSettings } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
@@ -96,6 +98,14 @@ export interface StageRunRequest {
   readonly settings: ProjectSettings;
   /** Why the task came back to this stage, when it did (`task.stage.returned.reason`). */
   readonly returnFeedback: string | null;
+  /**
+   * The commit a **shadow** run's workspace is checked out at — Q82 (a), PROGRESS backlog 71.
+   *
+   * `null` means *"this run has no comparison base"*, which is every ordinary task and a shadow
+   * task whose ticket had no human merge request. `checkoutRefOf` in the planner is what turns it
+   * (or the task's own branch) into `RunSpec.checkoutRef`.
+   */
+  readonly checkoutBase: string | null;
   /** This attempt's model and effort, when a human chose them ({@link StageExecutionJob}). */
   readonly overrides?: {
     readonly model?: string;
@@ -185,6 +195,17 @@ export interface StageExecutorOptions {
    * product/09's "$50 default, per template" lives.
    */
   readonly budgets?: BudgetGuard;
+  /**
+   * Shadow mode's own two questions, both answered from `shadow_batches` / `cost_entries` (WP-34).
+   *
+   * **Absent is "neither is asked"**, which is what a process composed without shadow mode should
+   * do: `features.shadow_mode.budget_usd` is the *separate* cap product/18 promises, so a build
+   * that cannot read shadow spend must not pretend it is unspent — but it also cannot start a
+   * shadow task, because `startShadowBatch` is the only thing that creates one and it takes the
+   * same port. The pairing is what makes the absence safe, and it is stated rather than assumed
+   * (standing rule 31's question: what is this guarantee worth when the collaborator is missing).
+   */
+  readonly shadow?: StageExecutorShadowPort;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -237,8 +258,59 @@ export interface StageExecutor {
   execute(job: StageExecutionJob): Promise<StageExecutionOutcome>;
 }
 
+/**
+ * The start of the current calendar month, in **UTC**, as an ISO instant.
+ *
+ * The shadow budget's window. UTC rather than the organisation's zone, for the reason stated at the
+ * call site; `cost/window.ts` is what does it properly for a `budgets` row, and this is not one.
+ */
+export const monthStartUtc = (at: string): IsoDateTime => {
+  const now = new Date(at);
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0),
+  ).toISOString() as IsoDateTime;
+};
+
 /** The name WP-12 puts on `run_stopped.data.reason` when the CLI reported no usable cost. */
 export const COST_UNREPORTED = 'cost_unreported';
+
+/**
+ * What the stage executor asks about a **shadow** task, and about nothing else.
+ *
+ * A narrow view of `ShadowStore` rather than the store itself: this module has no business reading
+ * a batch or writing a report, and a port that offered it either would be an invitation.
+ */
+export interface StageExecutorShadowPort {
+  /** This project's shadow spend since an instant, from `cost_entries` (WP-34, criterion 7). */
+  shadowSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number>;
+  /** Q82 (a): the commit this shadow task's workspace should start from (PROGRESS backlog 71). */
+  checkoutBaseFor(tx: Transaction, taskId: Id): Promise<string | null>;
+}
+
+/**
+ * The separate shadow budget — product/18:24's *"a budget cap … settings: shadow budget per
+ * month"*, and product/19 §12's *"~$5–15 per ticket, separate budget"* (WP-34, criterion 7).
+ *
+ * **It is the executor's own check against project configuration**, exactly like
+ * {@link taskBudgetExhausted}, and deliberately **not** a `budgets` row with a fifth `budget_scope`
+ * value. Three reasons, in the order they decide it. The cap lives in `.agentic/config.yml`
+ * (`features.shadow_mode.budget_usd`), so a `budgets` row would be a second copy of a number a
+ * repository owns and could rewrite. The window is **the month**, fixed by product/18's own wording,
+ * where a `budgets` row carries a `window` an operator chooses. And `budget_scope` is a scope over
+ * *rows the ledger already groups by* — org, project, task, run — while this one groups by
+ * `tasks.mode`, which is not a scope at all but a filter across every task of a project.
+ *
+ * The comparison adds what *this* run may spend to what shadow tasks have already spent, for
+ * {@link taskBudgetExhausted}'s reason: a budget checked only against past spend is a budget
+ * discovered one run too late.
+ */
+export const shadowBudgetUsdOf = (settings: ProjectSettings): number | null => {
+  const features = settings.config.features as
+    | { readonly shadow_mode?: { readonly budget_usd?: number } }
+    | undefined;
+  const value = features?.shadow_mode?.budget_usd;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+};
 
 /** Per-run cap: the project's `stages.<id>.budget_usd`, else product/04's table (BD-013). */
 export const runBudgetUsd = (settings: ProjectSettings, stage: Slug): number =>
@@ -274,6 +346,8 @@ type Admitted = {
   readonly stage: PipelineStage;
   readonly artifacts: readonly StoredArtifact[];
   readonly returnFeedback: string | null;
+  /** WP-34 / backlog 71: a shadow task's comparison base, `null` for every other task. */
+  readonly checkoutBase: string | null;
 };
 
 type Admission = Exclude<Prepared, { kind: 'ready' }> | Admitted;
@@ -392,12 +466,51 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}`,
         );
       }
+
+      /**
+       * The **separate** shadow budget (WP-34), asked only for a shadow task.
+       *
+       * Here rather than in `BudgetGuard` for the reason {@link shadowBudgetUsdOf} states: the cap
+       * is a configuration key rather than a `budgets` row, and the spend it is measured against is
+       * grouped by `tasks.mode` rather than by a scope. An ordinary delivery pays no query for it.
+       *
+       * The window is the calendar month **in UTC**, which is stated rather than hidden: the
+       * organisation's own zone decides a `budgets` window (`cost/window.ts`), and reading it here
+       * would mean a second query on every shadow admission for a cap whose whole purpose is "stop
+       * the demo before it costs more than the demo is worth". The consequence is bounded — the
+       * window turns over at most a few hours away from the organisation's midnight.
+       */
+      const shadowCap = task.mode === 'shadow' ? shadowBudgetUsdOf(settings) : null;
+      if (shadowCap !== null && options.shadow !== undefined) {
+        const since = monthStartUtc(options.context(task.id).clock.now());
+        const spent = await options.shadow.shadowSpendSince(scope.tx, task.projectId, since);
+        if (spent + runBudgetUsd(settings, job.stage) > shadowCap) {
+          return pause(
+            scope,
+            stored,
+            `this project’s shadow budget for the month is spent: ${spent} of ${shadowCap} USD ` +
+              `since ${since}, and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
+          );
+        }
+      }
+
       return {
         kind: 'admitted',
         stored,
         stage: valid.stage,
         artifacts: await store.artifacts.listFor(scope.tx, job.taskId),
         returnFeedback: await store.tasks.lastReturnReason(scope.tx, job.taskId, job.stage),
+        /**
+         * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.
+         *
+         * Read inside the admission transaction because that is where a transaction already is; the
+         * planner runs between the two and has none. `null` for every ordinary task, which
+         * `checkoutRefOf` turns into the task's own branch.
+         */
+        checkoutBase:
+          task.mode === 'shadow' && options.shadow !== undefined
+            ? await options.shadow.checkoutBaseFor(scope.tx, task.id)
+            : null,
       };
     });
 
@@ -492,6 +605,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       artifacts: admission.artifacts,
       settings,
       returnFeedback: admission.returnFeedback,
+      checkoutBase: admission.checkoutBase,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
     });
     return startTheRun(job, plan, runId);

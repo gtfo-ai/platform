@@ -157,6 +157,9 @@ beforeAll(async () => {
     // refuse an anonymous caller, which is what this census probes (the 503 is behind the guard).
     knowledge: null,
     onboarding: null,
+    // WP-34: no pipeline here, so the batch command refuses by name and the gate cannot answer.
+    shadow: null,
+    shadowGate: null,
     commands: null,
     // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
     asks: {
@@ -312,6 +315,26 @@ describe('the client’s endpoint list against the server’s router', () => {
     ]) {
       expect((await probe(path)).served, path).toBe(true);
     }
+  });
+
+  it('serves the three shadow-mode endpoints WP-34 added', async () => {
+    // Named positively (standing rule 10): "not in the gap list" is also satisfied by a path the
+    // client sweep failed to find at all. `/api/shadow-batches/{}` is **not** under a project, and
+    // that is deliberate — the batch id is what a reader has after starting one.
+    for (const path of ['/api/projects/{}/shadow-batches', '/api/shadow-batches/{}']) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('refuses an anonymous caller on the shadow batch command, by its own method', async () => {
+    // POST with **no body at all**, for the reason the wizard's case gives: Fastify validates the
+    // body before `preHandler`, so a guard that slipped back to `preHandler` answers 400 here.
+    const response = await app.inject({
+      method: 'POST',
+      url: probeUrl('/api/projects/{}/shadow-batches'),
+    });
+    const body = response.json() as ApiErrorBody;
+    expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
   });
 
   it('serves the six settings endpoints WP-30 added', async () => {

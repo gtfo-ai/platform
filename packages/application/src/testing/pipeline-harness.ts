@@ -66,6 +66,7 @@ import {
   type MemoryNotificationStore,
 } from './memory-notifications.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pipeline.js';
+import { createMemoryShadowStore, type MemoryShadowStore } from './memory-shadow.js';
 
 /** Enough for the longest template plus every bounded loop; a runaway pipeline passes it. */
 const MAX_DISPATCHES = 500;
@@ -314,6 +315,8 @@ export interface PipelineHarness {
   readonly knowledge: MemoryKnowledgeStore;
   /** The ledger's store when `cost: true` was asked for, and `null` otherwise. */
   readonly cost: MemoryCostStore | null;
+  /** Shadow mode's batches, tickets and reports (WP-34) — always composed. */
+  readonly shadow: MemoryShadowStore;
   readonly audit: ReturnType<typeof createMemoryAuditLog>;
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** The ask-the-task thread (WP-31) — read back to assert what an ask produced. */
@@ -686,6 +689,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const taskManagementPort = stubTaskManagement(options.taskManagement);
   const communication = stubCommunication(options.communication);
   const notifications = createMemoryNotificationStore();
+  // WP-34: the shadow batch's store. Composed unconditionally, because `createPipelineRuntime`
+  // requires it — `EVENT_CONSUMPTION` declares `shadow.report.created` handled.
+  const shadow = createMemoryShadowStore({ now: () => clock.now() });
   const integrations: PipelineIntegrations = {
     executor: createIntegrationActionExecutor({
       auditLog: audit,
@@ -764,6 +770,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
 
   const runtime = createPipelineRuntime({
     store,
+    shadow,
     settings: staticProjectSettings(() => settings),
     jobs,
     notifications,
@@ -981,6 +988,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     communication,
     knowledge,
     cost,
+    shadow,
     audit,
     idempotency,
     asks,

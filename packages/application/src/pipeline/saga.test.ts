@@ -20,6 +20,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { startShadowBatch } from '../shadow/batch.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
@@ -32,6 +33,7 @@ import {
   returnToStageCommand,
 } from './commands.js';
 import { MAX_GATE_CHECKS } from './gates.js';
+import { staticPipelineIntegrations } from './integrations.js';
 import { GATE_RECHECK_MS } from './jobs.js';
 import {
   DEFAULT_REVIEW_COMMENT_WINDOW_MS,
@@ -39,6 +41,7 @@ import {
   spendIsStillAhead,
   UNMATERIALISED_PLAN_APPROVAL,
 } from './saga.js';
+import { staticProjectSettings } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 
@@ -665,6 +668,104 @@ describe('the plan-approval gate reads the materialised dial (BD-027, WP-30)', (
     });
     await released.publish([ticketMatched()]);
     expect(released.types()).not.toContain('task.approval.requested');
+  });
+
+  /**
+   * **A shadow task is not gated on plan approval** — `planApprovalGate`'s first branch (WP-34).
+   *
+   * The pair isolates the **mode** and nothing else: one policy document, Observe's — whose
+   * `plan_approval` is `always` and which is the only position `shadow_mode` is true at — with
+   * `picks_up_new_tickets` turned on so the same dial can also produce an ordinary task. An
+   * unconditional gate parks both; a gate that reads the mode parks one. Nothing named this branch
+   * until WP-34's review round 2 (standing rule 42), and the reversal the notes offer — deleting
+   * three lines of `saga.ts` — now fails here by name rather than in a founder's ten-click batch.
+   */
+  it('skips the plan approval for a shadow task and still asks for one on a normal task', async () => {
+    const observe = materialiseAutonomy({
+      level: 'observe',
+      at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+      appliedBy: null,
+    });
+    // The two facts the case rests on, before anything is concluded from it (standing rule 4).
+    expect(AUTONOMY_PRESETS.observe.planApproval).toBe('always');
+    expect(AUTONOMY_PRESETS.observe.shadowMode).toBe(true);
+    const settings = {
+      config: { features: { shadow_mode: { enabled: true } } },
+      autonomy: { ...observe, policies: { ...observe.policies, picks_up_new_tickets: true } },
+    };
+
+    const shadow = harnessWith({
+      settings,
+      git: {
+        // `harnessWith` spreads `...options` last, so a `git` override replaces its defaults
+        // wholesale rather than merging with them — both are restored here.
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'success' as const,
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: '2026-06-01T09:30:00.000Z',
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+        // The batch's one scan, answered empty: this ticket has no human merge request, which
+        // Q82 (b) reports rather than refuses.
+        listMergedMergeRequests: async () => [],
+      },
+      taskManagement: {
+        // The default stub **echoes the ref it is handed**, and the batch addresses a ticket by key
+        // alone (`url: ''`) — which `createTask` refuses, because a ticket url is a url. The real
+        // adapter answers the ticket's own ref, so the override is what production does rather than
+        // a convenience.
+        readTicket: async (ref: { readonly key: string }) =>
+          ({
+            ref: {
+              provider: 'fake-jira',
+              key: ref.key,
+              url: `https://jira.example.test/browse/${ref.key}`,
+            },
+            issue_type: 'Story',
+            title: 'Show the totals in the invoice footer',
+            description: 'The footer sums the visible rows rather than all of them.',
+            status: 'Done',
+            priority: null,
+            labels: [],
+            comments: [],
+            links: [],
+            epic: null,
+            siblings: [],
+            attachments_text: [],
+            assignee: null,
+            reporter: null,
+            updated_at: '2026-06-01T09:00:00.000Z',
+          }) as never,
+      },
+    });
+    await startShadowBatch(
+      {
+        unitOfWork: shadow.memory,
+        store: shadow.store,
+        shadow: shadow.shadow,
+        settings: staticProjectSettings(() => shadow.settings),
+        integrations: staticPipelineIntegrations(shadow.integrations),
+        jobs: shadow.jobs,
+        ids: shadow.ids,
+        clock: { now: () => shadow.clock.now() as IsoDateTime },
+      },
+      { projectId: PROJECT as never, ticketKeys: [TICKET.key], requestedByUserId: null },
+    );
+    await shadow.drain();
+    expect(shadow.types()).not.toContain('task.approval.requested');
+    // Rule 10: "no approval was requested" is also true of a task that never reached the gate, so
+    // the walk itself is asserted — and as a shadow walk.
+    expect(shadow.specs.map((spec) => spec.stage)).toContain('implementation');
+    expect(shadow.specs.every((spec) => spec.mode === 'shadow')).toBe(true);
+
+    const normal = harnessWith({ settings });
+    await normal.publish([ticketMatched()]);
+    expect(normal.types()).toContain('task.approval.requested');
+    expect(taskOf(normal).task.state).toBe('waiting_approval');
   });
 
   it('never lets a stage override switch off a risk class', async () => {

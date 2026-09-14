@@ -40,6 +40,7 @@ const specFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     promptVersion: 'sha256:fixture',
     systemPromptAppend: 'You are the developer agent.',
     userPrompt: 'Fix the flaky login test.',
+    checkoutRef: null,
     workspacePath: '/workspace/task',
     contextPack: [],
     limits: runLimitsDefaults,

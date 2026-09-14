@@ -10,7 +10,7 @@ One per-project setting with four presets. A preset sets the granular policies; 
 
 | Level | Name | What runs | Granular policies set by the preset |
 |---|---|---|---|
-| 0 | **Observe** | Shadow mode, ticket linter (if enabled), review-only on human MRs. No agent MRs. | pipeline disabled for new tickets; review-only on; shadow allowed |
+| 0 | **Observe** | Shadow mode, ticket linter (if enabled), review-only on human MRs. No agent MRs. | pipeline disabled for new tickets; review-only on; shadow allowed — a shadow batch runs unattended: no plan approval is asked of anyone (BD-006's amendment, Q86) |
 | 1 | **Assist** | Refinement and Architecture produce artifacts; a human decides whether to launch Implementation ("scoping-only"). | plan approval `always`; probation on; auto-apply off |
 | 2 | **Supervised** (default after onboarding) | Full pipeline; approvals by size; probation for the first 5 tasks. | plan approval `above L`; probation on; question timeout 1 working day; auto-apply off |
 | 3 | **Autonomous** | Full pipeline, approvals only for risk-classed MRs; probation off. | plan approval `never` except risk classes; probation off; auto-apply on for the middle significance band |

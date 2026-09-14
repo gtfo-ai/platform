@@ -1127,56 +1127,127 @@
               ]
             },
             "agent_diff_stats": {
-              "type": "object",
-              "properties": {
-                "files_changed": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "files_changed": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "insertions": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "deletions": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "files_changed",
+                    "insertions",
+                    "deletions"
+                  ],
+                  "additionalProperties": false
                 },
-                "insertions": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "deletions": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
+                {
+                  "type": "null"
                 }
-              },
-              "required": [
-                "files_changed",
-                "insertions",
-                "deletions"
-              ],
-              "additionalProperties": false
+              ]
             },
             "overlap": {
-              "type": "object",
-              "properties": {
-                "files_jaccard": {
-                  "$ref": "#/$defs/UnitInterval"
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "files_jaccard": {
+                      "$ref": "#/$defs/UnitInterval"
+                    },
+                    "size_ratio": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "tests_added_ratio": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "agent_test_files": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "human_test_files": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "files_jaccard",
+                    "agent_test_files",
+                    "human_test_files"
+                  ],
+                  "additionalProperties": false
                 },
-                "size_ratio": {
-                  "type": "number",
-                  "minimum": 0
+                {
+                  "type": "null"
                 }
-              },
-              "required": [
-                "files_jaccard",
-                "size_ratio"
-              ],
-              "additionalProperties": false
+              ]
             },
             "agent_review_of_human_mr": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ReviewFinding"
-              }
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ReviewFinding"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "predicted_cost": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usd"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "shadow_cost": {
               "$ref": "#/$defs/Usd"
+            },
+            "reviewer_minutes_estimate": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "notes": {
               "type": "string"
@@ -1184,10 +1255,7 @@
           },
           "required": [
             "ticket",
-            "agent_diff_stats",
-            "overlap",
-            "agent_review_of_human_mr",
-            "predicted_cost",
+            "shadow_cost",
             "notes"
           ],
           "additionalProperties": false

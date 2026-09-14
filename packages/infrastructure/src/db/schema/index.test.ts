@@ -23,8 +23,11 @@ describe('Drizzle schema', () => {
     // digest and quiet hours need and technical/03 did not name until WP-32 amended it
     // (migration 0023), plus `task_asks`, the ask-the-task thread product/10:57 asks for and
     // which has no home anywhere else — `questions` is a *stage's* request for human input
-    // (technical/02:24), the opposite direction (migration 0024, WP-31).
-    expect(tables.length).toBe(52);
+    // (technical/02:24), the opposite direction (migration 0024, WP-31), plus `shadow_batches`
+    // and `shadow_batch_tickets` — the set of tickets somebody selected on one day and what each
+    // was compared against, which product/19 §13's *"aggregate report per shadow batch"* needs and
+    // which `shadow_reports` (a row per task) cannot express (migration 0029, WP-34).
+    expect(tables.length).toBe(54);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

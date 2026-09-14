@@ -44,6 +44,7 @@ import type { JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { runShadowReport, type ShadowReportOptions } from '../shadow/report.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
 import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
@@ -59,6 +60,7 @@ export interface PipelineOutboundOptions
     NotifyOptions,
     Pick<AskMirrorOptions, 'asks'>,
     Pick<DependencyGateOptions, 'dependencyMetadata'>,
+    Pick<ShadowReportOptions, 'shadow'>,
     Pick<RiskRoutingOptions, 'identities'> {
   readonly unitOfWork: UnitOfWork;
   /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
@@ -116,6 +118,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'dependency_gate':
         await runDependencyGate(options, data);
+        return;
+      case 'shadow_report':
+        await runShadowReport(options, data);
         return;
       case 'notify':
         await runNotification(options, data);
