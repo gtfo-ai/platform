@@ -2476,6 +2476,281 @@ spends the same budget as one after a human's finding.
 **WP-33** or with the first conflicted dogfood task, and the documentation half is whoever next edits
 product/04 S6b.
 
+### 67. **A return's reason is written on the row of the stage the task *leaves* and read from the row of the stage it *enters*, so a re-run stage is served its own last complaint instead of the finding it is being asked to fix** (TODO — **no work package owns it**; found by WP-27, session 5)
+**What is wrong.** `applyDecision`'s `return` branch writes the reason on the **leaving** stage's row —
+`recordStageExited(tx, {taskId, stage: decision.from, attempt, outcome: 'returned', returnReason:
+decision.reason})` (`packages/application/src/pipeline/transitions.ts:202-208`) — and the stage
+executor reads it for the stage **about to run**: `returnFeedback: await
+store.tasks.lastReturnReason(scope.tx, job.taskId, job.stage)`
+(`packages/application/src/pipeline/stage-executor.ts:400`), which the Postgres store answers with
+`select return_reason from task_stages where task_id = $1 and stage = $2 and return_reason is not
+null order by attempt desc limit 1`
+(`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:457-464`). The value then goes
+into the prompt (`planner.ts:614`, `assemblePrompt`'s return-feedback block) and into the context
+pack's query text. This is the channel product/04's whole return loop rests on.
+
+**Evidence.** The WP-27 bullet under "Discovered work — session 5", quoted: *"A code review that
+returns to implementation with 'the footer rounds twice' therefore writes that sentence on the
+`code_review` row, and the implementation run is given whatever **implementation** last said when it
+returned to architecture, or nothing. … **not fixed here** because the fix is a decision about which
+row owns the reason (the leaving stage's, read by a join, or the entering stage's attempt) and it
+moves behaviour for every return the pipeline makes."*
+
+Three things read off the tree (refiner, session 5; no test run, rule 66). **(a) The writer and the
+reader never name the same stage on any shipped edge**: every `return_to` in
+`packages/domain/src/pipeline/templates.ts` points at an *earlier* stage (`:218` architecture →
+refinement, `:226` implementation → architecture, `:253` code_review → implementation, `:281`/`:289`/
+`:297` and `:324`/`:357`/`:376` in the bug and chore templates, `:458` review-only → done), and a
+gate's `fail_to` is a return whose `from` is the gate. So the read is never the row the write
+touched. **(b) It is live for every ticket template**, not a corner: the feature template's
+`code_review → implementation` edge is the pipeline's main correction loop. **(c) Nothing asserts the
+channel at any tier.** `returnFeedback` appears in tests only as `null` or as a literal handed
+straight to the assembler (`packages/domain/src/prompt/assembly.test.ts:197,208,330`,
+`packages/application/src/pipeline/planner.test.ts:91`,
+`test/contract/prompts/role-prompts.contract.test.ts:53`); no test drives a return and then reads the
+next run's prompt, which is why writer and reader could disagree from WP-15 to now.
+
+**What it costs to leave.** Two costs, and the second is worse. **(1)** Every return re-runs a stage
+without telling it what was wrong, so a full stage budget is spent re-deriving the reviewer's finding
+or repeating the mistake — the loop is bounded (BD-008), so a task can exhaust `code_review`'s three
+rounds on a fix nobody described. **(2) It is not silence.** From a task's second loop onward the
+reader *finds* a row and serves a **stale, unrelated** sentence — what this stage said when it
+returned to the stage before it — inside the block the role prompt presents as feedback on this
+attempt. A wrong answer in a prompt is worse than a missing one (rule 16's shape one layer up), and
+it is unfalsifiable from outside: the prompt is well-formed and the sentence is real.
+
+**What "done" looks like.** First a decision about which row owns the reason, then one change.
+**(a) Reader-side**: the reason stays on the attempt that produced it — which is what
+`task_stages` is for as an audit — and the read becomes *the newest closed attempt on this task whose
+return targeted this stage*. `task_stages` has no target column (`0004_pipeline.sql:40-54`), so this
+is a forward migration adding one (`returned_to text`), a line in `transitions.ts`, and a rewritten
+`lastReturnReason`. **(b) Writer-side**: the transition also writes the reason where the reader
+already looks, which puts two meanings on one column — *why this stage returned* and *why this stage
+was entered* — the vocabulary problem entry **32** already records for `task_stages.state`.
+**Recommendation: (a)**, for the reason (b) fails on: the row is read by humans and by the
+convergence check beside it. The assertion is the countable effect (rule 79): drive one return
+through the pipeline harness and assert the **next** run's `RunSpec.userPrompt` carries the returning
+stage's sentence — `assemblePrompt`'s block makes it greppable — plus the negative case that a second
+loop does not resurrect the first loop's text.
+
+**Depends on / owner.** No dependency; every piece exists. **No work package owns it** — WP-15 built
+the transition, WP-17 built the prompt channel, both DONE. Cheapest owner is whoever next edits
+`packages/application/src/pipeline/transitions.ts` or `stage-executor.ts`. **WP-27's hand-back summary
+is blocked behind it**: that row deliberately left the summary on `task.handed_back` and the workpad
+rather than routing it through a channel it had just found broken, so product/19 § 19's *"re-enters
+the stage with a note 'continued by human: `<summary>`'"* stays unmet until this is fixed. No
+measurement needed before starting; it is live today on every return.
+
+### 68. **The take-over export writes a tarball nothing serves and no transcript at all, so two documents' *"downloadable from the UI"* has no endpoint — and `compose.yml` already mounts the export volume into a process with no code that reads it** (TODO — **no work package owns it**; found by WP-27, session 5)
+**What is wrong.** One cause with three symptoms: the export's **production** half shipped (WP-14's
+`WorkspaceProvider.export`, WP-27's take-over) and its **delivery** half — how a human gets the bytes
+— has never been anybody's row. technical/05:11 is *"branch pushed + transcript JSONL copied to
+`blobs` + optional tarball (excluding `.git`, `node_modules`) downloadable from the UI"* and
+product/19:156 puts *"the transcript download"* in the resume instructions the workpad renders. What
+ships is the branch.
+
+**Evidence.** The WP-27 bullet, quoted: *"The branch and the tarball ship; the JSONL does not, because
+`blobs` has had no writer since migration 0006, `workspaces` (with its `exported_blob_id` and
+`retention_until`) has never held a row, and no endpoint serves a download. Writing the blob alone
+would be a row nobody reads — the defect shape this ledger has filed four times. The transcript **is**
+readable, redacted, through `GET /api/runs/:run_id/messages`; what is missing is a file a human can
+take to their own machine."*
+
+Four reads off the tree (refiner, session 5; no test run, rule 66). **(a)** The only `insert into
+blobs` in the repository is a test fixture — `test/integration/server/read-api.integration.test.ts:158`
+— and there is **no** insert into `workspaces` anywhere, though the table has carried
+`retention_until` and `exported_blob_id` since `0004_pipeline.sql:192-207`. **(b) The tarball is
+not "shipped" in the sense the bullet reads**: it is written to the **launcher's** filesystem at
+`<exportDir>/<runId>.tar` (`apps/launcher/src/service.ts:222-231`; `exportDir` defaults to
+`/var/lib/app/exports`, `apps/launcher/src/config.ts:148`), and nothing serves *it* either — so both
+halves of "downloadable from the UI" are missing, not one. **(c) The measurement the bullet did not
+have**: `compose.yml` already mounts the shared `exports` volume into the **app** service
+(`compose.yml:126-128`) and sets `APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports` on it (`:117`),
+with the volume declared *"Shared between the launcher (which writes them) and the app (which serves
+them)"* (`:258-260`) — while `APP_WORKSPACE_EXPORT_DIR` is read by `apps/launcher/src/config.ts:30,148`
+and by nothing under `apps/server`. The deployment already carries the bytes to the process that is
+supposed to hand them over; the process has no route. (It is backlog **54**'s defect inverted: there
+compose omits variables the server reads, here it passes one no server code reads.) **(d)** Nothing
+deletes a file from that directory — the only code naming it is the write and the config — so the
+volume grows one tarball per take-over for ever, and WP-27's fourteen-day hold makes the workspace
+volume outlive the run too.
+
+**What it costs to leave.** The take-over's product value is *"the human continues on their own
+machine"*, and of the three things product/19 § 19 promises that human — branch, `claude --resume`
+guidance, transcript download — the platform can deliver one. The transcript is visible on a screen
+and cannot be taken; the tarball exists and the only way to it is `docker cp` on the operator's host.
+A self-hoster's first take-over is therefore the first time the product's own workpad comment names
+something that does not exist. Meanwhile the export directory grows unswept.
+
+**What "done" looks like — serve, do not copy.**
+1. **The transcript**: a JSONL rendering of `run_messages` on the read API — `GET
+   /api/runs/:run_id/transcript.jsonl`, or `?format=jsonl` on the existing `/messages` page — with
+   `Content-Disposition: attachment`, reusing WP-15h's projection and therefore the redaction
+   `createPostgresTranscriptSink` already applied (TD-012). **No `blobs` writer.** A copy would be a
+   *fourth* place the platform stores untrusted external text (after `inbox`, `kb_chunks` and
+   `ticket_snapshot`), it would need its own redaction argument at the write — which is exactly the
+   obligation this ledger records as *"WP-27's take-over export owes the redaction"* — and a
+   non-null `blob_id` is already the one row shape the read API refuses (`row_not_projectable`).
+2. **The tarball**: one authenticated download route in `apps/server` reading
+   `APP_WORKSPACE_EXPORT_DIR` through the realpath guard WP-15j wrote for the bundle, plus a
+   retention for the directory (a sweep, or a cap with the oldest removed). **Q52 is not a
+   dependency**: the compose file already shares the volume, so this is a route and a guard, not a
+   transport.
+3. **`workspaces`**: either the take-over writes the row the table was designed for, or technical/03
+   states that `exported_blob_id` and `retention_until` are unwritten and why — a table that has
+   never held a row after twenty-seven work packages is a claim the schema makes and the product does
+   not (the shape of backlog **31**).
+4. **Two doc sentences the orchestrator must amend** (docs win, and they are the orchestrator's to
+   change): technical/05:11's *"transcript JSONL copied to `blobs`"* — §6 already half-says the
+   opposite in its WP-14 amendment (*"the transcript lives in `run_messages`"*), so the two clauses
+   currently contradict each other — and product/19:156's *"the transcript download"*, which should
+   name the URL the resume instructions will carry. **The one argument for `blobs` instead**: if the
+   founder wants the exported file to outlive the transcript's own retention (product/19 § 20's
+   `APP_TRANSCRIPT_RETENTION_DAYS` purge), a copy is the only way, and that trade should be decided
+   in the amendment rather than discovered later.
+
+**Depends on / owner.** No dependency. **No work package owns it**; nearest by subject is whoever
+next touches `apps/server/src/routes/` — the transcript half is one route over an existing
+projection. It is the same change as entry **70**: the take-over control on the task screen is where
+the download link and the resume lines belong, so the two should be taken together or the endpoint
+ships with no caller. Trigger that makes it urgent: the first real take-over, which is also the first
+time a workpad comment promises a download.
+
+### 69. **`tasks` records that a task is paused and not *why*, so a workpad render while a human holds the task drops the take-over block — and the timeout that would trigger it is product/19 § 19's one unbuilt clause** (TODO, small, latent — **no work package owns either half**; found by WP-27, session 5)
+**What is wrong.** The workpad's take-over block (branch, `claude --resume` line, how to hand back) is
+carried on the `pipeline.outbound` job payload rather than re-derived from state: the handler copies
+`taken_over_branch`/`taken_over_session` onto the job **only** when the event it woke on is
+`task.taken_over` (`packages/application/src/pipeline/workpad.ts:247-261`), and the render reads them
+back from the job data (`:347-357`). Any *other* workpad event on a task that is still taken over
+therefore re-renders the same sticky comment without the block — the same shape as `blocker_brief`,
+which has the same carrier.
+
+**Evidence.** The WP-27 bullet, quoted: *"The block (branch, resume command, how to hand back) is
+carried on the `pipeline.outbound` wake-up, like `blocker_brief`, and a later render of the same
+sticky comment would drop it. The window is small — a taken-over task emits almost none of the
+workpad's events — but it is real for `task.escalated`. Two shapes: a `paused_reason` column on
+`tasks` (a migration, a column-partition entry and a writer), or a narrow store read of the newest
+`task.taken_over` on the task's stream, which `apps/server/src/queries/pipeline-queries.ts` already
+does for the read model and which the duty could do through `PipelineStore`."*
+
+**The trigger the bullet names has no producer today, and that is itself a finding** (refiner,
+session 5; greps only, rule 66). product/19:156 ends *"Timeouts: a taken-over task escalates to
+`Needs human` after 5 working days of inactivity; retention of the exported workspace 14 days."* The
+retention half shipped at WP-27; the **timeout half is unbuilt and was not filed** — no job, no
+handler and no duty mentions it, and the only occurrence of the phrase in the tree is
+`packages/application/src/scheduling/working-calendar.ts:264`, which names *"a take-over inactivity
+timeout"* as an example of what `resolveDeadline` is for. So a taken-over task today sits paused
+indefinitely and nobody is told; and the day that timeout is built is the day this entry's defect
+becomes certain rather than latent, because the escalation it raises is a workpad event on a task
+that is still taken over.
+
+**What it costs to leave.** Today: nothing, on the measurement above — a taken-over task is paused and
+emits almost nothing. When it bites, it takes away the one comment a human has been pointed at, in
+the tool they were pointed at it in, at the moment the platform escalates the task for being
+untouched. The unbuilt timeout costs more than the render: product/19's only bound on a human holding
+a task is absent, so a take-over is an unbounded pause.
+
+**What "done" looks like.** For the render, the second of the bullet's two shapes — **a narrow store
+read**, not a column: `PipelineStore` already answers task-stream questions and the read model does
+this exact projection, so the duty asks *"is this task still taken over, and on which branch"* at
+render time and the block follows the state instead of the wake-up. A `paused_reason` column is the
+larger change (a migration, a writer, an entry in `tasks-column-ownership.test.ts`) and buys the same
+render; take it only if something else needs the reason in a query. The assertion is the countable
+effect: a workpad render woken by `task.escalated` on a taken-over task still contains the branch
+line. For the timeout, a separate small piece of work, and it is the one that should carry a plan
+row if anyone wants product/19 § 19 met end to end: a `resolveDeadline(… '5 working days')` job
+armed on `task.taken_over`, re-validated on fire (TD-004) and cancelled by `task.handed_back`.
+
+**Depends on / owner.** No dependency either way. **No work package owns either half.** Cheapest for
+the render is whoever next edits `packages/application/src/pipeline/workpad.ts`; the timeout is a
+piece of product/19 § 19 that WP-27 did not claim, and naming it here is the only record it has.
+
+### 70. **Nothing in the SPA calls take-over or hand-back, so two shipped commands are reachable only by hand — and the client-driven census is blind to them by construction** (TODO, small — **no work package owns it**; found by WP-27, session 5)
+**What is wrong.** `POST /api/tasks/:task_id/take-over` and `/hand-back` are served, permissioned and
+audited, and no screen calls them. The reason the SPA gave for declining them is **no longer true**
+and the files say so: WP-27 published `takeOverResponseSchema` and `taskDetailResponseSchema.taken_over`
+carrying the branch, the session, the resume commands and what became of the workspace. What is left
+is the screen.
+
+**Evidence.** The WP-27 bullet, quoted: *"`takeOverResponseSchema` and `taskDetailResponseSchema.taken_over`
+now carry the branch, the session, the resume commands and what became of the workspace — which was
+the stated reason `apps/web` declined to build the buttons (`api/endpoints.ts`,
+`features/task-detail.tsx`, `features/run-detail.tsx`, all three corrected). What is left is a UI row:
+a take-over control on the task and run screens showing those four lines, and a stage picker for the
+hand-back. Until it lands the endpoints are asserted by hand in `client-census.test.ts`, because a
+client-driven census cannot see a route no screen calls."* The three corrected docblocks are
+`apps/web/src/api/endpoints.ts:17-26`, `apps/web/src/features/task-detail.tsx:20-26` and
+`apps/web/src/features/run-detail.tsx:7-12`; the hand-written assertion is
+`apps/server/src/routes/client-census.test.ts:434-453` (*"serves take-over and hand-back, which no
+screen calls yet and this census cannot see"*). Steer is **not** part of this: it has a control on
+the run screen (`features/run-detail.tsx:224-249`) and left `ADMITTED_GAPS` empty.
+
+**What it costs to leave.** product/10's task-screen command list (*"answer, approve, retry, take
+over, feedback"*) is met except for the one command that exists to hand work back to a person, so the
+product's answer to *"the agent is stuck, let me finish it"* is an HTTP request an operator writes by
+hand. It also costs the census its grip: two routes are excused from the comparison WP-15h built and
+asserted by a hand-written case instead, and a hand-written case is the thing that goes stale (the
+same reason `ADMITTED_GAPS` asserts both directions). Entry **68**'s download link has nowhere to
+live until this exists.
+
+**What "done" looks like.** A take-over control on the task screen and the run screen rendering the
+four fields the response already carries, a hand-back control with a stage picker over the compiled
+pipeline's stages (the route answers `409 stage_not_in_template` for anything else, so the picker is
+the honest surface), the two client functions in `apps/web/src/api/endpoints.ts`, and **the two
+hand-written census cases deleted** — once a screen calls them the client-driven comparison covers
+them, which is the assertion that the row landed. A `pnpm test:web-e2e` case for the pair, in the
+shape WP-20's cases use.
+
+**Depends on / owner.** Depends on nothing unbuilt; the routes, the DTOs and the permissions all
+ship. **No work package owns it** — WP-20 built the screens and is DONE, and WP-30 is *settings* and
+wizard step 4, not task controls. Cheapest by adjacency is **WP-30**, because it is the next M2 row
+that opens `apps/web` at all; if the buttons are wanted in M2 the honest way to schedule them is a
+named criterion on that row, and otherwise it is a small row of its own — this entry is its brief
+either way (the same caveat entry **63** carries about WP-41).
+
+### 71. **A run's workspace has no way to say which branch to check out, so technical/05 §2's *"checkout of the task branch for re-entries"* has no carrier — and product/19 § 19's hand-back re-provision is unimplementable as written** (TODO, latent — **no work package owns it**; found while judging WP-27's hand-back, session 5)
+**What is wrong.** `RunWorkspaceProvisioner.provision(spec: RunSpec)`
+(`packages/infrastructure/src/runner/workspace-runner.ts:104-106`) is the whole interface through
+which a run gets a workspace, and `runSpecSchema` (`packages/application/src/ports/runner.ts:145`)
+carries **no branch field**. The layer below is ready for one — `WorkspaceSpec.repo.checkoutBranch`
+exists (`packages/application/src/ports/workspace.ts:100-107`), `buildWorkspaceSpec` takes it
+(`packages/infrastructure/src/workspace/spec.ts:162-163,199`) and the Docker provider honours it
+(`provider.ts:676,700`) — but nothing above ever sets it.
+
+**Evidence** (refiner, session 5; greps and file reads, no test run — rule 66). `checkoutBranch`
+appears outside the port, the spec builder and the provider in exactly two places: `fixtures.ts:71`
+(`null`) and `scripts/runlet-launcher-inner.mjs:124`, a verification script. `grep` finds it nowhere
+under `test/`. `buildWorkspaceSpec` has no production caller at all — the only non-test call is that
+same script — which is consistent with WP-15g: `apps/server` takes a `RunWorkspaceProvisioner` it is
+*given*, absent in every production path, so the composition that would pass a branch does not exist
+yet. The promises it would have to keep: technical/05:7 (§2 Create) *"checkout of the task branch for
+re-entries"*, and product/19:156 *"the platform re-provisions a workspace from the branch"*.
+
+**What it costs to leave.** Nothing today — there is no production provisioner, so no run is
+mis-provisioned. The moment one exists (Q52's transport, or a launcher composed in-process), every
+run starts from the default branch: a returned `implementation` run cannot see the work the previous
+attempt pushed, a `code_review` stage reviews a tree that is not the merge request's, and a hand-back
+re-enters a stage on a checkout that does not contain the human's commits — the one thing the
+hand-back exists to carry. That is a wrong-answer failure that looks like a working pipeline, and it
+is cheapest to fix *before* the provisioner is composed rather than after, which is the only reason
+this is filed while it is still latent.
+
+**What "done" looks like.** One field on `RunSpec` — the branch to check out, `null` meaning the
+default branch (BD-025's wording is already on `checkoutBranch`'s docblock) — written by the planner
+from the task's own `branch` (`stored.branch`, which the take-over already reads,
+`packages/application/src/pipeline/commands.ts:1148-1150`), passed through the provisioner into
+`buildWorkspaceSpec`. Whoever builds the production provisioner says in the same change what happens
+when the branch does not exist on the remote (the first run of a task: clone the default branch, do
+not fail), and the assertion is the countable effect: a re-entry run's workspace has the task
+branch's head commit. **Needs measurement: none** — the gap is structural, in the argument type of a
+port.
+
+**Depends on / owner.** **No work package owns it.** It belongs to whoever composes a production
+`RunWorkspaceProvisioner` — **Q52**'s transport half, or WP-15g's successor — and it should be a
+criterion on that row rather than a separate piece of work. **WP-27's hand-back is the first
+consumer** and cannot meet product/19 § 19's re-provision sentence without it; entry **69**'s timeout
+and entry **68**'s export are the other two clauses of the same paragraph left unowned.
+
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
 entry 1's sentence one layer further in: *the loop starts now, and what it starts on is a ticket
@@ -3842,6 +4117,17 @@ for the other.
 row that next touches `apps/server/src/runtime.ts`'s composition, or WP-22's successor for the compose
 half (a second service in `compose.yml` is the honest place for the deployment to exist at all).
 
+**Two crossings WP-27 added, and the first one a *user* can see** (refiner, session 5; read off
+WP-27's notes, no run — rule 66). `POST /api/runs/:run_id/steer` reaches the session through an
+in-process register, so a steer issued to a process that is not holding the run answers `409
+run_not_reachable` — a named refusal rather than a wrong answer, which is the right shape, and it is
+the first place a split deployment is visible to an end user rather than to an operator. And
+`createSteerGate` (`apps/server/src/routes/commands.ts:203-232`) keeps technical/08:137's *"1 message
+per 5 s per user"* in a `Map` **per process**, so N API containers allow N messages per window — the
+module note states it at `:61-68` rather than leaving it to be discovered. Neither is a defect; both
+belong on the list of crossings a two-process tier would assert. The transport half is **Q52**, where
+this is also recorded.
+
 ### 32. **`task_stages.state` has two vocabularies and neither is declared, so a *returned* stage is published as `completed`** (TODO, small — the deferral it was waiting for expired when WP-15 merged)
 
 **What is wrong.** The column is `text` with a note deferring its vocabulary to a work package that is
@@ -4965,6 +5251,27 @@ the browser tier has never seen the sentence this entry is about.
     (M2, "steer + take-over/hand-back (export, resume instructions)") — the extra eleven days exist for the
     export path, so the extension belongs with the code that knows a task was taken over, and a create-time
     guess cannot know it. Trigger today: nothing, because no path pauses or hands over a run yet.
+    **Discharged at WP-27, by a mechanism this bullet did not imagine — and the orchestrator owes
+    technical/05 a sentence for it** (refiner, session 5; the measurement is WP-27's, quoted, nothing
+    run here — rule 66). *"A Docker volume's labels cannot be changed — measured, and one of the two
+    ways is silent. Against Docker Engine 29.7.2 / API 1.55: `docker volume create` with an existing
+    name and a different label **succeeds** (exit 0) and returns the volume with its **original**
+    labels, and `docker volume update` answers 'can only update cluster volumes'."* So *"no path
+    relabels a volume"* above was never a line somebody forgot: **a relabel is not available on the
+    shipped engine.** `extendRetention` writes a **second, marker volume `hold-<run-id>`** and
+    `purgeExpired` takes the later of the two instants, removing the hold with the workspace or on
+    its own when the workspace is already gone — the sweep still asks the daemon rather than keeping
+    a list of its own (rule 7), which a file or a row would have given up. Two consequences worth
+    having in writing. **(1) technical/05:10's *"keep the volume per retention (3 days default, 14
+    days for paused/taken-over)"* is still true as a policy and now understates the mechanism**: an
+    operator reading that line — or `docker volume ls` — meets a second volume per taken-over run
+    that no document mentions, and an operator pruning what looks like debris deletes the hold and
+    with it the fourteen days. The amendment is technical/05's and therefore the orchestrator's
+    (product/technical docs are theirs): name `hold-<run-id>`, say the sweep takes the later instant,
+    and say why a relabel was not available, so nobody re-derives the engine measurement. **(2) It is
+    a third member of rule 60's family** — a resource whose *name* carries meaning — but in the safe
+    direction this time: an orphaned `hold-<run>` whose workspace is already gone is removed by the
+    sweep on its own.
   - **A second instance of the same rule-60 class, one level down, and this one is CLOSED** (WP-22; refiner,
     session 5). The bullet above is about the *named* `ws-<uuid>` volume a sweep can see and chooses to keep.
     `alpine/git` declares `VOLUME /git`, so every helper container a run makes owned an **anonymous** volume
@@ -12619,7 +12926,253 @@ write of the duty; wait 3's "one handler, decided inside its own transaction" ar
 `read_ticket` waits in the second test bound the duty's refusals the way review-only's test 2 now
 does.
 
+### WP-27 — steer, take-over and hand-back, and the fourteen-day window
+
+**What shipped.** `POST /api/runs/:run_id/steer`, `POST /api/tasks/:task_id/take-over` and
+`POST /api/tasks/:task_id/hand-back`, on WP-15i's command shape (`Idempotency-Key`, one
+`human_actions` row per accepted command, the aggregate deciding, a typed 409 per refusal); the
+register that makes a live session reachable (`packages/application/src/pipeline/live-runs.ts`);
+`WorkspaceProvider.extendRetention` and technical/05 §5's fourteen days; the workpad's take-over
+block and the task read model's `taken_over`. `ADMITTED_GAPS` in the client census is now **empty**.
+
+**1. A steer reaches the live session through a register the runner is wrapped with, not a new
+option.** `LiveRuns.observe(runner)` is `RunStopReasons.observe(sink)`'s shape: the composition root
+wraps once (`apps/server/src/runtime.ts` builds it and hands the *same instance* to `composePipeline`
+and `createTaskCommands`), the stage executor is unchanged, and the handle is dropped when the run's
+outcome settles — either way, because a crashed run's handle would push into a closed queue and
+`claude-runner.ts` returns silently from that. A run that is running and **not here** is
+`RunNotReachableError` → `409 run_not_reachable`, a different code from `run_not_live` because the
+remedies differ; Q52's out-of-process transport is still unbuilt and this is where a caller is told so.
+
+**2. `run.steered` is appended to the *task's* stream, and that was measured rather than chosen.**
+The first e2e run of the steer failed with `stream run/<id> is at sequence 4, cannot append 3`: the
+stage executor holds **one `Run` aggregate in memory from `createRun` to `run.finished`**, so a
+second writer on the run's stream does not race — it makes the executor's own terminal append fail
+the `events_enforce_stream_seq` trigger, which failed the `stage.execute` job into pg-boss's retry
+and started the stage again 30 seconds later. The rule the existing code was already written to,
+now stated at `aggregates/run.ts`: *a foreign writer may append to a run's stream only when it has
+taken the run's ending from the executor* — which is what `cancelRunCommand` does. So `steerRun`
+moved from `run.ts` to `task.ts`, which is `recordArtifact`'s decision one aggregate over, with the
+same one-line reason.
+
+**3. The log is written before the session is.** A failed append after a delivered turn would make
+the caller retry and deliver a **second** turn the run pays for and nobody can take back; a failed
+delivery after a commit leaves an event with no `steer` transcript row, which is visible exactly
+where a human looks. The residual is stated at the call.
+
+**4. The steer window is technical/08:137's, and it is per process.** `createSteerGate` — one
+message per five seconds per user, `429 rate_limited`, asked **after** the replay check so a retry
+under a used key cannot refuse the next real steer (the case discriminates: the replay lands exactly
+at the end of the window). N API containers allow N messages per window; stated in the module note.
+
+**5. A take-over pauses first and does not wait for the run.** Pausing first leaves the same state a
+plain `pause` does if the second half fails, and the executor already handles it; stopping first
+would leave a killed run on a task the pipeline still owns. `handle.stop({reason:'taken_over',
+workspaceExport})` is not awaited — `RunHandle.stop` resolves only when the run's *outcome* does, so
+an awaited request would hold a connection through `interrupt()`, a grace period and teardown — and
+the response says `workspace_export: 'requested'`, which is the true tense.
+
+**6. `RunHandle.stop` carries the export, and `RunHandle.sessionId` exists.** The launcher-side work
+of a take-over — the `wip: hand-over to <user>` commit, the push of `agentic/<task>`, the optional
+tarball, the fourteen days — can only happen as the workspace is released, and `release` is in a
+`finally` on the outcome: after the stop there is nothing left to ask. The session id had to be on
+the handle because `runs.session_id` is written when a run **ends** and a take-over interrupts one
+that has not.
+
+**7. A Docker volume's labels cannot be changed — measured, and one of the two ways is silent.**
+Against Docker Engine 29.7.2 / API 1.55: `docker volume create` with an existing name and a different
+label **succeeds** (exit 0) and returns the volume with its **original** labels, and
+`docker volume update` answers *"can only update cluster volumes"*. So `extendRetention` writes a
+second labelled volume, `hold-<run-id>`, and `purgeExpired` takes the later of the two instants and
+removes the hold with the workspace (or on its own when the workspace is already gone). The sweep
+still asks the daemon rather than carrying a list of its own (rule 7), which a file or a row would
+have given up. Asserted through the shared contract suite, so the fake and the real daemon are held
+to the same three properties — held past day 3, removed after day 14, never shortened.
+
+**7a. The export's commit and push never meet the command policy, and the measurement says why that
+matters.** TD-027's question for this row was what `git commit` and `git push agentic/*` answer under
+the developer stage's baseline. Measured with `evaluateCommand` against
+`commandBaselineFor('developer', 'implementation')`: `git commit -q -m "wip: hand-over to Ada"` →
+**allow**, `git add -A` → **allow**, `git push origin agentic/ACME-1` → **allow**, and
+`git push origin HEAD:refs/heads/agentic/ACME-1` → **ask**. The last one is the form
+`WorkspaceProvider.export`'s helper actually runs — and it is **not** evaluated, by any of them: the
+only thing that evaluates a shell command is the platform-side `PreToolUse(Bash)` hook (TD-027 states
+it, `hooks.ts` implements it), and the export runs in a **launcher helper container** with the run's
+own credential, which never reaches the shim. So the policy is silent here by construction rather
+than by permission. It is worth knowing in one direction: an export moved into the agent's own shell
+would land on `ask` and an unattended run would **deny** it (BD-025's default), so that move is a
+decision and not a refactor.
+
+**8. `handBackTask` emits the event and moves nothing.** It used to do both, and doing both was
+wrong for the three stage ids a human is most likely to choose: `ready_for_merge`, `merged` and
+`retro` are task **states**, so entering them is `markReadyForMerge`/`recordMerge`/`startRetrospective`
+and not `enterStage`, and it wrote no `task_stages` row either. The entry now goes through
+`applyDecision`, and `StageNotInTemplateError` (`409 stage_not_in_template`) refuses a stage the
+compiled pipeline does not name or has disabled — without it the task would sit `active` at a stage
+nothing will ever run.
+
+**9. Its docblock claimed an iteration reset it did not do, and the claim is withdrawn rather than
+implemented.** product/04:86's reset is scoped by its own wording to a human asking for *a
+fundamentally different approach* (`@agentic rework`), which is `reworkStageCommand`'s rule. A
+hand-back is the opposite motion, and giving the rounds back would be unbounded by construction
+(hand back, take over, hand back). Written at the function.
+
+**Assumptions, each implemented.**
+- **Who may do what is the shipped table, not a new decision.** `permissions.ts` already has
+  `run.steer: member`, `task.take_over: member`, `task.hand_back: member`; technical/08:133 points at
+  that map, so no product question was opened.
+- **The take-over's export does not write the transcript JSONL** technical/05 §6 also names. `blobs`
+  has no writer, `workspaces` has no row and no endpoint serves a download — three pieces that belong
+  to one work package — while the transcript is already readable, redacted, through
+  `GET /api/runs/:run_id/messages`. Filed under discovered work rather than half-built.
+- **`session_id` is the live run's or `null`.** A take-over of a task with no run in flight answers
+  `no_live_run` and omits the `claude --resume` line rather than resuming a session whose workspace
+  is gone. technical/04's own note on importing a platform transcript into a local Claude Code still
+  carries a `[verify:]` marker, so the platform promises the id and not the import.
+- **The hand-back's summary does not reach the next run's prompt.** It reaches `task.handed_back` and
+  the workpad. The prompt's return-feedback channel is `task_stages.return_reason`, whose writer and
+  reader disagree about which stage's row holds it — filed under discovered work, not worked around.
+- **The workpad's take-over block is carried on the outbound job**, like `blocker_brief`, because
+  `tasks` records that a task is `paused` and not *why*. A later workpad render while the task is
+  still taken over would lose the block; the window is narrow (a taken-over task emits almost none of
+  the workpad's eleven events) and it is filed.
+
+**What the tiers assert.** `take-over.e2e.test.ts` drives all three through a whole `apps/server`
+instance over the real runner and a scripted CLI held open by `awaitSteers: 1`: the steer is asserted
+on **the bytes the CLI received** (rule 82) with a planted credential absent from the frame, on the
+redacted transcript row, on the event and on `human_actions`; the take-over on the response, the
+interrupted run, the `takeOver` request that reached the workspace's `release`, the workpad comment
+and the task read model; the hand-back on a run of the stage the human chose (`implementation`, which
+is neither the stage it was taken over at nor the one resuming would pick) and on `architecture`
+**not** running. The retention window is the contract suite's, against the fake and a real daemon.
+
+**Pre-merge fix round:** the approving review's four minors, each with the measurement that closed it.
+
+1. **A stated reason vanished, at two endpoints, and one of them was WP-15i's.** `/take-over`
+   accepted `reason` through a strict schema and `routes/commands.ts` recorded `task_id`/`tarball`
+   only; `/pause`'s description has said *"`reason` is recorded in the audit row"* since WP-15i
+   beside `params: () => ({})`, and `pauseTaskCommand`'s docblock said the same. Both are now true
+   the same way, and **where the redaction happens was the decision**: the route has no redactor and
+   acquiring one would make a second TD-012 site in `apps/server`, so the *command* redacts and
+   **returns** the words (`auditedReason`, `AuditedReason`) and the route writes back what it was
+   given through `auditResult` — which is why `params` still carries no byte of the request body.
+   The free-text count in three docblocks and technical/08 went from five/seven to **nine**
+   (rule 83). Mutation-checked both ways on this tree: dropping `deps.redactor` from `auditedReason`
+   fails *"hands back the human's reason, redacted…"* and *"hands back the operator's reason…"* by
+   name; emptying the pause route's `auditResult` fails *"records a pause's reason in the audit
+   row…"*. The e2e plants a `glpat-` credential in a take-over reason and reads the real
+   `human_actions` row: sentence present, credential absent (rule 42).
+2. **A docblock described a composition that does not exist, and a second sentence in it was wrong
+   in the other direction.** `apps/server/src/commands.ts` said an API-only process composes
+   `liveRuns: null`; `runtime.ts:218` builds `createLiveRuns()` on every role, outside the worker
+   branch, and leaves the API's **empty**. It also said both commands that reach for a live session
+   "refuse by name" — true of the steer, **false of the take-over**, which pauses the task and
+   answers `no_live_run`. Three docblocks now state the composition that exists (the two here and
+   `HumanCommandDependencies.liveRuns`), and the equality is measured rather than asserted in prose:
+   both cases in `human-commands.test.ts` are `it.each` over `[null, createLiveRuns()]`, so the
+   arm production actually has is driven (rules 3, 68).
+3. **Model-based steer coverage, restored one aggregate over.** `run.model.test.ts`'s `Steer` went
+   with `steerRun`'s move and nothing replaced it: coverage over run status was one `completed`
+   example. `task.model.test.ts` has a `Steer` command drawn from `runStatusSchema.options`, so the
+   status is crossed with every task state the sequences reach, plus a deterministic case over the
+   whole enum — because a `constantFrom` is a distribution and "every status is exercised" would
+   otherwise be a claim about a seed. It kills a mutant the old example survives: `run.steer` →
+   `LIVE_RUN_STATUSES.has(status)` leaves `task.test.ts` green (39 passed) and fails both new cases.
+4. **product/19:84 is pinned rather than true by construction.**
+   `packages/application/src/pipeline/wip-commit-sites.test.ts` is a two-part census over
+   `git ls-files` **and** `--others --exclude-standard` (rule 85): every production `wip:` **string**
+   (the one writer, plus the take-over endpoint's description, which quotes it) and every
+   `commitMessage:` **key** (two declarations, the writer, the launcher's forwarder). Canaried with a
+   planted untracked file, which both halves named. The `wip:` pattern requires a preceding quote
+   because `settings.ts` carries BD-010's limits as `wip: WipLimits` and a guard that fires on
+   legitimate content is a guard somebody switches off.
+
+**Assumption, implemented:** a take-over's reason is recorded in the audit row and **not** published
+on `task.taken_over`. Adding a field to a shipped event payload for one caller is the thing
+`pauseTaskCommand`'s own docblock refuses, and backlog 69's *why is this task paused* is a read-side
+question already filed with two recommended shapes.
+
+**Discovered while measuring finding 2 (for routing, not fixed here): on a split deployment a
+take-over answers `no_live_run` for a run that is live on the worker, and exports nothing.**
+`takeOverTaskCommand` reads `deps.liveRuns?.forTask(...)`, which on `ROLE=api` is an empty register,
+so the task pauses, the response says `workspace_export: 'no_live_run'`, and the run on the worker is
+neither interrupted nor asked for the `wip:` commit, the push or the fourteen days — the operator is
+told there was nothing to export rather than that the session is somewhere else. The steer's
+vocabulary already distinguishes the two (`run_not_live` vs `run_not_reachable`) and the take-over's
+does not; it is `takeOverResponseSchema.workspace_export` lacking the third value, on top of Q52's
+unbuilt transport, which is what would make the export actually happen. Single-process (`ROLE=all`,
+the shipped compose) is unaffected, which is why no tier sees it.
+
 ## Discovered work — session 5 (not in plan)
+- **A return's reason is written on the stage the task *leaves* and read for the stage it *enters*,
+  so return feedback reaches the prompt only by coincidence** (WP-27). `applyDecision`'s `return`
+  branch calls `recordStageExited(… stage: decision.from …, returnReason: decision.reason)`
+  (`packages/application/src/pipeline/transitions.ts`), and the stage executor asks
+  `store.tasks.lastReturnReason(tx, taskId, job.stage)` — the stage about to **run**
+  (`stage-executor.ts:400`). A code review that returns to implementation with *"the footer rounds
+  twice"* therefore writes that sentence on the `code_review` row, and the implementation run is
+  given whatever *implementation* last said when it returned to architecture, or nothing. The
+  planner puts the value in the prompt (`planner.ts:614`) and in the context-pack query text, so this
+  is the channel product/04's whole return loop rests on. Found while deciding where a hand-back's
+  summary should go; **not fixed here** because the fix is a decision about which row owns the
+  reason (the leaving stage's, read by a join, or the entering stage's attempt) and it moves
+  behaviour for every return the pipeline makes. Nothing in this row depends on it.
+  *Refiner (session 5): **filed as backlog 67**, judged a **live defect** and not a gap — no shipped
+  `return_to` edge names the stage the reader asks for, so from a task's second loop the reader finds
+  a row and serves a **stale, unrelated** sentence rather than nothing. Recommendation: the
+  reader-side shape with a `returned_to` column. No work package owns it, and the hand-back summary
+  is blocked behind it.*
+- **The take-over export writes no transcript JSONL, and the three pieces that would carry one have
+  no owner** (WP-27). technical/05 §6 is *"branch pushed + transcript JSONL copied to `blobs` +
+  optional tarball … downloadable from the UI"*. The branch and the tarball ship; the JSONL does not,
+  because `blobs` has had no writer since migration 0006, `workspaces` (with its `exported_blob_id`
+  and `retention_until`) has never held a row, and no endpoint serves a download. Writing the blob
+  alone would be a row nobody reads — the defect shape this ledger has filed four times. The
+  transcript **is** readable, redacted, through `GET /api/runs/:run_id/messages`; what is missing is
+  a file a human can take to their own machine.
+  *Refiner (session 5): **filed as backlog 68**, judged a **defect against two product/technical
+  documents** whose cheapest close needs **no `blobs` writer** — serve the JSONL from `run_messages`
+  through the read API's existing (already redacted) projection. One clause of this bullet is
+  **widened**: the tarball does not "ship" either — it is written to the launcher's filesystem and
+  nothing serves it, while `compose.yml:117,126-128,258-260` already mounts the `exports` volume into
+  the app container and declares it the one that serves them, and no code under `apps/server` reads
+  `APP_WORKSPACE_EXPORT_DIR`. Two doc sentences are the orchestrator's to amend (technical/05:11,
+  product/19:156).*
+- **`tasks` does not record *why* a task is paused, so the workpad's take-over block cannot be
+  re-rendered** (WP-27). The block (branch, resume command, how to hand back) is carried on the
+  `pipeline.outbound` wake-up, like `blocker_brief`, and a later render of the same sticky comment
+  would drop it. The window is small — a taken-over task emits almost none of the workpad's events —
+  but it is real for `task.escalated`. Two shapes: a `paused_reason` column on `tasks` (a migration,
+  a column-partition entry and a writer), or a narrow store read of the newest `task.taken_over` on
+  the task's stream, which `apps/server/src/queries/pipeline-queries.ts` already does for the read
+  model and which the duty could do through `PipelineStore`.
+  *Refiner (session 5): **filed as backlog 69**, judged **latent and small**, with the second shape
+  (the narrow store read) recommended over the column. The entry carries what this bullet's trigger
+  turned out to rest on: product/19:156's *"a taken-over task escalates to `Needs human` after 5
+  working days of inactivity"* is **unbuilt and was unfiled** — the only mention of it in the tree is
+  an example in `working-calendar.ts:264` — so nothing escalates a taken-over task today, and
+  building that timeout is what makes this defect certain.*
+- **Nothing renders the take-over on any screen** (WP-27). `takeOverResponseSchema` and
+  `taskDetailResponseSchema.taken_over` now carry the branch, the session, the resume commands and
+  what became of the workspace — which was the stated reason `apps/web` declined to build the
+  buttons (`api/endpoints.ts`, `features/task-detail.tsx`, `features/run-detail.tsx`, all three
+  corrected). What is left is a UI row: a take-over control on the task and run screens showing those
+  four lines, and a stage picker for the hand-back. Until it lands the endpoints are asserted by hand
+  in `client-census.test.ts`, because a client-driven census cannot see a route no screen calls.
+  *Refiner (session 5): **filed as backlog 70**. No work package owns it — WP-20 is DONE and **WP-30
+  is settings and wizard step 4, not task controls** — so the recommendation is a named criterion on
+  WP-30 (the next M2 row that opens `apps/web` at all) if the buttons are wanted in M2, and a small
+  row of its own otherwise. The assertion that the row landed is the **deletion** of the two
+  hand-written census cases: once a screen calls them the client-driven comparison covers them.
+  Entry 68's download link has nowhere to live until this exists.*
+- **A run's workspace cannot be told which branch to check out** (found while judging the hand-back,
+  refiner, session 5 — **filed as backlog 71**, latent). `RunWorkspaceProvisioner.provision` takes a
+  `RunSpec` and `runSpecSchema` has no branch field, while `WorkspaceSpec.repo.checkoutBranch` — which
+  the Docker provider honours — is set by nothing outside a verification script. technical/05 §2's
+  *"checkout of the task branch for re-entries"* and product/19 § 19's *"re-provisions a workspace
+  from the branch"* therefore have no carrier. Nothing is wrong today (no production provisioner
+  exists); it becomes a wrong-answer failure the moment one does, and it is a criterion for whoever
+  composes it rather than a piece of work of its own.
 - **The conflict warning has no screen, and the board is where product/04 says it belongs** (WP-26).
   product/04 S6b is *"the board warns when two active tasks touch the same files"* and product/18 is
   *"surfaced on the board ('touches the same files as PROJ-98')"*. What this row ships is a thread on

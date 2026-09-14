@@ -424,11 +424,19 @@ describe('the API never falls back to the shell', () => {
 
   it('keeps the census able to tell an unserved endpoint from a served one', async () => {
     // `routes/client-census.test.ts` classifies by this body and builds the app with no bundle, so
-    // this is the assertion that the bundle does not turn its instrument off. The path is the one
-    // entry still in its `ADMITTED_GAPS` (steer, WP-27).
+    // this is the assertion that the bundle does not turn its instrument off.
+    //
+    // The path used to be `…/steer`, which was that census's one admitted gap until **WP-27
+    // served it**; a probe that is now a real route would assert nothing (standing rule 83 — the
+    // sentence nearest a closed gap is the one nobody re-reads). It is an invented path now, on a
+    // real prefix, which is what the case has always been about: a `/api/*` request the router does
+    // not own must get the API's own 404 and never the bundle's shell.
     const { app } = await build();
     for (const method of ['GET', 'POST', 'PUT'] as const) {
-      const response = await app.inject({ method, url: `/api/runs/${PROBE_ID}/steer` });
+      const response = await app.inject({
+        method,
+        url: `/api/runs/${PROBE_ID}/wp27-no-such-command`,
+      });
       expect(response.statusCode, method).toBe(404);
       expect(response.json(), method).toEqual(notFoundBody);
     }

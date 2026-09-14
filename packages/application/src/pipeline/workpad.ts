@@ -81,6 +81,12 @@ const WORKPAD_EVENTS = [
   'task.escalated',
   'task.paused',
   'task.resumed',
+  // WP-27. A take-over and a hand-back both change what a human reading the ticket needs to know —
+  // the first adds the branch and the resume command, the second withdraws them — and neither
+  // emits `task.paused` or `task.resumed`, so without these two lines the workpad would show the
+  // stage the agent was at while a person was holding the task.
+  'task.taken_over',
+  'task.handed_back',
   'task.completed',
   'task.cancelled',
 ] as const;
@@ -90,6 +96,10 @@ const STATUS_EVENTS = [
   'task.stage.entered',
   'task.escalated',
   'task.paused',
+  // WP-27, for the reason above: a take-over pauses the task and a hand-back re-enters a stage, so
+  // a project that maps `paused` to a column on its board owes the move both ways.
+  'task.taken_over',
+  'task.handed_back',
   'task.completed',
   'task.cancelled',
 ] as const;
@@ -105,6 +115,20 @@ export interface WorkpadView {
   readonly mrUrl: string | null;
   /** The last blocker brief, when the task is parked. */
   readonly blocker: string | null;
+  /**
+   * The take-over in force, when this render was caused by one (WP-27, product/19 §19).
+   *
+   * Carried on the wake-up rather than re-derived, for the reason {@link WorkpadView.blocker} is:
+   * `tasks` records that a task is `paused` and not **why**, and the session id is not on the row
+   * at all (`runs.session_id` is written when a run *ends*, and a take-over interrupts one that has
+   * not). So it is the one thing here that a later render of the same comment cannot reproduce —
+   * stated rather than implied, and bounded by the fact that a paused task emits almost nothing:
+   * the workpad's other ten events are all pipeline motion, which a taken-over task has none of.
+   */
+  readonly takenOver: {
+    readonly branch: string;
+    readonly sessionId: string | null;
+  } | null;
 }
 
 /**
@@ -137,10 +161,34 @@ export const renderWorkpad = (view: WorkpadView): string => {
   if (view.blocker !== null) {
     lines.push('', '**Needs a human**', view.blocker);
   }
+  if (view.takenOver !== null) {
+    // product/19 §19: *"branch, resume command …, and how to hand back"*. Every line is the
+    // platform's own words around two values it stores — the branch and the session id — and the
+    // `claude --resume` line is omitted rather than written with a placeholder when there is no
+    // session, because a command a reader can paste and get an error from is worse than a missing
+    // one (standing rule 18).
+    lines.push(
+      '',
+      '**Taken over by a human** — the pipeline is paused.',
+      '',
+      'Continue the work:',
+      '```',
+      `git fetch && git checkout ${view.takenOver.branch}`,
+      ...(view.takenOver.sessionId === null ? [] : [`claude --resume ${view.takenOver.sessionId}`]),
+      '```',
+      '',
+      'Hand it back when you are done: push to the same branch and choose a stage on the task page.',
+    );
+  }
   return lines.join('\n');
 };
 
-const viewOf = (stored: StoredTask, budgetUsd: number, blocker: string | null): WorkpadView => ({
+const viewOf = (
+  stored: StoredTask,
+  budgetUsd: number,
+  blocker: string | null,
+  takenOver: WorkpadView['takenOver'] = null,
+): WorkpadView => ({
   ticketKey: stored.task.ticket.key,
   state: stored.task.state,
   currentStage: stored.task.currentStage,
@@ -152,6 +200,7 @@ const viewOf = (stored: StoredTask, budgetUsd: number, blocker: string | null): 
   budgetUsd,
   mrUrl: stored.mr?.url ?? null,
   blocker,
+  takenOver,
 });
 
 /**
@@ -179,6 +228,9 @@ interface TaskEventPayload {
   readonly task_id?: Id;
   readonly project_id?: Id;
   readonly blocker_brief?: string;
+  /** `task.taken_over` (WP-27): the two values the render cannot get from the task row. */
+  readonly branch?: string;
+  readonly session_id?: string | null;
 }
 
 export const workpadHandler = (options: WorkpadOptions): EventHandler => ({
@@ -192,6 +244,7 @@ export const workpadHandler = (options: WorkpadOptions): EventHandler => ({
     if (taskId === undefined || projectId === undefined) {
       return;
     }
+    const takenOver = context.event.event.type === 'task.taken_over';
     const data: PipelineOutboundData = {
       duty: 'workpad',
       project_id: projectId,
@@ -199,6 +252,12 @@ export const workpadHandler = (options: WorkpadOptions): EventHandler => ({
       cause_event_id: context.event.event.id,
       // The one thing the render cannot re-derive from the task row.
       ...(payload.blocker_brief === undefined ? {} : { blocker_brief: payload.blocker_brief }),
+      // …and the two the take-over adds (WP-27). Only from `task.taken_over`: reading `branch` off
+      // any task event would put the block on every render, and the block is a statement that a
+      // person is holding this task right now.
+      ...(takenOver && payload.branch !== undefined
+        ? { taken_over_branch: payload.branch, taken_over_session: payload.session_id ?? null }
+        : {}),
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
@@ -285,8 +344,19 @@ export const runWorkpadRender = async (
     return;
   }
   const settings = await options.settings.forProject(stored.task.projectId);
+  const branch = data.taken_over_branch;
   const markdown = renderWorkpad(
-    viewOf(stored, settings.taskBudgetUsd, data.blocker_brief ?? null),
+    viewOf(
+      stored,
+      settings.taskBudgetUsd,
+      data.blocker_brief ?? null,
+      typeof branch === 'string'
+        ? {
+            branch,
+            sessionId: typeof data.taken_over_session === 'string' ? data.taken_over_session : null,
+          }
+        : null,
+    ),
   );
   // The workpad is written outside any run, so the call's scope holds no minted credential (Q55).
   const integrations = await integrationsForProject(

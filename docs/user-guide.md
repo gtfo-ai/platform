@@ -170,10 +170,13 @@ the rest are not measured yet, rather than drawing empty ticks that read as "pas
 
 ### What is not on this screen
 
-- **Take over** and **hand back**. Taking over means "pause the pipeline, get the branch and a resume
-  command, export the workspace", and no published response carries the branch, the command or the
-  export. A button that paused your pipeline and then could not tell you where the work is would be
-  worse than no button.
+- **Take over** and **hand back**. The two endpoints exist and answer everything an operator needs —
+  taking over pauses the pipeline, interrupts the running agent, commits and pushes its work in
+  progress on `agentic/<ticket>`, and answers with the branch, the `claude --resume` command and
+  whether the workspace was exported — and the ticket's workpad is updated with the same
+  instructions, so the information reaches you there today. What is missing is the **buttons**: a
+  place on this screen to show those lines, and a stage picker for handing the task back. Until they
+  land, take over from the API (`POST /api/tasks/:id/take-over`) and read the workpad comment.
 - **Ask the task a question.** The answers are a thread, and the task response has nowhere to carry
   one, so a question would post into a void.
 

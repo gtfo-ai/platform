@@ -51,6 +51,7 @@ import type {
   IntegrationActionExecutor,
   IntegrationAuditLog,
   Jobs,
+  LiveRuns,
   Logger,
   PipelineIntegrationsPort,
   PipelineRuntime,
@@ -215,6 +216,16 @@ export interface ComposePipelineOptions {
   readonly intakeReconcileIntervalMs: number;
   /** Built once per process by {@link composeIntegrationStack}; the ingress shares it. */
   readonly stack: IntegrationStack;
+  /**
+   * The register of runs this process is executing (WP-27).
+   *
+   * Built by the composition root and passed to **both** halves — the runner is wrapped with it
+   * here, and `createTaskCommands` is given the same instance — because a steer and a take-over
+   * reach into a session the executor is holding. A second register would be a second, empty
+   * answer to "is that run here", and every steer would be refused on a process that was running
+   * the run.
+   */
+  readonly liveRuns: LiveRuns;
   /**
    * What a run is given of the model provider (BD-004, TD-021 phase 1): the provider mode, the model
    * credential that becomes a `RunSpec.env` entry named in `secretEnvNames`, and the `local`-mode
@@ -529,7 +540,13 @@ export const composePipeline = async (
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
     execution: {
-      runner: composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
+      // Wrapped so that every run this process starts is findable while it lasts (WP-27). The wrap
+      // is outermost on purpose: it must see the handle the executor is given, whichever of the
+      // three runners below produced it — including `unavailableClaudeRunner`, whose `start` throws
+      // and therefore registers nothing.
+      runner: options.liveRuns.observe(
+        composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
+      ),
       planner: createStageRunPlanner({
         /**
          * Where the *planner* thinks the workspace is.

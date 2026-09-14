@@ -55,10 +55,12 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * its transaction and retries through `retryOnTaskConflict` like a job, but when the bound is spent
  * the error reaches the caller as a typed `409` rather than escalating the task — a person can press
  * the button again, and parking their task for a race they never saw is not an ending they asked
- * for. Its three sites are pause, cancel, and the pause a cancelled run leaves behind.
+ * for. Its **four** sites are pause, cancel, the pause a cancelled run leaves behind, and WP-27's
+ * take-over — which is a pause with a branch and a session id on its event, and which therefore
+ * shares that ending exactly.
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
-  ['packages/application/src/pipeline/commands.ts', 3],
+  ['packages/application/src/pipeline/commands.ts', 4],
   ['packages/application/src/pipeline/saga.ts', 11],
   ['packages/application/src/pipeline/stage-executor.ts', 6],
   ['packages/application/src/pipeline/transitions.ts', 5],
@@ -126,14 +128,15 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts twenty-six, which is the number the change states', () => {
+  it('counts twenty-seven, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
     // from WP-15i — three human commands and the executor's sixth, which writes a run's spend onto
-    // a task a human stopped mid-run without completing its stage.
+    // a task a human stopped mid-run without completing its stage; plus WP-27's take-over, which is
+    // a fourth human command with the same ending as the other three.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(26);
+    expect(total).toBe(27);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

@@ -420,14 +420,60 @@ export interface SteerMessage {
 /** Why the platform stopped a live run. */
 export type RunStopReason = 'cancelled' | 'taken_over';
 
+/**
+ * What a take-over asks the run's **workspace** for on the way out (product/19 §19, WP-27).
+ *
+ * It travels with the stop rather than being asked for afterwards, because after the stop there is
+ * nothing left to ask: `createWorkspaceClaudeRunner` releases the workspace in a `finally` on the
+ * outcome, and the container is gone by the time any caller learns the run ended. The one call that
+ * interrupts the session is therefore also the one that says what to do with the tree it was
+ * working in.
+ *
+ * Nothing here is a credential: the launcher already holds the run's own git token (WP-14's broker)
+ * and is the only thing allowed near a daemon (TD-021).
+ */
+export interface RunTakeOverExport {
+  /** BD-025's namespace, always. `agentic/<task>` (product/19 §19). */
+  readonly branch: string;
+  /** product/19:84's one permitted `wip:` commit — `wip: hand-over to <user>`. */
+  readonly commitMessage: string;
+  /** Whether the launcher also writes a tarball of the checkout into its `exports` volume. */
+  readonly tarball: boolean;
+  /** technical/05 §5's fourteen days: when the workspace volume may be purged after all. */
+  readonly keepUntil: string;
+}
+
+/**
+ * Why the platform is ending this run, and what the ending owes.
+ *
+ * A discriminated union rather than the bare reason it used to be, because the two endings owe
+ * different things: a cancel ends the session and gives the workspace back, and a take-over ends the
+ * session, commits and pushes what the agent had reached, optionally archives it, and extends the
+ * volume's retention (technical/05 §5). Making the payload part of the `taken_over` arm is what
+ * stops a caller from asking for a take-over without saying where the work should go.
+ */
+export type RunStop =
+  | { readonly reason: 'cancelled' }
+  | { readonly reason: 'taken_over'; readonly workspaceExport: RunTakeOverExport };
+
 export interface RunHandle {
   readonly runId: Id;
+  /**
+   * The SDK session this run is in, or `null` until the CLI has reported one.
+   *
+   * A **getter on the handle** and not a field, because the value arrives mid-run: the session id
+   * is on the CLI's `init` message, and `runs.session_id` is not written until the run *ends*
+   * (`RunRepository.finish`). A take-over interrupts a run that has not ended, so the row cannot
+   * answer it and the only holder is the runner — which is why `claude --resume <session>`
+   * (product/19 §19) is reachable at all.
+   */
+  readonly sessionId: string | null;
   /** Resolves once — a run has exactly one outcome, however it ended. */
   readonly outcome: Promise<RunOutcome>;
   /** Pushes a user turn into the live session (technical/04 § "Steering"). */
   steer(message: SteerMessage): Promise<void>;
-  /** `interrupt()` then end the run. */
-  stop(reason: RunStopReason): Promise<void>;
+  /** `interrupt()` then end the run; a take-over also says what its workspace owes. */
+  stop(stop: RunStop): Promise<void>;
 }
 
 export interface ClaudeRunner {

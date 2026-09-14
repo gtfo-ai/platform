@@ -289,6 +289,53 @@ export const runWorkspaceProviderContractSuite = (
       });
     });
 
+    /**
+     * technical/05 §5's second window — WP-27, and the **whole** criterion in one case.
+     *
+     * The instants are the fixture's, not the wall clock's (standing rule 2): `workspaceSpecFixture`
+     * creates the workspace with `keep_until` at `2026-09-13`, and a take-over fourteen days later
+     * is `2026-09-27`. The three assertions are the three things a caller may rely on, and the
+     * middle one is the one that would have been missed: a sweep **after** the workspace's own
+     * three-day window and **before** the hold's keeps the volume, which is the day-4 purge
+     * backlog 7 describes. Reading the effective `keep_until` back off the report is the "read the
+     * label back" half — through the port rather than through `docker inspect`, so the fake is held
+     * to it too.
+     */
+    it('keeps a held workspace past its own window and removes it at the held one', async () => {
+      if (!context.supportsPurge) {
+        return;
+      }
+      await withRun(async ({ provider, handle }) => {
+        const held = await provider.extendRetention(handle, '2026-09-27T00:00:00.000Z');
+        expect(held.keepUntil).toBe('2026-09-27T00:00:00.000Z');
+        await provider.destroy(handle);
+
+        const afterItsOwnWindow = await provider.purgeExpired(new Date('2026-09-20T00:00:00.000Z'));
+        expect(
+          afterItsOwnWindow.volumes.find((entry) => entry.volumeName === handle.volumeName),
+        ).toMatchObject({
+          removed: false,
+          keptReason: 'not_expired',
+          // The effective instant, not the three-day label the volume carries.
+          keepUntil: '2026-09-27T00:00:00.000Z',
+        });
+
+        const afterTheHold = await provider.purgeExpired(new Date('2026-09-28T00:00:00.000Z'));
+        expect(afterTheHold.volumes).toContainEqual(
+          expect.objectContaining({ volumeName: handle.volumeName, removed: true }),
+        );
+      });
+    });
+
+    it('never shortens a window it is asked to shorten', async () => {
+      await withRun(async ({ provider, handle, spec }) => {
+        // Earlier than the workspace's own `keep_until`: honoured as a no-op, because every caller
+        // of this method is saying "a human needs this for longer" (the port's own rule).
+        const held = await provider.extendRetention(handle, '2026-09-10T00:00:00.000Z');
+        expect(held.keepUntil).toBe(spec.keepUntil);
+      });
+    });
+
     it('never touches a volume it did not label', async () => {
       await withRun(async ({ provider }) => {
         const report = await provider.purgeExpired(new Date('2099-01-01T00:00:00.000Z'));

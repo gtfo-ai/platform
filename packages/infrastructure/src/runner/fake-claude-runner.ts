@@ -37,6 +37,7 @@ import type {
   RunnerClock,
   RunOutcome,
   RunSpec,
+  RunStop,
   RunStopReason,
   RunTranscriptSink,
   SteerMessage,
@@ -290,6 +291,10 @@ export const createFakeClaudeRunner = (options: FakeClaudeRunnerOptions): Claude
 
     return {
       runId: spec.runId,
+      // The same value the outcome reports, available from the start: this runner has no CLI to
+      // wait for, and a fake that answered `null` until the run ended would be **kinder** than the
+      // real one in the one direction a take-over reads (standing rule 1).
+      sessionId: `fake-session-${spec.runId}`,
       outcome,
       steer: async (message: SteerMessage) => {
         await emit({
@@ -303,7 +308,7 @@ export const createFakeClaudeRunner = (options: FakeClaudeRunnerOptions): Claude
           author_user_id: message.authorUserId,
         });
       },
-      stop: async (reason: RunStopReason) => {
+      stop: async ({ reason }: RunStop) => {
         stopped.resolve(reason);
         await outcome.catch(() => undefined);
       },

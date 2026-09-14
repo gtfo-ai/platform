@@ -8,11 +8,22 @@
  * path and the rejection of illegal transitions are under test rather than only the paths a
  * `check()` gate would let through.
  */
-import type { DomainEvent, QuestionRecord, TaskState, TaskTotals } from '@platform/contracts';
+import type {
+  DomainEvent,
+  QuestionRecord,
+  RunStatus,
+  TaskState,
+  TaskTotals,
+} from '@platform/contracts';
+import { runStatusSchema } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { type Clock, fixedClock } from '../clock.js';
-import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
+import {
+  IllegalTransitionError,
+  InvariantViolationError,
+  PermissionDeniedError,
+} from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import {
@@ -39,6 +50,7 @@ import {
   requestApproval,
   returnToStage,
   startRetrospective,
+  steerRun,
   type Task,
   type TaskDecision,
   takeOverTask,
@@ -47,6 +59,8 @@ import { canTransitionTask, isRunnableTaskState, TASK_TRANSITIONS } from './task
 
 const TASK_ID = '00000000-0000-4000-8000-0000000000aa';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000bb';
+const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
+const USER_ID = '00000000-0000-4000-8000-0000000000e9';
 const STAGES = ['refinement', 'architecture', 'implementation', 'code_review'] as const;
 
 /**
@@ -382,20 +396,77 @@ class HandBack implements TaskCommand {
     return true;
   }
   run(model: TaskModel, real: TaskReal): void {
-    const stage = 'code_review';
-    const decision = transition(model, real, 'active', () =>
-      handBackTask(
-        real.task,
-        { branch: 'agentic/PROJ-1', stage, summary: 'continued by hand' },
-        context(real),
-      ),
+    // **It moves nothing** (WP-27): `handBackTask` announces the hand-back and entering the chosen
+    // stage is `applyDecision`'s, one ring out — which is why this is not a `transition(...)` call
+    // like every other command here. What the model checks is the invariant that replaced the old
+    // one: the state and the stage after it are the state and the stage before it, from **every**
+    // state the sequence can reach, including the terminal ones no transition would allow.
+    const state = real.task.state;
+    const stage = real.task.currentStage;
+    const decision = handBackTask(
+      real.task,
+      { branch: 'agentic/PROJ-1', stage: 'code_review', summary: 'continued by hand' },
+      context(real),
     );
-    if (decision !== null) {
-      model.currentStage = stage;
-    }
+    real.task = decision.aggregate;
+    real.events.push(...decision.events);
+    expect(real.task.state).toBe(state);
+    expect(real.task.currentStage).toBe(stage);
+    expect(model.state).toBe(state);
   }
   toString(): string {
     return 'handBack()';
+  }
+}
+
+/**
+ * A human pushes a turn into a run, from every status a run can be in (WP-27, fix round).
+ *
+ * It lived on the **run** model until `steerRun` moved to this aggregate, and the move dropped it:
+ * what was left was one `completed` example in `task.test.ts`, so eight of the nine statuses — and
+ * every combination of a run status with a task state — went unexercised. Standing rule **68**: the
+ * behaviour is parameterised over `runStatusSchema`, so the property is too, and the arbitrary
+ * reads the enum rather than a list copied here.
+ *
+ * Two things it pins that a single example cannot. The permission subject is the **run's** status
+ * and not the task's, so a steer succeeds from a `paused`, `needs_human` or even `done` task and is
+ * refused for every non-`running` run — a rule this file's sequences reach from states no unit test
+ * enumerates. And the steer **moves nothing**: state and stage are unchanged, while the event still
+ * chains the task's `stream_seq` (invariant 5 above), which is the whole reason the command lives
+ * on this aggregate.
+ */
+class Steer implements TaskCommand {
+  constructor(private readonly status: RunStatus) {}
+  check(): boolean {
+    return true;
+  }
+  run(model: TaskModel, real: TaskReal): void {
+    const state = real.task.state;
+    const stage = real.task.currentStage;
+    const command = (): TaskDecision =>
+      steerRun(
+        real.task,
+        {
+          run: { id: RUN_ID, status: this.status },
+          message: 'try the other helper',
+          authorUserId: USER_ID,
+          authorRole: 'member',
+        },
+        context(real),
+      );
+    if (this.status !== 'running') {
+      expect(command).toThrow(PermissionDeniedError);
+      return;
+    }
+    const decision = command();
+    real.task = decision.aggregate;
+    real.events.push(...decision.events);
+    expect(real.task.state).toBe(state);
+    expect(real.task.currentStage).toBe(stage);
+    expect(model.state).toBe(state);
+  }
+  toString(): string {
+    return `steer(${this.status})`;
   }
 }
 
@@ -520,6 +591,7 @@ const rawCommandArbitraries: fc.Arbitrary<TaskCommand>[] = [
   fc.constant(new Escalate()),
   fc.constant(new TakeOver()),
   fc.constant(new HandBack()),
+  fc.constantFrom(...runStatusSchema.options).map((status) => new Steer(status)),
   fc.constant(new ReadyForMerge()),
   fc.constant(new Merge()),
   fc.constant(new Retro()),
@@ -545,6 +617,38 @@ describe('Task state machine — model-based properties', () => {
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+
+  /**
+   * The sampled half above reaches these statuses *probably*; this one reaches them **certainly**.
+   *
+   * `fc.constantFrom` is a distribution, so "every reachable run status is exercised" would be a
+   * claim about a seed. The enum is read off the contract, so a tenth status fails here on the day
+   * it is added rather than whenever the sampler happens to draw it (standing rule 68).
+   */
+  it('allows a steer for exactly one of the nine run statuses, and refuses the other eight', () => {
+    const { real } = setup();
+    const attempt = (status: RunStatus): TaskDecision =>
+      steerRun(
+        real.task,
+        {
+          run: { id: RUN_ID, status },
+          message: 'try the other helper',
+          authorUserId: USER_ID,
+          authorRole: 'member',
+        },
+        context(real),
+      );
+    const allowed = runStatusSchema.options.filter((status) => {
+      try {
+        attempt(status);
+        return true;
+      } catch (error) {
+        expect(error).toBeInstanceOf(PermissionDeniedError);
+        return false;
+      }
+    });
+    expect(allowed).toEqual(['running']);
+  });
 
   it(
     'escalates rather than exceeding a limit, for any number of returns',

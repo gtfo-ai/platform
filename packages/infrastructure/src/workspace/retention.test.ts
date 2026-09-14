@@ -1,6 +1,12 @@
 import { WORKSPACE_LABELS } from '@platform/application';
 import { describe, expect, it } from 'vitest';
-import { type RetentionCandidate, retentionDecision, retentionDecisions } from './retention.js';
+import {
+  expiredHolds,
+  type RetentionCandidate,
+  type RetentionHold,
+  retentionDecision,
+  retentionDecisions,
+} from './retention.js';
 
 const RUN = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -105,5 +111,94 @@ describe('retention policy', () => {
       'a:remove',
       'b:keep',
     ]);
+  });
+
+  // ── The fourteen-day window (WP-27, technical/05 §5) ──────────────────────
+
+  /** A hold for this run, as `extendRetention` writes one. */
+  const hold = (keepUntil: string, runId = RUN): RetentionHold => ({
+    runId,
+    volumeName: `hold-${runId}`,
+    keepUntil,
+  });
+
+  it('keeps a held volume past its own window, and reports the instant it used', () => {
+    const decision = retentionDecision(
+      candidate(),
+      new Date('2026-09-20T00:00:00.000Z'),
+      hold('2026-09-27T00:00:00.000Z'),
+    );
+    // Day 7 of a three-day window: this is the purge backlog 7 describes, and the hold is what
+    // stops it.
+    expect(decision).toMatchObject({ action: 'keep', keptReason: 'not_expired' });
+    // The **effective** instant, not the label on the volume: the report is what an operator with a
+    // full disk reads, and the three-day figure would be the wrong number to give them.
+    expect(decision.keepUntil).toBe('2026-09-27T00:00:00.000Z');
+    expect(decision.holdVolume).toBe(`hold-${RUN}`);
+  });
+
+  it('removes a held volume once the hold’s own instant has passed', () => {
+    expect(
+      retentionDecision(
+        candidate(),
+        new Date('2026-09-28T00:00:00.000Z'),
+        hold('2026-09-27T00:00:00.000Z'),
+      ),
+    ).toMatchObject({ action: 'remove', keptReason: null });
+  });
+
+  it('ignores a hold that is earlier than the window the volume already has', () => {
+    // Nothing in the product asks for a *shorter* window, so the later instant wins whichever side
+    // it is on — and the volume's own label is what is reported when it is the later one.
+    const decision = retentionDecision(candidate(), NOW, hold('2026-09-11T00:00:00.000Z'));
+    expect(decision.keepUntil).toBe('2026-09-13T00:00:00.000Z');
+  });
+
+  it('ignores a hold it cannot parse, leaving the volume’s own window standing', () => {
+    const decision = retentionDecision(candidate(), NOW, hold('the day after tomorrow'));
+    expect(decision).toMatchObject({ action: 'keep', keptReason: 'not_expired' });
+    expect(decision.keepUntil).toBe('2026-09-13T00:00:00.000Z');
+  });
+
+  it('matches a hold to its own run and to no other', () => {
+    const other = '3f2504e0-4f89-41d3-9a0c-0305e82c3302';
+    const decisions = retentionDecisions(
+      [
+        candidate({ volumeName: `ws-${RUN}` }),
+        candidate({
+          volumeName: `ws-${other}`,
+          labels: { [WORKSPACE_LABELS.run]: other },
+        }),
+      ],
+      new Date('2026-09-20T00:00:00.000Z'),
+      [hold('2026-09-27T00:00:00.000Z')],
+    );
+    expect(decisions.map((decision) => `${decision.volumeName}:${decision.action}`)).toEqual([
+      `ws-${RUN}:keep`,
+      `ws-${other}:remove`,
+    ]);
+  });
+
+  describe('the holds a sweep may remove with the workspaces', () => {
+    it('removes the hold of a workspace this sweep removed', () => {
+      const decisions = retentionDecisions([candidate()], new Date('2026-09-28T00:00:00.000Z'), [
+        hold('2026-09-27T00:00:00.000Z'),
+      ]);
+      expect(expiredHolds([hold('2026-09-27T00:00:00.000Z')], decisions)).toEqual([
+        hold('2026-09-27T00:00:00.000Z'),
+      ]);
+    });
+
+    it('removes a hold whose workspace volume is not there at all', () => {
+      // The leak standing rule 60 is about: an object nothing reaps because nothing looks for it.
+      expect(expiredHolds([hold('2099-01-01T00:00:00.000Z')], [])).toHaveLength(1);
+    });
+
+    it('keeps the hold of a workspace this sweep kept', () => {
+      const decisions = retentionDecisions([candidate()], new Date('2026-09-20T00:00:00.000Z'), [
+        hold('2026-09-27T00:00:00.000Z'),
+      ]);
+      expect(expiredHolds([hold('2026-09-27T00:00:00.000Z')], decisions)).toEqual([]);
+    });
   });
 });

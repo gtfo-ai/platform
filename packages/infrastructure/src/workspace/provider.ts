@@ -104,10 +104,11 @@ import {
   controlSocketPath,
   egressContainerName,
   mirrorPath,
+  retentionHoldVolumeName,
   WORKSPACE_WORKDIR,
   workspaceVolumeName,
 } from './names.js';
-import { retentionDecisions } from './retention.js';
+import { expiredHolds, type RetentionHold, retentionDecisions } from './retention.js';
 import {
   type PlatformSkillCatalogue,
   WORKSPACE_GIT_EXCLUDE_ENTRY,
@@ -1295,9 +1296,83 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
   // ── Retention ──────────────────────────────────────────────────────────────
 
+  /**
+   * technical/05 §5's longer window, as a **hold volume** (WP-27).
+   *
+   * The workspace's own `keep_until` is untouched, because it cannot be touched: the two ways of
+   * relabelling a Docker volume are measured at `retentionHoldVolumeName`, and one of them succeeds
+   * while changing nothing. So this creates `hold-<run-id>` carrying the new instant, which
+   * {@link purgeExpired} reads beside the workspace's own label.
+   *
+   * Creating a volume that already exists is a **no-op** on the daemon — the same measurement —
+   * which makes a second call with a *later* instant do nothing rather than extend further. The
+   * hold is therefore removed and re-made when the request would move the instant forward, and the
+   * order is delete-then-create: a window that is briefly the workspace's own is the safe failure,
+   * because the next sweep would keep the volume for the three days it already had rather than
+   * remove it early.
+   */
+  async extendRetention(
+    handle: WorkspaceHandle,
+    keepUntil: string,
+  ): Promise<{ readonly keepUntil: string }> {
+    const runId = assertRunId(handle.runId);
+    const name = retentionHoldVolumeName(runId);
+    const existing = (
+      await this.#engine.listVolumes({ label: [`${WORKSPACE_LABELS.role}=retention_hold`] })
+    ).find((volume: EngineVolume) => volume.Name === name);
+    const held = existing?.Labels?.[WORKSPACE_LABELS.keepUntil];
+    const effective = this.#laterInstant(keepUntil, held ?? handle.keepUntil);
+    if (held === effective) {
+      return { keepUntil: effective };
+    }
+    if (existing !== undefined) {
+      await this.#engine.removeVolume(name);
+    }
+    await this.#engine.createVolume({
+      name,
+      labels: {
+        [WORKSPACE_LABELS.run]: runId,
+        [WORKSPACE_LABELS.project]: handle.projectId,
+        [WORKSPACE_LABELS.role]: 'retention_hold',
+        [WORKSPACE_LABELS.keepUntil]: effective,
+        [WORKSPACE_LABELS.createdAt]: this.#now().toISOString(),
+      },
+    });
+    this.#logger.info(
+      { run_id: runId, volume: handle.volumeName, keep_until: effective },
+      'the workspace is held past its own retention window',
+    );
+    return { keepUntil: effective };
+  }
+
+  /** The later of two instants, with an unparseable one losing (see `retention.ts`'s own rule). */
+  #laterInstant(requested: string, current: string): string {
+    const a = Date.parse(requested);
+    const b = Date.parse(current);
+    if (!Number.isFinite(a)) {
+      throw new WorkspaceError('invalid_spec', 'retention instant is not a date', {
+        detail: `length ${requested.length}`,
+      });
+    }
+    return Number.isFinite(b) && b > a ? current : requested;
+  }
+
   async purgeExpired(now: Date): Promise<PurgeReport> {
     const volumes = await this.#engine.listVolumes({
       label: [`${WORKSPACE_LABELS.role}=workspace`],
+    });
+    // A second listing rather than one over `com.agentic.run`: the filter stays a positive
+    // statement about the role each object plays, so a future object carrying a run label is not
+    // swept up by accident (the egress config volume already carries one).
+    const holdVolumes = await this.#engine.listVolumes({
+      label: [`${WORKSPACE_LABELS.role}=retention_hold`],
+    });
+    const holds: RetentionHold[] = holdVolumes.flatMap((volume: EngineVolume) => {
+      const runId = volume.Labels?.[WORKSPACE_LABELS.run];
+      const keepUntil = volume.Labels?.[WORKSPACE_LABELS.keepUntil];
+      return runId === undefined || keepUntil === undefined
+        ? []
+        : [{ runId, volumeName: volume.Name, keepUntil }];
     });
     const inUse = await this.#volumesInUse();
     const decisions = retentionDecisions(
@@ -1307,26 +1382,39 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         inUse: inUse.has(volume.Name),
       })),
       now,
+      holds,
     );
     const results: PurgedWorkspace[] = [];
     for (const decision of decisions) {
-      if (decision.action === 'keep') {
-        results.push(decision);
+      const { holdVolume, action, ...reported } = decision;
+      if (action === 'keep') {
+        results.push(reported);
         continue;
       }
       try {
         await this.#engine.removeVolume(decision.volumeName);
-        results.push({ ...decision, removed: true });
+        results.push({ ...reported, removed: true });
       } catch (error) {
         this.#logger.warn(
           { run_id: decision.runId, volume: decision.volumeName },
           'retention could not remove a volume',
         );
-        results.push({ ...decision, removed: false, keptReason: 'in_use' });
+        results.push({ ...reported, removed: false, keptReason: 'in_use' });
         if (!(error instanceof WorkspaceError)) {
           throw error;
         }
       }
+    }
+    // The holds of everything this sweep did not keep, including runs whose workspace volume is no
+    // longer there at all. Reported in the log rather than in `PurgeReport`: a hold is an artefact
+    // of how the window is expressed, and an operator counting workspaces would otherwise count
+    // some of them twice.
+    for (const hold of expiredHolds(holds, decisions)) {
+      await this.#engine.removeVolume(hold.volumeName).catch(() => undefined);
+      this.#logger.debug(
+        { run_id: hold.runId, volume: hold.volumeName },
+        'removed a retention hold whose workspace is gone',
+      );
     }
     return {
       examined: results.length,

@@ -184,6 +184,8 @@ describe('startRun leaves no container behind on any failure path', () => {
         attach: (handle) => step('attach', () => target.attach(handle)),
         export: (handle, exportRequest, credential) =>
           step('export', () => target.export(handle, exportRequest, credential)),
+        extendRetention: (handle, keepUntil) =>
+          step('extendRetention', () => target.extendRetention(handle, keepUntil)),
         purgeExpired: (now) => step('purgeExpired', () => target.purgeExpired(now)),
         kill: (handle) => target.kill(handle),
         destroy: async (handle) => {
@@ -346,6 +348,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       attach: (handle) => provider.attach(handle),
       kill: (handle) => provider.kill(handle),
       destroy: (handle) => provider.destroy(handle),
+      extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
       purgeExpired: (now) => provider.purgeExpired(now),
       export: async () => {
         throw new Error('the git host is down');
@@ -411,6 +414,104 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     const ended = await service.endRun(started.handle, { export: null });
     expect(ended.exported).toBeNull();
     expect(provider.isRunning(started.handle.runId)).toBe(false);
+  });
+
+  // ── The fourteen-day window (WP-27, technical/05 §5) ─────────────────────
+
+  it('holds the workspace past its own window when the take-over asks for one', async () => {
+    const { started } = await start();
+    const ended = await service.endRun(started.handle, {
+      export: { ...exportRequest, keepUntil: '2099-01-01T00:00:00.000Z' },
+    });
+    expect(ended.failures).toEqual([]);
+    expect(ended.keepUntil).toBe('2099-01-01T00:00:00.000Z');
+    // The property, through the port rather than through a label: a sweep past the workspace's own
+    // three days keeps it (`buildWorkspaceSpec`'s default, and the volume this run was created
+    // with).
+    const report = await provider.purgeExpired(new Date('2098-01-01T00:00:00.000Z'));
+    expect(report.volumes.find((entry) => entry.runId === started.handle.runId)).toMatchObject({
+      removed: false,
+      keptReason: 'not_expired',
+    });
+  });
+
+  it('holds it **even when the export failed**, which is when the volume matters most', async () => {
+    const { started } = await start();
+    const broken: WorkspaceProvider = {
+      updateMirror: (input) => provider.updateMirror(input),
+      create: (spec) => provider.create(spec),
+      attach: (handle) => provider.attach(handle),
+      kill: (handle) => provider.kill(handle),
+      destroy: (handle) => provider.destroy(handle),
+      extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
+      purgeExpired: (now) => provider.purgeExpired(now),
+      export: async () => {
+        throw new Error('the git host is unreachable');
+      },
+    };
+    const withBroken = new LauncherService({
+      provider: broken,
+      broker,
+      clock,
+      logger: silentLogger,
+      exportDir: path.join(dir, 'exports'),
+      retentionSweepMs: 60_000,
+    });
+
+    const ended = await withBroken.endRun(started.handle, {
+      export: { ...exportRequest, keepUntil: '2099-01-01T00:00:00.000Z' },
+    });
+
+    // A push that failed leaves the work in the volume and **nowhere else**, so the longer window
+    // is more necessary rather than less — which is why the extension is its own step in a
+    // `finally` rather than the last line of the export.
+    expect(ended.failures.some((failure) => failure.startsWith('export:'))).toBe(true);
+    expect(ended.keepUntil).toBe('2099-01-01T00:00:00.000Z');
+    expect(provider.isRunning(started.handle.runId)).toBe(false);
+  });
+
+  it('reports a retention failure and still stops the container', async () => {
+    const { started } = await start();
+    const broken: WorkspaceProvider = {
+      updateMirror: (input) => provider.updateMirror(input),
+      create: (spec) => provider.create(spec),
+      attach: (handle) => provider.attach(handle),
+      kill: (handle) => provider.kill(handle),
+      destroy: (handle) => provider.destroy(handle),
+      export: (handle, request, credential) => provider.export(handle, request, credential),
+      purgeExpired: (now) => provider.purgeExpired(now),
+      extendRetention: async () => {
+        throw new Error('the daemon is unreachable');
+      },
+    };
+    const withBroken = new LauncherService({
+      provider: broken,
+      broker,
+      clock,
+      logger: silentLogger,
+      exportDir: path.join(dir, 'exports'),
+      retentionSweepMs: 60_000,
+    });
+
+    const ended = await withBroken.endRun(started.handle, {
+      export: { ...exportRequest, keepUntil: '2099-01-01T00:00:00.000Z' },
+    });
+
+    expect(ended.keepUntil).toBeNull();
+    expect(ended.failures.some((failure) => failure.startsWith('retention:'))).toBe(true);
+    // The stop is the guarantee, and nothing above it may skip it (WP-13's third obligation).
+    expect(provider.isRunning(started.handle.runId)).toBe(false);
+  });
+
+  it('leaves the window alone for an ordinary end of run', async () => {
+    const { started } = await start();
+    const ended = await service.endRun(started.handle, { export: exportRequest });
+    expect(ended.keepUntil).toBeNull();
+    // …and the workspace really is on the three-day window it was created with.
+    const report = await provider.purgeExpired(new Date('2098-01-01T00:00:00.000Z'));
+    expect(report.volumes.find((entry) => entry.runId === started.handle.runId)).toMatchObject({
+      removed: true,
+    });
   });
 
   it('stops answering credential questions once the run has ended', async () => {

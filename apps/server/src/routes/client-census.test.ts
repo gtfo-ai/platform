@@ -61,20 +61,20 @@ const WEB_SOURCES = 'apps/web/src';
  * which is standing rule 7's corollary.
  */
 const ADMITTED_GAPS: Readonly<Record<string, string>> = {
-  // **One gap left.** Twelve commands were listed here until WP-15i; eleven of them landed with
-  // that row and are asserted positively below (standing rule 10 — "not in the gap list" is also
-  // satisfied by a path the sweep failed to find at all).
+  // **Empty, and it is meant to stay that way.** Twelve commands were listed here until WP-15i;
+  // eleven landed with that row and the twelfth — `POST /api/runs/:id/steer` — landed with WP-27,
+  // which is why this object is now empty rather than one line shorter. Every path the client names
+  // is served, and both directions of the comparison below are asserted, so a new client call with
+  // no route fails here whether or not anybody remembers to add an entry.
   //
   // **The wizard's seven were never on this list**, which is worth saying because a list of
   // commands reads as if it were about all of them. WP-21 added the client's calls and the
   // server's routes in one change, so the two halves were never out of step and there was nothing
   // to admit; they too are asserted positively below.
   //
-  // Steering is the one that is genuinely a different work package rather than a later iteration
-  // of this one: it pushes a user turn into a **live session**, which needs the transport to a
-  // running run that Q52 leaves unbuilt — the same reason `POST /api/runs/:id/cancel` can end a
-  // run as a record and cannot interrupt it.
-  '/api/runs/{}/steer': 'the run steering surface — WP-27 (take-over, hand-back and steer)',
+  // What this census **cannot** see is unchanged and is asserted by hand further down: a route no
+  // screen calls. There are three — `GET /api/projects/:id/kb/health` (WP-15h part 2) and WP-27's
+  // `take-over` and `hand-back`, whose buttons are a UI row of their own.
 };
 
 /**
@@ -197,6 +197,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
 });
+
+/** The shape of every error body this server sends (`apiErrorSchema`). */
+interface ApiErrorBody {
+  readonly error?: { readonly code?: string };
+}
 
 interface Probe {
   readonly path: string;
@@ -366,7 +371,7 @@ describe('the client’s endpoint list against the server’s router', () => {
   it('serves the eleven task and run commands WP-15i took off the gap list', async () => {
     // Named positively, and this is the case that makes the gap list's shrinking mean something:
     // the equality above is also satisfied by a path the client sweep failed to find (standing
-    // rule 10). Eleven, not twelve — `…/steer` is WP-27's and is the list's one remaining entry.
+    // rule 10). Eleven, not twelve — `…/steer` is WP-27's and has its own case below.
     for (const path of [
       '/api/tasks/{}/pause',
       '/api/tasks/{}/resume',
@@ -410,6 +415,40 @@ describe('the client’s endpoint list against the server’s router', () => {
       expect(`POST ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
         `POST ${path} -> 401 unauthenticated`,
       );
+    }
+  });
+
+  it('serves the steer command WP-27 took off the gap list — the last entry on it', async () => {
+    // The twelfth command, and the one that needed a different work package rather than a later
+    // iteration: it pushes a user turn into a **live session**, which is why WP-15i left it here.
+    // Asserted positively for standing rule 10's reason, and by POST because a GET would answer
+    // not-found and the probe would then be judging the wrong method.
+    const probed = await probe('/api/runs/{}/steer');
+    expect(probed.served).toBe(true);
+    const response = await app.inject({ method: 'POST', url: probeUrl('/api/runs/{}/steer') });
+    expect(`${response.statusCode} ${(response.json() as ApiErrorBody).error?.code ?? ''}`).toBe(
+      '401 unauthenticated',
+    );
+  });
+
+  it('serves take-over and hand-back, which no screen calls yet and this census cannot see', async () => {
+    // technical/08:17 names both and `apps/web/src/api/endpoints.ts` calls neither: the SPA's own
+    // docblock says why it declined to build the buttons, and WP-27 supplies the half it was
+    // waiting for (`takeOverResponseSchema`). A client-driven comparison is blind to a route with
+    // no caller, so — exactly like `kb/health` — they are asserted here by hand, with the 401 their
+    // siblings get automatically.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+      })),
+    );
+    for (const path of ['/api/tasks/{}/take-over', '/api/tasks/{}/hand-back']) {
+      const probed = await probe(path);
+      expect(probed.served, path).toBe(true);
+      expect(probed.status, path).toBe(401);
+      expect(probed.code, path).toBe('unauthenticated');
+      expect(paths, path).not.toContain(path);
     }
   });
 

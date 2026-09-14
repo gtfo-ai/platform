@@ -265,7 +265,7 @@ describe('stopping', () => {
       select: () => ({ ...scenarioOf('happy-path'), stepDelayMs: 1_000 }),
     });
     const handle = runner.start(runSpecFixture());
-    await handle.stop('cancelled');
+    await handle.stop({ reason: 'cancelled' });
     const outcome = await handle.outcome;
     expect(outcome.status).toBe('cancelled');
     expect(outcome.terminalReason).toBe('cancelled');

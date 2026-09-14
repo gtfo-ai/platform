@@ -85,6 +85,14 @@ const SETTLE_POLL_MS = 50;
 export interface ScenarioSpec {
   readonly structuredOutput: unknown;
   readonly costUsd?: number;
+  /**
+   * Extra user turns this stage's CLI waits for before it finishes — `agent-workspace.ts` (WP-27).
+   *
+   * Only meaningful in `real-over-fake-cli` mode, and it is what holds a run open long enough to be
+   * steered: the scripted CLI stops after its assistant message and waits for the platform to push
+   * the turn. `FakeClaudeRunner` ignores it, because a fake runner has no input queue at all.
+   */
+  readonly awaitSteers?: number;
 }
 
 const transcriptFor = (runId: Id, at: string, text: string): TranscriptEvent[] => [

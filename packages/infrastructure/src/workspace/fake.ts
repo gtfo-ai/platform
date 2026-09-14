@@ -32,10 +32,12 @@
  * | 5 | `updateMirror` performs no fetch, so a URL that does not resolve still "updates". | **Kinder** | The fake refuses a `create` whose project has no mirror (stricter than nothing, same as Docker's failing clone), asserted by `provider-suite.ts` › "refuses to create a workspace before the mirror exists". |
  * | 6 | No image pull, no daemon, so `engine_unavailable` never happens. | Kinder | Nothing pins it. Stated so no one reads the fake's reliability as the system's. |
  *
- * Two places the fake is deliberately **stricter**, which is always allowed: it refuses a second
+ * Three places the fake is deliberately **stricter**, which is always allowed: it refuses a second
  * `create` for a run id it has ever seen (Docker refuses only while the container exists, because
- * a name is free once removed), and it refuses an `export` for a run whose volume the retention
- * sweep has purged (Docker would fail later, in the helper, with a mount error).
+ * a name is free once removed), it refuses an `export` for a run whose volume the retention
+ * sweep has purged (Docker would fail later, in the helper, with a mount error), and it refuses an
+ * `extendRetention` for a run it does not have (the daemon would happily create a hold volume for a
+ * workspace that is gone — WP-27).
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -56,9 +58,15 @@ import type {
 import { WORKSPACE_LABELS, WorkspaceError, workspaceSpecSchema } from '@platform/application';
 import { renderEgressConfig } from './egress.js';
 import { type DockerCreateBody, runContainerCreateBody } from './hardening.js';
-import { assertRunId, controlSocketPath, WORKSPACE_WORKDIR, workspaceVolumeName } from './names.js';
+import {
+  assertRunId,
+  controlSocketPath,
+  retentionHoldVolumeName,
+  WORKSPACE_WORKDIR,
+  workspaceVolumeName,
+} from './names.js';
 import { assertProjectEnv, mintRunToken } from './provider.js';
-import { retentionDecisions } from './retention.js';
+import { expiredHolds, type RetentionHold, retentionDecisions } from './retention.js';
 import {
   type PlatformSkillCatalogue,
   WORKSPACE_GIT_EXCLUDE_ENTRY,
@@ -75,6 +83,15 @@ interface FakeRun {
   running: boolean;
   destroyed: boolean;
   volumeRemoved: boolean;
+  /**
+   * The retention hold, as a **separate** record (WP-27).
+   *
+   * Deliberately not a mutation of `spec.keepUntil`: the Docker provider cannot change a volume's
+   * label and writes a second object instead, so a fake that simply overwrote the field would be
+   * modelling an operation the adapter it stands in for does not have (standing rule 1). Both go
+   * through the same `retentionDecisions`, which is what makes the two agree.
+   */
+  hold: { volumeName: string; keepUntil: string } | null;
 }
 
 export interface FakeWorkspaceProviderOptions {
@@ -245,6 +262,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       running: true,
       destroyed: false,
       volumeRemoved: false,
+      hold: null,
     });
     this.#record('create', spec.runId);
     return handle;
@@ -318,21 +336,61 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     };
   }
 
+  /**
+   * technical/05 §5's longer window (WP-27), modelled the way the Docker provider expresses it.
+   *
+   * **Stricter than the adapter in one direction**, which is the allowed one: an unknown run is
+   * `not_found` here, while the daemon would happily create a hold volume for a run whose workspace
+   * has been purged. It never shortens a window, for the reason the port states.
+   */
+  async extendRetention(
+    handle: WorkspaceHandle,
+    keepUntil: string,
+  ): Promise<{ readonly keepUntil: string }> {
+    const run = this.#run(handle.runId);
+    const requested = Date.parse(keepUntil);
+    if (!Number.isFinite(requested)) {
+      throw new WorkspaceError('invalid_spec', 'retention instant is not a date', {
+        runId: handle.runId,
+        detail: `length ${keepUntil.length}`,
+      });
+    }
+    const current = Date.parse(run.hold?.keepUntil ?? run.spec.keepUntil);
+    const effective =
+      Number.isFinite(current) && current > requested
+        ? (run.hold?.keepUntil ?? run.spec.keepUntil)
+        : keepUntil;
+    run.hold = { volumeName: retentionHoldVolumeName(handle.runId), keepUntil: effective };
+    return { keepUntil: effective };
+  }
+
   async purgeExpired(now: Date): Promise<PurgeReport> {
-    const candidates = [...this.#runs.values()]
-      .filter((run) => !run.volumeRemoved)
-      .map((run) => ({
-        volumeName: run.handle.volumeName,
-        labels: {
-          [WORKSPACE_LABELS.run]: run.spec.runId,
-          [WORKSPACE_LABELS.keepUntil]: run.spec.keepUntil,
-        },
-        inUse: !run.destroyed,
-      }));
+    const live = [...this.#runs.values()].filter((run) => !run.volumeRemoved);
+    const candidates = live.map((run) => ({
+      volumeName: run.handle.volumeName,
+      labels: {
+        [WORKSPACE_LABELS.run]: run.spec.runId,
+        [WORKSPACE_LABELS.keepUntil]: run.spec.keepUntil,
+      },
+      inUse: !run.destroyed,
+    }));
+    const holds: RetentionHold[] = live.flatMap((run) =>
+      run.hold === null
+        ? []
+        : [
+            {
+              runId: run.spec.runId,
+              volumeName: run.hold.volumeName,
+              keepUntil: run.hold.keepUntil,
+            },
+          ],
+    );
+    const decisions = retentionDecisions(candidates, now, holds);
     const results: PurgedWorkspace[] = [];
-    for (const decision of retentionDecisions(candidates, now)) {
-      if (decision.action === 'keep') {
-        results.push(decision);
+    for (const decision of decisions) {
+      const { holdVolume, action, ...reported } = decision;
+      if (action === 'keep') {
+        results.push(reported);
         continue;
       }
       const run = this.#runs.get(decision.runId);
@@ -340,7 +398,14 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         run.volumeRemoved = true;
       }
       this.#record('purge', decision.runId);
-      results.push({ ...decision, removed: true });
+      results.push({ ...reported, removed: true });
+    }
+    // The hold goes with the workspace, exactly as the adapter's does.
+    for (const hold of expiredHolds(holds, decisions)) {
+      const run = this.#runs.get(hold.runId);
+      if (run !== undefined) {
+        run.hold = null;
+      }
     }
     return {
       examined: results.length,

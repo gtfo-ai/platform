@@ -59,6 +59,7 @@ import type {
   TranscriptEvent,
 } from '@platform/contracts';
 import { transcriptEventSchema } from '@platform/contracts';
+import { resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
@@ -66,6 +67,7 @@ import { HttpError } from '../errors.js';
 const {
   approvals,
   artifacts,
+  events,
   projects,
   questions,
   runContextPack,
@@ -500,6 +502,61 @@ const stageStateOf = (state: string, exitedAt: Date | null): string => {
   return 'pending';
 };
 
+/**
+ * The take-over in force on a task, or `null` — WP-27, and the one projection here that reads the
+ * **event log** rather than a row.
+ *
+ * It has to: `tasks` records that a task is `paused` and not *why*, and the session id of the run a
+ * take-over interrupted is on no row at all (`runs.session_id` is written when a run *ends*). The
+ * log is the authority for both, and reading the newest of this task's `task.taken_over` and
+ * `task.handed_back` answers the question in one indexed scan — including the withdrawal, because a
+ * hand-back is the later event and therefore the answer.
+ *
+ * Two things it refuses to invent. A payload that does not carry a `branch` publishes **nothing**
+ * rather than a blank one, because the branch is the whole point of the record; and a task that is
+ * not `paused` publishes nothing either, because a take-over that is over is not a take-over —
+ * `task.cancelled` and `task.completed` are not on the stream this reads, and the state is what
+ * covers them.
+ */
+const findTakenOver = async (
+  database: Database,
+  taskId: string,
+  state: TaskState,
+): Promise<TaskDetailResponse['taken_over']> => {
+  if (state !== 'paused') {
+    return null;
+  }
+  const rows = await database
+    .select({ type: events.type, payload: events.payload, occurredAt: events.occurredAt })
+    .from(events)
+    .where(
+      and(
+        eq(events.streamType, 'task'),
+        eq(events.streamId, taskId),
+        inArray(events.type, ['task.taken_over', 'task.handed_back']),
+      ),
+    )
+    .orderBy(desc(events.streamSeq))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined || row.type !== 'task.taken_over') {
+    return null;
+  }
+  const branch = row.payload.branch;
+  const stage = row.payload.stage;
+  if (typeof branch !== 'string' || typeof stage !== 'string') {
+    return null;
+  }
+  const sessionId = typeof row.payload.session_id === 'string' ? row.payload.session_id : null;
+  return {
+    at: isoRequired(row.occurredAt),
+    branch,
+    session_id: sessionId,
+    stage,
+    resume_commands: [...resumeCommands(branch, sessionId)],
+  };
+};
+
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
 export const findTaskDetail = async (
   database: Database,
@@ -540,13 +597,17 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const usage = await modelUsageFor(
-    database,
-    runRows.map((row) => row.id),
-  );
+  const [usage, takenOver] = await Promise.all([
+    modelUsageFor(
+      database,
+      runRows.map((row) => row.id),
+    ),
+    findTakenOver(database, taskId, task.state),
+  ]);
 
   return {
     task: toTaskRecord(task),
+    taken_over: takenOver,
     stages: stageRows.map((row) => ({
       stage: row.stage,
       attempt: row.attempt,

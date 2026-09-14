@@ -412,8 +412,35 @@ export interface WorkspaceProvider {
   destroy(handle: WorkspaceHandle): Promise<void>;
 
   /**
+   * Keeps this run's workspace until `keepUntil` — technical/05 §5's *"14 days for
+   * paused/taken-over"* (WP-27).
+   *
+   * **It is not a relabel**, and it cannot be: the `keep_until` an adapter writes at create time is
+   * a label on a Docker object, and a Docker volume's labels are immutable — the two ways of trying
+   * are measured at `retentionHoldVolumeName`, and one of them *succeeds while changing nothing*.
+   * So an adapter records the extension as a **hold** beside the workspace and `purgeExpired` takes
+   * the later of the two instants. What a caller may rely on is only this: after it resolves, a
+   * sweep at an instant before `keepUntil` keeps the volume, and one after it removes it.
+   *
+   * Idempotent, and it only ever **extends**: a `keepUntil` earlier than the window the workspace
+   * already has is honoured as a no-op rather than shortening it, because the caller of this method
+   * is saying "a human needs this for longer" and nothing in the product asks for the opposite. The
+   * effective instant is returned, so a caller that asked for less can see that it got more.
+   *
+   * @throws {WorkspaceError} `not_found` when this provider has no such run.
+   */
+  extendRetention(
+    handle: WorkspaceHandle,
+    keepUntil: string,
+  ): Promise<{ readonly keepUntil: string }>;
+
+  /**
    * Removes every workspace volume whose `keep_until` has passed (technical/05 §5), reporting
    * what it examined. `now` is injected: retention is a policy, not a wall-clock reading.
+   *
+   * A volume held by {@link extendRetention} is removed at the **held** instant, and its hold is
+   * removed with it; the report's `keepUntil` is the effective one, so a reader never sees the
+   * three-day label on a workspace that is being kept for fourteen days.
    */
   purgeExpired(now: Date): Promise<PurgeReport>;
 }

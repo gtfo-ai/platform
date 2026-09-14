@@ -75,7 +75,8 @@
 > transition (`illegal_transition`, plus `stage_not_current`, `iteration_limit_reached`,
 > `run_not_live` and `task_conflict` for the refusals that are not edges), and each accepted command
 > writes one `human_actions` row — **none** for a refused one — carrying the acting user, the
-> command's shape and the `Idempotency-Key`, never its free text, and naming the **task** in
+> command's shape, the `Idempotency-Key` and — for `pause` and `take-over` only — the reason the
+> person typed, redacted, and naming the **task** in
 > `task_id` even for the two commands whose path names a run (that column carries the table's only
 > index, so a row without it is one no reader of the table will find). The header is **required** on the
 > seven where a repeat would create a second thing (answer, decide, retry-stage, return-to-stage,
@@ -86,9 +87,15 @@
 > wrong state is 409. Those refusals are translated **at these routes** and not globally: the same
 > `IllegalTransitionError` on a route that reads is this build's bug, not the caller's request, and
 > stays a `500` (`apps/server/src/errors.ts`'s `commandRefusal`). Every piece of free text the
-> commands store — a question's answer, an approval's reason, a return's reason, rework instructions
-> and feedback — is redacted (TD-012) at the command that writes it, because the answer is read
-> back into the next prompt and the rest into events any projection carries.
+> commands take — a question's answer, an approval's reason, a return's reason, rework instructions,
+> feedback, a hand-back summary and a steer message — is redacted (TD-012) at the command that
+> *decides* it, because the answer is read back into the next prompt and the rest into events any
+> projection carries. **Two of them are kept in the audit row and nowhere else**: `task.paused`
+> carries the *kind* of pause and `task.taken_over` the branch and the session, so neither event has
+> a field for a sentence — the command redacts those two and hands them back for the row rather than
+> storing them itself, and the route never reads the request body for an audit field it has not
+> redacted (WP-27's fix round; before it, `/pause` promised the record and wrote nothing and
+> `/take-over` accepted a `reason` and dropped it).
 >
 > Two limits of that surface are the product's rather than the code's. `POST /api/runs/:id/cancel`
 > ends the run **as a record** and pauses its task; it cannot interrupt the model's session, because
@@ -99,18 +106,24 @@
 >
 > What is still unbuilt on those rows: `PATCH /api/org`,
 > `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`,
-> `GET/PUT /api/projects/:id/budgets`, `POST /api/tasks/:id/{take-over,hand-back,ask}` (WP-27 and
-> WP-31) and `POST /api/runs/:id/steer` (WP-27).
+> `GET/PUT /api/projects/:id/budgets` and `POST /api/tasks/:id/ask` (WP-31). **WP-27 removed three
+> of them** — `POST /api/runs/:id/steer` and `POST /api/tasks/:id/{take-over,hand-back}` are served,
+> and `POST /api/runs/:id/steer` is the one endpoint this document gives a rate limit to (below).
 >
 > **Only part of that list is kept true by a test, and the boundary is worth knowing.** The census is
 > **client-driven**: it compares the paths `apps/web/src` names against the router, so its admitted
 > gaps are the paths the SPA calls and the server does not serve — each with the row that owns it —
-> and it is blind to everything no client calls. Since WP-15i there is **one**: `POST
-> /api/runs/:id/steer`, which is WP-27's. WP-21's seven were never on that list: the client's
-> calls and the routes landed in one change, so there was nothing to admit, and they are asserted
-> **positively** in the census instead, as the eleven commands now are. The four reads above, the writes no screen fires, and any route served but uncalled
-> (`kb/health` is the shipped example) are outside it **by construction**, not by omission. This
-> paragraph is the only record of those, so it is the one to correct when one of them lands.
+> and it is blind to everything no client calls. Since **WP-27** there are **none**: the list is
+> empty, and the equality is asserted in both directions, so a new client call with no route fails
+> whether or not anybody remembers to add an entry. WP-21's seven were never on that list: the
+> client's calls and the routes landed in one change, so there was nothing to admit, and they are
+> asserted **positively** in the census instead, as the eleven commands of WP-15i and WP-27's steer
+> now are. The reads above, the writes no screen fires, and any route served but uncalled are
+> outside it **by construction**, not by omission — there are **three** of those today: `kb/health`
+> (WP-18b's report, which no screen asks for) and WP-27's `take-over` and `hand-back`, whose buttons
+> are a UI row of their own. All three are asserted by hand in the census beside the automatic half.
+> This paragraph is the only record of that class, so it is the one to correct when one of them
+> gains a caller.
 >
 > **The two reads answer from the index, not from git.** `kb/tree` is the pages the platform has
 > indexed at `kb_index_state.commit_sha` and `kb/doc` is a document's chunks re-joined, sanitised at
@@ -119,7 +132,7 @@
 > **The knowledge guards run at `preValidation`, not `preHandler`** — Fastify validates before
 > `preHandler`, so a route with a required query parameter or a non-uuid path segment would answer
 > an anonymous caller `400` describing its own shape instead of `401`. The wizard's commands (WP-21)
-> and the eleven task and run commands (WP-15i) are there for the same reason one step further: they
+> and the fourteen task and run commands (WP-15i, WP-27) are there for the same reason one step further: they
 > all take a **body**, which Fastify validates before `preHandler` too. Every remaining guarded route
 > takes only uuids and never noticed.
 

@@ -27,12 +27,10 @@ import type {
   RunTerminalReason,
   Slug,
   TokenUsage,
-  UserRole,
 } from '@platform/contracts';
 import { differenceMs } from '../clock.js';
 import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
-import { assertCan } from '../permissions.js';
 
 /** The transition table of technical/02, as data. */
 export const RUN_TRANSITIONS = {
@@ -322,23 +320,23 @@ export const failRun = (run: Run, input: FailRunInput, context: CommandContext):
   };
 };
 
-export interface SteerRunInput {
-  /** Untrusted human text, forwarded into the session as a user turn (product/18, BD-022). */
-  readonly message: string;
-  readonly authorUserId: Id;
-  readonly authorRole: UserRole;
-}
-
-/** Steering pushes a user turn into a live run; audited, and only while the run is running. */
-export const steerRun = (run: Run, input: SteerRunInput, context: CommandContext): RunDecision => {
-  assertCan(input.authorRole, 'run.steer', { kind: 'run', status: run.status });
-  const recorder = recorderFor(run, context);
-  recorder.emit('run.steered', {
-    project_id: run.projectId,
-    task_id: run.taskId,
-    run_id: run.id,
-    message: input.message,
-    author_user_id: input.authorUserId,
-  });
-  return { aggregate: { ...run, sequence: recorder.sequence }, events: recorder.events };
-};
+/**
+ * **Steering is a `Task` command, and it is in `task.ts`** — `steerRun` there (WP-27).
+ *
+ * It emits `run.steered`, so this file is where a reader looks for it, and the reason it is not
+ * here is worth the redirection. A run's `stream_seq` is held **in memory by the stage executor
+ * for the whole run**: `createRun`, `startRun` and `markRunning` advance one `Run` aggregate, and
+ * the executor appends `run.finished` from that same object minutes later. A second writer on the
+ * run's stream therefore does not race — it *corrupts*: the steer takes sequence 3, the executor
+ * appends its terminal event at the sequence it still believes in, and the `events_enforce_stream_seq`
+ * trigger rejects the whole transaction. Measured, before it was moved: `stream run/<id> is at
+ * sequence 4, cannot append 3`, which failed the `stage.execute` job into pg-boss's retry and
+ * started the stage a second time.
+ *
+ * The rule the existing code was already written to, stated: **a foreign writer may append to a
+ * run's stream only when it has taken the run's *ending* from the executor** — which is what
+ * `cancelRunCommand` does (`RunRepository.finish` is conditional, and the executor then writes
+ * nothing). A steer takes no ending, so it belongs on the stream that *is* re-read per transaction:
+ * the task's. `recordArtifact` is the same decision one aggregate over, with the same one-line
+ * reason in its own docblock.
+ */

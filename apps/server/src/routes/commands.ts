@@ -1,12 +1,13 @@
 /**
- * The eleven task and run **commands** the SPA has been calling since WP-20 — technical/08 §
- * "Tasks" and § "Runs" (WP-15i).
+ * The fourteen task and run **commands** of technical/08 § "Tasks" and § "Runs" — eleven from
+ * WP-15i, three from WP-27.
  *
  *   POST /api/tasks/:task_id/pause | resume | cancel
  *   POST /api/tasks/:task_id/retry-stage | return-to-stage | rework | feedback
  *   POST /api/tasks/:task_id/questions/:question_id/answer
  *   POST /api/tasks/:task_id/approvals/:approval_id/decide
- *   POST /api/runs/:run_id/retry | cancel
+ *   POST /api/tasks/:task_id/take-over | hand-back            (WP-27)
+ *   POST /api/runs/:run_id/retry | cancel | steer             (steer: WP-27)
  *
  * Every one of them is the same six steps, which is why {@link command} exists rather than eleven
  * near-copies: read the key, refuse a replay, call the **application** command, record the human
@@ -47,14 +48,30 @@
  * refused. `routes/kb.ts` and `routes/onboarding.ts` moved for the same reason; `scope.test.ts`
  * reads this position too, so a route that slips back is caught.
  *
- * **Free text is the client's, bounded by the contract and redacted by the command.** All five
- * fields — a question's answer, an approval's reason, a return's reason, rework instructions and
- * feedback text — are untrusted (BD-022): `packages/contracts` caps each at
- * `MAX_COMMAND_TEXT_CHARS` and the application command applies TD-012 at the one place it stores
- * each of them (`pipeline/commands.ts`'s `redactor`). What is
- * recorded here, in `human_actions.params`, is the *shape* of the request — the stage, the decision,
- * the scope, the key — and **not** the free text, so the audit row cannot become a second copy of
- * an unredacted sentence.
+ * **Free text is the client's, bounded by the contract and redacted by the command.** All nine
+ * fields — a question's answer, an approval's reason, a return's reason, rework instructions,
+ * feedback text, a hand-back summary, a steer message and the reasons on `pause` and `take-over` —
+ * are untrusted (BD-022): `packages/contracts` caps each at `MAX_COMMAND_TEXT_CHARS` (a steer keeps
+ * its own 10 000, which is the precedent the others were bounded against) and the application
+ * command applies TD-012 at the one place it *decides* each of them (`pipeline/commands.ts`'s
+ * `redactor`). What is recorded here, in `human_actions.params`, is the *shape* of the request —
+ * the stage, the decision, the scope, the key — plus the **last two** and nothing else, because
+ * those two have no other home: `task.paused` carries the *kind* of pause and `task.taken_over` the
+ * branch and the session, so a row that dropped them would make two endpoints' own descriptions
+ * false — which is exactly what WP-15i's `/pause` shipped ("`reason` is recorded in the audit row"
+ * beside `params: () => ({})`) and what WP-27's `/take-over` then copied. They arrive through
+ * `auditResult`, already redacted by the
+ * command, so the audit row still cannot become a copy of an **un**redacted sentence — which is the
+ * property this paragraph has always been about. The other seven are stored by the command itself
+ * and are not repeated here.
+ *
+ * **One rate limit, and it is the only one in this file.** technical/08:137 —
+ * *"`POST /api/runs/:id/steer` limited to 1 message per 5 s per user"* — is the one endpoint the
+ * document gives a number to, and {@link steerGate} is that number. It is **per process**: a
+ * deployment running N API containers allows N messages per window, which is stated here rather
+ * than discovered, and is the same trade every in-memory limiter in this repository makes. What it
+ * protects is not the platform but the **run**: each steer is a turn the model pays for, and a
+ * stuck key would spend a run's budget on repetition.
  */
 
 import type { RunStatus, TaskState, UserRole } from '@platform/contracts';
@@ -64,6 +81,7 @@ import {
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
   decideApprovalRequestSchema,
+  handBackRequestSchema,
   type JsonObject,
   pauseTaskRequestSchema,
   resumeTaskRequestSchema,
@@ -72,11 +90,14 @@ import {
   returnToStageRequestSchema,
   reworkRequestSchema,
   runCommandResponseSchema,
+  steerRunRequestSchema,
   submitFeedbackRequestSchema,
   submitFeedbackResponseSchema,
+  takeOverRequestSchema,
+  takeOverResponseSchema,
   taskCommandResponseSchema,
 } from '@platform/contracts';
-import type { PermissionAction } from '@platform/domain';
+import { type PermissionAction, resumeCommands } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -128,6 +149,8 @@ export interface CommandQueries {
 
 export interface CommandRoutesOptions {
   readonly queries: CommandQueries;
+  /** The steer window; the default is technical/08:137's. Injected so a test can drive its clock. */
+  readonly steerGate?: SteerGate;
   /**
    * The commands, or `null` on a process that composed no pipeline.
    *
@@ -169,12 +192,66 @@ const runParamsSchema = z.strictObject({ run_id: z.uuid() });
 /** Whether a repeat under a used key would create a second thing (see the module note). */
 type KeyPolicy = 'required' | 'optional';
 
+/** technical/08:137 — *"1 message per 5 s per user"*, verbatim. */
+export const STEER_MIN_INTERVAL_MS = 5_000;
+
+/**
+ * A bound on how many users this process remembers a steer for.
+ *
+ * Not a policy: an entry is one timestamp per user who has steered, and it is dropped as soon as
+ * its window has passed. The cap is here so that a pathological caller cannot grow the map without
+ * limit, and eviction is oldest-first — which lets the evicted user steer once more immediately,
+ * the fail-**open** direction. That is deliberate for a rate limit and would not be for a
+ * permission: over-refusing a person's message loses the thing the feature exists for, and the
+ * spend it protects is bounded by the run's own budget either way (BD-010).
+ */
+export const STEER_GATE_MAX_USERS = 4_096;
+
+export interface SteerGate {
+  /** `true` when this caller may steer now; records the attempt when it answers `true`. */
+  allow(userId: string): boolean;
+}
+
+/**
+ * The per-user steer window, in memory (see the module note for what "per process" costs).
+ *
+ * `now` is injected for the reason every other duration in this repository is: a test that waited
+ * five real seconds to prove a five-second window would be asserting something about the machine.
+ */
+export const createSteerGate = (
+  now: () => number = () => Date.now(),
+  intervalMs: number = STEER_MIN_INTERVAL_MS,
+  maxUsers: number = STEER_GATE_MAX_USERS,
+): SteerGate => {
+  const last = new Map<string, number>();
+  return {
+    allow: (userId) => {
+      const at = now();
+      const previous = last.get(userId);
+      if (previous !== undefined && at - previous < intervalMs) {
+        return false;
+      }
+      if (last.size >= maxUsers && previous === undefined) {
+        const oldest = last.keys().next();
+        if (!oldest.done) {
+          last.delete(oldest.value);
+        }
+      }
+      // Delete first so the insertion order is the recency order the eviction above reads.
+      last.delete(userId);
+      last.set(userId, at);
+      return true;
+    },
+  };
+};
+
 export const registerCommandRoutes = async (
   app: FastifyInstance,
   options: CommandRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const guard = { projectRole: options.queries.projectRole };
+  const steerGate = options.steerGate ?? createSteerGate();
 
   /**
    * The project a task or a run belongs to, resolved before the guard decides.
@@ -209,14 +286,17 @@ export const registerCommandRoutes = async (
     return options.commands;
   };
 
-  const actorOf = (request: FastifyRequest): { userId: string } => {
+  const actorOf = (request: FastifyRequest): { userId: string; name: string } => {
     const actor = request.actor;
     if (actor === undefined) {
       // Unreachable through `requirePermission`, which refuses an anonymous caller first; kept
       // because the audit row's user id is not optional and a 500 would be the wrong answer.
       throw new HttpError(401, 'unauthenticated', 'this endpoint needs an authenticated session');
     }
-    return { userId: actor.userId };
+    // The display **name**, never `actor.email`: it reaches a commit message on the project's own
+    // repository and a provenance line in a model's prompt (WP-27, `actorLabel`), and an address is
+    // the one field of a session a person did not choose to publish.
+    return { userId: actor.userId, name: actor.name };
   };
 
   const positionOf = async (taskId: string) => {
@@ -257,9 +337,19 @@ export const registerCommandRoutes = async (
     readonly key: KeyPolicy;
     /** What the digest is taken over: the body plus whatever the path contributes. */
     readonly subject: unknown;
-    /** The shape of the request, for the audit row. Never the free text (see the module note). */
+    /**
+     * The shape of the request, for the audit row — read off the **body**, so never free text: a
+     * sentence this file had not redacted is a sentence it may not write down (module note).
+     */
     readonly params: JsonObject;
-    /** What the command produced, for the audit row — the one thing a replay cannot recompute. */
+    /**
+     * What the command produced, for the audit row.
+     *
+     * Two kinds of field, and the second is why free text can be here and not in `params`: what a
+     * replay cannot recompute (the take-over's branch, the feedback id), and what the **command**
+     * redacted on the way past (a pause's or a take-over's reason). Applied only on a real
+     * performance, which is the same thing as saying a replay writes no row.
+     */
     readonly auditResult?: (result: T) => JsonObject;
     /**
      * The task the audit row names — `human_actions.task_id`, the table's only index.
@@ -309,6 +399,19 @@ export const registerCommandRoutes = async (
     return input.answer({ performed: true, result, previous: null });
   };
 
+  /** The branch a replayed take-over recorded, or a refusal: it never answers a placeholder. */
+  const recordedBranch = (previous: JsonObject | null): string => {
+    const recorded = previous?.branch;
+    if (typeof recorded !== 'string') {
+      throw new HttpError(
+        409,
+        'idempotency_key_reused',
+        'this Idempotency-Key has already taken a task over, and the attempt that did predates the branch being audited; use a new key',
+      );
+    }
+    return recorded;
+  };
+
   /** The feedback id a replayed attempt recorded, or a refusal: it never answers a placeholder. */
   const feedbackIdOf = (previous: JsonObject | null): string => {
     const recorded = previous?.feedback_id;
@@ -324,8 +427,8 @@ export const registerCommandRoutes = async (
     return recorded;
   };
 
-  /** One task command: the five things that differ between them, and nothing else. */
-  const taskCommand = <TBody extends z.ZodType>(route: {
+  /** One task command: the six things that differ between them, and nothing else. */
+  const taskCommand = <TBody extends z.ZodType, TResult = void>(route: {
     readonly path: string;
     readonly action: PermissionAction;
     readonly name: string;
@@ -334,12 +437,21 @@ export const registerCommandRoutes = async (
     readonly summary: string;
     readonly description: string;
     readonly params: (body: z.output<TBody>) => JsonObject;
+    /**
+     * What the **command** decided, for the audit row — the sixth, and `pause`'s alone today.
+     *
+     * The row's other fields are read off the body before anything runs; this one cannot be, because
+     * the words a person typed are redacted by the command that owns them (TD-012, and the argument
+     * is at `pipeline/commands.ts`'s `auditedReason`). So the value arrives back from `perform`, and
+     * a route that has nothing to add simply omits this.
+     */
+    readonly auditResult?: (result: TResult) => JsonObject;
     readonly perform: (input: {
       readonly deps: TaskCommands;
       readonly body: z.output<TBody>;
       readonly taskId: string;
       readonly userId: string;
-    }) => Promise<void>;
+    }) => Promise<TResult>;
   }): void => {
     typed.post(
       route.path,
@@ -368,11 +480,12 @@ export const registerCommandRoutes = async (
           key: route.key,
           subject: { task_id: taskId, body },
           params: { task_id: taskId, ...route.params(body) },
+          ...(route.auditResult === undefined ? {} : { auditResult: route.auditResult }),
           taskId,
           perform: async () => {
             const deps = commands();
             const { userId } = actorOf(request);
-            await route.perform({ deps, body, taskId, userId });
+            return route.perform({ deps, body, taskId, userId });
           },
           answer: async ({ performed }) => ({ ...(await positionOf(taskId)), performed }),
         });
@@ -388,9 +501,18 @@ export const registerCommandRoutes = async (
     body: pauseTaskRequestSchema,
     summary: 'Pause the task',
     description:
-      'The pipeline stops advancing it: a run already in flight is recorded when it ends, and its stage is **not** completed. Stopping the session itself is `POST /api/runs/:run_id/cancel`. A task that is already paused, done or cancelled answers 409 naming the transition. `reason` is recorded in the audit row, not in the event: `task.paused` carries the *kind* of pause (`manual`).',
+      'The pipeline stops advancing it: a run already in flight is recorded when it ends, and its stage is **not** completed. Stopping the session itself is `POST /api/runs/:run_id/cancel`. A task that is already paused, done or cancelled answers 409 naming the transition. `reason` is recorded in the audit row, redacted (TD-012), and not in the event: `task.paused` carries the *kind* of pause (`manual`).',
     params: () => ({}),
-    perform: async ({ deps, taskId, userId }) => deps.pause({ taskId, userId }),
+    // The one field of this row the body cannot supply: the command redacts the words before they
+    // are written down, and the module note says why that is not this file's job. The parameter is
+    // annotated rather than destructured bare because `perform` below takes its parameters from the
+    // context — it is context-sensitive and contributes no inference in the first pass, so with
+    // nothing to infer from here either, `TResult` falls back to its `void` default and this line
+    // stops compiling. One annotation is cheaper than explicit type arguments at all six calls.
+    auditResult: (result: { readonly reason: string | null }) =>
+      result.reason === null ? {} : { reason: result.reason },
+    perform: async ({ deps, body, taskId, userId }) =>
+      deps.pause({ taskId, userId, ...(body.reason === undefined ? {} : { reason: body.reason }) }),
   });
 
   taskCommand({
@@ -624,6 +746,123 @@ export const registerCommandRoutes = async (
   );
 
   typed.post(
+    '/api/tasks/:task_id/take-over',
+    {
+      preValidation: [
+        scope,
+        requirePermission(guard, 'task.take_over', { project: scopedProject }),
+      ],
+      schema: {
+        summary: 'Take the task over: pause the pipeline and get the work',
+        description:
+          'product/19 §19. The pipeline pauses, a run in flight is interrupted gracefully, and the response carries what a person needs to carry on: the branch, the `claude --resume` command when the interrupted run had a session, and whether its workspace was asked to export. The workspace’s `wip: hand-over to <user>` commit, its push and its tarball happen as the run winds down — `workspace_export: "requested"` is that tense, not a completed fact. A task with no run in flight answers `no_live_run` and the branch it already has.',
+        tags: ['tasks'],
+        params: taskParamsSchema,
+        body: takeOverRequestSchema,
+        response: {
+          200: takeOverResponseSchema,
+          400: apiErrorSchema,
+          409: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const taskId = request.params.task_id;
+      const body = request.body;
+      return command({
+        request,
+        action: 'task.take_over',
+        // A second take-over of a task this one paused is `paused → paused`, which the state machine
+        // does not have, so the aggregate refuses the repeat and the header stays optional — the
+        // same reading `pause` is given above.
+        key: 'optional',
+        subject: { task_id: taskId, body },
+        params: { task_id: taskId, tarball: body.tarball ?? false },
+        // `reason` for the same reason `pause` records one: a take-over's is the operator's account
+        // of why they stepped in, `task.taken_over` has no field for it, and this row is where it
+        // lives. Redacted by the command (TD-012), like every other piece of free text.
+        auditResult: (result) => ({
+          branch: result.branch,
+          exported: result.exported,
+          ...(result.reason === null ? {} : { reason: result.reason }),
+        }),
+        taskId,
+        perform: async () => {
+          const { userId, name } = actorOf(request);
+          return commands().takeOver({
+            taskId,
+            userId,
+            authorName: name,
+            tarball: body.tarball ?? false,
+            ...(body.reason === undefined ? {} : { reason: body.reason }),
+          });
+        },
+        answer: async ({ performed, result, previous }) => {
+          const position = await positionOf(taskId);
+          // A replay answers from the row the first attempt wrote, never from a placeholder: the
+          // branch is the audited result of the attempt this request repeats, and the session is not
+          // recoverable at all once the run has ended — which is why it is `null` rather than a
+          // guess (standing rule 18).
+          const branch = result?.branch ?? recordedBranch(previous);
+          return {
+            ...position,
+            performed,
+            branch,
+            session_id: result?.sessionId ?? null,
+            resume_commands: [...resumeCommands(branch, result?.sessionId ?? null)],
+            workspace_export:
+              result?.exported === true ? ('requested' as const) : ('no_live_run' as const),
+          };
+        },
+      });
+    },
+  );
+
+  typed.post(
+    '/api/tasks/:task_id/hand-back',
+    {
+      preValidation: [
+        scope,
+        requirePermission(guard, 'task.hand_back', { project: scopedProject }),
+      ],
+      schema: {
+        summary: 'Hand the task back to the pipeline at a stage you choose',
+        description:
+          'The other half of product/19 §19: the human has pushed to the branch and picks where the pipeline resumes. Any stage the project’s template runs and has enabled — one it does not answers 409 naming what it does run, because entering a stage the pipeline has no definition for would leave the task active with nothing to run it. The summary travels on `task.handed_back` and onto the ticket’s workpad. Nothing is reset and the workspace export is left where it is.',
+        tags: ['tasks'],
+        params: taskParamsSchema,
+        body: handBackRequestSchema,
+        response: {
+          200: taskCommandResponseSchema,
+          400: apiErrorSchema,
+          409: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const taskId = request.params.task_id;
+      const body = request.body;
+      return command({
+        request,
+        action: 'task.hand_back',
+        // Required: a hand-back **creates** a stage attempt and a run, so a double-clicked button
+        // would start two — the reason `retry-stage` requires one.
+        key: 'required',
+        subject: { task_id: taskId, body },
+        params: { task_id: taskId, stage: body.stage },
+        taskId,
+        perform: async () => {
+          const { userId } = actorOf(request);
+          await commands().handBack({ taskId, userId, stage: body.stage, summary: body.summary });
+        },
+        answer: async ({ performed }) => ({ ...(await positionOf(taskId)), performed }),
+      });
+    },
+  );
+
+  typed.post(
     '/api/runs/:run_id/retry',
     {
       preValidation: [scopeRun, requirePermission(guard, 'run.retry', { project: scopedProject })],
@@ -710,6 +949,66 @@ export const registerCommandRoutes = async (
         perform: async () => {
           const { userId } = actorOf(request);
           return commands().cancelRun({ runId, userId });
+        },
+        answer: async ({ performed }) => ({ ...(await runPositionOf(runId)), performed }),
+      });
+    },
+  );
+
+  typed.post(
+    '/api/runs/:run_id/steer',
+    {
+      preValidation: [scopeRun, requirePermission(guard, 'run.steer', { project: scopedProject })],
+      schema: {
+        summary: 'Send a message to the running agent',
+        description:
+          'product/18’s steer: the text becomes a **user turn** in the live session and a `steer` entry in the run’s transcript, attributed to whoever sent it. Only while the run is running — a run that has ended answers 409 naming its status, and a run this process is not executing answers 409 saying so rather than accepting a message nobody will hear. Limited to one message per five seconds per user (technical/08); the text is untrusted and is redacted once, before it reaches the session, the transcript and the event.',
+        tags: ['runs'],
+        params: runParamsSchema,
+        body: steerRunRequestSchema,
+        response: {
+          200: runCommandResponseSchema,
+          400: apiErrorSchema,
+          409: apiErrorSchema,
+          429: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const runId = request.params.run_id;
+      const body = request.body;
+      return command({
+        request,
+        action: 'run.steer',
+        // Required, and this is the one command where the reason is about the **model**: a repeat
+        // under a used key would be a second user turn in the conversation, which the session
+        // cannot take back and which the run pays for.
+        key: 'required',
+        subject: { run_id: runId, body },
+        params: { run_id: runId },
+        taskId: (result) => result.taskId,
+        perform: async () => {
+          const { userId, name } = actorOf(request);
+          // After the replay check and before the command: a replayed request delivered nothing, so
+          // charging it against the window would refuse the *next* real steer. The gate is the
+          // last thing between the caller and the session.
+          if (!steerGate.allow(userId)) {
+            throw new HttpError(
+              429,
+              'rate_limited',
+              `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person (technical/08); the run is still listening, try again in a moment`,
+            );
+          }
+          return commands().steerRun({
+            runId,
+            userId,
+            // The role the guard actually applied — the project membership where there is one, the
+            // organisation role otherwise. The aggregate asks `can()` again with it.
+            role: request.effectiveRole ?? 'viewer',
+            message: body.message,
+            authorName: name,
+          });
         },
         answer: async ({ performed }) => ({ ...(await runPositionOf(runId)), performed }),
       });

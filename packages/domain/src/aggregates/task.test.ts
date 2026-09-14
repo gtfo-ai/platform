@@ -1,7 +1,11 @@
 import type { ApprovalRecord, DomainEvent, QuestionRecord, TaskTotals } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { fixedClock } from '../clock.js';
-import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
+import {
+  IllegalTransitionError,
+  InvariantViolationError,
+  PermissionDeniedError,
+} from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { sequentialIds } from '../ids.js';
 import { resolveIterationLimits } from '../policies/iteration-limits.js';
@@ -23,8 +27,10 @@ import {
   requestApproval,
   returnToStage,
   startRetrospective,
+  steerRun,
   type Task,
   takeOverTask,
+  taskBranchName,
 } from './task.js';
 
 const TASK_ID = '00000000-0000-4000-8000-0000000000aa';
@@ -327,7 +333,7 @@ describe('pause, escalate, take over, hand back', () => {
     expect(types(events)).toEqual(['task.escalated']);
   });
 
-  it('pauses on take-over and re-enters a stage on hand-back', () => {
+  it('pauses on take-over and announces the hand-back without moving the task', () => {
     const takenOver = takeOverTask(
       activeTask(),
       { branch: 'agentic/PROJ-1', stage: 'implementation', sessionId: 'sess-1' },
@@ -341,9 +347,101 @@ describe('pause, escalate, take over, hand back', () => {
       { branch: 'agentic/PROJ-1', stage: 'code_review', summary: 'fixed the migration by hand' },
       context(),
     );
-    expect(handedBack.aggregate.state).toBe('active');
-    expect(handedBack.aggregate.currentStage).toBe('code_review');
-    expect(types(handedBack.events)).toEqual(['task.handed_back', 'task.stage.entered']);
+    // **The event and nothing else** (WP-27). Entering the chosen stage is `applyDecision`'s, which
+    // knows that `ready_for_merge` is not `enterStage` and that a `task_stages` row is owed; this
+    // function used to do a wrong version of both. The state is still `paused` here, and the
+    // command that calls it hands this aggregate straight to the entry.
+    expect(types(handedBack.events)).toEqual(['task.handed_back']);
+    expect(handedBack.aggregate.state).toBe('paused');
+    expect(handedBack.aggregate.currentStage).toBe('implementation');
+    // And no counter moved: the reset is `rework`'s rule, scoped by product/04:86 to a human
+    // rejecting the approach, which a hand-back is not.
+    expect(handedBack.aggregate.iterationCounters).toEqual(takenOver.aggregate.iterationCounters);
+  });
+});
+
+describe('steering a run', () => {
+  const RUN = { id: '00000000-0000-4000-8000-0000000000f1' as const, status: 'running' as const };
+  const USER = '00000000-0000-4000-8000-0000000000e9';
+
+  it('emits the steer on the **task’s** stream, and moves nothing', () => {
+    const task = activeTask();
+    const decision = steerRun(
+      task,
+      { run: RUN, message: 'use the existing helper', authorUserId: USER, authorRole: 'member' },
+      context(),
+    );
+    expect(types(decision.events)).toEqual(['run.steered']);
+    // The stream is the **task's**, which is the whole reason this command is here rather than on
+    // the Run aggregate: the run's `stream_seq` is held in memory by the stage executor for the
+    // length of the run (`run.ts` carries the measurement).
+    expect(decision.events[0]?.stream_type).toBe('task');
+    expect(decision.events[0]?.stream_id).toBe(task.id);
+    expect(decision.events[0]?.payload).toMatchObject({
+      run_id: RUN.id,
+      author_user_id: USER,
+      message: 'use the existing helper',
+    });
+    expect(decision.aggregate.state).toBe(task.state);
+    expect(decision.aggregate.currentStage).toBe(task.currentStage);
+  });
+
+  it('refuses a run that is not running, and a role that may not steer', () => {
+    expect(() =>
+      steerRun(
+        activeTask(),
+        {
+          run: { ...RUN, status: 'completed' },
+          message: 'too late',
+          authorUserId: USER,
+          authorRole: 'admin',
+        },
+        context(),
+      ),
+    ).toThrow(PermissionDeniedError);
+    expect(() =>
+      steerRun(
+        activeTask(),
+        { run: RUN, message: 'hello', authorUserId: USER, authorRole: 'viewer' },
+        context(),
+      ),
+    ).toThrow(PermissionDeniedError);
+  });
+});
+
+describe('the branch a task’s work lives on', () => {
+  it('carries the ticket key through, so the resume instruction names what a board shows', () => {
+    expect(taskBranchName('PROJ-123')).toBe('agentic/PROJ-123');
+  });
+
+  it.each([
+    ['a slash', 'PROJ/123', 'agentic/PROJ-123'],
+    ['a space', 'PROJ 123', 'agentic/PROJ-123'],
+    ['a shell metacharacter', 'PROJ;rm -rf /', 'agentic/PROJ-rm-rf'],
+    ['a refspec separator', 'PROJ:refs/heads/main', 'agentic/PROJ-refs-heads-main'],
+    ['two dots, which git itself refuses in a ref', 'PROJ..1', 'agentic/PROJ-1'],
+    ['a leading dot', '..PROJ-1', 'agentic/PROJ-1'],
+    ['a trailing dash', 'PROJ-1--', 'agentic/PROJ-1'],
+    ['an underscore', 'PROJ_1', 'agentic/PROJ-1'],
+    ['a non-latin key', 'ПРОЕКТ-1', 'agentic/1'],
+  ])('replaces %s, because the name reaches a git push refspec', (_what, key, expected) => {
+    expect(taskBranchName(key)).toBe(expected);
+  });
+
+  it('produces a name the workspace port accepts, for every case above', () => {
+    // The alphabet is not this function's to choose alone: `workspaceExportRequestSchema.branch` is
+    // what the launcher validates against, and a name that passed here and failed there would fail
+    // at the one moment a human is waiting for their work (standing rule 23).
+    for (const key of ['PROJ-123', 'PROJ/123', 'PROJ;rm -rf /', '..PROJ-1', 'PROJ..1']) {
+      const branch = taskBranchName(key);
+      expect(branch).toMatch(/^agentic\/[A-Za-z0-9._\-/]{1,200}$/);
+      // …and git's own rule, which that schema does not encode: no `..` anywhere in a ref.
+      expect(branch).not.toContain('..');
+    }
+  });
+
+  it('refuses a key that leaves nothing behind rather than pushing `agentic/`', () => {
+    expect(() => taskBranchName('✂️')).toThrow(InvariantViolationError);
   });
 });
 

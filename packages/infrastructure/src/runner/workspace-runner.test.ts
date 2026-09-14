@@ -95,6 +95,7 @@ const harness = (options: {
         return (
           options.inner?.(spec) ?? {
             runId: spec.runId,
+            sessionId: `session-${spec.runId}`,
             outcome: Promise.resolve(outcomeWith(spec, 'completed')),
             steer: async () => {},
             stop: async () => {},
@@ -130,6 +131,7 @@ describe('every ending frees the workspace', () => {
     const world = harness({
       inner: (inner) => ({
         runId: inner.runId,
+        sessionId: `session-${inner.runId}`,
         outcome: Promise.resolve(outcomeWith(inner, status)),
         steer: async () => {},
         stop: async () => {},
@@ -147,6 +149,7 @@ describe('every ending frees the workspace', () => {
     const world = harness({
       inner: (inner) => ({
         runId: inner.runId,
+        sessionId: null,
         outcome: Promise.reject(new Error('the transport died mid-run')),
         steer: async () => {},
         stop: async () => {},
@@ -238,19 +241,20 @@ describe('a stop that arrives before the run has started', () => {
         }),
       inner: (inner) => ({
         runId: inner.runId,
+        sessionId: `session-${inner.runId}`,
         outcome: new Promise<RunOutcome>((resolve) => {
           releaseInner = resolve;
         }),
         steer: async () => {},
-        stop: async (reason) => {
-          stops.push(reason);
+        stop: async (stop) => {
+          stops.push(stop.reason);
           releaseInner(outcomeWith(inner, 'cancelled'));
         },
       }),
     });
 
     const handle = world.runner.start(spec);
-    await handle.stop('cancelled');
+    await handle.stop({ reason: 'cancelled' });
     const result = await handle.outcome;
 
     expect(stops).toEqual(['cancelled']);

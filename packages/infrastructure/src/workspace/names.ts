@@ -38,6 +38,27 @@ export const assertRunId = (runId: string): string => {
 /** `ws-<run-id>`: the workspace volume. Outlives the container, per retention. */
 export const workspaceVolumeName = (runId: string): string => `ws-${assertRunId(runId)}`;
 
+/**
+ * `hold-<run-id>`: the **retention hold** that extends a workspace's window (WP-27).
+ *
+ * A second, empty volume rather than a new `keep_until` on the workspace's own, because a Docker
+ * volume's labels cannot be changed — measured against Docker Engine 29.7.2 / API 1.55 in two
+ * directions, and both of them silent:
+ *
+ *  - `POST /volumes/create` with the same name and a different label **succeeds** (201, exit 0) and
+ *    returns the volume with its **original** labels, so a relabel written that way looks like it
+ *    worked and does nothing;
+ *  - `docker volume update` answers *"can only update cluster volumes"* — it is the Swarm CSI
+ *    surface, and `PUT /volumes/{name}` takes a cluster `Spec` and no labels.
+ *
+ * So the extension has to be a **new object** carrying the new instant, and a volume is the
+ * cheapest daemon object that carries labels (a network would consume a subnet from the address
+ * pool). `purgeExpired` reads both and takes the later instant; removing a workspace removes its
+ * hold with it. The sweep therefore still asks the **daemon** what it has rather than carrying a
+ * list of its own (standing rule 7), which a file or a database row would have given up.
+ */
+export const retentionHoldVolumeName = (runId: string): string => `hold-${assertRunId(runId)}`;
+
 /** `run-<run-id>`: the per-run `internal: true` network. */
 export const runNetworkName = (runId: string): string => `run-${assertRunId(runId)}`;
 

@@ -14,14 +14,20 @@
  * - `GET /api/org/stats` has no DTO anywhere in contracts, so the statistics screen has nothing to
  *   parse and ships as an honest empty state rather than as a screen built on a shape this work
  *   package invented (Q45).
- * - `POST /api/tasks/:id/{take-over,hand-back}` and `POST /api/tasks/:id/ask`. contracts publishes
- *   a *request* for each and technical/08 names the routes, but each command's whole value is in a
- *   response no schema publishes: take-over must hand back the branch, the resume command and the
- *   workspace export (product/10), hand-back is its other half, and ask-the-task is a thread whose
- *   answers `taskDetailResponseSchema` has nowhere to carry. A button that fires the command and
- *   shows the operator none of that is worse than an absent one, and the plan already owns them —
- *   WP-27 for take-over/hand-back, WP-31 for ask. Named in the screens' docblocks as gaps, the way
- *   the Checks panel names its own.
+ * - `POST /api/tasks/:id/{take-over,hand-back}`. **The reason this list gave has been answered, and
+ *   the remaining absence is a smaller one.** It used to read *"each command's whole value is in a
+ *   response no schema publishes"*; WP-27 built both routes and published `takeOverResponseSchema`,
+ *   which carries the branch, the session, the resume commands and what became of the workspace —
+ *   so the objection that kept the buttons out is gone (standing rule 83: closing a gap falsifies
+ *   the sentence that described it). What is left is the **screen**: a take-over control needs
+ *   somewhere to render those four things and a hand-back control needs a stage picker, which is a
+ *   UI row rather than a client function. `apps/server/src/routes/client-census.test.ts` asserts
+ *   both routes by hand for exactly this reason — a census driven by the client's calls cannot see
+ *   an endpoint no screen calls.
+ * - `POST /api/tasks/:id/ask` (WP-31). contracts publishes a *request* and technical/08 names the
+ *   route, and the command's whole value is in a response no schema publishes: ask-the-task is a
+ *   thread whose answers `taskDetailResponseSchema` has nowhere to carry. A button that fires the
+ *   command and shows the operator nothing is worse than an absent one.
  */
 import {
   agentsResponseSchema,

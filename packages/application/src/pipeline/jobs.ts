@@ -127,6 +127,14 @@ export interface PipelineOutboundData {
   /** `workpad` only: the brief lives on the event, not on the task row. */
   readonly blocker_brief?: string;
   /**
+   * `workpad` after a `task.taken_over` (WP-27): the branch a human continues on, and the session
+   * `claude --resume` continues. Neither is on the task row — `tasks` says a task is `paused` and
+   * not why, and `runs.session_id` is written when a run *ends* — so they travel on the wake-up,
+   * exactly as `blocker_brief` does and for the same reason.
+   */
+  readonly taken_over_branch?: string;
+  readonly taken_over_session?: string | null;
+  /**
    * `status` only: the provider's own status name the handler mapped this event to.
    *
    * Decided by the handler rather than re-derived when the job fires, because a transition is a

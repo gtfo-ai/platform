@@ -141,6 +141,14 @@ const run = async (
 
 const kinds = (events: readonly TranscriptEvent[]): string[] => events.map((event) => event.kind);
 
+/** A take-over's instruction to the workspace, for the stop that carries one (WP-27). */
+const TAKE_OVER_EXPORT = {
+  branch: 'agentic/ACME-1',
+  commitMessage: 'wip: hand-over to Ada',
+  tarball: false,
+  keepUntil: '2026-09-28T00:00:00.000Z',
+} as const;
+
 describe('happy path', () => {
   it('completes, validates the artifact and reports the cost', async () => {
     const { result, events } = await run('happy-path');
@@ -619,7 +627,7 @@ describe('the wall clock', () => {
 describe('cancellation', () => {
   it('stops a live run and reports `cancelled`', async () => {
     const harness = start('stall');
-    await harness.handle.stop('cancelled');
+    await harness.handle.stop({ reason: 'cancelled' });
     const result = await harness.outcome;
     expect(result.status).toBe('cancelled');
     expect(result.terminalReason).toBe('cancelled');
@@ -627,7 +635,7 @@ describe('cancellation', () => {
 
   it('reports a take-over as a cancellation of the run', async () => {
     const harness = start('stall');
-    await harness.handle.stop('taken_over');
+    await harness.handle.stop({ reason: 'taken_over', workspaceExport: TAKE_OVER_EXPORT });
     expect((await harness.outcome).status).toBe('cancelled');
   });
 });

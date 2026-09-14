@@ -1071,6 +1071,7 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
         destroy: (handle) => fixture.provider.destroy(handle),
         export: (handle, request, credential) =>
           fixture.provider.export(handle, request, credential),
+        extendRetention: (handle, keepUntil) => fixture.provider.extendRetention(handle, keepUntil),
         purgeExpired: (now) => fixture.provider.purgeExpired(now),
       },
       spec,
@@ -1088,9 +1089,12 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
             allowFailure: true,
           });
           await docker(['network', 'rm', `run-${created}`], { allowFailure: true });
-          await docker(['volume', 'rm', '-f', `ws-${created}`, `egress-${created}`], {
-            allowFailure: true,
-          });
+          // `hold-<run>` is WP-27's retention hold: a real volume on the daemon, so a case that
+          // extends a window and then fails would otherwise leave one behind for ever.
+          await docker(
+            ['volume', 'rm', '-f', `ws-${created}`, `egress-${created}`, `hold-${created}`],
+            { allowFailure: true },
+          );
         }
       },
     };

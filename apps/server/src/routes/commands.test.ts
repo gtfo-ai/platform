@@ -22,7 +22,9 @@ import {
   CommandsUnavailableError,
   IterationLimitReachedError,
   RunNotLiveError,
+  RunNotReachableError,
   StageNotCurrentError,
+  StageNotInTemplateError,
   TaskConflictExhaustedError,
   UnknownAggregateError,
 } from '@platform/application';
@@ -32,7 +34,13 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
-import { type CommandQueries, registerCommandRoutes } from './commands.js';
+import {
+  type CommandQueries,
+  createSteerGate,
+  registerCommandRoutes,
+  STEER_MIN_INTERVAL_MS,
+  type SteerGate,
+} from './commands.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000a1';
 const RUN = '00000000-0000-4000-8000-0000000000a2';
@@ -60,6 +68,8 @@ interface World {
   readonly attempts: Map<string, { bodyDigest: string | null; params: JsonObject }>;
   /** What the next command call throws, if anything. */
   throws: Error | null;
+  /** What the next command call returns, when a case needs something other than the default. */
+  result: Record<string, unknown> | null;
   role: UserRole;
   /** Who is calling. A second user is how the key's scope is asserted. */
   userId: string;
@@ -67,7 +77,18 @@ interface World {
   signedIn: boolean;
 }
 
-const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> => {
+const build = async (
+  overrides: Partial<CommandQueries> = {},
+  /**
+   * The steer window, **open by default here** (WP-27).
+   *
+   * Every enumerated case below posts to each command two or three times as one user, and the
+   * shipped gate would refuse the second steer within five seconds — turning a question about the
+   * key policy into a question about the clock. The window has its own `describe` further down,
+   * where it is driven on an injected clock (standing rule 2).
+   */
+  steerGate: SteerGate = { allow: () => true },
+): Promise<World> => {
   const calls: Call[] = [];
   const actions: World['actions'] = [];
   const attempts = new Map<string, { bodyDigest: string | null; params: JsonObject }>();
@@ -76,6 +97,7 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
     actions,
     attempts,
     throws: null,
+    result: null,
     role: 'admin',
     userId: USER,
     signedIn: true,
@@ -110,14 +132,31 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
         world.throws = null;
         throw thrown;
       }
+      if (world.result !== null) {
+        const result = world.result;
+        world.result = null;
+        return result as never;
+      }
       return {
         feedbackId: '00000000-0000-4000-8000-0000000000f1',
         taskId: TASK,
         stage: 'refinement',
+        // WP-27's take-over answers with what the command produced, and the route's `answer`
+        // reads all three: a recorder that returned none of them would make the response's own
+        // shape untestable (standing rule 82).
+        branch: 'agentic/ACME-1',
+        sessionId: 'session-abc',
+        exported: true,
+        // `null`, never absent: the real `pause` and `takeOver` answer `{reason: string | null}`,
+        // and a stub that omitted the field would let a route read `undefined` where production
+        // reads `null` — a fake kinder than the adapter (standing rule 1). A case that wants the
+        // words back sets `world.result`.
+        reason: null,
       } as never;
     };
 
   await registerCommandRoutes(app, {
+    steerGate,
     queries: {
       taskProjectId: async (taskId) => (taskId === TASK ? PROJECT : null),
       runProjectId: async (runId) => (runId === RUN ? PROJECT : null),
@@ -157,6 +196,9 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
       decideApproval: record('decide'),
       retryRun: record('run-retry'),
       cancelRun: record('run-cancel'),
+      steerRun: record('run-steer'),
+      takeOver: record('take-over'),
+      handBack: record('hand-back'),
     },
   });
   await app.ready();
@@ -285,6 +327,30 @@ const COMMANDS: readonly {
     body: {},
     otherBody: { reason: 'it is stuck' },
     key: 'optional',
+    role: 'member',
+  },
+  {
+    name: 'run-steer',
+    path: `/api/runs/${RUN}/steer`,
+    body: { message: 'use the invoice total' },
+    otherBody: { message: 'use the line sum' },
+    key: 'required',
+    role: 'member',
+  },
+  {
+    name: 'take-over',
+    path: `/api/tasks/${TASK}/take-over`,
+    body: {},
+    otherBody: { tarball: true },
+    key: 'optional',
+    role: 'member',
+  },
+  {
+    name: 'hand-back',
+    path: `/api/tasks/${TASK}/hand-back`,
+    body: { stage: 'code_review', summary: 'fixed by hand' },
+    otherBody: { stage: 'implementation', summary: 'fixed by hand' },
+    key: 'required',
     role: 'member',
   },
 ];
@@ -425,6 +491,61 @@ describe('every command, enumerated', () => {
   });
 });
 
+describe('the steer window (technical/08: one message per five seconds per user)', () => {
+  /** A world whose gate runs on a clock the case advances (standing rule 2: never the wall clock). */
+  const windowed = async () => {
+    let at = 1_000_000;
+    const world = await build(
+      {},
+      createSteerGate(() => at),
+    );
+    return { world, advance: (ms: number) => (at += ms) };
+  };
+
+  it('refuses a second message inside the window and takes the next one after it', async () => {
+    const { world: gated, advance } = await windowed();
+    const first = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-1');
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+    advance(STEER_MIN_INTERVAL_MS - 1);
+    const tooSoon = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-2');
+    expect(`${tooSoon.status} ${tooSoon.body.error?.code ?? ''}`).toBe('429 rate_limited');
+    // Refused means refused: nothing reached the session and nothing was audited.
+    expect(gated.calls.filter((call) => call.name === 'run-steer')).toHaveLength(1);
+    expect(gated.actions).toHaveLength(1);
+
+    // The boundary from the other side (standing rule 42): one millisecond later it is allowed.
+    advance(1);
+    const later = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-3');
+    expect(later.status, JSON.stringify(later.body)).toBe(200);
+  });
+
+  it('is per user: a colleague’s message is not refused because of mine', async () => {
+    const { world: gated } = await windowed();
+    await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-a');
+    gated.userId = '00000000-0000-4000-8000-0000000000ea';
+    const other = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-b');
+    expect(other.status, JSON.stringify(other.body)).toBe(200);
+  });
+
+  it('does not spend the window on a replay, which delivered nothing', async () => {
+    // The ordering the route is written to: the gate is asked **after** the replay check, so a
+    // retried request under a used key cannot refuse the next real steer. The case discriminates:
+    // the replay lands exactly at the end of the window, so a gate that saw it would restart the
+    // window there and the real steer on the next line would be a 429.
+    const { world: gated, advance } = await windowed();
+    await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-once');
+    advance(STEER_MIN_INTERVAL_MS);
+    const replay = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-once');
+    expect(replay.status).toBe(200);
+    expect(replay.body.performed).toBe(false);
+
+    const real = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-next');
+    expect(real.status, JSON.stringify(real.body)).toBe(200);
+    expect(gated.calls.filter((call) => call.name === 'run-steer')).toHaveLength(2);
+  });
+});
+
 describe('what each refusal maps to', () => {
   const cases: readonly {
     readonly error: Error;
@@ -455,6 +576,20 @@ describe('what each refusal maps to', () => {
       error: new RunNotLiveError(RUN as never, 'completed', 'cancelled'),
       status: 409,
       code: 'run_not_live',
+    },
+    {
+      // WP-27: a **different** code from `run_not_live`, because the remedies differ — one run has
+      // ended, the other is running somewhere this process cannot reach (Q52).
+      error: new RunNotReachableError(RUN as never, 'steered'),
+      status: 409,
+      code: 'run_not_reachable',
+    },
+    {
+      error: new StageNotInTemplateError('deployment' as never, 'feature' as never, [
+        'refinement' as never,
+      ]),
+      status: 409,
+      code: 'stage_not_in_template',
     },
     {
       error: new TaskConflictExhaustedError(TASK as never, 3, 'pausing the task'),
@@ -494,8 +629,57 @@ describe('the routes’ own answers', () => {
       current_stage: 'refinement',
       performed: true,
     });
-    // The free text is **not** in the audit row: the row records the shape of the command.
-    expect(JSON.stringify(world.actions)).not.toContain('stepping in');
+    // The reason is **not** echoed back: a person who just typed it does not need it read out.
+    expect(JSON.stringify(reply.body)).not.toContain('stepping in');
+  });
+
+  /**
+   * The two commands whose free text has nowhere but the audit row (WP-27's fix round).
+   *
+   * `/pause`'s description has claimed since WP-15i that *"`reason` is recorded in the audit row"*
+   * beside a `params: () => ({})` that recorded nothing, and `/take-over` accepted a `reason`
+   * through a strict schema and dropped it on the floor. Both now carry what the **command**
+   * returned — which is the redacted text, because this file has no redactor and a route that
+   * wrote an unredacted sentence into an audit row would be TD-012's problem (module note).
+   */
+  it('records a pause’s reason in the audit row, exactly as the command redacted it', async () => {
+    world.result = { reason: 'stepping in before glpat-[REDACTED:token] leaks' };
+    await post(world, `/api/tasks/${TASK}/pause`, {
+      reason: 'stepping in before glpat-FAKE-planted-credential leaks',
+    });
+
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]?.params).toMatchObject({
+      task_id: TASK,
+      reason: 'stepping in before glpat-[REDACTED:token] leaks',
+    });
+    // The **body's** copy never reaches the row: what is written is what came back, so a command
+    // that stopped redacting could not be laundered past by this route.
+    expect(JSON.stringify(world.actions)).not.toContain('FAKE-planted-credential');
+  });
+
+  it('writes no `reason` key at all for a pause that carried none', async () => {
+    await post(world, `/api/tasks/${TASK}/pause`, {});
+    expect(world.actions[0]?.params).toEqual({ task_id: TASK });
+  });
+
+  it('records a take-over’s reason beside its branch, and passes it to the command', async () => {
+    world.result = {
+      taskId: TASK,
+      branch: 'agentic/ACME-1',
+      sessionId: null,
+      exported: false,
+      reason: 'taking it from here',
+    };
+    await post(world, `/api/tasks/${TASK}/take-over`, { reason: 'taking it from here' });
+
+    expect(world.calls[0]?.input).toMatchObject({ reason: 'taking it from here' });
+    expect(world.actions[0]?.params).toMatchObject({
+      task_id: TASK,
+      tarball: false,
+      branch: 'agentic/ACME-1',
+      reason: 'taking it from here',
+    });
   });
 
   it('answers a run command with the run and its task', async () => {
@@ -528,6 +712,52 @@ describe('the routes’ own answers', () => {
       task_id: TASK,
       performed: false,
     });
+  });
+
+  it('answers a take-over with the branch, the resume commands and how the export went', async () => {
+    // The whole reason this command has a response of its own (product/10, `endpoints.ts`'s note):
+    // an operator told only that the pipeline stopped has the cost and not what it bought.
+    const reply = await post(world, `/api/tasks/${TASK}/take-over`, { tarball: true });
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(reply.body).toMatchObject({
+      task_id: TASK,
+      state: 'active',
+      branch: 'agentic/ACME-1',
+      session_id: 'session-abc',
+      resume_commands: ['git fetch && git checkout agentic/ACME-1', 'claude --resume session-abc'],
+      workspace_export: 'requested',
+      performed: true,
+    });
+    // The audit records the shape — the branch and whether an export was asked for — and no
+    // `reason` key, because this caller sent none (the case below sends one).
+    expect(world.actions[0]?.params).toMatchObject({
+      task_id: TASK,
+      tarball: true,
+      branch: 'agentic/ACME-1',
+      exported: true,
+    });
+    expect(world.actions[0]?.params).not.toHaveProperty('reason');
+  });
+
+  it('answers a take-over of a task with no live run without inventing a resume command', async () => {
+    world.result = { taskId: TASK, branch: 'agentic/ACME-1', sessionId: null, exported: false };
+    const reply = await post(world, `/api/tasks/${TASK}/take-over`, {});
+    expect(reply.body.session_id).toBeNull();
+    expect(reply.body.resume_commands).toEqual(['git fetch && git checkout agentic/ACME-1']);
+    expect(reply.body.workspace_export).toBe('no_live_run');
+  });
+
+  it('answers a replayed take-over from the branch the first attempt recorded', async () => {
+    const first = await post(world, `/api/tasks/${TASK}/take-over`, {}, 'take-over-once');
+    expect(first.body.performed).toBe(true);
+    const replay = await post(world, `/api/tasks/${TASK}/take-over`, {}, 'take-over-once');
+    expect(replay.status).toBe(200);
+    expect(replay.body.performed).toBe(false);
+    // The branch comes from the audit row; the session does **not**, because a run that has ended
+    // cannot be resumed and answering the old id would be a guess (standing rule 18).
+    expect(replay.body.branch).toBe('agentic/ACME-1');
+    expect(replay.body.session_id).toBeNull();
+    expect(replay.body.workspace_export).toBe('no_live_run');
   });
 
   it('refuses a `budget_usd` override by name rather than ignoring it', async () => {
@@ -595,7 +825,9 @@ describe('the routes’ own answers', () => {
       role: 'admin',
       reason: 'the plan is too wide',
     });
-    // …and the reason is not audited, for the reason the pause case gives.
+    // …and the reason is **not** audited, unlike a pause's: this one has a home of its own —
+    // `approvals.reason` and the `task.approval.decided` payload — so a copy in the audit row
+    // would be a second place to keep right (module note).
     expect(JSON.stringify(world.actions)).not.toContain('too wide');
   });
 

@@ -76,12 +76,23 @@ export interface EndRunRequest {
     | (Omit<WorkspaceExportRequest, 'tarballPath'> & {
         /** `true` writes a tarball under the launcher's export directory. */
         readonly tarball: boolean;
+        /**
+         * How long the workspace volume is kept (technical/05 §5, WP-27).
+         *
+         * Absent leaves the three days `buildWorkspaceSpec` wrote at create time. A take-over sets
+         * fourteen, because the volume now holds work a **person** is coming back to — which is the
+         * fact create time could not know, and the reason the extension is a separate operation
+         * rather than a longer default.
+         */
+        readonly keepUntil?: string;
       })
     | null;
 }
 
 export interface EndedRun {
   readonly exported: WorkspaceExport | null;
+  /** The retention window this run's volume ended up with, when the request asked for one. */
+  readonly keepUntil: string | null;
   /** What went wrong on the way, after the container was already stopped. */
   readonly failures: readonly string[];
 }
@@ -191,13 +202,21 @@ export class LauncherService {
   }
 
   /**
-   * Ends a run: optional export, then revoke, then stop and remove — in that order, and the last
-   * two happen whatever the first does.
+   * Ends a run: optional export, then the retention window, then revoke, then stop and remove — in
+   * that order, and the last two happen whatever the first two do.
+   *
+   * **The retention extension is attempted even when the export failed**, and that is the whole
+   * reason it is a step of its own rather than part of the export. The two failures are different
+   * facts: an export that could not push has left the work in the workspace volume and *nowhere
+   * else*, which is precisely when purging it on day 4 destroys the only copy. So a failed export
+   * makes the longer window more necessary, not less (standing rule 60's direction: fix the sweep,
+   * never the retention rule).
    */
   async endRun(handle: WorkspaceHandle, request: EndRunRequest): Promise<EndedRun> {
     const { provider, broker, logger } = this.#options;
     const failures: string[] = [];
     let exported: WorkspaceExport | null = null;
+    let keepUntil: string | null = null;
     try {
       if (request.export !== null) {
         exported = await provider.export(
@@ -216,6 +235,18 @@ export class LauncherService {
       failures.push(`export: ${describe(error)}`);
       logger.warn({ run_id: handle.runId }, 'workspace export failed; ending the run anyway');
     } finally {
+      const requested = request.export?.keepUntil;
+      if (requested !== undefined) {
+        try {
+          keepUntil = (await provider.extendRetention(handle, requested)).keepUntil;
+        } catch (error) {
+          failures.push(`retention: ${describe(error)}`);
+          logger.warn(
+            { run_id: handle.runId, keep_until: requested },
+            'the taken-over workspace could not be held past its own retention window; it will be purged on the ordinary schedule',
+          );
+        }
+      }
       try {
         await broker.revoke(handle.runId);
       } catch (error) {
@@ -225,7 +256,7 @@ export class LauncherService {
       // The container stop is the guarantee. Nothing above may skip it.
       await provider.destroy(handle);
     }
-    return { exported, failures };
+    return { exported, keepUntil, failures };
   }
 
   /** One retention pass. */

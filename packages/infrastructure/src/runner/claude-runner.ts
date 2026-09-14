@@ -79,6 +79,7 @@ import type {
   RunnerClock,
   RunOutcome,
   RunSpec,
+  RunStop,
   RunStopReason,
   RunTranscriptSink,
   SecretRedactor,
@@ -654,6 +655,11 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
 
   return {
     runId: spec.runId,
+    // A getter: `sessionId` is assigned when the CLI's `init` message arrives, which is after this
+    // object has been handed to the caller (WP-27).
+    get sessionId() {
+      return sessionId;
+    },
     outcome,
     steer: async (message: SteerMessage) => {
       if (inputs.closed) {
@@ -675,8 +681,11 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
         session_id: sessionId ?? '',
       } as SDKUserMessage);
     },
-    stop: async (reason: RunStopReason) => {
-      requestStop(reason);
+    stop: async (stop: RunStop) => {
+      // Only the reason reaches this layer. A take-over's `workspaceExport` is an instruction to
+      // the **workspace**, and this runner has none — `createWorkspaceClaudeRunner` is the adapter
+      // that owns one and it keeps the payload for its own `release` (`workspace-runner.ts`).
+      requestStop(stop.reason);
       await outcome.catch(() => undefined);
     },
   };

@@ -58,6 +58,22 @@ export interface WorkspaceRelease {
   readonly stage: string;
   /** The terminal status, or `not_started` / `crashed` when there was no outcome. */
   readonly ending: string;
+  /**
+   * What a take-over asked of this workspace on the way out (WP-27), or `null`.
+   *
+   * The **launcher-side** half of the take-over is a commit, a push, a tarball and a retention
+   * extension, and none of them can happen in this tier — there is no container and no git host.
+   * What this tier can assert is the thing that reaches the launcher: the branch, the `wip:` commit
+   * message, whether a tarball was asked for and how long the volume is to be kept. Everything past
+   * this seam is `LauncherService.endRun`'s, whose own tests drive it against a fake provider, and
+   * the real container's is `test/e2e/workspace/docker-workspace.e2e.test.ts`.
+   */
+  readonly takeOver: {
+    readonly branch: string;
+    readonly commitMessage: string;
+    readonly tarball: boolean;
+    readonly keepUntil: string;
+  } | null;
 }
 
 const SESSION = 'fake-session-e2e';
@@ -89,7 +105,20 @@ export const SUBAGENT_MODEL = 'claude-haiku-4-5';
 export const SUBAGENT_COST_USD = 0.05;
 export const fakeCliScriptFor = (
   spec: RunSpec,
-  scenario: { readonly structuredOutput: unknown; readonly costUsd?: number },
+  scenario: {
+    readonly structuredOutput: unknown;
+    readonly costUsd?: number;
+    /**
+     * Extra user turns this run waits for before it produces its `result` (WP-27).
+     *
+     * A steer is a user turn pushed into the run's input queue while the session is open, so a
+     * script that finishes before one can arrive cannot be steered at all. `1` makes the CLI stop
+     * after its assistant message and wait, which is what holds a run open for the length of an
+     * HTTP request — and `FakeCli.stdin` is then where the steer's **bytes** are, which is the
+     * assertion that matters (standing rule 82).
+     */
+    readonly awaitSteers?: number;
+  },
 ): runnerAdapters.FakeCliScript => {
   const stage = spec.stage ?? 'stage';
   const cost = scenario.costUsd ?? 0.4;
@@ -141,6 +170,8 @@ export const fakeCliScriptFor = (
         session_id: SESSION,
       },
     },
+    // Nothing below runs until the platform has pushed this many more user turns (see `awaitSteers`).
+    ...Array.from({ length: scenario.awaitSteers ?? 0 }, () => ({ step: 'await_user' as const })),
     {
       step: 'emit',
       message: {
@@ -206,7 +237,11 @@ export interface ScriptedWorkspaces {
  * asserts the substitution must compare against the value production would use.
  */
 export const scriptedWorkspaces = (
-  scenarioFor: (stage: string) => { readonly structuredOutput: unknown; readonly costUsd?: number },
+  scenarioFor: (stage: string) => {
+    readonly structuredOutput: unknown;
+    readonly costUsd?: number;
+    readonly awaitSteers?: number;
+  },
   /**
    * Called — and **awaited** — inside `provision`, before the CLI exists.
    *
@@ -236,6 +271,7 @@ export const scriptedWorkspaces = (
             releases.push({
               stage,
               ending: ending.kind === 'ended' ? ending.status : ending.kind,
+              takeOver: ending.kind === 'ended' ? (ending.takeOver ?? null) : null,
             });
           },
         };

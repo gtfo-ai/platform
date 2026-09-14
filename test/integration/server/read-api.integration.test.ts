@@ -343,7 +343,122 @@ describe('the task projection', () => {
     );
     expect(detail?.runs).toHaveLength(2);
     expect(detail?.runs.every((run) => run.stage === 'refinement')).toBe(true);
+    // WP-27: no take-over on this task, and the field says so rather than being absent — the
+    // projection reads the event log and this task's log has no `task.taken_over`.
+    expect(detail?.taken_over).toBeNull();
     expect(await findTaskDetail(drizzled, '00000000-0000-4000-8000-00000000dead')).toBeNull();
+  });
+
+  /**
+   * The take-over projection (WP-27) — the one part of this DTO that reads the **event log**.
+   *
+   * It has to: `tasks` records that a task is `paused` and not why, and the session id of an
+   * interrupted run is on no row. Each case below moves exactly one of the three things the
+   * projection reads — the task's state, the newest event on the stream, and the payload — so a
+   * projection that ignored any of them fails by name rather than by a `null` that could mean
+   * anything (standing rule 42).
+   */
+  describe('the take-over it reads off the log', () => {
+    /**
+     * A task of its own, inserted **paused**, because this projection is the only one here that
+     * reads the state and the event log together.
+     *
+     * Inserted rather than updated, and that is not a style choice: `packages/infrastructure/src/
+     * pipeline/tasks-column-ownership.test.ts` is a census over every `update tasks set` statement
+     * in the repository — tests included — and one here would make this file a second writer of
+     * `tasks.state`, which is exactly the class that census exists to refuse. The `events` rows are
+     * appended and never deleted for the same kind of reason: the table is append-only for the
+     * application role (TD-005), and a `delete` answers `permission denied`. So each case appends
+     * the next sequence and asserts what the **newest** event makes true, which is how the
+     * projection is specified anyway.
+     */
+    let pausedTaskId: string;
+
+    const append = async (seq: number, type: string, payload: Record<string, unknown>) => {
+      await pool.query(
+        `insert into events (stream_type, stream_id, stream_seq, type, payload, actor)
+         values ('task', $1, $2, $3, $4::jsonb, '{"kind":"system","component":"test"}'::jsonb)`,
+        [
+          pausedTaskId,
+          seq,
+          type,
+          JSON.stringify({ project_id: pausedProjectId, task_id: pausedTaskId, ...payload }),
+        ],
+      );
+    };
+
+    /**
+     * A project of its own too, so that this task is invisible to the list projections above.
+     *
+     * Not fastidiousness: `listProjectTasks`'s keyset cases count the rows of `projectId`, and a
+     * fifth task added here made one of them fail by name. A fixture that changes another test's
+     * arithmetic is a fixture that will keep doing it.
+     */
+    let pausedProjectId: string;
+
+    beforeAll(async () => {
+      const org = await pool.query<{ id: string }>(
+        "insert into organizations (name) values ('takeover') returning id",
+      );
+      const project = await pool.query<{ id: string }>(
+        `insert into projects (org_id, key, name, repo_url)
+         values ($1, 'takeover', 'Take-over', 'https://git.example.test/acme/takeover.git')
+         returning id`,
+        [org.rows[0]?.id],
+      );
+      pausedProjectId = project.rows[0]?.id as string;
+      const row = await pool.query<{ id: string }>(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                            current_stage)
+         values ($1, 'fake-jira', 'ACME-9', 'https://jira.example.test/browse/ACME-9', 'feature',
+                 'paused', 'refinement') returning id`,
+        [pausedProjectId],
+      );
+      pausedTaskId = row.rows[0]?.id as string;
+    });
+
+    it('publishes nothing for a paused task whose log has no take-over', async () => {
+      // The negative that makes the positives mean something: `paused` alone is not a take-over —
+      // a budget pause is one too, and the row cannot tell them apart (standing rule 42).
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toBeNull();
+    });
+
+    it('publishes the branch, the session and the commands a person runs', async () => {
+      await append(1, 'task.taken_over', {
+        branch: 'agentic/ACME-9',
+        session_id: 'sess-1',
+        stage: 'refinement',
+      });
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toEqual({
+        at: expect.any(String),
+        branch: 'agentic/ACME-9',
+        session_id: 'sess-1',
+        stage: 'refinement',
+        resume_commands: ['git fetch && git checkout agentic/ACME-9', 'claude --resume sess-1'],
+      });
+    });
+
+    it('is withdrawn by a later hand-back, because the newest of the two is the answer', async () => {
+      await append(2, 'task.handed_back', {
+        branch: 'agentic/ACME-9',
+        stage: 'code_review',
+        summary: 'done by hand',
+      });
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toBeNull();
+    });
+
+    it('publishes nothing for a take-over whose payload carries no branch', async () => {
+      // The branch is the whole point of the record; a blank one would send a reader to
+      // `git checkout ` and would be worse than an absent card. Appended **after** the hand-back,
+      // so this take-over is the newest event and the previous case's answer cannot be the reason.
+      await append(3, 'task.taken_over', { session_id: 'sess-2', stage: 'refinement' });
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toBeNull();
+    });
+
+    it('publishes nothing for a task that is not paused, whatever its log says', async () => {
+      // The `active` task the rest of this file uses, whose own log has never had a take-over.
+      expect((await findTaskDetail(drizzled, taskId))?.taken_over).toBeNull();
+    });
   });
 });
 

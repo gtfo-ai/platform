@@ -351,8 +351,32 @@ export const createTaskRequestSchema = z.strictObject({
   mode: taskModeSchema.optional(),
 });
 
+/**
+ * A take-over in force on a task — what product/18 means by *"posts the branch and a
+ * `claude --resume <session>` command to the ticket **and UI**"* (WP-27).
+ *
+ * It is published on the task rather than on a command's answer alone because the person who took
+ * the task over is not the only person who needs it: the next operator to open the task page has to
+ * be able to see where the work went. `tasks` records that a task is `paused` and not **why**, so
+ * the projection reads it off the append-only log — the newest of this task's `task.taken_over` and
+ * `task.handed_back`, which is also what makes it disappear the moment the task is handed back.
+ */
+export const takenOverSchema = z.strictObject({
+  at: isoDateTimeSchema,
+  /** The branch the human's work is on, inside BD-025's `agentic/*` namespace. */
+  branch: nonEmptyStringSchema,
+  /** The session `claude --resume` continues, or `null` when the interrupted run had none. */
+  session_id: nonEmptyStringSchema.nullable(),
+  /** The stage the task was taken over at — where a hand-back would resume by default. */
+  stage: stageIdSchema,
+  /** The same lines the take-over command answered with, composed by the platform, not the client. */
+  resume_commands: z.array(nonEmptyStringSchema),
+});
+
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
+  /** The take-over in force, or `null` — see {@link takenOverSchema}. */
+  taken_over: takenOverSchema.nullable(),
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -437,10 +461,22 @@ export const returnToStageRequestSchema = z.strictObject({
   stage: stageIdSchema,
   reason: requiredCommandTextSchema,
 });
-export const takeOverRequestSchema = z.strictObject({ reason: z.string().optional() });
+export const takeOverRequestSchema = z.strictObject({
+  reason: commandTextSchema.optional(),
+  /**
+   * Whether the launcher writes a tarball of the workspace beside the pushed branch (WP-27).
+   *
+   * product/19 §19 calls it *"transcript JSONL + **optional** tarball"*, and the option is the
+   * caller's because the cost is theirs: the archive is the whole checkout minus `.git` and
+   * `node_modules`, written to the launcher's `exports` volume and kept for the same fourteen days
+   * as the workspace. Default `false` — the branch is where the work is, and an operator who wants
+   * the untracked files asks for them.
+   */
+  tarball: z.boolean().optional(),
+});
 export const handBackRequestSchema = z.strictObject({
   stage: stageIdSchema,
-  summary: nonEmptyStringSchema,
+  summary: requiredCommandTextSchema,
 });
 export const reworkRequestSchema = z.strictObject({
   stage: stageIdSchema,
@@ -463,6 +499,39 @@ export const submitFeedbackRequestSchema = z.strictObject({
   rating: z.int().min(1).max(5).optional(),
   stage: stageIdSchema.optional(),
   artifact_id: idSchema.optional(),
+});
+
+/**
+ * `POST /api/tasks/:id/take-over` — what a human needs to carry on by hand (WP-27).
+ *
+ * The command's whole value is in this shape, which is why no button existed for it before: product/10
+ * defines take-over as *"pause pipeline, get branch + resume command, export workspace"*, and an
+ * operator who is told only that the pipeline stopped has been given the cost and not the thing it
+ * bought. Every field is platform-written text or a provider value the platform already stores.
+ *
+ * `resume_commands` is a **list of shell lines** rather than one string: product/19 §19 names two
+ * (`git fetch && git checkout agentic/PROJ-123`, plus `claude --resume` guidance), and a client that
+ * has to split a blob on newlines to render them is a client that has to know the format.
+ */
+export const takeOverResponseSchema = z.strictObject({
+  task_id: idSchema,
+  state: taskStateSchema,
+  current_stage: stageIdSchema.nullable(),
+  performed: z.boolean(),
+  /** The branch the work is on, always inside BD-025's `agentic/*` namespace. */
+  branch: nonEmptyStringSchema,
+  /** The session `claude --resume` continues, or `null` when no run of this task ever had one. */
+  session_id: nonEmptyStringSchema.nullable(),
+  resume_commands: z.array(nonEmptyStringSchema),
+  /**
+   * What became of the workspace.
+   *
+   * `requested` — a live run was interrupted and its workspace is being committed, pushed and (if
+   * asked for) archived by the launcher as the run ends. `no_live_run` — this task had no run in
+   * flight in this process, so there is no workspace to export and the branch is whatever the last
+   * run pushed. The two are different facts and a caller renders them differently (standing rule 18).
+   */
+  workspace_export: z.enum(['requested', 'no_live_run']),
 });
 
 /** `POST /api/tasks/:id/ask` — ask-the-task (WP-31). */
@@ -813,10 +882,14 @@ export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
 export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
+export type TakenOver = z.infer<typeof takenOverSchema>;
 export type AnswerQuestionRequest = z.infer<typeof answerQuestionRequestSchema>;
 export type DecideApprovalRequest = z.infer<typeof decideApprovalRequestSchema>;
 export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;
 export type TaskCommandResponse = z.infer<typeof taskCommandResponseSchema>;
+export type TakeOverRequest = z.infer<typeof takeOverRequestSchema>;
+export type TakeOverResponse = z.infer<typeof takeOverResponseSchema>;
+export type HandBackRequest = z.infer<typeof handBackRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema>;
 export type TaskExportResponse = z.infer<typeof taskExportResponseSchema>;

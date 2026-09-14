@@ -17,11 +17,13 @@
  * **rework** and **feedback**. Absent on purpose, and this list is the declaration rather than a
  * hope:
  *
- * - **take over** and **hand back** (WP-27). `takeOverRequestSchema` and `handBackRequestSchema`
- *   exist, but product/10 defines take-over as "pause pipeline, get branch + resume command,
- *   export workspace" and **no published response carries any of those three**. A button that
- *   pauses the pipeline and then cannot tell an operator where the work is would be worse than no
- *   button.
+ * - **take over** and **hand back**. The routes exist since WP-27 and so does the response this
+ *   note used to say was missing: `takeOverResponseSchema` carries the branch, the session id, the
+ *   resume commands and what became of the workspace, which is product/10's "pause pipeline, get
+ *   branch + resume command, export workspace" in a shape a screen can render. What is absent is
+ *   this screen's half — somewhere to show those four lines, and a stage picker for the hand-back —
+ *   and it is a row of its own rather than a line in this file (standing rule 83: the sentence that
+ *   described the gap is false the moment the gap closes, and this is that sentence).
  * - **ask the task** (WP-31). `askTaskRequestSchema` exists; the answers are a thread, and
  *   `taskDetailResponseSchema` has nowhere to carry one, so a question would post into a void.
  */

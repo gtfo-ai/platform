@@ -261,6 +261,9 @@ export const run = runRecordSchema.parse({
 
 export const taskDetail = taskDetailResponseSchema.parse({
   task: featureTask,
+  // WP-27: a task nobody has taken over. `null` rather than absent — the field is required and
+  // nullable, so a client can tell "not taken over" from "this build does not report it".
+  taken_over: null,
   stages: [
     {
       stage: 'refinement',
@@ -299,6 +302,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
 
 export const bugTaskDetail = taskDetailResponseSchema.parse({
   task: bugTask,
+  taken_over: null,
   stages: [],
   artifacts: [],
   questions: [],

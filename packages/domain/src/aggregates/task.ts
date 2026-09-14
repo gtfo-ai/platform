@@ -18,14 +18,17 @@ import type {
   ArtifactRef,
   Id,
   QuestionRecord,
+  RunStatus,
   Slug,
   TaskMode,
   TaskState,
   TaskTotals,
   TicketRef,
+  UserRole,
 } from '@platform/contracts';
 import { InvariantViolationError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
+import { assertCan } from '../permissions.js';
 import {
   evaluateIteration,
   type IterationCounters,
@@ -436,6 +439,63 @@ export const escalateTask = (
   return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
 };
 
+/**
+ * The branch a task's work lives on — BD-025's `agentic/*` namespace, from the ticket's own key.
+ *
+ * product/19 §19 writes the resume instruction as `git fetch && git checkout agentic/PROJ-123`, so
+ * the key is carried through rather than slugified into something a human would not recognise on
+ * their board. The alphabet it is carried into is deliberately **narrower** than the one the
+ * workspace port accepts (`workspaceExportRequestSchema.branch` allows `[A-Za-z0-9._\-/]`): every
+ * run of anything that is not a letter or a digit becomes a single `-`, and leading and trailing
+ * dashes are dropped. Three reasons, and the middle one is what a wider rule gets wrong:
+ *
+ *  - a ticket key is **provider** text (BD-022) and this value reaches a `git push` refspec;
+ *  - git itself refuses a ref containing `..` (git-check-ref-format(1)), so a key with two dots
+ *    would produce a branch name this platform accepts and the push rejects — at the one moment a
+ *    human is waiting for their work;
+ *  - one separator reads as one separator: `PROJ;rm -rf /` becoming `PROJ-rm--rf` is a name nobody
+ *    would type the same way twice.
+ *
+ * It is a **fallback**, not the authority: a task that has already opened a merge request has its
+ * real branch on `tasks.branch` (the `ImplementationNotes` the saga read), and the caller prefers
+ * that. This answers the other case — a take-over before any branch was pushed — and it answers it
+ * with the name the run's own `git push origin agentic/*` allow entry permits.
+ *
+ * @throws {InvariantViolationError} when nothing of the key survives the alphabet.
+ */
+export const taskBranchName = (ticketKey: string): string => {
+  const cleaned = ticketKey
+    .slice(0, 180)
+    .replaceAll(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+  if (cleaned.length === 0) {
+    throw new InvariantViolationError(
+      'task.branch',
+      `ticket key ${JSON.stringify(ticketKey.slice(0, 40))} has no character a branch name may carry, so this task has no agentic/ branch`,
+    );
+  }
+  return `agentic/${cleaned}`;
+};
+
+/**
+ * The lines product/19 §19 tells a person to run to continue the work by hand.
+ *
+ * Platform text around two stored values, in the **domain** because both readers need the same
+ * answer: the take-over command's response and the task read model, which are written by different
+ * rings and must not each compose their own version of a shell command.
+ *
+ * The `claude --resume` line is **absent** when there is no session rather than printed with a
+ * placeholder: it is the one command here a reader would paste without checking, and technical/04's
+ * own note on importing a platform transcript into a local Claude Code still carries a `[verify:]`
+ * marker — so the platform promises the session **id** and not that the transcript is already on
+ * that machine.
+ */
+export const resumeCommands = (branch: string, sessionId: string | null): readonly string[] => [
+  `git fetch && git checkout ${branch}`,
+  ...(sessionId === null ? [] : [`claude --resume ${sessionId}`]),
+];
+
 /** A human took the task over (product/19 §19): the pipeline pauses and the workspace is exported. */
 export const takeOverTask = (
   task: Task,
@@ -455,15 +515,34 @@ export const takeOverTask = (
 };
 
 /**
- * The human handed the task back at a chosen stage. A human decision resets the agent-to-agent
- * iteration counters (product/04, Paperclip) — `human_rounds` survives.
+ * The human handed the task back at a chosen stage (product/19 §19).
+ *
+ * **It emits the event and moves nothing.** Entering the chosen stage is
+ * `applyDecision`'s — the caller hands this decision's aggregate to it and the two events chain
+ * through one `stream_seq`. It used to do both, and doing both here was wrong for the three stage
+ * ids a human is most likely to choose: `ready_for_merge`, `merged` and `retro` are task **states**
+ * of their own (product/04), so entering them is `markReadyForMerge` / `recordMerge` /
+ * `startRetrospective` and not `enterStage`, and this function's own `withState(task, 'active')`
+ * would have parked the task in the wrong state with a `task.stage.entered` to match. It also wrote
+ * no `task_stages` row, which is the bookkeeping every other entry does.
+ *
+ * **It does not reset any iteration counter, and the sentence that used to say it did was wrong in
+ * both halves** (WP-27). product/04:86's reset — *"Human rejection = reset, not patching"* — is
+ * scoped by its own wording to a human asking for *a fundamentally different approach* (`@agentic
+ * rework`, or a merge request closed with a reason), which is `reworkStageCommand`'s rule and is
+ * applied there, outside the aggregate. A hand-back is the opposite motion: the person carried the
+ * *same* approach forward by hand and is returning it, so the rounds the agents spent on it are
+ * rounds that were spent. Giving them back here would also be unbounded by construction — hand back,
+ * take over, hand back — where `human_rounds` has a ceiling for exactly that reason.
+ *
+ * What a spent loop then costs is BD-008's ordinary ending: the next return escalates to
+ * `needs_human`, with a person already attached to the task.
  */
 export const handBackTask = (
   task: Task,
   input: { readonly branch: string; readonly stage: Slug; readonly summary: string },
   context: CommandContext,
 ): TaskDecision => {
-  const next = withState(task, 'active');
   const recorder = recorderFor(task, context);
   recorder.emit('task.handed_back', {
     project_id: task.projectId,
@@ -472,22 +551,48 @@ export const handBackTask = (
     stage: input.stage,
     summary: input.summary,
   });
-  const attempt = enteredAttempt(task, input.stage);
-  recorder.emit('task.stage.entered', {
+  return { aggregate: { ...task, sequence: recorder.sequence }, events: recorder.events };
+};
+
+export interface SteerRunInput {
+  /** The run the turn goes into; its **status** is what decides whether steering is allowed. */
+  readonly run: { readonly id: Id; readonly status: RunStatus };
+  /** Untrusted human text, forwarded into the session as a user turn (product/18, BD-022). */
+  readonly message: string;
+  readonly authorUserId: Id;
+  readonly authorRole: UserRole;
+}
+
+/**
+ * A human pushed a turn into a live run (product/18's *"Steer"*, WP-27).
+ *
+ * **It is a `Task` command although it emits `run.steered`**, and the reason is the same one
+ * {@link recordArtifact} gives one line down: the event goes on the stream whose sequence is
+ * re-read in every transaction. A run's is not — the stage executor holds one `Run` aggregate from
+ * `createRun` to `run.finished`, so an event appended to that stream by anybody else makes the
+ * executor's own terminal append fail the `events_enforce_stream_seq` trigger and re-run the whole
+ * stage (measured; `run.ts` carries the error text). The steer's own reading of the run is its
+ * **status**, which it takes as an argument rather than by holding the aggregate.
+ *
+ * The task itself does not move: steering is a message, not a transition. The state check is the
+ * permission subject rule (`can()` allows `run.steer` only while the run is `running`), so a run
+ * that has ended refuses here as well as at the HTTP boundary.
+ */
+export const steerRun = (
+  task: Task,
+  input: SteerRunInput,
+  context: CommandContext,
+): TaskDecision => {
+  assertCan(input.authorRole, 'run.steer', { kind: 'run', status: input.run.status });
+  const recorder = recorderFor(task, context);
+  recorder.emit('run.steered', {
     project_id: task.projectId,
     task_id: task.id,
-    stage: input.stage,
-    attempt,
+    run_id: input.run.id,
+    message: input.message,
+    author_user_id: input.authorUserId,
   });
-  return {
-    aggregate: {
-      ...next,
-      currentStage: input.stage,
-      stageAttempts: { ...task.stageAttempts, [input.stage]: attempt },
-      sequence: recorder.sequence,
-    },
-    events: recorder.events,
-  };
+  return { aggregate: { ...task, sequence: recorder.sequence }, events: recorder.events };
 };
 
 /**

@@ -1,11 +1,7 @@
 import { type ContextPackRecord, runStatusSchema, type TokenUsage } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { addMs, type Clock, fixedClock } from '../clock.js';
-import {
-  IllegalTransitionError,
-  InvariantViolationError,
-  PermissionDeniedError,
-} from '../errors.js';
+import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
 import { type CommandContext, FIRST_STREAM_SEQ } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import {
@@ -24,13 +20,11 @@ import {
   type Run,
   recordOutput,
   startRun,
-  steerRun,
 } from './run.js';
 
 const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
 const TASK_ID = '00000000-0000-4000-8000-0000000000aa';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000bb';
-const USER_ID = '00000000-0000-4000-8000-0000000000e9';
 
 const world = (): { ids: IdSource; clock: Clock } => ({
   ids: sequentialIds(),
@@ -267,41 +261,6 @@ describe('output and stalls', () => {
     expect(() => recordOutput(newRun(), '2026-09-09T09:00:00.000Z')).toThrow(
       InvariantViolationError,
     );
-  });
-});
-
-describe('steering', () => {
-  it('pushes a user turn into a live run', () => {
-    const shared = world();
-    const { events } = steerRun(
-      runningRun(shared),
-      { message: 'use the existing helper', authorUserId: USER_ID, authorRole: 'member' },
-      context(shared),
-    );
-    expect(events.map((event) => event.type)).toEqual(['run.steered']);
-    expect(events[0]?.payload).toMatchObject({ author_user_id: USER_ID });
-  });
-
-  it('refuses to steer a run that is not running', () => {
-    const shared = world();
-    expect(() =>
-      steerRun(
-        startedRun(shared),
-        { message: 'hello', authorUserId: USER_ID, authorRole: 'admin' },
-        context(shared),
-      ),
-    ).toThrow(PermissionDeniedError);
-  });
-
-  it('refuses to steer without the permission', () => {
-    const shared = world();
-    expect(() =>
-      steerRun(
-        runningRun(shared),
-        { message: 'hello', authorUserId: USER_ID, authorRole: 'viewer' },
-        context(shared),
-      ),
-    ).toThrow(PermissionDeniedError);
   });
 });
 

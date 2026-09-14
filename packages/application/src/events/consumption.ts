@@ -100,6 +100,19 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    */
   'mr.opened': 'handled',
 
+  // ── Take-over and hand-back (WP-27), read by the workpad and the status mapping ──
+  /**
+   * A human is holding this task, or has given it back.
+   *
+   * Consumed by the two **integrations**-band handlers rather than by the saga: neither event needs
+   * the pipeline to decide anything (the commands that emit them have already moved the task), and
+   * what they change is what a person reading the ticket sees — the workpad gains the branch and
+   * the resume command, and the board moves with the task's state. `run.steered` stays unconsumed
+   * below: the steer's effect is on the session, and its *minutes* are WP-29's.
+   */
+  'task.taken_over': 'handled',
+  'task.handed_back': 'handled',
+
   // ── The ticket readiness linter (WP-25), registered by `ticketLintHandlers` ──
   /**
    * A ticket was created in a project the binding reads — the linter's door (product/18).
@@ -123,11 +136,12 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // line used to name was wrong as well as pending. Task sync is technical/02's consumer and no
   // work package owns it; PROGRESS's discovered work says so.
   'ticket.status.changed': 'unconsumed', // Task sync (technical/02); no owner.
-  'task.taken_over': 'unconsumed', // WP-27 take-over/hand-back owns both.
-  'task.handed_back': 'unconsumed', // WP-27.
+
   'run.created': 'unconsumed', // UI band, WP-20's realtime projection.
   'run.started': 'unconsumed', // UI band, WP-20.
-  'run.steered': 'unconsumed', // WP-27 steer.
+  // WP-27 gave it a producer (`steerRunCommand`); the consumer is WP-29's, which turns a steer
+  // into product/19 §15's five human minutes. Nothing else reads it.
+  'run.steered': 'unconsumed', // WP-29 human time accounting.
   'workspace.provisioned': 'unconsumed', // UI band, WP-20.
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.

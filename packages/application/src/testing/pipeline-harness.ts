@@ -492,6 +492,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       }
       return {
         runId: spec.runId,
+        // The same value `outcomeFor` reports, from the start: a harness that answered `null` here
+        // would be kinder than either shipped runner in the one direction a take-over reads.
+        sessionId: `session-${spec.runId}`,
         outcome: Promise.resolve(outcomeFor(spec.runId, scripted)),
         steer: async () => {},
         stop: async () => {},
@@ -664,6 +667,11 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const humanCommands: HumanCommandDependencies = {
     ...commands,
     jobs,
+    // The harness's runs end inside `start`, so nothing is ever live in it (WP-27). `null` is the
+    // honest register for that: a steer or a take-over driven through this harness is refused by
+    // name, and the tiers that need a live session drive the **real** runner over the fake CLI,
+    // where a run can be held open (`test/e2e/support/agent-workspace.ts`).
+    liveRuns: null,
     eventStore: memory.store,
     logger: silentLogger,
   };

@@ -6,10 +6,10 @@
  *
  * **The commands technical/09's screens table gives this screen are all here**: steer, cancel,
  * retry with model/effort (`POST /api/runs/:id/retry`, which creates a *new* run rather than
- * changing this one) and feedback. **Take-over is not**, and that is the declaration rather than
- * an oversight: product/10 defines it as "pause pipeline, get branch + resume command, export
- * workspace", and no published response carries the branch, the command or the export, so WP-27
- * owns it — see the same list in `task-detail.tsx`.
+ * changing this one) and feedback. **Take-over is not**, and the reason has changed since this
+ * note was written: the route and `takeOverResponseSchema` both exist (WP-27), so what is missing
+ * is the place to render the branch, the resume commands and the workspace's fate — a screen, not
+ * a contract. It is a UI row of its own; the same list in `task-detail.tsx` says so too.
  *
  * This route is **lazily loaded** (`routes/tree.tsx`): the transcript renderer is the largest
  * component in the app and TD-013's budget is about the *initial* bundle. A user on the board has

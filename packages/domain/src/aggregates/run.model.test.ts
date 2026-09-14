@@ -14,11 +14,7 @@ import type {
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { type Clock, fixedClock } from '../clock.js';
-import {
-  IllegalTransitionError,
-  InvariantViolationError,
-  PermissionDeniedError,
-} from '../errors.js';
+import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
 import type { CommandContext } from '../events.js';
 import { type IdSource, sequentialIds } from '../ids.js';
 import { MODEL_RUNS, PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
@@ -33,13 +29,11 @@ import {
   type Run,
   recordOutput,
   startRun,
-  steerRun,
 } from './run.js';
 
 const RUN_ID = '00000000-0000-4000-8000-0000000000f1';
 const TASK_ID = '00000000-0000-4000-8000-0000000000aa';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000bb';
-const USER_ID = '00000000-0000-4000-8000-0000000000e9';
 
 const contextPack: ContextPackRecord = {
   tier0: [],
@@ -251,29 +245,6 @@ class Fail implements RunCommand {
   }
 }
 
-class Steer implements RunCommand {
-  check(): boolean {
-    return true;
-  }
-  run(model: RunModel, real: RunReal): void {
-    const input = {
-      message: 'try the other helper',
-      authorUserId: USER_ID,
-      authorRole: 'member' as const,
-    };
-    if (model.status !== 'running') {
-      expect(() => steerRun(real.run, input, context(real))).toThrow(PermissionDeniedError);
-      return;
-    }
-    const decision = steerRun(real.run, input, context(real));
-    real.run = decision.aggregate;
-    real.events.push(...decision.events);
-  }
-  toString(): string {
-    return 'steer()';
-  }
-}
-
 class Checked implements RunCommand {
   constructor(private readonly inner: RunCommand) {}
   check(model: Readonly<RunModel>): boolean {
@@ -299,7 +270,6 @@ const commandArbitraries: fc.Arbitrary<RunCommand>[] = [
     new Finish('timed_out', 'timed_out'),
   ),
   fc.constantFrom(new Fail('failed'), new Fail('stalled')),
-  fc.constant(new Steer()),
 ].map((arbitrary) => arbitrary.map((command) => new Checked(command)));
 
 describe('Run state machine — model-based properties', () => {

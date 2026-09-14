@@ -42,7 +42,7 @@
  * scope — inherit the dispatcher's slot. Emit, never dispatch.
  */
 import type { Jobs, Logger, WebhookIngress } from '@platform/application';
-import { sweepReadiness } from '@platform/application';
+import { createLiveRuns, sweepReadiness } from '@platform/application';
 import {
   cost as costAdapters,
   db as dbAdapters,
@@ -206,6 +206,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           })
         : null;
 
+    /**
+     * The runs this process is executing, for the two commands that reach into a live session
+     * (WP-27: steer and take-over).
+     *
+     * One per process, built before either consumer: `composePipeline` wraps the agent runner with
+     * it and `createTaskCommands` looks runs up in it. It fills only on a process that runs stages,
+     * so on an API-only role it stays empty and both commands refuse by name — which is what a
+     * caller needs to be told, because the session is genuinely somewhere else (Q52).
+     */
+    const liveRuns = createLiveRuns();
+
     let jobsStarted = false;
     let jobs: Jobs | null = null;
     if (capabilities.worker) {
@@ -284,6 +295,12 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       // Before `worker.start()`, and that ordering is the point: the first sweep dispatches to
       // whatever is registered on the bus, so a pipeline registered afterwards would miss the
       // events the sweep had already marked handled.
+      //
+      // `liveRuns` is built **outside** this branch and before either half (WP-27): it is the one
+      // object the executor and the command surface share, and building it inside the pipeline
+      // would leave the API's steer and take-over asking an empty register on the process that is
+      // running the run. A process with no pipeline never fills it, and both commands then refuse
+      // by name — which is the true answer there.
       if (options.pipeline === null) {
         // The labelled seam on `StartRuntimeOptions.pipeline`. Nothing in production reaches here.
         logger.warn(
@@ -297,6 +314,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           eventing,
           jobs: jobsRuntime.jobs,
           secretKey: config.secretKey,
+          liveRuns,
           stageConcurrency: 1,
           intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
           // Non-null on this branch by construction: `capabilities.worker` is what got us here and
@@ -470,7 +488,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * commands that start a stage refuse by name rather than moving a task to a stage nothing runs.
      */
     const taskCommands = capabilities.api
-      ? createTaskCommands({ eventing, jobs, logger: loggerPort })
+      ? createTaskCommands({ eventing, jobs, liveRuns, logger: loggerPort })
       : null;
 
     const knowledgeCommands = capabilities.api

@@ -52,16 +52,30 @@ import type {
   RunHandle,
   RunOutcome,
   RunSpec,
-  RunStopReason,
+  RunStop,
+  RunTakeOverExport,
   SteerMessage,
   TerminalRunStatus,
 } from '@platform/application';
 import { RunStartError, silentLogger, WorkspaceError } from '@platform/application';
 
-/** How a run ended, as the thing that frees the workspace sees it. */
+/**
+ * How a run ended, as the thing that frees the workspace sees it.
+ *
+ * `takeOver` is the one thing the ending carries beyond the fact of it (WP-27): a human took this
+ * run over, so the workspace owes a `wip:` commit, a push of `agentic/<task>`, optionally a tarball,
+ * and fourteen days of retention instead of three (product/19 §19, technical/05 §5). It is on
+ * **`ended`** and on no other arm because a take-over interrupts a session that exists: a run that
+ * never started has no tree to commit, and a crashed one is a fault rather than a hand-over.
+ */
 export type RunWorkspaceEnding =
   /** The run produced an outcome; `status` is its terminal status. */
-  | { readonly kind: 'ended'; readonly status: TerminalRunStatus }
+  | {
+      readonly kind: 'ended';
+      readonly status: TerminalRunStatus;
+      /** Present exactly when a `stop({reason:'taken_over'})` ended this run. */
+      readonly takeOver?: RunTakeOverExport;
+    }
   /** There was never a run: provisioning or `start` threw. */
   | { readonly kind: 'not_started' }
   /** The run was started and its outcome promise rejected — a fault, not a result. */
@@ -159,8 +173,18 @@ export const createWorkspaceClaudeRunner = (
        * work nobody reads.
        */
       let handle: RunHandle | null = null;
-      let pendingStop: RunStopReason | null = null;
+      let pendingStop: RunStop | null = null;
       const pendingSteers: SteerMessage[] = [];
+      /**
+       * What the take-over asked of the workspace, kept for `release`.
+       *
+       * Set by `stop` and read in the `finally` below, because the two are the same event seen from
+       * the two sides of the run: the human's request arrives while the session is live, and the
+       * only moment the workspace can act on it is when the session has ended and the container is
+       * about to be given back. It survives a `stop` that arrived before the inner handle existed
+       * for the same reason `pendingStop` does.
+       */
+      let takeOver: RunTakeOverExport | null = null;
 
       const outcome = (async (): Promise<RunOutcome> => {
         let workspace: ProvisionedRunWorkspace;
@@ -202,7 +226,11 @@ export const createWorkspaceClaudeRunner = (
             await handle.stop(pendingStop);
           }
           const result = await handle.outcome;
-          ending = { kind: 'ended', status: result.status };
+          ending = {
+            kind: 'ended',
+            status: result.status,
+            ...(takeOver === null ? {} : { takeOver }),
+          };
           return result;
         } catch (error) {
           // `build().start()` throwing is a fault in the composition or a spec the runner refuses:
@@ -236,6 +264,12 @@ export const createWorkspaceClaudeRunner = (
 
       return {
         runId: spec.runId,
+        // Delegated, and `null` while the workspace is still being provisioned: there is no session
+        // until there is a CLI. A take-over that lands in that window gets a branch and no
+        // `claude --resume` line, which is the true answer rather than a guess.
+        get sessionId() {
+          return handle?.sessionId ?? null;
+        },
         outcome,
         steer: async (message) => {
           if (handle === null) {
@@ -244,12 +278,15 @@ export const createWorkspaceClaudeRunner = (
           }
           await handle.steer(message);
         },
-        stop: async (reason) => {
+        stop: async (stop) => {
+          if (stop.reason === 'taken_over') {
+            takeOver = stop.workspaceExport;
+          }
           if (handle === null) {
-            pendingStop ??= reason;
+            pendingStop ??= stop;
             return;
           }
-          await handle.stop(reason);
+          await handle.stop(stop);
         },
       };
     },

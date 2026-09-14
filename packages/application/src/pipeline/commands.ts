@@ -41,19 +41,26 @@ import {
   expireApproval,
   expireQuestion,
   finishRun,
+  handBackTask,
   InvariantViolationError,
   isActiveRunStatus,
   pauseTask,
   recordFeedback,
   resetAgentIterations,
+  stageOf,
+  steerRun,
+  takeOverTask,
+  taskBranchName,
 } from '@platform/domain';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
+import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { enqueueStage } from './jobs.js';
+import type { LiveRun, LiveRuns } from './live-runs.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type { PipelineStore, StoredRun, StoredTask } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
@@ -71,9 +78,12 @@ export interface TaskCommandDependencies {
    * commands that predate WP-15i store free text too: a question's `answer` reaches
    * `questions.answer`, the `task.question.answered` payload and — through the stage's next prompt —
    * a model, and an approval's `reason` reaches `approvals.reason` and `task.approval.decided`.
-   * Five fields in all, with the return reason, the rework instructions and the feedback text, and
-   * each is redacted at the one command that writes it rather than at each of the transports that
-   * can carry it (HTTP, a ticket comment, a Slack action).
+   * **Nine fields in all**: those two, the return reason, the rework instructions, the feedback
+   * text, WP-27's hand-back summary and steer message, and the pause and take-over reasons that go
+   * nowhere but the audit row ({@link auditedReason}). Each is redacted at the one command that
+   * *decides* it rather than at each of the transports that can carry it (HTTP, a ticket comment, a
+   * Slack action) — including the last two, which this ring redacts and hands back rather than
+   * storing itself.
    */
   readonly redactor: SecretRedactor;
 }
@@ -230,11 +240,33 @@ export const expireTaskApproval = async (
  * `task.stage.returned` payload and a `feedback.received` payload. They go through the composed
  * redactor (TD-012) here, at the one place that writes them, rather than at each transport — as do
  * the two fields the commands **above** store, a question's answer and an approval's reason, which
- * is why `redactor` is a field of {@link TaskCommandDependencies} and not of this interface.
+ * is why `redactor` is a field of {@link TaskCommandDependencies} and not of this interface. The
+ * two that are stored by **no** table this ring writes — a pause's reason and a take-over's — are
+ * redacted here too and *returned* for the transport's `human_actions` row ({@link auditedReason}),
+ * because where the words are kept is the transport's business and whether they are safe to keep is
+ * not.
  */
 export interface HumanCommandDependencies extends TaskCommandDependencies {
   /** `null` on a process that runs no workers; the commands that need a stage refuse by name. */
   readonly jobs: Jobs | null;
+  /**
+   * The runs this **process** is executing (WP-27), or `null` when it executes none.
+   *
+   * `null` and an **empty** register are deliberately the same answer, and the answer is each
+   * command's own: "this process composed no pipeline" and "this process is running no such run"
+   * are both *the session is not reachable from here*, which is the only thing a caller can act on.
+   * A **steer** therefore refuses by name ({@link RunNotReachableError}) — never a silent success,
+   * which is what accepting a turn nobody will hear would be. A **take-over** does not refuse: a
+   * task with no live run is an ordinary take-over of work that is already on the branch, so it
+   * pauses the task and reports `exported: false`, and the caller is told `no_live_run` rather than
+   * a lie about an export. That the two differ is the point; both halves are driven over `null`
+   * *and* over an empty register in `human-commands.test.ts` (standing rule 68), because the
+   * composition an API-only process really has is the second one.
+   *
+   * It is `LiveRuns | null` rather than an optional field for standing rule 31's reason: an absent
+   * collaborator is stated, not defaulted.
+   */
+  readonly liveRuns: LiveRuns | null;
   /**
    * Where a run's next `stream_seq` comes from when the run is ended from **another process**.
    *
@@ -281,6 +313,52 @@ export class IterationLimitReachedError extends Error {
     );
     this.loop = loop;
     this.limit = limit;
+  }
+}
+
+/**
+ * The run is live somewhere, and not **here** (WP-27).
+ *
+ * Distinct from {@link RunNotLiveError}, which is a fact about the row: this one says the row is
+ * `running` and this process holds no handle for it, so a user turn cannot be delivered. Three
+ * situations produce it and a caller cannot tell them apart (`./live-runs.ts` enumerates them); all
+ * three mean the same thing to whoever pressed the button, and the message says so rather than
+ * guessing which one it was.
+ */
+export class RunNotReachableError extends Error {
+  override readonly name = 'RunNotReachableError';
+  readonly runId: Id;
+
+  constructor(runId: Id, what: string) {
+    super(
+      `run ${runId} is not running in this process, so it cannot be ${what}: the session may have ` +
+        'just ended, or it belongs to another instance — reaching a live run across processes is ' +
+        'the transport Q52 leaves unbuilt. Read the run to see where it stands',
+    );
+    this.runId = runId;
+  }
+}
+
+/**
+ * The command named a stage this task's template does not run (WP-27).
+ *
+ * Refused rather than entered, because entering a stage the compiled pipeline does not name
+ * produces a task that is `active` at a stage **nothing will ever run**: `applyDecision`'s `enter`
+ * schedules work only for a stage whose `kind` is `agent` or `gate`, and an unknown id has no kind
+ * at all. A disabled stage is refused for the same reason from the other direction — the
+ * interpreter walks *past* it, so a task parked there would be waiting for a stage the project
+ * switched off.
+ */
+export class StageNotInTemplateError extends Error {
+  override readonly name = 'StageNotInTemplateError';
+  readonly stage: Slug;
+
+  constructor(stage: Slug, template: Slug, available: readonly Slug[]) {
+    super(
+      `template "${template}" has no enabled stage "${stage}", so this task cannot be sent there; ` +
+        `it runs: ${available.join(', ')}`,
+    );
+    this.stage = stage;
   }
 }
 
@@ -428,12 +506,40 @@ const currentStageOrThrow = (stored: StoredTask, what: string): Slug => {
   return stage;
 };
 
+/** What a command whose free text has no home but the audit row gives back to its transport. */
+export interface AuditedReason {
+  /** The human's own words, redacted (TD-012), or `null` when they sent none. */
+  readonly reason: string | null;
+}
+
+/**
+ * The one piece of free text this module **returns** instead of storing (WP-27's fix round).
+ *
+ * `pause` and `take over` are the two commands whose reason has nowhere else to go: `task.paused`
+ * carries the *kind* of pause and `task.taken_over` the branch, the stage and the session, so
+ * neither event has a field for a sentence and inventing one would change a published payload for
+ * one caller. The `human_actions` row the transport writes is therefore the only place the words
+ * land — which is what `/pause`'s own description has claimed since WP-15i while its route recorded
+ * nothing, and what `/take-over` accepted through a strict schema and dropped on the floor.
+ *
+ * It is redacted **here** rather than at the transport for the reason every other field is (see
+ * `redactor`): a stored copy of untrusted human text is TD-012's business, the redactor lives in
+ * this ring, and an HTTP route that redacted its own audit row would be a second site to keep
+ * right. The route records what this returned; it never reads the body for the row.
+ */
+const auditedReason = (
+  deps: TaskCommandDependencies,
+  reason: string | undefined,
+): AuditedReason => ({
+  reason: reason === undefined ? null : deps.redactor.redactText(reason).value,
+});
+
 /**
  * `POST /api/tasks/:task_id/pause` — product/03's "pause task".
  *
  * `reason: 'manual'` is the *kind* of pause the event carries (`PauseReason`); the human's own words
- * go in the `human_actions` row the transport writes, because `task.paused` has no field for them
- * and inventing one would change a published payload for one caller.
+ * are handed back to the transport for the `human_actions` row, redacted — see
+ * {@link auditedReason} for why that is the only home they have and why the redaction is here.
  *
  * A run already in flight is **not** stopped — nothing in this build can reach a live session from
  * another process (Q52) — but it can no longer advance the task: the stage executor records the run
@@ -442,14 +548,23 @@ const currentStageOrThrow = (stored: StoredTask, what: string): Slug => {
  */
 export const pauseTaskCommand = async (
   deps: HumanCommandDependencies,
-  input: { readonly taskId: Id; readonly userId: Id },
-): Promise<void> =>
-  writeTask(deps, { ...input, what: 'pausing the task' }, async (scope, stored, context) => {
-    const decision = pauseTask(stored.task, { reason: 'manual' }, context);
-    await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
-    await scope.events.append(decision.events);
-    return { result: undefined, work: null };
-  });
+  input: { readonly taskId: Id; readonly userId: Id; readonly reason?: string },
+): Promise<AuditedReason> => {
+  // Before the transaction, because it is not part of it: nothing here is stored by this command,
+  // and a redaction that ran inside the write would hold a connection for a pure string pass.
+  const audited = auditedReason(deps, input.reason);
+  await writeTask(
+    deps,
+    { taskId: input.taskId, userId: input.userId, what: 'pausing the task' },
+    async (scope, stored, context) => {
+      const decision = pauseTask(stored.task, { reason: 'manual' }, context);
+      await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+      await scope.events.append(decision.events);
+      return { result: undefined, work: null };
+    },
+  );
+  return audited;
+};
 
 /**
  * `POST /api/tasks/:task_id/resume` — re-enter the stage the task stopped at.
@@ -893,4 +1008,321 @@ export const retryRunCommand = async (
     },
   );
   return { taskId: run.taskId, stage };
+};
+
+// ── Steer, take over, hand back (WP-27) ──────────────────────────────────────
+
+/**
+ * technical/05 §5: *"3 days default, 14 days for paused/taken-over"*.
+ *
+ * Here rather than in the workspace adapter because it is the **reason** for the window that
+ * decides it: a human is now holding this task, and three days is the window for a workspace nobody
+ * is coming back to. The adapter is told an instant, not a policy.
+ */
+export const TAKEN_OVER_WORKSPACE_KEEP_DAYS = 14;
+
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * How a person is named in a git commit message and in a steer's provenance line.
+ *
+ * Two things bound it, and neither is decoration. It reaches a **commit message** on the project's
+ * own repository (product/19 §19's `wip: hand-over to <user>`), which is published to whoever reads
+ * the branch — so the display name is used and never the email address, which is the one field of
+ * `Actor` a person did not choose to publish. And it reaches a **model**, through the runner's
+ * `UserPromptSubmit` provenance line, which is platform-written text with one interpolation in it:
+ * a name is user-supplied (BD-022 makes no exception for a colleague's), so everything outside a
+ * conservative alphabet becomes a space and the result is bounded at 64 characters.
+ *
+ * An empty result is `someone`, because `wip: hand-over to ` is a sentence with a hole in it.
+ */
+export const actorLabel = (name: string): string => {
+  const cleaned = name
+    .slice(0, 64)
+    .replaceAll(/[^\p{L}\p{N} .@_-]+/gu, ' ')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+  return cleaned.length === 0 ? 'someone' : cleaned;
+};
+
+/** The live run of this task or this run id in **this** process, or a refusal naming why not. */
+const requireLiveRun = (
+  deps: HumanCommandDependencies,
+  key: { readonly runId: Id } | { readonly taskId: Id },
+  what: string,
+): LiveRun => {
+  const live =
+    deps.liveRuns === null
+      ? null
+      : 'runId' in key
+        ? deps.liveRuns.forRun(key.runId)
+        : deps.liveRuns.forTask(key.taskId);
+  if (live === null) {
+    throw new RunNotReachableError('runId' in key ? key.runId : key.taskId, what);
+  }
+  return live;
+};
+
+/**
+ * `POST /api/runs/:run_id/steer` — a user turn injected into a live session (product/18, WP-27).
+ *
+ * ## Three checks, in the order that makes each one mean something
+ *
+ * The **row** first: `runs.status` is the platform's record of the run, and a run that has ended is
+ * refused with {@link RunNotLiveError} — a 409 naming the status — rather than with a 403 from the
+ * aggregate's own state rule. Then the **register**: a `running` row this process holds no handle
+ * for is {@link RunNotReachableError}, which is a different sentence and a different remedy. Then
+ * the **role**, inside `steerRun`, which is where `can()` lives.
+ *
+ * ## The log is written before the session is, and the event is on the **task's** stream
+ *
+ * Two decisions, both of them measured rather than chosen for symmetry, and both stated at the
+ * lines that implement them: `steerRun` (`packages/domain/src/aggregates/task.ts`) says why a
+ * `run.*` event is appended to a task's stream, and the call below says why the delivery comes
+ * after the commit.
+ *
+ * The message is redacted once, here, and the same redacted bytes go to the session, to the
+ * transcript and to the event — a run may be handed a credential by a well-meaning operator, and
+ * TD-012 covers every place the platform stores one.
+ */
+export const steerRunCommand = async (
+  deps: HumanCommandDependencies,
+  input: {
+    readonly runId: Id;
+    readonly userId: Id;
+    readonly role: UserRole;
+    readonly message: string;
+    readonly authorName: string;
+  },
+): Promise<{ readonly taskId: Id }> => {
+  const run = await deps.unitOfWork.transaction(async (scope) =>
+    deps.store.runs.load(scope.tx, input.runId),
+  );
+  if (run === null) {
+    throw new UnknownAggregateError(`run ${input.runId} does not exist`);
+  }
+  if (run.status !== 'running') {
+    throw new RunNotLiveError(run.id, run.status, 'steered');
+  }
+  const live = requireLiveRun(deps, { runId: run.id }, 'steered');
+  const message = deps.redactor.redactText(input.message).value;
+  const label = actorLabel(input.authorName);
+  await deps.unitOfWork.transaction(async (scope) => {
+    const stored = await loadTaskOrThrow(deps, scope.tx, run.taskId);
+    const decision = steerRun(
+      stored.task,
+      {
+        run: { id: run.id, status: run.status },
+        message,
+        authorUserId: input.userId,
+        authorRole: input.role,
+      },
+      humanContext(deps, stored.task.id, input.userId),
+    );
+    // No `tasks.save`: steering moves nothing, so the row is untouched and its version is not
+    // spent — the same shape `submitFeedbackCommand` has, and the reason neither needs
+    // `retryOnTaskConflict`.
+    await scope.events.append(decision.events);
+  });
+  // Outside every transaction, and **after** the log: this reaches a model over a socket, and the
+  // rule that keeps a provider call out of an open transaction is the same rule.
+  //
+  // The order was chosen against its alternative and the argument is short. Delivering first and
+  // logging second means a failed append leaves the model holding a turn the log does not have —
+  // and the caller, told 500, retries and delivers a **second** turn, which the run pays for and
+  // nobody can take back. This way round the failure is an event with no delivery, which is
+  // visible exactly where a human looks: `handle.steer` writes the `steer` transcript row, so the
+  // run screen shows the turn or it does not. The residual is stated rather than implied.
+  await live.handle.steer({ text: message, authorUserId: input.userId, authorLabel: label });
+  return { taskId: run.taskId };
+};
+
+/** What a take-over produced, for the response technical/08 owes the operator. */
+export interface TakeOverOutcome extends AuditedReason {
+  readonly taskId: Id;
+  readonly branch: string;
+  /** The session `claude --resume` continues, or `null` when no live run had one. */
+  readonly sessionId: string | null;
+  /** Whether a live run was interrupted and its workspace asked to export. */
+  readonly exported: boolean;
+  /**
+   * Inherited from {@link AuditedReason}, and it is **not** part of the response: why a person took
+   * a task over is theirs to state and the audit row's to keep, and the operator who just typed it
+   * does not need it read back. See {@link auditedReason}.
+   */
+  readonly reason: string | null;
+}
+
+/**
+ * `POST /api/tasks/:task_id/take-over` — product/19 §19's take-over protocol.
+ *
+ * ## The order, and what each ordering decision costs
+ *
+ * **The task is paused first, in its own transaction; the run is stopped afterwards and is not
+ * waited for.** Both halves were chosen against their alternative.
+ *
+ * Pausing first means a failure between the two leaves a paused task beside a run that is still
+ * going — which is exactly what `POST /api/tasks/:task_id/pause` already does and what the stage
+ * executor already handles: `isRunnableTaskState` is false, so the run is recorded when it ends and
+ * its stage is not completed. Stopping first would mean a failure leaves a *killed* run on a task
+ * the pipeline still owns, and the pipeline would start the stage again.
+ *
+ * Not awaiting the stop means the request answers with the branch and the resume command while the
+ * session is still winding down. `RunHandle.stop` resolves only when the run's **outcome** does —
+ * `interrupt()`, a grace period, container teardown — and an HTTP request that held a connection
+ * open for all of it would time out on the one path where the operator most needs an answer. What
+ * the caller is told is therefore `workspace_export: 'requested'`, which is the true tense.
+ *
+ * ## What the export is, and what it is not
+ *
+ * The launcher commits the work in progress as `wip: hand-over to <user>` — product/19:84's one
+ * permitted `wip:` commit — pushes `agentic/<task>` with the **run's own** credential (never the
+ * platform's; the broker minted it for this run), optionally writes a tarball, and extends the
+ * volume's retention to fourteen days (technical/05 §5). All of that happens in the process that
+ * holds the workspace, driven by {@link RunTakeOverExport} on the stop.
+ *
+ * It does **not** write the transcript JSONL that technical/05 §6 also names. `blobs` has no
+ * writer, `workspaces` has no row and no endpoint serves a download — three pieces that belong to
+ * one work package and none of which has an owner — while the transcript itself is already
+ * readable, redacted, through `GET /api/runs/:run_id/messages`. Filed rather than half-built.
+ */
+export const takeOverTaskCommand = async (
+  deps: HumanCommandDependencies,
+  input: {
+    readonly taskId: Id;
+    readonly userId: Id;
+    readonly authorName: string;
+    readonly tarball: boolean;
+    readonly reason?: string;
+  },
+): Promise<TakeOverOutcome> => {
+  const audited = auditedReason(deps, input.reason);
+  const live = deps.liveRuns?.forTask(input.taskId) ?? null;
+  const outcome = await writeTask(
+    deps,
+    { taskId: input.taskId, userId: input.userId, what: 'taking the task over' },
+    async (scope, stored, context) => {
+      const stage = currentStageOrThrow(stored, 'take over');
+      // The branch the work is on: what the merge request said, or the name BD-025 reserves for
+      // this task. Never invented from the run — a task may have been taken over before any push.
+      const branch = stored.branch ?? taskBranchName(stored.task.ticket.key);
+      const decision = takeOverTask(
+        stored.task,
+        {
+          branch,
+          stage,
+          ...(live?.handle.sessionId == null ? {} : { sessionId: live.handle.sessionId }),
+        },
+        context,
+      );
+      await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+      await scope.events.append(decision.events);
+      return {
+        result: {
+          taskId: stored.task.id,
+          branch,
+          sessionId: live?.handle.sessionId ?? null,
+          exported: live !== null,
+          keepUntil: new Date(
+            Date.parse(context.clock.now()) + TAKEN_OVER_WORKSPACE_KEEP_DAYS * DAY_MS,
+          ).toISOString(),
+        },
+        work: null,
+      };
+    },
+  );
+  if (live !== null) {
+    const workspaceExport: RunTakeOverExport = {
+      branch: outcome.branch,
+      commitMessage: `wip: hand-over to ${actorLabel(input.authorName)}`,
+      tarball: input.tarball,
+      keepUntil: outcome.keepUntil,
+    };
+    // Deliberately not awaited; see the module note. The rejection is swallowed here and reported
+    // by the runner's own logger — a stop that failed has already been recorded as a run that did
+    // not end cleanly, and re-throwing it would turn a completed take-over into a 500.
+    void live.handle.stop({ reason: 'taken_over', workspaceExport }).catch((error: unknown) => {
+      deps.logger?.error(
+        { err: error, run_id: live.runId, task_id: input.taskId },
+        'the taken-over run could not be stopped; its workspace may not have been exported',
+      );
+    });
+  }
+  return {
+    taskId: outcome.taskId,
+    branch: outcome.branch,
+    sessionId: outcome.sessionId,
+    exported: outcome.exported,
+    reason: audited.reason,
+  };
+};
+
+/**
+ * `POST /api/tasks/:task_id/hand-back` — the other half of the protocol (product/19 §19).
+ *
+ * The human pushed to the same branch and chose a stage; the platform re-enters it with a fresh
+ * run. Three things are the point:
+ *
+ * **Any stage the template runs, and no other.** product/19 §19 says the human chooses — so this
+ * does not restrict the target to the stage the task was taken over at — and
+ * {@link StageNotInTemplateError} is what stops "any" from meaning "any string": a stage the
+ * compiled pipeline does not name, or one the project disabled, would leave the task `active` at a
+ * stage nothing will run.
+ *
+ * **The entry goes through `applyDecision`, not through the aggregate.** `handBackTask` emits the
+ * event and nothing else; which command a stage id implies — `ready_for_merge` is not `enterStage`
+ * — and what `task_stages` owes are `applyDecision`'s to know, and a second copy of that knowledge
+ * here would be wrong for exactly the stages a human is most likely to hand back to.
+ *
+ * **Nothing is reset and nothing is exported.** The iteration counters stand (`handBackTask`'s own
+ * note has the argument), and the workspace export the take-over produced is left where it is: a
+ * hand-back re-provisions from the **branch**, which is where the human's work now is.
+ */
+export const handBackTaskCommand = async (
+  deps: HumanCommandDependencies,
+  input: {
+    readonly taskId: Id;
+    readonly userId: Id;
+    readonly stage: Slug;
+    readonly summary: string;
+  },
+): Promise<void> => {
+  requireJobs(deps);
+  return writeTask(
+    deps,
+    { ...input, what: 'handing the task back' },
+    async (scope, stored, context) => {
+      const pipeline = compilePipeline(stored.task.template, stored.template);
+      const target = stageOf(pipeline, input.stage);
+      if (target === null || !target.enabled) {
+        throw new StageNotInTemplateError(
+          input.stage,
+          stored.task.template,
+          pipeline.stages.filter((entry) => entry.enabled).map((entry) => entry.id),
+        );
+      }
+      const branch = stored.branch ?? taskBranchName(stored.task.ticket.key);
+      const decision = handBackTask(
+        stored.task,
+        {
+          branch,
+          stage: input.stage,
+          // The human's own words, on their way into `task.handed_back` and the workpad (TD-012).
+          summary: deps.redactor.redactText(input.summary).value,
+        },
+        context,
+      );
+      // Appended before the entry's own events, because that is the order they happened in and
+      // `stream_seq` is chained through `decision.aggregate`: the hand-back, then the stage.
+      await scope.events.append(decision.events);
+      const work = await applyHumanDecision(
+        deps,
+        scope,
+        { ...stored, task: decision.aggregate },
+        context,
+        { kind: 'enter', stage: input.stage },
+      );
+      return { result: undefined, work: work === null ? null : { job: work } };
+    },
+  );
 };

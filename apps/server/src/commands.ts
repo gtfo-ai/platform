@@ -1,10 +1,11 @@
 /**
  * The task and run command surface, composed for `apps/server` — technical/08 § "Tasks"/"Runs"
- * (WP-15i).
+ * (WP-15i; steer, take-over and hand-back added by WP-27).
  *
  * The commands themselves are use cases in the application ring; what this file supplies is the
- * four collaborators they cannot build for themselves — the unit of work, the pipeline store, the
- * queue and the redactor — and the **interface** the routes see. That interface is eleven methods
+ * five collaborators they cannot build for themselves — the unit of work, the pipeline store, the
+ * queue, the redactor and the register of live runs (WP-27) — and the **interface** the routes see.
+ * That interface is fourteen methods
  * rather than the dependency bundle, for the reason `KnowledgeCommands` and `OnboardingCommands`
  * next door are shaped the same way: a route module that names a `UnitOfWork` cannot be driven
  * without one, and the decisions in `routes/commands.ts` (the key policy, the replay, the audit row,
@@ -15,9 +16,21 @@
  *
  * A process that composed no eventing has no commands, and the routes answer `503` naming the
  * missing piece rather than 404 — the shape `routes/kb.ts` established. A process that serves the
- * API **without** workers composes them with `jobs: null`: pausing, cancelling, answering and
- * deciding all work there, and the four commands that have to start a stage refuse by name rather
- * than moving a task to a stage nothing will run.
+ * API **without** workers composes `jobs: null` and — this is what `runtime.ts` actually builds — a
+ * live-run register that is **empty** rather than absent: `createLiveRuns()` is made once per
+ * process, outside the worker branch, because the pipeline and the command surface must share one
+ * instance and only the pipeline fills it. Pausing, cancelling, answering and deciding all work
+ * there; the five commands that have to start a stage refuse by name rather than moving a task to a
+ * stage nothing will run; a **steer** refuses by name rather than reporting a turn nobody heard;
+ * and a **take-over** performs — it pauses the task and says `no_live_run`, which is what taking
+ * over work that is already on the branch looks like.
+ *
+ * `liveRuns: null` and an empty register are the same answer to both, which is why the field keeps
+ * its `null` arm for a composition root that has no pipeline at all. That is an equality rather
+ * than a guess: `human-commands.test.ts` drives the steer's refusal and the take-over's success
+ * over both compositions (standing rules 3 and 68). The sentence this paragraph replaced said the
+ * API role composes `liveRuns: null`, which `runtime.ts` has never done, and said a take-over
+ * refuses, which it has never done either.
  *
  * ## The redactor is the platform's pattern rules, and nothing else
  *
@@ -27,12 +40,13 @@
  * one `createIntegrationProber` passes as its `platformRedactor`.
  */
 import { randomUUID } from 'node:crypto';
-import type { HumanCommandDependencies, Jobs, Logger } from '@platform/application';
+import type { HumanCommandDependencies, Jobs, LiveRuns, Logger } from '@platform/application';
 import {
   answerTaskQuestion,
   cancelRunCommand,
   cancelTaskCommand,
   decideTaskApproval,
+  handBackTaskCommand,
   PIPELINE_ACTOR,
   pauseTaskCommand,
   resumeTaskCommand,
@@ -40,7 +54,9 @@ import {
   retryStageCommand,
   returnToStageCommand,
   reworkStageCommand,
+  steerRunCommand,
   submitFeedbackCommand,
+  takeOverTaskCommand,
 } from '@platform/application';
 import type { AnswerChannel, Effort, Id, IsoDateTime, Slug, UserRole } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
@@ -50,9 +66,18 @@ import {
   redaction as redactionAdapters,
 } from '@platform/infrastructure';
 
-/** The eleven commands of technical/08, as the routes see them. */
+/** The fourteen commands of technical/08, as the routes see them. */
 export interface TaskCommands {
-  pause(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
+  /**
+   * Answers with the person's own words, redacted, because the `human_actions` row is the only
+   * place a pause's reason is kept (`pipeline/commands.ts`'s `auditedReason`). The route records
+   * what came back; it never reads the body for the row.
+   */
+  pause(input: {
+    readonly taskId: string;
+    readonly userId: string;
+    readonly reason?: string;
+  }): Promise<{ readonly reason: string | null }>;
   resume(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
   cancel(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
   retryStage(input: {
@@ -106,12 +131,49 @@ export interface TaskCommands {
     readonly runId: string;
     readonly userId: string;
   }): Promise<{ readonly taskId: string }>;
+  steerRun(input: {
+    readonly runId: string;
+    readonly userId: string;
+    readonly role: UserRole;
+    readonly message: string;
+    readonly authorName: string;
+  }): Promise<{ readonly taskId: string }>;
+  takeOver(input: {
+    readonly taskId: string;
+    readonly userId: string;
+    readonly authorName: string;
+    readonly tarball: boolean;
+    readonly reason?: string;
+  }): Promise<{
+    readonly taskId: string;
+    readonly branch: string;
+    readonly sessionId: string | null;
+    readonly exported: boolean;
+    /** Redacted, for the audit row, like `pause`'s: it is not part of the response. */
+    readonly reason: string | null;
+  }>;
+  handBack(input: {
+    readonly taskId: string;
+    readonly userId: string;
+    readonly stage: string;
+    readonly summary: string;
+  }): Promise<void>;
 }
 
 export interface TaskCommandOptions {
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   /** `null` on a process that runs no workers; see the module note. */
   readonly jobs: Jobs | null;
+  /**
+   * The register of runs **this process** is executing (WP-27), or `null` when it executes none.
+   *
+   * The same instance the pipeline's runner was wrapped with, which is why the composition root
+   * builds it rather than this function: steering and taking over reach into a live session, and a
+   * second register would be a second, empty answer to "is that run here". `runtime.ts` passes a
+   * real register on every role and lets the API-only one stay **empty**; the `null` arm is for a
+   * root with no pipeline, and the module note has the measurement that the two are the same answer.
+   */
+  readonly liveRuns: LiveRuns | null;
   readonly logger: Logger;
 }
 
@@ -138,6 +200,7 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
       causeEventId: null,
     }),
     jobs: options.jobs,
+    liveRuns: options.liveRuns,
     eventStore: options.eventing.store,
     redactor: redactionAdapters.patternRedactor(),
     logger: options.logger,
@@ -145,7 +208,11 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
 
   return {
     pause: async (input) =>
-      pauseTaskCommand(deps, { taskId: id(input.taskId), userId: id(input.userId) }),
+      pauseTaskCommand(deps, {
+        taskId: id(input.taskId),
+        userId: id(input.userId),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+      }),
     resume: async (input) =>
       resumeTaskCommand(deps, { taskId: id(input.taskId), userId: id(input.userId) }),
     cancel: async (input) =>
@@ -206,5 +273,28 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
       }),
     cancelRun: async (input) =>
       cancelRunCommand(deps, { runId: id(input.runId), userId: id(input.userId) }),
+    steerRun: async (input) =>
+      steerRunCommand(deps, {
+        runId: id(input.runId),
+        userId: id(input.userId),
+        role: input.role,
+        message: input.message,
+        authorName: input.authorName,
+      }),
+    takeOver: async (input) =>
+      takeOverTaskCommand(deps, {
+        taskId: id(input.taskId),
+        userId: id(input.userId),
+        authorName: input.authorName,
+        tarball: input.tarball,
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+      }),
+    handBack: async (input) =>
+      handBackTaskCommand(deps, {
+        taskId: id(input.taskId),
+        userId: id(input.userId),
+        stage: slug(input.stage),
+        summary: input.summary,
+      }),
   };
 };

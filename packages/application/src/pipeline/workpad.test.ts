@@ -61,6 +61,7 @@ describe('renderWorkpad', () => {
     budgetUsd: 50,
     mrUrl: 'https://git.example.test/acme/api/-/merge_requests/7',
     blocker: null,
+    takenOver: null,
   };
 
   it('shows the state, the checklist, the spend and the merge request', () => {
@@ -76,6 +77,35 @@ describe('renderWorkpad', () => {
 
   it('is byte-identical for the same task, so an edit-in-place does not churn', () => {
     expect(renderWorkpad(view)).toBe(renderWorkpad({ ...view }));
+  });
+
+  it('adds the branch, the resume command and how to hand back when a human took it over', () => {
+    const markdown = renderWorkpad({
+      ...view,
+      state: 'paused',
+      takenOver: { branch: 'agentic/ACME-1', sessionId: 'sess-42' },
+    });
+    // product/19 §19's three: the branch, the resume command, and how to hand back.
+    expect(markdown).toContain('**Taken over by a human**');
+    expect(markdown).toContain('git fetch && git checkout agentic/ACME-1');
+    expect(markdown).toContain('claude --resume sess-42');
+    expect(markdown).toContain('choose a stage on the task page');
+  });
+
+  it('omits the resume line when there is no session, rather than printing a placeholder', () => {
+    // A run taken over while its workspace was still being provisioned has no session id. A
+    // `claude --resume undefined` is a command a reader would paste and get an error from.
+    const markdown = renderWorkpad({
+      ...view,
+      state: 'paused',
+      takenOver: { branch: 'agentic/ACME-1', sessionId: null },
+    });
+    expect(markdown).toContain('git fetch && git checkout agentic/ACME-1');
+    expect(markdown).not.toContain('claude --resume');
+  });
+
+  it('says nothing about a take-over on an ordinary render', () => {
+    expect(renderWorkpad(view)).not.toContain('Taken over');
   });
 
   it('adds the blocker brief when the task is parked', () => {

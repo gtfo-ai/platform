@@ -73,9 +73,13 @@ export const PLATFORM_WORKSPACE_LIMITS: WorkspaceLimits = {
  * paused/taken-over").
  *
  * The three-day value is what a spec is *created* with, because at create time nothing knows whether
- * the task will be paused or taken over. Extending it for a workspace a human took over is the
- * launcher's job at export time and no code does it yet — recorded here rather than implied, because
- * the number in this file is the one an operator will find first.
+ * the task will be paused or taken over. **The fourteen-day half is built since WP-27**: a take-over
+ * ends the run with a `keepUntil` on the launcher's `EndRunRequest`, which calls
+ * `WorkspaceProvider.extendRetention` — and that is an extension rather than a relabel, because a
+ * Docker volume's labels cannot be changed (measured at `retentionHoldVolumeName`). The number of
+ * days lives with the code that knows a human took the task over
+ * (`TAKEN_OVER_WORKSPACE_KEEP_DAYS`, `packages/application/src/pipeline/commands.ts`); this file
+ * only decides what a workspace starts with.
  */
 export const DEFAULT_WORKSPACE_KEEP_DAYS = 3;
 
