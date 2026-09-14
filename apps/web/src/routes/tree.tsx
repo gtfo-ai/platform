@@ -41,6 +41,7 @@ import { InboxScreen } from '../features/inbox.js';
 import { IntegrationsScreen } from '../features/integrations.js';
 import { OnboardingScreen } from '../features/onboarding.js';
 import { BudgetsScreen, KnowledgeScreen, PipelineScreen } from '../features/project-panels.js';
+import { ProjectSettingsScreen } from '../features/project-settings.js';
 import { SettingsScreen } from '../features/settings.js';
 import { SignInScreen } from '../features/sign-in.js';
 import { StatisticsScreen } from '../features/statistics.js';
@@ -149,6 +150,16 @@ const budgetsRoute = createRoute({
   },
 });
 
+/** product/10:21's project settings page — the mirror of every wizard step (product/18:55). */
+const projectSettingsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: '/projects/$key/settings',
+  component: function ProjectSettings() {
+    const { key } = projectSettingsRoute.useParams();
+    return <ProjectSettingsScreen projectKey={key} />;
+  },
+});
+
 const runRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/runs/$runId',
@@ -172,6 +183,7 @@ export const routeTree = rootRoute.addChildren([
     knowledgeRoute,
     pipelineRoute,
     budgetsRoute,
+    projectSettingsRoute,
     runRoute,
   ]),
 ]);

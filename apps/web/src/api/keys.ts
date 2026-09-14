@@ -15,6 +15,7 @@ export const queryKeys = {
   inbox: ['org', 'inbox'] as const,
   integrations: ['integrations'] as const,
   integrationSetupGuide: (id: string) => ['integrations', id, 'setup-guide'] as const,
+  orgBudgets: ['org', 'budgets'] as const,
 
   projects: ['projects'] as const,
   project: (id: string) => ['project', id] as const,
@@ -22,6 +23,8 @@ export const queryKeys = {
   projectReadiness: (id: string) => ['project', id, 'readiness'] as const,
   projectBindings: (id: string) => ['project', id, 'bindings'] as const,
   projectBudgets: (id: string) => ['project', id, 'budgets'] as const,
+  projectAutonomy: (id: string) => ['project', id, 'autonomy'] as const,
+  projectAudit: (id: string) => ['project', id, 'audit'] as const,
   projectTasks: (id: string, filters: Readonly<Record<string, unknown>> = {}) =>
     ['project', id, 'tasks', filters] as const,
   kbTree: (id: string) => ['project', id, 'kb', 'tree'] as const,

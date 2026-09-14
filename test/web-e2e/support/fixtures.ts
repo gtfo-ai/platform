@@ -24,6 +24,7 @@
 import type { TranscriptEvent } from '@platform/contracts';
 import {
   agentsResponseSchema,
+  autonomyResponseSchema,
   budgetsResponseSchema,
   contextPackRecordSchema,
   effectiveConfigResponseSchema,
@@ -33,6 +34,7 @@ import {
   kbTreeResponseSchema,
   orgAuditResponseSchema,
   orgUsersResponseSchema,
+  projectAuditResponseSchema,
   projectSummarySchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
@@ -58,6 +60,7 @@ export const IDS = {
   integration: id(50),
   proposal: id(60),
   budget: id(70),
+  orgBudget: id(71),
   audit: id(80),
 } as const;
 
@@ -500,6 +503,77 @@ export const budgets = budgetsResponseSchema.parse({
       notify_pct: [50, 80],
       spent_usd: 12.5,
       window_start: now,
+    },
+  ],
+});
+
+/** The organisation's own caps — `GET /api/org/budgets`, served since WP-30. */
+export const orgBudgets = budgetsResponseSchema.parse({
+  items: [
+    {
+      id: IDS.orgBudget,
+      scope: 'org',
+      scope_id: null,
+      window: 'day',
+      limit_usd: 40,
+      notify_pct: [50, 80, 100],
+      spent_usd: 3.25,
+      window_start: now,
+    },
+  ],
+});
+
+/**
+ * `GET /api/projects/:id/autonomy` — a project that has **overridden** a policy, so the settings
+ * screen renders the *Custom* branch rather than the quiet one (WP-30, BD-027).
+ */
+export const autonomy = autonomyResponseSchema.parse({
+  level: 'supervised',
+  materialised: true,
+  preset_version: 1,
+  current_preset_version: 1,
+  preset_outdated: false,
+  applied_at: now,
+  applied_by: IDS.user,
+  policies: {
+    picks_up_new_tickets: true,
+    stop_after_stage: null,
+    plan_approval: 'above_size',
+    plan_approval_size_threshold: 'L',
+    plan_approval_for_risk_classes: true,
+    probation: true,
+    probation_tasks: 2,
+    business_review: true,
+    question_timeout: '1 working day',
+    human_mr_rounds: 3,
+    knowledge_auto_apply: false,
+    budget_approval_threshold_usd: 50,
+    review_only: false,
+    shadow_mode: false,
+    suggested_readiness_min: 1,
+  },
+  is_custom: true,
+  overrides: [{ policy: 'probationTasks', preset: 5, effective: 2 }],
+  readiness_level: 1,
+  suggested_cap: 'supervised',
+  above_suggested_cap: false,
+});
+
+/**
+ * `GET /api/projects/:id/audit` — product/18:5's *"every toggle records who changed it"*, read.
+ *
+ * `params` is client-supplied JSON, so it carries a hostile string like everything else the SPA
+ * renders (BD-022): `xss.spec.ts` is what holds the app to rendering it as text.
+ */
+export const projectAudit = projectAuditResponseSchema.parse({
+  items: [
+    {
+      id: IDS.audit,
+      action: 'project.autonomy.write',
+      user_id: IDS.user,
+      user_email: 'operator@example.invalid',
+      params: { project_id: IDS.project, before_level: 'observe', after_level: 'supervised' },
+      created_at: now,
     },
   ],
 });

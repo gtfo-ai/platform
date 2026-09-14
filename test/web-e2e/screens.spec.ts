@@ -85,6 +85,50 @@ test('settings shows the session, the user list and the instance version', async
   await expect(page.getByLabel('Theme preference')).toHaveValue('system');
 });
 
+test('org settings carries the organisation budgets WP-30 gave it a writer for', async ({
+  page,
+}) => {
+  // The sentence this file's own screen used to carry — *"global budgets … need `GET/PATCH /api/org`,
+  // which no work package has built"* — is false since WP-30, and the control is what makes it so.
+  await page.goto('/settings');
+  await expect(page.getByText('Organisation budgets')).toBeVisible();
+  await expect(page.getByText('spent $3.25 of $40.00 this window')).toBeVisible();
+});
+
+test('the project settings page mirrors every wizard step', async ({ page }) => {
+  // product/18:55 — *"nothing is only reachable during onboarding"*. Driven against the built
+  // bundle, so this is the one tier that shows the route exists and the page renders in a browser.
+  await page.goto(`/projects/${PROJECT_KEY}/settings`);
+  for (const heading of [
+    'Connections',
+    'Technical discovery and readiness',
+    'Business context',
+    'Autonomy dial',
+    'Features',
+    'Risk classes',
+    'Project budgets',
+    'Notifications',
+    'Who changed what',
+  ]) {
+    await expect(page.getByText(heading, { exact: true })).toBeVisible();
+  }
+  // BD-027's *Custom* with the differences listed, and the audit row that says who moved the dial.
+  await expect(page.getByText('Custom', { exact: true })).toBeVisible();
+  await expect(page.getByText('preset 5, in force 2')).toBeVisible();
+  await expect(page.getByText('project.autonomy.write')).toBeVisible();
+  // …and the gap that is named on the screen rather than drawn as a control that does nothing.
+  await expect(page.getByText(/proposing a set from the repository structure/)).toBeVisible();
+});
+
+test('the integrations screen carries the create and test controls', async ({ page }) => {
+  // PROGRESS backlog 55: `POST /api/integrations` was served and no component called it, so the
+  // product's front door had a step that could only be taken with `curl`.
+  await page.goto('/integrations');
+  await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add integration' })).toBeVisible();
+  await expect(page.getByLabel('Environment variable')).toBeVisible();
+});
+
 test('the theme control switches the document theme', async ({ page }) => {
   await page.goto('/settings');
   await page.getByLabel('Theme preference').selectOption('dark');

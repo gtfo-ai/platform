@@ -442,6 +442,34 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           }),
         ).toEqual([]);
       });
+
+      /**
+       * BD-006's probation — "the first 5 tasks" — asked of the store by WP-30's plan-approval gate.
+       *
+       * Asserted from **both** sides (standing rule 42), and each assertion kills a different wrong
+       * answer: a store that counted every task whatever its state would answer 4, one that returned
+       * a constant would fail the first (zero) case, and one that ignored `projectId` would answer 2
+       * for a project with no rows at all. The zero case is the one the gate leans on hardest,
+       * because probation is exactly a project's first tasks.
+       */
+      it('counts only this project’s completed tasks, and answers zero for a project with none', async () => {
+        const inState = (key: string, state: StoredTask['task']['state']): StoredTask =>
+          task({ task: { ...task({}, key).task, state } }, key);
+        expect(await store.tasks.countCompleted(tx, projectId)).toBe(0);
+        for (const row of [
+          inState('ACME-P1', 'done'),
+          inState('ACME-P2', 'done'),
+          inState('ACME-P3', 'cancelled'),
+          inState('ACME-P4', 'active'),
+        ]) {
+          await store.tasks.insert(tx, row);
+        }
+        expect(await store.tasks.countCompleted(tx, projectId)).toBe(2);
+        // A project id with no rows of its own is zero, not "whatever the table holds". A fresh id
+        // rather than a second seeded project: nothing is inserted under it, so no foreign key is
+        // involved and both stores are asked the same question.
+        expect(await store.tasks.countCompleted(tx, nextId())).toBe(0);
+      });
     });
 
     describe('stage bookkeeping', () => {

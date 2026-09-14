@@ -38,11 +38,14 @@ import type {
   AutonomyLevel,
   Id,
   IntegrationType,
+  IsoDateTime,
   JsonObject,
+  MaterialisedAutonomy,
   ProjectBindingSummary,
   ProjectRecord,
 } from '@platform/contracts';
 import { projectRecordSchema } from '@platform/contracts';
+import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
@@ -198,6 +201,17 @@ export const createProject = async (
         repoUrl: input.repoUrl,
         ...(input.defaultBranch === undefined ? {} : { defaultBranch: input.defaultBranch }),
         ...(input.knowledgeDir === undefined ? {} : { knowledgeDir: input.knowledgeDir }),
+        // BD-027:14 — the dial is materialised at **selection time**, and a project that has not
+        // reached step 4 has still selected one: the column's default, `supervised`. Writing the
+        // preset here rather than leaving the column null is what makes the level the row starts
+        // with mean the same thing a year from now (`migrations/0021_autonomy_materialised.sql`).
+        autonomyPolicies: materialiseAutonomy({
+          level: DEFAULT_AUTONOMY_LEVEL,
+          at: new Date().toISOString() as IsoDateTime,
+          // The wizard's creator did not choose a *dial position*; they created a project. Naming
+          // them here would read as "this person set Supervised", which they did not.
+          appliedBy: null,
+        }),
       })
       .onConflictDoNothing({ target: projects.key })
       .returning(PROJECT_COLUMNS);
@@ -581,6 +595,8 @@ export interface WriteProjectConfigInput {
   readonly config: JsonObject;
   readonly hash: string;
   readonly autonomyLevel?: AutonomyLevel;
+  /** Who chose the level, for the materialised record; ignored when no level is sent. */
+  readonly appliedBy?: string | null;
   /** The hash the client last read; `undefined` skips the check. */
   readonly baseHash?: string;
 }
@@ -626,7 +642,19 @@ export const writeProjectConfig = async (
       configSource: { '*': 'project' },
       configHash: input.hash,
       updatedAt: new Date(),
-      ...(input.autonomyLevel === undefined ? {} : { autonomyLevel: input.autonomyLevel }),
+      // The word and the policies it stands for move together or not at all (BD-027:14). Writing
+      // one without the other is the state the platform was in before WP-30: a column saying
+      // "autonomous" beside policies nobody had materialised.
+      ...(input.autonomyLevel === undefined
+        ? {}
+        : {
+            autonomyLevel: input.autonomyLevel,
+            autonomyPolicies: materialiseAutonomy({
+              level: input.autonomyLevel,
+              at: new Date().toISOString() as IsoDateTime,
+              appliedBy: input.appliedBy ?? null,
+            }),
+          }),
     })
     .where(
       input.baseHash === undefined
@@ -644,6 +672,40 @@ export const writeProjectConfig = async (
     return { status: 'conflict', currentHash: row.hash };
   }
   return { status: 'written' };
+};
+
+/**
+ * Re-materialises the dial — BD-027's *"the UI offers 're-apply preset'"*, and the one writer of
+ * `projects.autonomy_policies` that does not also write the configuration document.
+ *
+ * Two columns, and nothing else. `autonomy_level` and `autonomy_policies` are one fact written in
+ * two places, so they are always set together; `config` is deliberately **not** named, because a
+ * maintainer moving the dial must not overwrite a document an administrator is editing at the same
+ * moment (standing rule 79 — a whole-row write is correct only while nothing else writes the row).
+ *
+ * It is the same statement whether the level is changing or not: selecting a position and
+ * re-applying one are the same operation, which is why there is no `re_apply` flag anywhere. The
+ * caller sends the level it wants in force and gets **this release's** preset for it.
+ */
+export const writeProjectAutonomy = async (
+  database: Database,
+  projectId: string,
+  input: { readonly level: AutonomyLevel; readonly appliedBy: string | null },
+): Promise<
+  | { readonly status: 'written'; readonly autonomy: MaterialisedAutonomy }
+  | { readonly status: 'not_found' }
+> => {
+  const autonomy = materialiseAutonomy({
+    level: input.level,
+    at: new Date().toISOString() as IsoDateTime,
+    appliedBy: input.appliedBy as Id | null,
+  });
+  const updated = await database
+    .update(projects)
+    .set({ autonomyLevel: input.level, autonomyPolicies: autonomy, updatedAt: new Date() })
+    .where(eq(projects.id, projectId))
+    .returning({ id: projects.id });
+  return updated.length === 0 ? { status: 'not_found' } : { status: 'written', autonomy };
 };
 
 /**

@@ -9,6 +9,7 @@
  * the browser, the proposals queue with its decisions, the budget bars and the effective
  * configuration with the source of every key.
  */
+import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import {
@@ -185,6 +186,13 @@ export const BudgetsScreen = ({ projectKey }: { readonly projectKey: string }): 
   return (
     <div className="flex flex-col gap-3">
       <SectionHeading>Budgets</SectionHeading>
+      <p className="text-xs text-fg-muted">
+        A read. Setting a cap is on the{' '}
+        <Link to="/projects/$key/settings" params={{ key: projectKey }}>
+          project settings page
+        </Link>
+        , where every other wizard setting lives (product/18).
+      </p>
       {budgets.isPending ? <Loading label="Loading budgets…" /> : null}
       {budgets.isError ? (
         <ErrorNotice title="Budgets could not be loaded." detail={String(budgets.error)} />

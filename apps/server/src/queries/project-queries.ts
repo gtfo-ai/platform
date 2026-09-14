@@ -31,19 +31,49 @@
  */
 import { rollupDay } from '@platform/application';
 import type {
+  AutonomyLevel,
+  AutonomyPolicies,
+  AutonomyResponse,
   Id,
   IsoDateTime,
+  PoliciesConfig,
+  ProjectAuditResponse,
   ProjectSummary,
   ProjectsResponse,
   ReadinessResponse,
 } from '@platform/contracts';
-import { readinessResponseSchema } from '@platform/contracts';
-import { findReadinessCriterion, nextReadinessImprovements } from '@platform/domain';
+import {
+  autonomyResponseSchema,
+  materialisedAutonomySchema,
+  projectAuditResponseSchema,
+  readinessResponseSchema,
+} from '@platform/contracts';
+import {
+  AUTONOMY_PRESET_VERSION,
+  applyAutonomyPreset,
+  autonomyOverridesFromConfig,
+  autonomyRank,
+  describePresetOverrides,
+  effectiveAutonomyPreset,
+  findReadinessCriterion,
+  fromWireAutonomyPolicies,
+  nextReadinessImprovements,
+  suggestedAutonomyCap,
+  toWireAutonomyPolicies,
+} from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
 import { CLOSED_TASK_STATES } from './pipeline-queries.js';
 
-const { costRollupDaily, organizations, projects, readinessEvaluations, tasks } = dbAdapters.schema;
+const {
+  costRollupDaily,
+  humanActions,
+  organizations,
+  projects,
+  readinessEvaluations,
+  tasks,
+  users,
+} = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
 
@@ -236,4 +266,149 @@ export const findProjectReadiness = async (
       })),
     }),
   };
+};
+
+/**
+ * `GET /api/projects/:id/autonomy` — the dial as it is actually in force (WP-30, BD-027).
+ *
+ * Four columns and one derivation, and the derivation is the point of the endpoint: *Custom* is
+ * `describePresetOverrides(<the materialised preset>, <the effective preset>)` — measured against
+ * the copy the project was given and never against this release's table, which is BD-027:14's whole
+ * consequence. A project whose dial was never materialised answers `materialised: false` with this
+ * release's preset for its level, **marked as such**, rather than pretending it has one.
+ */
+export const findProjectAutonomy = async (
+  database: Database,
+  projectId: string,
+): Promise<AutonomyResponse | null> => {
+  const rows = await database
+    .select({
+      level: projects.autonomyLevel,
+      policies: projects.autonomyPolicies,
+      readinessLevel: projects.readinessLevel,
+      config: projects.config,
+    })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  const row = rows[0];
+  return row === undefined ? null : autonomyResponseFrom(row);
+};
+
+/** The four columns {@link autonomyResponseFrom} reads, as the row shape it is given. */
+export interface AutonomyRow {
+  readonly level: AutonomyLevel;
+  /** `projects.autonomy_policies` as stored — **unparsed**, because it is state from a past release. */
+  readonly policies: unknown;
+  readonly readinessLevel: number;
+  readonly config: unknown;
+}
+
+/**
+ * The dial's projection, as a pure function of the row — WP-30, BD-027.
+ *
+ * Separated from the query because everything interesting about it is a **decision**, and a decision
+ * reached only through a database is a decision asserted once, slowly. Three of them:
+ *
+ * - *Custom* is `describePresetOverrides(<the materialised preset>, <the effective preset>)` —
+ *   measured against the copy the project was given and never against this release's table, which is
+ *   BD-027:14's whole consequence. A reader that compared against the level would relabel every
+ *   project *Custom* the day a release edits a preset, without a policy having moved.
+ * - A project whose dial was never materialised answers `materialised: false` with this release's
+ *   preset for its level, **marked as such** — never silently, which is standing rule 16.
+ * - `preset_outdated` is two questions, not one: the stored version may be behind *or* the stored
+ *   values may differ from what this release ships under the same version number. A release that
+ *   edited a preset and forgot to bump is a mistake the UI should still be able to show.
+ */
+export const autonomyResponseFrom = (row: AutonomyRow): AutonomyResponse => {
+  // Parsed, never cast: the column is stored state and a document that does not match the current
+  // schema is read as "not materialised" rather than as whatever happens to be in it.
+  const stored = materialisedAutonomySchema.safeParse(row.policies);
+  const materialised = stored.success ? stored.data : null;
+  const baseline =
+    materialised === null
+      ? applyAutonomyPreset(row.level)
+      : fromWireAutonomyPolicies(materialised.policies);
+  const configPolicies = (row.config as { policies?: PoliciesConfig } | null)?.policies;
+  const effective =
+    materialised === null
+      ? { ...baseline, ...autonomyOverridesFromConfig(configPolicies) }
+      : effectiveAutonomyPreset(materialised, configPolicies);
+  const overrides = describePresetOverrides(baseline, effective);
+  const level = materialised?.level ?? row.level;
+  const suggestedCap = suggestedAutonomyCap(row.readinessLevel);
+
+  return autonomyResponseSchema.parse({
+    level,
+    materialised: materialised !== null,
+    preset_version: materialised?.preset_version ?? AUTONOMY_PRESET_VERSION,
+    current_preset_version: AUTONOMY_PRESET_VERSION,
+    preset_outdated:
+      materialised !== null &&
+      (materialised.preset_version !== AUTONOMY_PRESET_VERSION ||
+        !samePolicies(
+          materialised.policies,
+          toWireAutonomyPolicies(applyAutonomyPreset(materialised.level)),
+        )),
+    applied_at: materialised?.applied_at ?? null,
+    applied_by: materialised?.applied_by ?? null,
+    policies: toWireAutonomyPolicies(effective),
+    is_custom: overrides.length > 0,
+    overrides: overrides.map((override) => ({
+      policy: override.policy,
+      preset: override.preset ?? null,
+      effective: override.effective ?? null,
+    })),
+    readiness_level: row.readinessLevel,
+    suggested_cap: suggestedCap,
+    // A *statement*, never a refusal: readiness caps the suggestion and the maintainer overrides it
+    // visibly (product/18, Q21). The screen renders this as a note beside the chosen position.
+    above_suggested_cap: autonomyRank(level) > autonomyRank(suggestedCap),
+  });
+};
+
+/** Value equality over the fifteen policy fields; `JSON.stringify` would depend on key order. */
+const samePolicies = (left: AutonomyPolicies, right: AutonomyPolicies): boolean =>
+  (Object.keys(left) as (keyof AutonomyPolicies)[]).every((key) => left[key] === right[key]);
+
+/**
+ * `GET /api/projects/:id/audit` — the settings changes made on this project (PROGRESS backlog 52).
+ *
+ * `human_actions` has no `project_id` column: the wizard's commands put it in `params`, which is
+ * where every reader of the table was always going to look (the insert's own docblock says so). So
+ * the predicate is `params->>'project_id'`, and the scope it produces is honest — the **project's
+ * settings**, not every action ever taken on its tasks, which name a task instead.
+ *
+ * Newest first and bounded by the caller: this is a page on a settings screen, not an export.
+ */
+export const listProjectAudit = async (
+  database: Database,
+  projectId: string,
+  limit: number,
+): Promise<ProjectAuditResponse> => {
+  const rows = await database
+    .select({
+      id: humanActions.id,
+      action: humanActions.action,
+      userId: humanActions.userId,
+      email: users.email,
+      params: humanActions.params,
+      createdAt: humanActions.createdAt,
+    })
+    .from(humanActions)
+    .leftJoin(users, eq(users.id, humanActions.userId))
+    .where(sql`${humanActions.params} ->> 'project_id' = ${projectId}`)
+    .orderBy(desc(humanActions.createdAt))
+    .limit(limit);
+  return projectAuditResponseSchema.parse({
+    items: rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      user_id: row.userId,
+      // `null` when the account was deleted (`on delete set null`) — never a placeholder name.
+      user_email: row.email ?? null,
+      params: row.params,
+      created_at: row.createdAt.toISOString(),
+    })),
+  });
 };

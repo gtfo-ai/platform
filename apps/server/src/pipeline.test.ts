@@ -7,6 +7,8 @@
  * *decides*: where a git binding's repository path comes from, and what a project's settings are.
  */
 import type { RunSpec } from '@platform/application';
+import { autonomyPresetFor, silentLogger } from '@platform/application';
+import { materialiseAutonomy } from '@platform/domain';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createProjectSettingsPort,
@@ -71,7 +73,7 @@ describe('repositoryPathOf', () => {
 });
 
 describe('the project settings port', () => {
-  const poolOf = (rows: { config: unknown }[]) =>
+  const poolOf = (rows: { config: unknown; autonomy_policies?: unknown }[]) =>
     ({ query: vi.fn(async () => ({ rows, rowCount: rows.length })) }) as never;
 
   it('reads the effective configuration off the project row', async () => {
@@ -97,5 +99,54 @@ describe('the project settings port', () => {
         '00000000-0000-4000-8000-0000000000b9' as never,
       ),
     ).rejects.toThrow(/has no row; the pipeline cannot settle its settings/);
+  });
+
+  /**
+   * `projects.autonomy_policies` — the column the plan-approval gate reads (WP-30, BD-027:14).
+   *
+   * Parsed and never cast: this document decides whether a plan waits for a human, so one that does
+   * not match the current schema must not be read as one that does. It is `null` and **logged**
+   * rather than thrown, because a throw here fails the `stage.execute` job into a retry loop over a
+   * configuration problem no retry can fix.
+   */
+  it('parses the materialised dial, and reads an unparseable one as absent with a named log line', async () => {
+    const stored = materialiseAutonomy({
+      level: 'autonomous',
+      at: '2026-09-14T10:00:00.000Z' as never,
+      appliedBy: null,
+    });
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const settings = await createProjectSettingsPort(
+      poolOf([{ config: {}, autonomy_policies: stored }]),
+    ).forProject(project);
+    expect(settings.autonomy).toEqual(stored);
+    // …and the domain reads the effective preset off it rather than off the level.
+    expect(autonomyPresetFor(settings)?.planApproval).toBe('never');
+
+    const warnings: { message: string }[] = [];
+    const logger = {
+      ...silentLogger,
+      warn: (_fields: unknown, message: string) => warnings.push({ message }),
+    } as never;
+    const broken = await createProjectSettingsPort(
+      poolOf([{ config: {}, autonomy_policies: { level: 'autonomous' } }]),
+      logger,
+    ).forProject(project);
+    expect(broken.autonomy).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('re-apply the preset');
+
+    // A row with no document at all is the same answer and is **not** a warning: migration 0021
+    // backfilled every row that existed, so `null` here is a harness's row rather than a fault.
+    const quiet: { message: string }[] = [];
+    const absent = await createProjectSettingsPort(
+      poolOf([{ config: {}, autonomy_policies: null }]),
+      {
+        ...silentLogger,
+        warn: (_fields: unknown, message: string) => quiet.push({ message }),
+      } as never,
+    ).forProject(project);
+    expect(absent.autonomy).toBeNull();
+    expect(quiet).toEqual([]);
   });
 });

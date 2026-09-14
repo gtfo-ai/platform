@@ -34,10 +34,8 @@
  * It also says nothing about the *shape* either side expects; that is `packages/contracts`, which
  * both import.
  */
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
@@ -47,9 +45,7 @@ import { createLogger } from '../logging.js';
 import { createMetrics } from '../metrics.js';
 import type { Database } from '../queries/identity-queries.js';
 import { SseHub } from '../sse/hub.js';
-
-const repositoryRoot = fileURLToPath(new URL('../../../..', import.meta.url));
-const WEB_SOURCES = 'apps/web/src';
+import { repositoryRoot, webSourceFiles, withoutComments } from './web-sources.js';
 
 /**
  * The endpoints the client calls and this server does not serve yet, each with the row that owns
@@ -92,33 +88,6 @@ const PUBLIC_PREFIXES: readonly { readonly prefix: string; readonly why: string 
   },
   { prefix: '/api/version', why: 'build metadata, and the SPA reads it before anybody signs in' },
 ];
-
-/** Files git knows about under `apps/web/src`, tracked and untracked alike (standing rule 85). */
-const webSourceFiles = (): string[] => {
-  const git = (args: readonly string[]): string[] =>
-    execFileSync('git', [...args], { cwd: repositoryRoot, encoding: 'utf8' })
-      .split('\n')
-      .filter((line) => line.length > 0);
-  const tracked = git(['ls-files', '--', WEB_SOURCES]);
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', WEB_SOURCES]);
-  return [...new Set([...tracked, ...untracked])].filter(
-    (path) =>
-      (path.endsWith('.ts') || path.endsWith('.tsx')) &&
-      !path.endsWith('.test.ts') &&
-      !path.endsWith('.test.tsx'),
-  );
-};
-
-/** Strips block comments and comment-only lines, so prose about an endpoint is not a call to one. */
-export const withoutComments = (source: string): string =>
-  source
-    .replaceAll(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter((line) => {
-      const trimmed = line.trimStart();
-      return !trimmed.startsWith('//') && !trimmed.startsWith('*');
-    })
-    .join('\n');
 
 /** A quoted literal beginning `/api/`, in any of the three quote styles. */
 const API_PATH = /(['"`])(\/api\/[^'"`]*)\1/g;
@@ -336,6 +305,36 @@ describe('the client’s endpoint list against the server’s router', () => {
       '/api/projects/{}/readiness',
     ]) {
       expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('serves the six settings endpoints WP-30 added', async () => {
+    // Named positively for standing rule 10's reason, and by their own methods below. Two of them
+    // are the first production writers of `budgets`: before WP-30 every budget in existence was a
+    // row a test had seeded, so BD-010's org and project caps were inert on a real instance.
+    for (const path of [
+      '/api/projects/{}/autonomy',
+      '/api/projects/{}/budgets',
+      '/api/org/budgets',
+      '/api/projects/{}/audit',
+    ]) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('refuses an anonymous caller on every settings write, by its own method', async () => {
+    // The same hole the wizard's commands have — Fastify validates the body before `preHandler` —
+    // asked with **no body at all**, so a guard that slipped back answers 400 and fails here.
+    for (const [method, path] of [
+      ['PUT', '/api/projects/{}/autonomy'],
+      ['PUT', '/api/projects/{}/budgets'],
+      ['PUT', '/api/org/budgets'],
+    ] as const) {
+      const response = await app.inject({ method, url: probeUrl(path) });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${path} -> 401 unauthenticated`,
+      );
     }
   });
 

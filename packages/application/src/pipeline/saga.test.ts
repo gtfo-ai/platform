@@ -6,9 +6,14 @@
  * PostgreSQL with the real fake-Claude runner; this tier is where the branches live, because a
  * branch is cheap to reach here and expensive to reach there.
  */
-import type { DomainEvent } from '@platform/contracts';
+import type { DomainEvent, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { DEFAULT_ITERATION_LIMITS, readDataBlocks } from '@platform/domain';
+import {
+  AUTONOMY_PRESETS,
+  DEFAULT_ITERATION_LIMITS,
+  materialiseAutonomy,
+  readDataBlocks,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -20,7 +25,11 @@ import {
 import { answerTaskQuestion, decideTaskApproval, expireTaskQuestion } from './commands.js';
 import { MAX_GATE_CHECKS } from './gates.js';
 import { GATE_RECHECK_MS } from './jobs.js';
-import { DEFAULT_REVIEW_COMMENT_WINDOW_MS, priorityRankOf } from './saga.js';
+import {
+  DEFAULT_REVIEW_COMMENT_WINDOW_MS,
+  priorityRankOf,
+  UNMATERIALISED_PLAN_APPROVAL,
+} from './saga.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 
@@ -469,6 +478,201 @@ describe('questions', () => {
     await harness.drain();
     expect(taskOf(harness).task.state).not.toBe('needs_human');
     expect(harness.types()).not.toContain('task.question.expired');
+  });
+});
+
+/**
+ * **The dial, read by the pipeline** — WP-30's criterion 3.
+ *
+ * Before this work package `planApprovalGate` read `pipeline.template_overrides[…].plan_approval`
+ * and nothing else, so fifteen materialised policies had no reader and a project moved to
+ * Autonomous got the behaviour of Supervised. These cases drive each branch the gate now has, from
+ * **both** sides (standing rule 42): a gate that fired on everything would pass half of them.
+ */
+describe('the plan-approval gate reads the materialised dial (BD-027, WP-30)', () => {
+  const dialled = (
+    level: 'observe' | 'assist' | 'supervised' | 'autonomous',
+    extra: Partial<HarnessOptions> = {},
+  ): PipelineHarness =>
+    harnessWith({
+      ...extra,
+      settings: {
+        autonomy: materialiseAutonomy({
+          level,
+          at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          appliedBy: null,
+        }),
+        ...extra.settings,
+      },
+    });
+
+  it('gates an M plan on a Supervised project because probation is on', async () => {
+    // product/19 §11: Supervised is "above L; **probation first 5 tasks**". The happy path's plan
+    // is M, which `above_size` at L lets through — so the only thing that can stop it is probation,
+    // which is exactly the policy that had no reader.
+    const harness = dialled('supervised');
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+    expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement', 'architecture']);
+  });
+
+  it('lets the same M plan through once the project has overridden probation off', async () => {
+    // The other side, and it also drives the override path: `policies.probation_tasks: 0` is the
+    // one granular override `.agentic/config.yml` can express today, and "probation for 0 tasks" is
+    // "probation off" (`autonomyOverridesFromConfig`).
+    const harness = dialled('supervised', {
+      settings: { config: { policies: { probation_tasks: 0 } } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  it('lets an XL plan through on an Autonomous project, which the old gate would have stopped', async () => {
+    // `planApproval: never` and probation off. The pre-WP-30 gate read `above_size` at L from the
+    // template overrides' default and would have parked this task — so this case is the one that
+    // shows the dial is being read at all, rather than agreeing with the old behaviour by accident.
+    const harness = dialled('autonomous', {
+      runs: { ...happyRuns(), architecture: completedRun({ ...PLAN, estimated_size: 'XL' }) },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  it('still stops an Autonomous project when the plan touches a risk class', async () => {
+    // product/19 §11's last exception — "never, **except risk classes**" — and product/19 §14's
+    // classes, matched against the paths the plan declares (`files_to_change[].path`).
+    const harness = dialled('autonomous', {
+      settings: {
+        config: {
+          policies: {
+            risk_classes: { payments: { paths: ['src/totals.ts'], require: ['plan_approval'] } },
+          },
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+
+  it('does not stop it for a class whose requirement this build does not enforce', async () => {
+    // `reviewer:@ops` is parsed and unread, so a class that asks only for it must not silently
+    // become a plan approval — which would be the platform inventing a gate nobody configured.
+    const harness = dialled('autonomous', {
+      settings: {
+        config: {
+          policies: {
+            infra: undefined,
+            risk_classes: { infra: { paths: ['src/totals.ts'], require: ['reviewer:@ops'] } },
+          } as never,
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.types()).not.toContain('task.approval.requested');
+  });
+
+  /**
+   * **BD-027:14, driven through the pipeline rather than asserted in the domain.**
+   *
+   * The stored document says `plan_approval: never` while `AUTONOMY_PRESETS.supervised` says
+   * `above_size`. A gate that re-derived the preset from `projects.autonomy_level` would park the
+   * XL plan; one that reads what the project was given lets it through. Editing the source table in
+   * a test is not possible without mutating a module, so the falsification is the same one the
+   * domain test uses: a document the current table would not produce.
+   */
+  it('obeys the policies the project was given, not the ones the release now ships', async () => {
+    const shipped = materialiseAutonomy({
+      level: 'supervised',
+      at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+      appliedBy: null,
+    });
+    const harness = harnessWith({
+      runs: { ...happyRuns(), architecture: completedRun({ ...PLAN, estimated_size: 'XL' }) },
+      settings: {
+        autonomy: {
+          ...shipped,
+          policies: { ...shipped.policies, plan_approval: 'never', probation: false },
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    // …and the source table still says otherwise, which is what makes this a difference.
+    expect(AUTONOMY_PRESETS.supervised.planApproval).toBe('above_size');
+  });
+
+  it('keeps the pre-WP-30 gate for a project whose dial was never materialised', async () => {
+    // `autonomy: null` is a row a harness inserted (migration 0021 backfilled every real one). The
+    // branch is named rather than defaulted: substituting the supervised preset here would turn
+    // probation on for a project that never chose a position.
+    expect(UNMATERIALISED_PLAN_APPROVAL.probation).toBe(false);
+    const passes = harnessWith();
+    await passes.publish([ticketMatched()]);
+    expect(passes.types()).not.toContain('task.approval.requested');
+
+    const stopped = harnessWith({
+      runs: { ...happyRuns(), architecture: completedRun({ ...PLAN, estimated_size: 'XL' }) },
+    });
+    await stopped.publish([ticketMatched()]);
+    expect(stopped.types()).toContain('task.approval.requested');
+  });
+
+  it('lets a per-stage template override decide the mode, in both directions', async () => {
+    // The override is finer grained than the dial, so it wins over `planApproval` — and only over
+    // that field. It is **not** a switch for probation: `policies.probation_tasks` is, and a key
+    // named `plan_approval` that silently turned probation off would be one control with two jobs.
+    const forced = dialled('autonomous', {
+      settings: {
+        config: {
+          pipeline: {
+            template_overrides: {
+              feature: { stages: { architecture: { plan_approval: 'always' } } },
+            },
+          },
+        },
+      },
+    });
+    await forced.publish([ticketMatched()]);
+    expect(taskOf(forced).task.state).toBe('waiting_approval');
+
+    const released = dialled('supervised', {
+      runs: { ...happyRuns(), architecture: completedRun({ ...PLAN, estimated_size: 'XL' }) },
+      settings: {
+        config: {
+          policies: { probation_tasks: 0 },
+          pipeline: {
+            template_overrides: {
+              feature: { stages: { architecture: { plan_approval: 'never' } } },
+            },
+          },
+        },
+      },
+    });
+    await released.publish([ticketMatched()]);
+    expect(released.types()).not.toContain('task.approval.requested');
+  });
+
+  it('never lets a stage override switch off a risk class', async () => {
+    // A risk class is a statement about the **change**, not about the stage, so `plan_approval:
+    // never` on one stage cannot wave one through (product/19 §14).
+    const risky = dialled('autonomous', {
+      settings: {
+        config: {
+          pipeline: {
+            template_overrides: {
+              feature: { stages: { architecture: { plan_approval: 'never' } } },
+            },
+          },
+          policies: {
+            risk_classes: { payments: { paths: ['src/totals.ts'], require: ['plan_approval'] } },
+          },
+        },
+      },
+    });
+    await risky.publish([ticketMatched()]);
+    expect(taskOf(risky).task.state).toBe('waiting_approval');
   });
 });
 

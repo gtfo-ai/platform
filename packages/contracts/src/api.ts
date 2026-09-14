@@ -37,6 +37,7 @@ import { agenticConfigSchema } from './config.js';
 import { domainEventSchema, domainEventTypeSchema } from './events.js';
 import {
   approvalRecordSchema,
+  autonomyPoliciesSchema,
   budgetRecordSchema,
   configSourceSchema,
   contextPackRecordSchema,
@@ -607,11 +608,11 @@ export const inboxResponseSchema = z.strictObject({
   approvals: z.array(approvalRecordSchema),
 });
 
-export const putBudgetRequestSchema = z.strictObject({
-  window: z.enum(['day', 'week', 'month', 'total']),
-  limit_usd: usdSchema,
-  notify_pct: z.array(z.int().min(1).max(100)).optional(),
-});
+// `putBudgetRequestSchema` lived here from WP-01 until WP-30, unused, one key different from the
+// schema the route it was written for actually takes: it had no nullable `limit_usd`, so it could
+// set a cap and never remove one. It is deleted rather than kept beside `putBudgetsRequestSchema`,
+// because two schemas for one request is the second thing to keep true and the wrong one is the one
+// a later caller picks (standing rule 41 applied to a boundary).
 
 export const budgetsResponseSchema = z.strictObject({ items: z.array(budgetRecordSchema) });
 
@@ -709,10 +710,110 @@ export const startShadowRunsRequestSchema = z.strictObject({
   budget_usd: usdSchema,
 });
 
+/**
+ * `PUT /api/projects/:id/autonomy` — select a dial position, or re-apply the one already selected.
+ *
+ * One command for both, because they are the same operation: BD-027 materialises a preset **at
+ * selection time**, so "re-apply preset" is selecting the level the project already has and getting
+ * this release's table for it. A `re_apply` flag would be a second name for one statement.
+ *
+ * `override_reason` is product/18's *"the maintainer can override, visibly"*: readiness **suggests**
+ * a cap and never enforces one, so a level above the suggestion is accepted and the reason is
+ * recorded in the audit row — redacted, because it is free text a person typed (TD-012).
+ */
 export const setAutonomyRequestSchema = z.strictObject({
   autonomy: autonomyLevelSchema,
   /** An override above what readiness supports must say why (BD-027). */
   override_reason: z.string().optional(),
+});
+
+/** One policy a project has moved away from its materialised preset — the *Custom* list. */
+export const autonomyOverrideSchema = z.strictObject({
+  /** The `AutonomyPreset` field name, camelCase because it is an identifier and not wire data. */
+  policy: nonEmptyStringSchema,
+  preset: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  effective: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+});
+
+/**
+ * `GET /api/projects/:id/autonomy` — the dial, as it is actually in force (WP-30).
+ *
+ * Everything a screen needs to render BD-027 honestly, and nothing it would have to derive:
+ *
+ * - `policies` is what the pipeline reads — the **materialised** preset with the project's own
+ *   overrides applied — so a screen never re-derives a policy from `level`.
+ * - `is_custom` and `overrides` are computed against the materialised preset, never against the
+ *   current release's table (`describePresetOverrides`), so a release that edits a preset does not
+ *   relabel every project *Custom*.
+ * - `preset_outdated` is the reason the "re-apply preset" control exists: the stored
+ *   `preset_version` or the stored values differ from what this release ships.
+ * - `materialised` is `false` for a project whose dial has never been applied. It is not "the
+ *   defaults"; `policies` is then this release's preset for the level, marked as such, and the
+ *   pipeline uses its pre-WP-30 gate (standing rule 16).
+ * - `suggested_cap` is readiness's **suggestion**, and `above_suggested_cap` says the chosen level
+ *   is above it. Neither is a refusal: product/18 and Q21 are explicit that a maintainer overrides
+ *   visibly.
+ */
+export const autonomyResponseSchema = z.strictObject({
+  level: autonomyLevelSchema,
+  materialised: z.boolean(),
+  preset_version: z.int().positive(),
+  current_preset_version: z.int().positive(),
+  preset_outdated: z.boolean(),
+  applied_at: isoDateTimeSchema.nullable(),
+  applied_by: idSchema.nullable(),
+  policies: autonomyPoliciesSchema,
+  is_custom: z.boolean(),
+  overrides: z.array(autonomyOverrideSchema),
+  readiness_level: z.int().min(0).max(5),
+  suggested_cap: autonomyLevelSchema,
+  above_suggested_cap: z.boolean(),
+});
+
+/**
+ * `PUT /api/projects/:id/budgets` and `PUT /api/org/budgets` — BD-010's caps, upserted by window.
+ *
+ * The natural key is `(scope, scope_id, window)` — the unique index `budgets` already carries — so a
+ * project has at most one budget per window and sending the same window twice replaces it. That is
+ * why the write is keyed by **window** and not by id: technical/08 sketches
+ * `PUT /api/org/budgets/:id`, which has no creator, and until this work package `insert into budgets`
+ * occurred in exactly two test files, so every budget in existence was seeded.
+ *
+ * `limit_usd: null` **deletes** the budget for that window. It is spelled as a null rather than as a
+ * `DELETE` route because the whole surface is one upsert and a cap of zero is not the same thing as
+ * no cap: zero would block every run for ever (`budgets_limit_positive` refuses it in SQL anyway).
+ */
+export const putBudgetsRequestSchema = z.strictObject({
+  window: z.enum(['day', 'week', 'month', 'total']),
+  limit_usd: usdSchema.nullable(),
+  notify_pct: z.array(z.int().min(1).max(100)).max(10).optional(),
+});
+
+/**
+ * `GET /api/projects/:id/audit` — who changed this project's settings (product/18:5, BD-003).
+ *
+ * `human_actions` had eighteen writers and no reader but the idempotency guard (PROGRESS backlog
+ * 52), while product/18 requires *"every toggle records who changed it (audit)"* to be **visible**.
+ * This is the settings page's reader.
+ *
+ * Two things are deliberate. `params` is **opaque**: it carries client-supplied JSON and a
+ * client-chosen `Idempotency-Key`, so it renders through the untrusted path like everything else
+ * (BD-022). And the scope is the **project's settings**, which is `params->>'project_id'` — a task
+ * command's row names a task and not a project, so it is not here; that half of backlog 52 belongs
+ * with whichever row builds the task activity feed, and the endpoint's description says so rather
+ * than implying this is the whole audit.
+ */
+export const projectAuditEntrySchema = z.strictObject({
+  id: idSchema,
+  action: nonEmptyStringSchema,
+  user_id: idSchema.nullable(),
+  user_email: z.string().nullable(),
+  params: jsonObjectSchema,
+  created_at: isoDateTimeSchema,
+});
+
+export const projectAuditResponseSchema = z.strictObject({
+  items: z.array(projectAuditEntrySchema),
 });
 
 export const reviewOnlySettingsSchema = z.strictObject({
@@ -913,3 +1014,10 @@ export type WebhookDelivery = z.infer<typeof webhookDeliverySchema>;
 export type WebhookParams = z.infer<typeof webhookParamsSchema>;
 export type WebhookAcceptedResponse = z.infer<typeof webhookAcceptedResponseSchema>;
 export type SetupGuideResponse = z.infer<typeof setupGuideResponseSchema>;
+export type BudgetsResponse = z.infer<typeof budgetsResponseSchema>;
+export type SetAutonomyRequest = z.infer<typeof setAutonomyRequestSchema>;
+export type AutonomyResponse = z.infer<typeof autonomyResponseSchema>;
+export type AutonomyOverride = z.infer<typeof autonomyOverrideSchema>;
+export type PutBudgetsRequest = z.infer<typeof putBudgetsRequestSchema>;
+export type ProjectAuditEntry = z.infer<typeof projectAuditEntrySchema>;
+export type ProjectAuditResponse = z.infer<typeof projectAuditResponseSchema>;

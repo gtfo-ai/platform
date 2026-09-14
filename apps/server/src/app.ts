@@ -54,6 +54,8 @@ import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
 import type { WebhookIngress } from '@platform/application';
+import type { IsoDateTime } from '@platform/contracts';
+import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { type FastifyBaseLogger, type FastifyInstance, fastify, LogController } from 'fastify';
 import {
   jsonSchemaTransform,
@@ -70,6 +72,7 @@ import { type PinoLogger, withLogContext } from './logging.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
 import type { OnboardingCommands } from './onboarding.js';
+import { listOrgBudgets, writeBudget } from './queries/cost-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
   findProjectRole,
@@ -77,8 +80,13 @@ import {
   findTaskProjectId,
   projectExists,
 } from './queries/identity-queries.js';
-import { findIdempotentAttempt, recordHumanAction } from './queries/onboarding-queries.js';
+import {
+  findIdempotentAttempt,
+  recordHumanAction,
+  writeProjectAutonomy,
+} from './queries/onboarding-queries.js';
 import { findRunPosition, findTaskPosition } from './queries/pipeline-queries.js';
+import { findProjectAutonomy, listProjectAudit } from './queries/project-queries.js';
 import { roleCapabilities } from './role.js';
 import { registerCommandRoutes } from './routes/commands.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
@@ -88,6 +96,7 @@ import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerRunRoutes } from './routes/runs.js';
+import { registerSettingsRoutes } from './routes/settings.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { SseHub } from './sse/hub.js';
@@ -358,12 +367,39 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     if (options.webhooks !== null) {
       await registerWebhookRoutes(app, { ingress: options.webhooks });
     }
-    await registerProjectRoutes(app, { database: options.database });
+    await registerProjectRoutes(app, {
+      database: options.database,
+      // The `invalid_stored_config` refusal quotes `projects.config` back at the caller, and that
+      // column is partly the repository's own document (`describeConfigIssues`).
+      redactor: redactionAdapters.patternRedactor(),
+    });
     await registerOnboardingRoutes(app, {
       database: options.database,
       secretKey: config.secretKey,
       onboarding: options.onboarding,
       integrationSecretEnv: config.integrationSecretEnv,
+    });
+    await registerSettingsRoutes(app, {
+      // The nine reads and writes the settings surface needs, bound to this process's database
+      // here so that the route module names none (`routes/settings.ts`'s `SettingsQueries`).
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectAutonomy: async (projectId) => findProjectAutonomy(options.database, projectId),
+        writeAutonomy: async (projectId, input) =>
+          writeProjectAutonomy(options.database, projectId, input),
+        projectExists: async (projectId) => projectExists(options.database, projectId),
+        orgBudgets: async () =>
+          listOrgBudgets(options.database, new Date().toISOString() as IsoDateTime),
+        writeBudget: async (input) => writeBudget(options.database, input),
+        projectAudit: async (projectId, limit) =>
+          listProjectAudit(options.database, projectId, limit),
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+      // TD-012 step 2, the platform's patterns — the same composition `commands.ts` gives every
+      // task command, and for the same reason: an HTTP request carries no run-scoped credential.
+      redactor: redactionAdapters.patternRedactor(),
     });
     await registerKbRoutes(app, {
       database: options.database,

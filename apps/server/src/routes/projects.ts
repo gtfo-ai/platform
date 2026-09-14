@@ -14,11 +14,14 @@
  *
  * **The writes moved next door.** `POST /api/projects`, `PUT …/config`, `GET/PUT …/bindings` and
  * `POST …/discovery` are served by `routes/onboarding.ts` since WP-21 — a command needs an audit
- * row and an `Idempotency-Key` a read does not. What is still unbuilt is `POST …/config/export`
- * (the configuration as a merge request on the repository) and recomputing the merge from a
- * repository's own `.agentic/config.yml`; `packages/domain`'s `mergeProjectConfig` is there for
- * both.
+ * row and an `Idempotency-Key` a read does not — and `GET/PUT …/autonomy`, `PUT …/budgets` and
+ * `GET …/audit` by `routes/settings.ts` since WP-30, which is the same settings reached from the
+ * other side of onboarding. What is still unbuilt is `POST …/config/export` (the configuration as a
+ * merge request on the repository) and recomputing the merge from a repository's own
+ * `.agentic/config.yml`; `packages/domain`'s `mergeProjectConfig` is there for both.
  */
+
+import type { SecretRedactor } from '@platform/application';
 import {
   agenticConfigSchema,
   apiErrorSchema,
@@ -43,6 +46,16 @@ import { findProjectReadiness, listProjectSummaries } from '../queries/project-q
 
 export interface ProjectRoutesOptions {
   readonly database: Database;
+  /**
+   * TD-012 step 2 — the platform's pattern rules, injected.
+   *
+   * The only thing this module publishes that did not come out of a typed projection is the
+   * `invalid_stored_config` refusal, which quotes `projects.config` back at the caller;
+   * {@link describeConfigIssues} says why that needs a redactor. A read request carries no
+   * run-scoped credential (Q55), so the patterns alone are the honest composition — the same one
+   * `routes/settings.ts` is given.
+   */
+  readonly redactor: SecretRedactor;
 }
 
 const projectParamsSchema = z.strictObject({ project_id: z.uuid() });
@@ -88,6 +101,56 @@ export const decodeTaskCursor = (raw: string): TaskCursor => {
   return { createdAt: parsed.data.createdAt, id: parsed.data.id };
 };
 
+/** Longest rendering of one offending clause; stored state came from outside (BD-022). */
+export const MAX_STORED_VALUE_CHARS = 120;
+
+/**
+ * `features.review_only.trigger: "manual"` — one clause per zod issue, in the order they were found.
+ *
+ * The **key path and the value**, because a refusal an operator cannot act on is a 500 with better
+ * manners. `instancePath`-style dotted paths are the same spelling `toApiError` gives a request's
+ * own validation errors (`errors.ts`), so the two refusals read alike.
+ *
+ * **Every clause goes through the caller's redactor** (TD-012, BD-022), and all three of its parts
+ * do: `projects.config` is partly the repository's own document (layer `repo`, merged from
+ * `.agentic/config.yml`), the value is whatever was stored there, and a *strict* schema puts an
+ * unrecognised **key** into both the path and zod's own message — so a credential pasted into a
+ * config file reaches this string by three routes, not one. It is the same composition
+ * `routes/settings.ts` gives `override_reason` and `routes/commands.ts` gives every task command,
+ * injected rather than constructed here for the same reason.
+ *
+ * Redaction runs **before** the bound, which is the opposite order from `auditedText`'s and is
+ * deliberate: truncating first can cut a credential in half, and half a credential is both
+ * unmatchable by the rules and still a prefix of the secret.
+ */
+export const describeConfigIssues = (
+  document: unknown,
+  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+  redactText: (value: string) => string,
+): string =>
+  issues
+    .map((issue) => {
+      const path = issue.path.map(String).join('.');
+      const value = valueAt(document, issue.path);
+      const clause =
+        value === undefined
+          ? `${path === '' ? '(root)' : path} (${issue.message})`
+          : `${path}: ${JSON.stringify(value)}`;
+      return redactText(clause).slice(0, MAX_STORED_VALUE_CHARS);
+    })
+    .join(', ');
+
+const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
+  let current: unknown = document;
+  for (const segment of path) {
+    if (typeof current !== 'object' || current === null) {
+      return undefined;
+    }
+    current = (current as Record<PropertyKey, unknown>)[segment];
+  }
+  return current;
+};
+
 export const registerProjectRoutes = async (
   app: FastifyInstance,
   options: ProjectRoutesOptions,
@@ -127,7 +190,7 @@ export const registerProjectRoutes = async (
         summary: 'Effective project configuration, with the source of every key',
         tags: ['projects'],
         params: projectParamsSchema,
-        response: { 200: effectiveConfigResponseSchema },
+        response: { 200: effectiveConfigResponseSchema, 404: apiErrorSchema, 409: apiErrorSchema },
       },
     },
     async (request) => {
@@ -143,10 +206,29 @@ export const registerProjectRoutes = async (
       const raw = Object.keys(row.config).length === 0 ? { version: 1 } : row.config;
       const parsed = agenticConfigSchema.safeParse(raw);
       if (!parsed.success) {
+        /**
+         * **Named, and a 409 rather than a 500** — PROGRESS backlog 58.
+         *
+         * Boundary schemas are strict, so a value a *previous* release accepted is refused rather
+         * than dropped. That is right on the write side, where the platform is about to act, and
+         * wrong on the read side, where it is being told what it stored itself: a whole document
+         * failing over one key, with a 500 that named no key and offered an import endpoint that
+         * does not exist, made wizard step 4 and the project panel unopenable and gave an operator
+         * nothing to act on (standing rule 20 splits the two sides).
+         *
+         * It stays a **refusal** — nothing is dropped, so strictness is preserved and a silently
+         * pruned document cannot be re-saved without the key the operator never saw — but it names
+         * every key it could not parse and the value it found there, which is a `PUT` an operator
+         * can make. The value is stringified, **redacted** and bounded because it is stored state,
+         * and stored state came from outside (BD-022) — `describeConfigIssues` has the order and
+         * the reason for it.
+         */
         throw new HttpError(
-          500,
+          409,
           'invalid_stored_config',
-          `the stored configuration of project ${projectId} does not match the current schema; re-import it from the repository`,
+          `the stored configuration of project ${projectId} has ${parsed.error.issues.length} key(s) this release does not accept: ` +
+            `${describeConfigIssues(raw, parsed.error.issues, (value) => options.redactor.redactText(value).value)}. ` +
+            `Send a corrected document to PUT /api/projects/${projectId}/config`,
         );
       }
 

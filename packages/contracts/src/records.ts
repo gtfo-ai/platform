@@ -301,3 +301,54 @@ export type RunRecord = z.infer<typeof runRecordSchema>;
 export type ConfigSource = z.infer<typeof configSourceSchema>;
 export type ProjectRecord = z.infer<typeof projectRecordSchema>;
 export type HumanActionRecord = z.infer<typeof humanActionRecordSchema>;
+
+// ── The materialised autonomy dial (BD-027, WP-30) ───────────────────────────
+
+/**
+ * The granular policies one dial position sets — product/19 §11's table, as stored state.
+ *
+ * This is the wire form of `@platform/domain`'s `AutonomyPreset`, and it exists here because
+ * BD-027's consequence makes the preset **stored** rather than derived: *"Preset tables are
+ * versioned; changing a preset definition in a release never silently changes a project's effective
+ * policies (they are materialised at selection time and the UI offers 're-apply preset')."* A
+ * project therefore keeps a copy of the fifteen values that were in force when its dial was set,
+ * and a later release that edits the table changes nothing until somebody re-applies it.
+ *
+ * The two shapes are held to each other by `packages/domain/src/policies/autonomy.ts`
+ * (`toWireAutonomyPolicies` / `fromWireAutonomyPolicies`) and by a test that enumerates both key
+ * sets, so a field added to one and forgotten in the other does not compile (standing rule 68).
+ */
+export const autonomyPoliciesSchema = z.strictObject({
+  picks_up_new_tickets: z.boolean(),
+  stop_after_stage: slugSchema.nullable(),
+  plan_approval: z.enum(['never', 'above_size', 'always']),
+  plan_approval_size_threshold: sizeSchema.nullable(),
+  plan_approval_for_risk_classes: z.boolean(),
+  probation: z.boolean(),
+  probation_tasks: z.int().min(0).max(1000),
+  business_review: z.boolean(),
+  question_timeout: nonEmptyStringSchema,
+  human_mr_rounds: z.int().min(0).max(100),
+  knowledge_auto_apply: z.boolean(),
+  budget_approval_threshold_usd: usdSchema.nullable(),
+  review_only: z.boolean(),
+  shadow_mode: z.boolean(),
+  suggested_readiness_min: z.int().min(0).max(5),
+});
+
+/**
+ * `projects.autonomy_policies` — what a project's dial meant on the day it was set.
+ *
+ * `applied_by` is `null` for the rows the materialising migration wrote and for a selection the
+ * platform made on a project's behalf; it is never a name this document invents.
+ */
+export const materialisedAutonomySchema = z.strictObject({
+  level: autonomyLevelSchema,
+  preset_version: z.int().positive(),
+  applied_at: isoDateTimeSchema,
+  applied_by: idSchema.nullable(),
+  policies: autonomyPoliciesSchema,
+});
+
+export type AutonomyPolicies = z.infer<typeof autonomyPoliciesSchema>;
+export type MaterialisedAutonomy = z.infer<typeof materialisedAutonomySchema>;

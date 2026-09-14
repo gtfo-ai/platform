@@ -82,7 +82,7 @@ import {
 } from '@platform/contracts';
 import { AUTONOMY_PRESET_VERSION, applyAutonomyPreset } from '@platform/domain';
 import { secrets as secretAdapters } from '@platform/infrastructure';
-import { findShippedProvider } from '@platform/integrations';
+import { findShippedProvider, SHIPPED_PROVIDERS } from '@platform/integrations';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -295,7 +295,9 @@ export const registerOnboardingRoutes = async (
         throw new HttpError(
           400,
           'provider_not_shipped',
-          `this build does not ship provider "${request.body.provider}"; the shipped ones are the directories under packages/integrations/src/providers`,
+          // Named rather than pointed at a directory: this refusal is what a create form shows an
+          // operator who has no integration yet and therefore no setup guide to read (backlog 55).
+          `this build does not ship provider "${request.body.provider}"; the shipped ones are ${SHIPPED_PROVIDERS.map((entry) => `${entry.id} (${entry.type})`).join(', ')}`,
         );
       }
       if (provider.type !== request.body.type) {
@@ -501,7 +503,9 @@ export const registerOnboardingRoutes = async (
     '/api/projects/:project_id/config',
     {
       // `project.settings.write` is admin and `project.autonomy.write` is maintainer, so the
-      // stricter of the two governs the one endpoint that writes both.
+      // stricter of the two governs the one endpoint that writes both. A maintainer who only wants
+      // to move the dial uses `PUT /api/projects/:id/autonomy` (WP-30), which writes the two
+      // autonomy columns and never the configuration document.
       preValidation: requirePermission(guard, 'project.settings.write', { project: projectOf }),
       schema: {
         summary: 'Write this project’s configuration and autonomy dial (the wizard’s step 4)',

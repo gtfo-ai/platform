@@ -10,16 +10,23 @@
  *
  * ## What is here and what is honestly not
  *
- * - **Step 1 (connect)** creates the project, creates integrations from credentials already in the
- *   server's environment, tests them, and binds them to the project.
+ * - **Step 1 (connect)** creates the project, tests the integrations that exist and binds them to it.
+ *   **It does not create an integration**, and the sentence that said it did was false from WP-21
+ *   until WP-30 (PROGRESS backlog 55): the create control is on the Integrations screen, where
+ *   product/10 puts it and where this step links. The two screens used to attribute it to each
+ *   other, which is how a served endpoint ended up with no caller anywhere.
  * - **Step 2 (technical discovery)** starts the Discovery agent and shows the readiness evaluation
  *   it produces, with product/17's three cheapest improvements.
  * - **Step 3 (business interview)** is **not built**. product/06 describes a conversational form
  *   driven by the Product Manager role; nothing in this build runs an interview, and a form that
  *   collected answers nobody reads would be worse than an honest gap. The step says so and links to
  *   the knowledge screen, where the same pages can be written by hand.
- * - **Step 4 (operating mode)** sets the autonomy dial through the domain preset and writes the
- *   project's configuration.
+ * - **Step 4 (operating mode and features)** is `features/operating-mode.tsx`, rendered here and on
+ *   the project settings page — the *same component*, which is how product/18's "settings pages
+ *   mirror the wizard one-to-one" stays true without anybody remembering. It carries all five of
+ *   product/18's step-4 items: the dial (materialised, with *Custom* and "re-apply preset"), the
+ *   feature cards, the risk classes, the budgets and the notifications, with the two items this
+ *   build cannot honestly carry named as gaps **on the screen**.
  * - **Step 5 (commit)** is the proposal queue: the Discovery agent's drafted pages are `kb_proposals`
  *   with source `bootstrap`, and approving one commits it on an `agentic/knowledge/*` branch with a
  *   merge request — never onto the default branch. This step links there rather than duplicating it.
@@ -38,7 +45,6 @@ import {
   useIntegrations,
   useOnboardingCommands,
   useProjectBindings,
-  useProjectConfig,
   useProjectReadiness,
   useProjects,
 } from '../app/queries.js';
@@ -55,26 +61,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
-
-/** product/19 §11's four dial positions, in order, with the one sentence each one is. */
-const AUTONOMY_CHOICES = [
-  { level: 'observe', label: 'Observe', hint: 'Nothing is picked up; shadow runs only.' },
-  { level: 'assist', label: 'Assist', hint: 'Scoping only — the agent stops after architecture.' },
-  {
-    level: 'supervised',
-    label: 'Supervised',
-    hint: 'The default: plan approval above size L, probation on.',
-  },
-  {
-    level: 'autonomous',
-    label: 'Autonomous',
-    hint: 'No plan approval except for risk classes; still never merges (BD-007).',
-  },
-] as const satisfies readonly {
-  level: 'observe' | 'assist' | 'supervised' | 'autonomous';
-  label: string;
-  hint: string;
-}[];
+import { OperatingMode } from './operating-mode.js';
 
 const LEVEL_TONE: readonly BadgeTone[] = ['danger', 'warning', 'accent', 'success', 'success'];
 
@@ -103,8 +90,6 @@ export const OnboardingScreen = (): ReactElement => {
 
   const [chosen, setChosen] = useState<string | null>(null);
   const [draft, setDraft] = useState({ key: '', name: '', repoUrl: '' });
-  const [autonomy, setAutonomy] =
-    useState<(typeof AUTONOMY_CHOICES)[number]['level']>('supervised');
   const [selected, setSelected] = useState<readonly string[]>([]);
 
   /**
@@ -123,7 +108,6 @@ export const OnboardingScreen = (): ReactElement => {
   const items = projects.data?.items ?? [];
   const projectId = chosen ?? (items.length === 1 ? (items[0]?.id ?? null) : null);
   const bindings = useProjectBindings(projectId);
-  const config = useProjectConfig(projectId);
   const readiness = useProjectReadiness(projectId);
   const project = items.find((item) => item.id === projectId) ?? null;
 
@@ -324,72 +308,29 @@ export const OnboardingScreen = (): ReactElement => {
         />
       </Step>
 
-      <Step number={4} title="Operating mode">
-        <p className="text-xs text-fg-muted">
-          The autonomy dial. Readiness only ever <em>suggests</em> a cap — a maintainer may override
-          it, and the override is visible beside the badge (BD-027).
-        </p>
-        <div className="flex flex-col gap-1">
-          {AUTONOMY_CHOICES.map((choice) => (
-            <label key={choice.level} className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                name="autonomy"
-                checked={autonomy === choice.level}
-                onChange={() => setAutonomy(choice.level)}
-              />
-              <span>
-                <span className="font-semibold">{choice.label}</span>
-                <span className="block text-xs text-fg-muted">{choice.hint}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-        <div>
-          <Button
-            tone="primary"
-            disabled={project === null || !config.isSuccess || commands.writeConfig.isPending}
-            onClick={() => {
-              if (project !== null && config.isSuccess) {
-                /**
-                 * **The document that is already there, plus the dial, plus the hash it was read
-                 * at.** `PUT …/config` takes the *whole* `.agentic/config.yml` and replaces it, so
-                 * sending `{ version: 1 }` — which this screen did until WP-21's review round 2 —
-                 * silently discarded every other key the project had. `base_hash` is the optimistic
-                 * check the endpoint already implements: a document somebody else changed between
-                 * this read and this write is a 409 rather than a lost edit.
-                 */
-                commands.writeConfig.mutate({
-                  projectId: project.id,
-                  config: config.data.config as Record<string, unknown>,
-                  autonomy_level: autonomy,
-                  base_hash: config.data.hash,
-                });
-              }
-            }}
-          >
-            Save operating mode
-          </Button>
-        </div>
-        {commands.writeConfig.isError ? (
-          <ErrorNotice
-            title="The operating mode was not saved."
-            detail={String(commands.writeConfig.error)}
+      <Step number={4} title="Operating mode and features">
+        {project === null ? (
+          <EmptyState
+            title="Create the project first"
+            hint="Step 1 is what an operating mode belongs to."
           />
-        ) : null}
-        <p className="text-xs text-fg-muted">
-          The command policy is <strong>not</strong> editable here, and that is a limit of the
-          platform rather than of this screen: a project may only <em>narrow</em> the organisation
-          maximum (BD-025), so an entry it adds that the maximum does not grant is ignored. Running
-          a project&rsquo;s own test command therefore needs the organisation maximum widened, which
-          nothing in this build exposes.
-        </p>
-        {commands.writeConfig.isSuccess ? (
-          <p className="text-xs text-fg-muted">
-            Saved. Effective configuration hash{' '}
-            <UntrustedText value={commands.writeConfig.data.hash} />.
-          </p>
-        ) : null}
+        ) : (
+          <>
+            <p className="text-xs text-fg-muted">
+              All five of product/18&rsquo;s step-4 items. This is the <em>same component</em> the
+              project settings page renders — a mirror kept true by not having two of it
+              (product/18: nothing is reachable only during onboarding).
+            </p>
+            <OperatingMode projectId={project.id} />
+            <p className="text-xs text-fg-muted">
+              The command policy is <strong>not</strong> editable here, and that is a limit of the
+              platform rather than of this screen: a project may only <em>narrow</em> the
+              organisation maximum (BD-025), so an entry it adds that the maximum does not grant is
+              ignored. Running a project&rsquo;s own test command therefore needs the organisation
+              maximum widened, which nothing in this build exposes.
+            </p>
+          </>
+        )}
       </Step>
 
       <Step number={5} title="Commit">

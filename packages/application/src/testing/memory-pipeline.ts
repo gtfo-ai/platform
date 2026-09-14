@@ -134,6 +134,10 @@ export const createMemoryPipelineStore = (
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
         .slice(0, Math.max(query.limit, 0))
         .map(readTask),
+    countCompleted: async (_tx, projectId) =>
+      [...tasks.values()].filter(
+        (stored) => stored.task.projectId === projectId && stored.task.state === 'done',
+      ).length,
     insert: async (_tx, stored) => {
       const duplicate = [...tasks.values()].some(
         (existing) =>

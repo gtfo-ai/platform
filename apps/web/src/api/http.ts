@@ -71,6 +71,17 @@ export interface CommandOptions<TSchema extends z.ZodType> extends RequestOption
   readonly method?: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** technical/08: POSTs that create are idempotent under a client-supplied key. */
   readonly idempotent?: boolean;
+  /**
+   * The key to send, when the caller owns one — PROGRESS backlog **53**.
+   *
+   * `idempotent: true` alone mints a **fresh** key per request, which is the defect that entry
+   * records: the header's stated purpose is *"a retry is not a second task"*, and a double-clicked
+   * form sent two first requests under two keys, so the server — which does answer a replay — was
+   * never given one to answer. A key belongs to the user's *intent*, and only the call site that
+   * owns the intent knows when one ends, so it is passed in from there (`app/idempotency.ts`).
+   * Supplying this implies `idempotent`.
+   */
+  readonly idempotencyKey?: string;
 }
 
 export const CSRF_HEADER = 'X-Requested-With';
@@ -192,9 +203,12 @@ export const createApiClient = (options: ApiClientOptions = {}): ApiClient => {
             accept: 'application/json',
             'content-type': 'application/json',
             [CSRF_HEADER]: CSRF_HEADER_VALUE,
-            ...(options_.idempotent === true
-              ? { 'Idempotency-Key': newIdempotencyKey() }
-              : undefined),
+            // The caller's key wins: it is the one that survives a retry of the same intent.
+            ...(options_.idempotencyKey !== undefined
+              ? { 'Idempotency-Key': options_.idempotencyKey }
+              : options_.idempotent === true
+                ? { 'Idempotency-Key': newIdempotencyKey() }
+                : undefined),
           },
           body: JSON.stringify(options_.body ?? {}),
           ...(options_.signal === undefined ? {} : { signal: options_.signal }),

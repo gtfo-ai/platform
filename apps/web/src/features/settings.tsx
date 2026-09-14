@@ -2,13 +2,26 @@
  * Org settings (product/10 § "Settings (org)").
  *
  * What is here is what the API answers today: the signed-in session, the theme, the instance
- * version and the user list with roles (`GET /api/org/users`, which needs `org.read`). Autonomy
- * defaults, provider mode, global budgets and feature flags need `GET/PATCH /api/org`, which no
- * work package has built — they are named as absent rather than drawn as empty controls that
- * silently do nothing.
+ * version, the user list with roles (`GET /api/org/users`, which needs `org.read`) and — since
+ * WP-30 — **BD-010's organisation budgets**, which `GET/PUT /api/org/budgets` now serve.
+ *
+ * The budgets were in this file's "named as absent" list until that work package, and they were the
+ * expensive absence: `insert into budgets` occurred in exactly two files and both were tests, so the
+ * organisation cap that is supposed to stop every new run everywhere was a row no instance could
+ * have. What is *still* absent is the rest of that list — autonomy **defaults**, the Claude provider
+ * mode and feature flags — which need `GET/PATCH /api/org`; they stay named rather than drawn as
+ * controls that silently do nothing.
+ *
+ * A **project's** settings are `features/project-settings.tsx`, which mirrors the whole wizard.
  */
 import type { ReactElement } from 'react';
-import { useOrgUsers, useSession, useVersion } from '../app/queries.js';
+import {
+  useOrgBudgets,
+  useOrgUsers,
+  useSession,
+  useSettingsCommands,
+  useVersion,
+} from '../app/queries.js';
 import {
   Badge,
   Card,
@@ -20,11 +33,14 @@ import {
 } from '../ui/kit.js';
 import { useTheme } from '../ui/theme.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { Budgets } from './operating-mode.js';
 
 export const SettingsScreen = (): ReactElement => {
   const session = useSession();
   const users = useOrgUsers();
   const version = useVersion();
+  const budgets = useOrgBudgets();
+  const commands = useSettingsCommands();
   const { preference, resolved, setPreference } = useTheme();
 
   return (
@@ -119,11 +135,32 @@ export const SettingsScreen = (): ReactElement => {
             </>
           )}
           <p className="pt-2 text-xs text-fg-muted">
-            Autonomy defaults, the Claude provider mode, global budgets and feature flags are org
-            settings that <code>GET/PATCH /api/org</code> will carry; no work package has built that
-            endpoint yet, so they are not editable here.
+            Autonomy <em>defaults</em>, the Claude provider mode and feature flags are org settings
+            that <code>GET/PATCH /api/org</code> will carry; no work package has built that endpoint
+            yet, so they are not editable here. Global budgets are — below.
           </p>
         </Card>
+      </section>
+      <section>
+        {/* The heading is the `Budgets` component's own — `Organisation budgets` — so this section
+            does not repeat it: two elements with one string is a locator that cannot be written. */}
+        {budgets.isPending ? <Loading label="Loading budgets…" /> : null}
+        {budgets.isError ? (
+          <ErrorNotice
+            title="The organisation budgets could not be loaded."
+            detail="Reading a budget needs the viewer role; setting one needs maintainer."
+          />
+        ) : null}
+        <Budgets
+          projectId={null}
+          budgets={budgets.data?.items ?? []}
+          pending={commands.setOrgBudget.isPending}
+          error={commands.setOrgBudget.error}
+          scopeLabel="Organisation"
+          onSave={(window, limitUsd) => {
+            commands.setOrgBudget.mutate({ window, limit_usd: limitUsd });
+          }}
+        />
       </section>
     </div>
   );

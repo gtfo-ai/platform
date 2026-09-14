@@ -73,6 +73,39 @@ const READINESS = {
   ],
 };
 
+/** `GET /api/projects/:id/autonomy` — the dial as WP-30's projection publishes it. */
+const AUTONOMY = {
+  level: 'supervised',
+  materialised: true,
+  preset_version: 1,
+  current_preset_version: 1,
+  preset_outdated: false,
+  applied_at: '2026-09-13T04:00:00.000Z',
+  applied_by: null,
+  policies: {
+    picks_up_new_tickets: true,
+    stop_after_stage: null,
+    plan_approval: 'above_size',
+    plan_approval_size_threshold: 'L',
+    plan_approval_for_risk_classes: true,
+    probation: true,
+    probation_tasks: 5,
+    business_review: true,
+    question_timeout: '1 working day',
+    human_mr_rounds: 3,
+    knowledge_auto_apply: false,
+    budget_approval_threshold_usd: 50,
+    review_only: false,
+    shadow_mode: false,
+    suggested_readiness_min: 1,
+  },
+  is_custom: false,
+  overrides: [],
+  readiness_level: 1,
+  suggested_cap: 'supervised',
+  above_suggested_cap: false,
+};
+
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -94,6 +127,9 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
           );
     }
     if (url.includes('/api/projects/') && url.includes('/bindings')) return json({ items: [] });
+    if (url.includes('/api/projects/') && url.includes('/autonomy')) return json(AUTONOMY);
+    if (url.includes('/api/projects/') && url.includes('/budgets')) return json({ items: [] });
+    if (url.includes('/api/projects/') && url.includes('/audit')) return json({ items: [] });
     if (url.includes('/api/projects/') && url.includes('/config')) {
       return json({
         config: { version: 1, policies: { protected_paths: ['tests/**'] } },
@@ -124,7 +160,7 @@ describe('the onboarding wizard', () => {
       'Connect',
       'Technical discovery',
       'Business interview',
-      'Operating mode',
+      'Operating mode and features',
       'Commit',
     ]) {
       expect(await screen.findByText(title), title).toBeTruthy();
@@ -175,12 +211,17 @@ describe('the onboarding wizard', () => {
 });
 
 describe('the wizard’s step 4', () => {
-  it('sends the stored document and its hash, not a fresh one', async () => {
+  it('sends the stored document and its hash when a feature is toggled, not a fresh one', async () => {
     /**
      * `PUT …/config` **replaces** the whole `.agentic/config.yml`, so a screen that posted
      * `{ version: 1 }` discarded every other key the project had — which is what this one did until
      * WP-21's review round 2. `base_hash` is the endpoint's optimistic check: without it a
      * concurrent edit is a lost update rather than a 409.
+     *
+     * Since WP-30 the **dial** no longer writes the document at all (it has its own command), so
+     * the caller that carries this property is a feature toggle — which is also the write BD-028
+     * cares about: an opt-in that discarded the rest of a project's configuration would be a very
+     * expensive checkbox.
      */
     const sent: { url: string; body: unknown }[] = [];
     const recording = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -193,26 +234,80 @@ describe('the wizard’s step 4', () => {
     }) as typeof fetch;
 
     render(createApp({ fetchImpl: recording, realtime: false }).element);
-    // The button stays disabled until the stored document has been read — which is the fix: a
+    // The checkbox stays disabled until the stored document has been read — which is the fix: a
     // screen that could save before reading is a screen that saves something it made up.
-    const save = await screen.findByRole('button', { name: 'Save operating mode' });
+    const toggle = await screen.findByRole('checkbox', { name: /Review-only mode/ });
     await waitFor(() => {
-      expect((save as HTMLButtonElement).disabled).toBe(false);
+      expect((toggle as HTMLInputElement).disabled).toBe(false);
     });
-    fireEvent.click(save);
+    fireEvent.click(toggle);
 
     await waitFor(() => {
       expect(sent.some((entry) => entry.url.includes('/config'))).toBe(true);
     });
     const body = sent.find((entry) => entry.url.includes('/config'))?.body as {
-      config: { policies?: { protected_paths?: string[]; autonomy?: string } };
+      config: {
+        policies?: { protected_paths?: string[] };
+        features?: { review_only?: { enabled?: boolean } };
+      };
       base_hash?: string;
       autonomy_level?: string;
     };
     // The key the screen never knew about survives — the assertion a `{ version: 1 }` body fails.
     expect(body.config.policies?.protected_paths).toEqual(['tests/**']);
     expect(body.base_hash).toBe('deadbeef');
-    expect(body.autonomy_level).toBe('supervised');
+    expect(body.config.features?.review_only?.enabled).toBe(true);
+    // …and the dial is **not** restated on a write that did not touch it: sending it would
+    // re-materialise the preset, which is the opposite of BD-027:14.
+    expect(body.autonomy_level).toBeUndefined();
+  });
+
+  it('saves the dial through its own command, and re-apply sends the level already in force', async () => {
+    const sent: { url: string; method: string; body: unknown }[] = [];
+    const recording = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method !== 'GET') {
+        sent.push({ url, method, body: JSON.parse(String(init?.body ?? '{}')) });
+        return json({ level: 'supervised', preset_version: 1, performed: true });
+      }
+      return fetchFor('recorded')(input, init);
+    }) as typeof fetch;
+
+    render(createApp({ fetchImpl: recording, realtime: false }).element);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save operating mode' }));
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/autonomy'))).toBe(true);
+    });
+    const saved = sent.find((entry) => entry.url.includes('/autonomy'));
+    expect(saved?.method).toBe('PUT');
+    expect(saved?.body).toEqual({ autonomy: 'supervised' });
+
+    // "Re-apply preset" is the same command with the position the project already has — BD-027's
+    // materialisation *is* the selection, so a second route would be a second name for one write.
+    fireEvent.click(screen.getByRole('button', { name: 'Re-apply preset' }));
+    await waitFor(() => {
+      expect(sent.filter((entry) => entry.url.includes('/autonomy'))).toHaveLength(2);
+    });
+    expect(sent.at(-1)?.body).toEqual({ autonomy: 'supervised' });
+  });
+
+  it('carries all five of the step’s items, and names the two it cannot honestly build', async () => {
+    // product/18:50-54. A control that silently did nothing would be worse than an absent one, so
+    // the two gaps are on the screen (standing rule 18: the absent case must not be the quiet one).
+    const { container } = render(
+      createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element,
+    );
+    await screen.findByText('Autonomy dial');
+    for (const heading of ['Features', 'Risk classes', 'Project budgets', 'Notifications']) {
+      expect(screen.getByText(heading), heading).toBeTruthy();
+    }
+    // product/19 §124's five card fields, on a card whose behaviour is shipped (WP-24).
+    expect(container.textContent).toContain('Default: off · Cost: ~$1–3 per merge request');
+    expect(container.textContent).toContain('Touches: posts discussion threads on merge requests');
+    // The two gaps, in the words an operator reads.
+    expect(container.textContent).toContain('proposing a set from the repository structure');
+    expect(container.textContent).toContain('Not built in this release:');
   });
 
   it('says why the command policy is not editable here', async () => {
@@ -221,7 +316,9 @@ describe('the wizard’s step 4', () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element,
     );
-    await screen.findByText('Operating mode');
+    // Waited on the dial, not on the step's title: the title renders before the projects list
+    // arrives, so a wait on it would assert against a screen that has not resumed a project yet.
+    await screen.findByText('Autonomy dial');
     // The sentence spans an `<em>`, so it is read off the rendered text rather than matched against
     // one element.
     expect(container.textContent).toContain('may only narrow the organisation maximum');

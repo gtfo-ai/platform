@@ -33,10 +33,12 @@ import {
   type DomainEvent,
   type Id,
   type IsoDateTime,
+  type RiskClass,
+  type Size,
   type Slug,
   ticketRefSchema,
 } from '@platform/contracts';
-import type { CommandContext, PipelineSignal } from '@platform/domain';
+import type { AutonomyPreset, CommandContext, PipelineSignal } from '@platform/domain';
 import {
   compilePipeline,
   createApproval,
@@ -51,9 +53,11 @@ import {
   orderQueue,
   queueTask,
   requestApproval,
+  requiresPlanApproval,
   resolveIterationLimits,
   resumeStage,
   returnLoopFor,
+  riskClassesRequiringPlanApproval,
   stageOf,
   toApprovalRecord,
 } from '@platform/domain';
@@ -71,7 +75,7 @@ import {
   type PipelineOutboundData,
 } from './jobs.js';
 import type { ProjectSettingsPort } from './settings.js';
-import { templateForIssueType } from './settings.js';
+import { autonomyPresetFor, templateForIssueType } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { readTicketSnapshot } from './ticket-snapshot.js';
@@ -544,11 +548,74 @@ const convergenceEscalation = async (
   return true;
 };
 
+/** Sizes in ascending order — the wire values of `sizeSchema`, narrowed from a model's string. */
+const SIZES = ['S', 'M', 'L', 'XL'] as const satisfies readonly Size[];
+
 /**
- * product/04 S2: "require human plan approval above a size threshold (default: require for L/XL)".
+ * What the plan-approval gate does for a project whose dial has **never been materialised**.
+ *
+ * It reproduces the pre-WP-30 gate exactly — approve above size L, no probation, no risk classes —
+ * and it is a named constant rather than a `??` chain so that the branch is visible and testable.
+ * It is deliberately **not** `AUTONOMY_PRESETS.supervised`: substituting the release's supervised
+ * preset would turn probation on for a project that never chose a dial position, which is a
+ * behaviour change smuggled in as a default (standing rule 16).
+ */
+export const UNMATERIALISED_PLAN_APPROVAL = {
+  picksUpNewTickets: true,
+  stopAfterStage: null,
+  planApproval: 'above_size',
+  planApprovalSizeThreshold: 'L',
+  planApprovalForRiskClasses: false,
+  probation: false,
+  probationTasks: 0,
+  businessReview: true,
+  questionTimeout: '1 working day',
+  humanMrRounds: 3,
+  knowledgeAutoApply: false,
+  budgetApprovalThresholdUsd: null,
+  reviewOnly: false,
+  shadowMode: false,
+  suggestedReadinessMin: 0,
+} as const satisfies AutonomyPreset;
+
+/** The paths an Implementation Plan declares it will touch (`files_to_change[].path`). */
+const planPaths = (data: unknown): readonly string[] => {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return [];
+  }
+  const files = (data as Record<string, unknown>).files_to_change;
+  if (!Array.isArray(files)) {
+    return [];
+  }
+  return files.flatMap((entry) => {
+    const path = (entry as Record<string, unknown> | null)?.path;
+    return typeof path === 'string' ? [path] : [];
+  });
+};
+
+/**
+ * product/04 S2: "require human plan approval above a size threshold (default: require for L/XL)",
+ * and since WP-30 the **dial** is what says so.
  *
  * Keyed on the stage *attempt*: a second plan needs a second approval, and an approval recorded
  * for attempt 1 must not wave attempt 2 through.
+ *
+ * ## Where the policy comes from, in one sentence per source
+ *
+ * The project's **materialised** preset (BD-027:14) decides, through the domain's
+ * `requiresPlanApproval` — so `planApproval`, `planApprovalSizeThreshold`, `probation`,
+ * `probationTasks` and `planApprovalForRiskClasses` are all read, rather than only the first two.
+ * A project's `pipeline.template_overrides.<template>.stages.<stage>` entry is **finer grained than
+ * the dial** and therefore wins over it, but only over the two fields it can express: an explicit
+ * `plan_approval: never` on one stage does not turn off the risk-class gate, because a risk class is
+ * a statement about the change and not about the stage (product/19 §14).
+ *
+ * A project whose dial has **never been materialised** keeps the pre-WP-30 behaviour exactly —
+ * {@link UNMATERIALISED_PLAN_APPROVAL} — and that branch is named rather than defaulted:
+ * substituting `AUTONOMY_PRESETS[level]` here is the read-time re-derivation BD-027:14 forbids, and
+ * substituting the supervised preset would turn probation on for a project that never chose it.
+ * Migration 0021 backfilled every row that existed and all three writers supply one, so the branch
+ * is reachable only from a harness.
  */
 const planApprovalGate = async (
   options: PipelineSagaOptions,
@@ -578,24 +645,41 @@ const planApprovalGate = async (
   }
   const override =
     settings.config.pipeline?.template_overrides?.[stored.task.template]?.stages?.[stage];
-  const mode = override?.plan_approval ?? 'above_size';
-  if (mode === 'never') {
-    return false;
-  }
   const plan = await options.store.artifacts.latest(
     context.scope.tx,
     stored.task.id,
     'ImplementationPlan',
   );
-  const size =
+  const rawSize =
     typeof plan?.data === 'object' && plan.data !== null && !Array.isArray(plan.data)
       ? (plan.data as Record<string, unknown>).estimated_size
       : null;
-  const threshold = override?.size_threshold ?? 'L';
-  const ranked = ['S', 'M', 'L', 'XL'];
-  const needsApproval =
-    mode === 'always' ||
-    (typeof size === 'string' && ranked.indexOf(size) >= ranked.indexOf(threshold));
+  const size = SIZES.find((candidate) => candidate === rawSize) ?? null;
+  const preset: AutonomyPreset = {
+    ...(autonomyPresetFor(settings) ?? UNMATERIALISED_PLAN_APPROVAL),
+    ...(override?.plan_approval === undefined ? {} : { planApproval: override.plan_approval }),
+    ...(override?.size_threshold === undefined
+      ? {}
+      : { planApprovalSizeThreshold: override.size_threshold }),
+  };
+  const needsApproval = requiresPlanApproval({
+    preset,
+    size,
+    // Probation is "the first N tasks" of the project, so it is a count over the project and not
+    // over this task. Asked only when the preset actually has probation on: a project past its
+    // probation still pays the query otherwise, on every plan, for an answer nothing reads.
+    tasksCompleted: preset.probation
+      ? await options.store.tasks.countCompleted(context.scope.tx, stored.task.projectId)
+      : 0,
+    // product/19 §14, from the paths the plan itself declares — `risk-classes.ts` carries the
+    // argument for reading them there rather than from a merge request diff that does not exist
+    // yet, and the direction of the residual (a plan that omits a path escapes the class; a model
+    // can never use it to *skip* a gate).
+    riskClassesRequiringApproval: riskClassesRequiringPlanApproval(
+      settings.config.policies?.risk_classes as Readonly<Record<string, RiskClass>> | undefined,
+      planPaths(plan?.data),
+    ),
+  });
   if (!needsApproval) {
     return false;
   }

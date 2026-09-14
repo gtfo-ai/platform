@@ -170,6 +170,15 @@ export interface TaskRepository {
     projectId: Id,
     query: { readonly excludeTaskId: Id; readonly limit: number },
   ): Promise<readonly StoredTask[]>;
+  /**
+   * How many tasks this project has **completed** — BD-006's probation, "the first 5 tasks".
+   *
+   * `done` only: a cancelled task was not delivered and a task still in flight has not been either,
+   * so counting them would end probation without a single merged change. It is a `Promise<number>`
+   * rather than a page because the caller only ever compares it to a small threshold, and the
+   * comparison is `<`, so a project past the threshold costs the same query as one inside it.
+   */
+  countCompleted(tx: Transaction, projectId: Id): Promise<number>;
   insert(tx: Transaction, stored: StoredTask): Promise<void>;
   /**
    * Writes the aggregate's own columns, and only if the row is still at `stored.version`.

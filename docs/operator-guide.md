@@ -268,12 +268,16 @@ APP_INTEGRATION_SECRET_ENV=GITLAB_TOKEN,JIRA_API_TOKEN,JIRA_WEBHOOK_SECRET
 docker compose up -d app                  # picks up both
 ```
 
-### Creating one: the API, because no screen does it yet
+### Creating one: the Integrations screen, or the API
 
-**This is the one operator task the browser cannot do.** The wizard *binds* integrations that already
-exist and can test them; its own text points at the Integrations screen, and that screen has no "add"
-control in this release. The endpoint is served and the browser application even has the client for
-it — nothing renders a form. Until one does, create an integration with a request:
+**Since WP-30 the browser can do this.** The Integrations screen has an "Add integration" form and a
+"Test connection" button on every card; the form asks for the provider, a name, the credential
+*field* and the **name of the environment variable** the server should read it from — never the
+value. A provider this build does not ship is refused by name, and the refusal lists the ones that
+do. (Until that release, no screen called `POST /api/integrations` at all, which is the defect
+PROGRESS backlog 55 records.)
+
+The API is still there, and it is what a script uses:
 
 ```bash
 BASE=http://localhost:8080
@@ -300,7 +304,8 @@ The two extra headers are not optional and the API says so if you omit them: eve
 needs a trusted `Origin` **and** `x-requested-with`, which is the cross-site guard. `Idempotency-Key`
 is required on the three commands that *create* something, so a retry is not a second integration.
 
-Then bind it to a project in the wizard's step 1, which is where "Test connection" lives.
+Then bind it to a project — in the wizard's step 1, or on the project's own settings page
+(`/projects/<key>/settings`), which mirrors every wizard step (product/18).
 
 ### The five providers that ship
 

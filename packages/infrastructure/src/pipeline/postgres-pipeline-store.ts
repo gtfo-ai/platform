@@ -252,6 +252,17 @@ export const createPostgresPipelineStore = (
       return rows.map((row) => toStoredTask(row, templateFor(row)));
     },
 
+    countCompleted: async (tx, projectId) => {
+      // `count(*)` rather than a page: the caller compares it to a small threshold and never reads
+      // the rows. `done` is spelled rather than derived from "not cancelled and not active", for the
+      // reason `listWithMergeRequest` gives about `task_state` being a database enum.
+      const { rows } = await sqlOf(tx).query<{ n: string }>(
+        `select count(*)::text as n from tasks where project_id = $1 and state = 'done'`,
+        [projectId],
+      );
+      return Number(rows[0]?.n ?? 0);
+    },
+
     insert: async (tx, stored) => {
       const { task } = stored;
       await sqlOf(tx).query(

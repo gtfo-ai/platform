@@ -9,6 +9,8 @@
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../api/keys.js';
 import type { SessionResponse } from '../auth/session.js';
+import type { MintKey } from './idempotency.js';
+import { useIntentKeys } from './idempotency.js';
 import { useServices } from './services.js';
 
 const FOREVER = { staleTime: Number.POSITIVE_INFINITY, gcTime: 5 * 60_000 } as const;
@@ -105,6 +107,37 @@ export const useProjectBudgets = (projectId: string | null) => {
     queryKey: queryKeys.projectBudgets(projectId ?? ''),
     queryFn: () => endpoints.projectBudgets(projectId ?? ''),
     enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
+/** `GET /api/projects/:id/autonomy` — the dial as it is in force, not as it is derived (WP-30). */
+export const useProjectAutonomy = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectAutonomy(projectId ?? ''),
+    queryFn: () => endpoints.projectAutonomy(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
+/** `GET /api/projects/:id/audit` — who changed this project's settings (product/18:5). */
+export const useProjectAudit = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.projectAudit(projectId ?? ''),
+    queryFn: () => endpoints.projectAudit(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
+export const useOrgBudgets = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.orgBudgets],
+    queryFn: () => endpoints.orgBudgets(),
     ...FOREVER,
   });
 };
@@ -394,14 +427,26 @@ export const useKbProposalCommands = (projectId: string) => {
  * invalidates what it could have changed — the projects list after a create, the integration list
  * after a create or a test, the bindings and the configuration after a write.
  */
-export const useOnboardingCommands = () => {
+export const useOnboardingCommands = (mint?: MintKey) => {
   const { endpoints } = useServices();
   const queryClient = useQueryClient();
+  /**
+   * One `Idempotency-Key` per **intent** rather than per request (PROGRESS backlog 53).
+   *
+   * A double-clicked "Create project" used to send two first requests under two fresh keys, so the
+   * server's replay answer — which has existed since WP-21 — was never given a key to answer. The
+   * key is held here, at the call site that owns the user's intent, minted on the first send and
+   * released when that intent succeeds (`app/idempotency.ts`).
+   */
+  const intents = useIntentKeys(mint);
   return {
     createProject: useMutation({
       mutationFn: (input: { key: string; name: string; repo_url: string }) =>
-        endpoints.createProject(input),
-      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] }),
+        endpoints.createProject(input, intents.keyFor(['project.create', input])),
+      onSuccess: async (_result, input) => {
+        intents.release(['project.create', input]);
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
+      },
     }),
     createIntegration: useMutation({
       mutationFn: (input: {
@@ -410,8 +455,11 @@ export const useOnboardingCommands = () => {
         name: string;
         config: Record<string, unknown>;
         secret_refs: Record<string, string>;
-      }) => endpoints.createIntegration(input),
-      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
+      }) => endpoints.createIntegration(input, intents.keyFor(['integration.create', input])),
+      onSuccess: async (_result, input) => {
+        intents.release(['integration.create', input]);
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] });
+      },
     }),
     testIntegration: useMutation({
       mutationFn: (integrationId: string) => endpoints.testIntegration(integrationId),
@@ -430,15 +478,23 @@ export const useOnboardingCommands = () => {
       },
     }),
     writeConfig: useMutation({
+      /**
+       * `autonomy_level` is **optional**, because a feature toggle is not a dial change.
+       *
+       * The endpoint has always accepted the document without one (`updateProjectConfigRequestSchema`
+       * marks it optional and its docblock says why: a caller editing the pipeline limits should not
+       * have to restate the dial). Sending the current level with every toggle would re-materialise
+       * the preset on a write that did not touch it, which is the opposite of BD-027:14.
+       */
       mutationFn: (input: {
         projectId: string;
         config: Record<string, unknown>;
-        autonomy_level: 'observe' | 'assist' | 'supervised' | 'autonomous';
+        autonomy_level?: 'observe' | 'assist' | 'supervised' | 'autonomous';
         base_hash?: string;
       }) =>
         endpoints.updateProjectConfig(input.projectId, {
           config: input.config as never,
-          autonomy_level: input.autonomy_level,
+          ...(input.autonomy_level === undefined ? {} : { autonomy_level: input.autonomy_level }),
           ...(input.base_hash === undefined ? {} : { base_hash: input.base_hash }),
         }),
       onSuccess: async (_result, input) => {
@@ -447,9 +503,80 @@ export const useOnboardingCommands = () => {
       },
     }),
     startDiscovery: useMutation({
-      mutationFn: (projectId: string) => endpoints.startDiscovery(projectId),
+      mutationFn: (projectId: string) =>
+        endpoints.startDiscovery(projectId, intents.keyFor(['discovery.run', projectId])),
       onSuccess: async (_result, projectId) => {
+        intents.release(['discovery.run', projectId]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.projectReadiness(projectId) });
+      },
+    }),
+  };
+};
+
+/**
+ * The settings commands — the dial and BD-010's budgets (WP-30).
+ *
+ * Separate from {@link useOnboardingCommands} because they are a different permission (the dial is
+ * `project.autonomy.write`, a budget is `budget.write`, the wizard's config write is admin) and
+ * because the settings screens use them without the wizard. They share its `Idempotency-Key`
+ * discipline: one key per intent, released on success.
+ */
+export const useSettingsCommands = (mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return {
+    setAutonomy: useMutation({
+      mutationFn: (input: {
+        projectId: string;
+        autonomy: 'observe' | 'assist' | 'supervised' | 'autonomous';
+        override_reason?: string;
+      }) =>
+        endpoints.setProjectAutonomy(
+          input.projectId,
+          {
+            autonomy: input.autonomy,
+            ...(input.override_reason === undefined
+              ? {}
+              : { override_reason: input.override_reason }),
+          },
+          intents.keyFor(['autonomy.write', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['autonomy.write', input]);
+        // The dial, the project list's badge and the audit feed all move with one write.
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
+      },
+    }),
+    setProjectBudget: useMutation({
+      mutationFn: (input: {
+        projectId: string;
+        window: 'day' | 'week' | 'month' | 'total';
+        limit_usd: number | null;
+      }) =>
+        endpoints.putProjectBudget(
+          input.projectId,
+          { window: input.window, limit_usd: input.limit_usd },
+          intents.keyFor(['budget.write', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['budget.write', input]);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+      },
+    }),
+    setOrgBudget: useMutation({
+      mutationFn: (input: {
+        window: 'day' | 'week' | 'month' | 'total';
+        limit_usd: number | null;
+      }) =>
+        endpoints.putOrgBudget(
+          { window: input.window, limit_usd: input.limit_usd },
+          intents.keyFor(['org.budget.write', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['org.budget.write', input]);
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgBudgets] });
       },
     }),
   };

@@ -1893,7 +1893,7 @@ can be built.
 `open_mr`, since that is the row that makes this live; **WP-23** owns the written-down residual if it
 ships unfixed.
 
-### 52. **Eighteen commands write `human_actions` and nothing reads it but the idempotency guard, while technical/08 promises an audit of every human action** (TODO, small — **no work package owns it**; found by WP-15i, session 5)
+### 52. **Eighteen commands write `human_actions` and nothing reads it but the idempotency guard, while technical/08 promises an audit of every human action** (**RESOLVED for the project half** at `<sha>`, WP-30 — the seven wizard commands and the settings writes are served by `GET /api/projects/:id/audit` (`apps/server/src/routes/settings.ts`) on the predicate `params->>'project_id'`, because `human_actions` has no `project_id` column, and the project settings page renders them. **The task half is open and unowned**: WP-15i's eleven task and run commands and WP-27's three write a row that names a **task**, so that predicate never matches one and no read surface serves them — *"who cancelled this run"* still has no answer in the product. Cheapest owner is **WP-31**, whose criterion 6 answers an ask *"from the audit trail"* (product/10:57) and which now carries it as criterion 10; the index is already `(task_id, created_at desc)`, so it is one query and a DTO. Found by WP-15i, session 5)
 **What is wrong.** WP-21's seven wizard commands and WP-15i's eleven task and run commands each write
 one row per performed command, and no read surface serves any of them. `GET /api/org/audit` reads a
 **different table**: `listAuditEntries` selects from `configAudit` and nothing else
@@ -1934,13 +1934,30 @@ says which table a row came from.
 nobody's work package owned — and belongs with whichever row builds the task screen's activity feed;
 **WP-15j** serves the SPA and adds no reads.
 
-### 53. **The SPA mints a fresh `Idempotency-Key` on every call, so the header's stated purpose — a retry is not a second task — is not met end to end** (TODO, small — **no work package owns it**; found by WP-15i's reviewer, session 5)
+**What WP-30 closed, and what is left** (refiner, session 5; read off the tree, no test run). Closed:
+the **project** half. `GET /api/projects/:id/audit` exists, is permissioned, and its predicate is
+`params->>'project_id'` rather than a column — WP-30's own assumption says why (*"`human_actions` has
+no `project_id` column and a task command's row names a task, so the predicate is
+`params->>'project_id'` and the endpoint's description says what is therefore not in it"*), which is
+exactly the sentence that decides what is **not** closed. Open: every command whose params name a
+task and not a project — WP-15i's eleven (`apps/server/src/routes/commands.ts`) and WP-27's three —
+so the surface that is missing is a task-scoped page, not a widening of the project one. Two things
+carry over unchanged from *"What done looks like"* above: `params` is client-supplied JSON with a
+client-chosen `Idempotency-Key` in it, so it renders through the untrusted path (BD-022); and
+technical/08 gains the published path first, which is an orchestrator edit. **Owner: WP-31**, the
+cheapest by need rather than by adjacency — product/10:57 defines an ask as *"answered from the audit
+trail and artifacts with links to the exact run and prompt"*, so that row cannot meet its own
+criterion 6 without this read, and it is named there as criterion 10. If the task activity feed is
+wanted before WP-31, entry **70**'s UI row is the other natural host: it is the one that opens the
+task screen.
+
+### 53. **The SPA mints a fresh `Idempotency-Key` on every call, so the header's stated purpose — a retry is not a second task — is not met end to end** (**RESOLVED** at `<sha>`, WP-30 — the fix is one key per *user intent* rather than per request: `apps/web/src/app/idempotency.ts` holds the key per canonical value of a mutation's variables, mints it on the first send and releases it on success, so a retry of a failed send carries the same key, a corrected form gets a new one and a deliberate second identical create gets a new one; `features/integrations.test.tsx` drives a double-submitted create through the real client and reads the two keys off the requests. It deliberately does **not** deduplicate on the client — two clicks still send two requests, because the client cannot know whether the first arrived; what changed is that the second carries a key the server recognises. `newIdempotencyKey` is still injectable and is still the fallback for a call site that owns no intent. Found by WP-15i's reviewer, session 5)
 **What is wrong.** `apps/web/src/api/http.ts:135` defaults `newIdempotencyKey` to `crypto.randomUUID()` and `:196` calls it inside `send`, once per request. The docblock at `:15` says the key exists `so a retry is not a second task`, but nothing in the client holds a key across a retry: a double-click, a TanStack mutation retry or a user pressing the button again after a timed-out response each send a **different** key, and the server — which since WP-21 and WP-15i answers a replay from the key and refuses a different body under a used one — sees two first requests. The server side is honest; the client never gives it a replay to answer.
 **Why it matters.** The seven wizard commands and the seven task/run commands that create are exactly the ones a user retries after a slow response (rule 20's asymmetry runs the other way here: a second `POST /api/tasks` is a second task, a second `POST /api/integrations` is a unique-key 409 the user reads as a failure). WP-15i's e2e proves the replay path on the server with a key the test holds; no ui or web-e2e test holds one across two sends, so the gap is invisible to every tier.
 **What to do.** Mint the key **per mutation attempt-set**, not per request: at the call site that owns the user's intent (the `useMutation` wrapper or the form submit), and pass it down so a retry of the same intent carries the same key; a *new* intent (the user edits the form and submits again) mints a new one. Assert in the ui tier that two sends of one mutation carry one key and two mutations carry two (rule 42), and in `verify:web-e2e` that a double-click yields one `POST` the fake backend counts as performed. Keep `newIdempotencyKey` injectable. The server's scope for the key is stated at `apps/server/src/routes/idempotency.ts` (WP-15i's fix round) — read it before choosing where the client holds one.
 **Acceptance.** A double-click on any creating command produces one performed effect, asserted end to end through the fake backend's count; the docblock at `http.ts:15` is a measurement.
 
-### 55. **No screen creates an integration, the two screens that could host the control each point at the other, and a client call no component makes passes every check in this repository** (TODO, small — owned by **WP-30**, acceptance criterion 6; found by WP-23's dogfood run, session 5)
+### 55. **No screen creates an integration, the two screens that could host the control each point at the other, and a client call no component makes passes every check in this repository** (**RESOLVED** at `<sha>`, WP-30 — the fix is three parts: the create form and the "Test connection" button now live on the Integrations screen (`apps/web/src/features/integrations.tsx`, with the server's own refusal rendered rather than a catalogue copied into the SPA); the three false prose statements are corrected in the same change (rule 83) — the wizard's *"Add one from the Integrations screen"*, that screen's *"driven from the onboarding wizard"* and `onboarding.tsx`'s docblock claim that step 1 creates integrations; and the recurrence guard is `apps/server/src/routes/endpoint-callers.test.ts` — every mutation `app/queries.ts` declares must be fired from outside it and every read hook called from outside it, both directions, with an admitted-gap list and a canary (renaming the one `createIntegration.mutate(` call site fails it by name). Found by WP-23's dogfood run, session 5)
 **What is wrong.** `POST /api/integrations` is served (WP-21), the client half exists twice —
 `endpoints.createIntegration` (`apps/web/src/api/endpoints.ts:137-138`, `:295-298`) and
 `useOnboardingCommands().createIntegration` (`apps/web/src/app/queries.ts:406-413`) — and **no
@@ -1985,7 +2002,7 @@ in its docblock, the way the census states its own.
 **Depends on / owner.** **WP-30** (before WP-28 and WP-32). Nothing blocks it: both endpoints and
 both client halves shipped at WP-21.
 
-### 58. **`features.review_only.trigger` dropped `manual`, so a stored configuration the platform's own API accepted answers `500 invalid_stored_config` on every read — and the remedy that message names does not exist** (TODO, small — introduced by **WP-24**; **no work package owns the fix**, WP-30 is the nearest; found by WP-24's review round 2, session 5)
+### 58. **`features.review_only.trigger` dropped `manual`, so a stored configuration the platform's own API accepted answers `500 invalid_stored_config` on every read — and the remedy that message names does not exist** (**RESOLVED** at `<sha>`, WP-30, both halves and in the order this entry asked for — **read side**: `GET /api/projects/:id/config` stays a **refusal** (a silently pruned document would be re-saved without the key nobody saw) but a named one, a **409** carrying every failing key path **and the value found there**, plus the `PUT` an operator can make; **data side**: forward-only migration **0021** rewrites the one value that exists in the wild, `features.review_only.trigger: manual`, to `paths` with an empty list — what the pipeline already does with it through `matchesReviewOnly`'s `default:` branch, so the document changes and the behaviour does not — and **not** to `label`, which would start an enabled project reviewing every labelled merge request it never asked for. Introduced by **WP-24**; found by WP-24's review round 2, session 5)
 Placed above the ticket-text family because it is the only entry here that breaks a **served** read
 of the platform's own stored state, and because the class behind it — a strict schema narrowed under
 rows that already exist — outlives the one value that triggered it.
@@ -2708,6 +2725,12 @@ that opens `apps/web` at all; if the buttons are wanted in M2 the honest way to 
 named criterion on that row, and otherwise it is a small row of its own — this entry is its brief
 either way (the same caveat entry **63** carries about WP-41).
 
+*Refiner (session 5, after WP-30): **that adjacency is spent.** WP-30 merged at `<sha>` with the
+settings mirror and wizard step 4 and **did not** take the task controls — correctly, since its
+mirror census (`apps/server/src/routes/settings-mirror.test.ts`) compares the wizard's and the
+settings page's command sets and a take-over button belongs to neither screen. So this is now a small
+row of its own, and the two hand-written cases in `client-census.test.ts` stay until it lands.*
+
 ### 71. **A run's workspace has no way to say which branch to check out, so technical/05 §2's *"checkout of the task branch for re-entries"* has no carrier — and product/19 § 19's hand-back re-provision is unimplementable as written** (TODO, latent — **no work package owns it**; found while judging WP-27's hand-back, session 5)
 **What is wrong.** `RunWorkspaceProvisioner.provision(spec: RunSpec)`
 (`packages/infrastructure/src/runner/workspace-runner.ts:104-106`) is the whole interface through
@@ -2750,6 +2773,224 @@ port.
 criterion on that row rather than a separate piece of work. **WP-27's hand-back is the first
 consumer** and cannot meet product/19 § 19's re-provision sentence without it; entry **69**'s timeout
 and entry **68**'s export are the other two clauses of the same paragraph left unowned.
+
+### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (TODO — **no work package owns any of the three**; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
+**What is wrong.** WP-30 materialised the dial and gave five policies a reader; the enumeration it
+left behind says the rest out loud. The discovered-work bullet, quoted: *"six are read by the
+plan-approval gate and the read endpoint, `budgetApprovalThresholdUsd` is **WP-28's** (its row names
+the field), `reviewOnly` is decided rather than deferred (the opt-in key wins), and these seven say
+`owner: 'none'` because `13-implementation-plan.md` ends at WP-32 and naming a row that does not
+exist is rule 86 in a table"* — `picksUpNewTickets`, `stopAfterStage`, `businessReview`,
+`questionTimeout`, `humanMrRounds`, `knowledgeAutoApply` and `shadowMode`. The table is
+`packages/domain/src/policies/autonomy.ts` (`AUTONOMY_POLICY_READERS`), and a test holds its keys to
+`AutonomyPreset`'s own. **The count is fifteen, not sixteen**: `AUTONOMY_POLICY_WIRE_NAMES` has
+fifteen entries and `satisfies Record<keyof AutonomyPreset, …>`; the bullet, the WP-28 row and the
+WP-30 row all say *"sixteen"*, and nothing rests on the number except a reader's arithmetic.
+
+**The seven are three separate problems, and naming the cause is what makes each small** (refiner,
+session 5; greps and file reads only, rule 66 — no test was run):
+
+**(a) Three are a second spelling of a configuration key that already has a reader, and nothing
+carries the dial's value into it.** `humanMrRounds` ↔ `pipeline.limits.human_rounds` (default 3,
+`packages/domain/src/config/effective-config.ts:80`, read by `iterationLimits`,
+`packages/domain/src/policies/iteration-limits.ts:38,52`); `knowledgeAutoApply` ↔
+`policies.knowledge_apply` (WP-18b's apply policy); `questionTimeout` ↔
+`pipeline.limits.question_timeout` (`effective-config.ts:80`). This is the shape WP-30 **already
+decided twice** — `reviewOnly` (*"the opt-in key wins"*) and `probationTasks` (the one overridable
+key) — so the decision is made and the carrier is missing. The readers table describes the carrier as
+though it existed: `knowledgeAutoApply`'s `why` is *"WP-18b's apply policy reads
+`policies.knowledge_apply` out of the configuration document, so the dial's value is a preselection
+the wizard writes there rather than a second switch"* — **there is no such writer**: a grep for
+`knowledge_apply` over `apps/web/src/features/operating-mode.tsx`, `apps/server/src/routes/settings.ts`
+and `apps/server/src/routes/onboarding.ts` returns nothing, so moving the dial to Autonomous changes
+nothing about auto-apply, and `humanMrRounds: 5` at Autonomous leaves the ceiling at the template's 3.
+Cheapest close: **one writer at materialisation time** (the route that writes `autonomy_policies` also
+writes the document keys the preset has an opinion about) or, if a settings write must not touch the
+repository's document (WP-30 note 2's reason), a resolver that prefers the materialised preset where
+the document is silent — either way one decision covering all three, and the second half of Q78.
+
+**(b) Two are a halt the compiled pipeline cannot express.** `stopAfterStage` (Assist's
+*"scoping-only"*: park the task after `architecture`) and `businessReview` (whether the stage runs at
+all). The mechanism exists — the interpreter honours a disabled stage
+(`packages/domain/src/pipeline/interpreter.test.ts:449` drives `business_review` with
+`enabled: false`) — so what is missing is a compile step that reads the dial, plus a decision about
+what "park" means for `stopAfterStage` (a `needs_human` escalation is the existing vocabulary; a new
+task state is what Q59 refused). Cheapest by adjacency: **WP-28**, the only open row that opens the
+gate machinery and already reads `autonomyPresetFor(settings)` (`packages/application/src/pipeline/saga.ts:659`).
+
+**(c) Two are what *Observe* means, and they belong to shadow mode.** `picksUpNewTickets` (nothing in
+intake asks it; the `intake_check` duty asks the ticket label and the WIP limits) and `shadowMode`
+(no shadow runner exists; `tasks.mode` is chosen by whoever creates the task). Owner: **WP-34**
+(M3 — *"shadow mode (closed tickets) + ShadowReport + UI"*), which is the row where an Observe
+project first has to both refuse live tickets and run shadow batches. It is the only pairing in this
+entry that is a single piece of work.
+
+**What it costs to leave.** The screen publishes all fifteen as facts: `PolicyTable`
+(`apps/web/src/features/operating-mode.tsx:339-353`) renders *"The 15 policies this position set"*
+with each value and **no mark on the seven that set nothing** — the feature cards carry caveat lines
+and the policy list does not. So a maintainer who moves a project to Autonomous is shown
+`knowledge_auto_apply true`, `human_mr_rounds 5`, `picks_up_new_tickets true` and
+`business_review true`, and gets the behaviour of whatever the template and the document say. The
+audit row records that the dial meant something it did not — which is the same sentence WP-30's plan
+row used about the pre-WP-30 build, one layer in.
+
+**What "done" looks like.** Three changes, in the order of their cost: (a) a writer or a resolver
+covering the three document-backed policies, with the assertion being the **countable effect** rather
+than the stored value (a task on an Autonomous project gets five human rounds, read back from the
+iteration counter); (b) a compile step that takes the preset, asserted at both boundaries (rule 42) —
+Assist parks after `architecture` and Supervised does not; (c) WP-34's. In every case the entry in
+`AUTONOMY_POLICY_READERS` flips from `owner: 'none'` to `kind: 'read'`, and that table's test is the
+recurrence guard that already exists. **Needs measurement: none** for (a) and (b); (c) inherits
+whatever WP-34's shadow batch needs.
+
+**Depends on / owner.** **No work package owns any of the three.** (a) and (b) are M2-shaped and
+WP-28 is the cheapest host for both by adjacency; (c) is **WP-34**, M3. The product half of (a) —
+*which* of the fifteen a project may override at all — is **Q78**, filed with a recommendation, and
+it does not block: the three keys named here already exist in the configuration schema.
+
+**Adjacent, and each already owned — three feature keys the same screen stores and nothing reads.**
+WP-30's note 10 says four cards carry a caveat line; three of them are *"stored and acted on by
+nothing"*: `features.shadow_mode` (*"the switch and its budget are stored; nothing in this build
+starts a shadow batch"* — **WP-34**), `features.maintenance` (*"Stored; no scheduler runs a
+maintenance batch in this build"* — **WP-36**) and `features.digest` (*"Stored; nothing in this build
+sends a notification of any kind (WP-32)"* — **WP-32**, whose row already says so at length). No new
+work is filed here because each has a row; what each of those rows gains is one assertion — **the
+caveat line is deleted in the same change** (`FEATURE_CARDS`, `apps/web/src/features/operating-mode.tsx:117-167`),
+so a feature that starts working and leaves the screen saying it does not is a test failure.
+
+### 73. **Risk classes are half a feature in four places: no default set ships, the proposal has no producer, `tasks.risk_classes` has no writer, and one of the three requirements product/19 §14 defines cannot be stored at all** (TODO — **no work package owns any part**; cheapest owner **WP-37**, which is an M3 one-line row with no acceptance criteria, so this entry is its brief; found by WP-30, session 5)
+**What is wrong — one cause.** The platform now has a risk-class **reader** and has never had a
+risk-class **producer**: nothing computes a class from a repository, and the one thing that computes
+a class from a change computes it from a *plan*. WP-30's gate is the reader
+(`packages/domain/src/policies/risk-classes.ts`, `riskClassesRequiringPlanApproval`, called from
+`packages/application/src/pipeline/saga.ts:678`); the four symptoms below are what is missing around it.
+
+**(a) No default classes ship, so the gate's risk-class branch is dead on every project.**
+product/19 §14 is titled *"Default risk classes and reviewer routing"* and tables six of them — auth,
+payments, data, infra, agent-config, public-api — with path patterns and a default policy each.
+`PLATFORM_DEFAULT_CONFIG.policies` (`packages/domain/src/config/effective-config.ts:82-104`) carries
+`protected_paths` and **no `risk_classes` key**, so a project has zero classes unless somebody
+hand-writes `.agentic/config.yml`, and the settings screen renders the empty state
+(`apps/web/src/features/operating-mode.tsx:462-467`). This is also why WP-30's gate could ship with
+no behaviour change anywhere, which is worth knowing before reading its canaries.
+
+**(b) The *proposal* has no producer and no field to put one in.** product/18:52 is *"Risk classes
+proposed from the repository structure; reviewer routing from CODEOWNERS if present"*.
+`discoveryDraftDataSchema` (`packages/contracts/src/artifacts.ts:300-320`) is a strict object with
+`documents`, `commands`, `linked_documents`, `questions` and `readiness` — **no risk-class field** —
+so a Discovery agent cannot return one even if the prompt asked. WP-30 named it a gap on the screen
+rather than rendering a control that does nothing, which is the right call and leaves the work here.
+
+**(c) `tasks.risk_classes` has no writer, and the task page renders the column.** It is
+`packages/infrastructure/src/db/schema/pipeline.ts:93` (`text('risk_classes').array().notNull().default(emptyArray)`),
+`taskRecordSchema` publishes it (`packages/contracts/src/records.ts:220`) and
+`apps/web/src/features/task-detail.tsx:556` renders it, so every task shows an empty list. The
+authoritative source product/19 §14 names is the merge request's own diff, which **WP-26 already
+fetches at the rebase gate** — the residual and its safe direction (a plan that omits a path escapes
+the class; a model can never use this to *skip* a gate) are stated in `risk-classes.ts`'s docblock.
+
+**(d) Of the three requirements the document defines, one is read, one parses with no consumer, and
+one cannot be written at all.** `riskRequirementSchema` (`packages/contracts/src/config.ts:150-153`)
+is `z.enum(['plan_approval','budget_approval'])` united with `/^reviewer:@?[A-Za-z0-9._\-/]+$/`. So
+`plan_approval` is read by the gate; `reviewer:@handle` parses and has no consumer (**WP-37**'s
+reviewer routing); `budget_approval` parses and has no consumer, and its natural one is **WP-28**'s
+`kind: 'budget'` approval, whose row does not name it; and **`checklist:<name>` is not in the union**,
+so a strict boundary schema refuses it and product/19 §14's *"payments → plan approval + stricter
+checklist"* and *"public-api → stricter checklist"* cannot be expressed in a configuration file.
+One line of this entry is therefore a **comment correction rather than missing work**:
+`packages/domain/src/policies/risk-classes.ts:9` says *"`reviewer:@handle` and `checklist:<name>` are
+parsed by `riskRequirementSchema` and have no consumer"*, and the `checklist:` half of that sentence
+is false — it is not parsed, it is refused (rule 83's shape; read off the tree, no test run).
+
+**What it costs to leave.** BD-030 and product/19 §14 are the product's answer to *"what stops the
+agent touching auth and payments unsupervised"*, and on this build the answer is a gate that never
+fires, a task field that is always empty and a wizard step that says so. It is the **latent** kind:
+the moment a dogfood project hand-writes one class, (c) and (d) become live — the gate will fire from
+the plan's paths and nothing will notice a class the implementation touched and the plan did not name.
+
+**What "done" looks like.** (a) is one constant and a decision about whether shipped defaults are
+*defaults* or a *proposal an operator accepts* — the honest answer given product/18:52 is the second,
+so it belongs with (b). (b) is an artifact field on `DiscoveryDraft`, a prompt change and a
+`ROLE_PROMPT_VERSIONS` bump with eval cases (TD-016), plus the wizard turning the proposal into
+`policies.risk_classes` through the existing configuration write — and the proposal is **never
+auto-applied**, the same rule `kb_proposals` follows (product/06). (c) is a narrow write of the
+classes computed from the merge request's changed paths at the rebase gate, where the read already
+happens, asserted by the countable effect: a task whose diff touches `**/migrations/**` carries the
+`data` class on its row. (d) is either a consumer for each requirement or a schema that refuses what
+it cannot act on; `checklist:<name>` needs a decision before it needs code, because the review
+checklist it would select does not exist as a named thing anywhere in the tree. **Needs measurement:
+none** — all four were read off files.
+
+**Depends on / owner.** **No work package owns any part.** **WP-37** (*"risk classes + reviewer
+routing (CODEOWNERS)"*, M3) is the cheapest owner of (a), (b) and the `reviewer:@handle` half of (d),
+and it is a one-line row: if it is planned from this entry, (c) is the piece to pull forward, because
+it is the only one that can be done inside a row that is already open (WP-26's gate has the diff).
+`budget_approval` in (d) is **WP-28**'s by mechanism and should be a sentence on that row when it is
+implemented. Nothing here blocks anything else.
+
+### 74. **BD-006's one-working-day question timeout is unbuilt end to end — no deadline is written, no timer is armed, and the escalation that exists has no producer** (TODO — **no work package owns it**; found by the refiner while attributing WP-30's `questionTimeout` policy, session 5)
+**What is wrong.** A blocking question parks a task for ever. Every piece of the timeout exists
+except the one that starts it, and each piece is production code that looks finished.
+
+**Evidence** (greps and file reads only, rule 66 — no test was run):
+- **No deadline is ever written.** `openQuestion` (`packages/application/src/pipeline/stage-executor.ts:785-797`)
+  passes no `deadlineAt`, and the aggregate defaults it — `deadlineAt: input.deadlineAt ?? null`
+  (`packages/domain/src/aggregates/question.ts:104`) — so `questions.deadline_at` is null on every
+  row and the API publishes the null (`apps/server/src/queries/pipeline-queries.ts:474`).
+- **The calendar that would compute one has no production caller.** `questionTimeoutAt` and
+  `questionReminderTimes` (`packages/application/src/scheduling/working-calendar.ts:290,301`) are
+  referenced only by `working-calendar.test.ts`. WP-05's plan row owed *"working-day calendar for
+  question timeouts"* and shipped exactly the calendar.
+- **The queues are declared and never used.** `JOB_QUEUES.questionTimeout = 'question.timeout'` and
+  `questionReminder = 'question.reminder'` (`packages/application/src/ports/jobs.ts:315-319`), each
+  with a comment reading *"`startAfter` from the working-day calendar"*; a grep for either string
+  over `packages/` and `apps/` returns the declaration and nothing else.
+- **The command that would fire has only test callers.** `expireTaskQuestion`
+  (`packages/application/src/pipeline/commands.ts:136`), whose docblock is *"The `question.timeout`
+  timer fired (TD-004). The saga escalates on the event this emits."*, is called from
+  `packages/application/src/pipeline/saga.test.ts:455,477` and nowhere else.
+- **So a `handled` event has no producer.** `task.question.expired` is declared `'handled'` in
+  `EVENT_CONSUMPTION` (`packages/application/src/events/consumption.ts:78`) and the saga's branch for
+  it is complete and unreachable (`saga.ts:788-800`: mark the question escalated, escalate the task
+  with a blocker brief naming the question). The consumption table asks who *reads* an event and
+  never who *writes* one, which is why no census sees this.
+- **Nothing arms anything when a question is asked.** The only consumer of `task.question.asked` is
+  the workpad render (`packages/application/src/pipeline/workpad.ts:79`).
+
+**Two sentences in the tree say otherwise and are part of the fix** (rule 83's shape, comment
+corrections rather than missing work): `AUTONOMY_POLICY_READERS`'s `questionTimeout` entry reads
+*"`questions.deadline_at` is written from the template's own limit and nothing sweeps it"*
+(`packages/domain/src/policies/autonomy.ts`), and the WP-30 discovered-work bullet repeats it. The
+column is not written from anything — it is null — so the dial's policy is two steps from a reader,
+not one.
+
+**What it costs to leave.** BD-006 and product/19 make a blocking question time-bounded; on this build
+it is unbounded, with no reminder, no escalation and no deadline shown in the UI — and the task holds
+a WIP slot while it waits. It is the live half of the dial's `questionTimeout` policy (entry **72**
+(a)): a dial that moved the timeout would be moving a value nothing reads. It is also the **second**
+unbuilt deadline of exactly this shape — entry **69** records product/19:156's five-working-day
+take-over timeout, whose only trace in the tree is an example in `working-calendar.ts:264` — so the
+two want one mechanism and should be scheduled together.
+
+**What "done" looks like.** A handler on `task.question.asked` at a declared TD-005 priority arms
+`question.timeout` with `startAfter` from `questionTimeoutAt(calendar, askedAt,
+limits.question_timeout)` and writes `questions.deadline_at` in the same transaction that stores the
+question; the enqueue goes through `HandlerContext.afterCommit`, because `Jobs.enqueue` does not join
+the handler's transaction, and the job **re-validates on fire** (TD-004) — `expireTaskQuestion`
+already returns quietly for a question that was answered meanwhile, which is the whole of that
+re-validation. Reminders are the same shape over `questionReminderTimes`. `EVENT_CONSUMPTION`'s entry
+for `task.question.expired` gains its producer, and the assertion is the countable effect with an
+injected clock (rules 2 and 42), at the boundary and one unit past it: a question asked at 16:00 on a
+Friday with `1 working day` expires on Monday and not on Saturday, read back from the question's
+status and the task's escalation rather than from a return value. **Needs measurement: none.**
+
+**Depends on / owner.** **No work package owns it**: WP-05 shipped the calendar and is DONE, WP-15
+shipped the escalation and is DONE, and no open row names the arming. Cheapest by adjacency is
+**WP-32** — it is the row that already owes a `task.question.asked` consumer at TD-005 priority 210,
+an injected clock and a calendar-aware schedule, and its own cost sentence is *"BD-006's
+one-working-day question timeout expires against a human nobody told"*, which on this build does not
+expire at all. If WP-32 does not take it, it is a small row of its own and should carry entry **69**'s
+take-over timeout with it.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -11805,6 +12046,11 @@ that leaks a handle is untidy, and one that leaks a *lock* is a time bomb for wh
    WP-19 produces the estimate, nothing reads `AutonomyPreset.budgetApprovalThresholdUsd`, and the
    gate belongs with the approval work rather than with the wizard. This row sets the dial; it does
    not build the gate the dial configures.
+   *Implementer (WP-30, session 5): still true of the **gate**, and no longer true of its **input**.
+   `budgetApprovalThresholdUsd` is materialised per project (migration 0021) and published by
+   `GET /api/projects/:id/autonomy`, so WP-28 reads a stored threshold instead of re-deriving one
+   from the level — which BD-027:14 forbids. It is recorded as `kind: 'unread', owner: 'WP-28'` in
+   `AUTONOMY_POLICY_READERS`, which a test holds to `AutonomyPreset`'s own key set.*
 5. **Step 3 (the business interview) is not built, and the wizard says so.** product/06 describes a
    conversational form driven by the Product Manager role; nothing in this build runs one, and a
    form that collected answers nobody reads would be worse than an honest gap. The screen links to
@@ -13103,7 +13349,305 @@ does not; it is `takeOverResponseSchema.workspace_export` lacking the third valu
 unbuilt transport, which is what would make the export actually happen. Single-process (`ROLE=all`,
 the shipped compose) is unaffected, which is why no tier sees it.
 
+### WP-30 — the autonomy dial materialised, step 4, and the settings mirror
+
+**What shipped.** `projects.autonomy_policies` (migration **0021**) with every writer filling it;
+`GET/PUT /api/projects/:project_id/autonomy`, `PUT /api/projects/:project_id/budgets`,
+`GET/PUT /api/org/budgets` and `GET /api/projects/:project_id/audit`
+(`apps/server/src/routes/settings.ts`); a plan-approval gate that reads the dial;
+`apps/web/src/features/operating-mode.tsx` — product/18:50-54's five items, rendered by the wizard
+**and** by the new project settings page; the Integrations screen's create and test controls; and one
+`Idempotency-Key` per user intent in the SPA. Backlog **52** (project half), **53**, **55** and **58**
+(both halves) are closed.
+
+**1. The materialised preset is a column, and `null` in it is a *statement* rather than a default.**
+`projects.autonomy_policies` holds `materialisedAutonomySchema` — the level, the version of the
+preset table, when it was applied, by whom, and the fifteen policies. The alternative considered was
+a declared key of `projects.config`; it was refused because that column is the repository's document
+(layer `repo`) and what a dial *meant* on the day it was chosen is the platform's record, not
+something a `.agentic/config.yml` may rewrite. The column is **nullable with no SQL default**: a
+default frozen in the migration would hand a project created in a later release the preset of this
+one, which is the same re-derivation bug one layer down. Migration 0021 backfills every row that
+existed and all three writers (`createProject`, `PUT …/config` with a level, `PUT …/autonomy`) supply
+a document, so `null` can only be a harness's row — and every reader says *"never materialised"*
+rather than substituting a preset (standing rule 16). `planApprovalGate` keeps its **pre-WP-30**
+behaviour for such a row through the named constant `UNMATERIALISED_PLAN_APPROVAL`, which is
+deliberately not the supervised preset: substituting that would turn probation on for a project that
+never chose a position.
+
+**2. Re-apply is not a second command; selecting *is* materialising.** `PUT …/autonomy` writes
+`autonomy_level` and `autonomy_policies` together, always from **this release's** table, so
+"re-apply preset" is the same request with the position already in force. A `re_apply` flag would be
+a second name for one statement. The route writes those two columns and **not** `config`, because a
+maintainer moving the dial must not overwrite a document an administrator is editing (standing rule
+79). `PUT …/config` still carries the dial for the wizard's one-request path and goes through the
+same materialisation.
+
+**3. *Custom* is measured against the stored copy, never against the level.**
+`describePresetOverrides` now takes a level **or a preset value**, and the projection passes the
+materialised one. Comparing against the level would relabel every project *Custom* the day a release
+edits a preset — a label that moved without a policy moving — which is asserted directly:
+`autonomyResponseFrom` answers `is_custom: false` and `preset_outdated: true` for exactly that case.
+`preset_outdated` is two questions rather than one, because a release that edits a preset and forgets
+to bump the version is a mistake the UI should still be able to show.
+
+**4. What a project can actually override is one key, and that is stated rather than implied.**
+BD-027 keeps every policy overridable and `.agentic/config.yml` is where an override is written —
+but `policiesConfigSchema` has exactly **one** key that maps onto a preset field,
+`policies.probation_tasks`. `autonomyOverridesFromConfig` is therefore one entry long and its
+docblock says so; `probation` follows the count, because "probation for 0 tasks" and "probation off"
+are one behaviour and two switches for one behaviour is what `reviewOnly` is filed for.
+
+**5. The gate reads five policies, and the other ten are enumerated where the absent case cannot be
+quiet.** `AUTONOMY_POLICY_READERS` is `EVENT_CONSUMPTION`'s shape: every key of `AutonomyPreset` with
+either the module that reads it or the reason nothing does. Five read — the gate's
+(`planApproval`, `planApprovalSizeThreshold`, `planApprovalForRiskClasses`, `probation`,
+`probationTasks`); `budgetApprovalThresholdUsd` names **WP-28**; `reviewOnly` and
+`suggestedReadinessMin` are decided rather than deferred (review round 2 moved the second one:
+nothing reads it, the read endpoint *publishes* it inside the document, and the suggestion an
+operator sees is `suggestedAutonomyCap` over `projects.readiness_level`); the remaining seven say
+`owner: 'none'`, because the plan ends at WP-32 and naming a row that does not exist is rule 86 in a
+table. They are filed under discovered work below. `packages/domain/src/policies/autonomy-readers.test.ts`
+holds the table's keys to `AutonomyPreset`'s own **and resolves every claimed reader against the
+tree**.
+
+**6. Risk classes got a real reader, from the plan's declared paths.** `policies.risk_classes` has
+been in the schema since WP-01 with no reader, and `tasks.risk_classes` has no writer. The gate reads
+the **Implementation Plan's** `files_to_change[].path` instead — the first moment the platform knows
+what a task will touch, and the moment plan approval is decided. The residual has a direction and it
+is the safe one: a model that omits a path escapes the class and the task is *not* gated, never the
+reverse, so a model cannot use this to skip a gate. The authoritative source product/19 §14 names is
+the merge request's diff, which arrives later; closing that is a read at the rebase gate, filed.
+`reviewer:@handle` and `checklist:` are parsed and unread, and
+`riskClassesRequiringPlanApproval` exists as a separate function so that nothing reads as though all
+three requirements were acted on.
+
+**7. A per-stage `plan_approval` override wins over the dial, and never over a risk class.** The two
+are composed rather than branched: the override replaces `planApproval`/`planApprovalSizeThreshold`
+on the preset and `requiresPlanApproval` is asked once. So `plan_approval: never` on one stage does
+not switch off probation (a different policy, with its own key) and does not wave a risk-classed
+change through (a statement about the change, not about the stage). Both are asserted.
+
+**8. Two switches for one feature, and which one wins.** `AutonomyPreset.reviewOnly` and
+`features.review_only.enabled` are both "review-only mode". **The opt-in key wins**: BD-028 makes
+every adoption feature an opt-in, WP-24 wired the key to the pipeline, and the preset field has no
+reader. The dial *recommends*; the card writes the key; the card says so in one line, because an
+operator who moves the dial to Observe and expects the mode to switch itself on is otherwise
+surprised.
+
+**9. The mirror is one component, not two screens kept in step.** `features/operating-mode.tsx` is
+rendered by the wizard's step 4 and by `features/project-settings.tsx`. The census that keeps it
+honest (`apps/server/src/routes/settings-mirror.test.ts`) compares the command sets of the two
+screens over the **transitive closure of their relative imports**, in both directions, with one
+admitted omission (`createProject`: a settings page belongs to a project that exists). The shared
+helper `routes/web-sources.ts` came out of `client-census.test.ts` in the same change, because
+importing one test file from another runs its `describe`s twice.
+
+**10. The two items this build cannot honestly carry are named on the screen.** Risk classes
+*proposed from the repository structure* (a Discovery output with no artifact field) and the
+notification **channel** (a property of a `communication` binding, and the loader resolves two of
+five types). Both are rendered as the gap the wizard's step 3 already uses, not as controls that do
+nothing. Four feature cards carry a caveat line for the same reason — shadow mode, maintenance and
+digest are stored and acted on by nothing in this build.
+
+**11. Budgets have a production writer, and it is an upsert on the natural key.**
+`unique nulls not distinct (scope, scope_id, "window")` is exactly "one cap per scope per window", so
+`PUT …/budgets` is keyed by **window** rather than by the `:id` technical/08 sketches — an id-keyed
+write has no creator, and every budget in existence before this row was seeded by a test.
+`limit_usd: null` removes the cap; zero is refused by the table, because zero would block every run
+for ever. `on conflict do update` rather than delete-then-insert, because `budget_windows` cascades
+and an operator raising a cap must not reset the meter that made them raise it.
+
+**12. A settings write's free text is redacted at the route, and that is a stated deviation.** WP-27's
+rule is that the *command* redacts and hands the words back to its transport. A settings write has no
+application-ring command — it is a query and an audit row — so the route is that one place, with the
+redactor **injected** (`redactionAdapters.patternRedactor()`, the same composition `commands.ts`
+gives every task command) rather than constructed there. `override_reason` is bounded at 2 000
+characters first, because it is stored state that came from outside.
+
+**13. `GET …/config` names what it could not parse.** Backlog 58's general fix: the refusal stays a
+refusal — a silently pruned document would be re-saved without the key nobody saw — and it is a
+**409** carrying every failing key path and the value found there, plus the `PUT` an operator can
+make. Migration 0021 rewrites the one value that exists in the wild, `features.review_only.trigger:
+manual`, to `paths` with an empty list, which is what the pipeline already does with it through
+`matchesReviewOnly`'s default branch — the document changes and the behaviour does not. Not to
+`label`: an enabled project would start reviewing every labelled merge request it never asked for.
+
+**14. One `Idempotency-Key` per intent, in the client.** Held per canonical value of a mutation's
+variables, minted on the first send and released on success: a retry of a failed send keeps the key,
+a corrected form gets a new one because its variables differ, and a deliberate second identical
+create gets a new one because the first released it. It does **not** deduplicate on the client — two
+clicks still send two requests, because the client cannot know whether the first arrived; what
+changes is that the second carries a key the server recognises.
+
+**Assumptions, each implemented.**
+- **The settings mirror is product/18:55's**, all five wizard steps, which is what the WP-21 bullet
+  left to this row. BD-028's narrower wording would have put only step 4 in it.
+- **WIP limits and policies are read-only on the settings page.** product/10:21 lists them; both are
+  keys of a document the repository also owns, and a form that wrote one key by re-sending the whole
+  document would be a second writer of it. The pipeline screen already renders the merged document
+  with the source of every key, and the settings page says so and links there.
+- **The integrations form takes a free-text provider id** and renders the server's own refusal, which
+  now names every shipped provider. A catalogue copied into the SPA is a second list to keep true,
+  and importing `@platform/integrations` into the browser would pull every adapter past TD-013's
+  budget.
+- **`GET /api/org/budgets` is keyed by window like the project half**, and the deviation from
+  technical/08's `PUT /api/org/budgets/:id` is stated at the route and in that document.
+- **The project audit is the *settings* audit.** `human_actions` has no `project_id` column and a
+  task command's row names a task, so the predicate is `params->>'project_id'` and the endpoint's
+  description says what is therefore not in it.
+
+**What the tiers assert.** Unit: the wire mapping over both key sets, the reader table against
+`AutonomyPreset`, BD-027:14 from both sides, the projection's nine branches, the gate's eight cases,
+the risk-class matcher, the intent keys. Contract: `TaskRepository.countCompleted` in the shared
+suite, against the fake and PostgreSQL. Integration: the migration's **own statements read off disk**
+and re-run over rows it would have backfilled (a paraphrase would pass whether or not the file's
+literals were right), the budget upsert against the real unique index, and the audit's jsonb
+predicate. ui: the settings page's ten sections, *Custom* both ways, the never-applied badge, and a
+double-submitted create carrying one key. e2e: the dial materialised over HTTP and re-applied, the
+same ticket walking through with no dial and parking at a human with Supervised selected, and a
+budget **created over HTTP** exhausted by a real run's spend pausing the next task with no run row.
+
+**Canaries.** Dropping the dial from the gate (`autonomyPresetFor(settings) ?? …` → the constant)
+fails five named saga cases; renaming the one `createIntegration.mutate(` call site fails both
+censuses by name.
+
+**Review round 2:** one blocker, one major, three minors and a nit, each fixed and each measured.
+
+- **The `dayMinus` suite was lost to a whole-file rewrite, not to a decision** (blocker).
+  `apps/server/src/queries/project-queries.test.ts` was **46 lines and a single `describe('dayMinus')`**
+  at `a2b442e`; round 1 needed a home for the dial's projection and wrote the file rather than
+  extending it, so `dayMinus` and `SPEND_WINDOW_DAYS` — live code behind `spent_usd_30d` — had no
+  test in any tier and nothing recorded the deletion. The four cases are restored verbatim as a
+  second `describe` in the same file (month, year and leap-year boundaries; the inclusive 30-day
+  window derived from the constant; DST-independence; `TypeError` over four malformed keys), the
+  file's head docblock now names **both** subjects, and the restored block says at the top how it
+  was lost (standing rule 44 — a deleted assertion is a decision somebody records).
+- **The reader table's grep is written, and the entry it would have refused is fixed** (major).
+  `AUTONOMY_POLICY_READERS`'s docblock claimed the values were *"asserted against a grep of the
+  tree"* while the assertion was `entry.by.length > 0` (rules 3 and 44), and the table named a
+  `routes/autonomy.ts` nobody has written. `packages/domain/src/policies/autonomy-readers.test.ts`
+  is the check: a `read` entry must name a **repository path**, it must be a file git knows about
+  (tracked *or* untracked-committable, rule 85), its text must name the policy as a whole word, and
+  it may not be the table's own module — which would satisfy the third condition for all fifteen.
+  **Canaried first, and it refused six of six**: run against the table as it shipped, every `read`
+  entry failed — the five gate entries said `pipeline/saga.ts` (a bare name, not a path — WP-24's
+  lesson) and `suggestedReadinessMin` cited a file that does not exist. The five now carry
+  `packages/application/src/pipeline/saga.ts`; four negative cases are kept permanently in the
+  suite, one of them the wrong entry as it shipped, the others a renamed path, a real file that does
+  not mention the policy, and a citation of the table's own module.
+- **`suggestedReadinessMin` is `unread`, decided rather than deferred** (the same finding, one layer
+  in). No file outside the table names it: `routes/settings.ts` and `queries/project-queries.ts`
+  *publish* it inside the whole document through `toWireAutonomyPolicies`, which is true of all
+  fifteen and would make the table meaningless, and the *suggestion* an operator sees is
+  `suggestedAutonomyCap` over `projects.readiness_level` — the same ladder written the other way
+  round, which never consults this field. So it joins `reviewOnly` as decided-not-deferred, the read
+  set is **five**, and the seven `owner: 'none'` entries (backlog 72) are unchanged. The two
+  encodings of the ladder are now held to each other by a case in `autonomy.test.ts`, because a
+  published number nothing reads is exactly the one that drifts.
+- **Migration 0021's citation named a test that does not exist** (minor).
+  `autonomy-migration.integration.test.ts` was never written; the assertion is
+  `test/integration/server/settings.integration.test.ts` › *"gives a pre-0021 row the policies its
+  level meant, for all four levels"*, and the comment now names the file, the case and what it does.
+  The file's **statements are untouched**; TD-011 is forward-only and the comment edit is allowed
+  only because 0021 has not shipped in any release — and it is not free, because `checksumOf` covers
+  the whole file: any database that had already applied the round-1 text would now refuse to
+  migrate. That is nobody's database yet, and it is why this is the last edit it gets.
+- **"Sixteen" was never the count; there are fifteen** (minor, rule 39). Corrected at
+  `0021_autonomy_materialised.sql`, `packages/contracts/src/records.ts`,
+  `test/e2e/server/settings-api.e2e.test.ts` (twice), `packages/application/src/pipeline/saga.test.ts`,
+  `packages/domain/src/policies/autonomy.ts` and both discovered-work bullets below. The count is now
+  also *produced*: `autonomy-readers.test.ts` asserts the table has fifteen keys and that they are
+  `AutonomyPreset`'s own. The plan's WP-28 and WP-30 rows still say sixteen and are not an
+  implementer's to edit.
+- **The `invalid_stored_config` refusal is redacted** (minor, rules 42 and 10).
+  `describeConfigIssues` echoed `projects.config` back at the caller, and that column is partly the
+  repository's own document — a credential pasted into `.agentic/config.yml` reached the message by
+  **three** routes: the value, the key path, and zod's own *"Unrecognized key"* message. It now takes
+  the injected `patternRedactor()` (the composition `routes/settings.ts` and `routes/commands.ts`
+  already get) and redacts **before** the 120-character bound, the opposite order from `auditedText`:
+  measured, truncating first publishes `glpat-FAKE`, a prefix no rule can match, while redacting
+  first publishes `[REDACTED …]`. Both directions are asserted — a planted token in a value, a
+  planted token as an unknown key, the straddling case with the clause's length pinned, and the
+  ordinary `features.review_only.trigger: "manual"` clause still readable.
+- **The two budget reads share their arithmetic** (nit). `listOrgBudgets` and `listProjectBudgets`
+  now differ in the predicate and in where the timezone comes from and in nothing else;
+  `budgetsWithSpend` is the window-and-spend half, which is the thing Q12 needs the two endpoints to
+  agree about.
+
 ## Discovered work — session 5 (not in plan)
+- **Seven of the dial's fifteen policies have no reader and no work package**, and they are now
+  enumerated where that is visible rather than implied (WP-30). `AUTONOMY_POLICY_READERS`
+  (`packages/domain/src/policies/autonomy.ts`) is `EVENT_CONSUMPTION`'s shape and a test holds its
+  keys to `AutonomyPreset`'s: five are read by the plan-approval gate,
+  `budgetApprovalThresholdUsd` is **WP-28's** (its row names the field), `reviewOnly` and
+  `suggestedReadinessMin` are decided rather than deferred (the opt-in key wins; the suggestion is
+  computed from the readiness level), and these seven say `owner: 'none'` because
+  `13-implementation-plan.md` ends at WP-32 and naming a row that does not exist is rule 86 in a
+  table: **`picksUpNewTickets`** (intake would refuse a new ticket on an Observe project; today it
+  asks the ticket label and the WIP limits and nothing else), **`stopAfterStage`** (Assist's
+  "scoping-only" — the saga would park the task after the named stage, and the compiled pipeline has
+  no such halt), **`businessReview`** (the template decides it, not the dial), **`questionTimeout`**
+  (BD-006's one working day — `questions.deadline_at` comes from the template's limit and nothing
+  sweeps it), **`humanMrRounds`** (BD-008's ceiling is a constant per template), **`knowledgeAutoApply`**
+  (WP-18b reads `policies.knowledge_apply` out of the configuration document, so the dial's value is
+  a preselection rather than a second switch) and **`shadowMode`** (no shadow runner exists;
+  `tasks.mode` is chosen by whoever creates the task). Each is a small change on its own and the set
+  is what "the dial does something" finally means; they are the reason the wizard's feature cards
+  carry caveat lines.
+  *Refiner (session 5): **filed as backlog 72**, as **three** pieces of work rather than seven — the
+  three that duplicate a configuration key already read and have no carrier into it
+  (`humanMrRounds`, `knowledgeAutoApply`, `questionTimeout`; the "preselection the wizard writes
+  there" does not exist, measured), the two the compiled pipeline cannot express (`stopAfterStage`,
+  `businessReview`; cheapest host **WP-28**) and the two that are what Observe means (`picksUpNewTickets`,
+  `shadowMode`; **WP-34**). The count is **fifteen**, not sixteen. `questionTimeout`'s live half is
+  its own entry, **74**, and this bullet's *"`questions.deadline_at` comes from the template's
+  limit"* is **falsified**: `openQuestion` passes no deadline, so the column is **null** on every row
+  and nothing arms the timeout at all. The overridability half is **Q78**.*
+- **The task-scoped half of the settings audit has no reader** (WP-30; PROGRESS backlog **52**'s
+  remainder). `GET /api/projects/:id/audit` serves the rows whose `params.project_id` is the
+  project — the wizard's and the settings screens' writes — and a task command's row names a **task**
+  instead, so the eleven commands of WP-15i and WP-27's three are still invisible to any read
+  surface. The index is already `(task_id, created_at desc)`, so it is one query and a DTO; it
+  belongs with whichever row builds the task page's activity feed rather than with a settings page.
+  *Refiner (session 5): **no new entry — backlog 52 updated**, whose heading now says the project
+  half is closed at `<sha>` and what the predicate `params->>'project_id'` therefore cannot match.
+  Owner named by need rather than adjacency: **WP-31**, which cannot meet its own criterion 6
+  (product/10:57, an ask *"answered from the audit trail"*) without this read, and which now carries
+  it as criterion 10 on its plan row.*
+- **Nothing computes a task's risk classes from what it actually touched** (WP-30). The plan-approval
+  gate reads `policies.risk_classes` against the **Implementation Plan's** declared
+  `files_to_change[].path`, which is the first moment the platform knows anything about the change
+  and the moment the gate runs. `tasks.risk_classes` — the column `taskRecordSchema` publishes and
+  the task page renders — still has **no writer**, and product/19 §14's authoritative source is the
+  merge request's own diff, which WP-26 already fetches at the rebase gate. The residual has a safe
+  direction (a plan that omits a path escapes the class; a model can never use it to *skip* a gate),
+  which is why this is a gap rather than a defect. Two of the three requirements the document
+  defines — `reviewer:@handle` and `checklist:<name>` — are parsed by `riskRequirementSchema` and
+  read by nothing.
+  *Refiner (session 5): **filed as backlog 73**, widened to the cause and its four symptoms, with two
+  clauses corrected. `checklist:<name>` is **not** parsed — `riskRequirementSchema` is
+  `['plan_approval','budget_approval']` plus a `reviewer:@…` regex, so a strict schema refuses it and
+  product/19 §14's two "stricter checklist" classes cannot be written down at all; `budget_approval`
+  is the requirement that parses unread, and its consumer is **WP-28**'s. And the gate is dead on
+  every project today: `PLATFORM_DEFAULT_CONFIG` ships **no** `risk_classes`, so §14's six default
+  classes exist only in the document. Cheapest owner **WP-37** (M3, a one-line row — entry 73 is its
+  brief); the `tasks.risk_classes` writer is the piece that fits inside an already-open row, because
+  WP-26's rebase gate already has the diff.*
+- **A project can override exactly one of the dial's fifteen policies** (WP-30). BD-027 says
+  *"granular policies remain overridable"* and `.agentic/config.yml` is where an override is written,
+  but `policiesConfigSchema` has one key that maps onto a preset field —
+  `policies.probation_tasks`. So *Custom* is computable and testable, and the other fifteen policies
+  cannot be overridden by a project at all, whatever the decision allows.
+  `autonomyOverridesFromConfig` states it at the map. Widening it is a configuration-schema decision
+  (which fields, and whether an override survives a re-apply), not a code change.
+  *Refiner (session 5): **filed as Q78** with a recommendation strong enough to build from — widen to
+  the fields that already have a reader and no further, which is what makes an unread override
+  impossible rather than merely undocumented. **Half of it is already answered by the
+  implementation**: an override *does* survive a re-apply, because it lives in the repository's
+  document and is layered over the materialised copy at read time
+  (`autonomyOverridesFromConfig` in `project-queries.ts:335` and `pipeline/settings.ts:66`), not
+  merged into the stored column — so the open question is only *which fields*.*
 - **A return's reason is written on the stage the task *leaves* and read for the stage it *enters*,
   so return feedback reaches the prompt only by coincidence** (WP-27). `applyDecision`'s `return`
   branch calls `recordStageExited(… stage: decision.from …, returnReason: decision.reason)`
@@ -13328,6 +13872,12 @@ the shipped compose) is unaffected, which is why no tier sees it.
   its docblock that step 1 *"creates integrations from credentials already in the server's
   environment"*, which is false in this build. The recurrence guard is named there too — every
   `endpoints` member reached from outside `api/` and `app/queries.ts`, or an admitted gap.*
+  *Implementer (WP-30, session 5): **closed.** `features/integrations.tsx` has the create form and
+  the test button, both prose statements are corrected (rule 83), and the recurrence guard is
+  `apps/server/src/routes/endpoint-callers.test.ts` — every mutation `app/queries.ts` declares must be
+  fired from outside it and every read hook called from outside it, both directions, admitted-gap list
+  empty. Canaried: renaming the one `createIntegration.mutate(` call site fails it by name, and fails
+  `settings-mirror.test.ts` too.*
 - **A mutating request refused for two different reasons produces one ungrammatical message** (WP-23,
   nit). `role cross-site request: Origin (absent) is not a trusted origin may not perform POST
   /api/integrations` — the capability sentence and the CSRF sentence are concatenated without a
@@ -13517,6 +14067,11 @@ the shipped compose) is unaffected, which is why no tier sees it.
   buttons are in the row). They are driven from the onboarding wizard; `features/integrations.tsx`
   says so at the top rather than leaving the claim that the routes are unbuilt. Small, and it is a UI
   change only.
+  *Implementer (WP-30, session 5): **answered and closed.** The mirror is **product/18:55's** — all
+  five steps — so both buttons are in the row and they are on the Integrations screen, where
+  product/10 puts them. The sentence above about them being "driven from the onboarding wizard" was
+  false when it was written: no component called `createIntegration` at all (backlog 55), and the
+  wizard binds integrations rather than creating them. Both docblocks are corrected.*
 - **Nothing refuses a TypeScript construct Node's type stripping cannot strip, and the one check that
   finds it says "socket never appeared"** (WP-15e). A parameter property
   (`constructor(readonly x: T)`) passes `tsc`, passes biome and passes every vitest tier, and breaks

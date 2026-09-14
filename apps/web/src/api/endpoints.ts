@@ -32,6 +32,7 @@
 import {
   agentsResponseSchema,
   answerQuestionRequestSchema,
+  autonomyResponseSchema,
   budgetsResponseSchema,
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
@@ -49,9 +50,11 @@ import {
   orgAuditResponseSchema,
   orgUsersResponseSchema,
   pauseTaskRequestSchema,
+  projectAuditResponseSchema,
   projectBindingsResponseSchema,
   projectRecordSchema,
   projectsResponseSchema,
+  putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
   readinessResponseSchema,
   resumeTaskRequestSchema,
@@ -62,6 +65,7 @@ import {
   runMessagesResponseSchema,
   runPromptResponseSchema,
   runRecordSchema,
+  setAutonomyRequestSchema,
   setupGuideResponseSchema,
   startDiscoveryResponseSchema,
   steerRunRequestSchema,
@@ -107,6 +111,11 @@ export interface Endpoints {
     projectId: string,
   ) => Promise<z.output<typeof readinessResponseSchema>>;
   readonly projectBudgets: (projectId: string) => Promise<z.output<typeof budgetsResponseSchema>>;
+  readonly orgBudgets: () => Promise<z.output<typeof budgetsResponseSchema>>;
+  readonly projectAutonomy: (projectId: string) => Promise<z.output<typeof autonomyResponseSchema>>;
+  readonly projectAudit: (
+    projectId: string,
+  ) => Promise<z.output<typeof projectAuditResponseSchema>>;
   readonly projectTasks: (
     projectId: string,
     query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
@@ -139,9 +148,12 @@ export interface Endpoints {
    */
   readonly createProject: (
     body: z.input<typeof createProjectRequestSchema>,
+    /** The caller's intent key (`app/idempotency.ts`); omitted, a fresh one is minted per request. */
+    idempotencyKey?: string,
   ) => Promise<z.output<typeof projectRecordSchema>>;
   readonly createIntegration: (
     body: z.input<typeof createIntegrationRequestSchema>,
+    idempotencyKey?: string,
   ) => Promise<{ readonly id: string; readonly provider: string; readonly name: string }>;
   readonly testIntegration: (
     integrationId: string,
@@ -156,7 +168,28 @@ export interface Endpoints {
   ) => Promise<{ readonly hash: string; readonly autonomy_level: string }>;
   readonly startDiscovery: (
     projectId: string,
+    idempotencyKey?: string,
   ) => Promise<z.output<typeof startDiscoveryResponseSchema>>;
+
+  /**
+   * The settings commands (WP-30). Each takes the caller's `Idempotency-Key` — the key belongs to
+   * the user's *intent* and only the call site that owns the intent knows when one ends
+   * (`app/idempotency.ts`, PROGRESS backlog 53).
+   */
+  readonly setProjectAutonomy: (
+    projectId: string,
+    body: z.input<typeof setAutonomyRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<void>;
+  readonly putProjectBudget: (
+    projectId: string,
+    body: z.input<typeof putBudgetsRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<void>;
+  readonly putOrgBudget: (
+    body: z.input<typeof putBudgetsRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<void>;
 
   // Commands (technical/08 § Principles: imperative names, audited).
   readonly pauseTask: (
@@ -255,6 +288,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/projects/${seg(projectId)}/readiness`, { schema: readinessResponseSchema }),
     projectBudgets: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/budgets`, { schema: budgetsResponseSchema }),
+    orgBudgets: () => client.get('/api/org/budgets', { schema: budgetsResponseSchema }),
+    projectAutonomy: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/autonomy`, { schema: autonomyResponseSchema }),
+    projectAudit: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/audit`, { schema: projectAuditResponseSchema }),
     projectTasks: (projectId, query) =>
       client.get(`/api/projects/${seg(projectId)}/tasks`, {
         schema: tasksResponseSchema,
@@ -292,17 +330,19 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     // The wizard's commands. The three that **create** carry an `Idempotency-Key` (technical/08 §
     // Principles); a double-clicked "Create project" that made two projects is the failure the
     // header exists for, and the server refuses the request without one.
-    createProject: (body) =>
+    createProject: (body, idempotencyKey) =>
       client.command('/api/projects', {
         schema: projectRecordSchema,
         body: createProjectRequestSchema.parse(body),
         idempotent: true,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       }),
-    createIntegration: (body) =>
+    createIntegration: (body, idempotencyKey) =>
       client.command('/api/integrations', {
         schema: z.object({ id: z.string(), provider: z.string(), name: z.string() }),
         body: createIntegrationRequestSchema.parse(body),
         idempotent: true,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       }),
     testIntegration: (integrationId) =>
       client.command(`/api/integrations/${seg(integrationId)}/test`, {
@@ -321,12 +361,38 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         schema: z.object({ hash: z.string(), autonomy_level: z.string() }),
         body: updateProjectConfigRequestSchema.parse(body),
       }),
-    startDiscovery: (projectId) =>
+    startDiscovery: (projectId, idempotencyKey) =>
       client.command(`/api/projects/${seg(projectId)}/discovery`, {
         schema: startDiscoveryResponseSchema,
         body: {},
         idempotent: true,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       }),
+
+    setProjectAutonomy: async (projectId, body, idempotencyKey) => {
+      await client.command(`/api/projects/${seg(projectId)}/autonomy`, {
+        method: 'PUT',
+        schema: acknowledgedSchema,
+        body: setAutonomyRequestSchema.parse(body),
+        idempotencyKey,
+      });
+    },
+    putProjectBudget: async (projectId, body, idempotencyKey) => {
+      await client.command(`/api/projects/${seg(projectId)}/budgets`, {
+        method: 'PUT',
+        schema: acknowledgedSchema,
+        body: putBudgetsRequestSchema.parse(body),
+        idempotencyKey,
+      });
+    },
+    putOrgBudget: async (body, idempotencyKey) => {
+      await client.command('/api/org/budgets', {
+        method: 'PUT',
+        schema: acknowledgedSchema,
+        body: putBudgetsRequestSchema.parse(body),
+        idempotencyKey,
+      });
+    },
 
     pauseTask: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/pause`, pauseTaskRequestSchema, body),

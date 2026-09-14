@@ -105,10 +105,17 @@
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >
 > What is still unbuilt on those rows: `PATCH /api/org`,
-> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`,
-> `GET/PUT /api/projects/:id/budgets` and `POST /api/tasks/:id/ask` (WP-31). **WP-27 removed three
+> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`
+> and `POST /api/tasks/:id/ask` (WP-31). **WP-27 removed three
 > of them** — `POST /api/runs/:id/steer` and `POST /api/tasks/:id/{take-over,hand-back}` are served,
 > and `POST /api/runs/:id/steer` is the one endpoint this document gives a rate limit to (below).
+> **WP-30 removed `GET/PUT /api/projects/:id/budgets`** and added four endpoints this table did not
+> name: `GET/PUT /api/projects/:id/autonomy` (the materialised dial, BD-027), `GET /api/projects/:id/audit`
+> (the `human_actions` rows of a project's settings — the table row 8 promises an audit of and that
+> nothing read) and `GET/PUT /api/org/budgets`. The organisation budget is keyed by **window** rather
+> than by the `:id` row 14 sketches, because an id-keyed write has no creator and
+> `unique nulls not distinct (scope, scope_id, "window")` is the natural key the table already
+> carries; the deviation is stated at `apps/server/src/routes/settings.ts`.
 >
 > **Only part of that list is kept true by a test, and the boundary is worth knowing.** The census is
 > **client-driven**: it compares the paths `apps/web/src` names against the router, so its admitted

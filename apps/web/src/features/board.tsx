@@ -158,6 +158,13 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
             >
               Budgets
             </Link>
+            <Link
+              to="/projects/$key/settings"
+              params={{ key: project.key }}
+              className="text-accent underline"
+            >
+              Settings
+            </Link>
           </div>
         }
       >

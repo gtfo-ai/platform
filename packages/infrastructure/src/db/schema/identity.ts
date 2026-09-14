@@ -2,7 +2,7 @@
  * Identity and configuration tables (technical/03 § "Identity and configuration").
  * Mirrors `migrations/0003_identity.sql`; the DDL is authoritative and the parity test enforces it.
  */
-import type { ConfigSource, JsonObject } from '@platform/contracts';
+import type { ConfigSource, JsonObject, MaterialisedAutonomy } from '@platform/contracts';
 import { sql } from 'drizzle-orm';
 import {
   boolean,
@@ -120,6 +120,13 @@ export const projects = pgTable('projects', {
   configSource: jsonb('config_source').$type<Record<string, ConfigSource>>().notNull().default({}),
   configHash: text('config_hash'),
   autonomyLevel: autonomyLevelEnum('autonomy_level').notNull().default('supervised'),
+  /**
+   * The dial's granular policies as they were when it was set — BD-027:14, migration 0021.
+   *
+   * `null` means *never materialised*: a row inserted by a harness or by a build older than that
+   * migration. It is not "the default preset", and nothing here substitutes one.
+   */
+  autonomyPolicies: jsonb('autonomy_policies').$type<MaterialisedAutonomy>(),
   readinessLevel: smallint('readiness_level').notNull().default(0),
   status: projectStatusEnum('status').notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

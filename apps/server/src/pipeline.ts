@@ -70,9 +70,11 @@ import {
   createStageRunPlanner,
   createWebhookIngress,
   defaultProjectSettings,
+  silentLogger,
   startIntakeReconciliation,
 } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts';
+import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import type {
@@ -411,10 +413,14 @@ export const repositoryPathOf = (repoUrl: string): string => {
  * over a bare mirror), but that read answers the four *indexed vault* paths and nothing else, and
  * settling a project's pipeline from it is a work package of its own.
  */
-export const createProjectSettingsPort = (pool: pg.Pool): ProjectSettingsPort => ({
+export const createProjectSettingsPort = (
+  pool: pg.Pool,
+  /** Optional so the two call sites that have no logger keep their one argument. */
+  logger: Logger = silentLogger,
+): ProjectSettingsPort => ({
   forProject: async (projectId: Id): Promise<ProjectSettings> => {
-    const { rows } = await pool.query<{ config: unknown }>(
-      'select config from projects where id = $1',
+    const { rows } = await pool.query<{ config: unknown; autonomy_policies: unknown }>(
+      'select config, autonomy_policies from projects where id = $1',
       [projectId],
     );
     const row = rows[0];
@@ -424,9 +430,38 @@ export const createProjectSettingsPort = (pool: pg.Pool): ProjectSettingsPort =>
     return defaultProjectSettings(projectId, {
       templates: SHIPPED_TEMPLATES,
       config: (row.config ?? {}) as ConfigValues,
+      // Parsed, not cast — this column decides whether a plan waits for a human, and a document
+      // that does not match the current schema must not be read as one that does. A row that fails
+      // is `null`, which is the *stated* "never materialised" branch the gate names, and it is
+      // logged rather than thrown: failing here would fail the `stage.execute` job into a retry
+      // loop over a configuration problem no retry can fix.
+      autonomy: parseMaterialisedAutonomy(row.autonomy_policies, projectId, logger),
     });
   },
 });
+
+/** `projects.autonomy_policies` through its published schema, or `null` with a named log line. */
+const parseMaterialisedAutonomy = (
+  value: unknown,
+  projectId: Id,
+  logger: Logger,
+): MaterialisedAutonomy | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = materialisedAutonomySchema.safeParse(value);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  logger.warn(
+    {
+      project_id: projectId,
+      issues: parsed.error.issues.map((issue) => issue.path.join('.')),
+    },
+    'projects.autonomy_policies does not match the current schema; this project is read as having no materialised dial (re-apply the preset)',
+  );
+  return null;
+};
 
 export interface ComposedPipeline {
   readonly runtime: PipelineRuntime;
@@ -494,7 +529,7 @@ export const composePipeline = async (
   });
 
   const stopReasons = createRunStopReasons();
-  const settings = createProjectSettingsPort(options.pool);
+  const settings = createProjectSettingsPort(options.pool, options.logger);
   /**
    * The cost ledger (WP-19), composed here so that a process which registers the pipeline registers
    * it too: `EVENT_CONSUMPTION` declares `run.finished`, `run.failed` and `artifact.created`
