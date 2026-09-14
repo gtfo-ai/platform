@@ -90,6 +90,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the
   // task, the post before it writes the threads, the observation before it reads them back.
   'review-only.ts': 3,
+  // WP-37's `risk_route` duty: one resolution for the classification and the reviewer routing,
+  // which are one wake-up and share every read.
+  'risk-routing.ts': 1,
   'saga.ts': 1,
   // WP-25's two duties: the check before it creates the lint task, the post before it comments.
   'ticket-lint.ts': 2,

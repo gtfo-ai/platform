@@ -11,6 +11,7 @@
  * (BD-002, BD-025, TD-012).
  */
 import type {
+  CodeownersRules,
   ExternalIdentity,
   GitProviderPort,
   InboundContext,
@@ -109,6 +110,35 @@ export interface GitProviderContractContext {
    * the suite asserts the distinction rather than accepting either error.
    */
   readonly foreignRevokeId: string;
+  /**
+   * A handle this provider can resolve to an account id, and one it cannot (WP-37).
+   *
+   * Provider-shaped like every other name in this context: the fake answers exactly what a test
+   * seeded, GitLab replays a recorded `GET /users?username=` page. `unknown` is the load-bearing
+   * half — a `CODEOWNERS` naming a group, a team or somebody who has left is the ordinary state of
+   * a real repository, and the port promises `null` for it rather than an exception.
+   */
+  readonly reviewer: {
+    readonly handle: string;
+    readonly externalId: string;
+    readonly unknownHandle: string;
+  };
+  /**
+   * Two refs whose `CODEOWNERS` differ, and an owner each file names (WP-37 review round 2).
+   *
+   * `ref` is the trusted copy — the default branch, which the platform reads routing from because
+   * a merge request may edit the file and its author must not be able to appoint their own
+   * reviewer (BD-022) — and `otherRef` is a branch carrying a *different* file. The suite asserts
+   * both directions, because "the ref is honoured" is satisfied by an adapter that answers the
+   * right file for the wrong reason: the fake stored one file per project and ignored `ref`
+   * entirely until this case existed, and every tier above it was green.
+   */
+  readonly codeowners: {
+    readonly ref: string;
+    readonly owner: string;
+    readonly otherRef: string;
+    readonly otherOwner: string;
+  };
   /** Produces signed deliveries. */
   emitMerged(): WebhookDelivery;
   emitReviewComment(text: string): WebhookDelivery;
@@ -556,17 +586,64 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
       it('parses CODEOWNERS into rules, or refuses when it cannot', async () => {
         if (!port.capabilities().codeowners) {
           await expectIntegrationError(
-            () => port.readCodeowners(context.project, 'main'),
+            () => port.readCodeowners(context.project, context.codeowners.ref),
             'unsupported_capability',
           );
           return;
         }
-        const rules = await port.readCodeowners(context.project, 'main');
+        const rules = await port.readCodeowners(context.project, context.codeowners.ref);
         expect(rules).not.toBeNull();
         expect(rules?.rules.length).toBeGreaterThan(0);
         for (const rule of rules?.rules ?? []) {
           expect(rule.owners.length).toBeGreaterThan(0);
         }
+      });
+
+      it('reads CODEOWNERS at the ref it was asked for, and never another ref’s', async () => {
+        /**
+         * A **security** assertion, like the two the file's docblock names: reviewer routing reads
+         * this file at the default branch on purpose, because a merge request may edit it and
+         * routing by the copy *inside* the change would let whoever wrote the change appoint their
+         * own reviewer (BD-022, product/19:138, WP-37).
+         *
+         * Asserted **both ways** (standing rule 42): each ref's own owner is present and the
+         * other's is absent. One direction alone passes against a provider that ignores `ref` and
+         * answers one file for the whole project, which is what `FakeGitProvider` did through the
+         * whole of WP-37's first round.
+         */
+        if (!port.capabilities().codeowners) {
+          // The same refusal its sibling asserts: a future adapter without the capability must not
+          // pass this case vacuously by returning early.
+          await expectIntegrationError(
+            () => port.readCodeowners(context.project, context.codeowners.ref),
+            'unsupported_capability',
+          );
+          return;
+        }
+        const ownersOf = (rules: CodeownersRules | null): readonly string[] =>
+          (rules?.rules ?? []).flatMap((rule) => rule.owners);
+
+        const trusted = ownersOf(
+          await port.readCodeowners(context.project, context.codeowners.ref),
+        );
+        const branch = ownersOf(
+          await port.readCodeowners(context.project, context.codeowners.otherRef),
+        );
+
+        expect(trusted).toContain(context.codeowners.owner);
+        expect(trusted).not.toContain(context.codeowners.otherOwner);
+        expect(branch).toContain(context.codeowners.otherOwner);
+        expect(branch).not.toContain(context.codeowners.owner);
+      });
+
+      it('resolves a handle to the account id reviewers are set by', async () => {
+        expect(await port.resolveUserId(context.reviewer.handle)).toBe(context.reviewer.externalId);
+      });
+
+      it('answers null for a handle it does not know, rather than throwing', async () => {
+        // Standing rule 20's direction for a *notification*: a stale CODEOWNERS line must cost a
+        // reviewer that is not assigned, never a failed job with a retry behind it.
+        expect(await port.resolveUserId(context.reviewer.unknownHandle)).toBeNull();
       });
 
       it('lists merged merge requests since an instant', async () => {

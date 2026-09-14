@@ -22,6 +22,7 @@ import {
   gitlabPipelineSchema,
   gitlabProjectSchema,
   gitlabProtectedBranchSchema,
+  gitlabUserSchema,
   gitlabVersionSchema,
 } from './schemas.js';
 
@@ -173,6 +174,13 @@ export interface GitLabClient {
   jobTrace(project: string, jobId: number): Promise<string | null>;
   /** <https://docs.gitlab.com/api/repository_files/> § "Retrieve a raw file from a repository". */
   rawFile(project: string, path: string, ref: string): Promise<string | null>;
+  /**
+   * <https://docs.gitlab.com/api/users/> § "As a regular user" — `GET /users?username=:username`
+   * (retrieved 2026-09-14): *"Username search is case-insensitive"*, and the endpoint is listed for
+   * regular users, so a project access token can ask it. The response is an **array** of user
+   * objects, which is why this returns a list and the caller decides what more than one means.
+   */
+  usersByUsername(username: string): Promise<z.output<typeof gitlabUserSchema>[]>;
   /** <https://docs.gitlab.com/api/project_access_tokens/> § "Create a project access token". */
   createProjectAccessToken(
     project: string,
@@ -434,6 +442,20 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
       });
       return response === null ? null : response.body;
     },
+
+    usersByUsername: async (username) =>
+      parse(
+        z.array(gitlabUserSchema),
+        (
+          await http.request({
+            method: 'GET',
+            path: '/users',
+            query: { username },
+            action: 'resolve_user_id',
+          })
+        )?.body ?? [],
+        'resolve_user_id',
+      ),
 
     rawFile: async (project, path, ref) => {
       const response = await http.requestText({

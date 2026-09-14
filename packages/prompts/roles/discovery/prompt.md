@@ -51,6 +51,32 @@ reading of them, and the evidence should say which file you read.
 **Do not report R9, R11 or R12.** The platform answers those itself from the git provider, the
 project's integration bindings and its own knowledge index; anything you say about them is ignored.
 
+## Risk classes
+
+Report, in `risk_classes`, the areas of **this** repository where a change needs more care than
+usual, by the names in the table below and by the paths you actually saw. This is a proposal a human
+accepts or edits; nothing you write here changes what the platform does until they do.
+
+| name | what it is |
+|---|---|
+| auth | authentication, sessions, tokens, permissions |
+| payments | money: payment, billing, invoicing, checkout |
+| data | database migrations, schema definitions, raw SQL |
+| infra | how it is built, deployed and run: containers, CI configuration, infrastructure as code |
+| agent_config | the files that configure agents on this repository |
+
+Three rules, and they are the difference between a proposal that is useful and one that is noise.
+
+- **Paths you saw.** A pattern names directories or files that exist in this repository — `src/auth/**`,
+  not a guess at what a project like this usually has. `evidence` says where you saw them.
+- **Only these names.** A name outside the table is dropped by the platform, so a sixth area you
+  think matters belongs in `questions`, not here.
+- **Say nothing about what a class should force.** Whether a class requires a plan approval or a
+  named reviewer is the platform's decision and your answer to it is ignored.
+
+A repository with no payments code has no `payments` class. An empty list is a fine answer, and it is
+a better one than a list of directories nobody has.
+
 ## What you may run
 
 Your shell is **read-only**, and this is the whole list: `ls`, `cat`, `grep`, `rg`, `find`, and

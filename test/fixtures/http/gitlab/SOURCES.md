@@ -43,7 +43,8 @@ reviewer's job.
 ## Sources
 
 All retrieved **2026-09-10** unless a `retrieved` date on the interaction says otherwise; two
-interactions were added on **2026-09-13** (WP-24) and carry that date.
+interactions were added on **2026-09-13** (WP-24) and two more on **2026-09-14** (WP-37), each
+carrying its own date.
 
 - `https://docs.gitlab.com/api/version/` — `GET /version`, the `version`/`revision`/`enterprise`
   response used to detect the instance version.
@@ -68,12 +69,22 @@ interactions were added on **2026-09-13** (WP-24) and carry that date.
   `null`.
 - `https://docs.gitlab.com/api/jobs/` — "List pipeline jobs" and "Retrieve a job log file", both
   the `200` that serves the log and the documented "404: Job not found or no log file".
-- `https://docs.gitlab.com/api/repository_files/` — the raw-file endpoint the CODEOWNERS read uses.
-  The page does not state the status for a missing file, so both `404`s here are `inferred` from
-  the REST status table.
+- `https://docs.gitlab.com/api/repository_files/` — the raw-file endpoint the CODEOWNERS read uses,
+  including its `ref` parameter. The page does not state the status for a missing file, so both
+  `404`s here are `inferred` from the REST status table. The **second** `200`, on
+  `ref=agentic%2Ftask-1`, is `documented-adapted`: the endpoint and the raw-text response are the
+  page's, the two-line body is this corpus's own, and it exists so the contract suite can assert
+  that a read at one ref never answers another ref's file — the branch under review naming its own
+  owner is what reviewer routing must not honour (WP-37 round 2, BD-022).
 - `https://docs.gitlab.com/user/project/codeowners/reference/` — the CODEOWNERS syntax the fixture
   body is assembled from: default owner, multiple owners, an inline comment, an email owner, a
   section with default owners, an optional section with an approval count, and a role owner.
+- `https://docs.gitlab.com/api/users/` — "List users" filtered by `username`, the endpoint reviewer
+  routing resolves a CODEOWNERS handle with (WP-37): listed under *"As a regular user"*, so
+  a project access token may ask it, and *"Username search is case-insensitive"*, which is why the
+  adapter compares the answer to what it asked for instead of trusting the filter. Retrieved
+  **2026-09-14**, later than the rest of this corpus, which is why this line carries its own date.
+  The empty answer for an unknown username is `inferred`: the page publishes no example of it.
 - `https://docs.gitlab.com/api/project_access_tokens/` — "Create a project access token", "Revoke a
   project access token" ("returns 204 No content"), and "404: Not Found if the access token does
   not exist".

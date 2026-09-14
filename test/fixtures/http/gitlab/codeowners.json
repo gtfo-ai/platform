@@ -14,6 +14,18 @@
     },
     {
       "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/files/CODEOWNERS/raw?ref=agentic%2Ftask-1",
+      "status": 200,
+      "text": "# Owners on this branch only\nsrc/ @branch-owner\n",
+      "source": {
+        "url": "https://docs.gitlab.com/api/repository_files/",
+        "retrieved": "2026-09-10",
+        "kind": "documented-adapted",
+        "note": "The endpoint, the `ref` parameter and the raw-text response are the repository-files page's; the body is this corpus's own two-line file in the default-owner form of https://docs.gitlab.com/user/project/codeowners/reference/. It exists so the shared contract suite can assert that a read at one ref never answers another ref's file — the branch under review naming its own owner is exactly what reviewer routing must not honour (WP-37, BD-022)."
+      }
+    },
+    {
+      "method": "GET",
       "path": "/projects/acme%2Fapi/repository/files/docs%2FCODEOWNERS/raw?ref=main",
       "status": 404,
       "body": {

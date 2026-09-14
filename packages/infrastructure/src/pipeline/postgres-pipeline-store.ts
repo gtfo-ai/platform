@@ -91,6 +91,8 @@ interface TaskRow extends Record<string, unknown> {
   ticket_snapshot: TicketSnapshot | null;
   ticket_snapshot_at: Date | null;
   review_subject: MergeRequestSnapshot | null;
+  risk_classes: string[] | null;
+  requested_by_user_id: string | null;
   version: number;
   created_at: Date;
   sequence: string | number | null;
@@ -100,7 +102,8 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
-    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.version,
+    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.risk_classes,
+    t.requested_by_user_id, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
@@ -141,6 +144,10 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   ticketSnapshot: row.ticket_snapshot,
   ticketSnapshotAt: iso(row.ticket_snapshot_at),
   reviewSubject: row.review_subject,
+  // `text[] not null default '{}'`, so the `?? []` is for a driver that hands back `null` rather
+  // than for a row that can hold one (WP-37).
+  riskClasses: row.risk_classes ?? [],
+  requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
   version: Number(row.version),
 });
 
@@ -348,6 +355,25 @@ export const createPostgresPipelineStore = (
         `update tasks set ticket_snapshot = $2::jsonb, ticket_snapshot_at = $3, updated_at = now()
           where id = $1`,
         [taskId, JSON.stringify(snapshot), readAt],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
+    /**
+     * `risk_classes` — one column, one statement, written whole (WP-37).
+     *
+     * The fourth narrow write and the third with the same argument behind it (standing rule 79):
+     * this runs in a `pipeline.outbound` job beside the stage executor's transactions, so a
+     * whole-row `save` from here would put back a state, a stage and a cost it never read. The
+     * array is replaced rather than merged, because the rebase gate is re-entered whenever the
+     * default branch moves and a class the merge request no longer touches has to leave the row.
+     */
+    saveRiskClasses: async (tx, taskId, classes) => {
+      const result = await sqlOf(tx).query(
+        'update tasks set risk_classes = $2::text[], updated_at = now() where id = $1',
+        [taskId, [...classes]],
       );
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);

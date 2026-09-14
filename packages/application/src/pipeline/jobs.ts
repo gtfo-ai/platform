@@ -107,6 +107,12 @@ export interface PipelineOutboundData {
     | 'ticket_lint_post'
     /** WP-26, the rebase gate: tell this task's merge request which peers touch the same files. */
     | 'conflict_warn'
+    /**
+     * WP-37, the rebase gate again: classify the merge request's changed paths and route its
+     * reviewers. A duty of its own rather than a branch of `conflict_warn`, because that one gives
+     * up when the project has no peer task — see `risk-routing.ts`.
+     */
+    | 'risk_route'
     /** WP-32, the notify band: say one thing in the project's chat channel. */
     | 'notify'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */

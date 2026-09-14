@@ -299,6 +299,70 @@ describe('recordDiscoveryFindings', () => {
     expect(readiness.rows).toHaveLength(1);
   });
 
+  describe('the risk classes a draft proposes (product/18:52, WP-37)', () => {
+    it('stores them on the project, config-shaped, and applies nothing', async () => {
+      const started = harness({
+        data: draft({
+          risk_classes: [
+            { name: 'auth', paths: ['src/auth/**'], evidence: 'src/auth/session.ts exists' },
+          ],
+        }),
+      });
+      const report = await recordDiscoveryFindings(started.options, job);
+
+      expect(report.riskClasses).toBe(1);
+      // It is a **proposal**: the map is on the project row, ready to be sent back through the
+      // configuration write, and `policies.risk_classes` is not touched by this job at all.
+      expect(started.readiness.proposals.get(PROJECT)).toEqual({
+        auth: {
+          paths: ['src/auth/**'],
+          // The requirement is the **platform's**, never the model's (the rule `unlocks` follows).
+          require: ['plan_approval', 'reviewer:@security'],
+        },
+      });
+    });
+
+    it('drops a class name the platform does not have, rather than creating one', async () => {
+      const started = harness({
+        data: draft({
+          risk_classes: [
+            { name: 'nothing_special', paths: ['src/**'], evidence: 'the README asked for it' },
+            { name: 'Agent-Config', paths: ['.agentic/**'], evidence: '.agentic exists' },
+          ],
+        }),
+      });
+      const report = await recordDiscoveryFindings(started.options, job);
+
+      // One survives — case and dashes folded, because a model writes `agent-config` for the key an
+      // operator writes as `agent_config` — and the invented one does not.
+      expect(report.riskClasses).toBe(1);
+      expect(Object.keys(started.readiness.proposals.get(PROJECT) ?? {})).toEqual(['agent_config']);
+    });
+
+    it('writes nothing at all when the draft proposed nothing, so silence is not "none"', async () => {
+      const started = harness({ data: draft() });
+      const report = await recordDiscoveryFindings(started.options, job);
+
+      expect(report.riskClasses).toBe(0);
+      expect(started.readiness.proposals.has(PROJECT)).toBe(false);
+    });
+
+    it('redacts a path before it is stored', async () => {
+      const started = harness({
+        data: draft({
+          risk_classes: [
+            { name: 'data', paths: [`db/${PLANTED_SECRET}/**`], evidence: 'migrations live here' },
+          ],
+        }),
+      });
+      await recordDiscoveryFindings(started.options, job);
+
+      const stored = JSON.stringify(started.readiness.proposals.get(PROJECT));
+      expect(stored).not.toContain(PLANTED_SECRET);
+      expect(stored).toContain('[REDACTED:integration:repo_key]');
+    });
+  });
+
   it('records nothing when the project has gone', async () => {
     const { options, readiness, proposals } = harness({ project: null });
     const report = await recordDiscoveryFindings(options, job);

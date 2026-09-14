@@ -770,6 +770,10 @@ export const runReviewOnlyCheck = async (
       ticketSnapshot: null,
       ticketSnapshotAt: null,
       reviewSubject: snapshot,
+      // A review-only task never opens a merge request of its own, so the `risk_route` duty never
+      // runs for it and this list stays empty (WP-37).
+      riskClasses: [],
+      requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);
 

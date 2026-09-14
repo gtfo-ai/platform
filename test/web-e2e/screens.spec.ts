@@ -122,8 +122,15 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
   await expect(page.getByText('Custom', { exact: true })).toBeVisible();
   await expect(page.getByText('preset 5, in force 2')).toBeVisible();
   await expect(page.getByText('project.autonomy.write')).toBeVisible();
-  // …and the gap that is named on the screen rather than drawn as a control that does nothing.
-  await expect(page.getByText(/proposing a set from the repository structure/)).toBeVisible();
+  /**
+   * …and the risk-class step, which stopped being a named gap at **WP-37**: the offer is a control
+   * that does something (accepting it writes `policies.risk_classes` through the configuration
+   * endpoint), and the one row of product/19 §14 this build still cannot express is rendered with
+   * its reason instead. Standing rule 83 — the sentence this assertion used to pin described the
+   * gap that work package closed.
+   */
+  await expect(page.getByRole('button', { name: 'Accept these classes' })).toBeVisible();
+  await expect(page.getByText(/Not proposed, and why/)).toBeVisible();
 });
 
 test('the integrations screen carries the create and test controls', async ({ page }) => {

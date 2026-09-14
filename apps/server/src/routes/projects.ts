@@ -26,13 +26,20 @@ import {
   agenticConfigSchema,
   apiErrorSchema,
   budgetsResponseSchema,
+  type EffectiveConfigResponse,
   effectiveConfigResponseSchema,
   type IsoDateTime,
   listTasksQuerySchema,
   projectsResponseSchema,
   readinessResponseSchema,
+  riskClassSchema,
+  slugSchema,
   tasksResponseSchema,
 } from '@platform/contracts';
+import {
+  PROPOSED_RISK_CLASSES,
+  RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST,
+} from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -151,6 +158,35 @@ const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
   return current;
 };
 
+/**
+ * What the wizard is offered for `policies.risk_classes` — product/18:52 (WP-37).
+ *
+ * A discovery run's proposal when there is one, and product/19 §14's own table when there is not.
+ * **Both are parsed before they are published**, and a stored proposal that does not parse is
+ * dropped back to the platform's table rather than refused: this field is an *offer*, so failing
+ * the whole configuration read over it would make an unopenable settings screen out of a suggestion
+ * (PROGRESS backlog 58's distinction — fail closed on the write, open on the read). The stored value
+ * is model output about somebody's repository, which is the other reason it is re-validated here
+ * (BD-022).
+ */
+export const riskClassProposalOf = (
+  stored: Record<string, unknown> | null,
+): EffectiveConfigResponse['risk_class_proposal'] => {
+  const parsed = stored === null ? null : z.record(slugSchema, riskClassSchema).safeParse(stored);
+  const proposed = parsed?.success === true && Object.keys(parsed.data).length > 0;
+  return {
+    source: proposed ? 'discovery' : 'platform',
+    classes: proposed
+      ? (parsed.data as EffectiveConfigResponse['risk_class_proposal']['classes'])
+      : (PROPOSED_RISK_CLASSES as EffectiveConfigResponse['risk_class_proposal']['classes']),
+    not_expressible: RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST.map((entry) => ({
+      name: entry.name,
+      paths: [...entry.paths],
+      reason: entry.reason,
+    })),
+  };
+};
+
 export const registerProjectRoutes = async (
   app: FastifyInstance,
   options: ProjectRoutesOptions,
@@ -237,6 +273,7 @@ export const registerProjectRoutes = async (
         sources: row.configSource as Record<string, 'default' | 'org' | 'project' | 'repo'>,
         hash: row.configHash ?? 'unconfigured',
         computed_at: row.updatedAt.toISOString(),
+        risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses),
       };
     },
   );

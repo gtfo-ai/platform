@@ -47,6 +47,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { runConflictWarning } from './conflict-warning.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
+import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
@@ -54,7 +55,8 @@ import { runStatusTransition, runWorkpadRender } from './workpad.js';
 export interface PipelineOutboundOptions
   extends PipelineSagaOptions,
     NotifyOptions,
-    Pick<AskMirrorOptions, 'asks'> {
+    Pick<AskMirrorOptions, 'asks'>,
+    Pick<RiskRoutingOptions, 'identities'> {
   readonly unitOfWork: UnitOfWork;
   /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
   readonly baseUrl: string;
@@ -102,6 +104,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'conflict_warn':
         await runConflictWarning(options, data);
+        return;
+      case 'risk_route':
+        await runRiskRouting(options, data);
         return;
       case 'notify':
         await runNotification(options, data);

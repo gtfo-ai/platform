@@ -515,6 +515,16 @@ export interface StartPipelineOptions {
    */
   readonly seedProject?: boolean;
   /**
+   * The project's raw `CODEOWNERS` file, or absent for a repository that has none (WP-37).
+   *
+   * The default is **absent**, which is what most repositories are and what reviewer routing has to
+   * survive: with no owners and no `policies.reviewers`, a merge request is assigned to nobody and
+   * the platform says so rather than guessing.
+   */
+  readonly codeowners?: string;
+  /** Handle → the provider account id `resolveUserId` answers with (WP-37, fake divergence 11). */
+  readonly gitUsers?: Readonly<Record<string, string>>;
+  /**
    * Extra repository paths the fake git provider knows about, beside {@link GIT_PROJECT}.
    *
    * The provider is addressed by the path `repositoryPathOf(projects.repo_url)` derives, so a test
@@ -655,9 +665,17 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   const git = createFakeGitProvider({
     integrationId: GIT_INTEGRATION_ID,
     projects: [
-      { path: GIT_PROJECT, defaultBranch: 'main' },
+      {
+        path: GIT_PROJECT,
+        defaultBranch: 'main',
+        // WP-37: the repository's `CODEOWNERS`, seeded **here** rather than by a later
+        // `seedProject` — re-seeding replaces the stored project, which would reset the iid counter
+        // and the head this world's merge request was opened against.
+        ...(options.codeowners === undefined ? {} : { codeowners: options.codeowners }),
+      },
       ...(options.gitProjects ?? []).map((path) => ({ path, defaultBranch: 'main' })),
     ],
+    ...(options.gitUsers === undefined ? {} : { users: options.gitUsers }),
   });
   const tickets = createFakeTaskManagement({
     integrationId: TICKETS_INTEGRATION_ID,

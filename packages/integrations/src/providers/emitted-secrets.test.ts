@@ -364,6 +364,13 @@ const gitlabScript = (): Script => ({
   [`GET /projects/${P}/jobs/9002/trace`]: {
     text: `$ echo pushing\nremote: https://oauth2:${GITLAB_TOKEN}@gitlab.example.test/acme/api\nfatal\n`,
   },
+  // WP-37: the username is echoed back by GitLab's own user object, so a handle carrying the plant
+  // arrives in an emitted field — which is the point of driving this method here at all.
+  'GET /users': {
+    body: [
+      { id: 4242, username: `dana-${GITLAB_TOKEN}`, name: `Dana ${GITLAB_TOKEN}`, state: 'active' },
+    ],
+  },
   [`GET /projects/${P}/repository/files/CODEOWNERS/raw`]: {
     // Both halves of a rule are provider text: the pattern is kept verbatim, and the owner list is
     // matched by shape — so the placeholder survives in the pattern and the owner match stops at
@@ -447,6 +454,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   get_job_log: 'getJobLog',
   get_default_branch_head: 'getDefaultBranchHead',
   read_codeowners: 'readCodeowners',
+  resolve_user_id: 'resolveUserId',
   list_merged_merge_requests: 'listMergedMergeRequests',
   is_branch_protected: 'isBranchProtected',
   branch_protection: 'branchProtection',
@@ -542,6 +550,9 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
     emitted.get_job_log = await port.getJobLog(PROJECT, '9002');
     emitted.get_default_branch_head = await port.getDefaultBranchHead(PROJECT);
     emitted.read_codeowners = await port.readCodeowners(PROJECT, 'main');
+    // The handle is the plant; the adapter compares it to what GitLab answered, so the id it
+    // returns is emitted only when the credential-bearing username matched.
+    emitted.resolve_user_id = await port.resolveUserId(`@dana-${GITLAB_TOKEN}`);
     emitted.list_merged_merge_requests = await port.listMergedMergeRequests(
       PROJECT,
       '2026-01-01T00:00:00.000Z',

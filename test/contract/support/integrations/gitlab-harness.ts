@@ -132,6 +132,23 @@ export const gitlabReplayContext = (
     // the DELETE goes out and its 404 is ambiguous. A random string here would earn
     // `invalid_request` instead and fail the suite case, which is what makes it a real assertion.
     foreignRevokeId: `${GITLAB_PROJECT}#${FOREIGN_TOKEN_ID}`,
+    // WP-37: `users.json` records the two answers — one active account, one empty list. The handle
+    // carries the `@` a CODEOWNERS file writes, because the port takes a handle as written.
+    reviewer: {
+      handle: '@dana-reviewer',
+      externalId: '4242',
+      unknownHandle: '@departed',
+    },
+    // WP-37 round 2: `codeowners.json` records the root file at both refs — `main`'s documented
+    // syntax sample, and a two-line file on `agentic/task-1` that names an owner `main` does not.
+    // The adapter passes `ref` as a query parameter, so the replay cannot answer one for the other:
+    // a request for a ref with no fixture is a loud failure naming the key it looked for.
+    codeowners: {
+      ref: 'main',
+      owner: '@acme/platform-team',
+      otherRef: 'agentic/task-1',
+      otherOwner: '@branch-owner',
+    },
     emitMerged: () => signedDelivery('Merge Request Hook', mergedHookBody()),
     emitReviewComment: (text) => signedDelivery('Note Hook', reviewCommentHookBody(text)),
     emitPipelineFinished: () => signedDelivery('Pipeline Hook', pipelineHookBody()),

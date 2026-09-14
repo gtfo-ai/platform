@@ -151,6 +151,8 @@ describe('a spend written in a transaction that rolls back', () => {
         ticketSnapshot: null,
         ticketSnapshotAt: null,
         reviewSubject: null,
+        riskClasses: [],
+        requestedByUserId: null,
         version: INITIAL_TASK_VERSION,
       };
       await store.tasks.insert(tx, task);

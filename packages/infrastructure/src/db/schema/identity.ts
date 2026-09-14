@@ -128,6 +128,13 @@ export const projects = pgTable('projects', {
    */
   autonomyPolicies: jsonb('autonomy_policies').$type<MaterialisedAutonomy>(),
   readinessLevel: smallint('readiness_level').notNull().default(0),
+  /**
+   * Risk classes a discovery run proposed from the repository's structure — migration 0026, WP-37.
+   *
+   * Config-shaped (`policies.risk_classes`'s own map) and **never applied**: `null` means nothing
+   * has been proposed, and acceptance is the configuration write a human makes.
+   */
+  proposedRiskClasses: jsonb('proposed_risk_classes').$type<Record<string, JsonObject>>(),
   status: projectStatusEnum('status').notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

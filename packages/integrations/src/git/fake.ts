@@ -71,6 +71,28 @@
  *     size rules, and may answer `404` for a merge request whose diff has been garbage-collected.
  *     A test that needs the omitted case seeds it (`omitted: true`), which is why the shared
  *     contract suite drives one.
+ * 11. **Stricter — `resolveUserId` knows exactly the handles a test seeded, and `null` for every
+ *     other.** WP-37 added the method so reviewer routing can turn a CODEOWNERS handle into the
+ *     account id a merge request's reviewers are set by. A real provider searches its user
+ *     directory: it can answer an account the platform has never heard of, it matches
+ *     case-insensitively, and it may return several candidates for one query. The fake answers only
+ *     what `seedUser` put in, which makes "this handle routes to nobody" the *default* in tests —
+ *     the case the routing has to survive, since a `CODEOWNERS` naming a group or a departed
+ *     colleague is the ordinary state of a real repository.
+ * 12. **Different — `CODEOWNERS` belongs to a *ref*, and a ref this fake holds no file for has
+ *     none.** Until WP-37 review round 2 the file was stored per **project** and `ref` was ignored,
+ *     which made the one security property the reviewer routing rests on untestable: routing reads
+ *     the file at the *default branch* precisely because a merge request may edit it and its author
+ *     must not be able to appoint their own reviewer (BD-022), and with the ref ignored a build
+ *     that read it from the branch under review passed every tier. Now `FakeProjectSeed.codeowners`
+ *     is the **default branch's** file, `seedFile`/`commitFiles` put one on any branch (divergence
+ *     9's store), and the file a ref holds wins for that ref. It is **stricter** than real git in
+ *     one way, deliberately: a real branch carries the whole tree, so a task branch that never
+ *     touched `CODEOWNERS` still has the default branch's copy, while here it answers `null` — a
+ *     caller that read the wrong ref gets nothing rather than the right answer by accident. It is
+ *     **kinder** in one: only the root `CODEOWNERS` path exists, where GitLab also looks in `docs/`
+ *     and `.gitlab/`, so an adapter's search order is the shared contract suite's business and not
+ *     this fake's.
  */
 import {
   type CodeownersRules,
@@ -117,11 +139,19 @@ import {
 
 const PROVIDER = 'fake-git';
 
+/** The one path this fake keeps a `CODEOWNERS` at (divergence 12's kinder half). */
+const CODEOWNERS_PATH = 'CODEOWNERS';
+
 export interface FakeProjectSeed {
   readonly path: string;
   readonly defaultBranch?: string;
   readonly head?: string;
-  /** Raw CODEOWNERS text; `null` when the project has none. */
+  /**
+   * Raw CODEOWNERS text **at the default branch**; `null` when the project has none.
+   *
+   * Divergence 12: the file belongs to a ref. Another branch's copy is planted with `seedFile`
+   * (path `CODEOWNERS`) or written by `commitFiles`, and it is visible only at that branch.
+   */
   readonly codeowners?: string | null;
   /**
    * Branches this project protects. Defaults to `[defaultBranch]`, because a project whose default
@@ -137,6 +167,8 @@ export interface FakeGitOptions {
   readonly projects?: readonly FakeProjectSeed[];
   readonly capabilities?: Partial<GitProviderCapabilities>;
   readonly webhookSecret?: string;
+  /** Handle (as CODEOWNERS writes it) → the account id reviewers are set by (WP-37). */
+  readonly users?: Readonly<Record<string, string>>;
 }
 
 interface StoredProject {
@@ -271,6 +303,8 @@ const deliveryBody = z.discriminatedUnion('event', [
 export interface FakeGitProvider extends GitProviderPort {
   readonly core: FakeCore;
   seedProject(seed: FakeProjectSeed): void;
+  /** Maps a handle to the account id `resolveUserId` answers with (divergence 11). */
+  seedUser(handle: string, externalId: string): void;
   /** Installs (or replaces) the pipeline for a commit. */
   setPipeline(pipeline: {
     readonly project: string;
@@ -407,6 +441,11 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
   const nextDeliveryId = (): string => {
     deliveryCounter += 1;
     return `d-${deliveryCounter}`;
+  };
+
+  const users = new Map<string, string>(Object.entries(options.users ?? {}));
+  const seedUser = (handle: string, externalId: string): void => {
+    users.set(handle, externalId);
   };
 
   const seedProject = (seed: FakeProjectSeed): void => {
@@ -558,6 +597,23 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       })
       .filter((rule) => rule.pattern.length > 0 && rule.owners.length > 0),
   });
+
+  /**
+   * The `CODEOWNERS` **at one ref** — divergence 12, and the reason it is a function.
+   *
+   * A branch that holds the file answers with it, so a merge request that edits `CODEOWNERS`
+   * (through `commitFiles`, or `seedFile` for a repository that was already in that state) is
+   * visible at *its* branch and nowhere else. Everything else answers the seed, and only at the
+   * default branch: that is the copy the change cannot rewrite, which is what makes a caller
+   * reading the wrong ref fail loudly here instead of passing.
+   */
+  const codeownersAt = (stored: StoredProject, ref: string): string | null => {
+    const onRef = branchOf(stored.path, ref)?.files.get(CODEOWNERS_PATH);
+    if (onRef !== undefined) {
+      return onRef;
+    }
+    return ref === stored.defaultBranch ? stored.codeowners : null;
+  };
 
   const terminalStatus = (status: PipelineStatusValue): CiStatus =>
     status === 'success' || status === 'failed' || status === 'canceled' || status === 'skipped'
@@ -1091,13 +1147,26 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return stored.protectedBranches.has(branch);
     },
 
-    readCodeowners: async (project, _ref) => {
+    /**
+     * Divergence 11: exactly what was seeded, and `null` for everything else.
+     *
+     * The leading `@` is not stripped, because a handle is passed to the port **as written** and
+     * what one means is the provider's business — so a test that seeds `@dana` and a routing that
+     * asks for `dana` disagree here, which is the honest reproduction of a real directory lookup.
+     */
+    resolveUserId: async (handle: string) => {
+      core.enter('resolve_user_id');
+      return users.get(handle) ?? null;
+    },
+
+    readCodeowners: async (project, ref) => {
       core.enter('read_codeowners');
       if (!capabilities.codeowners) {
         throw new IntegrationUnsupportedError(PROVIDER, 'CODEOWNERS');
       }
       const stored = requireProject('read_codeowners', project);
-      return stored.codeowners === null ? null : parseCodeowners(stored.codeowners);
+      const text = codeownersAt(stored, ref);
+      return text === null ? null : parseCodeowners(text);
     },
 
     listMergedMergeRequests: async (
@@ -1138,6 +1207,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     inbound,
 
     seedProject,
+    seedUser,
     seedFile,
     commits,
     fileAt: (project: string, branch: string, path: string) =>

@@ -750,6 +750,73 @@ describe('CODEOWNERS lookup', () => {
   });
 });
 
+describe('resolving a reviewer handle (WP-37)', () => {
+  const user = (overrides: Record<string, unknown> = {}) => ({
+    id: 4242,
+    username: 'dana-reviewer',
+    name: 'Dana Reviewer',
+    state: 'active',
+    ...overrides,
+  });
+
+  it('answers the account id for an exact username, with the leading @ stripped', async () => {
+    const { port, calls } = build({
+      'GET /users?username=dana-reviewer': { status: 200, body: [user()] },
+    });
+    expect(await port.resolveUserId('@dana-reviewer')).toBe('4242');
+    expect(calls[0]?.path).toContain('username=dana-reviewer');
+  });
+
+  it('never asks the provider about a group, because a group cannot review', async () => {
+    const { port, calls } = build({
+      'GET /users?username=dana-reviewer': { status: 200, body: [user()] },
+    });
+    // `@team/security` is a GitLab *group*: only an approval rule can name one, so answering an id
+    // here would be wrong rather than merely unhelpful — and the request is not made at all.
+    expect(await port.resolveUserId('@team/security')).toBeNull();
+    expect(await port.resolveUserId('@')).toBeNull();
+    expect(calls.length).toBe(0);
+  });
+
+  it('answers null for a username nobody has', async () => {
+    const { port } = build({ 'GET /users?username=departed': { status: 200, body: [] } });
+    expect(await port.resolveUserId('@departed')).toBeNull();
+  });
+
+  it('re-checks the match itself, rather than trusting the filter it sent', async () => {
+    // The documented filter is exact and case-insensitive; relying on a query parameter for a
+    // routing decision is what this guards against.
+    const { port } = build({
+      'GET /users?username=dana-reviewer': {
+        status: 200,
+        body: [user({ username: 'dana-reviewer-2' })],
+      },
+    });
+    expect(await port.resolveUserId('@dana-reviewer')).toBeNull();
+    const insensitive = build({
+      'GET /users?username=dana-reviewer': {
+        status: 200,
+        body: [user({ username: 'Dana-Reviewer' })],
+      },
+    });
+    expect(await insensitive.port.resolveUserId('@dana-reviewer')).toBe('4242');
+  });
+
+  it('answers null when two accounts match, rather than picking one', async () => {
+    const { port } = build({
+      'GET /users?username=dana-reviewer': { status: 200, body: [user(), user({ id: 77 })] },
+    });
+    expect(await port.resolveUserId('dana-reviewer')).toBeNull();
+  });
+
+  it('answers null for an account GitLab would refuse to assign', async () => {
+    const { port } = build({
+      'GET /users?username=dana-reviewer': { status: 200, body: [user({ state: 'blocked' })] },
+    });
+    expect(await port.resolveUserId('dana-reviewer')).toBeNull();
+  });
+});
+
 describe('health and history', () => {
   it('probes /version read-only and reports the version and edition', async () => {
     const { port, calls } = build({

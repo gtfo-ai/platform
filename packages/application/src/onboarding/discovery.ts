@@ -217,6 +217,10 @@ export const startProjectDiscovery = async (
       ticketSnapshot: null,
       reviewSubject: null,
       ticketSnapshotAt: null,
+      // No merge request, so nothing to classify, and no requester on the row: the wizard's actor
+      // is recorded in `human_actions` by the route (WP-37 reads both and says so).
+      riskClasses: [],
+      requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);
 

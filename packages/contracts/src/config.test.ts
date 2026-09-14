@@ -155,6 +155,66 @@ describe('.agentic/config.yml', () => {
     expect(parsed.stages?.my_custom_stage?.effort).toBe('low');
   });
 
+  describe('a risk requirement is refused by name when this build cannot act on it (WP-37)', () => {
+    const withRequirement = (requirement: string) =>
+      agenticConfigSchema.safeParse({
+        version: 1,
+        policies: { risk_classes: { payments: { paths: ['**/pay/**'], require: [requirement] } } },
+      });
+
+    it('accepts the two that have a consumer', () => {
+      expect(withRequirement('plan_approval').success).toBe(true);
+      expect(withRequirement('reviewer:@security').success).toBe(true);
+      expect(withRequirement('reviewer:@team/security').success).toBe(true);
+      // The pattern takes an `@` only at the front, so an **email** owner — which a `CODEOWNERS`
+      // file may name — cannot be written as a requirement. Pinned rather than silently true: it is
+      // a limit of `REVIEWER_REQUIREMENT` as WP-01 wrote it, and the routing resolves a handle
+      // through `GET /users?username=` in any case, which no email would answer.
+      expect(withRequirement('reviewer:person@example.test').success).toBe(false);
+    });
+
+    it('refuses `checklist:<name>` with the reason and the open question', () => {
+      const result = withRequirement('checklist:payments');
+      expect(result.success).toBe(false);
+      // The message is the whole point of refusing here rather than in a union: an operator whose
+      // `payments` class silently did nothing is exactly who must not get `invalid_union`.
+      expect(result.error?.issues[0]?.message).toContain('Q83');
+      expect(result.error?.issues[0]?.message).toContain('checklist:payments');
+      expect(result.error?.issues[0]?.path).toEqual([
+        'policies',
+        'risk_classes',
+        'payments',
+        'require',
+        0,
+      ]);
+    });
+
+    it('refuses `budget_approval`, naming the gate that cannot read it', () => {
+      const result = withRequirement('budget_approval');
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toContain('budget_approval_threshold_usd');
+    });
+
+    it('refuses anything else with the two forms it does accept', () => {
+      expect(withRequirement('approve').error?.issues[0]?.message).toContain('plan_approval');
+    });
+  });
+
+  it('takes the project’s reviewers, which product/19:138’s middle step had no key for', () => {
+    const parsed = agenticConfigSchema.parse({
+      version: 1,
+      policies: { reviewers: ['4242', '@dana'] },
+    });
+    expect(parsed.policies?.reviewers).toEqual(['4242', '@dana']);
+    // Bounded: the list is one provider read per entry at the rebase gate.
+    expect(
+      agenticConfigSchema.safeParse({
+        version: 1,
+        policies: { reviewers: Array.from({ length: 9 }, (_, index) => `u${index}`) },
+      }).success,
+    ).toBe(false);
+  });
+
   it('still constrains the shape of those map keys', () => {
     expect(
       agenticConfigSchema.safeParse({ version: 1, stages: { 'Not A Slug': {} } }).success,

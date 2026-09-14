@@ -38,7 +38,7 @@ import {
   usdSchema,
   userRoleSchema,
 } from './common.js';
-import { agenticConfigSchema } from './config.js';
+import { agenticConfigSchema, riskClassSchema } from './config.js';
 import { domainEventSchema, domainEventTypeSchema } from './events.js';
 import {
   approvalRecordSchema,
@@ -192,6 +192,35 @@ export const effectiveConfigResponseSchema = z.strictObject({
   sources: z.record(z.string(), configSourceSchema),
   hash: nonEmptyStringSchema,
   computed_at: isoDateTimeSchema,
+  /**
+   * Risk classes **proposed** for this project and not applied — product/18:52, WP-37.
+   *
+   * product/18 makes risk classes a wizard step rather than a default, so `policies.risk_classes`
+   * above is empty until a human accepts: this field is what they are accepting, config-shaped, and
+   * the acceptance is `PUT /api/projects/:id/config` with the map copied into `policies`.
+   *
+   *  - `source: 'discovery'` — a Discovery run read this repository and suggested these
+   *    (`projects.proposed_risk_classes`, migration 0026).
+   *  - `source: 'platform'` — nobody has proposed anything, so the platform offers product/19 §14's
+   *    own table. The two are distinguished because *"the agent looked at your repository"* and
+   *    *"here is the standard set"* are different claims, and a screen that conflated them would be
+   *    putting words in the agent's mouth.
+   *
+   * `not_expressible` is the row of product/19 §14 this build cannot propose, **with the reason** —
+   * data rather than prose, because the screen renders it and an operator does not read docblocks
+   * (standing rule 18: the absent case must not be the quiet one).
+   */
+  risk_class_proposal: z.strictObject({
+    source: z.enum(['discovery', 'platform']),
+    classes: z.record(slugSchema, riskClassSchema),
+    not_expressible: z.array(
+      z.strictObject({
+        name: nonEmptyStringSchema,
+        paths: z.array(pathPatternSchema),
+        reason: nonEmptyStringSchema,
+      }),
+    ),
+  }),
 });
 
 /**

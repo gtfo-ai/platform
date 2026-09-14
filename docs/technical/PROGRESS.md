@@ -2452,7 +2452,7 @@ carries the board field in criterion 3 together with entries **64** and **65**'s
 this entry is still its brief; what changed is only that the M3 default now has a home instead of
 none.
 
-### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5)
+### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again**)
 **What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
 calls `getMergeRequestDiff` once for the task and once per peer and keeps `new_path`/`old_path`; the
 port's `FileDiff` carries `diff` as well, so every patch is fetched and discarded. One gate entry is
@@ -2492,6 +2492,29 @@ provider work. **(b) The port method, only once a documented surface answers it 
 fixture with a `source` block, which is a work package. Whoever plans (b) records the page and the
 retrieval date the way `SOURCES.md` does; if no such surface exists, (b) closes as *"refused, and here is
 why"* rather than staying open as an unbuilt improvement.
+
+**The arithmetic above is WP-26's and is now low** (refiner, session 5, folded in rather than filed as a
+second entry — it is the same read at the same trigger). WP-37 added a **second** `pipeline.outbound`
+duty on the same `task.stage.entered`, `risk_route`, which reads the merge request's changed paths
+**again** rather than sharing `conflict_warn`'s read. The reason is stated and survives review:
+*"`conflict_warn` gives up when the project has no peer task — which is exactly the ordinary case in
+which a task still needs its classes and its reviewers. Sharing the read would have meant the
+commonest task on the commonest project silently getting neither"*
+(`packages/application/src/pipeline/risk-routing.ts:18-24`). The duty states its own bound at
+`:26-33`: *"the merge request's **changed files**, the project's **default branch**, that branch's
+**`CODEOWNERS`** — three reads, made on every gate entry … then one `resolve_user_id` per routed
+handle up to `MAX_ROUTED_REVIEWERS` [8], and finally `set_reviewers`, which re-reads the merge
+request"*. The WP-26 test that pinned the old cost moved with it: `conflict-warning.test.ts`'s two
+provider-read assertions went from `[IID, PEER_IID]` to `[IID, IID, PEER_IID]` and from `[]` to
+`[IID]` (WP-37 note 5, rule 83). **So this entry's formula is now**, per gate entry: **2** diff reads
+(one per duty) `+ min(K−1, 10)` peer diffs `+ 2` (default branch, `CODEOWNERS`) `+ up to 8`
+`resolve_user_id` `+ 2` (`get_merge_request` and `set_reviewers`) when anything is routed — the floor
+for a project with no peers, no `CODEOWNERS` and no configured reviewers being **four** reads and no
+write, where before WP-37 it was one. Derived arithmetic, not a measurement; nothing new is wrong.
+**It makes remedy (a) worth more than it was**: a coalesced read per `(merge request, head sha)` now
+removes a duplicate *within one gate entry* as well as the `K²` factor across tasks, which is a
+saving that needs no port change and no provider documentation — so (a) is the half to take first,
+and (b)'s documentation question is unchanged.
 
 **Depends on / owner.** No dependency. **No work package owns it**; nearest is whoever next touches the
 git adapter. Trigger that would make it urgent: a project with a busy default branch and ten or more
@@ -2989,7 +3012,7 @@ work is filed here because each has a row; what each of those rows gains is one 
 caveat line is deleted in the same change** (`FEATURE_CARDS`, `apps/web/src/features/operating-mode.tsx:117-167`),
 so a feature that starts working and leaves the screen saying it does not is a test failure.
 
-### 73. **Risk classes are half a feature in four places: no default set ships, the proposal has no producer, `tasks.risk_classes` has no writer, and one of the three requirements product/19 §14 defines cannot be stored at all** (TODO — **no work package owns any part**; cheapest owner **WP-37**, which is an M3 one-line row with no acceptance criteria, so this entry is its brief; found by WP-30, session 5)
+### 73. **Risk classes are half a feature in four places: no default set ships, the proposal has no producer, `tasks.risk_classes` has no writer, and one of the three requirements product/19 §14 defines cannot be stored at all** (**RESOLVED** at `<sha>`, WP-37 — the cause closed: the classes have a producer, a proposal, a writer and a routing consumer; **what remains is at the end of this entry**, and none of it re-opens the cause. Found by WP-30, session 5)
 **What is wrong — one cause.** The platform now has a risk-class **reader** and has never had a
 risk-class **producer**: nothing computes a class from a repository, and the one thing that computes
 a class from a change computes it from a *plan*. WP-30's gate is the reader
@@ -3069,6 +3092,51 @@ and has **no caller** anywhere, `MergeRequestUpdate.reviewers` (`:253`) is never
 three-step precedence has **no middle step to write**, because there is no `reviewers` key in
 `packages/contracts/src/config.ts` at all; and **Q83**, filed for the `checklist:<name>` half, which
 that row refuses by name until it is answered rather than deferring the whole requirement.
+
+**What closed, symptom by symptom** (refiner, session 5, from the WP-37 notes and the tree; no test
+run, rule 66). **(a)** `PROPOSED_RISK_CLASSES` (`packages/domain/src/policies/risk-classes.ts:126-151`)
+is product/19 §14's table as a **proposal an operator accepts**, deliberately *not* in
+`PLATFORM_DEFAULT_CONFIG` — asserted in both directions, because a set that arrived with a deploy would
+gate every existing project's migrations with nobody having chosen it. It reaches an operator as
+`risk_class_proposal` on `GET /api/projects/:id/config` and acceptance is the existing `PUT …/config`
+with its `human_actions` row, so no new endpoint and `client-census.test.ts` is unchanged. **(b)**
+`discoveryDraftDataSchema.risk_classes` takes `{name, paths, evidence}` and **not** `require` — what a
+class *forces* is platform policy — folded onto the platform's table by `onboarding/record.ts` and
+written to `projects.proposed_risk_classes` (migration **0026**), never to `policies.risk_classes`;
+`ROLE_PROMPT_VERSIONS.discovery` is 3 with three eval cases. **(c)** `tasks.risk_classes` has a narrow
+writer, `TaskRepository.saveRiskClasses`, fed from the merge request's own diff at the rebase gate —
+the fourth narrow writer for the third time rule 79 applied, named in
+`tasks-column-ownership.test.ts`. **(d)** every requirement the schema accepts now has a consumer and
+the two that have none are **refused by name with the reason**, `riskRequirementSchema` becoming a
+refinement rather than a union so the message can say *why*. The reviewer-routing half this entry did
+not detail also closed: `readCodeowners` has its first caller since WP-09, the middle step's
+`policies.reviewers` key exists, and `GitProviderPort.resolveUserId` was added because a merge
+request's reviewers are set by **id**.
+
+**What remains** — three items, none of which re-opens the cause:
+- **The `checklist:` half is filed as backlog 91** and blocked on **Q83**. `public_api` is proposed as
+  a *named non-proposal* (`RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST`) and rendered on the settings
+  screen under *"Not proposed, and why"*, so five classes ship where WP-37's criterion 1 says six;
+  `payments` ships with one of its two documented requirements and **is not** in that list, which is
+  the quiet half. That is a gap to file rather than a product/19 amendment: nothing in §14 became false.
+- **`budget_approval` is refused, and that is a stated residual rather than a defect against
+  product/19 §14** (refiner judgement, session 5). The document's class table requires *plan approval*,
+  a *stricter checklist*, a *named reviewer group*, a *reviewer from CODEOWNERS* and *flagged in
+  review* — and **budget approval nowhere**, so no documented class needs the value; it was in
+  `riskRequirementSchema`'s pre-WP-37 enum with nothing reading it. The reason it cannot be wired is
+  structural and is measured: `spendIsStillAhead` (`packages/application/src/pipeline/saga.ts:749-755`)
+  answers true **only** for the stage whose `produces` is `RefinedSpec`, `budgetApprovalGate` returns
+  early on it (`:798`), and a class is computed from the merge request's diff two stages later — so no
+  moment exists at which WP-28's gate could read one. What it costs to leave is **nothing today**: no
+  project can hold the value (no defaults ship, no wizard writes classes, the proposal never names it),
+  and the project's spend gate is the dial's `budget_approval_threshold_usd`. The trigger that would
+  make it work rather than a residual is a *product* decision that a risk class may force a spend gate
+  — which needs a second gate moment and an answer to whether a task may wait on two approvals at once
+  — and **WP-28 owns the mechanism** if that ever happens. **No new backlog number**: it is filed here
+  rather than as an entry because there is no defect to schedule, and `config.ts:176-180` carries the
+  reasoning at the line.
+- **`tasks.requested_by_user_id` still has no writer, so the routing's third step resolves to nobody on
+  every task — backlog 92**, with backlog **79** as the other half of the same step.
 
 ### 74. **BD-006's one-working-day question timeout is unbuilt end to end — no deadline is written, no timer is armed, and the escalation that exists has no producer** (TODO — **no work package owns it**; found by the refiner while attributing WP-30's `questionTimeout` policy, session 5)
 **What is wrong.** A blocking question parks a task for ever. Every piece of the timeout exists
@@ -3546,6 +3614,16 @@ it is what a reader should not assume is closed with it:
   `toWireIdentityMapping` (the wire shape and that `email` is never published); a grep for
   `org/identities` over `test/` and `apps/server/src/**/*.test.ts` finds none, so the 401-per-route
   and wrong-role-403 assertions this entry named are owed by whoever adds the screen.
+- **The reader's own docblock still says the writer does not exist** (found by WP-37, owed by WP-31;
+  recorded here rather than as a number of its own, because it is the sentence this entry quotes as
+  its **evidence** and is now false — rule 83, one edit). `packages/infrastructure/src/integrations/postgres-inbox.ts:155-174`
+  is headed *"`user_identities` has a reader and **no writer**, and that is stated rather than
+  implied"* and says *"nothing anywhere inserts into it"* (`:157-158`) and that an operator-stated
+  mapping is *"an admin screen and an endpoint, which no work package owns"* (`:167`) — all three
+  falsified by `POST /api/org/identities` at `a29de19`. What stays true and should survive the edit:
+  the map is **empty by default**, the two automatic routes are still refused on purpose, and
+  `resolveIdentity` still has no caller. WP-37 did not take it because it reads the table through the
+  existing `forProvider` and touches no line of that file.
 
 ### 80. **An organisation-scoped budget notifies nobody, and `notifications.project_id` is `not null`, so the one cap that stops every project cannot even be recorded** (TODO, small — **no work package owns it**; found by WP-32, session 5)
 **What is wrong.** The budget with the widest blast radius is the only one with no channel. It is
@@ -4084,6 +4162,140 @@ normaliser change with its fake, its contract-suite case and a recorded fixture 
 23), or is listed as absent with the reason"* — so the default outcome, if nobody takes this, is that the
 metric ships incomplete with a footnote. Cheapest owner: whoever next opens `gitlab/inbound.ts`; no M3
 row does today.
+
+### 91. **No review checklist exists anywhere in the product, so product/19 §14's two checklist classes ship as a refusal and a half-proposal — `public_api` is not offered at all, and `payments` is offered with one of its two documented requirements and nothing on the screen saying the other was dropped** (TODO — **no work package owns it**; the row it wants is **WP-45**, named on the M3 page; **blocked on Q83**; found by WP-37, session 5)
+**What is wrong — one cause, two symptoms.** `checklist:<name>` cannot be written in a configuration
+file *and* there is nothing for it to select: the only review checklist in the product is prose
+inside the reviewer's own prompt. Two of product/19 §14's six classes are defined by it — *"payments
+→ plan approval + stricter checklist"* and *"public-api → stricter checklist (compatibility)"* — so
+both ship incomplete, in two different ways, and only one of the two says so where an operator reads.
+
+**Evidence** (file reads only, rule 66).
+- **The refusal**, quoted from `packages/contracts/src/config.ts:181-186`: *"`checklist:<name>` —
+  **refused**, with the reason. product/19 §14 asks for it twice and nothing in the product defines
+  what a checklist *is* (Q83, filed with a recommendation): the only checklist that exists is prose
+  inside the reviewer's own prompt. Accepting the string without the reviewer-side consumer would
+  recreate exactly the defect the first two bullets close."*
+- **`public_api` is not proposed, and that is stated as data rather than prose** —
+  `RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST` (`packages/domain/src/policies/risk-classes.ts:164-176`)
+  carries its name, its paths and its reason; `riskClassProposalOf` publishes them as
+  `not_expressible` (`apps/server/src/routes/projects.ts:182-186`); the settings screen renders them
+  under *"Not proposed, and why"* (`apps/web/src/features/operating-mode.tsx:581-585`). So
+  `PROPOSED_RISK_CLASSES` has **five** classes where WP-37's criterion 1 says six. Standing rule 18
+  is honoured for this half.
+- **`payments` is the half nobody has recorded, and it is the one that is quiet.** It *is* proposed,
+  with `require: ['plan_approval']` (`risk-classes.ts:131-134`) against the document's *"plan
+  approval + stricter checklist"*, and it is **not** in `not_expressible` — so an operator who
+  accepts the proposal gets one of its two requirements and the screen says nothing about the other.
+  The drop is stated only in a docblock (`risk-classes.ts:119-120`, *"the plan approval only. The
+  checklist half is `RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST`"*), which is not a surface.
+- **What the full feature costs**, quoted from WP-37's discovered-work bullet: *"`policies.review_checklists`
+  as `record<slug, string[]>`, `checklist:<name>` in `riskRequirementSchema`, and a class naming an
+  undefined list refused at configuration load — is four files of schema and **one** of consumer, and
+  the consumer is the expensive half: the reviewer's prompt needs an additional data block
+  (`assemblePrompt` gains an input, `packages/domain/src/prompt/assembly.ts`), the reviewer's
+  `prompt.md` needs a sentence about it, which bumps `ROLE_PROMPT_VERSIONS.reviewer` and owes eval
+  cases (TD-016), and the Review Verdict should record *which* checklist was applied, because
+  'stricter' is observable only as 'the reviewer was given N additional items'."*
+
+**Is this a deviation the orchestrator must record against product/19? No.** Nothing in product/19
+§14 became false and the document needs no amendment: the build ships a *partial* proposal and names
+the part it cannot express. What deviates is **WP-37's own criterion 1** (*"the six classes ship as a
+proposal"*), which shipped as five plus a named refusal, and the WP-37 notes record that deviation
+with its reason. This entry is the gap, not an amendment.
+
+**What it costs to leave.** The two classes a maintainer most wants gated — payments and the public
+API — are the two the feature cannot fully express: one is not offered, the other is offered weaker
+than the document. The live half is the **screen**: an operator can accept a `payments` class today
+and reasonably believe the stricter checklist came with it, because the only place the omission is
+written is a comment in the domain package. The latent half is the reviewer: until a checklist exists
+there is nothing for *"stricter"* to mean.
+
+**What "done" looks like — two sizes, and the small one can land first.** **(a) The proposal tells the
+truth about `payments`** (one change, no product decision needed): either it joins `not_expressible`
+as a *partially* proposed class, or that structure gains a per-class *"requirement dropped, and why"*
+field so a class can be offered **and** carry its omission — asserted on the published document rather
+than on a docblock. **(b) Q83's recommendation in full**, which is the work package: `policies.review_checklists`
+as `record<slug, string[]>`, `checklist:<name>` accepted by `riskRequirementSchema`, a class naming an
+undefined list refused at configuration load with the key path and the value found there (backlog
+**58**'s 409 shape), the reviewer's prompt taking the project's items **in a data block** — project
+text, so no `ROLE_PROMPT_VERSIONS` bump for a project's own list, only for a change to the platform's
+default (Q83 states this) — and the Review Verdict recording which checklist was applied. When (b)
+lands, `public_api` moves out of `RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST` into
+`PROPOSED_RISK_CLASSES` and `payments` gains its second requirement: WP-37 kept both classes' paths in
+that table precisely so this is an edit of one table rather than a re-transcription. **Needs
+measurement: none** — every fact above was read off a file.
+
+**Depends on / owner.** **Blocked on Q83**, which is filed with a recommendation strong enough to build
+from and two sub-questions to confirm (whether the platform ships default checklists — the
+recommendation is **no** — and whether a checklist may only add to product/04:63's default — the
+recommendation is **add-only**). **No work package owns it**: none of the nine M3 rows touches the
+reviewer's prompt, and (b) is a work package rather than a backlog-sized change, so the M3 page now
+names it **WP-45** at the next free number with this entry and Q83 as its brief — the same disposition
+backlog **78** and **68** were given as WP-43 and WP-44. (a) depends on nothing and is the cheapest
+thing in this entry; nearest owner for it is whoever next opens `risk-classes.ts` or the settings
+screen.
+
+### 92. **`tasks.requested_by_user_id` has no writer at any of the four sites that create a task, so product/19:138's third reviewer step resolves to nobody on every task — and at three of the four the requester is in hand and dropped** (TODO, small — **no work package owns it**; found by WP-37, session 5; the other half of the same step is backlog **79**)
+**What is wrong.** The reviewer precedence's fallback reads a column nothing writes. WP-37 implemented
+the step rather than omitting it — *"routing that cannot express its own last step is the state
+`readCodeowners` sat in for five milestones"* — and says so by name in the log, so nothing is assigned
+silently; what is missing is the writer.
+
+**Evidence** (greps and file reads only, rule 66).
+- **The reader**: `requesterAccount` (`packages/application/src/pipeline/risk-routing.ts:144-158`),
+  called from the routing duty at `:298-301`. Its docblock, quoted: *"Step three of product/19:138, and
+  **it resolves to nobody on this build** — twice over, which is why both halves are named here rather
+  than in one sentence. `tasks.requested_by_user_id` has no writer at all
+  (`StoredTask.requestedByUserId`), and `user_identities` is empty until an operator fills it through
+  `POST /api/org/identities` (PROGRESS backlog 79)."*
+- **The four task-creation sites, all four a literal `requestedByUserId: null`**: intake
+  (`pipeline/saga.ts:361`), discovery (`onboarding/discovery.ts:223`), review-only
+  (`pipeline/review-only.ts:776`), the ticket linter (`pipeline/ticket-lint.ts:568`). The column is
+  `StoredTask.requestedByUserId` (`pipeline/store.ts:98`) and is published on the task record
+  (`packages/contracts/src/records.ts:266`, `idSchema.nullish()`).
+- **Three of the four hold the value and drop it.** `startProjectDiscovery` takes
+  `requestedByUserId: Id | null` as input (`onboarding/discovery.ts:141`), threads it into
+  `contextFor` twice (`:198`, `:245`) — so the actor reaches the `human_actions` row — and then writes
+  `null` onto the task at `:223` with the comment *"the wizard's actor is recorded in `human_actions`
+  by the route (WP-37 reads both and says so)"*. Review-only and the linter are commands with an actor
+  for the same reason.
+- **The fourth has a candidate the platform already reads.** Intake's task comes from a ticket, and
+  `Ticket.reporter` is on the port (`packages/application/src/ports/integrations/task-management.ts:93`,
+  `externalIdentitySchema.nullish()`). Mapping it needs `user_identities`, which has had a writer since
+  WP-31 (backlog **79**).
+
+**What it costs to leave.** The precedence's last step never fires, so a project with no `CODEOWNERS`
+and no `policies.reviewers` key gets **no** reviewer assigned — and that is the commonest project,
+since `CODEOWNERS` is optional and the `reviewers` key is new at WP-37. It is the fail-closed
+direction and nothing is assigned wrongly, which is why this is small. It is **live rather than
+latent** in one respect only: a duty ships today whose log line distinguishes *"the fallback found
+nobody"* from *"there is no fallback"*, and on every instance it is always the second.
+
+**What "done" looks like — two halves, separable, cheapest first.** **(a) The three commands write the
+actor they already have**: one field on the insert in `onboarding/discovery.ts`,
+`pipeline/review-only.ts` and `pipeline/ticket-lint.ts`. No migration — the column has been on the
+table since it was created (`packages/infrastructure/src/db/migrations/0004_pipeline.sql:18`,
+`requested_by_user_id uuid references users (id) on delete set null`). Asserted by the countable effect and both ways (rule 42): a discovery task created
+by user U carries U on its row and the routing assigns U's provider account when nothing else matched,
+and a task created by nobody still routes to nobody. **(b) The intake path decides whether a ticket's
+reporter is the requesting human.** *Recommendation: yes, resolved through `user_identities` and never
+through an email match* — BD-022 and Q10 refuse a guessed identity for answering questions and
+approving plans, and being made a **required reviewer** is the same class of authority — with `null`
+when the reporter is unmapped, which is exactly the state the routing already names. The reporter is
+untrusted provider text (BD-022): the mapping is the only thing that turns it into a platform user id,
+and the provider account is never stored on the task row. **Rule 83**: three places say the column has
+no writer and must be corrected by whichever change gives it one —
+`StoredTask.requestedByUserId`'s docblock (`pipeline/store.ts:88-98`), `saga.ts:358-360`'s comment and
+`risk-routing.ts:135-143`. **Needs measurement: none.**
+
+**Depends on / owner.** **No work package owns it**, and none of the nine M3 rows opens any of these
+four files. (a) depends on nothing. (b) depends on backlog **79**'s endpoint having been *used* — on an
+instance where nobody has mapped anybody it still resolves to `null`, and no screen calls that endpoint
+(79's remaining half), so (b) buys nothing until that screen exists. Cheapest owner for (a): whoever
+next opens one of the three command modules. **WP-38** is the first surface that would *show* the
+result — its Checks panel item is *"risk classes and required reviewers"* — but it renders the outcome
+and does not own the writer.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -15798,7 +16010,257 @@ than left standing — the fix is not one line, and the seed is gone.
   `toIso` is the safe spelling of the same helper (it converts the string branch too). Filed as
   discovered work, not changed here.
 
+### WP-37 — risk classes and reviewer routing
+
+**What was half a feature in four places is now one loop**, and the four are worth reading as one
+cause: `policies.risk_classes` had a *reader* (WP-30's plan gate) and no *producer* anywhere —
+no defaults, no proposal, no writer for `tasks.risk_classes`, and one of the three requirements
+product/19 §14 defines could not be stored at all. PROGRESS backlog **73** is the brief; this is what
+the change decided.
+
+**1. The six classes ship as a proposal, and the proposal is data the server sends.**
+`PROPOSED_RISK_CLASSES` (`packages/domain/src/policies/risk-classes.ts`) is product/19 §14's table,
+and it is deliberately **not** in `PLATFORM_DEFAULT_CONFIG` — asserted in both directions by
+`risk-classes.test.ts` ("is **not** in the shipped defaults"), because a set that arrived with a
+deploy would gate every existing project's migrations with nobody having chosen it. It reaches an
+operator as `risk_class_proposal` on `GET /api/projects/:id/config` (`source: 'discovery' |
+'platform'`), and acceptance is the **existing** `PUT …/config` with its `human_actions` row — no new
+endpoint, so `client-census.test.ts` is unchanged. The settings screen renders the offer and the
+acceptance is asserted through the real router-shaped fake in `onboarding.test.tsx` ("accepts the
+proposed risk classes through the configuration write, and applies nothing until then").
+
+**2. `public_api` is proposed as *five* classes plus a named refusal, and that is a deviation from
+criterion 1's "six".** Its only documented requirement is a *"stricter checklist"* and nothing in the
+product defines what a checklist is (**Q83**); proposing it would mean inventing a requirement the
+document does not ask for or writing a class that requires nothing. So it is
+`RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST` — its name, its paths and its reason, as **data** the
+settings screen renders under *"Not proposed, and why"* (standing rule 18: the absent case must not
+be the quiet one). Answering Q83 is then an edit of one table rather than a re-transcription.
+
+**3. `checklist:` and `budget_approval` are refused by name, which is criterion 5's other option.**
+`riskRequirementSchema` is now a refinement rather than a union, so the message can say *why*: zod's
+`invalid_union` is exactly what an operator whose `payments` class silently did nothing must not
+get. `checklist:<name>` stays out because **accepting it without a reviewer-side consumer would
+recreate the defect this row exists to close** — a third parsed-and-unread requirement; implementing
+Q83's recommendation in full is the prompt, a `ReviewVerdict` field, `ROLE_PROMPT_VERSIONS` and eval
+cases for the reviewer, which is a work package (filed as discovered work). `budget_approval` is
+refused because **it cannot be wired**, measured rather than asserted: `spendIsStillAhead` answers
+true only for the stage that produces the `RefinedSpec`, and a class is known from the Implementation
+Plan two stages later, so no moment exists at which WP-28's gate could read one. The cost of
+refusing a value the API used to accept is stated: no project can have one (no defaults ship, no
+wizard writes classes, and the proposal never names it). The refinement loses the JSON Schema's
+`pattern`, which is put back through `.meta()` built from `REVIEWER_REQUIREMENT.source` — one
+spelling, not two.
+
+**4. `tasks.risk_classes` is written from the merge request's own diff, by a narrow writer.**
+`TaskRepository.saveRiskClasses` — one column, one statement, no version bump, the whole list
+replaced (the gate is re-entered on every default-branch move, so a class the diff no longer carries
+has to leave the row). It is the **fourth** narrow writer for the third time the same reason applied
+(standing rule 79), and `tasks-column-ownership.test.ts` now names `risk_classes` as owned by
+`postgres-pipeline-store.ts`. `StoredTask` gained `riskClasses` so the shared contract suite can read
+the write back; the suite's case asserts the replacement *and* a concurrent `addSpend` surviving it.
+
+**5. It is a second `pipeline.outbound` duty, not a branch of `conflict_warn`, and that costs one
+provider read.** Both fire on `task.stage.entered` at the rebase gate. `conflict_warn` gives up when
+the project has no peer task — which is the ordinary case in which a task still needs its classes and
+its reviewers — so sharing its read would have meant the commonest task on the commonest project
+silently getting neither. The cost is measured in `conflict-warning.test.ts`, whose two
+provider-read assertions moved from `[IID, PEER_IID]` to `[IID, IID, PEER_IID]` and from `[]` to
+`[IID]`, each with the sentence it falsified corrected beside it (standing rule 83).
+
+**6. Reviewer routing is product/19:138's three steps, and the third resolves to nobody on this
+build — twice over.** `resolveReviewerRouting` (`packages/domain/src/policies/reviewer-routing.ts`)
+is pure and each step is asserted separately; classes **add** required reviewers and never replace
+them (a CODEOWNERS entry and a class requirement naming different people both end up on the merge
+request, asserted with a fixture where they disagree). The fallback reads
+`tasks.requested_by_user_id` — which **no writer fills** — through `user_identities`, which is empty
+until an operator maps an account (backlog **79**). So step three finds nobody, the duty logs which
+of the two it hit, and nothing is assigned silently. `CODEOWNERS` is read at the **default branch**,
+never inside the change: a merge request may edit that file, and routing by the version in the change
+would let a contributor appoint their own reviewer (BD-022).
+
+**7. `readCodeowners` got its first caller and the port got one new obligation.**
+`GitProviderPort.resolveUserId(handle)` exists because a merge request's reviewers are set by **id**
+— GitLab's API takes `reviewer_ids` and nothing else — while `CODEOWNERS` produces handles, so
+without it the routing can be computed and never applied. `null` is a first-class answer and must not
+be an exception: a `CODEOWNERS` naming a group, a team or somebody who has left is the ordinary state
+of a real repository. The GitLab adapter uses `GET /users?username=` (documented for a regular user,
+case-insensitive — retrieved 2026-09-14) and refuses four ways: a handle containing `/` is a group
+and is never searched for, the match is re-checked here rather than trusted to the filter, two
+matches answer `null` rather than picking one, and a non-`active` account answers `null` because
+GitLab would refuse to assign it. Rule 23: the shared contract suite has both cases, the fake has
+`seedUser` and divergence **11**, and `users.json` carries its provenance and its `SOURCES.md` entry.
+
+**8. `set_reviewers` adds, never replaces.** `updateMergeRequest` sets the whole list, so
+`reviewWrites.reviewers` re-reads the merge request and unions with whoever is already there — a
+human who added themselves is not removed. The union is computed at the call rather than in the duty
+for the reason the markdown redaction is (standing rule 44). The key is
+`set_reviewers:<task>:<head_sha>`: platform-owned, no provider prose, and **no revision means no
+assignment**, said out loud, which is the answer `conflict_warn` already gives for its own key.
+
+**9. The Discovery agent can propose them, and its answer is a suggestion in the same shape
+R9/R11/R12 are.** `discoveryDraftDataSchema.risk_classes` takes `{name, paths, evidence}` and **not**
+`require`: what a class forces is platform policy, and a model that could write the requirement could
+also write an empty one. `onboarding/record.ts` folds the name onto the platform's table (`agent-config`
+→ `agent_config`), drops one outside it, redacts the paths and writes
+`projects.proposed_risk_classes` (**migration 0026**, narrow writer beside `readiness_level`) — never
+`policies.risk_classes`. `ROLE_PROMPT_VERSIONS.discovery` is **3** and three eval cases land with the
+prompt (TD-016), including the hostile one: a README asking for a class of its own gets a question,
+not a class.
+
+**10. Rule 83's sweep.** `risk-classes.ts:9`'s claim that `checklist:<name>` *"is parsed … and has no
+consumer"* was false — it was **refused** — and is corrected at the line, together with the residual
+paragraph that said the diff *"is not read by anything today"*. `git-provider.ts`'s
+`readCodeowners`/`reviewers` sentences, `operating-mode.tsx`'s two-gaps docblock and its screen copy,
+`onboarding.test.tsx`'s and `screens.spec.ts`'s assertions on the old gap text, and
+`conflict-warning.test.ts`'s two cost sentences all described the state this change ended.
+
+**11. Canaries (standing rule 77's recipe, each mutant's landing proved by an md5 before and
+after).** Classifying from a fixed path instead of the diff → two named failures (`expected [] to
+deeply equal [ 'data' ]`); dropping `classReviewers` from the routing union → three
+(`expected [ [ '4242' ] ] to deeply equal [ [ '4242', '7' ] ]`); making the memory store's
+`saveRiskClasses` merge instead of replace → the contract case (`expected [ 'data', 'auth', 'data' ]
+to deeply equal [ 'data' ]`). All three files were restored and re-hashed.
+
+**Assumptions, stated because the docs did not decide them.** `policies.reviewers` lives under
+`policies` beside `risk_classes` (product/19:138 says only *"project `reviewers` config"*), holds the
+provider's own account identifiers *or* handles — a numeric id passes through, a handle is resolved
+like a CODEOWNERS owner — and is capped at `MAX_ROUTED_REVIEWERS` (8), which is a provider-read
+budget rather than a product number. The classes are computed at the rebase gate rather than at
+`mr.opened`, because the gate is entered before Ready **and** on every default-branch move, so a
+fifth push is classified and an `mr.opened` trigger would classify only the first.
+
+**Review round 2:** one major, one minor and one nit — and the minor turned out to be hiding a live
+defect.
+
+1. **The major: "`CODEOWNERS` is read at the default branch, never inside the change" was written in
+three docblocks and asserted nowhere, because the *instruments* could not tell the two refs apart**
+(standing rule 4). The unit harness's stub was `readCodeowners: async () => …` and `FakeGitProvider`
+stored one file per **project** and ignored `ref`, so the reviewer measured the mutant that reads at
+`stored.mr.branch` passing every tier. Fixed at all three levels, and the fake first: `CODEOWNERS`
+now belongs to a **ref** (**divergence 12**) — the seed's text is the default branch's file,
+`seedFile`/`commitFiles` put one on any branch (divergence 9's store, so no new control method), the
+file a ref holds wins for that ref, and a ref with no file answers `null`, which is *stricter* than
+real git and says so. The shared contract suite gained *"reads CODEOWNERS at the ref it was asked
+for, and never another ref's"* (standing rule 23: the obligation is the port's, not one adapter's),
+asserted **both ways** over a new `codeowners` context block — one `documented-adapted` GitLab
+fixture at `ref=agentic%2Ftask-1` with its provenance and its `SOURCES.md` line, and a plant on the
+fake's branch. The unit double now answers a **different file per ref** and records every ref it was
+asked for, and the new case gives the mutant three named failures at once. The e2e plants a hostile
+`CODEOWNERS` on the branch under review naming `@mallory` (who resolves to a real account, so the
+wrong read assigns `6666`) and asserts the production audit rows: `read_codeowners` was made at
+`main` and at no other ref.
+**Canaries** (rule 77's recipe; both mutants' landing proved by an md5 before and after, both files
+restored to the exact pre-mutation digest). Reading at `ref.branch ?? target.branch` in
+`risk-routing.ts` → **8** named failures, the sharpest being `expected [ 'agentic/acme-1' ] to
+deeply equal [ 'main' ]`; the same mutant was green before this round. `FakeGitProvider.readCodeowners`
+put back to ignoring `ref` → the fake's own case and the **contract suite's** case fail
+(`expected [ '@billing-team', '@docs-team' ] to include '@branch-owner'`), and GitLab's runner is
+unaffected, which is the fixture keys doing their job. One canary failed *usefully* and is recorded
+as a refinement of rule 77: the `cp x.ts zzmutant.ts` recipe **cannot** mutate this duty, because the
+test reaches it through `createPipelineRuntime` (which imports the original by relative path) rather
+than through its own import — a planted `throw` in the copy fired in exactly **1** of 14 cases, the
+one that calls `runRiskRouting` directly. The mutation was therefore made in place with the Edit
+tool, whose writes persist.
+
+2. **The minor was a docblock promising a case that did not exist — and writing the case found a
+`TypeError` on the shipped path.** `reviewWrites.reviewers` passed `() => null as unknown as
+MergeRequest` as its `shadowResult` while its `describeResult` dereferences `result.reviewers`, and
+the executor **describes** a `would_have` row, so **every** shadow task's `risk_route` job threw
+`TypeError: Cannot read properties of null (reading 'reviewers')` instead of recording a non-call —
+under a docblock four paragraphs up claiming *"a shadow task records `would_have` and assigns
+nobody"*. The shadow result is now the merge request just read carrying the union that was about to
+be sent (nothing invented: an identity already on the merge request is kept as the provider wrote it,
+one this call would have added is `verified: false`). The case that found it is driven by calling the
+duty directly — nothing in this build creates a shadow task, so the row is flipped by hand, the
+arrangement is stated at the case, and the directory learns the account only afterwards so that the
+shadow pass is the **first** one with anything to assign (`reviewers` makes no call when the union
+adds nothing, so a shadow pass over an already-assigned merge request would have asserted nothing).
+
+3. **The nit was the wrong half.** `provider.ts:801` and `client.ts:178` quote *"As a regular user"*;
+`SOURCES.md:78` and `users.json`'s note quoted *"For non-administrator users"*. Fetched
+<https://docs.gitlab.com/api/users/> again on 2026-09-14: the page carries *"As a regular user"* and
+the string "non-administrator users" does not appear on it, so the **two fixtures** were corrected to
+the adapter's spelling rather than the other way round (standing rule 39).
+
+
 ## Discovered work — session 5 (not in plan)
+- **Q83's recommendation is implemented as a refusal, not as the feature** (WP-37). A review
+  checklist as Q83 describes it — `policies.review_checklists` as `record<slug, string[]>`,
+  `checklist:<name>` in `riskRequirementSchema`, and a class naming an undefined list refused at
+  configuration load — is *four* files of schema and **one** of consumer, and the consumer is the
+  expensive half: the reviewer's prompt needs an additional data block (`assemblePrompt` gains an
+  input, `packages/domain/src/prompt/assembly.ts`), the reviewer's `prompt.md` needs a sentence about
+  it, which bumps `ROLE_PROMPT_VERSIONS.reviewer` and owes eval cases (TD-016), and the Review
+  Verdict should record *which* checklist was applied, because "stricter" is observable only as "the
+  reviewer was given N additional items". WP-37 refused `checklist:` by name instead, with the reason
+  and the question id in the message, because shipping the schema half alone would have recreated the
+  exact defect the work package closed — a requirement that parses and nothing reads. The paths of
+  the one class that needs it are kept in `RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST` so that
+  answering Q83 is an edit of one table.
+  *Refiner (session 5): **filed as backlog 91**, and the row it asks for is named **WP-45** on the M3
+  page beside WP-43 and WP-44 — no M3 row touches the reviewer's prompt. The entry carries a second
+  symptom of the same cause that this bullet does not: **`payments` is proposed with one of its two
+  documented requirements and is not in the screen's "Not proposed, and why" list**, so the operator-
+  visible omission is `public_api` only. Judged **not** a product/19 amendment — nothing in §14 became
+  false; the five-of-six deviation is against this row's own criterion 1 and is recorded above.*
+- **A risk class cannot force a budget approval, and the reason is structural rather than missing
+  work** (WP-37). `spendIsStillAhead` answers true **only** for the stage that produces the
+  `RefinedSpec`, and a class is known from the Implementation Plan two stages later — so WP-28's gate
+  has no moment at which it could read one. Making it possible is a product decision about *when* a
+  spend gate fires (and whether a task may wait on two approvals at once), not a wiring change;
+  `budget_approval` is refused by name meanwhile. WP-28's row does not name this requirement, which
+  is what backlog 73 (d) asked to have said out loud.
+  *Refiner (session 5): **folded into backlog 73's "what remains" — no number, and judged a stated
+  residual rather than a defect against product/19 §14**. The document's class table requires plan
+  approval, a stricter checklist, a named reviewer group, a reviewer from CODEOWNERS and flagged-in-
+  review, and **budget approval nowhere**: no documented class needs the value, so nothing in the
+  product is unmet. It costs nothing today because no project can hold one. **Owner: none.** It
+  becomes work only if a product decision says a class may force a spend gate, and that decision owes
+  two answers — when the second gate fires, and whether a task may wait on two approvals at once —
+  after which **WP-28 owns the mechanism**.*
+- **`tasks.requested_by_user_id` has no writer anywhere**, so product/19:138's third routing step —
+  *"then the requesting human as fallback"* — resolves to nobody on every task, before
+  `user_identities` is even consulted (backlog **79** is the second half). Intake creates a task from
+  a ticket a rule matched, and the three commands that create one (discovery, review-only, the ticket
+  linter) carry the actor into `human_actions` rather than onto the task. WP-37 implements the step
+  and says so by name in the log rather than leaving it unexpressible; giving the column a writer —
+  and deciding whether a ticket's reporter counts as a requester — is a row of its own.
+  *Refiner (session 5): **filed as backlog 92**, and it is smaller than "a row of its own" because it
+  splits. **Three of the four creation sites already hold the actor and drop it** — `startProjectDiscovery`
+  takes `requestedByUserId` at `onboarding/discovery.ts:141`, threads it into `contextFor` at `:198`
+  and `:245`, and writes `null` onto the row at `:223`; review-only (`:776`) and the ticket linter
+  (`:568`) are the same shape. That half is one field on three inserts and no migration. The **intake**
+  half is the judgement, and the entry carries a recommendation: `Ticket.reporter` exists on the port
+  (`ports/integrations/task-management.ts:93`) and should be resolved through `user_identities` —
+  **never through an email match**, because a guessed identity must not become a required reviewer
+  either (BD-022, Q10). Cheapest owner for the first half: whoever next opens one of the three command
+  modules; **no work package owns either**.*
+- **A merge request's required reviewers are not on the task DTO**, so product/10:38's *"risk classes
+  and required reviewers"* is half rendered: WP-37 writes and publishes `tasks.risk_classes`, and the
+  people it routed to live only in `integration_actions.payload`. WP-38 owns the Checks panel and is
+  the cheapest place to decide whether that needs a column, a projection over the audit, or a read
+  through the provider.
+  *Refiner (session 5): **folded into WP-38's row — no number; that row carries it and now says so
+  in both of its columns.** The dependency clause records the measurement (`taskRecordSchema` has
+  `risk_classes` at `packages/contracts/src/records.ts:240` and no `required_reviewers`; the only
+  platform record is the `set_reviewers` audit row, `integration_actions` being append-only and
+  partitioned with `integration_actions_task_idx on (task_id, created_at desc)` as the index a
+  projection would use), and criterion 5 now says this is **the one item that row may not resolve by
+  listing it absent** — WP-37 shipped the producer and no other row will own it — with the three
+  shapes priced. Not folded into backlog 92, which is the different gap the panel would display
+  rather than fix.*
+- **`postgres-inbox.ts`'s identity docblock is stale** (found by WP-37, owed by WP-31): it says
+  *"nothing anywhere inserts into it"* and that an operator-stated mapping is a route *"no work
+  package owns"*, both of which `POST /api/org/identities` falsified at `a29de19`. One sentence,
+  rule 83's shape; not taken here because WP-37 reads the table through the existing `forProvider`
+  and touches no line of that file.
+  *Refiner (session 5): **folded into backlog 79's "what remains" list — no number**, because that
+  entry **quotes this very docblock as its evidence**, so a separate line would leave the false
+  sentence cited in two places and corrected in neither. The fold names the three stale claims with
+  their lines (`postgres-inbox.ts:155-158` and `:167`) and the three that must survive the edit: the
+  map is empty by default, the two automatic routes are still refused on purpose, and
+  `resolveIdentity` still has no caller. Owed by **WP-31**; a nit.*
 - **`POST /api/org/identities` answers 500 against a real database** (WP-31, found by WP-29's e2e).
   `toWireIdentityMapping` converts `created_at` only when it `instanceof Date`, and the driver hands
   a row read through `database.execute` back with PostgreSQL's own rendering as a

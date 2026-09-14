@@ -1,0 +1,36 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/users?username=dana-reviewer",
+      "status": 200,
+      "body": [
+        {
+          "id": 4242,
+          "username": "dana-reviewer",
+          "name": "Dana Reviewer",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/dana-reviewer"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-09-14",
+        "kind": "documented-adapted",
+        "note": "The shape is the page's \"As a regular user\" list response for GET /users?username=:username (id, username, name, state, web_url); the values are this corpus's own obviously fake reviewer, and the members the adapter never reads are removed. The page also states \"Username search is case-insensitive\", which is why the adapter re-checks the match itself."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/users?username=departed",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/users/",
+        "retrieved": "2026-09-14",
+        "kind": "inferred",
+        "note": "The page does not publish the response for a username nobody has; an empty array is inferred from the endpoint being a filtered list rather than a lookup. The adapter answers null for it, which is the case reviewer routing depends on — a CODEOWNERS file naming somebody who has left is the ordinary state of a real repository."
+      }
+    }
+  ]
+}

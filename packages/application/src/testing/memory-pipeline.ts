@@ -221,6 +221,16 @@ export const createMemoryPipelineStore = (
       // that accepted what PostgreSQL's reader refuses would be kinder than production (rule 1).
       tasks.set(taskId, clone({ ...current, workpad: workpadRefSchema.parse(workpad) }));
     },
+    saveRiskClasses: async (_tx, taskId, classes) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Only this field, and the whole list every time — the same statement the SQL adapter writes
+      // (WP-37): the rebase gate is re-entered on every default-branch move, and a class the merge
+      // request no longer touches has to leave the row.
+      tasks.set(taskId, clone({ ...current, riskClasses: [...classes] }));
+    },
     addSpend: async (_tx, taskId, usd) => {
       const current = tasks.get(taskId);
       if (current === undefined) {

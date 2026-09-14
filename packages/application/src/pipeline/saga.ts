@@ -352,6 +352,13 @@ export const runIntakeCheck = async (
       ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
       // Never a review-only task: this is the ticket path (WP-24's is `review-only.ts`).
       reviewSubject: null,
+      // Filled in at the rebase gate from the merge request's own diff (WP-37): a task that has
+      // not written code yet has touched nothing to be classed.
+      riskClasses: [],
+      // `tasks.requested_by_user_id` has no writer: a ticket the pick-up rule matched was not
+      // requested by anybody the platform can name (`StoredTask.requestedByUserId` says what that
+      // costs the reviewer fallback).
+      requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);
 

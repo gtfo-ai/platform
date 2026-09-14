@@ -499,7 +499,41 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * @throws {IntegrationError} `not_found` when the branch does not exist on the project.
    */
   isBranchProtected(project: string, branch: string): Promise<boolean>;
+  /**
+   * The `CODEOWNERS` **at `ref`**, parsed, or `null` when that ref has none.
+   *
+   * `ref` is an obligation rather than a hint, and it is a security one: the platform reads this
+   * file at the *default branch* because a merge request may edit it, and routing by the version
+   * inside the change would let whoever wrote the change appoint their own reviewer (BD-022,
+   * product/19:138). An adapter that answered one file for the whole project would satisfy every
+   * caller and quietly break that — `FakeGitProvider` did, until WP-37 review round 2 — so the
+   * shared contract suite asserts it both ways ("reads CODEOWNERS at the ref it was asked for, and
+   * never another ref's") rather than leaving it to this sentence (standing rule 3).
+   */
   readCodeowners(project: string, ref: string): Promise<CodeownersRules | null>;
+
+  /**
+   * The provider's own account identifier for a handle, or `null` when it does not name one
+   * (WP-37).
+   *
+   * It exists because a merge request's reviewers are set by **id**: GitLab's API takes
+   * `reviewer_ids` and nothing else, while `readCodeowners` and `policies.reviewers` produce
+   * handles — `@dana`, `@team/security`, `dana@example.com`. Without this method the reviewer
+   * routing product/19:138 specifies can be computed and never applied, which is the state
+   * `readCodeowners` sat in from WP-09 until now: built, correct and never called.
+   *
+   * **`null` is a first-class answer and must not be an exception.** A CODEOWNERS file is written
+   * by whoever can push to the repository (BD-022) and routinely names a *group*, a team that is
+   * not a user, or somebody who has left — and the caller's answer to all three is the same: name
+   * the handle in the log and assign nobody for it. An adapter that threw would turn one stale
+   * line in somebody's `CODEOWNERS` into a failed job with a retry.
+   *
+   * A handle is passed **as written**, leading `@` and all; normalising is the adapter's business,
+   * because what a handle means is the provider's. It is a **read**, so it happens in every mode.
+   *
+   * @throws {IntegrationError} only for transport-level failures — never for an unknown handle.
+   */
+  resolveUserId(handle: string): Promise<string | null>;
 
   listMergedMergeRequests(
     project: string,

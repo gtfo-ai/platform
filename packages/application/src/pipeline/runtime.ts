@@ -66,6 +66,7 @@ import {
 } from './jobs.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { reviewOnlyHandlers } from './review-only.js';
+import { riskRoutingHandlers } from './risk-routing.js';
 import { type PipelineSagaOptions, pipelineHandlers } from './saga.js';
 import {
   createStageExecutor,
@@ -144,6 +145,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ...options,
     unitOfWork,
     asks: options.ask.asks,
+    // WP-37: the same identity map the ask handler resolves an author with, read in the other
+    // direction by the reviewer fallback. One collaborator rather than two of the same table.
+    identities: options.ask.identities,
   };
   const workers: JobWorker[] = [];
 
@@ -162,6 +166,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...reviewOnlyHandlers(options),
       ...ticketLintHandlers(options),
       ...conflictWarningHandlers(options),
+      // WP-37: the rebase gate's other duty — classify the diff, route the reviewers.
+      ...riskRoutingHandlers(options),
       // The notify band (WP-32), TD-005 priority 210 — the one handler outside the core and
       // integrations bands, and the reason `EVENT_CONSUMPTION`'s two budget entries are `handled`.
       ...notifyHandlers(options),

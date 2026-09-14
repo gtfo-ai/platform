@@ -146,14 +146,76 @@ export const knowledgeApplyPolicySchema = z.strictObject({
   proposal_above: unitIntervalSchema.optional(),
 });
 
+/** `reviewer:@handle`, `reviewer:@group/sub`, `reviewer:person@example.com`. */
+export const REVIEWER_REQUIREMENT = /^reviewer:@?[A-Za-z0-9._\-/]+$/;
+
 /**
- * What a risk class requires before the task may proceed: a plan approval, and/or a named
- * reviewer (`reviewer:@security`, resolved through CODEOWNERS and identity mapping).
+ * How many reviewers one merge request may be routed to.
+ *
+ * A **provider-call budget** rather than a product number: each handle that is not already an
+ * account id costs one `resolveUserId` read before the assignment can be made (WP-37), so this is
+ * the fan-out of one rebase-gate entry. Eight is larger than any CODEOWNERS rule this repository's
+ * own parser caps at per rule (64 owners) is likely to produce for one change and small enough that
+ * a hostile `CODEOWNERS` cannot turn a gate entry into a hundred provider requests — the file is
+ * attacker-controlled in a fork workflow (BD-022).
  */
-export const riskRequirementSchema = z.union([
-  z.enum(['plan_approval', 'budget_approval']),
-  z.string().regex(/^reviewer:@?[A-Za-z0-9._\-/]+$/, 'expected "reviewer:@handle"'),
-]);
+export const MAX_ROUTED_REVIEWERS = 8;
+
+/**
+ * What a risk class requires before the task may proceed — product/19 §14, WP-37.
+ *
+ * **Every value this accepts has a consumer, and the two it refuses are refused by name.** That is
+ * the rule this schema was changed to keep (PROGRESS backlog 73 (d)): before WP-37 it accepted two
+ * requirements nothing acted on, which is the worst direction for this feature to fail in — a
+ * `payments` class that looks gated and is not.
+ *
+ *  - `plan_approval` — WP-30's `planApprovalGate` (`packages/application/src/pipeline/saga.ts`).
+ *  - `reviewer:@handle` — WP-37's reviewer routing (`packages/domain/src/policies/reviewer-routing.ts`
+ *    and the `risk_route` outbound duty), which *adds* the handle to whatever CODEOWNERS or the
+ *    project's `reviewers` key produced.
+ *  - `budget_approval` — **refused**, with the reason. WP-28's budget gate is asked exactly once
+ *    per task, at the stage that produces the `RefinedSpec` (`spendIsStillAhead`), and a risk class
+ *    is computed from paths that do not exist until the Implementation Plan two stages later — so
+ *    there is no moment at which this gate could read one. It is refused rather than parsed-and-
+ *    ignored; the project's spend gate is the autonomy dial's `budget_approval_threshold_usd`.
+ *  - `checklist:<name>` — **refused**, with the reason. product/19 §14 asks for it twice and
+ *    nothing in the product defines what a checklist *is* (Q83, filed with a recommendation): the
+ *    only checklist that exists is prose inside the reviewer's own prompt. Accepting the string
+ *    without the reviewer-side consumer would recreate exactly the defect the first two bullets
+ *    close.
+ *
+ * A refusal carries the offending value, and the read side prints the key path beside it
+ * (`describeConfigIssues`, the shape PROGRESS backlog 58's 409 uses).
+ *
+ * **It is a refinement rather than a union, and that costs the generated schema its `pattern`** —
+ * so the pattern is put back through `.meta()`, built from {@link REVIEWER_REQUIREMENT}'s own source
+ * rather than typed out a second time (standing rule 41: a value expressed twice is two things that
+ * disagree later). A union cannot say *why* a value was refused — zod answers `invalid_union`, and
+ * *"this is not a risk requirement"* is exactly the message an operator whose `payments` class
+ * silently did nothing needs not to get.
+ */
+export const riskRequirementSchema = z
+  .string()
+  .meta({
+    description:
+      'A risk class requirement: "plan_approval" or "reviewer:@handle". "budget_approval" and "checklist:<name>" are refused by name — see the schema docblock.',
+    pattern: `^(plan_approval|${REVIEWER_REQUIREMENT.source.replace(/^\^|\$$/g, '')})$`,
+  })
+  .superRefine((value, ctx) => {
+    if (value === 'plan_approval' || REVIEWER_REQUIREMENT.test(value)) {
+      return;
+    }
+    const detail =
+      value === 'budget_approval'
+        ? "budget approval cannot be forced by a risk class on this build: the budget gate is asked at refinement and a class is known only from the Implementation Plan. Use the autonomy dial's budget_approval_threshold_usd"
+        : value.startsWith('checklist:')
+          ? 'a review checklist is not a thing this build has (docs/OPEN-QUESTIONS.md Q83): no reviewer-side consumer exists, so the requirement would be silently ignored'
+          : 'expected "plan_approval" or "reviewer:@handle"';
+    ctx.addIssue({
+      code: 'custom',
+      message: `${JSON.stringify(value)} is not a risk requirement this build can act on — ${detail}`,
+    });
+  });
 
 export const riskClassSchema = z.strictObject({
   paths: z.array(pathPatternSchema).min(1),
@@ -169,6 +231,22 @@ export const policiesConfigSchema = z.strictObject({
   drift_without_direction: z.enum(['disabled', 'label_unknown']).optional(),
   protected_paths: z.array(pathPatternSchema).optional(),
   risk_classes: z.record(slugSchema, riskClassSchema).optional(),
+  /**
+   * The project's default reviewers — step **two** of product/19:138's precedence, *"CODEOWNERS
+   * match first, then project `reviewers` config, then the requesting human as fallback"* (WP-37).
+   *
+   * The document tells an operator to write this and until WP-37 there was no key to write it in:
+   * a strict schema refused the middle step of its own precedence (PROGRESS backlog 73).
+   *
+   * **The values are the git provider's own account identifiers, not display names.** GitLab's
+   * merge-request API takes `reviewer_ids` and nothing else, so a handle has to be resolved to an
+   * id before it can be assigned; `readCodeowners` produces handles and the platform resolves those
+   * through `GitProviderPort.resolveUserId`, but a value written here is used **as it stands** —
+   * which is why an operator may write either (a numeric id passes straight through, a handle is
+   * resolved like a CODEOWNERS owner). Anything that cannot be resolved is reported by name and
+   * assigned to nobody, never silently dropped.
+   */
+  reviewers: z.array(nonEmptyStringSchema).max(MAX_ROUTED_REVIEWERS).optional(),
 });
 
 // ── commands (BD-025) ────────────────────────────────────────────────────────

@@ -136,6 +136,19 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',
+        // WP-37: what the server offers for `policies.risk_classes`. The project has **none** and
+        // the offer is not empty, which is the whole shape of "proposed, not applied".
+        risk_class_proposal: {
+          source: 'platform',
+          classes: { data: { paths: ['**/migrations/**'], require: ['plan_approval'] } },
+          not_expressible: [
+            {
+              name: 'public_api',
+              paths: ['**/api/**'],
+              reason: 'no review checklist exists in this build (Q83)',
+            },
+          ],
+        },
       });
     }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
@@ -309,9 +322,59 @@ describe('the wizard’s step 4', () => {
     // product/19 §124's five card fields, on a card whose behaviour is shipped (WP-24).
     expect(container.textContent).toContain('Default: off · Cost: ~$1–3 per merge request');
     expect(container.textContent).toContain('Touches: posts discussion threads on merge requests');
-    // The gap, in the words an operator reads — and the one that is no longer a gap.
-    expect(container.textContent).toContain('proposing a set from the repository structure');
+    // The gap, in the words an operator reads — and the two that are no longer gaps. **Risk
+    // classes stopped being one at WP-37**: the set is proposed, the offer is on the screen and
+    // accepting it writes the configuration document (standing rule 83 again — the sentence this
+    // test used to pin, *"proposing a set from the repository structure"*, described the gap that
+    // work package closed).
+    // Waited on rather than read synchronously: the offer arrives with the configuration query, and
+    // a `textContent` assertion taken before it resolves passes for the wrong reason.
+    await screen.findByRole('button', { name: 'Accept these classes' });
+    expect(container.textContent).toContain('The platform’s suggested set');
+    // …and the row that genuinely cannot be proposed is named with its reason rather than left out.
+    expect(container.textContent).toContain('public_api');
+    expect(container.textContent).toContain('Not proposed, and why');
     expect(container.textContent).not.toContain('A channel belongs to a chat integration');
+  });
+
+  it('accepts the proposed risk classes through the configuration write, and applies nothing until then', async () => {
+    /**
+     * Criterion 1 of WP-37, both ways (standing rule 42). Before the click the project has **no**
+     * `policies.risk_classes` — the platform ships none, so a deploy gates nobody — and the click
+     * sends the whole document with the proposal copied into `policies`, through the same
+     * `PUT …/config` (and therefore the same `human_actions` row) every other control here uses.
+     */
+    const sent: { url: string; body: unknown }[] = [];
+    const recording = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') !== 'GET') {
+        sent.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+        return json({ hash: 'newhash', autonomy_level: 'supervised' });
+      }
+      return fetchFor('recorded')(input, init);
+    }) as typeof fetch;
+
+    const { container } = render(createApp({ fetchImpl: recording, realtime: false }).element);
+    const accept = await screen.findByRole('button', { name: 'Accept these classes' });
+    // Nothing is applied yet: the configured set is empty while the offer is on the screen.
+    expect(container.textContent).toContain('No risk classes configured');
+    expect(sent).toEqual([]);
+
+    fireEvent.click(accept);
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/config'))).toBe(true);
+    });
+    const body = sent.find((entry) => entry.url.includes('/config'))?.body as {
+      config: { policies?: { risk_classes?: unknown; protected_paths?: string[] } };
+      base_hash?: string;
+    };
+    expect(body.config.policies?.risk_classes).toEqual({
+      data: { paths: ['**/migrations/**'], require: ['plan_approval'] },
+    });
+    // The rest of the document survives, and the write is optimistic — the two properties the
+    // feature toggle's own test pins, asserted here because this is a second writer of the document.
+    expect(body.config.policies?.protected_paths).toEqual(['tests/**']);
+    expect(body.base_hash).toBe('deadbeef');
   });
 
   it('says why the command policy is not editable here', async () => {

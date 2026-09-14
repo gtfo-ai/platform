@@ -232,7 +232,7 @@
                 "minItems": 1,
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/anon_745cd275"
+                  "$ref": "#/$defs/anon_eee548eb"
                 }
               }
             },
@@ -241,6 +241,13 @@
               "require"
             ],
             "additionalProperties": false
+          }
+        },
+        "reviewers": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
           }
         }
       },
@@ -627,26 +634,16 @@
         "gate"
       ]
     },
-    "anon_745cd275": {
-      "anyOf": [
-        {
-          "type": "string",
-          "enum": [
-            "plan_approval",
-            "budget_approval"
-          ]
-        },
-        {
-          "type": "string",
-          "pattern": "^reviewer:@?[A-Za-z0-9._\\-/]+$"
-        }
-      ]
-    },
     "anon_903202da": {
       "$ref": "#/$defs/NonEmptyString"
     },
     "anon_e6c200cc": {
       "$ref": "#/$defs/PathPattern"
+    },
+    "anon_eee548eb": {
+      "type": "string",
+      "description": "A risk class requirement: \"plan_approval\" or \"reviewer:@handle\". \"budget_approval\" and \"checklist:<name>\" are refused by name — see the schema docblock.",
+      "pattern": "^(plan_approval|reviewer:@?[A-Za-z0-9._\\-/]+)$"
     }
   }
 }

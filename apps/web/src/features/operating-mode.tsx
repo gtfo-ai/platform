@@ -12,20 +12,20 @@
  *
  * 1. **The autonomy dial** (BD-027) — including *Custom*, the differences, and "re-apply preset".
  * 2. **Feature toggles**, each carrying product/19:124's five card fields.
- * 3. **Risk classes** — *named as a gap*, see below.
+ * 3. **Risk classes** — the configured set, the proposal, and one row that is named as a gap.
  * 4. **Budgets**, including the separate shadow and maintenance budgets.
  * 5. **Notifications** — digest and quiet hours; the channel is *named as a gap*.
  *
- * ## The two gaps are on the screen, not in a comment
+ * ## The gap that is left is on the screen, not in a comment
  *
  * A control that silently does nothing is worse than an absent one (the shape step 3 already uses
- * at `onboarding.tsx`), so the two items this build cannot honestly carry say so where an operator
- * reads them:
+ * at `onboarding.tsx`), so the item this build cannot honestly carry says so where an operator
+ * reads it. **Risk classes left this list at WP-37**: the proposal is real (the server sends one,
+ * a Discovery run can produce it and accepting it writes the configuration document), and the one
+ * row of product/19 §14 that still cannot be expressed — `public_api`, whose only requirement is a
+ * checklist nothing in the product defines (Q83) — is rendered *by name with its reason* rather
+ * than left out quietly.
  *
- * - **Risk classes proposed from the repository structure.** `policies.risk_classes` is read — WP-30
- *   made `planApprovalGate` ask it, from the paths an Implementation Plan declares — but nothing
- *   *proposes* a set from a repository's layout: that is a Discovery-agent output with no artifact
- *   field. The configured classes are shown, and the note says where they are edited.
  * - **The notification channel.** A channel is a property of a `communication` binding, and this
  *   build resolves `git` and `task_management` only — `CommunicationPort` has no caller anywhere
  *   (WP-32). Digest and quiet hours are stored keys and are editable; the channel would be a field
@@ -461,15 +461,27 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
 
 /**
  * product/18:52 — *"Risk classes proposed from the repository structure; reviewer routing from
- * CODEOWNERS if present"*.
+ * CODEOWNERS if present"* (WP-37).
  *
- * The **proposal** is the gap, and it is stated on the screen: nothing in this build reads a
- * repository's layout and suggests a set, and a form that invented one would be worse than saying
- * so. The classes a project has **are** read — WP-30 made the plan-approval gate ask them against
- * the paths an Implementation Plan declares — so they are shown with what each one forces.
+ * **The proposal is a proposal, in both directions** (standing rule 42). A project's
+ * `policies.risk_classes` is empty until somebody accepts here, and accepting writes the
+ * configuration document through the same `PUT /api/projects/:id/config` every other control on
+ * this screen uses — with its `human_actions` row. The platform ships **no** default classes, which
+ * is the point: a set that arrived with a deploy would gate every existing project's migrations
+ * without anybody having chosen it.
+ *
+ * What is proposed comes from the server (`GET …/config`, `risk_class_proposal`), so this screen
+ * invents nothing: a Discovery run's suggestion when there is one, and product/19 §14's own table
+ * when there is not. The two say different things on the screen, because *"the agent read your
+ * repository"* is a different claim from *"here is the standard set"*.
+ *
+ * Everything rendered here is untrusted (BD-022): the class names are the platform's, and the paths
+ * are whatever a repository or an operator wrote, so they go through `UntrustedText` like every
+ * other string on this screen.
  */
 export const RiskClasses = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const config = useProjectConfig(projectId);
+  const commands = useOnboardingCommands();
   const classes =
     (
       config.data?.config as
@@ -477,13 +489,30 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
         | undefined
     )?.policies?.risk_classes ?? {};
   const names = Object.keys(classes);
+  const proposal = config.data?.risk_class_proposal;
+  const proposed = Object.entries(proposal?.classes ?? {});
+
+  const accept = (): void => {
+    if (!config.isSuccess || proposal === undefined) {
+      return;
+    }
+    const document = config.data.config as Record<string, unknown>;
+    const policies = (document.policies ?? {}) as Record<string, unknown>;
+    // The **whole** document plus the hash it was read at, like every other write on this screen:
+    // a fragment would discard every other key.
+    commands.writeConfig.mutate({
+      projectId,
+      config: { ...document, policies: { ...policies, risk_classes: proposal.classes } },
+      base_hash: config.data.hash,
+    });
+  };
 
   return (
     <Section title="Risk classes">
       {names.length === 0 ? (
         <EmptyState
           title="No risk classes configured"
-          hint="A risk class is a set of paths (auth, payments, migrations, infra) that forces a plan approval when a change touches them."
+          hint="A risk class is a set of paths (auth, payments, migrations, infra) that forces a plan approval and can route the review to named people when a change touches them."
         />
       ) : (
         <ul className="flex flex-col gap-1 text-xs">
@@ -502,12 +531,75 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
           ))}
         </ul>
       )}
+
+      {proposed.length === 0 ? null : (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-semibold">
+            {proposal?.source === 'discovery'
+              ? 'Proposed by the Discovery agent from this repository’s structure'
+              : 'The platform’s suggested set (no discovery run has proposed one)'}
+          </p>
+          <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">
+            {proposed.map(([name, declared]) => (
+              <li key={name} className="flex flex-wrap items-center gap-2">
+                <Badge tone="neutral">
+                  <UntrustedText value={name} />
+                </Badge>
+                <code>
+                  <UntrustedText value={declared.paths.join(', ')} />
+                </code>
+                <span>
+                  requires <UntrustedText value={declared.require.join(', ')} />
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div>
+            <Button
+              type="button"
+              onClick={accept}
+              disabled={!config.isSuccess || commands.writeConfig.isPending}
+            >
+              {names.length === 0 ? 'Accept these classes' : 'Replace with these classes'}
+            </Button>
+          </div>
+          <p className="text-xs text-fg-muted">
+            Nothing is applied until you accept. Accepting writes <code>policies.risk_classes</code>{' '}
+            into this project’s configuration and records who did it; you can edit the set
+            afterwards in <code>.agentic/config.yml</code>.
+          </p>
+        </div>
+      )}
+
+      {commands.writeConfig.isError ? (
+        <ErrorNotice
+          title="The risk classes were not saved."
+          detail={String(commands.writeConfig.error)}
+        />
+      ) : null}
+
+      {(proposal?.not_expressible ?? []).length === 0 ? null : (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs font-semibold">Not proposed, and why</p>
+          <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">
+            {(proposal?.not_expressible ?? []).map((entry) => (
+              <li key={entry.name}>
+                <strong>
+                  <UntrustedText value={entry.name} />
+                </strong>{' '}
+                (<UntrustedText value={entry.paths.join(', ')} />) —{' '}
+                <UntrustedText value={entry.reason} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <p className="text-xs text-fg-muted">
-        <strong>Not built in this release:</strong> proposing a set from the repository structure,
-        and reading reviewer routing from CODEOWNERS. Classes are edited in the project’s{' '}
-        <code>.agentic/config.yml</code> under <code>policies.risk_classes</code>; of the three
-        requirements the product defines, only <code>plan_approval</code> has a gate behind it —{' '}
-        <code>reviewer:@handle</code> and <code>checklist:</code> are parsed and unread.
+        A class can force a plan approval and add a named reviewer. Reviewers are routed at the
+        rebase gate: a <code>CODEOWNERS</code> match first, then this project’s{' '}
+        <code>policies.reviewers</code>, then the human who asked for the task — and a handle the
+        git provider does not know is reported rather than assigned to somebody else.
       </p>
     </Section>
   );

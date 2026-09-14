@@ -88,6 +88,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       ticketSnapshot: null,
       ticketSnapshotAt: null,
       reviewSubject: null,
+      riskClasses: [],
+      requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
     });
@@ -221,6 +223,48 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(loaded?.costActualUsd).toBeCloseTo(4.25, 6);
         expect(loaded?.task.state).toBe('active');
         expect(loaded?.task.currentStage).toBe('implementation');
+      });
+
+      /**
+       * WP-37's write, held to the same property the other two narrow writes are — and to one
+       * more, which is what makes it worth its own case rather than a line in theirs.
+       *
+       * `risk_classes` is computed in the `risk_route` duty at the rebase gate, beside the stage
+       * executor's transactions, so the assertion is again on a **derived total** rather than on
+       * the column (standing rule 79). The extra property is **replacement**: the gate is
+       * re-entered on every default-branch move, so a second write with fewer classes must leave
+       * fewer classes on the row. A merging implementation passes the first half of this case and
+       * fails the second.
+       */
+      it('writes the risk classes whole, without writing anything else', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const stale = await store.tasks.load(tx, stored.task.id);
+        expect(stale?.riskClasses).toEqual([]);
+        await store.tasks.save(tx, {
+          ...(stale as NonNullable<typeof stale>),
+          task: { ...stored.task, state: 'active', currentStage: 'rebase_gate' },
+        });
+        await store.tasks.addSpend(tx, stored.task.id, 1.5);
+        await store.tasks.saveRiskClasses(tx, stored.task.id, ['data', 'auth']);
+
+        const first = await store.tasks.load(tx, stored.task.id);
+        expect(first?.riskClasses).toEqual(['data', 'auth']);
+        expect(first?.costActualUsd).toBeCloseTo(1.5, 6);
+        expect(first?.task.state).toBe('active');
+        expect(first?.task.currentStage).toBe('rebase_gate');
+
+        // The default branch moved and the merge request no longer touches an `auth` path.
+        await store.tasks.saveRiskClasses(tx, stored.task.id, ['data']);
+        expect((await store.tasks.load(tx, stored.task.id))?.riskClasses).toEqual(['data']);
+
+        // …and the empty list is a write like any other, not "leave it alone".
+        await store.tasks.saveRiskClasses(tx, stored.task.id, []);
+        expect((await store.tasks.load(tx, stored.task.id))?.riskClasses).toEqual([]);
+      });
+
+      it('refuses to write risk classes for a task that does not exist', async () => {
+        await expect(store.tasks.saveRiskClasses(tx, nextId(), ['data'])).rejects.toThrow();
       });
 
       /**

@@ -93,6 +93,18 @@ runGitProviderContract({
       hasConflicts: null,
     });
 
+    // WP-37: the one handle this fake resolves. Everything else answers `null` (divergence 11).
+    port.seedUser('@dana-reviewer', '4242');
+
+    // WP-37 round 2, divergence 12: a `CODEOWNERS` that exists only on the branch under review —
+    // the file a contributor can write, and the one routing must never read.
+    port.seedFile({
+      project: PROJECT,
+      branch: 'agentic/task-1',
+      path: 'CODEOWNERS',
+      content: '# Owners on this branch only\nsrc/billing/** @branch-owner\n',
+    });
+
     // WP-24: the diff `getMergeRequestDiff` answers, including the file the provider excluded —
     // divergence 10 says the fake holds no repository content, so a test that wants a diff seeds it.
     port.setDiff({
@@ -142,6 +154,20 @@ runGitProviderContract({
       // issued. (The fake identifies a credential by its value, so the foreign *value* the suite
       // sends is what it actually looks up — the shape is what the next provider needs.)
       foreignRevokeId: 'rev-4242',
+      // WP-37, divergence 11: the fake knows what a test seeded and nothing else, so the unknown
+      // handle needs no arrangement at all — which is the state a real `CODEOWNERS` is usually in.
+      reviewer: {
+        handle: '@dana-reviewer',
+        externalId: '4242',
+        unknownHandle: '@departed',
+      },
+      // The seed's file is the default branch's; the plant above is `agentic/task-1`'s.
+      codeowners: {
+        ref: 'main',
+        owner: '@billing-team',
+        otherRef: 'agentic/task-1',
+        otherOwner: '@branch-owner',
+      },
       emitMerged: () =>
         port.emitMergeRequestEvent({
           event: 'mr.merged',

@@ -797,6 +797,42 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       return { branch: head.name, sha: head.commit.id };
     },
 
+    /**
+     * A handle → the numeric account id `reviewer_ids` takes (WP-37).
+     *
+     * `GET /users?username=` (<https://docs.gitlab.com/api/users/>, retrieved 2026-09-14): listed
+     * under *"As a regular user"*, so a project access token can ask it, and *"Username search is
+     * case-insensitive"*. Four decisions, each of which is a way this could answer wrongly:
+     *
+     *  - **A group is not a user, and answering `null` for one is correct rather than a gap.**
+     *    `@team/security` in a `CODEOWNERS` file is a GitLab *group*, and a group cannot be a
+     *    merge request's reviewer — only an approval rule can name one. The `/` is what tells them
+     *    apart, so a handle containing one is refused without a request rather than searched for.
+     *  - **The match is re-checked here, case-insensitively, against `username`.** GitLab's filter
+     *    is documented as case-insensitive, and a *substring* match would be a different endpoint
+     *    (`search=`) — but relying on the server to have applied an exact filter is trusting a
+     *    query parameter with a routing decision, so the answer is compared to what was asked for.
+     *  - **More than one match answers `null`.** The filter should produce at most one, so two is
+     *    a state this adapter does not understand, and picking the first would assign somebody's
+     *    review to whoever the API happened to sort first (standing rule 16's direction).
+     *  - **A blocked or deactivated account answers `null`.** GitLab refuses to assign one, so
+     *    returning its id would turn a stale `CODEOWNERS` line into a failed mutation instead of a
+     *    named, harmless "routes to nobody".
+     */
+    resolveUserId: async (handle: string): Promise<string | null> => {
+      const username = handle.replace(/^@+/, '').trim();
+      if (username === '' || username.includes('/')) {
+        return null;
+      }
+      const found = await client.usersByUsername(username);
+      const exact = found.filter((user) => user.username.toLowerCase() === username.toLowerCase());
+      const one = exact.length === 1 ? exact[0] : undefined;
+      if (one === undefined || (one.state != null && one.state !== 'active')) {
+        return null;
+      }
+      return String(one.id);
+    },
+
     readCodeowners: async (project, ref): Promise<CodeownersRules | null> => {
       if (!capabilities.codeowners) {
         throw new IntegrationUnsupportedError(GITLAB_PROVIDER_ID, 'CODEOWNERS');

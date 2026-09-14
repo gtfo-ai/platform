@@ -44,6 +44,7 @@ import type {
   ThreadRef,
 } from '../ports/integrations/communication.js';
 import type {
+  CodeownersRules,
   CommitAction,
   CommitRef,
   Discussion,
@@ -402,6 +403,52 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
       { project: git.project, branch },
       context,
       async () => git.port.isBranchProtected(git.project, branch),
+    );
+  },
+
+  /**
+   * The project's `CODEOWNERS`, parsed, or `null` when it has none (WP-37 — the first caller
+   * `readCodeowners` has had since WP-09 built it).
+   *
+   * A **read**, so it happens in every mode: a shadow task computes its routing and assigns
+   * nobody, which is the executor's job rather than this one's.
+   *
+   * `ref` is the branch the file is read at, and it is the **target** of the merge request rather
+   * than the source: a change may edit `CODEOWNERS` itself, and routing by the version in the
+   * change would let a contributor appoint their own reviewer (BD-022 — this file is written by
+   * whoever can push). `null` also covers a provider that does not support the concept at all,
+   * which is an `unsupported_capability` the caller has nothing to do about.
+   */
+  codeowners: async (ref: string, context: CallContext): Promise<CodeownersRules | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'read_codeowners',
+      { project: git.project, ref },
+      context,
+      async () => git.port.readCodeowners(git.project, ref),
+    );
+  },
+
+  /**
+   * A reviewer handle → the provider's own account id, or `null` when it names nobody (WP-37).
+   *
+   * One provider read per handle, which is why {@link MAX_ROUTED_REVIEWERS} exists. The payload
+   * records the handle, because the audit's question here is *"who did the platform look up"* —
+   * and the handle comes from a `CODEOWNERS` file or a configuration document, both of which are
+   * provider text, so the executor redacts what it stores (TD-012).
+   */
+  userId: async (handle: string, context: CallContext): Promise<string | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(integrations, git.ref, 'resolve_user_id', { handle }, context, async () =>
+      git.port.resolveUserId(handle),
     );
   },
 
@@ -843,6 +890,93 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
  * role both mints a credential and posts provider text, this call site will need the run's scope".
  */
 export const reviewWrites = (integrations: PipelineIntegrations) => ({
+  /**
+   * Sets the merge request's reviewers — product/08:10's `set_reviewers`, which no caller had
+   * until WP-37.
+   *
+   * It is a **mutation**, so a shadow task records `would_have` and assigns nobody, and it carries
+   * a platform-owned `IdempotencyPlan` keyed on the task and the revision: this runs from an
+   * at-least-once job, and a retry after the provider already answered must replay rather than
+   * assign a second time.
+   *
+   * **The ids are the caller's and are already resolved** (`resolveUserId`), because the port takes
+   * the provider's own identifiers — GitLab's API takes `reviewer_ids` and nothing else. The
+   * platform's own reviewers are **added to** whoever is already on the merge request rather than
+   * replacing them: `updateMergeRequest` sets the whole list, so a caller that sent only its own
+   * would silently remove a human who had added themselves. The union is computed here rather than
+   * in the duty for the reason the markdown redaction is (standing rule 44): a second caller cannot
+   * forget it.
+   */
+  reviewers: async (
+    input: {
+      readonly ref: MergeRequestRefInput;
+      readonly externalIds: readonly string[];
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    const current = await read(
+      integrations,
+      git.ref,
+      'get_merge_request',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () => git.port.getMergeRequest(addressed(git, input.ref)),
+    );
+    const reviewers = [...current.reviewers.map((identity) => identity.external_id)];
+    for (const id of input.externalIds) {
+      if (!reviewers.includes(id)) {
+        reviewers.push(id);
+      }
+    }
+    if (reviewers.length === current.reviewers.length) {
+      // Nothing to add. A mutation that would change nothing is not made: it would cost a request,
+      // an audit row and an idempotency record to write the list that is already there.
+      return current;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'set_reviewers',
+      { project: git.project, iid: input.ref.iid, reviewers },
+      context,
+      async () => git.port.updateMergeRequest(addressed(git, input.ref), { reviewers }),
+      /**
+       * The merge request as this call **would have** left it — and never `null`.
+       *
+       * A shadow task makes no call, but the executor still *describes* the result for the
+       * `would_have` row (technical/06: the row says what it would have done), so a `null` here
+       * is a `TypeError` thrown inside `describeResult` and a failed `risk_route` job on every
+       * shadow task instead of a recorded non-call. It **was** one until WP-37 review round 2,
+       * and what hid it is that no tier drove a shadow task through this write — the sentence
+       * four paragraphs up ("a shadow task records `would_have` and assigns nobody") was a claim
+       * nothing held. `risk-routing.test.ts` § "records a shadow task’s assignment as would_have"
+       * holds it now.
+       *
+       * Nothing is invented: the value is the merge request just read, carrying the union that
+       * was about to be sent. An identity already on it is kept as the provider wrote it, and one
+       * this call would have added is `verified: false`, because nothing verified it.
+       */
+      () => ({
+        ...current,
+        reviewers: reviewers.map(
+          (externalId) =>
+            current.reviewers.find((identity) => identity.external_id === externalId) ?? {
+              provider: git.ref.provider,
+              external_id: externalId,
+              verified: false,
+            },
+        ),
+      }),
+      (result) => ({ reviewers: result.reviewers.map((identity) => identity.external_id) }),
+      replayable<MergeRequest>(input.idempotencyKey),
+    );
+  },
+
   /**
    * One thread. `path`/`line` anchor it to the diff; both absent posts it on the merge request,
    * which is what the neutral summary is.

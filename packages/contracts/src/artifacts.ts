@@ -291,6 +291,15 @@ export const readinessReportDataSchema = z.strictObject({
 });
 
 /**
+ * How many path patterns one proposed class may carry.
+ *
+ * Model output reaching a stored row, so it is bounded here rather than at the writer (the same
+ * answer every other artifact cap gives). Twelve is twice the longest row of product/19 §14's own
+ * table, which is the widest a faithful proposal needs to be.
+ */
+export const MAX_PROPOSED_CLASS_PATHS = 12;
+
+/**
  * DiscoveryDraft. technical/12 does not list its `data` fields; this shape follows the outputs
  * product/06 § "Step 2 — Technical discovery" names: drafted `technical/*.md` pages with
  * confidence markers, commands marked *verified* only when actually run, documents that are
@@ -339,6 +348,33 @@ export const discoveryDraftDataSchema = z.strictObject({
         /** `R1` … `R14`. An id outside the table is dropped rather than refused (rule 20). */
         id: nonEmptyStringSchema,
         passed: z.boolean(),
+        evidence: z.string(),
+      }),
+    )
+    .optional(),
+  /**
+   * The risk classes this repository's layout suggests — product/18:52, *"Risk classes proposed
+   * from the repository structure"* (WP-37).
+   *
+   * **Three fields and not four, for the reason `readiness` has three**: the model says *which*
+   * class and *which paths* it saw, with the evidence it has, and the platform supplies the
+   * `require` list from product/19 §14's own table (`PROPOSED_RISK_CLASSES`). What a class *forces*
+   * is a platform policy — a model that could write `require` could also write an empty one, and a
+   * `payments` class that forces nothing is worse than no class at all.
+   *
+   * It is a **proposal and never a setting**: `onboarding/record.ts` stores it on the project for
+   * the wizard to show, and `policies.risk_classes` changes only when a human accepts it through
+   * `PUT /api/projects/:id/config` (product/06: nothing is committed without acceptance).
+   *
+   * Optional, so a draft written before this field existed still parses — an absent proposal is
+   * "the agent proposed nothing", which leaves the platform's own five on the screen.
+   */
+  risk_classes: z
+    .array(
+      z.strictObject({
+        /** A name from product/19 §14 (`auth`, `payments`, …). One outside the table is dropped. */
+        name: nonEmptyStringSchema,
+        paths: z.array(pathPatternSchema).min(1).max(MAX_PROPOSED_CLASS_PATHS),
         evidence: z.string(),
       }),
     )

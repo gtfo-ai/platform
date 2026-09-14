@@ -64,6 +64,7 @@ import type {
   IsoDateTime,
   JsonValue,
   LibrarianProposal,
+  RiskClass,
 } from '@platform/contracts';
 import {
   discoveryDraftDataSchema,
@@ -71,7 +72,7 @@ import {
   knowledgeProposalRecordSchema,
 } from '@platform/contracts';
 import type { Clock, IdSource, KnowledgeApplyThresholds } from '@platform/domain';
-import { curateProposals, MAX_PROPOSALS_PER_RUN } from '@platform/domain';
+import { curateProposals, MAX_PROPOSALS_PER_RUN, PROPOSED_RISK_CLASSES } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import type {
   KnowledgeProposalStore,
@@ -170,6 +171,13 @@ export interface DiscoveryRecordReport {
   readonly queued: number;
   readonly discarded: number;
   readonly redactions: number;
+  /**
+   * The risk classes the draft proposed and the platform recognised (WP-37).
+   *
+   * A count and not the set, like `queued` above: the report is what the log line is built from, and
+   * the classes themselves are on the project row for the wizard to render.
+   */
+  readonly riskClasses: number;
 }
 
 const EMPTY: DiscoveryRecordReport = {
@@ -179,6 +187,47 @@ const EMPTY: DiscoveryRecordReport = {
   queued: 0,
   discarded: 0,
   redactions: 0,
+  riskClasses: 0,
+};
+
+/**
+ * The model's proposed classes → the configuration map the wizard will offer (WP-37, product/18:52).
+ *
+ * **Three rules, and each is the reason a model's answer is a suggestion rather than a setting.**
+ *
+ *  1. **The name must be one the platform knows.** `PROPOSED_RISK_CLASSES` is product/19 §14's own
+ *     table; a name outside it is dropped rather than created, so a repository cannot invent a class
+ *     (and `public_api`, which this build cannot express, is dropped with the rest — see
+ *     `RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST`). Dashes and case are folded on the way in,
+ *     because a model writes `agent-config` for the key an operator writes as `agent_config`.
+ *  2. **`require` is never taken from the model.** What a class *forces* is a platform policy: a
+ *     model that could write the requirement could also write an empty one, and a `payments` class
+ *     that forces nothing is worse than no class at all. It is the same answer `unlocks` gets in the
+ *     readiness criteria.
+ *  3. **The paths are the model's**, because the paths are the only part of this that is a fact
+ *     about the repository — which is what product/18:52 asks the agent to look at. They are
+ *     redacted like every other string it wrote, and already bounded by the artifact schema.
+ */
+const proposedClassesFrom = (
+  draft: DiscoveryDraftData,
+  redactor: SecretRedactor,
+  tally: { count: number },
+): Readonly<Record<string, RiskClass>> => {
+  const proposed: Record<string, RiskClass> = {};
+  for (const entry of draft.risk_classes ?? []) {
+    const name = entry.name.trim().toLowerCase().replaceAll('-', '_');
+    const known = PROPOSED_RISK_CLASSES[name];
+    if (known === undefined) {
+      continue;
+    }
+    const paths = entry.paths.map((path) => {
+      const outcome = redactor.redactText(path);
+      tally.count += outcome.count;
+      return outcome.value;
+    });
+    proposed[name] = { paths, require: [...known.require] };
+  }
+  return proposed;
 };
 
 /** One drafted page as the curator's input. Every string the model wrote is redacted here. */
@@ -291,6 +340,8 @@ export const recordDiscoveryFindings = async (
   });
   tally.count += redactions;
 
+  const proposedClasses = proposedClassesFrom(draft, options.redactor, tally);
+
   const curated = curateProposals({
     proposals: proposalsFrom(draft, options.redactor, tally),
     knowledgeDir: project.knowledgeDir,
@@ -325,6 +376,12 @@ export const recordDiscoveryFindings = async (
    */
   await options.unitOfWork.transaction(async (scope) => {
     await options.readiness.record(scope.tx, evaluation);
+    // WP-37: a **proposal**, so it goes on the project row and not into `policies.risk_classes`.
+    // Written only when the agent proposed something the platform recognises — an empty write would
+    // replace an earlier run's proposal with "nothing", which is a different claim from silence.
+    if (Object.keys(proposedClasses).length > 0) {
+      await options.readiness.saveRiskClassProposal(scope.tx, projectId, proposedClasses);
+    }
     if (rows.length > 0) {
       await options.proposals.insert(scope.tx, rows);
     }
@@ -371,6 +428,7 @@ export const recordDiscoveryFindings = async (
     queued: rows.filter((row) => row.status === 'queued').length,
     discarded: rows.filter((row) => row.status === 'discarded').length,
     redactions: tally.count,
+    riskClasses: Object.keys(proposedClasses).length,
   };
 };
 
@@ -387,6 +445,7 @@ export const discoveryRecordHandler =
       readiness_level: report.level,
       queued: report.queued,
       discarded: report.discarded,
+      risk_classes: report.riskClasses,
       redactions: report.redactions,
       reason: report.reason,
     };

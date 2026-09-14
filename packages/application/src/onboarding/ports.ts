@@ -6,7 +6,7 @@
  * answers somebody else obtained, which is what makes it testable without a database and what
  * keeps the ring rule intact.
  */
-import type { Id, IntegrationType, IsoDateTime } from '@platform/contracts';
+import type { Id, IntegrationType, IsoDateTime, RiskClass } from '@platform/contracts';
 import type { ReadinessDetector } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
 
@@ -52,6 +52,26 @@ export interface ReadinessStore {
   record(tx: Transaction, evaluation: ReadinessEvaluation): Promise<void>;
   /** The project's most recent evaluation, or `null` when it has never been evaluated. */
   latest(projectId: Id): Promise<ReadinessEvaluation | null>;
+  /**
+   * Stores the risk classes a discovery run proposed — `projects.proposed_risk_classes`, migration
+   * 0026 (WP-37).
+   *
+   * On this store rather than on one of its own because it is written by the same job, in the same
+   * transaction, from the same artifact: one wake-up records what the Discovery agent found, and a
+   * second port for a second column of the same row would be a second thing to compose.
+   *
+   * **It is a proposal and writing it changes no behaviour.** `policies.risk_classes` is untouched;
+   * the wizard reads this column and the operator's acceptance goes through the configuration write
+   * (product/06: nothing is committed without acceptance). The value is config-shaped so acceptance
+   * is a copy rather than a translation.
+   *
+   * The `projects` write is **narrow**, for the reason `readiness_level`'s is (standing rule 79).
+   */
+  saveRiskClassProposal(
+    tx: Transaction,
+    projectId: Id,
+    classes: Readonly<Record<string, RiskClass>>,
+  ): Promise<void>;
 }
 
 /**

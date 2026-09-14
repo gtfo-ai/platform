@@ -269,6 +269,8 @@ const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<
       ticketSnapshot: null,
       ticketSnapshotAt: null,
       reviewSubject: null,
+      riskClasses: [],
+      requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     };
     await harness.store.tasks.insert(scope.tx, stored);
@@ -324,9 +326,16 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
 
     expect(started.posted).toEqual([]);
     expect(warnings(started.harness)).toEqual([]);
-    // …and it looked: the negative is a comparison that happened, not a duty that never ran
-    // (standing rule 4 — every assertion above is satisfied by a duty that did nothing).
-    expect(started.diffReads).toEqual([IID, PEER_IID]);
+    /**
+     * …and it looked: the negative is a comparison that happened, not a duty that never ran
+     * (standing rule 4 — every assertion above is satisfied by a duty that did nothing).
+     *
+     * **Three reads, not two, since WP-37**: the gate now enqueues a second duty that reads *this*
+     * task's own diff to classify it, so the merge request under test is read once per duty. They
+     * are counted sorted because the two duties are separate jobs and their order on the queue is
+     * the queue's, not this test's (the same property WP-15d states for every outbound duty).
+     */
+    expect([...started.diffReads].sort()).toEqual([IID, IID, PEER_IID]);
   });
 
   it('reads no diff at all when the project has no other task with a merge request', async () => {
@@ -335,9 +344,16 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
 
     expect(started.posted).toEqual([]);
     expect(warnings(started.harness)).toEqual([]);
-    // The peer list is read first and the duty gives up on an empty one, so an ordinary project
-    // pays nothing for this feature.
-    expect(started.diffReads).toEqual([]);
+    /**
+     * The peer list is read first and *this* duty gives up on an empty one, so an ordinary project
+     * pays nothing **for the warning**.
+     *
+     * The one read that remains is WP-37's: the same gate entry classifies this task's own changed
+     * paths, and it must not be skipped for a project with no peer task — which is precisely why
+     * that is a duty of its own rather than a branch inside this one (`risk-routing.ts` carries the
+     * argument).
+     */
+    expect(started.diffReads).toEqual([IID]);
   });
 
   it('keeps a credential out of the thread and out of the stored event', async () => {

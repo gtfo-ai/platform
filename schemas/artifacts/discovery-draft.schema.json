@@ -121,6 +121,34 @@
         ],
         "additionalProperties": false
       }
+    },
+    "risk_classes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "paths": {
+            "minItems": 1,
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PathPattern"
+            }
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "paths",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

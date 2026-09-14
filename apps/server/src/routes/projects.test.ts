@@ -19,6 +19,7 @@ import {
   describeConfigIssues,
   encodeTaskCursor,
   MAX_STORED_VALUE_CHARS,
+  riskClassProposalOf,
 } from './projects.js';
 
 const ID = '0199aa11-2b3c-7d4e-8f90-000000000001';
@@ -175,5 +176,41 @@ describe('an unreadable stored configuration', () => {
     expect(described.startsWith(prefix)).toBe(true);
     expect(described).not.toContain('glpat-');
     expect(described).toContain('[REDACTED');
+  });
+});
+
+describe('the risk-class proposal the configuration read publishes (WP-37)', () => {
+  it('offers the platform’s own table when no discovery run has proposed one', () => {
+    const offer = riskClassProposalOf(null);
+    expect(offer.source).toBe('platform');
+    expect(Object.keys(offer.classes)).toContain('data');
+    // The row this build cannot propose travels **with its reason**, because the screen renders it.
+    expect(offer.not_expressible.map((entry) => entry.name)).toEqual(['public_api']);
+    expect(offer.not_expressible[0]?.reason).toContain('Q83');
+  });
+
+  it('offers what a discovery run proposed, and says it was the agent', () => {
+    const stored = { payments: { paths: ['src/billing/**'], require: ['plan_approval'] } };
+    const offer = riskClassProposalOf(stored);
+    expect(offer.source).toBe('discovery');
+    expect(offer.classes).toEqual(stored);
+  });
+
+  it('falls back to the platform’s table for a stored proposal it cannot parse', () => {
+    /**
+     * The column holds model output about somebody's repository (BD-022), so it is re-validated on
+     * the way out — and a failure **drops back to the offer** rather than refusing the whole
+     * configuration read. Failing closed here would turn a suggestion into an unopenable settings
+     * screen, which is the distinction PROGRESS backlog 58 drew between the write side and the read
+     * side.
+     */
+    for (const stored of [
+      {},
+      { payments: { paths: [], require: ['plan_approval'] } },
+      { payments: { paths: ['src/**'], require: ['checklist:payments'] } },
+      { 'Not A Slug': { paths: ['src/**'], require: ['plan_approval'] } },
+    ]) {
+      expect(riskClassProposalOf(stored).source, JSON.stringify(stored)).toBe('platform');
+    }
   });
 });

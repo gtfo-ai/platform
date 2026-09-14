@@ -62,6 +62,7 @@ export * from './policies/iteration-limits.js';
 export * from './policies/notifications.js';
 export * from './policies/path-patterns.js';
 export * from './policies/review-only.js';
+export * from './policies/reviewer-routing.js';
 export * from './policies/risk-classes.js';
 export * from './policies/ticket-lint.js';
 export * from './policies/wip.js';

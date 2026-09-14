@@ -68,6 +68,10 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'ticket_snapshot_at',
     // `saveWorkpad`
     'workpad_ref',
+    // `saveRiskClasses` — the classes the merge request's own diff falls into (WP-37). A fourth
+    // narrow writer for the third time the same reason applied: it runs in a `pipeline.outbound`
+    // job beside the stage executor.
+    'risk_classes',
     // `addSpend` — the one column two *processes* write, and therefore the one whose statement is
     // an increment rather than an assignment (WP-31). It left `save`'s list with this row: the ask
     // executor adds a run's spend from a process that runs beside the stage executor, and the

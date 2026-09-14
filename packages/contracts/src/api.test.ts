@@ -120,8 +120,29 @@ describe('response DTOs', () => {
       sources: { 'policies.autonomy': 'repo' as const, version: 'default' as const },
       hash: 'sha256:abc',
       computed_at: AT,
+      // WP-37: what the wizard is offered for `policies.risk_classes`, which is **not** what the
+      // project has — the field above is empty and this one is not, which is the whole shape of
+      // "proposed, not applied" (product/18:52).
+      risk_class_proposal: {
+        source: 'discovery' as const,
+        classes: { payments: { paths: ['src/billing/**'], require: ['plan_approval'] } },
+        not_expressible: [
+          { name: 'public_api', paths: ['**/api/**'], reason: 'no checklist mechanism (Q83)' },
+        ],
+      },
     };
     expect(effectiveConfigResponseSchema.parse(response)).toEqual(response);
+    // A requirement this build cannot act on is refused **by name**, here as everywhere else
+    // (PROGRESS backlog 73 (d)): the offer a screen renders goes through the same schema.
+    expect(
+      effectiveConfigResponseSchema.safeParse({
+        ...response,
+        risk_class_proposal: {
+          ...response.risk_class_proposal,
+          classes: { payments: { paths: ['src/billing/**'], require: ['checklist:payments'] } },
+        },
+      }).success,
+    ).toBe(false);
     expect(
       effectiveConfigResponseSchema.safeParse({ ...response, sources: { x: 'guess' } }).success,
     ).toBe(false);

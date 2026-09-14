@@ -619,6 +619,19 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
   sources: { version: 'default' },
   hash: 'fakehash1',
   computed_at: now,
+  // WP-37: the platform's own suggestion, because no discovery run has proposed one here. The
+  // project's `policies.risk_classes` is absent above — proposed is not applied.
+  risk_class_proposal: {
+    source: 'platform',
+    classes: { data: { paths: ['**/migrations/**'], require: ['plan_approval'] } },
+    not_expressible: [
+      {
+        name: 'public_api',
+        paths: ['**/api/**'],
+        reason: 'no review checklist exists in this build (Q83)',
+      },
+    ],
+  },
 });
 
 export const kbTree = kbTreeResponseSchema.parse({

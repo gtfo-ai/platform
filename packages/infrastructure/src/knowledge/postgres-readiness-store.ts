@@ -27,7 +27,7 @@
  */
 
 import type { ReadinessEvaluation, ReadinessStore, Transaction } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, RiskClass } from '@platform/contracts';
 import type { ReadinessDetector } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
@@ -114,6 +114,25 @@ export class PostgresReadinessStore implements ReadinessStore {
     await sql.query('update projects set readiness_level = $2 where id = $1', [
       evaluation.projectId,
       evaluation.level,
+    ]);
+  }
+
+  /**
+   * The proposal, config-shaped, on `projects.proposed_risk_classes` (migration 0026, WP-37).
+   *
+   * One column and one statement, like `readiness_level` above and for the same reason. A zero-row
+   * update is **not** an error here for the reason that one gives: the job re-read the project
+   * first, so a row that has gone between that read and this write is a race whose ending the
+   * cascade already chose.
+   */
+  async saveRiskClassProposal(
+    tx: Transaction,
+    projectId: Id,
+    classes: Readonly<Record<string, RiskClass>>,
+  ): Promise<void> {
+    await sqlOf(tx).query('update projects set proposed_risk_classes = $2::jsonb where id = $1', [
+      projectId,
+      JSON.stringify(classes),
     ]);
   }
 

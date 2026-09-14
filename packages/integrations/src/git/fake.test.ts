@@ -262,6 +262,33 @@ describe('FakeGitProvider CI and CODEOWNERS', () => {
     expect(rules?.rules).toEqual([{ pattern: 'src/billing/**', owners: ['@billing', '@second'] }]);
   });
 
+  it('answers the CODEOWNERS of the ref it was asked for, never another ref’s (divergence 12)', async () => {
+    /**
+     * The property reviewer routing rests on, asserted **both ways** (standing rule 42). A merge
+     * request may edit `CODEOWNERS` itself, so a copy planted on the branch under review must not
+     * be the answer at the default branch — and until this case existed the fake ignored `ref`
+     * entirely, so a caller that read the file from the branch passed every tier (WP-37 review
+     * round 2).
+     */
+    const port = build();
+    port.seedFile({
+      project: PROJECT,
+      branch: 'agentic/task-1',
+      path: 'CODEOWNERS',
+      content: 'src/** @mallory\n',
+    });
+
+    expect(await port.readCodeowners(PROJECT, 'main')).toEqual({
+      rules: [{ pattern: 'src/**', owners: ['@team'] }],
+    });
+    expect(await port.readCodeowners(PROJECT, 'agentic/task-1')).toEqual({
+      rules: [{ pattern: 'src/**', owners: ['@mallory'] }],
+    });
+    // Divergence 12's stricter half, said out loud: a branch this fake holds no file for has none,
+    // where a real branch carries the default branch's copy.
+    expect(await port.readCodeowners(PROJECT, 'agentic/untouched')).toBeNull();
+  });
+
   it('moves the default branch and reports it', async () => {
     const port = build();
     port.moveDefaultBranch(PROJECT, 'e'.repeat(40));

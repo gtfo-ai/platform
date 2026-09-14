@@ -368,6 +368,20 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
           throw new Error('the test did not script getMergeRequest');
         },
         listDiscussions: async () => [],
+        /**
+         * WP-37's three reads, defaulted to *"this project has none"* rather than left missing.
+         *
+         * The rebase gate now enqueues a `risk_route` duty on every entry, so every test that
+         * reaches the gate makes these calls whether it cares about them or not. The defaults are
+         * the honest empty answers — a merge request whose diff this double does not hold (the same
+         * answer `FakeGitProvider`'s divergence 10 gives), a repository with no `CODEOWNERS`, and a
+         * handle that names nobody — so the duty classifies nothing and assigns nobody unless a test
+         * scripts otherwise. A test that wants the feature exercised for real drives the e2e tier
+         * against the real fake (standing rule 82).
+         */
+        getMergeRequestDiff: async () => [],
+        readCodeowners: async () => null,
+        resolveUserId: async () => null,
         ...overrides,
       } as unknown as GitProviderPort);
 

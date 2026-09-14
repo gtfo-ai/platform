@@ -23,8 +23,12 @@
  *    this double returned "the last row inserted" and the shared suite caught it, which is the
  *    reason the suite exists (standing rule 1: kinder is the direction that matters, and "whatever
  *    was written last" is kinder than "the newest").
+ * 5. **Risk-class proposals are stored verbatim** (WP-37). `saveRiskClassProposal` keeps what it is
+ *    given, exactly as the `jsonb` column does; the rule that only a *known* class name survives is
+ *    applied by the caller (`onboarding/record.ts`), which is where a test asserts it. A double that
+ *    re-applied the filter would hide a caller that stopped applying it.
  */
-import type { Id } from '@platform/contracts';
+import type { Id, RiskClass } from '@platform/contracts';
 import type { ReadinessEvaluation, ReadinessStore } from '../onboarding/ports.js';
 import type { Transaction } from '../ports/transaction.js';
 
@@ -33,19 +37,29 @@ export interface MemoryReadinessStore extends ReadinessStore {
   readonly rows: readonly ReadinessEvaluation[];
   /** The narrow `projects.readiness_level` write, as the double records it. */
   readonly levels: ReadonlyMap<Id, number>;
+  /** The narrow `projects.proposed_risk_classes` write (WP-37), as the double records it. */
+  readonly proposals: ReadonlyMap<Id, Readonly<Record<string, RiskClass>>>;
 }
 
 export const memoryReadinessStore = (): MemoryReadinessStore => {
   const rows: ReadinessEvaluation[] = [];
   const levels = new Map<Id, number>();
+  const proposals = new Map<Id, Readonly<Record<string, RiskClass>>>();
   return {
     rows,
     levels,
+    proposals,
     record: async (_tx: Transaction, evaluation: ReadinessEvaluation) => {
       rows.push(evaluation);
       // The pair is one write for the same reason it is one method on the port: a build that wrote
       // the row without the projection would show a level no evaluation supports.
       levels.set(evaluation.projectId, evaluation.level);
+    },
+    saveRiskClassProposal: async (_tx, projectId, classes) => {
+      // Divergence 5 (WP-37): the column is `jsonb` and the adapter stores what it is handed, so
+      // this double does too — the *filtering* that makes a proposal safe is `record.ts`'s, on the
+      // way in, and a double that re-applied it would hide a caller that stopped calling it.
+      proposals.set(projectId, classes);
     },
     latest: async (projectId: Id) =>
       [...rows]

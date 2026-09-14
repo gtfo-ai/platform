@@ -73,6 +73,30 @@ export interface StoredTask {
   /** How many finished tasks the estimate averaged; `null` exactly when {@link estimateBasis} is. */
   readonly estimateSamples: number | null;
   /**
+   * The risk classes the merge request's **changed paths** fall into — product/19 §14, WP-37.
+   *
+   * Written by {@link TaskRepository.saveRiskClasses} from the `risk_route` duty at the rebase gate
+   * and by nothing else; empty until a task has a merge request the platform has read the diff of.
+   * An empty list is *"nothing this project classes was touched"* and is a different fact from a
+   * project with no classes at all — which is why the duty logs which of the two it found rather
+   * than leaving the reader of an empty column to guess.
+   *
+   * It is deliberately **not** what the plan-approval gate reads: that gate answers before there is
+   * a merge request, from the Implementation Plan's own paths (`risk-classes.ts` has the argument).
+   */
+  readonly riskClasses: readonly string[];
+  /**
+   * The human who asked for this task — step **three** of product/19:138's reviewer precedence.
+   *
+   * `tasks.requested_by_user_id` **has no writer anywhere in this build**: intake creates a task
+   * from a ticket a rule matched, and the three commands that create one (discovery, review-only,
+   * the ticket linter) carry the actor into the `human_actions` row rather than onto the task. So
+   * this is `null` on every row, the fallback resolves to nobody, and WP-37 says so by name instead
+   * of assigning silently. It is read rather than omitted because the alternative — routing that
+   * cannot express its own last step — is the state `readCodeowners` sat in for five milestones.
+   */
+  readonly requestedByUserId: Id | null;
+  /**
    * The ticket's own words as the platform read them once (WP-15f, migration 0015).
    *
    * `null` means **the platform has not read this ticket** — a fetch that failed, a project with no
@@ -276,6 +300,24 @@ export interface TaskRepository {
     snapshot: TicketSnapshot,
     readAt: IsoDateTime,
   ): Promise<void>;
+  /**
+   * Writes **only** `risk_classes` — the fourth narrow writer, and the third for the same reason
+   * (WP-37).
+   *
+   * The classes are computed in the `risk_route` duty, a `pipeline.outbound` job that runs beside
+   * the stage executor's transactions, so a whole-row `save` from there would put back the state,
+   * the stage and the cost as they were when the job started (standing rule 79, measured at 0.40
+   * USD in WP-15d). One column, one statement, no version bump: `save` does not name this column,
+   * so bumping the token here would refuse an in-flight aggregate write that never touched it.
+   *
+   * The list is written **whole**, replacing whatever was there: the gate is re-entered every time
+   * the default branch moves, and a class that no longer matches the merge request's files must
+   * disappear from the row rather than accumulate (a task page that only ever gains classes would
+   * be a page that cannot be corrected).
+   *
+   * @throws when the task does not exist, like `save` and the other narrow writes.
+   */
+  saveRiskClasses(tx: Transaction, taskId: Id, classes: readonly string[]): Promise<void>;
   /**
    * Adds a run's spend to `tasks.cost_actual` — the third narrow writer, and the first that is
    * **not** a read-modify-write at all (WP-31).

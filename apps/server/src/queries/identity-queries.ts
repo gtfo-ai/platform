@@ -94,6 +94,15 @@ export interface ProjectConfigRow {
   readonly configSource: Record<string, string>;
   readonly configHash: string | null;
   readonly updatedAt: Date;
+  /**
+   * What a Discovery run proposed for `policies.risk_classes`, or `null` (WP-37, migration 0026).
+   *
+   * Read **beside** the configuration rather than through an endpoint of its own, because it is
+   * read by exactly the screen that already reads the configuration and is accepted by exactly the
+   * write that already writes it — a second path would be a second thing for
+   * `client-census.test.ts` to hold and a second round trip for the wizard.
+   */
+  readonly proposedRiskClasses: Record<string, unknown> | null;
 }
 
 export const findProjectConfig = async (
@@ -106,6 +115,7 @@ export const findProjectConfig = async (
       configSource: projects.configSource,
       configHash: projects.configHash,
       updatedAt: projects.updatedAt,
+      proposedRiskClasses: projects.proposedRiskClasses,
     })
     .from(projects)
     .where(eq(projects.id, projectId))
@@ -118,6 +128,7 @@ export const findProjectConfig = async (
         configSource: row.configSource as Record<string, string>,
         configHash: row.configHash,
         updatedAt: row.updatedAt,
+        proposedRiskClasses: (row.proposedRiskClasses ?? null) as Record<string, unknown> | null,
       };
 };
 
