@@ -68,6 +68,11 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'ticket_snapshot_at',
     // `saveWorkpad`
     'workpad_ref',
+    // `addSpend` — the one column two *processes* write, and therefore the one whose statement is
+    // an increment rather than an assignment (WP-31). It left `save`'s list with this row: the ask
+    // executor adds a run's spend from a process that runs beside the stage executor, and the
+    // version token cannot arbitrate an increment.
+    'cost_actual',
     // `save` — the aggregate's own columns, plus the token that guards them
     'state',
     'current_stage',
@@ -75,7 +80,6 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'mr_ref',
     'stage_attempts',
     'iteration_counters',
-    'cost_actual',
     'version',
     'completed_at',
   ],

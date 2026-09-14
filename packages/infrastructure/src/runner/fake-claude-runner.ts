@@ -52,7 +52,7 @@ import type {
   TranscriptEvent,
 } from '@platform/contracts';
 import { transcriptEventSchema } from '@platform/contracts';
-import { evaluateCommand } from '@platform/domain';
+import { evaluateCommand, readDataBlocks } from '@platform/domain';
 import { deferred } from './async-queue.js';
 import { validateStructuredOutput } from './structured-output.js';
 
@@ -98,6 +98,49 @@ export const scenarioByStage =
     if (scenario === undefined) {
       throw new FakeScenarioError(
         `no scenario for stage "${spec.stage ?? '(none)'}"; known: ${Object.keys(scenarios).join(', ') || '(none)'}`,
+      );
+    }
+    return scenario;
+  };
+
+/**
+ * The scenario key for a run that has **no stage** — ask-the-task (WP-31, standing rule 82).
+ *
+ * `scenarioByStage` cannot express such a run at all: `spec.stage` is `null` and technical/03:40-42
+ * names three run kinds that use it. That is precisely the instrument failure rule 82 records — *the
+ * fake that lets an acceptance test pass is the one that never reads the artefact the work package
+ * exists to produce* — arriving in the work package whose deliverable **is** the prompt.
+ *
+ * So the key is read out of the assembled prompt, with the same reader the tests parse a prompt
+ * with (`readDataBlocks`): the body of the `ask_question` block, which is the human's question
+ * byte-for-byte. A planner that emitted an empty prompt, forgot the block, or put a different
+ * question in it finds no scenario and the run fails **loudly**, which is what a stage-keyed
+ * selector could never do.
+ */
+export const askScenarioKey = (spec: RunSpec): string | null => {
+  if (spec.stage !== null) {
+    return null;
+  }
+  const block = readDataBlocks(spec.userPrompt).blocks.find(
+    (candidate) => candidate.kind === 'ask_question',
+  );
+  return block === undefined ? 'ask:(no question in the prompt)' : `ask:${block.body.trim()}`;
+};
+
+/**
+ * `select` for a mixed table: a stage run is keyed by its stage, an ask by its question.
+ *
+ * The two are one table rather than two because a test drives one pipeline: the ticket's stages and
+ * the question somebody asked about them are the same run of the same world.
+ */
+export const scenarioByStageOrAsk =
+  (scenarios: Readonly<Record<string, FakeRunScenario>>) =>
+  (spec: RunSpec): FakeRunScenario => {
+    const key = askScenarioKey(spec) ?? spec.stage ?? '';
+    const scenario = scenarios[key];
+    if (scenario === undefined) {
+      throw new FakeScenarioError(
+        `no scenario for "${key}"; known: ${Object.keys(scenarios).join(', ') || '(none)'}`,
       );
     }
     return scenario;

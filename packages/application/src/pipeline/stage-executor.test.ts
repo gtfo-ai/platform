@@ -415,7 +415,19 @@ describe('a stage write that lost every race with another writer', () => {
     const real = repository.save.bind(harness.store.tasks);
     let conflicts = 0;
     repository.save = async (tx, stored) => {
-      if (stored.costActualUsd > 0) {
+      /**
+       * Every save carrying a run's spend, until the bound is spent — and then none.
+       *
+       * `costActualUsd > 0` alone was the discriminator until WP-31, because the *only* save that
+       * carried spend was the executor's transaction 2 and the conflict escalation's own save read
+       * a row whose `cost_actual` was still zero. That is no longer true: `addSpend` writes the
+       * column in its own statement and the in-memory store does not roll one back (its divergence
+       * 1), so the escalation would conflict for ever against a fake that never stopped. Bounding
+       * the fake by the same constant the code is bounded by is what lets the escalation land, and
+       * it keeps both halves of this pair assertable: the loop retried exactly `MAX` times rather
+       * than giving up after one, and the ending it reached says *another writer won*.
+       */
+      if (conflicts < MAX_TASK_CONFLICT_ATTEMPTS && stored.costActualUsd > 0) {
         conflicts += 1;
         throw new TaskConcurrentModificationError(
           stored.task.id,
@@ -440,9 +452,24 @@ describe('a stage write that lost every race with another writer', () => {
 
     expect(taskOf(harness).task.state).toBe('needs_human');
     expect(escalationOf(harness)?.payload.reason).toContain('another writer won');
-    // Nothing was written from the stale snapshot: the spend the losing transaction carried is not
-    // on the row, because its transaction rolled back every time.
-    expect(taskOf(harness).costActualUsd).toBe(0);
+    /**
+     * Nothing was written **from the stale snapshot**: the stage the losing transaction was about
+     * to complete is not completed, and the task is parked instead.
+     *
+     * This used to read `expect(taskOf(harness).costActualUsd).toBe(0)`, and that assertion moved
+     * with WP-31 rather than being dropped. `cost_actual` left `save`'s column list and is written
+     * by `addSpend`, a separate statement in the same transaction — which a real database rolls
+     * back with everything else and the in-memory store does not (its divergence 1). So the
+     * *rollback* is asserted where a rollback means something, in
+     * `test/integration/pipeline/pipeline-store-concurrency.integration.test.ts`, and what is
+     * asserted here is the thing this tier can see: the stage did not complete.
+     */
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'task.stage.completed')
+        .map((event) => (event.payload as { stage: string }).stage),
+    ).toEqual(['intake']);
   });
 });
 

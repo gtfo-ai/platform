@@ -420,6 +420,24 @@
             }
           },
           "additionalProperties": false
+        },
+        "ask": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "model": {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "budget_usd": {
+              "$ref": "#/$defs/Usd"
+            },
+            "mirror_to_ticket": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -451,7 +469,8 @@
         "acceptance_tester",
         "facilitator",
         "librarian",
-        "discovery"
+        "discovery",
+        "ask"
       ]
     },
     "ArtifactType": {
@@ -467,7 +486,8 @@
         "LibrarianProposals",
         "ShadowReport",
         "ReadinessReport",
-        "DiscoveryDraft"
+        "DiscoveryDraft",
+        "AskAnswer"
       ]
     },
     "AutonomyLevel": {

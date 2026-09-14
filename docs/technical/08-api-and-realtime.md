@@ -105,10 +105,30 @@
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >
 > What is still unbuilt on those rows: `PATCH /api/org`,
-> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id`, `POST /api/projects/:id/config/export`
-> and `POST /api/tasks/:id/ask` (WP-31). **WP-27 removed three
+> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id` and
+> `POST /api/projects/:id/config/export`. **WP-27 removed three
 > of them** — `POST /api/runs/:id/steer` and `POST /api/tasks/:id/{take-over,hand-back}` are served,
 > and `POST /api/runs/:id/steer` is the one endpoint this document gives a rate limit to (below).
+> **WP-31 removed `POST /api/tasks/:id/ask`** and added two reads this table did not name:
+> `GET /api/tasks/:task_id/asks` (the Q&A thread product/10:57 asks for) and
+> `GET /api/tasks/:task_id/audit` — the `human_actions` rows of one **task**, which
+> `GET /api/projects/:id/audit` can never serve because that predicate is `params->>'project_id'`
+> and `human_actions` has no `project_id` column (PROGRESS backlog 52). It also added
+> `GET/POST /api/org/identities`, the mapping of a provider account to a platform user: the table
+> `user_identities` has had a reader since WP-15c and had **no writer at all**, so every ticket and
+> chat author was `unmapped_identity` on every instance (PROGRESS backlog 79). `POST` is `admin`
+> (`org.users.manage`), because the mapping decides who may act as whom, and it takes no `email`:
+> a match the platform performed itself is the route BD-022 and Q10 refuse. It records a
+> `human_actions` row like every other command — *"all human actions recorded"* below applies to the
+> one write whose subject is who may act as whom — and it takes **no `Idempotency-Key`**, which is
+> the one command in the product that does not: the write is an upsert on the primary key
+> `(provider, external_id)`, so a retry creates nothing second, and a *different* body under a used
+> key is the re-mapping an operator performs when somebody leaves and must be allowed rather than
+> refused. Neither route has a screen, so both are asserted by hand — in `routes/org.test.ts` and,
+> for the auth, in the client census.
+> `POST /api/tasks/:id/ask` requires an `Idempotency-Key` — a repeat starts a second run the project
+> pays for — and asking is `task.ask` (**member**, the shipped capability map) while reading the
+> thread is `task.read` (viewer) and reading the task audit is `org.audit.read` (maintainer).
 > **WP-30 removed `GET/PUT /api/projects/:id/budgets`** and added four endpoints this table did not
 > name: `GET/PUT /api/projects/:id/autonomy` (the materialised dial, BD-027), `GET /api/projects/:id/audit`
 > (the `human_actions` rows of a project's settings — the table row 8 promises an audit of and that

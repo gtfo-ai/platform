@@ -164,7 +164,16 @@ export interface PromptArtifact {
 }
 
 export interface PromptTask {
-  readonly stage: string;
+  /**
+   * The stage this run is one attempt of, or `null` for a run that belongs to **no** stage.
+   *
+   * Required-and-nullable rather than optional, like {@link PromptTask.ticketSnapshot}: technical/03
+   * names three run kinds with no stage (discovery, ask-the-task, librarian/maintenance) and
+   * `runs.task_stage_id` has been nullable since migration 0004, so a caller that has no stage
+   * must say so rather than pass a word that stands in for one. The line it produces in the prompt
+   * is a different sentence, not an empty slot (WP-31).
+   */
+  readonly stage: string | null;
   readonly attempt: number;
   readonly ticket: { readonly provider: string; readonly key: string; readonly url: string };
   /**
@@ -195,6 +204,43 @@ export interface PromptTask {
   readonly artifacts: readonly PromptArtifact[];
   /** `task.stage.returned.reason` — why this stage is running again. Untrusted. */
   readonly returnFeedback: string | null;
+  /**
+   * The platform's own record of what has happened to this task — WP-31's ask-the-task.
+   *
+   * Empty for every pipeline stage, which is why it is a required array rather than an optional
+   * field: a stage is not shown the audit trail, and a caller that meant that has to say so. Each
+   * entry becomes one `record` data block; `count` goes in the marker because "this is how many
+   * there are" is a claim about the platform's behaviour that the rows themselves must not be able
+   * to forge (technical/07), and `body` is rendered verbatim — `human_actions.params` is
+   * client-supplied JSON carrying a caller-chosen `Idempotency-Key`, so every byte is untrusted.
+   */
+  readonly record: readonly PromptRecordBlock[];
+}
+
+/** One block of the platform's own record of a task (WP-31). */
+export interface PromptRecordBlock {
+  /** Platform vocabulary, in the marker: `runs`, `human_actions`. */
+  readonly kind: 'runs' | 'human_actions';
+  /** How many rows the body holds. A platform integer, in the marker. */
+  readonly count: number;
+  /** The rows, already rendered. Untrusted (BD-022). */
+  readonly body: string;
+}
+
+/**
+ * The human's question, for an ask-the-task run — product/10:57 (WP-31).
+ *
+ * `question` is the only untrusted half and goes in the block's **body**; `askedBy` is a label the
+ * platform resolved from its own `users` row (or the literal `a ticket comment`), so it is a marker
+ * attribute — which is what makes it unforgeable by whoever wrote the question (technical/07).
+ * `assemblePrompt` refuses an `askedBy` outside the marker alphabet rather than escaping it, the
+ * same answer every other attribute gets.
+ */
+export interface PromptAsk {
+  /** Untrusted (BD-022). Bounded by the caller at `MAX_ASK_QUESTION_CHARS`, never here. */
+  readonly question: string;
+  /** Who asked, as the platform knows them. Platform-resolved, marker-safe. */
+  readonly askedBy: string;
 }
 
 /** Where the random token comes from. A port, for the same reason `IdSource` is one. */
@@ -325,6 +371,15 @@ export interface AssemblePromptInput {
    * the reader.
    */
   readonly language: CommunicationLanguage;
+  /**
+   * The question an **ask-the-task** run is answering, or `null` for every other run (WP-31).
+   *
+   * Required-and-nullable for the reason {@link AssemblePromptInput.focus} is: a run that is not an
+   * ask has to say so. The question reaches the model **only** inside a data block with this
+   * prompt's nonce — never concatenated into the platform's own voice — which is the whole of this
+   * work package's criterion 2.
+   */
+  readonly ask: PromptAsk | null;
 }
 
 export interface AssembledPrompt {
@@ -697,6 +752,35 @@ const artifactBlock = (artifact: PromptArtifact): DataBlock => {
   };
 };
 
+/**
+ * The human's question — the only block whose body a person typed *at the platform* rather than
+ * about the work.
+ *
+ * `asked_by` is in the marker and the question is in the body, which is the division every other
+ * block here makes: a claim about who is speaking is a claim about the platform's own behaviour, and
+ * technical/07 requires such a claim to be unforgeable. No cap is applied here — the caller bounded
+ * the question at the write, where the store is the consumer (the same answer `ticketSnapshot`
+ * gets, Q54) — so the body is byte-identical to what was stored.
+ */
+const askBlock = (ask: PromptAsk): DataBlock => ({
+  kind: 'ask_question',
+  attributes: { asked_by: ask.askedBy },
+  body: ask.question,
+});
+
+/**
+ * One slice of the platform's own record — the runs, or the human actions (WP-31).
+ *
+ * `kind="record"` with a `record` attribute naming the slice, rather than two block kinds, so that
+ * `readDataBlocks` and every test that reads a prompt back can find the record without knowing which
+ * slices exist. Both attributes are platform values: a closed vocabulary and an integer.
+ */
+const recordBlock = (entry: PromptRecordBlock): DataBlock => ({
+  kind: 'record',
+  attributes: { record: entry.kind, rows: entry.count },
+  body: entry.body,
+});
+
 const feedbackBlock = (feedback: string): DataBlock => {
   const capped = cap(feedback, MAX_FEEDBACK_CHARS);
   return { kind: 'return_feedback', attributes: cappedAttributes(capped), body: capped.text };
@@ -705,6 +789,20 @@ const feedbackBlock = (feedback: string): DataBlock => {
 /** The field names of the artifact's schema — one source, so the prompt cannot drift from it. */
 export const artifactFieldNames = (type: ArtifactType): readonly string[] =>
   Object.keys(artifactDataSchemas[type].shape);
+
+/**
+ * What the task block says for a run that belongs to no stage (WP-31).
+ *
+ * Platform literals, chosen from a closed set rather than assembled from a parameter, for the reason
+ * {@link STAGE_PROMPT_FOCUS} is a closed set: this sentence is in the platform's own voice and
+ * nothing a project, a ticket or a model wrote may reach it.
+ */
+const stagelessLine = (ask: PromptAsk | null): string =>
+  ask === null
+    ? 'This run belongs to no pipeline stage.'
+    : 'This run belongs to no pipeline stage: a human has asked a question about this task, and ' +
+      'the question is in the `ask_question` block below. Answer it from the record you were ' +
+      'given and from nothing else.';
 
 const outputContract = (type: ArtifactType | null): string => {
   if (type === null) {
@@ -771,6 +869,9 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
       : [mergeRequestBlock(reviewSubjectOf(input.task) as MergeRequestSnapshot)]),
     ...input.task.artifacts.map(artifactBlock),
     ...(input.task.returnFeedback === null ? [] : [feedbackBlock(input.task.returnFeedback)]),
+    ...input.task.record.map(recordBlock),
+    // Last, so it is the nearest thing to the output contract the model reads next.
+    ...(input.ask === null ? [] : [askBlock(input.ask)]),
   ];
 
   let nonce: string | null = null;
@@ -792,7 +893,14 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
   const taskBlocks = blocks.slice(input.pack.documents.length);
   const render = (block: DataBlock): string => renderDataBlock(nonce as string, block);
 
-  assertPlatformVoice('a stage id', input.task.stage);
+  if (input.task.stage !== null) {
+    assertPlatformVoice('a stage id', input.task.stage);
+  }
+  if (input.ask !== null) {
+    // The attribute goes into a marker, so it is held to the marker alphabet rather than escaped —
+    // `renderDataBlock` would refuse it anyway, and refusing here names the field.
+    assertPlatformVoice('an asker label', input.ask.askedBy);
+  }
   const systemPrompt = systemPromptOf(input.role, input.focus ?? null, input.language ?? 'auto');
   const userPrompt = [
     packHeader(input.pack),
@@ -800,7 +908,9 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     '',
     '## The task',
     '',
-    `Stage \`${input.task.stage}\`, attempt ${input.task.attempt}.`,
+    input.task.stage === null
+      ? stagelessLine(input.ask)
+      : `Stage \`${input.task.stage}\`, attempt ${input.task.attempt}.`,
     '',
     ...taskBlocks.map(render),
     '',

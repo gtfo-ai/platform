@@ -154,14 +154,15 @@ export const runPipelineStoreConcurrencyContract = (
       const fresh = await store.tasks.load(winner.tx, stored.task.id);
       await store.tasks.save(winner.tx, {
         ...(fresh as StoredTask),
-        costActualUsd: 2.8,
         task: { ...(fresh as StoredTask).task, currentStage: 'code_review' },
       });
+      // The spend is its own narrow write since WP-31 (`addSpend` is an increment, because the ask
+      // executor adds to the same column from another process). The rest of this case is unchanged:
+      // what is being asserted is that the **version** refuses a stale whole-row save.
+      await store.tasks.addSpend(winner.tx, stored.task.id, 2.8);
       await winner.commit();
 
-      await expect(
-        store.tasks.save(loser.tx, { ...(stale as StoredTask), costActualUsd: 0.4 }),
-      ).rejects.toMatchObject({
+      await expect(store.tasks.save(loser.tx, stale as StoredTask)).rejects.toMatchObject({
         name: 'TaskConcurrentModificationError',
         concurrencyConflict: true,
         taskId: stored.task.id,
@@ -182,7 +183,10 @@ export const runPipelineStoreConcurrencyContract = (
 
       const winner = await begin();
       const fresh = (await store.tasks.load(winner.tx, stored.task.id)) as StoredTask;
-      await store.tasks.save(winner.tx, { ...fresh, costActualUsd: 2.8 });
+      // A spend **and** a version bump, so the loser below is genuinely refused: `addSpend` alone
+      // moves no version, which is the property that lets it run beside the executor at all.
+      await store.tasks.save(winner.tx, { ...fresh, branch: 'agentic/winner' });
+      await store.tasks.addSpend(winner.tx, stored.task.id, 2.8);
       await winner.commit();
 
       await expect(
@@ -234,7 +238,8 @@ export const runPipelineStoreConcurrencyContract = (
 
       // No conflict: the workpad is not a column `save` owns, so the narrow write does not move
       // the version and this write is not refused.
-      await store.tasks.save(executor.tx, { ...stale, costActualUsd: 0.4 });
+      await store.tasks.save(executor.tx, stale);
+      await store.tasks.addSpend(executor.tx, stored.task.id, 0.4);
       await executor.commit();
 
       const after = await read(stored.task.id);
@@ -303,12 +308,12 @@ export const runPipelineStoreConcurrencyContract = (
 
         await store.tasks.save(executor.tx, {
           ...snapshot,
-          costActualUsd: snapshot.costActualUsd + COST_PER_STAGE,
           task: {
             ...snapshot.task,
             stageAttempts: { ...snapshot.task.stageAttempts, [`s${stage}`]: 1 },
           },
         });
+        await store.tasks.addSpend(executor.tx, stored.task.id, COST_PER_STAGE);
         await executor.commit();
       }
 

@@ -25,13 +25,18 @@
  *   this screen's half — somewhere to show those four lines, and a stage picker for the hand-back —
  *   and it is a row of its own rather than a line in this file (standing rule 83: the sentence that
  *   described the gap is false the moment the gap closes, and this is that sentence).
- * - **ask the task** (WP-31). `askTaskRequestSchema` exists; the answers are a thread, and
- *   `taskDetailResponseSchema` has nowhere to carry one, so a question would post into a void.
+ *
+ * **Ask the task is here since WP-31** — `features/ask-thread.tsx`, between the approvals and the
+ * artifacts. This note used to say that `taskDetailResponseSchema` had nowhere to carry a thread so
+ * a question would post into a void; both halves are false now, and the sentence nearest the fix is
+ * the one nobody re-reads (standing rule 83). The thread is a query of its own
+ * (`GET /api/tasks/:id/asks`) rather than a field of the task DTO, for the reason that note
+ * implied: an ask is answered by a run that takes a minute, on its own schedule.
  */
 import type { ApprovalRecord, QuestionRecord, TaskRecord } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
-import { useProjects, useTask, useTaskCommands } from '../app/queries.js';
+import { useProjects, useTask, useTaskAudit, useTaskCommands } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import {
@@ -48,6 +53,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { AskThread } from './ask-thread.js';
 import { FeedbackForm } from './feedback.js';
 
 /**
@@ -144,6 +150,59 @@ const QuestionCard = ({
         </p>
       )}
     </Card>
+  );
+};
+
+/**
+ * Who did what to this task — `GET /api/tasks/:task_id/audit` (WP-31, PROGRESS backlog 52).
+ *
+ * WP-30 put the *project's* settings audit on the settings page and a task command's row never
+ * appeared on it: `human_actions` has no `project_id` column, so the predicate that page uses
+ * (`params->>'project_id'`) matches none of WP-15i's eleven commands or WP-27's three. This is the
+ * other half, and it is the read an ask's own answer is built from — one projection, two readers.
+ *
+ * `org.audit.read` is **maintainer** (Q36), so a member sees a sentence rather than an error: a
+ * 403 here is *"you may not read this"*, which is a different fact from a failure (standing rule
+ * 18) and is the one thing an `ErrorNotice` would state wrongly.
+ */
+const TaskActivity = ({ taskId }: { readonly taskId: string }): ReactElement => {
+  const audit = useTaskAudit(taskId);
+  return (
+    <div>
+      <SectionHeading>Who did what</SectionHeading>
+      {audit.isPending ? <Loading label="Loading this task's activity…" /> : null}
+      {audit.error === null || audit.error === undefined ? null : (
+        <EmptyState
+          title="Not shown"
+          hint="Every human action on this task is recorded; reading the record needs the maintainer role."
+        />
+      )}
+      {audit.data === undefined || audit.data.items.length > 0 ? null : (
+        <EmptyState
+          title="Nothing yet"
+          hint="Pausing, answering, approving, retrying and taking over are all recorded here."
+        />
+      )}
+      <ul className="flex flex-col gap-1">
+        {(audit.data?.items ?? []).map((entry) => (
+          <li key={entry.id}>
+            <Card className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium">{entry.action}</span>
+              <span className="text-fg-muted">{entry.user_id ?? 'unknown user'}</span>
+              <span className="ml-auto text-fg-muted">{formatDateTime(entry.created_at)}</span>
+              {/*
+                `params` is client-supplied JSON carrying the caller's own `Idempotency-Key`, so it
+                is untrusted like everything else this screen renders (BD-022).
+              */}
+              <UntrustedText
+                className="basis-full text-fg-muted"
+                value={JSON.stringify(entry.params)}
+              />
+            </Card>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 };
 
@@ -467,6 +526,10 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             </div>
           </div>
         )}
+
+        <AskThread taskId={task.id} />
+
+        <TaskActivity taskId={task.id} />
 
         <div>
           <SectionHeading>Artifacts</SectionHeading>

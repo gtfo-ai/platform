@@ -108,7 +108,9 @@ export interface PipelineOutboundData {
     /** WP-26, the rebase gate: tell this task's merge request which peers touch the same files. */
     | 'conflict_warn'
     /** WP-32, the notify band: say one thing in the project's chat channel. */
-    | 'notify';
+    | 'notify'
+    /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */
+    | 'ask_answer';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -143,6 +145,8 @@ export interface PipelineOutboundData {
    * movement and the board owes a human every move in order; see `statusMappingHandler`.
    */
   readonly status?: string;
+  /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */
+  readonly ask_id?: string;
   /** The three `review_only_*` duties: which merge request, and where it lives. */
   readonly iid?: number;
   readonly mr_url?: string;

@@ -709,15 +709,22 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     sink: { append: async () => {} },
     clock: { now: () => Date.now(), setTimer: () => () => {} },
     select: (spec) => {
-      const scenario = options.scenarioFor?.(spec, world) ?? scenarios[spec.stage ?? ''];
+      /**
+       * The key is the stage, **or the question the prompt carries** for a run with no stage
+       * (WP-31, standing rule 82). `askScenarioKey` reads it out of the assembled prompt's
+       * `ask_question` block, so an ask scripted here is scripted against bytes the planner
+       * actually produced — a stage-keyed table cannot express a stage-less run at all.
+       */
+      const key = runnerAdapters.askScenarioKey(spec) ?? spec.stage ?? '';
+      const scenario = options.scenarioFor?.(spec, world) ?? scenarios[key];
       if (scenario === undefined) {
-        throw new runnerAdapters.FakeScenarioError(`no scenario for stage "${spec.stage ?? ''}"`);
+        throw new runnerAdapters.FakeScenarioError(`no scenario for "${key}"`);
       }
       return {
         events: transcriptFor(
           spec.runId,
           new Date().toISOString(),
-          `${spec.stage ?? 'stage'} did its work`,
+          `${spec.stage ?? 'the ask'} did its work`,
         ),
         status: 'completed',
         terminalReason: 'success',
@@ -840,8 +847,9 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       // Turn the instance's own timers down rather than sleeping in the assertions.
       APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
-      // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`).
-      APP_DB_POOL_MAX: '20',
+      // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`) — six since
+      // WP-31's `task.ask`, which is why this is one above `instance.ts`'s exact floor.
+      APP_DB_POOL_MAX: '21',
       // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
       // planted rather than absent precisely so the redaction assertions have something to look for.
       ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),

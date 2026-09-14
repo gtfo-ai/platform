@@ -84,7 +84,15 @@ export interface Run {
   readonly id: Id;
   readonly taskId: Id;
   readonly projectId: Id;
-  readonly stage: Slug;
+  /**
+   * The pipeline stage this run is an attempt of, or `null` for a run that belongs to none.
+   *
+   * `runs.task_stage_id` has been nullable since migration 0004 and technical/03:40-42 names the
+   * three run kinds that use it — discovery, ask-the-task, librarian/maintenance. The aggregate
+   * typed it non-nullable until WP-31, which is why the only stage-less run the platform could
+   * express before then had to borrow a one-off task's stage (`onboarding/discovery.ts`).
+   */
+  readonly stage: Slug | null;
   readonly role: AgentRole;
   readonly mode: RunMode;
   readonly attempt: number;
@@ -111,7 +119,8 @@ export interface CreateRunInput {
   readonly id: Id;
   readonly taskId: Id;
   readonly projectId: Id;
-  readonly stage: Slug;
+  /** Required and nullable — see {@link Run.stage}. */
+  readonly stage: Slug | null;
   readonly role: AgentRole;
   readonly mode: RunMode;
   readonly attempt: number;

@@ -425,7 +425,11 @@ describe('the platform skills a stage is planned with', () => {
       Object.entries(COMMAND_BASELINE_BY_ROLE)
         .filter(([, baseline]) => baseline === 'read_only')
         .map(([role]) => role),
-    ).toEqual(['discovery']);
+      // `ask` joined `discovery` at WP-31: an ask has **no shell at all** (`TOOLS_BY_ROLE.ask` is
+      // empty), so the entry decides nothing that can happen — and it is the read-only one rather
+      // than the permissive one, because a table whose unreachable entry is permissive becomes
+      // wrong the day somebody adds `Bash` to the row above.
+    ).toEqual(['discovery', 'ask']);
     expect(commandBaselineFor('discovery', 'discovery').allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
     expect(commandBaselineFor('developer', 'implementation').allow).toEqual(
       DEFAULT_COMMAND_POLICY.allow,

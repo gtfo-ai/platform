@@ -21,8 +21,10 @@ describe('Drizzle schema', () => {
     // plus `kb_health_reports`, which technical/07 § "Librarian pipeline" names and no migration
     // had created (migration 0018, WP-18b), plus `notifications`, the chat outbox product/18:33's
     // digest and quiet hours need and technical/03 did not name until WP-32 amended it
-    // (migration 0023).
-    expect(tables.length).toBe(51);
+    // (migration 0023), plus `task_asks`, the ask-the-task thread product/10:57 asks for and
+    // which has no home anywhere else — `questions` is a *stage's* request for human input
+    // (technical/02:24), the opposite direction (migration 0024, WP-31).
+    expect(tables.length).toBe(52);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

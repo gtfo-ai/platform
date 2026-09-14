@@ -62,6 +62,7 @@ import type {
 } from '@platform/application';
 import {
   costHandlers,
+  createAskRunPlanner,
   createBudgetGuard,
   createContextPackAssembler,
   createIntegrationActionExecutor,
@@ -83,6 +84,7 @@ import type {
   runner as runnerAdapters,
 } from '@platform/infrastructure';
 import {
+  ask as askAdapters,
   cost as costAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
@@ -204,6 +206,29 @@ export interface PipelineComposition {
   readonly registry?: (options: PipelineProviderRegistryOptions) => IntegrationRegistry;
 }
 
+/**
+ * How an ask's thread and its prompt name the person who asked.
+ *
+ * The display **name**, never `users.email`: it reaches the platform's own prompt as a marker
+ * attribute and a mirrored ticket comment, and an address is the one field of an account a person
+ * did not choose to publish (WP-27's rule at `actorLabel`, applied one work package later).
+ *
+ * A user the row no longer has is `a platform user`, not an empty string: the marker alphabet
+ * refuses an empty attribute and the prompt should say *somebody asked* rather than nothing.
+ */
+const askerLabel = async (pool: pg.Pool, userId: string): Promise<string> => {
+  const { rows } = await pool.query<{ name: string }>('select name from users where id = $1', [
+    userId,
+  ]);
+  const name = rows[0]?.name?.trim() ?? '';
+  // The marker alphabet is `A-Z a-z 0-9 . _ - /` (`SAFE_ATTRIBUTE_VALUE`), and a person's name is
+  // not held to it — `assemblePrompt` refuses rather than escapes, which would fail every ask by a
+  // user with a space in their name. So the label is folded here, where the fallback is a decision
+  // rather than a crash.
+  const folded = name.replaceAll(/[^A-Za-z0-9._/-]+/g, '-').replace(/^-+|-+$/g, '');
+  return folded === '' ? 'a-platform-user' : folded.slice(0, 120);
+};
+
 export interface ComposePipelineOptions {
   readonly composition: PipelineComposition;
   readonly pool: pg.Pool;
@@ -248,6 +273,8 @@ export interface ComposePipelineOptions {
    * with UTC as the documented fallback.
    */
   readonly timezone: string;
+  /** `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31). */
+  readonly baseUrl: string;
   readonly logger: Logger;
 }
 
@@ -589,6 +616,47 @@ export const composePipeline = async (
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
+    baseUrl: options.baseUrl,
+    /**
+     * Ask-the-task (WP-31) — a run with a task and no stage, on the same runner, the same budget
+     * guard and the same stop-reason register the stage executor is given.
+     *
+     * The **runner is the same instance**, wrapped in `liveRuns` like every other run this process
+     * starts: an ask is a run, so `POST /api/runs/:id/steer` and a take-over reach it exactly as
+     * they reach a stage's. What is different is the planner — an ask has no stage and its prompt
+     * is built from the audit trail (`createAskRunPlanner`) — and the tools, which
+     * `PLATFORM_TOOLS_BY_ROLE.ask` narrows to `get_task_context` and `kb_search`.
+     */
+    ask: {
+      asks: askAdapters.createPostgresAskStore(),
+      // The same map the inbound normaliser decides `verified` from; the ask handler needs the
+      // platform user id, which `ExternalIdentity` does not carry.
+      identities: integrationAdapters.createPostgresIdentityDirectory({ sql: options.pool }),
+      runner: options.liveRuns.observe(
+        composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
+      ),
+      planner: createAskRunPlanner({
+        workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+        providerMode: options.agent.providerMode,
+        claudeCodePath: options.agent.claudeBinary,
+        env: runEnvironment.env,
+        secretEnvNames: runEnvironment.secretEnvNames,
+        prompts: ROLE_PROMPTS,
+        skills: PLATFORM_SKILLS,
+        nonce: { next: () => randomUUID().replaceAll('-', '') },
+        contextPacks: createContextPackAssembler({
+          store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
+          logger: options.logger,
+        }),
+        clock: { now: nowIso },
+        logger: options.logger,
+      }),
+      // TD-012 step 2 over the question and the answer — the same composition `routes/commands.ts`
+      // and `routes/settings.ts` are given.
+      redactor: redactionAdapters.patternRedactor(),
+      askedByLabel: async (userId: Id) => askerLabel(options.pool, userId),
+      budgets: createBudgetGuard({ store: costStore }),
+    },
     execution: {
       // Wrapped so that every run this process starts is findable while it lasts (WP-27). The wrap
       // is outermost on purpose: it must see the handle the executor is given, whichever of the

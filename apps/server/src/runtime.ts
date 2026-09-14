@@ -41,6 +41,8 @@
  * for it. Only *chained* events — the ones a handler returns or appends through its transaction
  * scope — inherit the dispatcher's slot. Emit, never dispatch.
  */
+
+import { randomUUID } from 'node:crypto';
 import type { Jobs, Logger, WebhookIngress } from '@platform/application';
 import { createLiveRuns, sweepReadiness } from '@platform/application';
 import {
@@ -53,6 +55,7 @@ import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { agentRunEnvironment } from './agent.js';
 import { buildApp } from './app.js';
+import { composeAsks } from './asks.js';
 import { createAuth } from './auth/better-auth.js';
 import { bootstrapAdministrator } from './auth/bootstrap.js';
 import { createTaskCommands } from './commands.js';
@@ -329,6 +332,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           // quiet-hours comparison. `config.timezone` is `TZ`, defaulted to UTC and never to the
           // host clock.
           timezone: config.timezone,
+          // `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31).
+          baseUrl: config.baseUrl,
           logger: loggerPort,
         });
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });
@@ -495,6 +500,25 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       ? createTaskCommands({ eventing, jobs, liveRuns, logger: loggerPort })
       : null;
 
+    /**
+     * Ask-the-task's API half (WP-31): the command port and the two reads, over one `AskStore`.
+     *
+     * Composed for every process that serves the API, like `taskCommands`. `jobs` decides how much
+     * of it works: without a queue the reads still answer and the write refuses by name, because a
+     * recorded question nothing will ever pick up is worse than a refusal.
+     */
+    const asks = composeAsks({
+      eventing: {
+        unitOfWork: eventing.unitOfWork,
+        // The same two the task commands are given (`commands.ts`): a v4 uuid and the wall clock,
+        // applied once at the composition root so the application ring reads neither.
+        ids: { next: () => randomUUID() as never },
+        clock: { now: () => new Date().toISOString() as never },
+      },
+      jobs,
+      logger: loggerPort,
+    });
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -604,6 +628,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       knowledge: knowledgeCommands,
       onboarding: onboardingCommands,
       commands: taskCommands,
+      asks,
       /**
        * The browser application (WP-15j): the operator's directory, or the one the image carries.
        *

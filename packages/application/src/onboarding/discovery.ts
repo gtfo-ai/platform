@@ -14,6 +14,18 @@
  * least-privilege tables. WP-18b's `librarian` stage is the precedent for a stage entered outside
  * the ticket flow's own decisions.
  *
+ * **WP-31 built the second path this paragraph weighed against, and did not change this decision**
+ * (standing rule 83: the sentence nearest a new mechanism is the one that goes stale). Ask-the-task
+ * is a run with a task and **no stage** — `packages/application/src/ask/executor.ts`, its own
+ * admission and its own transaction 2 — so a stage-less run is expressible now, and a reader could
+ * reasonably ask why discovery is not one. The answer is what the two runs *produce*. A discovery
+ * run writes a `DiscoveryDraft` that **transitions a pipeline**: the stage completes, the
+ * interpreter reads the verdict, the task moves, and the `onboarding.discovery` job records the
+ * readiness evaluation off `artifact.created`. An ask transitions nothing — it deliberately never
+ * writes the `tasks` row at all, because it runs beside whatever the pipeline is doing. So this is
+ * still the choice that reuses a mechanism rather than adding one: the ask has an executor because
+ * there was no stage to reuse, not because a stage was in the way.
+ *
  * ## The ticket that does not exist
  *
  * `tasks` requires a ticket provider, key and URL, and a project being onboarded has no ticket. The

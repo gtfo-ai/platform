@@ -62,6 +62,7 @@ import {
   serializerCompiler,
   validatorCompiler,
 } from 'fastify-type-provider-zod';
+import type { AskComposition } from './asks.js';
 import type { Auth } from './auth/better-auth.js';
 import { authPlugin } from './auth/plugin.js';
 import type { TaskCommands } from './commands.js';
@@ -78,7 +79,10 @@ import {
   findProjectRole,
   findRunProjectId,
   findTaskProjectId,
+  findUserById,
+  listIdentityMappings,
   projectExists,
+  upsertIdentityMapping,
 } from './queries/identity-queries.js';
 import {
   findIdempotentAttempt,
@@ -88,6 +92,7 @@ import {
 import { findRunPosition, findTaskPosition } from './queries/pipeline-queries.js';
 import { findProjectAutonomy, listProjectAudit } from './queries/project-queries.js';
 import { roleCapabilities } from './role.js';
+import { registerAskRoutes } from './routes/asks.js';
 import { registerCommandRoutes } from './routes/commands.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
@@ -152,6 +157,14 @@ export interface BuildAppOptions {
    * with no queue, and the four that must start a stage refuse by name (`commands.ts`).
    */
   readonly commands: TaskCommands | null;
+  /**
+   * Ask-the-task (WP-31): the command port and the two reads, or `null` on a process that composed
+   * no pipeline.
+   *
+   * Null on the write half only — the reads are always served, because a thread somebody asked for
+   * on a worker is readable from an API-only replica.
+   */
+  readonly asks: AskComposition;
   /**
    * The directory holding the built SPA, or absent for a process that serves no browser
    * application (WP-15j).
@@ -359,7 +372,18 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       baseUrl: config.baseUrl,
       trustProxy: config.trustProxy,
     });
-    await registerOrgRoutes(app, { database: options.database });
+    await registerOrgRoutes(app, {
+      database: options.database,
+      // The identity pair's four functions, bound to this process's database here so the route
+      // module names none (`routes/org.ts`'s `IdentityQueries`). The four org **reads** beside
+      // them still take `database`; that file says why the asymmetry is deliberate.
+      identities: {
+        findUser: async (userId) => findUserById(options.database, userId),
+        upsertMapping: async (input) => upsertIdentityMapping(options.database, input),
+        listMappings: async () => listIdentityMappings(options.database),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+    });
     await registerIntegrationRoutes(app, {
       database: options.database,
       baseUrl: config.baseUrl,
@@ -406,6 +430,17 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       knowledge: options.knowledge,
     });
     await registerTaskRoutes(app, { database: options.database });
+    await registerAskRoutes(app, {
+      queries: {
+        taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+        ...options.asks.queries,
+      },
+      asks: options.asks.commands,
+    });
     await registerCommandRoutes(app, {
       // The seven functions the command routes need, bound to this process's database here so
       // that module names none (`routes/commands.ts`'s `CommandQueries`).

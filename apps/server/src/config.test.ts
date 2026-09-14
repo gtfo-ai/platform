@@ -190,7 +190,7 @@ describe('the agent run’s provider configuration', () => {
 
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
-    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '20' });
+    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '21' });
     // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
     // the pipeline's job workers, HTTP and maintenance. Every term is symbolic on purpose: the
     // count of pipeline workers belongs to `POOL_RESERVATIONS`, and this comment saying "three"
@@ -238,10 +238,22 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Eighteen since WP-32: seventeen (WP-15c's fourth pipeline worker, WP-18a's `knowledge.index`,
-    // WP-18b's three Librarian queues and WP-21's `onboarding.discovery`) plus the digest tick.
-    expect((thrown as UndersizedPoolError).required).toBe(18);
+    // Nineteen since WP-31: eighteen (seventeen — WP-15c's fourth pipeline worker, WP-18a's
+    // `knowledge.index`, WP-18b's three Librarian queues and WP-21's `onboarding.discovery` — plus
+    // WP-32's digest tick) plus the `task.ask` worker.
+    expect((thrown as UndersizedPoolError).required).toBe(19);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
+    // PROGRESS backlog 22's **site 3**, derived rather than spelled since WP-31 round 2. The
+    // message used to say "the pipeline's five job workers" beside a `POOL_RESERVATIONS.pipeline`
+    // of 6 — the first time the class reached an *error message*, and the one sentence an operator
+    // reads at the moment the program refuses to start. Comparing it against the constant is the
+    // point: a word written back in fails here.
+    expect((thrown as Error).message).toContain(
+      `the pipeline's ${POOL_RESERVATIONS.pipeline} job workers`,
+    );
+    expect((thrown as Error).message).toContain(
+      `the knowledge base's ${POOL_RESERVATIONS.knowledge}`,
+    );
   });
 
   /**

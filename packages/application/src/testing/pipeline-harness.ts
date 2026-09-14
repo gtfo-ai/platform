@@ -25,7 +25,8 @@ import type {
 } from '@platform/contracts';
 import { agentRoleSchema, refinedSpecDataSchema } from '@platform/contracts';
 import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
-import { SHIPPED_TEMPLATES } from '@platform/domain';
+import { readDataBlocks, SHIPPED_TEMPLATES } from '@platform/domain';
+import { type AskRunPlanner, createAskRunPlanner } from '../ask/planner.js';
 import { createBudgetGuard } from '../cost/guard.js';
 import { costHandlers } from '../cost/runtime.js';
 import { EventBus } from '../events/event-bus.js';
@@ -49,6 +50,7 @@ import type { CronScheduleDefinition, EnqueueRequest, JobHandler, Jobs } from '.
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
+import { createMemoryAskStore, type MemoryAskStore } from './memory-ask.js';
 import { createMemoryCostStore, type MemoryCostStore } from './memory-cost.js';
 import { MemoryEventing } from './memory-eventing.js';
 import {
@@ -210,8 +212,36 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun): RunOutcome => ({
 export interface HarnessOptions {
   readonly projectId?: Id;
   readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
-  /** One scripted run per stage id; a stage with no script fails the test loudly. */
+  /**
+   * One scripted run per key; a run with no script fails the test loudly.
+   *
+   * The key is the **stage id** for a pipeline stage and `ask:<question>` for an ask-the-task run,
+   * which has no stage — see {@link harnessScriptKey}, which reads the question out of the prompt
+   * the planner actually produced (standing rule 82).
+   */
   readonly runs?: Readonly<Record<string, ScriptedRun>>;
+  /** The ask-the-task thread, when a test wants to read it back or seed it (WP-31). */
+  readonly asks?: MemoryAskStore;
+  /**
+   * `user_identities`, as `{provider: {external_id: user_id}}` (WP-31, PROGRESS backlog 79).
+   *
+   * Empty by default, which is what a real instance has until an operator maps an account through
+   * `POST /api/org/identities`: a ticket-side ask is then refused `unverified_identity`.
+   */
+  readonly askIdentities?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** The redactor the ask's question and answer go through (TD-012). */
+  readonly askRedactor?: SecretRedactor;
+  /**
+   * Something that commits **while an ask's prompt is being assembled** (WP-31 round 2).
+   *
+   * The ask executor's shape is transaction / plan / transaction and the plan phase deliberately
+   * holds no transaction, which is the window TD-004's re-validate-on-fire exists for: a stage
+   * running beside the ask can finish and charge `tasks.cost_actual` in it. A test has no other
+   * handle inside that window — the planner is composed here, not passed in — so the harness offers
+   * one. It runs immediately before **every** `AskRunPlanner.plan` call (`askPlannerWith` wraps the
+   * planner, not the harness), and absent it changes nothing.
+   */
+  readonly whileAskPlans?: () => Promise<void>;
   readonly git?: Partial<GitProviderPort> | null;
   readonly taskManagement?: Partial<TaskManagementPort> | null;
   /** The chat binding. **Absent by default** — see {@link HarnessCommunication} (WP-32). */
@@ -277,6 +307,8 @@ export interface PipelineHarness {
   readonly cost: MemoryCostStore | null;
   readonly audit: ReturnType<typeof createMemoryAuditLog>;
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
+  /** The ask-the-task thread (WP-31) — read back to assert what an ask produced. */
+  readonly asks: MemoryAskStore;
   /** Every spec the runner was started with, in order. */
   readonly specs: readonly RunSpec[];
   /**
@@ -298,6 +330,26 @@ export interface PipelineHarness {
   events(): readonly DomainEvent[];
   types(): readonly string[];
 }
+
+/**
+ * The ask planner, with `whileAskPlans` run once in front of it.
+ *
+ * Wrapped rather than branched at the call site so the unhooked composition is the real planner
+ * itself and not a delegate: a harness whose default path went through an extra object would be a
+ * harness whose default path is not the one production uses.
+ */
+const askPlannerWith = (
+  planner: AskRunPlanner,
+  hook: (() => Promise<void>) | undefined,
+): AskRunPlanner =>
+  hook === undefined
+    ? planner
+    : {
+        plan: async (input) => {
+          await hook();
+          return planner.plan(input);
+        },
+      };
 
 const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitProviderPort | null =>
   overrides === null
@@ -530,6 +582,20 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const idempotency = createMemoryIdempotencyStore();
   const scripts = new Map<string, ScriptedRun>(Object.entries(options.runs ?? {}));
   /**
+   * The ask-the-task store and the identity map its ticket door reads (WP-31).
+   *
+   * `askIdentities` is empty unless a test seeds it, which is production's own state until an
+   * operator maps an account through `POST /api/org/identities` — so a harness that forgot to seed
+   * it sees exactly what a real instance sees: every ticket-side ask refused `unverified_identity`.
+   */
+  const asks: MemoryAskStore = options.asks ?? createMemoryAskStore();
+  const askIdentities = new Map<string, Map<string, Id>>(
+    Object.entries(options.askIdentities ?? {}).map(([provider, map]) => [
+      provider,
+      new Map(Object.entries(map) as [string, Id][]),
+    ]),
+  );
+  /**
    * The ledger's store, reading this harness's own `runs` and `tasks` (WP-19).
    *
    * The organisation id is the harness's one constant: the in-memory pipeline store has no
@@ -652,9 +718,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const runner: ClaudeRunner = {
     start: (spec) => {
       specs.push(spec);
-      const scripted = scripts.get(spec.stage ?? '');
+      const key = harnessScriptKey(spec);
+      const scripted = scripts.get(key);
       if (scripted === undefined) {
-        throw new Error(`the test scripted no run for stage "${spec.stage ?? '(none)'}"`);
+        throw new Error(`the test scripted no run for "${key}"`);
       }
       return {
         runId: spec.runId,
@@ -684,6 +751,30 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ids,
     clock: { now: () => clock.now() },
     unitOfWork: memory,
+    baseUrl: 'https://agentic.example.test',
+    /**
+     * Ask-the-task (WP-31), on the **same** runner every other run of this harness uses — which is
+     * what makes `harnessScriptKey` the one place the stage-less case is expressed.
+     */
+    ask: {
+      asks,
+      identities: { forProvider: async (provider) => askIdentities.get(provider) ?? new Map() },
+      runner: wrapRunner(runner, scripts, () => clock, sink),
+      planner: askPlannerWith(
+        createAskRunPlanner({
+          workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
+          prompts: harnessRolePrompts(),
+          skills: harnessSkills(),
+          nonce: { next: () => nonceFor(ids.next()) },
+          contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
+          clock: { now: () => clock.now() },
+        }),
+        options.whileAskPlans,
+      ),
+      redactor: options.askRedactor ?? exactSecretRedactor([]),
+      askedByLabel: async (userId: Id) => `user-${userId.slice(0, 8)}`,
+      ...(cost === null ? {} : { budgets: createBudgetGuard({ store: cost }) }),
+    },
     ...(options.reviewCommentWindowMs === undefined
       ? {}
       : { reviewCommentWindowMs: options.reviewCommentWindowMs }),
@@ -803,6 +894,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       const ran =
         (await runJobs(JOB_QUEUES.pipelineOutbound)) +
         (await runJobs(JOB_QUEUES.stageExecute)) +
+        // WP-31: an ask is a run on a queue of its own, and it enqueues the ticket mirror back onto
+        // `pipeline.outbound` — so it is drained in the same loop rather than by a second helper.
+        (await runJobs(JOB_QUEUES.taskAsk)) +
         (await runJobs(JOB_QUEUES.mrCommentDebounce));
       if (dispatched === 0 && ran === 0) {
         return;
@@ -863,6 +957,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     cost,
     audit,
     idempotency,
+    asks,
     specs,
     script: (stage, run) => {
       scripts.set(stage, run);
@@ -878,6 +973,29 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
 };
 
 /**
+ * Which script a run gets — **read off the prompt when the run has no stage** (WP-31, standing
+ * rule 82).
+ *
+ * A stage run is keyed by its stage slug, which is what every harness in this repository has always
+ * done. An **ask** has no stage at all (`runs.task_stage_id` is null and `RunSpec.stage` is
+ * `null`), so a stage-keyed harness cannot express the case — which is precisely the instrument
+ * failure rule 82 records, arriving in the one work package whose deliverable has no stage to key
+ * on. The ask's key is therefore the **question**, taken out of the assembled prompt's
+ * `ask_question` data block by the same reader the tests parse a prompt with. A test that scripts
+ * `ask:why did you choose X?` is scripting against bytes the planner actually produced: an empty
+ * prompt, a missing block or a question the platform never put there all fail to find a script.
+ */
+export const harnessScriptKey = (spec: RunSpec): string => {
+  if (spec.stage !== null) {
+    return spec.stage;
+  }
+  const block = readDataBlocks(spec.userPrompt).blocks.find(
+    (candidate) => candidate.kind === 'ask_question',
+  );
+  return block === undefined ? 'ask:(no question in the prompt)' : `ask:${block.body.trim()}`;
+};
+
+/**
  * Writes the scripted `run_stopped` row the way WP-12's adapter does — through the sink, before
  * the outcome resolves — so the executor reads the reason from the same place production puts it.
  */
@@ -888,7 +1006,7 @@ const wrapRunner = (
   sink: RunTranscriptSink,
 ): ClaudeRunner => ({
   start: (spec) => {
-    const scripted = scripts.get(spec.stage ?? '');
+    const scripted = scripts.get(harnessScriptKey(spec));
     if (scripted?.throwsOnStart !== undefined) {
       throw scripted.throwsOnStart;
     }

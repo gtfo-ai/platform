@@ -20,6 +20,7 @@
  * (BD-025) — that is the caller's job; this module only merges what it is handed.
  */
 import type { AgenticConfig, AutonomyLevel, ConfigSource } from '@platform/contracts';
+import { DEFAULT_ASK_BUDGET_USD, DEFAULT_ASK_MODEL } from '../ask/ask.js';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../knowledge/retrieval.js';
 import { autonomyRank } from '../policies/autonomy.js';
 import {
@@ -137,6 +138,15 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       urgent: [...DEFAULT_URGENT_NOTIFICATION_CLASSES],
     },
     shadow_mode: { enabled: false },
+    // product/18:34's default column is **on**, with Q72 (c)'s starting cap and Q72 (d)'s mirror
+    // off. `DEFAULT_ASK_BUDGET_USD` is in `packages/domain/src/ask/` beside the admission rule that
+    // reads it, so "what a question may cost" has one spelling.
+    ask: {
+      enabled: true,
+      model: DEFAULT_ASK_MODEL,
+      budget_usd: DEFAULT_ASK_BUDGET_USD,
+      mirror_to_ticket: false,
+    },
   },
 };
 

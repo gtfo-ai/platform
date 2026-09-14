@@ -276,6 +276,28 @@ export interface TaskRepository {
     snapshot: TicketSnapshot,
     readAt: IsoDateTime,
   ): Promise<void>;
+  /**
+   * Adds a run's spend to `tasks.cost_actual` — the third narrow writer, and the first that is
+   * **not** a read-modify-write at all (WP-31).
+   *
+   * An ask-the-task run happens beside whatever the pipeline is doing, so it has the same problem
+   * `saveWorkpad` and `saveTicketSnapshot` have and one more: the value it writes *depends on the
+   * value already there*. A `save` would put back the state, the stage and the workpad as they were
+   * when the ask started; even a narrow `set cost_actual = $2` would lose a stage's spend that
+   * committed while the ask was running. So the statement is `cost_actual = cost_actual + $2`,
+   * which is atomic in the database and needs no version token — the two writers are adding to a
+   * running total and their order does not matter.
+   *
+   * The stage executor keeps its own `save`, because it holds the aggregate and writes the state
+   * with it; nothing here changes that. Like the other narrow writes it does not bump
+   * `tasks.version`: adding spend is not a change the aggregate's optimistic concurrency is about.
+   *
+   * A negative amount is refused rather than clamped: money only ever goes one way here, and a
+   * caller that computed one has a defect the ledger should not absorb (standing rule 20).
+   *
+   * @throws when the task does not exist, like `save` and the two writes above.
+   */
+  addSpend(tx: Transaction, taskId: Id, usd: number): Promise<void>;
   /** WIP counting (BD-010); `countsAsActive` / `countsInPipeline` decide which states count. */
   counts(
     tx: Transaction,

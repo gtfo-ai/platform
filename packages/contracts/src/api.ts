@@ -9,7 +9,12 @@
  * set.
  */
 import * as z from 'zod';
-import { artifactRefSchema, artifactSchema, kbHealthFindingSchema } from './artifacts.js';
+import {
+  artifactRefSchema,
+  artifactSchema,
+  askAnswerCitationSchema,
+  kbHealthFindingSchema,
+} from './artifacts.js';
 import {
   agentRoleSchema,
   autonomyLevelSchema,
@@ -514,6 +519,114 @@ export const submitFeedbackRequestSchema = z.strictObject({
  * (`git fetch && git checkout agentic/PROJ-123`, plus `claude --resume` guidance), and a client that
  * has to split a blob on newlines to render them is a client that has to know the format.
  */
+/**
+ * `POST /api/tasks/:task_id/ask` — ask-the-task (technical/08:17, product/10:57, WP-31).
+ *
+ * The question is bounded at `MAX_ASK_QUESTION_CHARS` (4 000) rather than at
+ * {@link MAX_COMMAND_TEXT_CHARS}, and the smaller number is derived at the constant in
+ * `packages/domain/src/ask`: a question is one or two sentences, it is stored, and it reaches a
+ * prompt beside a context pack whose own budget it must not crowd out. A **refusal** rather than a
+ * truncation, like every other command's text: half a question is a different question.
+ */
+export const askTaskRequestSchema = z.strictObject({
+  question: nonEmptyStringSchema.max(4_000),
+});
+
+export const askTaskResponseSchema = z.strictObject({
+  ask_id: idSchema,
+  task_id: idSchema,
+  /** `false` for a replayed `Idempotency-Key` and for a ticket comment already turned into an ask. */
+  performed: z.boolean(),
+  /** `pending` — the run is enqueued. Nothing here waits for it; the thread reports the answer. */
+  status: z.enum(['pending', 'answered', 'refused', 'failed']),
+});
+
+/** One entry of the ask thread (`GET /api/tasks/:task_id/asks`). Every string is untrusted. */
+export const taskAskSchema = z.strictObject({
+  id: idSchema,
+  task_id: idSchema,
+  source: z.enum(['ui', 'ticket']),
+  asked_by_user_id: idSchema,
+  question: z.string(),
+  run_id: idSchema.nullable(),
+  status: z.enum(['pending', 'answered', 'refused', 'failed']),
+  answer: z.string().nullable(),
+  citations: z.array(askAnswerCitationSchema),
+  /**
+   * How many citations the model wrote that named another task's or another project's row, and
+   * were dropped (product/11:30).
+   *
+   * Published rather than hidden: a reader who can see that three claims lost their evidence knows
+   * to trust the answer less, and an operator who sees it happen often knows the prompt is wrong.
+   */
+  dropped_citations: z.int().nonnegative(),
+  /** The `AskAnswer` artifact this answer was stored as; `null` until the run finishes. */
+  answer_artifact_id: idSchema.nullable(),
+  refusal_reason: z.string().nullable(),
+  mirrored_at: isoDateTimeSchema.nullable(),
+  created_at: isoDateTimeSchema,
+  answered_at: isoDateTimeSchema.nullable(),
+});
+
+export const taskAskListSchema = z.strictObject({ items: z.array(taskAskSchema) });
+
+/**
+ * One `human_actions` row of a task — `GET /api/tasks/:task_id/audit` (WP-31 criterion 10,
+ * PROGRESS backlog 52).
+ *
+ * WP-30 shipped the *project* half on the predicate `params->>'project_id'`, which a task command's
+ * row never matches because `human_actions` has no `project_id` column. This is the other half, and
+ * it is served from the same projection the ask's prompt is built from.
+ *
+ * `params` is **client-supplied JSON** — it carries the caller's own `Idempotency-Key` and whatever
+ * the command chose to record — so it is untrusted at every reader (BD-022) and the SPA renders it
+ * through the untrusted path like everything else.
+ */
+export const taskAuditEntrySchema = z.strictObject({
+  id: idSchema,
+  action: nonEmptyStringSchema,
+  user_id: idSchema.nullable(),
+  params: jsonObjectSchema,
+  created_at: isoDateTimeSchema,
+});
+
+export const taskAuditPageSchema = z.strictObject({ items: z.array(taskAuditEntrySchema) });
+
+/**
+ * `POST /api/org/identities` — mapping a provider account to a platform user (WP-31, PROGRESS
+ * backlog **79**).
+ *
+ * `user_identities` has had a reader since WP-15c and **no writer**, so on every instance the map
+ * is empty, every ticket and chat author is unmapped, and every answer, approval or ask that
+ * arrives from a provider is dropped as `unmapped_identity`. This is the writer, and it is an
+ * **operator** saying so rather than either of the two automatic routes: an OAuth sign-in with the
+ * provider (TD-022 ships email and password only) or an email match the platform performed itself,
+ * which would let a *guessed* identity answer questions and approve plans (BD-022, Q10).
+ *
+ * `admin`, because the mapping decides who may act as whom.
+ */
+export const createIdentityMappingRequestSchema = z.strictObject({
+  /** The provider id as the registry knows it (`jira-cloud`, `gitlab`, `slack`). */
+  provider: nonEmptyStringSchema.max(64),
+  /** The account's id **in the provider**, which is what a normaliser resolves against. */
+  external_id: nonEmptyStringSchema.max(256),
+  user_id: idSchema,
+  /** What the provider calls them, for an operator reading the list. Never used to resolve. */
+  display_name: z.string().max(256).optional(),
+});
+
+export const identityMappingSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  user_id: idSchema,
+  display_name: z.string().nullable(),
+  created_at: isoDateTimeSchema,
+});
+
+export const identityMappingListSchema = z.strictObject({
+  items: z.array(identityMappingSchema),
+});
+
 export const takeOverResponseSchema = z.strictObject({
   task_id: idSchema,
   state: taskStateSchema,
@@ -533,11 +646,6 @@ export const takeOverResponseSchema = z.strictObject({
    * run pushed. The two are different facts and a caller renders them differently (standing rule 18).
    */
   workspace_export: z.enum(['requested', 'no_live_run']),
-});
-
-/** `POST /api/tasks/:id/ask` — ask-the-task (WP-31). */
-export const askTaskRequestSchema = z.strictObject({
-  question: nonEmptyStringSchema,
 });
 
 export const taskExportResponseSchema = z.strictObject({
@@ -990,6 +1098,14 @@ export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;
 export type TaskCommandResponse = z.infer<typeof taskCommandResponseSchema>;
 export type TakeOverRequest = z.infer<typeof takeOverRequestSchema>;
 export type TakeOverResponse = z.infer<typeof takeOverResponseSchema>;
+export type AskTaskRequest = z.infer<typeof askTaskRequestSchema>;
+export type AskTaskResponse = z.infer<typeof askTaskResponseSchema>;
+export type TaskAsk = z.infer<typeof taskAskSchema>;
+export type TaskAskList = z.infer<typeof taskAskListSchema>;
+export type TaskAuditEntry = z.infer<typeof taskAuditEntrySchema>;
+export type TaskAuditPage = z.infer<typeof taskAuditPageSchema>;
+export type CreateIdentityMappingRequest = z.infer<typeof createIdentityMappingRequestSchema>;
+export type IdentityMapping = z.infer<typeof identityMappingSchema>;
 export type HandBackRequest = z.infer<typeof handBackRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema>;

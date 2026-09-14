@@ -45,6 +45,7 @@ import {
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
   DEFAULT_READ_ONLY_ALLOW,
+  isPromptExcludedArtifact,
   narrowCommandPolicy,
   PLATFORM_DEFAULT_CONFIG,
   type PromptContextPack,
@@ -96,6 +97,15 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
   facilitator: ['report_progress', 'get_task_context', 'kb_search'],
   librarian: ['report_progress', 'get_task_context', 'kb_search'],
   discovery: ['report_progress', 'kb_search'],
+  /**
+   * Ask-the-task (WP-31, Q72 (b)): *"read-only over **platform** data, not the repository"*.
+   *
+   * `get_task_context` and `kb_search`, and **not** `ask_human` — an ask is already a conversation
+   * with a human, and a run that asked a question back would park the *task* in `waiting_answers`
+   * on a question about an explanation nobody is blocked on. `report_progress` is absent for the
+   * simpler reason that this build refuses it by name and an ask is over in one turn.
+   */
+  ask: ['get_task_context', 'kb_search'],
 };
 
 /**
@@ -171,6 +181,13 @@ export const COMMAND_BASELINE_BY_ROLE: Readonly<Record<AgentRole, 'read_only' | 
     librarian: 'implementation',
     // The one role that reads a repository nobody has reviewed yet, at first contact.
     discovery: 'read_only',
+    /**
+     * The ask has **no shell at all** (`TOOLS_BY_ROLE.ask` is empty), so this entry decides nothing
+     * that can happen — and it is `read_only` rather than `implementation` because a table whose
+     * unreachable entry is the permissive one is a table that becomes wrong the day somebody adds
+     * `Bash` to the row above (standing rule 20's direction, applied to a default).
+     */
+    ask: 'read_only',
   };
 
 /**
@@ -214,6 +231,13 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   // `Bash` under BD-025's command policy — see the docblock. It writes nothing: no `Edit`, no
   // `Write`, and `PLATFORM_TOOLS_BY_ROLE.discovery` carries no mutating platform tool.
   discovery: ['Read', 'Glob', 'Grep', 'Bash'],
+  /**
+   * **Empty, and that is the point** (WP-31, Q72 (b)). An ask explains the platform's own record;
+   * it never inspects the code. No `Read`, because there is no checkout to read — an ask run is
+   * given no workspace, which is also why it costs a fraction of a stage. Everything it may do is
+   * in `PLATFORM_TOOLS_BY_ROLE.ask`.
+   */
+  ask: [],
 };
 
 /**
@@ -280,6 +304,12 @@ export const SKILLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   facilitator: ['kb', 'retro'],
   librarian: ['kb'],
   discovery: ['kb'],
+  /**
+   * `kb`, because the ask holds `kb_search` and rule 2 of this table says a skill goes to a role
+   * that has the tool it is about. Nothing else: every other skill describes work in a repository,
+   * and an ask has no workspace for one to be copied into.
+   */
+  ask: ['kb'],
 };
 
 /**
@@ -417,10 +447,18 @@ const limitsFor = (settings: ProjectSettings, stage: string, role: AgentRole): R
   };
 };
 
-/** The latest version of each artifact type, oldest type first — what a stage is shown. */
+/**
+ * The latest version of each artifact type, oldest type first — what a stage is shown.
+ *
+ * `AskAnswer` is filtered out here (WP-31): the reason is a property of the artifact type and is
+ * written at `PROMPT_EXCLUDED_ARTIFACT_TYPES` in `@platform/domain`, beside the type itself, so this
+ * is one call rather than a rule to remember. It filters **before** picking the latest, so an
+ * excluded type cannot displace anything; the exclusion is asserted in both directions in
+ * `planner.test.ts`.
+ */
 const latestArtifacts = (artifacts: readonly StoredArtifact[]): readonly StoredArtifact[] => {
   const latest = new Map<ArtifactType, StoredArtifact>();
-  for (const artifact of artifacts) {
+  for (const artifact of artifacts.filter((entry) => !isPromptExcludedArtifact(entry.type))) {
     const current = latest.get(artifact.type);
     if (current === undefined || artifact.version > current.version)
       latest.set(artifact.type, artifact);
@@ -630,6 +668,9 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
             json: JSON.stringify(artifact.data),
           })),
           returnFeedback: request.returnFeedback,
+          // A stage is not shown the audit trail (WP-31): the record blocks are the ask's, and a
+          // stage that carried them would be paying context for the platform talking to itself.
+          record: [],
         },
         artifactType: stage.produces,
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set
@@ -645,6 +686,9 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
          * (`auto`) applies to a project that never chose.
          */
         language: languageOf(settings),
+        // A stage run is never an ask (WP-31). Required-and-nullable in the assembler, so this line
+        // is the planner saying so rather than a key it forgot.
+        ask: null,
       });
 
       const spec: RunSpec = {

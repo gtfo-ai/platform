@@ -345,6 +345,61 @@ export const discoveryDraftDataSchema = z.strictObject({
     .optional(),
 });
 
+/**
+ * `AskAnswer` — what an ask-the-task run returns (WP-31, product/10:57).
+ *
+ * *"answered from the audit trail and artifacts with links to the exact run and prompt"*, which is
+ * what makes `citations` the load-bearing field rather than `answer`: an explanation nobody can
+ * check against the record is the thing a transcript already is.
+ *
+ * Three rules are in the shape rather than in the prompt.
+ *
+ *  - **A citation names a row, never a URL.** `run_id` and `artifact_type`/`version` resolve
+ *    through the read endpoints WP-15h shipped; a model that wrote a link could write any link,
+ *    and the platform would be publishing it. `apps/web` renders the citation as a link it builds
+ *    itself.
+ *  - **A citation is scoped to the task at recording time.** `packages/application/src/ask` drops
+ *    one that names another task's or another project's run (product/11:30), counts the drops and
+ *    reports them; the schema cannot do it, because a schema does not know whose task this is.
+ *  - **`unanswered` is required and may be empty.** A question the record does not answer has to
+ *    be sayable, or the model's only way to comply is to invent (standing rule 16).
+ */
+/**
+ * The caps every model-authored string in an `AskAnswer` is held to.
+ *
+ * Named rather than inline because the **recorder re-applies them** (WP-31 round 2): TD-012 step 2
+ * replaces a credential with a `[REDACTED:…]` placeholder, which can be *longer* than the value it
+ * replaced — so a `detail` that arrived exactly at its cap comes out of the redactor past it, and
+ * the read endpoint that publishes it through this very schema would answer 500 rather than the
+ * thread. `packages/application/src/ask/executor.ts` redacts and then cuts to these numbers, and
+ * they are these numbers because a second copy is the thing that drifts (standing rule 63).
+ */
+export const MAX_ASK_CITATION_DETAIL_CHARS = 2_000;
+export const MAX_ASK_CITATION_REFERENCE_CHARS = 512;
+export const MAX_ASK_UNANSWERED_CHARS = 1_000;
+
+export const askAnswerCitationSchema = z.strictObject({
+  kind: z.enum(['run', 'artifact', 'audit', 'knowledge']),
+  /** `kind: 'run'` — the run this claim rests on. Checked against the task's own runs. */
+  run_id: idSchema.nullish(),
+  /** `kind: 'artifact'` — which artifact, and which version of it. */
+  artifact_type: artifactTypeSchema.nullish(),
+  version: z.int().positive().nullish(),
+  /** `kind: 'audit'` — the `human_actions` row's id. `kind: 'knowledge'` — the vault path. */
+  reference: z.string().max(MAX_ASK_CITATION_REFERENCE_CHARS).nullish(),
+  /** Why this row supports the claim, in the model's own words. Untrusted (BD-022). */
+  detail: z.string().max(MAX_ASK_CITATION_DETAIL_CHARS),
+});
+
+export const askAnswerDataSchema = z.strictObject({
+  /** The answer a human reads. Rendered as text nodes by the SPA, never as markup (BD-022). */
+  answer: z.string().max(20_000),
+  citations: z.array(askAnswerCitationSchema).max(50),
+  /** What the record does not say. Empty is a claim, not an omission. */
+  unanswered: z.array(z.string().max(MAX_ASK_UNANSWERED_CHARS)).max(20),
+  confidence: z.enum(['high', 'medium', 'low']),
+});
+
 /** `artifact_type` → the schema for that type's `data`. */
 export const artifactDataSchemas = {
   RefinedSpec: refinedSpecDataSchema,
@@ -358,6 +413,7 @@ export const artifactDataSchemas = {
   ShadowReport: shadowReportDataSchema,
   ReadinessReport: readinessReportDataSchema,
   DiscoveryDraft: discoveryDraftDataSchema,
+  AskAnswer: askAnswerDataSchema,
 } as const;
 
 // ── Envelope ─────────────────────────────────────────────────────────────────
@@ -396,6 +452,7 @@ export const artifactSchema = z.discriminatedUnion('artifact_type', [
   artifactOf('ShadowReport', shadowReportDataSchema),
   artifactOf('ReadinessReport', readinessReportDataSchema),
   artifactOf('DiscoveryDraft', discoveryDraftDataSchema),
+  artifactOf('AskAnswer', askAnswerDataSchema),
 ]);
 
 /** A reference to a stored artifact, used in event payloads and API DTOs. */
@@ -426,5 +483,7 @@ export type LibrarianProposalsData = z.infer<typeof librarianProposalsDataSchema
 export type ShadowReportData = z.infer<typeof shadowReportDataSchema>;
 export type ReadinessReportData = z.infer<typeof readinessReportDataSchema>;
 export type DiscoveryDraftData = z.infer<typeof discoveryDraftDataSchema>;
+export type AskAnswerData = z.infer<typeof askAnswerDataSchema>;
+export type AskAnswerCitation = z.infer<typeof askAnswerCitationSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;

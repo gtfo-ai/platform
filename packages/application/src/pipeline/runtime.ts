@@ -10,8 +10,8 @@
  *
  * The dispatcher needs `2 × APP_DISPATCH_MAX_CONCURRENCY + 1` connections
  * (`InsufficientPoolError`), and since WP-15d the pipeline's term is **flat**: one per job worker
- * this runtime starts — `stage.execute`, `mr.comment.debounce`, `pipeline.outbound` and, since
- * WP-32, `notify.digest` — each holding one connection during each of its transactions.
+ * this runtime starts — `stage.execute`, `mr.comment.debounce`, `pipeline.outbound`, `notify.digest`
+ * (WP-32) and `task.ask` (WP-31) — each holding one connection during each of its transactions.
  *
  * That is the whole of it because **no handler calls a provider any more**. Until WP-15d three did
  * (the intake branch check, the workpad, the status mapping), and each made its dispatch hold a
@@ -22,16 +22,16 @@
  *
  * So a process running the pipeline needs
  * `2 × dispatchConcurrency + 1 + stageConcurrency + reviewConcurrency + outboundConcurrency +
- * digestConcurrency + 1` at least, and the number is a floor rather than a budget — the HTTP layer and the projections
+ * digestConcurrency + askConcurrency + 1` at least, and the number is a floor rather than a budget — the HTTP layer and the projections
  * draw on the same pool.
  *
- * That trailing `+ 1` is the **fourth** worker, and it is not started here: WP-15c's
+ * That trailing `+ 1` is the **sixth** worker, and it is not started here: WP-15c's
  * `pipeline.intake.reconcile` pass is composed by `apps/server/src/pipeline.ts`, because it is a
  * maintenance schedule the process owns rather than a queue this runtime drives. It is counted
  * unconditionally — including when `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no worker at all —
  * because a reservation that shrank with a setting would be a floor an operator could lower by
- * accident. `POOL_RESERVATIONS.pipeline` is therefore **5** (it was 4 until WP-32 added the digest
- * tick, which is the fifth worker), and this sentence is the reason a
+ * accident. `POOL_RESERVATIONS.pipeline` is therefore **6** (4 until WP-32 added the digest tick, 5
+ * until WP-31 added the `task.ask` worker), and this sentence is the reason a
  * reader of *this* file can reach that number: the term is the process's, not this function's
  * (standing rule 63 — an arithmetic claim cannot be maintained from inside one file).
  *
@@ -43,6 +43,8 @@
  * It is filed as discovered work rather than fixed here: the honest fix is for the port to take the
  * caller's transaction.
  */
+
+import { type AskRuntimeOptions, composeAsk } from '../ask/runtime.js';
 import type { EventHandler } from '../events/handler.js';
 import { markTransactions } from '../events/open-transaction.js';
 import { startDigestRuntime } from '../notify/digest.js';
@@ -74,6 +76,16 @@ import { ticketLintHandlers } from './ticket-lint.js';
 
 export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptions {
   readonly unitOfWork: UnitOfWork;
+  /** `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31). */
+  readonly baseUrl: string;
+  /**
+   * Ask-the-task (WP-31): the store, the identity map, the runner and the planner.
+   *
+   * Required rather than optional, like `execution`: a process that runs the pipeline answers asks,
+   * and a composition that could omit it is a deployment where `POST /api/tasks/:id/ask` writes a
+   * row nothing ever picks up (standing rule 31 — an optional collaborator is an absent one).
+   */
+  readonly ask: AskRuntimeOptions;
   /** Everything the stage executor needs that the saga does not. */
   readonly execution: Omit<
     StageExecutorOptions,
@@ -114,9 +126,25 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
   });
 
   const jobOptions: PipelineJobOptions = { ...options, unitOfWork, executor };
+  const ask = composeAsk({
+    ...options.ask,
+    unitOfWork,
+    store: options.store,
+    settings: options.settings,
+    stopReasons: options.execution.stopReasons,
+    jobs: options.jobs,
+    ids: options.ids,
+    clock: options.clock,
+    context: options.execution.context,
+    ...(logger === undefined ? {} : { logger }),
+  });
   // The outbound queue's duties include the notification band's, which needs the store and the
   // organisation's zone; `PipelineJobOptions` is the stage executor's shape and does not carry them.
-  const outboundOptions: PipelineOutboundOptions = { ...options, unitOfWork };
+  const outboundOptions: PipelineOutboundOptions = {
+    ...options,
+    unitOfWork,
+    asks: options.ask.asks,
+  };
   const workers: JobWorker[] = [];
 
   return {
@@ -137,10 +165,13 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // The notify band (WP-32), TD-005 priority 210 — the one handler outside the core and
       // integrations bands, and the reason `EVENT_CONSUMPTION`'s two budget entries are `handled`.
       ...notifyHandlers(options),
+      // Ask-the-task (WP-31), TD-005 core band at 60: `ticket.comment.added`'s first consumer.
+      ...ask.handlers,
     ],
     executor,
     start: async () => {
       await declarePipelineQueues(options.jobs);
+      await ask.declareQueue();
       workers.push(
         await options.jobs.work<StageExecuteData>({
           queue: JOB_QUEUES.stageExecute,
@@ -160,6 +191,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // job" is written down, and a composition root that started it separately would be a second
       // copy of that decision. One more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
       workers.push(await startDigestRuntime(outboundOptions));
+      // WP-31: one ask at a time, one more pooled connection (`POOL_RESERVATIONS.pipeline`).
+      workers.push(await ask.startWorker());
       workers.push(
         await options.jobs.work<PipelineOutboundData>({
           queue: JOB_QUEUES.pipelineOutbound,

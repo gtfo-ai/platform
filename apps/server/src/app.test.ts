@@ -79,6 +79,11 @@ const build = async (
     knowledge: null,
     onboarding: null,
     commands: null,
+    // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
+    asks: {
+      commands: null,
+      queries: { listAsks: async () => [], taskAudit: async () => [] },
+    },
     readiness: async () => {
       if (harness.readinessError !== null) {
         throw harness.readinessError;

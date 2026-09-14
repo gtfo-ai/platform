@@ -23,6 +23,8 @@ export * from './aggregates/question.js';
 export * from './aggregates/run.js';
 export * from './aggregates/task.js';
 export * from './aggregates/task-state-machine.js';
+// Ask-the-task: the caps, the vocabulary and the ticket-comment classifier (WP-31, Q72)
+export * from './ask/ask.js';
 // Foundations
 export * from './clock.js';
 // The repository map (TD-010, WP-16)

@@ -27,9 +27,10 @@
  * technical/02's "Core consumers" column is the normative source and the amendment makes it so, with
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
- * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **27**
- * of them — 22 from the pipeline, 3 from the cost ledger (WP-19) and the 2 budget events the
- * notification band added (WP-32; its other six types were already handled by the saga). A table
+ * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **28**
+ * of them — 22 from the pipeline, 3 from the cost ledger (WP-19), the 2 budget events the
+ * notification band added (WP-32; its other six types were already handled by the saga) and
+ * `ticket.comment.added`, whose first consumer is ask-the-task (WP-31). A table
  * transcribed from the
  * column would therefore stop the outbox
  * worker in every build that exists today, including the one whose e2e walks a ticket to
@@ -141,8 +142,24 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   /** The estimate at refinement reads the `RefinedSpec`'s size (product/09). */
   'artifact.created': 'handled',
 
+  // ── Ask-the-task (WP-31), registered by `askHandlers` in the core band at 60 ──
+  /**
+   * A human wrote in the ticket thread — the door every ticket-side conversation arrives through.
+   *
+   * This line read `'unconsumed', // WP-31 ask-the-task; feedback intake has no owner.` from WP-15c
+   * until this work package, and **half of it is still true**: `classifyTicketComment` turns a
+   * comment carrying `@agentic ask` into exactly one ask and everything else into a named refusal,
+   * while *feedback* intake (`@agentic remember:`, product/07:42) still has no owner and is in the
+   * ledger's discovered work rather than here (standing rule 83 — the sentence nearest the fix is
+   * the one nobody re-reads, so it is corrected rather than deleted).
+   *
+   * On a build where `user_identities` holds no row, every one of these is refused
+   * `unverified_identity` (BD-022, Q10) — which is why WP-31 also gave that table its first writer,
+   * `POST /api/org/identities`.
+   */
+  'ticket.comment.added': 'handled',
+
   // ── Declared unconsumed in this build, with the work package that changes it ──
-  'ticket.comment.added': 'unconsumed', // WP-31 ask-the-task; feedback intake has no owner.
   // Review-only mode does **not** read it — it has no ticket at all (WP-24) — so the owner this
   // line used to name was wrong as well as pending. Task sync is technical/02's consumer and no
   // work package owns it; PROGRESS's discovered work says so.

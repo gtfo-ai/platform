@@ -626,6 +626,13 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   };
 };
 
+/**
+ * What a run cost, as the ledger records it: finite, non-negative, and 0 for a run that reported
+ * nothing (`cost_unreported`, which is a fault rather than a free run — BD-011, standing rule 16).
+ */
+const spendOf = (outcome: RunOutcome): number =>
+  Number.isFinite(outcome.cost.usd) ? Math.max(0, outcome.cost.usd) : 0;
+
 interface RecordInput {
   readonly job: StageExecutionJob;
   readonly settings: ProjectSettings;
@@ -655,7 +662,23 @@ const record = async (
   }
   const context = options.context(job.taskId);
 
-  const spent = Number.isFinite(outcome.cost.usd) ? Math.max(0, outcome.cost.usd) : 0;
+  const spent = spendOf(outcome);
+  /**
+   * The spend, carried in memory here and **written by `addSpend`** in each branch below, after
+   * that branch has won the run (WP-31).
+   *
+   * Two things, deliberately. The row's `cost_actual` is moved by an increment the database
+   * performs, because the ask executor adds to the same column from a process that runs beside this
+   * one and a read-modify-write from either would lose the other's — `save` no longer names the
+   * column at all, so there is one writing statement and no arbitration to get wrong. And the
+   * *in-memory* snapshot still carries the new total, because the workpad render and the task's own
+   * events read it from there.
+   *
+   * It is **not** written here, before the branches: `runs.finish` is conditional on this caller
+   * still owning the run (a human may have cancelled it), and a caller that lost must write nothing
+   * — which is the assertion `writes nothing at all when the run was ended by somebody else first`
+   * makes.
+   */
   const withCost: StoredTask = { ...stored, costActualUsd: stored.costActualUsd + spent };
 
   /**
@@ -705,6 +728,7 @@ const record = async (
   if (!owned) {
     return lostTheRun(input);
   }
+  await store.tasks.addSpend(scope.tx, job.taskId, spent);
 
   const events: DomainEvent[] = [...finished.events];
   let artifactRef: ArtifactRef | null = null;
@@ -887,9 +911,10 @@ const recordOntoStoppedTask = async (
   if (!owned) {
     return lostTheRun(input);
   }
-  // The spend, and nothing else: `withCost` is the row this transaction read, so the save carries
-  // the state the human left it in rather than one this process decided.
-  await store.tasks.save(scope.tx, withCost);
+  // The spend, and **nothing else**: `withCost.task` is the state the human left the task in, so a
+  // `save` here would put back a row nobody changed and bump its version against the human's next
+  // command. Since WP-31 the spend is its own narrow write, which is what made that possible.
+  await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
   await scope.events.append(decision.events);
   return {
     kind: 'skipped',
@@ -949,6 +974,7 @@ const recordUnsuccessful = async (
   if (!owned) {
     return lostTheRun(input);
   }
+  await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
 
   if (overspent) {
     // BD-010: a task budget pauses the task; a human may raise the cap and resume it.

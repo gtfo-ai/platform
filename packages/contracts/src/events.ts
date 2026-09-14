@@ -423,7 +423,13 @@ export const taskCompletedEvent = defineEvent('task.completed', {
 export const runCreatedEvent = defineEvent('run.created', {
   ...taskScoped,
   run_id: idSchema,
-  stage: stageIdSchema,
+  /**
+   * `null` for a run that belongs to no pipeline stage — discovery, ask-the-task, librarian
+   * (technical/03:40-42). `RunRecord.stage` has been nullable since WP-04 for the same reason; this
+   * payload typed it non-nullable until WP-31, which is the work package that created the first
+   * such run through the ordinary `createRun` path.
+   */
+  stage: stageIdSchema.nullable(),
   role: agentRoleSchema,
   mode: runModeSchema,
   attempt: z.int().positive(),

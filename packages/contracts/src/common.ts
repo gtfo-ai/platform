@@ -141,6 +141,13 @@ export const runModeSchema = z.enum([
   'discovery',
   'retro',
   'librarian',
+  /**
+   * Ask-the-task (WP-31): a run with a task and **no stage**, answering a human's question from
+   * the task's own audit trail. Appended rather than slotted in beside `discovery`, because
+   * `alter type run_mode add value 'ask'` appends and `test/integration/db/enums.integration.test.ts`
+   * compares the database's labels with this list **in order**.
+   */
+  'ask',
 ]);
 
 /** Run state machine (technical/02) — mirrors `runs.status`. */
@@ -255,6 +262,12 @@ export const agentRoleSchema = z.enum([
   'facilitator',
   'librarian',
   'discovery',
+  /**
+   * Ask-the-task (WP-31, Q72 (a)) — the role that answers *"why did you choose X?"* from the audit
+   * trail. Appended for the reason `runModeSchema`'s `'ask'` is: the enum migration appends and the
+   * integration parity test reads the order.
+   */
+  'ask',
 ]);
 
 /** Integration types, one contract suite each (technical/06, technical/10). */
@@ -317,6 +330,16 @@ export const artifactTypeSchema = z.enum([
   'ShadowReport',
   'ReadinessReport',
   'DiscoveryDraft',
+  /**
+   * The answer an ask-the-task run returns (WP-31).
+   *
+   * It is an artifact **type** rather than a free-text reply so that the SDK is given a JSON schema
+   * and the platform re-validates the answer against the same one (`structured-output.ts`,
+   * technical/04's defence in depth). It is also the one artifact type that is **kept out of a
+   * later stage's prompt** — see `PROMPT_EXCLUDED_ARTIFACT_TYPES` in `packages/domain` — because a
+   * human's question and a model's answer about the audit trail are not inputs to the delivery.
+   */
+  'AskAnswer',
 ]);
 
 /** Pipeline templates the platform ships (BD-005). Projects may define more in `pipeline.yml`. */

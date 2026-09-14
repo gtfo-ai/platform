@@ -319,6 +319,27 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    /**
+     * `cost_actual = cost_actual + $2` — an increment, not a write (WP-31).
+     *
+     * The ask executor runs beside the stage executor and both add a run's spend to the same
+     * column. A read-modify-write from either would lose the other's; the database does the
+     * addition, so their order does not matter and neither needs the version token.
+     */
+    addSpend: async (tx, taskId, usd) => {
+      if (!Number.isFinite(usd) || usd < 0) {
+        throw new RangeError(
+          `cannot add ${String(usd)} USD to task ${taskId}: spend is finite and non-negative`,
+        );
+      }
+      const result = await sqlOf(tx).query(
+        'update tasks set cost_actual = cost_actual + $2::numeric, updated_at = now() where id = $1',
+        [taskId, usd],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
       // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
       // job beside the stage executor's transactions, and a whole-row write from there is a lost
@@ -364,6 +385,14 @@ export const createPostgresPipelineStore = (
      * winning. `workpad_ref` is **not** in the set list and must not be — it belongs to
      * `saveWorkpad`, and naming it here is exactly how the executor used to put back the `null` the
      * workpad job had just filled in (migration 0019's docblock has the measurement).
+     *
+     * **`cost_actual` left this list at WP-31**, for the same reason and with a sharper edge. The
+     * ask executor adds a run's spend from a process that runs *beside* this one, and the version
+     * token cannot help: `addSpend` is an increment and deliberately bumps no version, so a `save`
+     * that carried `cost_actual = <a value read before the ask committed>` would match the predicate
+     * and silently put the ask's spend back. The column now has exactly one writing statement —
+     * `addSpend` — and the stage executor calls it in the same transaction as this save.
+     * `tasks-column-ownership.test.ts` is what holds that rather than this sentence.
      */
     save: async (tx, stored) => {
       const { task } = stored;
@@ -371,10 +400,10 @@ export const createPostgresPipelineStore = (
       const result = await sql.query<{ version: number }>(
         `update tasks
             set state = $2::task_state, current_stage = $3, branch = $4, mr_ref = $5::jsonb,
-                stage_attempts = $6::jsonb, iteration_counters = $7::jsonb, cost_actual = $8,
+                stage_attempts = $6::jsonb, iteration_counters = $7::jsonb,
                 version = version + 1, updated_at = now(),
                 completed_at = case when $2::text in ('done', 'cancelled') then now() else completed_at end
-          where id = $1 and version = $9
+          where id = $1 and version = $8
         returning version`,
         [
           task.id,
@@ -384,7 +413,6 @@ export const createPostgresPipelineStore = (
           stored.mr === null ? null : JSON.stringify(stored.mr),
           JSON.stringify(task.stageAttempts),
           JSON.stringify(task.iterationCounters),
-          stored.costActualUsd,
           stored.version,
         ],
       );

@@ -55,7 +55,8 @@
         "acceptance_tester",
         "facilitator",
         "librarian",
-        "discovery"
+        "discovery",
+        "ask"
       ]
     },
     "ArtifactType": {
@@ -71,7 +72,8 @@
         "LibrarianProposals",
         "ShadowReport",
         "ReadinessReport",
-        "DiscoveryDraft"
+        "DiscoveryDraft",
+        "AskAnswer"
       ]
     },
     "CustomStage": {

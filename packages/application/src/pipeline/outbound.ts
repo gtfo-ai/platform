@@ -37,6 +37,7 @@
  *  - nothing here holds a transaction while it calls. `integrations.forProject` and the executor
  *    both refuse if a later change tries (`events/open-transaction.ts`).
  */
+import { type AskMirrorOptions, runAskMirror } from '../ask/mirror.js';
 import { runNotification } from '../notify/duty.js';
 import type { NotifyOptions } from '../notify/options.js';
 import type { JobHandler } from '../ports/jobs.js';
@@ -50,8 +51,13 @@ import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
-export interface PipelineOutboundOptions extends PipelineSagaOptions, NotifyOptions {
+export interface PipelineOutboundOptions
+  extends PipelineSagaOptions,
+    NotifyOptions,
+    Pick<AskMirrorOptions, 'asks'> {
   readonly unitOfWork: UnitOfWork;
+  /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
+  readonly baseUrl: string;
 }
 
 /**
@@ -99,6 +105,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'notify':
         await runNotification(options, data);
+        return;
+      case 'ask_answer':
+        await runAskMirror(options, data);
         return;
       default:
         logger.warn(

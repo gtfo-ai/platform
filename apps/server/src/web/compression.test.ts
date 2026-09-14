@@ -137,6 +137,11 @@ const build = async (): Promise<FastifyInstance> => {
     knowledge: null,
     onboarding: null,
     commands: null,
+    // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
+    asks: {
+      commands: null,
+      queries: { listAsks: async () => [], taskAudit: async () => [] },
+    },
     webRoot: root,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
@@ -160,7 +165,7 @@ describe('the browser application is coded on the wire', () => {
     const response = await app.inject({ url: '/', headers: { 'accept-encoding': 'gzip' } });
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-encoding']).toBe('gzip');
-    expect(response.headers['vary']).toBe('accept-encoding');
+    expect(response.headers.vary).toBe('accept-encoding');
     expect(response.rawPayload.subarray(0, 2).equals(GZIP_MAGIC)).toBe(true);
     // Rule 82: the bytes on disk, decoded from what the socket carried — not a string this test
     // also wrote, and not the server's own claim about what it sent.
@@ -197,7 +202,7 @@ describe('the browser application is coded on the wire', () => {
       expect(response.headers['content-encoding'], JSON.stringify(headers)).toBeUndefined();
       expect(response.rawPayload.equals(readFileSync(join(root, 'index.html')))).toBe(true);
       // The header is still declared, so a cache in front of this server keys on it either way.
-      expect(response.headers['vary']).toBe('accept-encoding');
+      expect(response.headers.vary).toBe('accept-encoding');
     }
   });
 
@@ -222,7 +227,7 @@ describe('the browser application is coded on the wire', () => {
     const first = await app.inject({ url: '/', headers: { 'accept-encoding': 'gzip' } });
     const second = await app.inject({
       url: '/',
-      headers: { 'accept-encoding': 'gzip', 'if-none-match': String(first.headers['etag']) },
+      headers: { 'accept-encoding': 'gzip', 'if-none-match': String(first.headers.etag) },
     });
     expect(second.statusCode).toBe(304);
     expect(second.rawPayload.length).toBe(0);
@@ -240,7 +245,7 @@ describe('the API is coded by the plugin TD-002 names', () => {
     });
     expect(coded.statusCode).toBe(200);
     expect(coded.headers['content-encoding']).toBe('gzip');
-    expect(String(coded.headers['vary'] ?? '')).toContain('accept-encoding');
+    expect(String(coded.headers.vary ?? '')).toContain('accept-encoding');
     expect(gunzipSync(coded.rawPayload).toString()).toBe(plain.rawPayload.toString());
     expect(coded.rawPayload.length).toBeLessThan(plain.rawPayload.length);
   });

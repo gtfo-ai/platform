@@ -67,6 +67,11 @@
       "description": "Structured output of the stage that produces a DiscoveryDraft artifact (technical/12)."
     },
     {
+      "file": "artifacts/ask-answer.schema.json",
+      "title": "AskAnswer data",
+      "description": "Structured output of the stage that produces a AskAnswer artifact (technical/12)."
+    },
+    {
       "file": "agentic-config.schema.json",
       "title": ".agentic/config.yml",
       "description": "Repository configuration; unknown keys are errors (technical/12)."

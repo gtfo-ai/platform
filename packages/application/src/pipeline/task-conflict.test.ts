@@ -151,16 +151,17 @@ describe('retryOnTaskConflict', () => {
           // Another writer lands between this read and this write.
           await uow.transaction(async (other) => {
             const fresh = await store.tasks.load(other.tx, TASK);
+            // A version bump **and** a spend: the conflict this case is about is the version's,
+            // and the spend is `addSpend`'s own since WP-31 (`save` no longer names `cost_actual`).
             await store.tasks.save(other.tx, {
               ...(fresh as NonNullable<typeof fresh>),
-              costActualUsd: 2.4,
+              branch: 'agentic/other',
             });
+            await store.tasks.addSpend(other.tx, TASK, 2.4);
           });
         }
-        await store.tasks.save(scope.tx, {
-          ...(current as NonNullable<typeof current>),
-          costActualUsd: (current?.costActualUsd ?? 0) + 0.4,
-        });
+        await store.tasks.save(scope.tx, current as NonNullable<typeof current>);
+        await store.tasks.addSpend(scope.tx, TASK, 0.4);
       }),
     );
 

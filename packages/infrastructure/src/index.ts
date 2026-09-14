@@ -15,6 +15,7 @@
  * (`notify/`), which is what lets quiet hours defer a message rather than drop it. Later work
  * packages add the rest.
  */
+export * as ask from './ask/index.js';
 export * as broadcast from './broadcast/index.js';
 export * as cost from './cost/index.js';
 export * as db from './db/index.js';

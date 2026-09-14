@@ -1452,6 +1452,82 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "AskAnswer"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "answer": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "citations": {
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_85f500a1"
+              }
+            },
+            "unanswered": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_204b72bd"
+              }
+            },
+            "confidence": {
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            }
+          },
+          "required": [
+            "answer",
+            "citations",
+            "unanswered",
+            "confidence"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -1521,6 +1597,23 @@
         "blocking"
       ],
       "additionalProperties": false
+    },
+    "ArtifactType": {
+      "type": "string",
+      "enum": [
+        "RefinedSpec",
+        "RootCauseAnalysis",
+        "ImplementationPlan",
+        "ImplementationNotes",
+        "ReviewVerdict",
+        "AcceptanceVerdict",
+        "RetroReport",
+        "LibrarianProposals",
+        "ShadowReport",
+        "ReadinessReport",
+        "DiscoveryDraft",
+        "AskAnswer"
+      ]
     },
     "Id": {
       "type": "string",
@@ -1744,6 +1837,10 @@
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
     },
+    "anon_204b72bd": {
+      "type": "string",
+      "maxLength": 1000
+    },
     "anon_2ab70f90": {
       "type": "string",
       "enum": [
@@ -1757,6 +1854,72 @@
     },
     "anon_4682db72": {
       "type": "string"
+    },
+    "anon_85f500a1": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "run",
+            "artifact",
+            "audit",
+            "knowledge"
+          ]
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "additionalProperties": false
     },
     "anon_ac146fff": {
       "type": "string",

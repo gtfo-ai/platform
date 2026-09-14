@@ -69,8 +69,9 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // to admit; they too are asserted positively below.
   //
   // What this census **cannot** see is unchanged and is asserted by hand further down: a route no
-  // screen calls. There are three — `GET /api/projects/:id/kb/health` (WP-15h part 2) and WP-27's
-  // `take-over` and `hand-back`, whose buttons are a UI row of their own.
+  // screen calls. There are four paths — `GET /api/projects/:id/kb/health` (WP-15h part 2), WP-27's
+  // `take-over` and `hand-back`, whose buttons are a UI row of their own, and WP-31's
+  // `/api/org/identities` pair (`POST` and `GET` on one path), which has no screen either.
 };
 
 /**
@@ -157,6 +158,11 @@ beforeAll(async () => {
     knowledge: null,
     onboarding: null,
     commands: null,
+    // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
+    asks: {
+      commands: null,
+      queries: { listAsks: async () => [], taskAudit: async () => [] },
+    },
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
@@ -449,6 +455,56 @@ describe('the client’s endpoint list against the server’s router', () => {
       expect(probed.code, path).toBe('unauthenticated');
       expect(paths, path).not.toContain(path);
     }
+  });
+
+  it('serves the three ask-the-task paths WP-31 added, and the client calls all three', async () => {
+    // Criterion 7's other half. `POST /api/tasks/:id/ask` was the route this census was blind to by
+    // construction — the SPA did not call it — and `features/ask-thread.tsx` is what changed that,
+    // so the comparison above now covers all three. They are named here positively as well, because
+    // a route that leaves the client's list would otherwise drop silently out of both halves at
+    // once (the shape `serves the seven reads WP-15h part 2 took off the gap list` already uses).
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+      })),
+    );
+    for (const path of ['/api/tasks/{}/ask', '/api/tasks/{}/asks', '/api/tasks/{}/audit']) {
+      const probed = await probe(path);
+      expect(probed.served, path).toBe(true);
+      expect(probed.status, path).toBe(401);
+      expect(probed.code, path).toBe('unauthenticated');
+      expect(paths, path).toContain(path);
+    }
+  });
+
+  it('serves the identity pair no screen calls, by each of its own methods', async () => {
+    // `POST /api/org/identities` is the writer `user_identities` had never had (WP-31, PROGRESS
+    // backlog 79) and `GET` is the list beside it. No screen calls either, so the comparison above
+    // is blind to both by construction — the same position `kb/health`, `take-over` and
+    // `hand-back` are in. Asked **by each method**, because `probe()` tries GET first and would
+    // otherwise judge the POST on its sibling's answer (the hole WP-21's review found), and with
+    // **no body at all**, because the write's guard is a `preValidation` hook: one that slipped
+    // back to `preHandler` would answer `400` describing the route's shape instead of `401`.
+    const probed = await probe('/api/org/identities');
+    expect(probed.served).toBe(true);
+    expect(probed.status).toBe(401);
+    expect(probed.code).toBe('unauthenticated');
+    for (const method of ['GET', 'POST'] as const) {
+      const response = await app.inject({ method, url: '/api/org/identities' });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} -> 401 unauthenticated`,
+      );
+    }
+
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+      })),
+    );
+    expect(paths).not.toContain('/api/org/identities');
   });
 
   it('serves the kb health read no client calls, which is why the census cannot see it', async () => {

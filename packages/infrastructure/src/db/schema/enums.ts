@@ -55,6 +55,9 @@ export const agentRoleEnum = pgEnum('agent_role', [
   'facilitator',
   'librarian',
   'discovery',
+  // WP-31, migration 0024. Appended, because `alter type … add value` appends and the parity test
+  // compares the labels in order.
+  'ask',
 ]);
 export const runModeEnum = pgEnum('run_mode', [
   'normal',
@@ -64,6 +67,7 @@ export const runModeEnum = pgEnum('run_mode', [
   'discovery',
   'retro',
   'librarian',
+  'ask',
 ]);
 export const runStatusEnum = pgEnum('run_status', [
   'created',
@@ -106,6 +110,7 @@ export const artifactTypeEnum = pgEnum('artifact_type', [
   'ShadowReport',
   'ReadinessReport',
   'DiscoveryDraft',
+  'AskAnswer',
 ]);
 export const questionStatusEnum = pgEnum('question_status', [
   'open',

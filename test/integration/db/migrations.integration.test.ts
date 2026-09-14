@@ -60,6 +60,10 @@ const EXPECTED_TABLES = [
   'secrets',
   'sessions',
   'shadow_reports',
+  // WP-31 (migration 0024): the ask-the-task thread product/10:57 asks for. `questions` is a
+  // *stage's* request for human input (technical/02:24), the opposite direction, so a human's
+  // question to the platform had no home anywhere in this schema.
+  'task_asks',
   'task_stages',
   'tasks',
   'user_identities',
@@ -181,6 +185,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('redaction_log', 'append_only', 'created_at'),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
       row('sessions', 'read_write', null),
+      // WP-31 (migration 0024): the ask-the-task thread. `read_write` because a row is updated at
+      // most three times — the run is attached, the answer is stored, the ticket mirror is stamped.
+      row('task_asks', 'read_write', null),
       row('users', 'read_write', null),
       row('verifications', 'read_write', null),
     ]);

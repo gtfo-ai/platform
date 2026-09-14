@@ -364,6 +364,19 @@ export const JOB_QUEUES = {
    * replicas and a process restart all collapse onto the same single pending job.
    */
   intakeReconcile: 'pipeline.intake.reconcile',
+  /**
+   * **One ask-the-task question, answered** (WP-31).
+   *
+   * A run with a task and no stage (Q72 (a)), so it cannot ride `stage.execute`: that queue is
+   * `stately` per **task**, which admits one queued job per task — an ask arriving beside a stage
+   * wake-up would collapse one of the two, and the one lost would be whichever arrived second.
+   * This queue is `stately` per **ask** instead, so a redelivered wake-up for one question collapses
+   * and two questions about one task are two runs.
+   *
+   * It is a worker of its own and therefore one more pooled connection: `POOL_RESERVATIONS.pipeline`
+   * counts it (`apps/server/src/config.ts`).
+   */
+  taskAsk: 'task.ask',
   /** Budget window rollover (cron). */
   budgetWindowReset: 'budget.window.reset',
   /** Knowledge-base index rebuild; singleton per project. */

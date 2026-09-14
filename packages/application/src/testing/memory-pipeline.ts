@@ -179,6 +179,7 @@ export const createMemoryPipelineStore = (
      *
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
      * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
+     * `costActualUsd` (WP-31: `addSpend` owns it),
      * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`)
      * belong to the narrow writers — or, for
      * `reviewSubject`, to the insert alone (WP-24) — and a fake that let a
@@ -198,14 +199,14 @@ export const createMemoryPipelineStore = (
         task: stored.task,
         branch: stored.branch,
         mr: stored.mr,
-        costActualUsd: stored.costActualUsd,
         version: current.version + 1,
       };
       tasks.set(stored.task.id, clone(written));
       // The caller's own snapshot at the new version, so a second save in the same unit is not a
       // conflict with the first: `{ ...stored }` rather than `{ ...current }`, because the columns
-      // this write ignored are the store's and the ones it took are the caller's.
-      return clone({ ...stored, version: written.version });
+      // this write ignored are the store's and the ones it took are the caller's. `costActualUsd`
+      // is the store's since WP-31, so it comes back from `written` rather than from the caller.
+      return clone({ ...stored, costActualUsd: written.costActualUsd, version: written.version });
     },
     saveWorkpad: async (_tx, taskId, workpad) => {
       const current = tasks.get(taskId);
@@ -219,6 +220,20 @@ export const createMemoryPipelineStore = (
       // strict, a `CommentRef` passes the port's `WorkpadRef` parameter structurally, and a fake
       // that accepted what PostgreSQL's reader refuses would be kinder than production (rule 1).
       tasks.set(taskId, clone({ ...current, workpad: workpadRefSchema.parse(workpad) }));
+    },
+    addSpend: async (_tx, taskId, usd) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      if (!Number.isFinite(usd) || usd < 0) {
+        // Stricter than production is the direction a fake may take (standing rule 1); the SQL
+        // adapter refuses the same value with the same sentence.
+        throw new RangeError(
+          `cannot add ${String(usd)} USD to task ${taskId}: spend is finite and non-negative`,
+        );
+      }
+      tasks.set(taskId, clone({ ...current, costActualUsd: current.costActualUsd + usd }));
     },
     saveTicketSnapshot: async (_tx, taskId, ticketSnapshot, readAt) => {
       const current = tasks.get(taskId);

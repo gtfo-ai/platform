@@ -140,6 +140,11 @@ const build = async (
     knowledge: null,
     onboarding: null,
     commands: null,
+    // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
+    asks: {
+      commands: null,
+      queries: { listAsks: async () => [], taskAudit: async () => [] },
+    },
     webRoot: options.webRoot === undefined ? root : options.webRoot,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
@@ -297,7 +302,7 @@ describe('the shell and the assets come off disk', () => {
       expect(response.statusCode, url).toBe(200);
       expect(response.headers['x-frame-options'], url).toBe('DENY');
       expect(response.headers['content-security-policy'], url).toBe(EXPECTED_POLICY);
-      expect(response.headers['vary'], url).toBe('accept-encoding');
+      expect(response.headers.vary, url).toBe('accept-encoding');
     }
   });
 
@@ -525,9 +530,7 @@ describe('an absent bundle refuses by name', () => {
     const missing = join(base, 'no-such-bundle');
     const { app, logLines } = await build({ webRoot: missing });
     expect(
-      logLines().some(
-        (line) => line['web_root'] === missing && line['variable'] === 'APP_WEB_ROOT',
-      ),
+      logLines().some((line) => line.web_root === missing && line.variable === 'APP_WEB_ROOT'),
     ).toBe(true);
 
     expect((await app.inject({ url: '/' })).statusCode).toBe(404);
@@ -540,7 +543,7 @@ describe('an absent bundle refuses by name', () => {
     const empty = join(base, 'empty-bundle');
     mkdirSync(empty, { recursive: true });
     const { app, logLines } = await build({ webRoot: empty });
-    expect(logLines().some((line) => line['missing'] === 'index.html')).toBe(true);
+    expect(logLines().some((line) => line.missing === 'index.html')).toBe(true);
     expect((await app.inject({ url: '/' })).statusCode).toBe(404);
   });
 

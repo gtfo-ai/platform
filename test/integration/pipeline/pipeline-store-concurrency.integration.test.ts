@@ -12,11 +12,12 @@
  * transaction: a lost update needs a **committed** row between two transactions, which is exactly
  * what that shape cannot express and why this is a second file rather than a case in that one.
  */
-import type { Transaction } from '@platform/application';
+import type { StoredTask, Transaction } from '@platform/application';
+import { INITIAL_TASK_VERSION } from '@platform/application';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
 import pg from 'pg';
-import { afterAll, beforeAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runPipelineStoreConcurrencyContract } from '../../contract/support/pipeline-store-concurrency-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 
@@ -84,4 +85,86 @@ runPipelineStoreConcurrencyContract({
       },
     };
   },
+});
+
+/**
+ * `addSpend` is a statement in its caller's transaction, and a rollback takes it with it (WP-31).
+ *
+ * It is **not** in the shared suite, because the in-memory store ignores the transaction handle
+ * entirely (that suite's one stated kind divergence) and would pass this case by not rolling
+ * anything back — which is the opposite of what it would be asserting. So it lives here, where a
+ * rollback means something.
+ *
+ * It is the half `stage-executor.test.ts` hands over: that tier watches the executor lose every
+ * race and asserts the stage did not complete, and this one asserts that the spend its losing
+ * transaction wrote is not on the row either.
+ */
+describe('a spend written in a transaction that rolls back', () => {
+  const store = pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+
+  const withClient = async <T>(
+    fn: (tx: Transaction) => Promise<T>,
+    verb: 'commit' | 'rollback',
+  ) => {
+    const client = new pg.Client({ connectionString: database.connectionString });
+    await client.connect();
+    await client.query('begin');
+    try {
+      return await fn({ adapter: 'postgres', client } as unknown as Transaction);
+    } finally {
+      await client.query(verb);
+      await client.end();
+    }
+  };
+
+  it('leaves `cost_actual` where it was, and a committed one moves it', async () => {
+    const taskId = await withClient(async (tx) => {
+      const task: StoredTask = {
+        task: {
+          id: crypto.randomUUID() as never,
+          projectId: projectId as never,
+          ticket: {
+            provider: 'fake-jira',
+            key: `ROLL-${Math.floor(Math.random() * 1_000_000)}`,
+            url: 'https://tickets.example.test/browse/ROLL-1',
+          },
+          template: 'feature',
+          mode: 'normal',
+          state: 'queued',
+          currentStage: null,
+          stageAttempts: {},
+          iterationCounters: {},
+          limits: { code_review: 3, business_review: 2, ci_fix: 3, human_rounds: 3 },
+          requestedBy: null,
+          sequence: 1,
+        } as never,
+        template: SHIPPED_TEMPLATES.feature as never,
+        priorityRank: 1,
+        createdAt: new Date().toISOString() as never,
+        branch: null,
+        mr: null,
+        workpad: null,
+        costActualUsd: 0,
+        estimateUsd: null,
+        estimateBasis: null,
+        estimateSamples: null,
+        ticketSnapshot: null,
+        ticketSnapshotAt: null,
+        reviewSubject: null,
+        version: INITIAL_TASK_VERSION,
+      };
+      await store.tasks.insert(tx, task);
+      return task.task.id;
+    }, 'commit');
+
+    // Rolled back: the increment goes with the transaction.
+    await withClient(async (tx) => store.tasks.addSpend(tx, taskId, 0.4), 'rollback');
+    const afterRollback = await withClient(async (tx) => store.tasks.load(tx, taskId), 'rollback');
+    expect(afterRollback?.costActualUsd).toBe(0);
+
+    // Committed: it moves — both directions, so a store that wrote nothing at all would fail here.
+    await withClient(async (tx) => store.tasks.addSpend(tx, taskId, 0.4), 'commit');
+    const afterCommit = await withClient(async (tx) => store.tasks.load(tx, taskId), 'rollback');
+    expect(afterCommit?.costActualUsd).toBeCloseTo(0.4, 6);
+  });
 });

@@ -74,7 +74,7 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, 'kb_search'>, string>> 
   report_progress:
     'progress reporting writes a transcript row, and the run transcript sink now exists (WP-15g) — what is missing is a shape for it: the sink is the runner’s, it writes what the SDK produced, and `TranscriptEvent` has no kind for a tool-reported progress line',
   get_task_context:
-    'the task read model is not exposed to a run yet; the prompt already carries the ticket, the artifacts and the return feedback as delimited data',
+    'the task read model is not exposed to a run yet; the prompt already carries the ticket, the artifacts and the return feedback as delimited data — and, for an ask-the-task run, the task’s runs and its human actions as well (WP-31)',
   add_ticket_comment:
     'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); reaching it from inside a run is unbuilt',
   open_mr:

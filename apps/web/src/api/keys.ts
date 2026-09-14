@@ -32,6 +32,9 @@ export const queryKeys = {
   kbProposals: (id: string) => ['project', id, 'kb', 'proposals'] as const,
 
   task: (id: string) => ['task', id] as const,
+  /** The ask-the-task thread and the task's own audit trail (WP-31). */
+  taskAsks: (id: string) => ['task', id, 'asks'] as const,
+  taskAudit: (id: string) => ['task', id, 'audit'] as const,
   run: (id: string) => ['run', id] as const,
   runMessages: (id: string) => ['run', id, 'messages'] as const,
   runPrompt: (id: string) => ['run', id, 'prompt'] as const,

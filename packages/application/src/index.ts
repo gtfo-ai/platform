@@ -24,6 +24,14 @@
  */
 
 // The cost ledger, its budgets projection and the task estimate (WP-19, BD-010, BD-011)
+// Ask-the-task: the thread, the run with no stage and the ticket mirror (WP-31)
+export * from './ask/commands.js';
+export * from './ask/executor.js';
+export * from './ask/mirror.js';
+export * from './ask/planner.js';
+export * from './ask/runtime.js';
+export * from './ask/settings.js';
+export * from './ask/store.js';
 export * from './cost/estimate.js';
 export * from './cost/guard.js';
 export * from './cost/ledger.js';
@@ -117,6 +125,7 @@ export * from './scheduling/zoned-time.js';
 // Test doubles (technical/10: fakes are first-class code)
 export * from './testing/fixture-vault.js';
 export * from './testing/fixtures.js';
+export * from './testing/memory-ask.js';
 export * from './testing/memory-cost.js';
 export * from './testing/memory-eventing.js';
 export * from './testing/memory-integrations.js';

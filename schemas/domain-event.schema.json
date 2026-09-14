@@ -2085,7 +2085,14 @@
               "$ref": "#/$defs/Id"
             },
             "stage": {
-              "$ref": "#/$defs/Slug"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "role": {
               "$ref": "#/$defs/AgentRole"
@@ -2099,7 +2106,8 @@
                 "linter",
                 "discovery",
                 "retro",
-                "librarian"
+                "librarian",
+                "ask"
               ]
             },
             "attempt": {
@@ -4500,7 +4508,8 @@
         "acceptance_tester",
         "facilitator",
         "librarian",
-        "discovery"
+        "discovery",
+        "ask"
       ]
     },
     "AnswerChannel": {
@@ -4633,7 +4642,8 @@
         "LibrarianProposals",
         "ShadowReport",
         "ReadinessReport",
-        "DiscoveryDraft"
+        "DiscoveryDraft",
+        "AskAnswer"
       ]
     },
     "BudgetScope": {

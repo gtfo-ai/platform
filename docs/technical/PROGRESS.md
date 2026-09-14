@@ -1899,7 +1899,7 @@ can be built.
 `open_mr`, since that is the row that makes this live; **WP-23** owns the written-down residual if it
 ships unfixed.
 
-### 52. **Eighteen commands write `human_actions` and nothing reads it but the idempotency guard, while technical/08 promises an audit of every human action** (**RESOLVED for the project half** at `c7ebc42`, WP-30 — the seven wizard commands and the settings writes are served by `GET /api/projects/:id/audit` (`apps/server/src/routes/settings.ts`) on the predicate `params->>'project_id'`, because `human_actions` has no `project_id` column, and the project settings page renders them. **The task half is open and unowned**: WP-15i's eleven task and run commands and WP-27's three write a row that names a **task**, so that predicate never matches one and no read surface serves them — *"who cancelled this run"* still has no answer in the product. Cheapest owner is **WP-31**, whose criterion 6 answers an ask *"from the audit trail"* (product/10:57) and which now carries it as criterion 10; the index is already `(task_id, created_at desc)`, so it is one query and a DTO. Found by WP-15i, session 5)
+### 52. **Eighteen commands write `human_actions` and nothing reads it but the idempotency guard, while technical/08 promises an audit of every human action** (**RESOLVED, both halves.** The **project half** at `c7ebc42`, WP-30 — the seven wizard commands and the settings writes are served by `GET /api/projects/:id/audit` (`apps/server/src/routes/settings.ts`) on the predicate `params->>'project_id'`, because `human_actions` has no `project_id` column, and the project settings page renders them. **The task half is open and unowned**: WP-15i's eleven task and run commands and WP-27's three write a row that names a **task**, so that predicate never matches one and no read surface serves them — *"who cancelled this run"* still has no answer in the product. **The task half is RESOLVED at `<sha>`, WP-31**, which took it as criterion 10 because its own criterion 6 could not be met without it: `GET /api/tasks/:task_id/audit` (`apps/server/src/routes/asks.ts:255-270`) pages the rows by `(task_id, created_at desc)` — the index that already existed — under `org.audit.read` scoped to the task's project, `params` rendered through the untrusted path because it is client-supplied JSON carrying the caller's own `Idempotency-Key` (BD-022), and the SPA renders it as the task's activity panel (`apps/web/src/features/task-detail.tsx:157-190`, called at `:532`). Found by WP-15i, session 5)
 **What is wrong.** WP-21's seven wizard commands and WP-15i's eleven task and run commands each write
 one row per performed command, and no read surface serves any of them. `GET /api/org/audit` reads a
 **different table**: `listAuditEntries` selects from `configAudit` and nothing else
@@ -1956,6 +1956,11 @@ trail and artifacts with links to the exact run and prompt"*, so that row cannot
 criterion 6 without this read, and it is named there as criterion 10. If the task activity feed is
 wanted before WP-31, entry **70**'s UI row is the other natural host: it is the one that opens the
 task screen.
+
+**And WP-31 took it** (refiner, session 5): the endpoint, the DTO and the panel are in the heading
+above, and the one thing this entry asked to happen *first* did happen — `docs/technical/08` names
+`GET /api/tasks/:task_id/audit` and says in the same paragraph why the project endpoint can never
+serve it. Nothing of this entry is left open.
 
 ### 53. **The SPA mints a fresh `Idempotency-Key` on every call, so the header's stated purpose — a retry is not a second task — is not met end to end** (**RESOLVED** at `c7ebc42`, WP-30 — the fix is one key per *user intent* rather than per request: `apps/web/src/app/idempotency.ts` holds the key per canonical value of a mutation's variables, mints it on the first send and releases it on success, so a retry of a failed send carries the same key, a corrected form gets a new one and a deliberate second identical create gets a new one; `features/integrations.test.tsx` drives a double-submitted create through the real client and reads the two keys off the requests. It deliberately does **not** deduplicate on the client — two clicks still send two requests, because the client cannot know whether the first arrived; what changed is that the second carries a key the server recognises. `newIdempotencyKey` is still injectable and is still the fallback for a call site that owns no intent. Found by WP-15i's reviewer, session 5)
 **What is wrong.** `apps/web/src/api/http.ts:135` defaults `newIdempotencyKey` to `crypto.randomUUID()` and `:196` calls it inside `send`, once per request. The docblock at `:15` says the key exists `so a retry is not a second task`, but nothing in the client holds a key across a retry: a double-click, a TanStack mutation retry or a user pressing the button again after a timed-out response each send a **different** key, and the server — which since WP-21 and WP-15i answers a replay from the key and refuses a different body under a used one — sees two first requests. The server side is honest; the client never gives it a replay to answer.
@@ -3382,7 +3387,7 @@ it is the natural host for the inbound half of entry **79**. Entry **79** is its
 transport with no author mapping still drops every decision as `unmapped_identity`, so neither entry
 alone makes product/03's chat journey work.
 
-### 79. **`user_identities` has one reader and no writer anywhere, so every human decision arriving from a provider is dropped as `unmapped_identity` — three rows record it as a consequence and none owns the mapping** (TODO — **no work package owns it**; recorded as a symptom in WP-29's plan row, WP-31's criterion 5 and Q72 and never given a number; measured again by WP-32, session 5)
+### 79. **`user_identities` has one reader and no writer anywhere, so every human decision arriving from a provider is dropped as `unmapped_identity` — three rows record it as a consequence and none owns the mapping** (**RESOLVED** at `<sha>`, WP-31 — the third route this entry asked for, as an operator-stated mapping: `POST /api/org/identities` upserts on the primary key `(provider, external_id)` under `org.users.manage` (**admin**) and `GET /api/org/identities` lists them (`apps/server/src/routes/org.ts:196-243`); the two automatic routes stay refused **on purpose** and the endpoint's docblock says so, and `email` is not taken for the same reason. **Deliberately no `Idempotency-Key`**, against this entry's own "done" list, and the reason is stated at the route: the write is an upsert on the natural key, so a repeat writes the same row and a second mechanism would be a second thing to keep true — which satisfies *"performs nothing twice"* by construction. **What remains is below.** Found by WP-15c's reader, recorded as a symptom in WP-29's plan row, WP-31's criterion 5 and Q72, measured again by WP-32, session 5)
 **What is wrong.** The only mapping from a provider account to a platform user is empty on every
 instance that has ever run, and the platform is fail-closed on it. So the inbound half of BD-006's
 human loop is shut on **every** transport at once — including the ticket path, which is fully built
@@ -3436,6 +3441,27 @@ WP-21 the org surfaces a screen would join, WP-32 measured it again. Cheapest by
 and which cannot deliver an ask arriving from a ticket without it; WP-29's minutes want the same
 table and do not block. It is a hard dependency of entry **78** being observable — a chat transport
 with no author mapping drops every envelope it receives — and of nothing else.
+
+**What remains after the writer** (refiner, session 5; read off the uncommitted working tree while
+WP-31 was being verified — grep and file reads, no test run, rule 66). None of it re-opens the entry;
+it is what a reader should not assume is closed with it:
+- **Every author is still unmapped until an operator maps them, one at a time.** The map is empty on
+  every existing instance and there is no import, no proposal and no bulk path — `resolveIdentity`
+  is still uncalled, so the *"lookup aid that proposes"* half of this entry's "done" is unbuilt.
+  WP-31 asserts the refusal directly on a harness that seeds none (`ask-pipeline.test.ts`), which is
+  the honest statement of the default.
+- **No screen calls either route.** This entry asked for *"the screen on the organisation settings
+  surface"*; the change ships the two endpoints and nothing in `apps/web/src` names them. That is
+  entry **70**'s shape exactly — a shipped command reachable only by hand — and the client-driven
+  census cannot see it, because `client-census.test.ts` compares the **client's** paths against the
+  router and a route no client calls is invisible to it by construction.
+- **No `human_actions` row**, against this entry's "done" list: the route writes the mapping and
+  nothing else, so *"who decided that this Slack account is that person"* is not in the audit the
+  same organisation's other admin writes are in (technical/08:118).
+- **No test drives either route through the router.** `apps/server/src/routes/org.test.ts` covers
+  `toWireIdentityMapping` (the wire shape and that `email` is never published); a grep for
+  `org/identities` over `test/` and `apps/server/src/**/*.test.ts` finds none, so the 401-per-route
+  and wrong-role-403 assertions this entry named are owed by whoever adds the screen.
 
 ### 80. **An organisation-scoped budget notifies nobody, and `notifications.project_id` is `not null`, so the one cap that stops every project cannot even be recorded** (TODO, small — **no work package owns it**; found by WP-32, session 5)
 **What is wrong.** The budget with the widest blast radius is the only one with no channel. It is
@@ -3542,6 +3568,288 @@ and entry **57**'s lesson applies — the row that measures a thing must not be 
 it. Cheapest is whoever next touches `apps/server/src/metrics.ts`; the same change is owed for
 queue-depth alerting on `event_dispatch_pending`, which `docs/TODO.md` already records as open with no
 work package, so one row could take both.
+
+### 82. **An ask run is provisioned a container and a checkout it holds no tool to open, and two docblocks in the planner say it is not** (TODO, small, **latent** — no production path composes a provisioner today; **no work package owns it**; found by WP-31, session 5)
+**What is wrong.** `createWorkspaceClaudeRunner` provisions a workspace for **every** `RunSpec`, with
+no predicate of any kind — `workspace = await options.provisioner.provision(spec)`
+(`packages/infrastructure/src/runner/workspace-runner.ts:192`) — while `TOOLS_BY_ROLE.ask` is `[]`
+(`packages/application/src/pipeline/planner.ts:240`). The one run kind that cannot open a file is
+given a container, a mirror update and a checkout.
+
+**Evidence**, quoted from WP-31's discovered-work bullet rather than paraphrased:
+
+> `createWorkspaceClaudeRunner` provisions a container and a checkout for every `RunSpec`, and an
+> ask's `TOOLS_BY_ROLE` row is **empty** — no `Read`, no `Bash`, no checkout to read — so when a
+> provisioner is composed, a question that product/18:34 sells as *"cheaper than reading
+> transcripts"* costs a container. … The honest predicate is about the **tools**: a spec with no file
+> tool and no shell has nothing to do with a tree.
+
+**Three readings off the tree while filing** (grep and file reads, no test run — rule 66), because
+they change what "done" has to answer:
+- **Two sentences in the planner already state the opposite, and neither is true once a provisioner
+  exists** (rule 3: an invariant asserted in a comment is not evidence it holds). `TOOLS_BY_ROLE.ask`'s
+  docblock: *"there is no checkout to read — an ask run **is given no workspace**, which is also why
+  it costs a fraction of a stage"* (`planner.ts:236-237`). `SKILLS_BY_ROLE.ask`'s, eight lines of
+  code later: *"every other skill describes work in a repository, and **an ask has no workspace for
+  one to be copied into**"* (`planner.ts:310`).
+- **That second docblock is self-contradicting, and it is the reason the obvious fix is not free.**
+  `SKILLS_BY_ROLE.ask` is `['kb']` (`planner.ts:312`), and a skill reaches a run *only* by being
+  written into the checkout — `<checkout>/.agentic-run/plugins/agentic/skills/<name>/SKILL.md`
+  (`packages/infrastructure/src/workspace/skills.ts`, asserted at
+  `packages/infrastructure/src/workspace/provider.test.ts:196-197`). So skipping provisioning for an
+  ask **removes the `kb` skill that documents the one platform tool the ask holds** (`kb_search`),
+  and whoever takes this must move the skill or accept the loss deliberately.
+- **It is latent, and the trigger is nameable.** `startRuntime` composes `unavailableClaudeRunner`
+  when no provisioner is given and the provisioner is **absent by default**
+  (`apps/server/src/agent.ts:187-195`, naming Q52 and TD-021), so on every build that exists today an
+  ask starts no container at all. The cost arrives with the first deployment that composes one.
+
+**Is it a defect?** No. The run inherits the mechanism every other run gets, which is Q72's whole
+principle, and inheriting it is what makes the admission guard, the ledger and the cap apply. What is
+wrong is the **documentation** (the two docblocks) and what is missing is the rule that would skip the
+provisioning; filed so that neither is discovered again by the first person to compose a launcher.
+
+**What it costs to leave.** A question costs a container, a mirror update and a clone before a model
+sees the prompt — against product/18:34's *"cheaper than reading transcripts"* and against Q72 (b)'s
+own justification (*"it needs no checkout and costs a fraction of a stage"*). **Needs measurement:**
+what one provision actually costs in seconds and in daemon load has never been measured for a run that
+uses none of it; WP-22's e2e is the only place a real provision has ever been timed.
+
+**What "done" looks like.** A predicate on the **spec's tools**, not on the stage — a spec with no
+file tool and no shell gets no workspace — implemented where the provisioning happens
+(`workspace-runner.ts`) rather than at the ask's call site, since the same predicate is what makes the
+claim in `planner.ts:236` true. Two things are part of done: *discovery* is a stage-less run that
+**does** need its checkout, so the predicate must be asserted in both directions (rule 42) with a
+discovery spec and an ask spec; and the `kb` skill's delivery is decided in the same change rather
+than silently dropped. The two false docblocks are corrected with it (rule 83).
+
+**Depends on / owner.** **No work package owns it.** It is a `WorkspaceProvider`/runner decision with
+consequences for two other run kinds, which is why WP-31 filed it rather than special-casing the ask.
+Cheapest owner is whoever first composes a `RunWorkspaceProvisioner` in a production path — the
+launcher deployment behind **Q52**'s transport — because that is the commit on which the cost becomes
+real and the docblocks become false.
+
+### 83. **`get_task_context` refuses for all ten roles that hold it, and its `include` vocabulary has no value for the two things an ask is about** (TODO — **no work package owns it**; the refusal has been recorded since WP-17 as *another entry's evidence* and never given a number; measured again by WP-31, session 5)
+**What is wrong.** The platform tool whose whole job is *"read the platform's own record of this
+task"* refuses by name in the production surface — `getTaskContext: async () => refuse(…)`
+(`apps/server/src/platform-tools.ts:118`) — while ten of the eleven roles in
+`PLATFORM_TOOLS_BY_ROLE` hold it (`packages/application/src/pipeline/planner.ts:80-108`; only
+`discovery` does not). Every role that would use it is told no.
+
+**Evidence**, quoted from WP-31's discovered-work bullet:
+
+> `PLATFORM_TOOLS_BY_ROLE.ask` is `['get_task_context', 'kb_search']` — Q72 (b)'s *"read-only over
+> platform data"* — and `apps/server/src/platform-tools.ts` refuses the first by name. The ask does
+> not *need* it on this build, because its prompt carries the ticket, the artifacts, the runs and
+> the `human_actions` rows as data blocks (`createAskRunPlanner`) … What it costs: an ask cannot ask
+> for **more** than the prompt was built with — a question about a long transcript, or about an
+> artifact version the pack did not include, is answered from what fits rather than from what
+> exists.
+
+**Two readings off the tree** (rule 66):
+- **The refusal message is honest and is now a statement about the *ask*, not only about the stages**:
+  *"the task read model is not exposed to a run yet; the prompt already carries the ticket, the
+  artifacts and the return feedback as delimited data — and, for an ask-the-task run, the task's runs
+  and its human actions as well (WP-31)"* (`platform-tools.ts:76-77`).
+- **The vocabulary is the reason it is not a small change.** `include` is
+  `z.array(z.enum(['ticket', 'artifacts', 'feedback', 'mr', 'ci'])).min(1)`
+  (`packages/application/src/ports/runner.ts:351`) — no value for *runs*, none for *audit*, which are
+  exactly the two things an ask is asked about. Widening the enum changes a tool ten roles hold, so
+  it touches every role's prompt and eval cases (TD-016), which is why WP-31 declined it in a row
+  that needed two of the five existing values.
+
+**Nobody's entry owns it, and that is why it is being numbered now.** Backlog **11** says
+*"**`get_task_context` still refuses**, which is entry 23's evidence rather than this entry's"* — and
+entry **23** was closed by **WP-15f**, which fixed the *ticket-text* half by putting a snapshot in the
+prompt and left the tool refusing. So the sentence that carried this finding has pointed at a resolved
+entry since WP-15f.
+
+**What it costs to leave.** Everything a run knows is fixed when the prompt is assembled. A reviewer
+cannot pull the diff it is reviewing, an investigator cannot fetch the CI log, and an ask answers a
+question about a 200-turn transcript from whatever fitted in the pack — with no way to say *"I could
+not look"*, which is the failure mode that reads as a confident wrong answer.
+
+**What "done" looks like.** An implementation over the projections WP-15h already ships
+(`apps/server/src/queries/pipeline-queries.ts`), which is where the read already exists and where the
+refusal rule lives — a field the projection cannot answer is refused rather than invented. Part of
+done: `include` gains the values the platform can actually serve (`runs`, `audit` at least) or the
+change states why it does not; every value is asserted to return the rows and **not** rows of another
+task or project (product/11:30, the scoping WP-31's citations already assert); and the output is
+untrusted text that reaches the prompt only inside a data block, like everything else. **Needs
+measurement: none** for the read; the widening's blast radius is the ten roles' eval cases, which
+`pnpm eval` cannot run in this repository (backlog **1**).
+
+**Depends on / owner.** **No work package owns it.** WP-17 built the tool surface and correctly
+refused the eight, WP-15h built the projections an implementation would read, WP-31 is the first row
+whose *whole deliverable* is the platform's own record. Cheapest by need is whoever next wants an ask
+to answer about a transcript; nothing blocks it.
+
+### 84. **A lost ask wake-up leaves a question `pending` for ever, and this is the third site of entries 20 and 36's class — and the cheapest of the three to recover** (TODO, small — **no work package owns it**; found by WP-31, session 5)
+**What is wrong.** The same at-most-once window, one feature further on: the ask is recorded in a
+transaction and the job that answers it is enqueued **after** the commit, so a process that dies in
+between leaves a `pending` row nothing will ever pick up.
+
+**Evidence**, quoted from WP-31's discovered-work bullet:
+
+> `askTaskCommand` enqueues **after** its commit, because `Jobs.enqueue` does not join a transaction,
+> so a process that dies in that window leaves a `pending` ask nothing will ever pick up. It is the
+> same at-most-once window `onboarding/discovery.ts` states for a discovery task and
+> `pipeline.intake.reconcile` closes for a matched ticket, and the index it would be found by already
+> exists (`task_asks_pending_idx`). One pass, in the shape WP-15c's reconciler already has.
+
+and stated at the line by the module itself: *"A crash between the two loses the wake-up and leaves a
+`pending` ask, which `task_asks_pending_idx` exists to find; that recovery is filed rather than built"*
+(`packages/application/src/ask/commands.ts:125-130`).
+
+**Both producers have the window** (read off the tree, rule 66): the HTTP command commits and then
+enqueues (`commands.ts:135-142`), and the ticket-comment handler enqueues from
+`context.afterCommit` (`commands.ts:281-287`), which TD-004 makes at-most-once by construction.
+
+**Three things that make this the cheapest of the three recoveries, and are the reason it is filed
+small:**
+- **Entry 36's blocker does not apply.** There, *"a curation that ran and proposed nothing is spelled
+  identically to a curation that never ran"* (rule 18); here the row carries its own answer —
+  `status` is `('pending', 'answered', 'refused', 'failed')` with a check constraint
+  (`0024_ask_the_task.sql:91-92`), so *"did it run?"* is a column read.
+- **A blind re-enqueue cannot double-charge.** `enqueueAsk` is `stately` with
+  `singletonKey: ask:<id>` (`commands.ts:104-114`), so a redelivered wake-up for the same question
+  collapses rather than starting a second paid run.
+- **The query is already indexed**: `task_asks_pending_idx on task_asks (created_at) where status =
+  'pending'` (`0024_ask_the_task.sql:115`) — created for exactly this.
+
+**What it costs to leave, and why it is worse than the other two sites.** A lost intake and a lost
+curation are invisible to a human. This one is **in front of the person who asked**: the thread shows
+their question as pending for ever, on a screen that is the product's own *"trust through
+explanation"* surface (product/18:34), and a ticket-side asker gets silence in their own thread.
+Nothing is corrupted and the remedy is to ask again — which is why it is small and not large — but the
+one thing the feature sells is that the platform answers.
+
+**What "done" looks like.** One sweep in the shape of `pipeline.intake.reconcile`: `pending` asks older
+than the pass's own interval get `enqueueAsk` again, with the **grace period equal to the interval**
+so there is one knob rather than two — the reasoning is already written out at
+`packages/application/src/pipeline/intake-reconcile.ts:41-45`. The age bound is what separates *never
+enqueued* from *in flight*, and the singleton key is what makes a wrong guess harmless. Asserted by
+dropping the enqueue (entry 20's reproduction, one feature later) and reading the answer back from
+`task_asks.status` rather than from a return value. **Needs measurement: none.**
+
+**Depends on / owner.** **No work package owns it.** Entry **20** is the class, entry **36** is its
+second site, and `pipeline.intake.reconcile` is the worked example — a *new* wake-up rather than a
+re-dispatch, because `handler_executions` skips the old position. Cheapest home is beside the
+reconciler that already runs, `apps/server/src/pipeline.ts`, which composes it today.
+
+### 85. **No route serves an artifact's body, so every artifact on every task screen is a row you cannot open — and the first one a human actually wants to read is the `AskAnswer`** (TODO, small — one cause, two symptoms; **no work package owns it**; found by WP-31, session 5)
+**What is wrong.** `GET /api/tasks/:task_id` publishes each artifact as
+`{id, artifact_type, version, url: null}` — the `null` is a literal in the projection
+(`apps/server/src/queries/pipeline-queries.ts:629-634`) — and no route anywhere serves an artifact's
+content. The SPA renders a link only when `url` is non-null
+(`apps/web/src/features/task-detail.tsx:548-551`), so the list is a list of names.
+
+**Evidence**, quoted from WP-31's discovered-work bullet:
+
+> The answer is an `artifacts` row and the task page's artifact list shows every one of them, so a
+> reader sees an `AskAnswer v3` entry with no way to open it — the same gap every artifact has
+> (`artifact.url` is null and no route serves an artifact's body), now with a type whose content a
+> human actually wants to read. The thread renders the same text, so nothing is lost; what is odd is
+> the list.
+
+**The second symptom of the same cause**, from the citations bullet: an `artifact` citation in an ask's
+answer *"is rendered as the row it names, without a link, because there is no screen that addresses
+[one] by id"* (`apps/web/src/features/ask-thread.tsx:55-57`, `:70-77`). So product/10:57's *"links to
+the exact run and prompt"* is served for `run` (the run screen exists) and not for `artifact`. The
+**prompt** half of that sentence is a different finding and is already recorded: `runs.system_prompt`
+/`user_prompt` have no writer and storing an assembled prompt is a retention decision — backlog **31**
+and **Q64**.
+
+**Is it a defect?** For the `AskAnswer` specifically, **no** — the thread renders the same text and
+nothing is lost, which is why this is small. For the other twelve artifact types it is the read
+surface that was never anybody's work package (entry **29**'s shape), and it is the reason a human
+cannot read the spec, the plan or the review the platform produced except through the transcript.
+
+**The dependency that decides the shape, and it is a blocker rather than a note.** Backlog **35**:
+a run's `structuredOutput` is stored in `artifacts.data` **unredacted** — measured, with a planted
+`ANTHROPIC_API_KEY` present verbatim in the row (`test/e2e/pipeline/librarian.e2e.test.ts:200`) — and
+`artifacts` has no `redaction_count` column to record a redaction that did happen. **A route that
+serves artifact bodies publishes that.** The `AskAnswer` type is the exception and the exception is
+narrow: its `answer` field is redacted and then bounded, in that order, before the row is written
+(`packages/application/src/ask/executor.ts:403-404`, stored at `:450`) — the *citations* beside it in
+the same object are model text no redactor touched (`:396-399`, `kept` at `:450`).
+
+**What it costs to leave.** A row a reader can see and cannot open, on the screen the product uses to
+argue that its work is auditable. Nothing is corrupted and every artifact is reachable by SQL.
+
+**What "done" looks like.** `GET /api/artifacts/:id` (or `…/tasks/:task_id/artifacts/:id`) serving the
+row's `data`, permissioned like the task it belongs to, rendered through
+`apps/web/src/ui/untrusted.tsx` as React text nodes (BD-022) and **after** backlog 35 — or, if it
+lands first, with the redaction done at the write in the same change, because a read surface over an
+unredacted column is how a secret leaves the building. The projection's `url` stops being a literal
+`null` in the same change, and the `artifact` citation in `ask-thread.tsx` becomes a link (rule 83
+sweeps both sentences that say it cannot be one).
+
+**Depends on / owner.** **No work package owns it.** Hard dependency on backlog **35** (or on doing
+its write-side redaction here). WP-15h owns the projections and shipped this `null`; WP-31 is where it
+started to look odd. Cheapest owner: whoever takes **35**, which has to touch the same rows anyway.
+
+### 86. **An `audit` or `knowledge` citation names a row the product can serve and a screen cannot address, so two of an ask's four citation kinds are plain text** (nit, TODO — **no work package owns it**; found by WP-31, session 5)
+**What is wrong.** An `AskAnswerCitation` deliberately carries **no URL** — it names a row, and the
+application builds the link (`apps/web/src/features/ask-thread.tsx:12-16`, Q49's reasoning). Of the
+four kinds, `run` links; `artifact` is backlog **85**; and `audit` and `knowledge` fall through to the
+untyped branch that prints the kind and the reference as text (`ask-thread.tsx:80-86`). The bullet's
+own remedies are right and are the reason this is one line rather than a project:
+
+> The audit panel is on the same screen, so an `audit` citation could scroll to its row with no new
+> route; a `knowledge` citation wants the KB screen to take a path in its URL.
+
+**Two readings that price them** (rule 66): the knowledge half is the smaller — the API already takes
+the path (`GET /api/projects/:id/kb/doc`, `apps/web/src/api/endpoints.ts:337`) and only the **route**
+cannot carry one (`/projects/$key/knowledge` has no search param,
+`apps/web/src/routes/tree.tsx:128`). The audit half has a catch worth stating: the task audit is
+**paged** (`apps/server/src/routes/asks.ts:60`), so an anchor resolves only for a row on the first
+page — the honest cheap shape is a filter or a cursor that lands on the citation's row, not an `#id`.
+
+**What it costs to leave.** product/10:57 promises an answer *"with links to the exact run and prompt"*;
+two of four kinds are typographically a link and functionally a sentence. Nothing is wrong and nothing
+is lost.
+
+**Depends on / owner.** **No work package owns it.** Cheapest owner: whoever next opens
+`apps/web/src/features/ask-thread.tsx` or the knowledge screen; the two halves are independent.
+
+### 87. **The global branch-coverage threshold has 0.05 points of headroom, so the next work package pays a debt it did not create — and the cheap way out removes an instrument that has already found four defects** (TODO, small — **no work package owns it**; reported by WP-31's implementer, session 5; the figure is **not re-measured here**, rule 66)
+**What is wrong.** `verify:tests` enforces `branches: 80` over
+`packages/*/src/**`, `apps/server/src/**`, `apps/launcher/src/**` and `apps/runlet/src/**`
+(`vitest.config.ts:168-172`, with `packages/domain/src/**` held to 85 at `:174-179`), and WP-31's run
+reported **80.05 %**. The margin is one small module's worth of unbranched code.
+
+**Evidence.** The measurement is the implementer's, reported with the work package and **not re-run by
+the refiner** (rule 66): branch coverage **80.05 %** against a threshold of **80**. Treat the figure as
+reported rather than as re-derived; what is checkable from the tree is the threshold it is measured
+against, which is the `vitest.config.ts` lines above.
+
+**Why it is worth a number rather than a shrug — the threshold is a working instrument.** WP-15i's
+notes, quoted: *"`apps/server/src/routes/commands.ts` was written against the database and could not be
+unit-tested at all; the injected `CommandQueries` and the `TaskCommands` port exist because the
+**branch-coverage threshold refused the change** — and the test that became possible then found four
+refusals mapping to **500** (`StageNotCurrentError`, `IterationLimitReachedError`, `RunNotLiveError`,
+`CommandsUnavailableError`), one of which the e2e asserted as a 409 and would have failed on. The
+threshold was the instrument that found them."*
+
+**What it costs to leave.** The next change that adds a module with untested branches fails a gate for
+a reason that has nothing to do with it, and the two cheapest responses are both bad: test whatever is
+easiest to cover rather than what matters, or lower the number — which switches off the instrument
+above. It is the shape standing rule **21** warns about from the other side: an instrument nobody can
+afford to keep is an instrument that gets turned off.
+
+**What "done" looks like.** Not *"write more tests"*. Either the thin rings get their own thresholds
+the way `packages/domain` already has one — which makes the budget say *where* the coverage is owed
+instead of averaging it — or the uncovered branches are listed with the row that owes each, the way
+`client-census.test.ts` carries its admitted gaps. **Needs measurement:** which files and which ring
+carry the uncovered branches. That is a coverage run with the json-summary reporter, which the refiner
+did not make (rule 66); do it before choosing between the two shapes, because they differ only in
+whether the debt is concentrated or spread.
+
+**Depends on / owner.** **No work package owns it.** **WP-39** (*coverage delta*, M3) is adjacent and
+is the wrong owner for entry **57**'s reason: it reports a change's delta per merge request, which is a
+different question from the absolute budget, and the row that measures a thing should not be the row
+that pays for it. Cheapest owner is whoever the gate stops first.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -3744,6 +4052,24 @@ than a version column while the list is short.
 **Depends on.** WP-15d (landed; it created both the first concurrent writer and the reproduction). Owner:
 **WP-15e** in `13-implementation-plan.md`. Related: entry 17 (the move that exposed it), entry 1 (nothing
 produces production load yet, which is the only reason this is scheduled rather than urgent).
+
+**The remedy's limit, measured at WP-31** (refiner, session 5 — recorded here rather than as a new
+entry, because it is a fact about *this* entry's chosen shape (b) and nothing is open). Shape (b) is
+*a version column **plus** the column partition*, and the two halves are not interchangeable: **the
+version token cannot arbitrate an increment.** WP-31's ask executor had to move `cost_actual`, and
+`TaskRepository.addSpend` is `cost_actual = cost_actual + $2` which deliberately bumps **no** version
+— so a whole-row `save` carrying a value read before the ask committed would *match* the `where …
+and version = $n` predicate and silently put the ask's spend back. The column had to leave `save`'s
+list; the partition, not the version, is what closes it. Two receipts a reader should not re-derive:
+`task-save-sites.test.ts` counts **28** rather than 29 (the save on a task a human stopped mid-run
+had nothing left to write once the spend was its own), and `stage-executor.test.ts`'s *"nothing was
+written from the stale snapshot"* moved from a cost assertion to a stage assertion, with the rollback
+asserted in `test/integration/pipeline/pipeline-store-concurrency.integration.test.ts` because the
+in-memory store does not roll back. The transferable sentence, and it is standing rule **79** one
+layer in: *a version predicate protects a column whose new value was computed from the old one it
+read; a column written as a delta was never protected by it.* So the census
+(`tasks-column-ownership.test.ts`) is the guard for every incremented column, and it caught this one
+immediately.
 
 ### 20. **A matched ticket whose intake enqueue is lost is never started again, and nothing says so** (TODO — **WP-15c**, criterion now on its plan row)
 **What is wrong.** The other half of entry 1's sentence, one layer in. Since WP-15d the intake handler
@@ -4880,6 +5206,53 @@ and no document ever stated the number.** Read off the tree, rule 66; nothing ru
 - **What would make this urgent**: entry **74**'s row adds up to four timer workers, which moves the
   floor to 22 and every one of the seven sites with it — the first change since this entry was filed
   that touches more than one term at once.
+
+**The class recurred at WP-31, and this is the first time the *error message* is false** (refiner,
+session 5; read off the **uncommitted working tree** while that row was being verified — grep and
+file reads, no test run, rule 66). `task.ask` is a sixth pipeline worker: `POOL_RESERVATIONS.pipeline`
+is **6**, the `ROLE=all` floor is **19**, `.env.example` ships `APP_DB_POOL_MAX=20`, and
+`config.test.ts:241-244` asserts 19 symbolically. Four sites moved with it and four did not:
+- **`apps/server/src/config.ts:342-344`** — the file's own *"the whole sum, so that nobody has to
+  reassemble it from five docblocks"* still reads `+ 5` pipeline workers `… = **18**, against
+  .env.example's APP_DB_POOL_MAX=19`. Three numbers, all three now wrong (6, 19, 20), in the
+  paragraph written to stop exactly this.
+- **`apps/server/src/config.ts:354`** — *"**`2N + 16`** — **18 at N=1**, and **24 at N=4**"*. The
+  shape is `2N + 17`: 19 and 25.
+- **`apps/server/src/config.ts:486`** — `UndersizedPoolError`'s message, *"the pipeline's **five** job
+  workers"*. This is site **3**, the one the entry has twice called *genuinely derivable* because the
+  word sits beside a `POOL_RESERVATIONS.pipeline` it could interpolate; it has now crossed from
+  un-derived to **false**, and it is the only one of the four an operator reads at the moment the
+  program refuses to start.
+- **`.env.example:194-200`** — the **operator-facing** paragraph eight lines above the corrected sum
+  in the same file: *"the pipeline's **four** job workers (+4: stage.execute, mr.comment.debounce,
+  pipeline.outbound and, since WP-15c, pipeline.intake.reconcile), the knowledge index job (+1,
+  WP-18a: knowledge.index singleton per project, onboarding.discovery)"*. It is two generations stale
+  (it never took WP-18b's three or WP-21's one), it garbles the onboarding term into the knowledge
+  one, and it now contradicts `:203-212` of the same file. **It is an eighth site**: this entry
+  counted site 4 as one comment and `.env.example` carries two.
+- **`packages/infrastructure/src/db/config.ts:82-97`** (site 6) is **untouched**, so its docblock's
+  derivation — the thing the previous sweep above praised it for — is false in the direction that
+  matters: `poolMax: 19` is no longer *"the floor plus one connection of slack"*, it **is** the floor,
+  with zero slack, while `.env.example` ships 20. The two shipped defaults for one knob still differ
+  and nothing still holds the second.
+- **Repaired with the change**: `POOL_RESERVATIONS.pipeline`'s own docblock (site 2),
+  `packages/application/src/pipeline/runtime.ts` (site 5), `config.test.ts` (site 7) and
+  `.env.example:203-212`.
+**The transferable half**: the sweep that fixes this class has to be driven from the **constant**, not
+from the diff — four of the eight sites are in files the change already opened, and the two that were
+missed in `config.ts` are in the *same file* as the two that were fixed.
+
+**All five of those sites were repaired in WP-31's review round 2** (see that row's § *Review round
+2*), and site **3** — `UndersizedPoolError`'s message — is finally **derived**: it interpolates
+`POOL_RESERVATIONS.pipeline` and `.knowledge`, and `config.test.ts` compares the message against the
+constants so a word written back in fails. Two clauses of this entry are falsified by that round and
+corrected here: *"nothing still holds the second"* shipped **defaults** is no longer true —
+`apps/server/src/config.test.ts:271` reads `APP_DB_POOL_MAX` out of `.env.example` and asserts both
+it and the code default clear `requiredPoolConnections` — so what remains of the value half is only
+that nothing says **which of the two is intended** (19 in code, 20 in the file). The prose half of
+the class is not closed either: `.env.example`'s stale paragraph and `db/config.ts`'s docblock now
+*point* rather than restate, which removes two of the eight sites' ability to go stale but leaves
+the rest.
 
 ### 38. **`ROLE` splits the product across containers and no tier has ever started two processes with different roles** (TODO — **no work package owns it**; the general form of a risk WP-18b stated about one command)
 **What is wrong.** `ROLE` is the platform's scaling story — *“splitting the roles across containers is the
@@ -14623,7 +14996,426 @@ timeout on a machine under that load is a **budget** the suite is close to, not 
 test.
 
 
+### WP-31 — ask-the-task
+
+**What shipped.** A human asks a running task *"why did you choose X?"* and the platform answers
+from its own record. `POST /api/tasks/:task_id/ask`, `GET …/asks` and `GET …/audit`
+(`apps/server/src/routes/asks.ts`); `packages/application/src/ask/` — the store port, the command,
+the `ticket.comment.added` consumer, the executor, the planner and the ticket-mirror duty; the `ask`
+role (`packages/prompts/roles/ask/`), the `ask` `run_mode` and `agent_role` values and the
+`AskAnswer` artifact type (migration **0024**, with `task_asks`); the thread on the task page
+(`apps/web/src/features/ask-thread.tsx`) and the task's own activity panel. **Q72 is implemented as
+recommended, all four parts.** PROGRESS backlog **52**'s task half and backlog **79** are closed.
+
+**1. An ask is a run with a task and no stage, and the aggregate says so rather than only the
+column.** `runs.task_stage_id` has been nullable since migration 0004 and technical/03:40-42 names
+the three run kinds that use it — but `Run.stage` was `Slug` and `run.created.stage` was
+non-nullable, so the only stage-less run the platform could express was Discovery's, which had to
+borrow a one-off task's stage (WP-21). Both are `| null` now, and the ask goes through the **same**
+`createRun`/`startRun`/`markRunning`/`finishRun`, the same `RunStore`, the same admission guard
+(`cost/guard.ts`), the same cost ledger, the same transcript sink and the same budget cap. There is
+no second entry point; `packages/application/src/onboarding/discovery.ts` carries the argument and
+this is the easier case it names.
+
+**2. It never writes the `tasks` row through `save`, and that forced a real repair.** An ask runs
+*beside* whatever the pipeline is doing — product/10:57 lets anyone ask at any moment — so a
+whole-row save from the ask executor is the lost update WP-15e measured. The one column it must move
+is `cost_actual`, and `tasks-column-ownership.test.ts` refused it immediately: `save` named that
+column too. **The repair is the one WP-15e made for `workpad_ref`**, and it is sharper here because
+the version token cannot arbitrate an increment — `addSpend` is `cost_actual = cost_actual + $2` and
+deliberately bumps no version, so a `save` carrying a value read before the ask committed would
+*match* the predicate and silently put the ask's spend back. `cost_actual` left `save`'s column list,
+`TaskRepository.addSpend` is its one writing statement, and the **stage executor calls it too** —
+after `runs.finish` in each branch, never before, because a caller that lost the run must write
+nothing. Consequences a reader should know: `task-save-sites.test.ts` counts **28** rather than 29
+(the save on a task a human stopped mid-run had nothing left to write once the spend was its own),
+and `stage-executor.test.ts`'s *"nothing was written from the stale snapshot"* moved from a cost
+assertion to a stage assertion, with the **rollback** asserted where a rollback means something —
+`test/integration/pipeline/pipeline-store-concurrency.integration.test.ts`, because the in-memory
+store does not roll back (its divergence 1).
+
+**3. It never moves the task's state either.** A spent budget refuses the *ask* and does not pause
+the task: the person who asked a question is not the person whose delivery would stop, and pausing a
+delivery because somebody asked why is a side effect nobody asked for. A failed ask escalates
+nothing — the row carries the failure, the thread shows it, and the remedy is to ask again. `refused`
+(no run was started) and `failed` (a run started and produced nothing usable) are distinct because
+the remedies are: one is a cap to raise, the other is a question to ask again.
+
+**4. The answer is an `artifacts` row and is kept out of every later prompt.** It is a real artifact
+— versioned, attached to the run that produced it — which is what makes a citation to it resolve
+through the read endpoints WP-15h shipped. What it is **not** is a `recordArtifact` on the Task
+aggregate (note 2), so an ask emits no `artifact.created`; the audit's record of it is `run.finished`
+plus the row. `PROMPT_EXCLUDED_ARTIFACT_TYPES` in `packages/domain/src/ask/` is what keeps it out of
+a later stage's prompt, and the reason is a property of the type rather than of the caller: an ask's
+answer is prose *about the audit trail*, and carrying it forward would route a stranger's ticket
+comment into every later stage's prompt through a second door.
+
+**5. The question reaches the model only inside a data block, and a stage-less run says so.**
+`PromptTask.stage` is now `string | null` and the task block's line becomes *"This run belongs to no
+pipeline stage: a human has asked a question about this task…"* — platform literals from a closed
+set, like `STAGE_PROMPT_FOCUS`. The question is an `ask_question` block whose body is byte-identical
+and whose only attribute is `asked_by`, a label the platform resolved from its own `users` row and
+which `assertPlatformVoice` **refuses** rather than escapes. The record — the task's runs and its
+`human_actions` — are `record` blocks with the row count in the marker, because "this is how many
+there are" is a claim about the platform's behaviour that the rows must not be able to forge
+(technical/07).
+
+**6. `ticket.comment.added` has its first consumer, and every branch is named.**
+`classifyTicketComment` (domain, pure) answers one of five verdicts and the handler two more, so
+criterion 5's *"classified in both directions"* is a name per refusal rather than an absence:
+`platform_comment` (the body carries `agentic:task:` or `agentic:ask:` — checked **before** the
+trigger, so an answer can never be read back as a new question), `no_trigger`,
+`unverified_identity`, `empty_question`, `no_task`, `duplicate`. The trigger is **Q81**, filed with
+this recommendation and implemented: `@agentic ask` and `@agentic why`, at the **start** of the
+comment, because the platform already answers to `@agentic remember:` (product/07:42) and
+`@agentic hold` / `@agentic rework` (product/04:84) and a wider rule would turn every mention of the
+bot into a paid run on somebody else's ticket.
+
+**7. `user_identities` has a writer (backlog 79), and it is an operator rather than a guess.**
+`POST /api/org/identities` (admin, `org.users.manage`) upserts on the primary key
+`(provider, external_id)`; `GET /api/org/identities` lists them. The two automatic routes stay
+refused **on purpose** and the endpoint's docblock says so: an OAuth sign-in with the provider
+(TD-022 ships email and password) and an email match the platform performed itself, which would let
+a *guessed* identity ask, answer questions and approve plans (BD-022, Q10). `email` is not written
+for the same reason. Until an operator maps an account the map is empty and every ticket-side ask is
+refused `unverified_identity` — which is what `ask-pipeline.test.ts` asserts directly, on a harness
+that seeds none.
+
+**8. The mirror is an outbound duty, and the setting governs the `ui` ask only.** `ask_answer` on
+`pipeline.outbound`, keyed `ask:<id>`, through `IntegrationActionExecutor` like every other provider
+call; `events/open-transaction.ts` refuses the alternative on both paths. `features.ask.mirror_to_ticket`
+is **off** by default (Q72 (d)) and governs a `ui` ask: a `ticket` ask is answered in the ticket
+whatever it says, because somebody who typed `@agentic ask` into that thread **did** ask, in that
+thread, and an answer withheld from where the question was asked is the platform ignoring a person.
+The comment carries the answer, the citations as *rows*, and a link this platform built — never a URL
+the model wrote, which is why `AskAnswerCitation` has no URL field at all (Q49: `urlSchema` is
+`z.url()` and accepts `javascript:`).
+
+**9. The fake picks its scenario from the prompt (standing rule 82).** An ask has **no stage**, so a
+stage-keyed selector cannot express the case at all — which is exactly the instrument failure rule 82
+records, arriving in the row whose deliverable *is* the prompt. `askScenarioKey`
+(`fake-claude-runner.ts`) and `harnessScriptKey` (`pipeline-harness.ts`) read the question out of the
+assembled prompt's `ask_question` block with `readDataBlocks`, so every ask case in every tier is
+scripted against bytes the planner actually produced: an empty prompt, a missing block or a different
+question finds no scenario and fails by name.
+
+**9a. Standing rule 87 earned its second run, on this row's own e2e.** The ledger assertion sat
+behind the *answer's* wait: `task_asks.status` and `tasks.cost_actual` are both written in the
+executor's transaction 2, so waiting on `answered` binds them — and `cost_entries` is written by the
+**cost ledger's handler on `run.finished`**, a different dispatch in a different transaction that
+commits afterwards. The first `verify:e2e` passed and the second failed with `expected 0 to be
+greater than 0`, which is exactly the scheduling accident rule 87 says one green sample cannot rule
+out. It now waits on the `cost_entries` row it asserts. The file's other two waits were swept with
+the same question and are sound: the answer, the artifact, the run row and `cost_actual` are all
+transaction 2's, and the mirror already waited on `mirrored_at` — the last row that duty writes.
+
+**10. One more pooled connection.** `task.ask` is a worker of its own — it cannot ride
+`stage.execute`, which is `stately` per **task** and would collapse an ask with a stage wake-up —
+so `POOL_RESERVATIONS.pipeline` is **6**, the `ROLE=all` floor is **19**, and `.env.example` ships
+`APP_DB_POOL_MAX=20`.
+
+**Assumptions, each implemented.**
+- **Who may ask is the shipped table, not Q72's sentence.** `permissions.ts` has `task.ask: member`
+  (Q36); Q72 recommends *"anyone with `project.read`"*. The shipped answer is kept, and the reason is
+  that Q72's own justification is false: *"an ask mutates nothing and reads only what the asker can
+  already read"* — an ask **starts a run and spends the project's money**. Reading the thread is
+  `task.read` (viewer), which really does read only what the caller can already see, and both
+  directions are asserted in `routes/asks.test.ts`.
+- **The task audit is `org.audit.read` (maintainer)**, the same capability WP-30's project audit
+  uses, because it is the same table and the same question. A member sees a sentence on the screen
+  rather than an error: a 403 is *"you may not read this"*, which is a different fact from a failure.
+- **`AskAnswer` is an artifact type rather than a second output mechanism.** `RunSpec.artifactType`
+  is what gives the SDK a JSON Schema and the platform its defence-in-depth re-validation, and a
+  parallel "answer contract" would be a second way to say what a run must return.
+- **The ask has no `ask_human`.** It is already a conversation with a human, and a run that asked a
+  question back would park the *task* in `waiting_answers` on a question nobody is blocked on.
+- **An ask is given a workspace it cannot read**, because `createWorkspaceClaudeRunner` provisions
+  one for every spec. `TOOLS_BY_ROLE.ask` is empty so it cannot look at the checkout, but the
+  container is still created when a provisioner is composed. Filed under discovered work rather than
+  special-cased: skipping provisioning for a stage-less run is a `WorkspaceProvider` decision with
+  consequences for discovery, which *does* need its checkout.
+- **The per-question cap is compared against the task cap**, `costActualUsd + features.ask.budget_usd
+  > taskBudgetUsd`, which is `taskBudgetExhausted`'s shape with the question's own figure as the
+  "about to spend" term. Asserted at the cap and one unit under it.
+
+**What the tiers assert.** Unit (domain): the classifier's five verdicts and the ordering that puts
+`platform_comment` first, the caps' derivation, the prompt's ask block and record blocks, the
+stage-less line, and an asker label outside the marker alphabet refused rather than escaped.
+Unit (application): the whole feature through the composed pipeline — stage null, mode `ask`,
+read-only tools, the artifact written and the task aggregate untouched, the spend added to
+`cost_actual` and to `cost_entries`, the cap at and one under, the organisation budget refusing
+before any run exists, a planted credential redacted out of the stored question — and, since review
+round 2, out of the answer, every citation `detail` and `reference`, every `unanswered` line and the
+asker's provider label, with the count summed and the cap re-applied after redaction — the six
+ticket-comment classifications, citation scoping both ways, five mirror refusals, the runner
+throwing, an answer the contract rejects, a run somebody else ended first, and a stage that crosses
+the task cap while the ask's prompt is being built. Contract: the `AskStore` suite (in-memory) and
+the extended `PipelineStore` suite's `addSpend`. Integration: the same two suites against PostgreSQL,
+migration 0024's table and policy row, and `addSpend` under a rollback. ui: the thread renders markup
+as text, the citation link is built by the application, the drop count is shown both ways, a refusal
+is named, and one `Idempotency-Key` per question. e2e: the whole chain on a real instance — a ticket
+driven to `ready_for_merge`, a question over HTTP, a run with `task_stage_id` null, a `cost_entries`
+row whose `stage` is `(none)`, the dropped citation, one `human_actions` row with no words in it, the
+task-audit read, the thread, the mirrored ticket comment, and a replayed key performing nothing twice.
+
+**Standing rule 83 — every sentence this falsified.** `consumption.ts`'s `ticket.comment.added` line
+(half of it is still true: *feedback* intake still has no owner, and the line now says which half);
+`task-detail.tsx`'s *"`askTaskRequestSchema` exists; the answers are a thread, and
+`taskDetailResponseSchema` has nowhere to carry one, so a question would post into a void"*;
+`identity-queries.ts`'s *"Everything here is a **read**"*; `postgres-pipeline-store.ts`'s `save`
+docblock and `memory-pipeline.ts`'s, which listed the columns a narrow writer owns;
+`task-save-sites.test.ts`'s count of twenty-nine; `config.ts`'s and `.env.example`'s pool arithmetic
+(five workers, floor 18); `client-census.test.ts` (the ask paths are in the client's list now, so the
+census sees all three); and `instance.ts`'s *"18 since WP-32"*. `platform-tools.ts`'s
+`get_task_context` refusal is **unchanged and still true** — see the discovered-work entry.
+
+**For `CLAUDE.md` (the orchestrator's file, so the wording is here).** A "Where to look" entry:
+
+> - **Ask-the-task** (WP-31): a human's question about a task is answered by a **run with that task
+>   and no stage** — `packages/application/src/ask/`, the shape Q72 chose so the ask inherits the
+>   admission guard, the cost ledger, the transcript sink and the budget cap rather than adding
+>   them. It arrives through `POST /api/tasks/:task_id/ask` or through a ticket comment carrying
+>   `@agentic ask` (Q81), whose classifier is `packages/domain/src/ask/` and whose **unverified**
+>   author is refused — which is every author until an operator maps one through
+>   `POST /api/org/identities`, the writer `user_identities` had never had. The executor writes the
+>   `tasks` row through **no** `save` at all: `cost_actual` is `TaskRepository.addSpend`, an
+>   increment, because the ask runs beside the stage executor and the version token cannot
+>   arbitrate one — that column left `save`'s list with this row and the stage executor calls
+>   `addSpend` too. The answer is an `AskAnswer` artifact, the one type
+>   `PROMPT_EXCLUDED_ARTIFACT_TYPES` keeps out of a later stage's prompt; its citations name **rows
+>   and never URLs**, and one naming another task's or project's row is dropped and counted
+>   (product/11:30). The ticket mirror is `features.ask.mirror_to_ticket`, off by default, and it
+>   governs the **UI** ask only: a question asked in the ticket is answered there whatever the
+>   setting says.
+
+
+**Review round 2:** two majors, three minors, plus the refiner's rule-83 sweep of backlog **22**.
+All six closed, each with a test that fails on the round-1 shape (canaried, one mutation at a time).
+`verify` **PASS** exit 0, `verify:ui` **PASS** exit 0, `verify:integration` **PASS** exit 0,
+`verify:e2e` **PASS** exit 0 twice (standing rule 87).
+
+**Major 1 — the identity route was a command without a command's guarantees.**
+`POST /api/org/identities` wrote the mapping and left **nothing** behind saying who had decided it,
+while technical/08:170 requires every human action recorded and every other command route in the
+product does it — on the one write in the product whose own docblock says it decides *who may act as
+whom*. It now writes one `human_actions` row per accepted request, after the effect and never for a
+refusal (`routes/commands.ts`'s rule), `action: 'org.identity.map'`, `taskId: null` (organisation
+scope; `human_actions` has no project column, the same answer the wizard's seven give). `params`
+carries the **mapping** — provider, external id, user id — because a row that did not name them
+would record that *something* was mapped; `display_name` is a label the mapping never resolves
+anything by, so only `display_name_chars` is recorded (`routes/asks.ts`'s *"the shape of the
+request, never the words"*: this route has no redactor and a free-text field on its way to an audit
+row is where a pasted credential would land).
+
+**No `Idempotency-Key`, decided rather than omitted**, and the shipped docblock's one-line reason is
+replaced by the argument. The header separates a *retry* from a **different request under a used
+key**, and neither half applies here: the write is an upsert on the primary key
+`(provider, external_id)`, so a retry writes the row it already wrote and creates nothing second —
+and a *different* body under a used key is exactly the operation an operator performs when somebody
+leaves (re-mapping the account to another person), which must be **allowed** rather than refused
+`409 idempotency_key_reused`. WP-21 requires the header on the three wizard commands that **create**;
+this one has no resource to create twice. The cost is stated rather than implied: two identical
+requests leave **two** audit rows — a true record of two requests, not a duplicated effect. Asserted
+positively (`re-maps an account to another person rather than refusing the second request`).
+
+**Major 2 — neither identity route had a test, and the census cannot see them.** No screen calls
+either, so `client-census.test.ts` is blind to both by construction — the position `kb/health`,
+`take-over` and `hand-back` are already in, and the census's own *"there are three"* comment is now
+*four paths* (the pair shares one path with two methods). Closed on both sides:
+- **In the census, by hand**: served, `401 unauthenticated`, and **absent from the client's list** —
+  asked by **each of its own methods** with no body at all, because `probe()` tries GET first and
+  would otherwise judge the POST on its sibling's answer (WP-21's measured hole), and because the
+  write's guard is a `preValidation` hook that would answer `400` from `preHandler`.
+- **In `routes/org.test.ts`, through a real Fastify instance**: the wrong-role 403 for all three
+  roles under admin (both routes, nothing written and nothing audited), the upsert and the row it
+  publishes, exactly one `human_actions` row with the mapping and no task, the planted credential in
+  `display_name` absent from `params`, the `unknown_user` 409 with **no** audit row, the re-map, and
+  four bodies the strict contract refuses (including `email`, which this endpoint deliberately does
+  not take).
+
+That needed a seam: `OrgRoutesOptions` gains `identities` — four functions (`findUser`,
+`upsertMapping`, `listMappings`, `recordAction`) bound to the process's database in `app.ts`, the
+shape `routes/asks.ts`, `routes/commands.ts` and `routes/settings.ts` already use. The four
+organisation **reads** on the same file keep taking `database` directly, and the asymmetry is stated
+at the interface: the identity write is the only *command* on that file, and a seam nothing drives
+only makes the file longer.
+
+**Minor 3 — three of the four model-authored strings were stored and published unredacted.** Only
+`answer.answer` passed the redactor; `citations[].detail`, `citations[].reference` and `unanswered[]`
+reached `task_asks.citations`, `artifacts.data`, `GET …/asks`, the thread — and, for a `knowledge`
+or `audit` citation, **somebody else's ticket tracker** through `renderAskComment`. `redactAskAnswer`
+(exported, `executor.ts`) now redacts every one of them and **sums** the count, which is what
+`redaction_count` is for: it is the only signal a redactor that stopped working would leave
+(migration 0024's note), and a count over one field of four reads as *"nothing else needed it"*.
+Three things are decided rather than incidental:
+- **Scope first, redact second.** `run_id` and an `audit` `reference` are the keys `scopeCitations`
+  is made of, and a redacted key answers one row's citation with another's or with none (standing
+  rule 70). `run_id` is then left alone for the same reason — the thread builds the link from it —
+  asserted with the run id itself registered as the credential, the most hostile form of the
+  question, and with the `detail` beside it in the same citation redacted so the assertion is about
+  the field rather than the row.
+- **Redact, then cut, and the cut is not optional.** WP-30's order (cutting first can publish
+  `glpat-FAKE`, a prefix no rule matches), and the cut afterwards is what keeps the row
+  *publishable*: `[REDACTED:integration:NAME]` is 32 characters and can be longer than what it
+  replaced, so a `detail` that arrived exactly at its cap comes out of the redactor past it and the
+  read endpoint would answer **500** through the very schema that fixes the cap. Asserted on both
+  sides of the bound with an 8-character secret (`MIN_SECRET_LENGTH`, the shortest that makes the
+  placeholder longer), ending in `askAnswerDataSchema.safeParse(...).success`.
+- **The caps are named once.** `MAX_ASK_CITATION_DETAIL_CHARS`, `MAX_ASK_CITATION_REFERENCE_CHARS`
+  and `MAX_ASK_UNANSWERED_CHARS` are exported from `packages/contracts/src/artifacts.ts` and used
+  *by the schema itself*, so the recorder and the contract cannot hold different numbers (rule 63).
+  No schema shape changed; `schemas:check` is green.
+
+**Minor 4 — the asker's provider label was neither bounded nor redacted**, two lines from the
+question that is both. `ExternalIdentity.display_name` is `z.string().nullish()` with no bound at
+all — whatever a ticket tracker put in the webhook — and it is stored in
+`task_asks.asked_by_identity` and read back by the thread and the prompt's `asked_by` label.
+`askIdentityForStorage` redacts then cuts at `MAX_ASK_IDENTITY_LABEL_CHARS` (**256**, not a new
+number: the bound `createIdentityMappingRequestSchema.display_name` already puts on the same label
+when an operator types it), and its count is summed into the row's. The guard is at the **write**,
+not the call site: `RecordAskInput.askedByIdentity` is now a typed `AskIdentityInput` rather than a
+finished `JsonObject`, so a caller cannot hand over an object that is neither. `provider` and
+`external_id` are deliberately untouched and the reason is at the line — a platform literal and a
+**key** the handler has just resolved through `user_identities` (rule 70 again: a redacted account
+id resolves to nobody, on the row whose subject is which account asked).
+
+**Minor 5 — the plan phase's window was open for the caps.** `startTheRun` re-asked only *"is it
+still pending"*, while the stage executor's `revalidate` re-asks everything after the pack is built
+(TD-004). The gap was not theoretical: `cost_actual` is exactly the column a stage finishing beside
+an ask increments (`TaskRepository.addSpend`, WP-31's own note 2), so a stage committing during
+retrieval let an ask start and run up to `features.ask.budget_usd` **past** the task cap it had just
+been checked against. `admissionVerdict` is the five questions in one place — the ask still exists
+and is pending, the task exists, the feature is on, the task cap, the organisation/project budget —
+asked in **1a and again in 1b**, answering a verdict rather than writing one so both call sites
+produce the same refusal row through the same `refuse` (two copies of a re-validation is one copy
+that drifts, `revalidate`'s own reason). `settings` is the caller's, read once outside the
+transaction, and that is stated: a project that reconfigured mid-retrieval is not what this guards.
+
+Testing it needed a handle inside a window that holds no transaction, so `createPipelineHarness`
+gains **`whileAskPlans`** — a hook that runs once immediately before `AskRunPlanner.plan`. It wraps
+the planner rather than branching at the call site, so the default path is the real planner itself
+and not a delegate. Both directions (rule 10): a spend that crosses the cap during planning refuses
+the ask with **no run created at all**, and one that stays under it still runs.
+
+**Standing rule 83 — every sentence this falsified, and one it deliberately did not.**
+`routes/org.ts`'s *"No `Idempotency-Key`: … a second mechanism would be a second thing to keep
+true"* (replaced by the argument, and by what it costs); that file's module docblock, which listed
+three role levels and no command; `client-census.test.ts`'s *"There are three"*; `commands.ts`'s
+*"The **budget** is not asked here at all: it is asked at admission, in the job"* (still true, and
+now says *and again after the prompt has been built*); `executor.ts`'s ASCII shape, which said
+*"the four admission questions"* at 1a and described 1b as a pending check; `store.ts`'s
+`askedByIdentity` and `redactionCount` comments, which said nothing about what is bounded and
+nothing about what the count sums. **Not edited: `0024_ask_the_task.sql`'s note** that `question`
+and `answer` are *"the fourth and fifth such sinks"* — `citations`, `unanswered` and
+`asked_by_identity.display_name` are sinks too, but the migrator keys `platform_migrations` on a
+**checksum** and refuses a file whose bytes moved, so editing an already-applied comment would break
+any checkout with a persistent `TEST_DATABASE_URL` for a prose fix. The correction lives on
+`AskStore.redactionCount`, which is the module a reader reaches from the column.
+
+**The refiner's item — backlog 22's WP-31 instance, all five sites.** The floor moved 18 → 19 with
+the `task.ask` worker and four sites did not move with it; the fifth (site 6) had gone false in the
+direction that matters. Each now states the measured floor and its derivation:
+- `apps/server/src/config.ts` § whole sum — `+ 6` pipeline workers, **19**, against `.env.example`'s
+  `APP_DB_POOL_MAX=20`; shape **`2N + 17`**, 19 at N=1 and **25** at N=4, with WP-32's `2N + 16` kept
+  as history. The paragraph now also carries the fact that it has gone stale **twice** and the
+  transferable half from the entry: the sweep is driven from `POOL_RESERVATIONS`, not from the diff.
+- `apps/server/src/config.ts` § `UndersizedPoolError` — **derived**, at last. The message
+  interpolates `POOL_RESERVATIONS.pipeline` and `.knowledge` instead of spelling *"five"* and
+  *"four"*; this is the entry's site 3, twice called *genuinely derivable*, and at WP-31 it had
+  crossed from un-derived to **false** in the one sentence an operator reads at the moment the
+  program refuses to start. `config.test.ts` now asserts the message against the constants, so a
+  word written back in fails.
+- `.env.example:194-200` — the operator-facing paragraph **stops restating**. It said *"the
+  pipeline's four job workers"* and folded the onboarding worker into the knowledge term, two
+  generations stale, eight lines above a corrected sum in the same file; it now points at that sum
+  and says why it carries no copy. (The entry counted this as a site of its own — `.env.example`
+  carries two.)
+- `packages/infrastructure/src/db/config.ts` (site 6) — its *"19 is the floor plus one connection of
+  slack"* was false once the floor reached 19. It now states the relationship rather than a sum
+  (this ring may not import `apps/*`, which is why it cannot derive), says **the value equals the
+  floor exactly, with no slack**, and names the surviving divergence: two shipped defaults for one
+  knob, 19 in code and 20 in `.env.example`. One clause of the entry is **falsified** and corrected
+  here: *"nothing holds the second"* is no longer true — `config.test.ts:271` reads
+  `APP_DB_POOL_MAX` out of `.env.example` and asserts **both** values clear
+  `requiredPoolConnections`. What is still unstated is which of the two is *intended*.
+
+
 ## Discovered work — session 5 (not in plan)
+- **An ask is given a workspace it cannot read** (WP-31). `createWorkspaceClaudeRunner` provisions a
+  container and a checkout for every `RunSpec`, and an ask's `TOOLS_BY_ROLE` row is **empty** — no
+  `Read`, no `Bash`, no checkout to read — so when a provisioner is composed, a question that
+  product/18:34 sells as *"cheaper than reading transcripts"* costs a container. Nothing is wrong:
+  the run inherits the mechanism, which is Q72's whole principle. What is missing is the rule that
+  would skip it, and it is not free — the workspace also delivers the context-pack files and the
+  skills plugin, and *discovery* is a stage-less run that genuinely needs its checkout, so "a
+  stage-less run needs no workspace" is false. The honest predicate is about the **tools**: a spec
+  with no file tool and no shell has nothing to do with a tree. It is a `WorkspaceProvider` decision
+  with consequences for two other run kinds, which is why it is filed rather than taken here.
+  *Refiner (session 5): **filed as backlog 82**, judged **not a defect and latent** — the provisioner
+  is absent by default (`agent.ts:187-195`), so nothing starts a container today. Two measurements
+  the bullet did not have: the planner states the opposite **twice** (`planner.ts:236-237`
+  *"an ask run is given no workspace"*, `:310` *"an ask has no workspace for one to be copied
+  into"*), and the second of those sits three lines above `SKILLS_BY_ROLE.ask = ['kb']` — a skill
+  reaches a run only by being written into the checkout, so the tools-shaped predicate **removes the
+  `kb` skill** unless the same change moves it.*
+- **`get_task_context` still refuses, and the ask is why that is now visible** (WP-31).
+  `PLATFORM_TOOLS_BY_ROLE.ask` is `['get_task_context', 'kb_search']` — Q72 (b)'s *"read-only over
+  platform data"* — and `apps/server/src/platform-tools.ts` refuses the first by name. The ask does
+  not *need* it on this build, because its prompt carries the ticket, the artifacts, the runs and
+  the `human_actions` rows as data blocks (`createAskRunPlanner`), which is the same answer the
+  refusal itself gives (*"the prompt already carries the ticket, the artifacts and the return
+  feedback as delimited data"*). What it costs: an ask cannot ask for **more** than the prompt was
+  built with — a question about a long transcript, or about an artifact version the pack did not
+  include, is answered from what fits rather than from what exists. Building it needs the
+  `include` vocabulary widened (`ticket|artifacts|feedback|mr|ci` has no value for *runs* or
+  *audit*), which is a change to a tool every role holds, and that is the reason it was not taken in
+  a row that needed two of the five values.
+  *Refiner (session 5): **filed as backlog 83**, and the reason it needed a number of its own is that
+  the sentence carrying it pointed at a **closed** entry — backlog 11 says the refusal *"is entry
+  23's evidence rather than this entry's"*, and entry 23 was resolved by WP-15f, which fixed the
+  ticket-text half and left the tool refusing. Widened by one measurement: **ten of the eleven roles
+  hold it** (`planner.ts:80-108`; only `discovery` does not), so it is not the ask's tool that
+  refuses, it is everyone's.*
+- **`task_asks` has no recovery for a lost wake-up** (WP-31). `askTaskCommand` enqueues **after** its
+  commit, because `Jobs.enqueue` does not join a transaction, so a process that dies in that window
+  leaves a `pending` ask nothing will ever pick up. It is the same at-most-once window
+  `onboarding/discovery.ts` states for a discovery task and `pipeline.intake.reconcile` closes for a
+  matched ticket, and the index it would be found by already exists (`task_asks_pending_idx`). One
+  pass, in the shape WP-15c's reconciler already has.
+  *Refiner (session 5): **filed as backlog 84** — yes, the same class as entries **20** and **36**,
+  and filed as its own number rather than folded because that is what 36 did for the second site.
+  Two facts make it the **cheapest** of the three to close, and both are the reason it stays small:
+  entry 36's blocker does not apply (`task_asks.status` distinguishes *ran and answered nothing*
+  from *never ran*, where a curation cannot — rule 18), and a blind re-enqueue cannot double-charge
+  because `enqueueAsk` is `stately` on `ask:<id>`. One clause is widened: it is worse than the other
+  two sites in one respect, because the loss is **in front of the person who asked**.*
+- **`AskAnswer` has no screen of its own** (WP-31). The answer is an `artifacts` row and the task
+  page's artifact list shows every one of them, so a reader sees an `AskAnswer v3` entry with no way
+  to open it — the same gap every artifact has (`artifact.url` is null and no route serves an
+  artifact's body), now with a type whose content a human actually wants to read. The thread renders
+  the same text, so nothing is lost; what is odd is the list.
+  *Refiner (session 5): **filed as backlog 85** together with the **artifact** half of the citation
+  bullet below — one cause (no route serves an artifact's body; the `url: null` is a literal at
+  `queries/pipeline-queries.ts:634`), two symptoms. The entry adds the dependency that decides its
+  shape and is a blocker rather than a note: **backlog 35** — `artifacts.data` holds a run's
+  `structuredOutput` **unredacted**, measured with a planted key — so a route serving artifact bodies
+  publishes that. `AskAnswer` is the narrow exception (its `answer` is redacted and then bounded,
+  `ask/executor.ts:403-404`); the **citations** beside it in the same row are model text no redactor
+  touched.*
+- **A citation to a `human_actions` row or a knowledge page cannot be opened** (WP-31). The thread
+  links a `run` citation through the router and renders the other three as the row they name, because
+  no screen addresses an audit entry or a vault path by id. The audit panel is on the same screen, so
+  an `audit` citation could scroll to its row with no new route; a `knowledge` citation wants the KB
+  screen to take a path in its URL.
+  *Refiner (session 5): split — the **artifact** kind is backlog **85** (it shares its cause with the
+  bullet above), and the `audit`/`knowledge` kinds are **backlog 86**, filed as a **nit** because
+  both remedies named here are right and small. Two prices read off the tree: the knowledge half is
+  the cheaper (the API already takes the path, `endpoints.ts:337`; only the route carries none,
+  `routes/tree.tsx:128`), and the audit half has a catch — the task audit is **paged**
+  (`TASK_AUDIT_PAGE_LIMIT`), so an anchor resolves only for a row on the first page. The **prompt**
+  half of product/10:57's *"links to the exact run and prompt"* is neither: it is backlog **31** and
+  **Q64**, because `runs.system_prompt`/`user_prompt` have no writer.*
+
 - **An organisation-scoped budget has no channel, so `budget.exhausted` for an org cap notifies
   nobody** (WP-32). A chat binding belongs to a **project** and BD-010's org cap carries no
   `project_id` on its payload, so `decideNotification` answers `null` and logs why. What it costs: the

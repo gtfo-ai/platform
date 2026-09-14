@@ -32,6 +32,8 @@
 import {
   agentsResponseSchema,
   answerQuestionRequestSchema,
+  askTaskRequestSchema,
+  askTaskResponseSchema,
   autonomyResponseSchema,
   budgetsResponseSchema,
   cancelRunRequestSchema,
@@ -70,6 +72,8 @@ import {
   startDiscoveryResponseSchema,
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
+  taskAskListSchema,
+  taskAuditPageSchema,
   taskDetailResponseSchema,
   tasksResponseSchema,
   testIntegrationResponseSchema,
@@ -192,6 +196,18 @@ export interface Endpoints {
   ) => Promise<void>;
 
   // Commands (technical/08 § Principles: imperative names, audited).
+  /** The ask-the-task thread and the task's own audit trail (WP-31, product/10:57). */
+  readonly taskAsks: (taskId: string) => Promise<z.output<typeof taskAskListSchema>>;
+  readonly taskAudit: (taskId: string) => Promise<z.output<typeof taskAuditPageSchema>>;
+  /**
+   * Ask this task a question. Carries the caller's `Idempotency-Key` because the server requires
+   * one: a repeat would start a second run the project pays for.
+   */
+  readonly askTask: (
+    taskId: string,
+    body: z.input<typeof askTaskRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof askTaskResponseSchema>>;
   readonly pauseTask: (
     taskId: string,
     body: z.input<typeof pauseTaskRequestSchema>,
@@ -300,6 +316,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
 
     task: (taskId) => client.get(`/api/tasks/${seg(taskId)}`, { schema: taskDetailResponseSchema }),
+    taskAsks: (taskId) =>
+      client.get(`/api/tasks/${seg(taskId)}/asks`, { schema: taskAskListSchema }),
+    taskAudit: (taskId) =>
+      client.get(`/api/tasks/${seg(taskId)}/audit`, { schema: taskAuditPageSchema }),
     run: (runId) => client.get(`/api/runs/${seg(runId)}`, { schema: runRecordSchema }),
     runMessages: (runId, query) =>
       client.get(`/api/runs/${seg(runId)}/messages`, {
@@ -394,6 +414,13 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       });
     },
 
+    askTask: (taskId, body, idempotencyKey) =>
+      client.command(`/api/tasks/${seg(taskId)}/ask`, {
+        schema: askTaskResponseSchema,
+        body: askTaskRequestSchema.parse(body),
+        idempotent: true,
+        idempotencyKey,
+      }),
     pauseTask: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/pause`, pauseTaskRequestSchema, body),
     resumeTask: (taskId, body) =>

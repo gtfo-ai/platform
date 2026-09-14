@@ -181,6 +181,32 @@ export const useTask = (taskId: string) => {
   });
 };
 
+/**
+ * The ask-the-task thread for one task (WP-31, product/10:57).
+ *
+ * A query of its own rather than a field of `useTask`: an ask is answered by a run that takes a
+ * minute, so the thread changes on its own schedule and the task screen should not re-read five
+ * tables to see one new answer arrive.
+ */
+export const useTaskAsks = (taskId: string) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.taskAsks(taskId),
+    queryFn: () => endpoints.taskAsks(taskId),
+    ...FOREVER,
+  });
+};
+
+/** This task's `human_actions` rows (WP-31 criterion 10, PROGRESS backlog 52). */
+export const useTaskAudit = (taskId: string) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.taskAudit(taskId),
+    queryFn: () => endpoints.taskAudit(taskId),
+    ...FOREVER,
+  });
+};
+
 export const useRun = (runId: string) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -274,6 +300,28 @@ export const useAudit = (filters: { readonly entity_type?: string; readonly curs
 // Every command invalidates what it could have changed. The stream will say the same thing a
 // moment later; doing it here as well is what makes the button feel like it did something on an
 // instance whose stream is down.
+
+/**
+ * Asking this task a question (WP-31).
+ *
+ * Its own hook rather than a member of {@link useTaskCommands}, because it is the only task command
+ * whose server **requires** an `Idempotency-Key`: a repeat starts a second run the project pays for,
+ * so the key is held per intent at the call site that owns it (`app/idempotency.ts`, backlog 53) and
+ * released when the ask is recorded.
+ */
+export const useAskTask = (taskId: string, mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return useMutation({
+    mutationFn: (question: string) =>
+      endpoints.askTask(taskId, { question }, intents.keyFor(['task.ask', taskId, question])),
+    onSuccess: async (_result, question) => {
+      intents.release(['task.ask', taskId, question]);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.taskAsks(taskId) });
+    },
+  });
+};
 
 export const useTaskCommands = (taskId: string) => {
   const { endpoints } = useServices();

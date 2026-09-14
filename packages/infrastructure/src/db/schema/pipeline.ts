@@ -315,6 +315,36 @@ export const notifications = pgTable('notifications', {
   redactionCount: integer('redaction_count').notNull().default(0),
 });
 
+/**
+ * The ask-the-task thread (WP-31, migration 0024).
+ *
+ * `citations` is the model's own list after the application dropped the entries that name another
+ * task or another project (product/11:30), so it is `JsonValue` rather than a typed shape here: the
+ * column is written by one module and read by one projection, and both parse it with
+ * `askAnswerCitationSchema` rather than trusting this declaration.
+ */
+export const taskAsks = pgTable('task_asks', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  taskId: uuid('task_id').notNull(),
+  projectId: uuid('project_id').notNull(),
+  source: text('source').notNull(),
+  askedByUserId: uuid('asked_by_user_id').notNull(),
+  askedByIdentity: jsonb('asked_by_identity').$type<JsonObject | null>(),
+  ticketCommentId: text('ticket_comment_id'),
+  question: text('question').notNull(),
+  runId: uuid('run_id'),
+  status: text('status').notNull().default('pending'),
+  answer: text('answer'),
+  citations: jsonb('citations').$type<JsonValue>().notNull().default([]),
+  droppedCitations: integer('dropped_citations').notNull().default(0),
+  answerArtifactId: uuid('answer_artifact_id'),
+  refusalReason: text('refusal_reason'),
+  redactionCount: integer('redaction_count').notNull().default(0),
+  mirroredAt: timestamp('mirrored_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  answeredAt: timestamp('answered_at', { withTimezone: true }),
+});
+
 export type Task = typeof tasks.$inferSelect;
 export type TaskStage = typeof taskStages.$inferSelect;
 export type Run = typeof runs.$inferSelect;
@@ -324,3 +354,4 @@ export type Approval = typeof approvals.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type HumanAction = typeof humanActions.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+export type TaskAsk = typeof taskAsks.$inferSelect;

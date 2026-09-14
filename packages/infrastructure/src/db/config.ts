@@ -83,16 +83,25 @@ export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export const DATABASE_CONFIG_DEFAULTS = {
   appRole: 'platform_app',
   /**
-   * 19 at WP-32, from 17 (WP-18b), 13 (WP-15b) and 10 before that.
+   * 19 at WP-31, from 13 (WP-15b) and 10 before that.
    *
-   * `apps/server`'s `requiredPoolConnections` refuses to start below its own floor, and the floor
-   * for `ROLE=all` has risen three times since: to **13** when WP-18a registered the
-   * `knowledge.index` worker, to **16** when WP-18b added the Librarian's three
-   * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`), and to **18** when WP-32 added
-   * the daily digest tick (`notify.digest`). A default below the floor does not degrade — it
-   * **refuses to boot**, which is how each of those work packages found this line. 19 is the floor
-   * plus one connection of slack; it is not a capacity plan, and `.env.example` says the same thing
-   * with the whole sum written out.
+   * **The floor is not restated here** — it is `apps/server`'s `requiredPoolConnections`, computed
+   * from `POOL_RESERVATIONS`, and this ring may not import it (`biome.json`: `infrastructure` may
+   * name `application` and `prompts`, not `apps/*`). So this docblock states the *relationship* and
+   * points, which is PROGRESS backlog 22's remedy for a site that cannot derive: a default below
+   * the floor does not degrade, it **refuses to boot** with `UndersizedPoolError`, which is how
+   * every work package that added a worker found this line.
+   *
+   * Two facts a reader needs, both true at WP-31 and both checkable rather than restated. **This
+   * value equals the `ROLE=all` floor exactly, with no slack** — it was *"the floor plus one"* until
+   * WP-31's `task.ask` worker raised the floor onto it, and the sentence claiming the slack was
+   * still here after the floor had moved, which is backlog 22's site 6. And **the two shipped
+   * defaults for this one knob differ**: this one, which a process with no `.env` gets, and
+   * `.env.example`'s `APP_DB_POOL_MAX=20`, which an operator copies. Both are **held to the
+   * floor** — `apps/server/src/config.test.ts` reads `APP_DB_POOL_MAX` out of `.env.example` and
+   * asserts each value clears `requiredPoolConnections` — so neither can fall under it unnoticed.
+   * What is still unstated is which of the two is *intended*, and that is backlog 22's remaining
+   * half rather than a thing to guess at here.
    */
   poolMax: 19,
   connectionTimeoutMs: 10_000,

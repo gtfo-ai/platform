@@ -184,6 +184,26 @@ const DATA: Record<ArtifactType, unknown> = {
     linked_documents: [{ path: 'CONTRIBUTING.md', reason: 'review expectations' }],
     questions: [{ id: 'Q-1', text: 'Is legacy/ still maintained?', blocking: false }],
   },
+  AskAnswer: {
+    answer:
+      'Architecture chose a column over a second table because every read of the task page would ' +
+      'otherwise need a join; the plan says so in as many words.',
+    citations: [
+      {
+        kind: 'artifact',
+        artifact_type: 'ImplementationPlan',
+        version: 2,
+        detail: 'the rationale is the third paragraph of `approach`',
+      },
+      {
+        kind: 'run',
+        run_id: RUN,
+        detail: 'the architecture run that produced it',
+      },
+    ],
+    unanswered: ['whether the join would actually have been slow — nothing measured it'],
+    confidence: 'medium',
+  },
 };
 
 const ARTIFACT_TYPES = artifactTypeSchema.options;

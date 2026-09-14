@@ -8,8 +8,15 @@
  * composition root and may name Drizzle directly, so these live here until there is a repository
  * to move them into; `docs/technical/PROGRESS.md` carries that move as discovered work.
  *
- * Everything here is a **read**. The server writes no identity row of its own: Better Auth owns
- * `users`, `sessions`, `accounts` and `verifications`.
+ * Everything here was a **read** until WP-31. Better Auth still owns `users`, `sessions`,
+ * `accounts` and `verifications`; what this file now also writes is `user_identities`, the mapping
+ * of a **provider account** to a platform user — PROGRESS backlog **79**, the table that has had a
+ * reader since WP-15c and no writer at all.
+ *
+ * It is here rather than behind a port for the reason the rest of this file is: a repository with
+ * one caller and no second implementation is a port nobody needs. The reader stays where it is
+ * (`createPostgresIdentityDirectory`, behind `InboundIdentityDirectory`), because *that* one has two
+ * callers and a fake.
  */
 import type { AuditEntry, UserRole, UserSummary } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
@@ -111,6 +118,63 @@ export const findProjectConfig = async (
         configHash: row.configHash,
         updatedAt: row.updatedAt,
       };
+};
+
+export interface IdentityMappingRow extends Record<string, unknown> {
+  readonly provider: string;
+  readonly external_id: string;
+  readonly user_id: string;
+  readonly display_name: string | null;
+  readonly created_at: Date | string;
+}
+
+/**
+ * Maps a provider account to a platform user — the writer PROGRESS backlog **79** is about (WP-31).
+ *
+ * An **upsert on the primary key** `(provider, external_id)`, because re-mapping an account to a
+ * different person is the operation an operator actually performs when somebody leaves: an insert
+ * that refused would leave them deleting a row they cannot see. What it must never be is an upsert
+ * on `(provider, user_id)` — one person may hold several accounts of one provider — which is why
+ * the conflict target is spelled out rather than left to the table.
+ *
+ * `email` is deliberately **not** written. It is a column of the table and the only thing that
+ * would read it is a match the platform performed itself, which is the one route BD-022 and Q10
+ * refuse: a *guessed* identity would then be allowed to answer questions and approve plans. An
+ * operator names the account.
+ */
+export const upsertIdentityMapping = async (
+  database: Database,
+  input: {
+    readonly provider: string;
+    readonly externalId: string;
+    readonly userId: string;
+    readonly displayName: string | null;
+  },
+): Promise<IdentityMappingRow> => {
+  const result = await database.execute<IdentityMappingRow>(sql`
+    insert into user_identities (provider, external_id, user_id, display_name)
+    values (${input.provider}, ${input.externalId}, ${input.userId}, ${input.displayName})
+    on conflict (provider, external_id)
+      do update set user_id = excluded.user_id, display_name = excluded.display_name
+    returning provider, external_id, user_id, display_name, created_at
+  `);
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error('the identity mapping upsert returned no row');
+  }
+  return row;
+};
+
+/** Every mapping an operator has made, so the screen that writes them can also show them. */
+export const listIdentityMappings = async (
+  database: Database,
+): Promise<readonly IdentityMappingRow[]> => {
+  const result = await database.execute<IdentityMappingRow>(sql`
+    select provider, external_id, user_id, display_name, created_at
+      from user_identities
+     order by provider asc, external_id asc
+  `);
+  return [...result.rows];
 };
 
 export const listUsers = async (database: Database): Promise<UserSummary[]> => {

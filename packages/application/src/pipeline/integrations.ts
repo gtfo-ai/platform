@@ -607,6 +607,52 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
     );
   },
 
+  /**
+   * The ask-the-task mirror — product/10:57's *"and mirrored in the ticket thread"* (WP-31).
+   *
+   * A sibling of {@link lintComment} rather than a reuse of it, because the two differ in the one
+   * thing the idempotency key is about: a lint is posted **once per task** and an ask is posted once
+   * per *ask*, so the key and the marker are the ask's id. Sharing the function would have meant one
+   * caller passing the other's vocabulary.
+   *
+   * Q72 (d): this is reached only when the project turned `features.ask.mirror_to_ticket` on. The
+   * marker does the second job it does for the lint — a comment the platform wrote is recognisable,
+   * so `boundTicketSnapshot` skips it and `classifyTicketComment` refuses it, which is what stops an
+   * answer from being read as a new question.
+   */
+  askComment: async (
+    ticket: TicketRefInput,
+    markdown: string,
+    context: CallContext & {
+      readonly mode: TaskMode;
+      readonly idempotencyKey: string;
+      readonly markerId: string;
+    },
+  ): Promise<CommentRef | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const redacted = binding.redactor.redactText(markdown).value;
+    return mutate(
+      integrations,
+      binding.ref,
+      'add_comment',
+      { ticket_key: ticket.key, marker_id: context.markerId },
+      context,
+      async () => binding.port.addComment(ticket, redacted, { markerId: context.markerId }),
+      () => ({
+        provider: ticket.provider,
+        ticket_key: ticket.key,
+        comment_id: 'would-have-ask',
+        url: null,
+        marker_id: context.markerId,
+      }),
+      (result) => ({ comment_id: result.comment_id }),
+      replayable<CommentRef>(context.idempotencyKey),
+    );
+  },
+
   /** product/04: "Map stage states to ticket statuses per project" (`status_mapping`). */
   transition: async (
     ticket: TicketRefInput,

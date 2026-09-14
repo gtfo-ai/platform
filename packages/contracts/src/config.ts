@@ -296,6 +296,36 @@ export const featuresConfigSchema = z.strictObject({
       budget_usd: usdSchema.optional(),
     })
     .optional(),
+  /**
+   * Ask-the-task — product/18:34, WP-31, Q72.
+   *
+   * *"A Q&A thread on a task ('why did you choose X?') answered from the task's audit trail and
+   * artifacts, in the UI and in the ticket thread … Default: on … Settings: model (default Sonnet
+   * 5), per-question budget"*. Four keys, and every one of them has a reader:
+   *
+   *  - `enabled` defaults to **true** (product/18's own default column). A project that turns it
+   *    off refuses the endpoint by name rather than 404 — the feature exists and this project said
+   *    no.
+   *  - `model` is the document's *"default Sonnet 5"*, which is BD-013's verification model. It is
+   *    free text because a model id is the provider's vocabulary, not the platform's.
+   *  - `budget_usd` is the **per-question** cap (Q72 (c): 0.50 to start). It is the run's
+   *    `limits.maxBudgetUsd` *and* what admission adds to the task's spend before comparing against
+   *    the task cap, because a budget checked only against past spend is discovered one run late —
+   *    the argument `taskBudgetExhausted` already makes for a stage.
+   *  - `mirror_to_ticket` is Q72 (d) and defaults to **false**. product/10:57 asks for the mirror
+   *    and product/08:11 lists it as a capability; a bot that answers in somebody else's ticket
+   *    tracker is the most visible thing this platform does in another team's tool (A3), and every
+   *    other default here is conservative. When it is on, the comment goes out through a
+   *    `pipeline.outbound` duty like every other provider call.
+   */
+  ask: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+      model: nonEmptyStringSchema.optional(),
+      budget_usd: usdSchema.optional(),
+      mirror_to_ticket: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 // ── status mapping ───────────────────────────────────────────────────────────

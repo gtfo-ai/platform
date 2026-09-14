@@ -149,14 +149,44 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             stageAttempts: { refinement: 1, implementation: 2 },
             iterationCounters: { ci_fix: 1 },
           },
-          costActualUsd: 3.5,
         });
         const loaded = await store.tasks.load(tx, stored.task.id);
         expect(loaded?.task.state).toBe('active');
         expect(loaded?.task.currentStage).toBe('implementation');
         expect(loaded?.task.stageAttempts).toEqual({ refinement: 1, implementation: 2 });
         expect(loaded?.task.iterationCounters).toEqual({ ci_fix: 1 });
+      });
+
+      it('adds a run’s spend without touching anything else', async () => {
+        // `cost_actual` left `save`'s column list at WP-31: the ask executor adds to it from a
+        // process that runs beside the stage executor, so it is an **increment** the store performs
+        // rather than a value a caller computed from a snapshot it read earlier. Two calls, so the
+        // second is asserted to add rather than to replace — which is the whole difference.
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.addSpend(tx, stored.task.id, 0.4);
+        await store.tasks.addSpend(tx, stored.task.id, 3.1);
+        const loaded = await store.tasks.load(tx, stored.task.id);
         expect(loaded?.costActualUsd).toBeCloseTo(3.5, 6);
+        // …and nothing else moved: the state is the one `insert` wrote.
+        expect(loaded?.task.state).toBe(stored.task.state);
+        expect(loaded?.task.currentStage).toBe(stored.task.currentStage);
+      });
+
+      it('refuses a spend that is not a finite, non-negative number', async () => {
+        // Money only ever goes one way here; a caller that computed a negative has a defect the
+        // ledger must not absorb (standing rule 20). Both stores refuse with the same sentence.
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await expect(store.tasks.addSpend(tx, stored.task.id, -1)).rejects.toThrow(/non-negative/);
+        await expect(store.tasks.addSpend(tx, stored.task.id, Number.NaN)).rejects.toThrow(
+          /non-negative/,
+        );
+        expect((await store.tasks.load(tx, stored.task.id))?.costActualUsd).toBe(0);
+      });
+
+      it('refuses to add spend to a task it has never seen', async () => {
+        await expect(store.tasks.addSpend(tx, task().task.id, 0.4)).rejects.toThrow();
       });
 
       it('refuses to save a task it has never seen', async () => {
@@ -177,8 +207,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await store.tasks.save(tx, {
           ...(stale as NonNullable<typeof stale>),
           task: { ...stored.task, state: 'active', currentStage: 'implementation' },
-          costActualUsd: 4.25,
         });
+        await store.tasks.addSpend(tx, stored.task.id, 4.25);
         await store.tasks.saveWorkpad(tx, stored.task.id, {
           provider: 'fake-jira',
           ticket_key: stored.task.ticket.key,
@@ -238,8 +268,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await store.tasks.save(tx, {
           ...(stale as NonNullable<typeof stale>),
           task: { ...stored.task, state: 'active', currentStage: 'implementation' },
-          costActualUsd: 4.25,
         });
+        await store.tasks.addSpend(tx, stored.task.id, 4.25);
         await store.tasks.saveTicketSnapshot(
           tx,
           stored.task.id,

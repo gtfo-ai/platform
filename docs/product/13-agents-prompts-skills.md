@@ -75,6 +75,7 @@ Full default prompt texts are written in Round 2 as files; here is the intent an
 | Retrospective | task history | – | – | – | – | – | – | proposal | – |
 | Librarian | KB | KB | – | knowledge branch | KB MR | – | – | ✔ | – |
 | Discovery (onboarding, Step 2) | ✔ (repository) | – | read-only cmds (`ls`, `cat`, `grep`, `rg`, `find`, `git log|diff|show|blame|status`) | – | – | – | – | draft pages as `bootstrap` proposals, never auto-applied | – (questions go into the draft) |
+| Ask (ask-the-task, WP-31) | ✔ (the task's own context as data blocks: ticket, artifacts, runs, human actions — no workspace) | – | – | – | – | – | `get_task_context`, `kb_search` (read-only) | – | – (an ask is answered from the audit trail; questions to a human are not its job) |
 
 *Row added at WP-21 (session 5): the table had no Discovery row while the code gives the role a shell restricted to the read-only list above (`COMMAND_BASELINE_BY_ROLE`). Readiness criteria R1, R2 and R6 are read for what a run can establish without executing a project command — because BD-025 lets a project only narrow the organisation's command maximum, and the shipped maximum names no test or setup command, no run of any role can execute one today; that gap is recorded in PROGRESS with both ways out (a wider organisation maximum, or a per-role declared baseline the project may narrow).*
 
