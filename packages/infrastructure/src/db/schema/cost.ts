@@ -123,11 +123,24 @@ export const budgetWindows = pgTable(
   (table) => [primaryKey({ columns: [table.budgetId, table.windowStart] })],
 );
 
+/**
+ * Human minutes derived from events by the WP-29 projector (product/19 §16, technical/03:88).
+ *
+ * A **projection**, not a ledger: a review entry is a window that grows as more activity arrives,
+ * which is why migration 0025 registers the table `read_write` rather than `append_only`. `minutes`
+ * and `ended_at` are null together for a window that is still open.
+ */
 export const humanTimeEntries = pgTable('human_time_entries', {
   id: uuid('id').primaryKey().default(uuidv7),
   taskId: uuid('task_id').notNull(),
   kind: humanTimeKindEnum('kind').notNull(),
   userId: uuid('user_id'),
+  /**
+   * The provider account, `"<provider>:<external id>"`, when no platform user is mapped
+   * (migration 0025). It is the **segment key** for review minutes, so two unmapped reviewers of
+   * one merge request do not extend one another's window.
+   */
+  externalAuthor: text('external_author'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
   endedAt: timestamp('ended_at', { withTimezone: true }),
   minutes: numeric('minutes', { precision: 10, scale: 2 }),

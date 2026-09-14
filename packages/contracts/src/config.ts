@@ -297,6 +297,31 @@ export const featuresConfigSchema = z.strictObject({
     })
     .optional(),
   /**
+   * Human time accounting — product/18:32, product/19 §16, WP-29.
+   *
+   * product/18's Configuration column for this feature is **one setting** — *"show per-user
+   * breakdown off/on (default off)"* — and this object has exactly that key. Two absences are
+   * decided rather than overlooked:
+   *
+   *  - There is **no `enabled`**. The feature's Default column is *"on (derived from events; no
+   *    tracking of individuals beyond what tools already record)"*, it makes no provider call and
+   *    writes nothing anybody else can see, and BD-028's opt-in rule is about features that act in
+   *    somebody else's tools. A switch no document asks for is a key with a reader and no writer.
+   *  - There is **no hourly rate**. Q73: adding a USD figure to a minutes figure needs one, no
+   *    document supplies one, and a default would be published on every task page as a measurement.
+   *    The API carries minutes and dollars as two fields and never sums them; the optional
+   *    `human_hour_rate_usd` Q73 sketches belongs to whichever row owns organisation settings,
+   *    because it is only worth having together with the multiplication it gates.
+   *
+   * `per_user_breakdown` decides a **read**, not what is recorded: the entries are written either
+   * way, and turning it off means the API answers `by_user: null` rather than a list.
+   */
+  human_time: z
+    .strictObject({
+      per_user_breakdown: z.boolean().optional(),
+    })
+    .optional(),
+  /**
    * Ask-the-task — product/18:34, WP-31, Q72.
    *
    * *"A Q&A thread on a task ('why did you choose X?') answered from the task's audit trail and

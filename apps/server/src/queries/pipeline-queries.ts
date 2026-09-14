@@ -47,6 +47,7 @@
  */
 import type {
   AgentsResponse,
+  HumanTimeSummary,
   Id,
   InboxResponse,
   ModelUsage,
@@ -63,11 +64,13 @@ import { estimateAccuracy, resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
+import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 
 const {
   approvals,
   artifacts,
   events,
+  humanTimeEntries,
   projects,
   questions,
   runContextPack,
@@ -76,6 +79,7 @@ const {
   runs,
   taskStages,
   tasks,
+  users,
 } = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
@@ -431,6 +435,48 @@ export const findRunContextPack = async (
   return { found: true, recorded: false, rows: rows.length };
 };
 
+/**
+ * The human minutes recorded against a task — product/19 §16, product/09:29 (WP-29).
+ *
+ * Two reads and a pure fold: the entries joined to `users`, and the project's effective
+ * configuration for product/18:32's per-user-breakdown setting. Everything the answer is *made of*
+ * is in `./human-time-summary.js`, which is where the arithmetic, the two identity shapes and the
+ * `by_user: null` rule are asserted — a database is needed to reach this function and not to reach
+ * that one.
+ *
+ * The sum is done in TypeScript rather than in SQL so that the four `by_kind` buckets, the per-user
+ * rows and the total are folded from **one** read of the same rows and cannot disagree.
+ */
+export const findHumanTime = async (
+  database: Database,
+  taskId: string,
+  projectId: string,
+): Promise<HumanTimeSummary> => {
+  const [rows, projectRows] = await Promise.all([
+    database
+      .select({
+        kind: humanTimeEntries.kind,
+        userId: humanTimeEntries.userId,
+        userName: users.name,
+        externalAuthor: humanTimeEntries.externalAuthor,
+        minutes: humanTimeEntries.minutes,
+      })
+      .from(humanTimeEntries)
+      .leftJoin(users, eq(users.id, humanTimeEntries.userId))
+      .where(eq(humanTimeEntries.taskId, taskId))
+      .orderBy(asc(humanTimeEntries.startedAt)),
+    database
+      .select({ config: projects.config })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1),
+  ]);
+
+  return summariseHumanTime(rows, {
+    perUserBreakdown: perUserBreakdownEnabled(projectRows[0]?.config),
+  });
+};
+
 const toTaskRecord = (row: typeof tasks.$inferSelect): TaskRecord => ({
   id: row.id as Id,
   project_id: row.projectId as Id,
@@ -608,17 +654,21 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const [usage, takenOver] = await Promise.all([
+  const [usage, takenOver, humanTime] = await Promise.all([
     modelUsageFor(
       database,
       runRows.map((row) => row.id),
     ),
     findTakenOver(database, taskId, task.state),
+    // The project id comes from the task row rather than from the request: the breakdown setting
+    // belongs to the project that owns the task, and a caller cannot name a different one.
+    findHumanTime(database, taskId, task.projectId),
   ]);
 
   return {
     task: toTaskRecord(task),
     taken_over: takenOver,
+    human_time: humanTime,
     stages: stageRows.map((row) => ({
       stage: row.stage,
       attempt: row.attempt,

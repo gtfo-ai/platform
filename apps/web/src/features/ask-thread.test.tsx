@@ -59,6 +59,14 @@ const TASK_DETAIL = {
     completed_at: null,
   },
   taken_over: null,
+  // WP-29: required and always present, so a server that forgot to project it fails here rather
+  // than rendering a task page with no human-time line.
+  human_time: {
+    total_minutes: 0,
+    by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
+    by_user: null,
+    entries: 0,
+  },
   stages: [],
   artifacts: [],
   questions: [],

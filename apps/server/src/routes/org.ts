@@ -18,7 +18,14 @@
  * `routes/client-census.test.ts`, which compares the *client's* paths against the router, so they
  * are asserted by hand: positively in that census (served, 401, and absent from the client's list —
  * the shape `GET /api/projects/:id/kb/health` already has) and behaviourally in `./org.test.ts`,
- * which drives them through a real Fastify instance.
+ * which drives them through a real Fastify instance over a **fake** `IdentityQueries`.
+ *
+ * That last word is why they are also driven against a real PostgreSQL in
+ * `test/e2e/server/identity-api.e2e.test.ts`. A fake that returns what the route would like is not
+ * evidence about the driver that answers it: the pair shipped answering **500** on every real
+ * request, green in every tier, because the fake's `created_at` was a `Date` and the database's was
+ * a string (`toWireIdentityMapping` below carries the mechanism). No screen calls these two, so no
+ * client-driven tier would ever have found it either.
  *
  * What technical/08 names and this server still does not serve is enumerated, with the row that
  * owns each one, in `routes/client-census.test.ts` — which fails if that list drifts from the
@@ -44,13 +51,19 @@ import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole, listAuditEntries, listUsers } from '../queries/identity-queries.js';
 import { listInbox, listRunningAgents } from '../queries/pipeline-queries.js';
 
-/** One `user_identities` row as the two identity endpoints read and write it. */
+/**
+ * One `user_identities` row as the two identity endpoints read and write it.
+ *
+ * `created_at` is a `Date`. It used to be `Date | string`, and the union was the defect: a fake
+ * that answered one branch made an endpoint that only ever took the other look tested (standing
+ * rule 1). A shape the real query cannot produce is now a type error rather than a 500.
+ */
 export interface IdentityMappingRecord {
   readonly provider: string;
   readonly external_id: string;
   readonly user_id: string;
   readonly display_name: string | null;
-  readonly created_at: Date | string;
+  readonly created_at: Date;
 }
 
 /**
@@ -101,27 +114,26 @@ export interface OrgRoutesOptions {
 /**
  * One `user_identities` row on the wire (WP-31).
  *
- * A function rather than two object literals because the two endpoints below publish the same row
- * and `created_at` is the one field whose shape depends on the driver: `pg` answers a `timestamptz`
- * as a `Date` and a `sql` template can answer a string, so the conversion happens once and both
- * readers cannot disagree about it. `email` is a column of the table and is deliberately **not**
- * published: nothing reads it, and the only thing that would is a match the platform performed
- * itself, which is the route `POST /api/org/identities` exists to replace (BD-022, Q10).
+ * A function rather than two object literals because the two endpoints below publish the same row,
+ * so a difference between them is impossible rather than unlikely. `email` is a column of the table
+ * and is deliberately **not** published: nothing reads it, and the only thing that would is a match
+ * the platform performed itself, which is the route `POST /api/org/identities` exists to replace
+ * (BD-022, Q10).
+ *
+ * `created_at` is rendered here **unconditionally**, because the record carries a `Date`. It used
+ * to be written `row.created_at instanceof Date ? … : row.created_at` over a `Date | string`, and
+ * that branch is how the endpoint answered **500** on every real request while its route test
+ * passed: `queries/identity-queries.ts` read the row through drizzle's raw `execute`, which hands a
+ * `timestamptz` back unparsed, and the untouched string went out as the ISO instant the schema
+ * demands. The query is on the builder path now and the union is gone; what is left here is one
+ * conversion with no branch to be wrong about.
  */
-export const toWireIdentityMapping = (row: {
-  readonly provider: string;
-  readonly external_id: string;
-  readonly user_id: string;
-  readonly display_name: string | null;
-  readonly created_at: Date | string;
-}) => ({
+export const toWireIdentityMapping = (row: IdentityMappingRecord) => ({
   provider: row.provider,
   external_id: row.external_id,
   user_id: row.user_id,
   display_name: row.display_name,
-  created_at: (row.created_at instanceof Date
-    ? row.created_at.toISOString()
-    : row.created_at) as IsoDateTime,
+  created_at: row.created_at.toISOString() as IsoDateTime,
 });
 
 const DEFAULT_PAGE_SIZE = 50;

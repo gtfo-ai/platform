@@ -234,6 +234,21 @@ export const formatDateTime = (iso: string): string => {
     : new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(at);
 };
 
+/**
+ * Human minutes as `"2 h 15 m"` — product/19 §16's unit, product/09:29's *"shown next to"* (WP-29).
+ *
+ * Minutes rather than a duration between two instants, because that is what `human_time_entries`
+ * stores: the caps and the excluded gaps have already been applied, so there is no interval left to
+ * derive. Below an hour it prints minutes alone, and a measured zero prints `"0 m"` rather than an
+ * em dash — a review window the platform measured at zero length is a different fact from a task
+ * nobody has touched, and the caller decides which it is showing.
+ */
+export const formatMinutes = (value: number): string => {
+  const total = Math.max(0, Math.round(value));
+  const hours = Math.floor(total / 60);
+  return hours === 0 ? `${total} m` : `${hours} h ${total % 60} m`;
+};
+
 /** Elapsed time as a compact human string. `now` is a parameter: a component must not read a clock. */
 export const formatElapsed = (fromIso: string | null | undefined, nowMs: number): string => {
   if (fromIso === null || fromIso === undefined) {

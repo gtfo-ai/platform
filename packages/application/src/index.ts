@@ -20,7 +20,8 @@
  * `CodeMapStore`), the indexer, the context-pack assembler, the `kb_search` tool and the code
  * mapper — technical/07, TD-008, TD-010. WP-19 added the cost ledger, the budgets projection and
  * the task estimate (`cost/`), plus `events/replay.ts` — the backfill that serves a handler
- * registered after the events it needs were already dispatched.
+ * registered after the events it needs were already dispatched. WP-29 added `human-time/`, the
+ * projector technical/03:88 has described since the schema existed and nothing implemented.
  */
 
 // The cost ledger, its budgets projection and the task estimate (WP-19, BD-010, BD-011)
@@ -47,6 +48,11 @@ export * from './events/handler.js';
 export * from './events/open-transaction.js';
 export * from './events/outbox.js';
 export * from './events/replay.js';
+// Human time accounting: the projector product/19 §16 defines (WP-29)
+export * from './human-time/minutes.js';
+export * from './human-time/ports.js';
+export * from './human-time/projector.js';
+export * from './human-time/runtime.js';
 // Outbound integration actions (technical/06, WP-07)
 export * from './integrations/action-executor.js';
 export * from './integrations/inbound.js';
@@ -128,6 +134,7 @@ export * from './testing/fixtures.js';
 export * from './testing/memory-ask.js';
 export * from './testing/memory-cost.js';
 export * from './testing/memory-eventing.js';
+export * from './testing/memory-human-time.js';
 export * from './testing/memory-integrations.js';
 export * from './testing/memory-knowledge.js';
 export * from './testing/memory-notifications.js';

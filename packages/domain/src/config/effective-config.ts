@@ -138,6 +138,10 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       urgent: [...DEFAULT_URGENT_NOTIFICATION_CLASSES],
     },
     shadow_mode: { enabled: false },
+    // product/18:32's one setting for human time accounting: *"show per-user breakdown off/on
+    // (default off)"*. The entries are recorded either way — this key decides a **read** — so the
+    // default is about who is named on a task page, not about what the platform measures (WP-29).
+    human_time: { per_user_breakdown: false },
     // product/18:34's default column is **on**, with Q72 (c)'s starting cap and Q72 (d)'s mirror
     // off. `DEFAULT_ASK_BUDGET_USD` is in `packages/domain/src/ask/` beside the admission rule that
     // reads it, so "what a question may cost" has one spelling.

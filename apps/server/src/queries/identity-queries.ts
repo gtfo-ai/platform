@@ -22,7 +22,8 @@ import type { AuditEntry, UserRole, UserSummary } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
 
-const { configAudit, projectMembers, projects, runs, tasks, users } = dbAdapters.schema;
+const { configAudit, projectMembers, projects, runs, tasks, userIdentities, users } =
+  dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
 
@@ -120,13 +121,29 @@ export const findProjectConfig = async (
       };
 };
 
+/**
+ * One `user_identities` row as these two functions answer it.
+ *
+ * `created_at` is a **`Date`**, and that it is not a `Date | string` is the whole point of the
+ * repair below: the union is what let `routes/org.ts` publish whichever of the two the driver
+ * happened to hand back, with a fake supplying the branch production never takes.
+ */
 export interface IdentityMappingRow extends Record<string, unknown> {
   readonly provider: string;
   readonly external_id: string;
   readonly user_id: string;
   readonly display_name: string | null;
-  readonly created_at: Date | string;
+  readonly created_at: Date;
 }
+
+/** The four columns both functions publish; `email` is not one of them (see below). */
+const IDENTITY_MAPPING_COLUMNS = {
+  provider: userIdentities.provider,
+  external_id: userIdentities.externalId,
+  user_id: userIdentities.userId,
+  display_name: userIdentities.displayName,
+  created_at: userIdentities.createdAt,
+} as const;
 
 /**
  * Maps a provider account to a platform user — the writer PROGRESS backlog **79** is about (WP-31).
@@ -141,6 +158,23 @@ export interface IdentityMappingRow extends Record<string, unknown> {
  * would read it is a match the platform performed itself, which is the one route BD-022 and Q10
  * refuse: a *guessed* identity would then be allowed to answer questions and approve plans. An
  * operator names the account.
+ *
+ * ## Why this is the query builder and not a `sql` template
+ *
+ * It was a `sql` template through `database.execute`, and **every call to it answered 500**:
+ * drizzle-orm 0.45.2's node-postgres session installs its own `getTypeParser` on a raw query and
+ * returns `TIMESTAMPTZ`, `TIMESTAMP`, `DATE` and `INTERVAL` **unparsed** (`node-postgres/session.js`
+ * builds both `rawQueryConfig` and `queryConfig` that way), so `created_at` came back as
+ * PostgreSQL's own rendering — `2026-09-14 11:47:18.53969+00`, measured — the endpoint published
+ * it, and `isoDateTimeSchema` refused it (`FST_ERR_RESPONSE_SERIALIZATION`, *"Invalid ISO
+ * datetime"* at `created_at`; measured against a real instance,
+ * `test/e2e/server/identity-api.e2e.test.ts` is the case that would have caught it, and
+ * `test/integration/server/identity-queries.integration.test.ts` fails on this function's
+ * pre-repair body by name). The parsers are disabled because drizzle maps timestamps itself,
+ * per column, on the **builder** path — which is what every other timestamp this server publishes
+ * already goes through (`listAuditEntries`, `findProjectConfig`, `queries/pipeline-queries.ts`).
+ * So the fix is to be on that path rather than to re-render the string by hand: one mechanism for
+ * every timestamp in the file instead of two.
  */
 export const upsertIdentityMapping = async (
   database: Database,
@@ -151,14 +185,20 @@ export const upsertIdentityMapping = async (
     readonly displayName: string | null;
   },
 ): Promise<IdentityMappingRow> => {
-  const result = await database.execute<IdentityMappingRow>(sql`
-    insert into user_identities (provider, external_id, user_id, display_name)
-    values (${input.provider}, ${input.externalId}, ${input.userId}, ${input.displayName})
-    on conflict (provider, external_id)
-      do update set user_id = excluded.user_id, display_name = excluded.display_name
-    returning provider, external_id, user_id, display_name, created_at
-  `);
-  const row = result.rows[0];
+  const rows = await database
+    .insert(userIdentities)
+    .values({
+      provider: input.provider,
+      externalId: input.externalId,
+      userId: input.userId,
+      displayName: input.displayName,
+    })
+    .onConflictDoUpdate({
+      target: [userIdentities.provider, userIdentities.externalId],
+      set: { userId: input.userId, displayName: input.displayName },
+    })
+    .returning(IDENTITY_MAPPING_COLUMNS);
+  const row = rows[0];
   if (row === undefined) {
     throw new Error('the identity mapping upsert returned no row');
   }
@@ -168,14 +208,11 @@ export const upsertIdentityMapping = async (
 /** Every mapping an operator has made, so the screen that writes them can also show them. */
 export const listIdentityMappings = async (
   database: Database,
-): Promise<readonly IdentityMappingRow[]> => {
-  const result = await database.execute<IdentityMappingRow>(sql`
-    select provider, external_id, user_id, display_name, created_at
-      from user_identities
-     order by provider asc, external_id asc
-  `);
-  return [...result.rows];
-};
+): Promise<readonly IdentityMappingRow[]> =>
+  database
+    .select(IDENTITY_MAPPING_COLUMNS)
+    .from(userIdentities)
+    .orderBy(asc(userIdentities.provider), asc(userIdentities.externalId));
 
 export const listUsers = async (database: Database): Promise<UserSummary[]> => {
   const rows = await database

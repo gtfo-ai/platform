@@ -152,7 +152,13 @@ export const blobStorageEnum = pgEnum('blob_storage', ['db', 'file', 's3']);
 export const budgetScopeEnum = pgEnum('budget_scope', ['org', 'project', 'task', 'run']);
 export const budgetWindowEnum = pgEnum('budget_window', ['day', 'week', 'month', 'total']);
 export const costModeEnum = pgEnum('cost_mode', ['actual', 'estimated']);
-export const humanTimeKindEnum = pgEnum('human_time_kind', ['review', 'question', 'approval']);
+/** Migration 0025 appended `steer`, product/19 §16's fourth kind (WP-29). */
+export const humanTimeKindEnum = pgEnum('human_time_kind', [
+  'review',
+  'question',
+  'approval',
+  'steer',
+]);
 export const integrationDirectionEnum = pgEnum('integration_direction', ['in', 'out']);
 
 // Knowledge

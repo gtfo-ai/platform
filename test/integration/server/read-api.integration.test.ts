@@ -346,7 +346,98 @@ describe('the task projection', () => {
     // WP-27: no take-over on this task, and the field says so rather than being absent — the
     // projection reads the event log and this task's log has no `task.taken_over`.
     expect(detail?.taken_over).toBeNull();
+    // WP-29: a task with no recorded minutes, and the fields say which of the two "zeroes" it is —
+    // no entries at all, rather than entries that measured nothing.
+    expect(detail?.human_time).toEqual({
+      total_minutes: 0,
+      by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
+      by_user: null,
+      entries: 0,
+    });
     expect(await findTaskDetail(drizzled, '00000000-0000-4000-8000-00000000dead')).toBeNull();
+  });
+
+  /**
+   * **product/18:32's *"per user breakdown off by default"*, both directions** (WP-29).
+   *
+   * The rows are seeded here rather than folded from events **because this is a test of the read**:
+   * the fold from real provider deliveries and a real run is the e2e tier's, which is where WP-29's
+   * criterion 8 puts it. What is asserted here is the projection — the four kinds, the sum, the two
+   * identity shapes and the setting that decides whether anybody is named.
+   */
+  describe('the human-time summary', () => {
+    const KINDS = ['review', 'question', 'approval', 'steer'] as const;
+
+    beforeAll(async () => {
+      const user = await pool.query<{ id: string }>(
+        `insert into users (email, name) values ('ada@example.invalid', 'Ada Lovelace')
+         returning id`,
+      );
+      await pool.query(
+        `insert into human_time_entries
+           (task_id, kind, user_id, external_author, started_at, ended_at, minutes)
+         values ($1, 'review', $2, null, $3, $4, 90),
+                ($1, 'review', null, 'gitlab:grace', $3, $4, 12.5),
+                ($1, 'question', $2, null, $3, $4, 15),
+                ($1, 'approval', $2, null, $3, $4, 10),
+                ($1, 'steer', $2, null, $3, $4, 5)`,
+        [taskId, user.rows[0]?.id, '2026-09-12T09:00:00.000Z', '2026-09-12T10:30:00.000Z'],
+      );
+    });
+
+    afterAll(async () => {
+      await pool.query('delete from human_time_entries where task_id = $1', [taskId]);
+      await pool.query("update projects set config = '{}'::jsonb where id = $1", [projectId]);
+    });
+
+    it('sums the four kinds and publishes no names by default', async () => {
+      const detail = await findTaskDetail(drizzled, taskId);
+      expect(detail?.human_time).toEqual({
+        total_minutes: 132.5,
+        by_kind: { review: 102.5, question: 15, approval: 10, steer: 5 },
+        // Off by default — and `null` rather than `[]`, which is the answer when the breakdown is
+        // on and nobody has spent a minute.
+        by_user: null,
+        entries: 5,
+      });
+      // Every kind the enum has is a key, so a kind added later cannot be silently absent.
+      expect(Object.keys(detail?.human_time.by_kind ?? {}).sort()).toEqual([...KINDS].sort());
+    });
+
+    it('names the two identity shapes when the project turns the breakdown on', async () => {
+      await pool.query(`update projects set config = $2::jsonb where id = $1`, [
+        projectId,
+        JSON.stringify({ version: 1, features: { human_time: { per_user_breakdown: true } } }),
+      ]);
+      const detail = await findTaskDetail(drizzled, taskId);
+
+      expect(detail?.human_time.total_minutes).toBe(132.5);
+      expect(detail?.human_time.by_user).toEqual([
+        {
+          user_id: expect.any(String),
+          user_name: 'Ada Lovelace',
+          external_author: null,
+          minutes: 120,
+        },
+        // The unmapped reviewer: `user_id: null`, named by the provider account instead, and the
+        // total above holds all the same (WP-29 criterion 5).
+        { user_id: null, user_name: null, external_author: 'gitlab:grace', minutes: 12.5 },
+      ]);
+    });
+
+    it('reads the breakdown as off when the stored configuration does not parse', async () => {
+      // Strict schemas refuse rather than drop, and on the **read** side the conservative answer is
+      // the one that publishes fewer names (standing rule 20's split).
+      await pool.query(`update projects set config = $2::jsonb where id = $1`, [
+        projectId,
+        JSON.stringify({
+          version: 1,
+          features: { human_time: { per_user_breakdown: true } },
+          nope: 1,
+        }),
+      ]);
+      expect((await findTaskDetail(drizzled, taskId))?.human_time.by_user).toBeNull();
+    });
   });
 
   /**

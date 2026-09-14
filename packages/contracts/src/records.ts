@@ -205,6 +205,16 @@ export const budgetRecordSchema = z.strictObject({
 });
 
 /**
+ * The four kinds of human minute product/19 §16 defines — `human_time_entries.kind` (WP-29).
+ *
+ * The order is the database's (`human_time_kind`, migration 0002 plus **0025**'s appended
+ * `'steer'`), because `test/integration/db/enums.integration.test.ts` compares the two *in order*
+ * and `alter type … add value` without `before`/`after` appends. product/19 §16 lists `steer`
+ * fourth as well, so nothing is being re-ordered to match storage.
+ */
+export const humanTimeKindSchema = z.enum(['review', 'question', 'approval', 'steer']);
+
+/**
  * Where a task's cost estimate came from (product/09, Q65, Q71).
  *
  * `unknown` is the estimator's **refusal** and not an error: a project with no finished task has no
@@ -330,6 +340,7 @@ export type BudgetScope = z.infer<typeof budgetScopeSchema>;
 export type BudgetWindow = z.infer<typeof budgetWindowSchema>;
 export type BudgetRecord = z.infer<typeof budgetRecordSchema>;
 export type EstimateBasis = z.infer<typeof estimateBasisSchema>;
+export type HumanTimeKind = z.infer<typeof humanTimeKindSchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 export type RunRecord = z.infer<typeof runRecordSchema>;
 export type ConfigSource = z.infer<typeof configSourceSchema>;

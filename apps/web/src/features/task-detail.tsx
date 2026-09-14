@@ -33,7 +33,13 @@
  * (`GET /api/tasks/:id/asks`) rather than a field of the task DTO, for the reason that note
  * implied: an ask is answered by a run that takes a minute, on its own schedule.
  */
-import type { ApprovalRecord, QuestionRecord, TaskRecord } from '@platform/contracts';
+import type {
+  ApprovalRecord,
+  HumanTimeKind,
+  HumanTimeSummary,
+  QuestionRecord,
+  TaskRecord,
+} from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import { useProjects, useTask, useTaskAudit, useTaskCommands } from '../app/queries.js';
@@ -47,6 +53,7 @@ import {
   ErrorNotice,
   formatDateTime,
   formatElapsed,
+  formatMinutes,
   formatUsd,
   Loading,
   Metric,
@@ -80,6 +87,36 @@ export const estimateBasisText = (task: TaskRecord): string => {
         : 'Estimated before this platform recorded where the figure came from.';
   }
 };
+
+/**
+ * What the minutes are made of — product/19 §16's four kinds, in the order the document lists them.
+ *
+ * A **measured zero** and *nothing recorded* are different facts, and this line is where they are
+ * told apart: the metric above prints "none recorded" only when there is no entry at all, and a
+ * review window the platform measured at zero length (one comment, nothing after it) says so here.
+ * The kinds with no minutes are left out rather than printed as zeros.
+ */
+export const humanTimeBreakdown = (humanTime: HumanTimeSummary): string => {
+  if (humanTime.entries === 0) {
+    return 'No human activity recorded on this task yet — no review comment, question, approval or steer.';
+  }
+  const parts = HUMAN_TIME_KIND_LABELS.flatMap(([kind, label]) => {
+    const minutes = humanTime.by_kind[kind] ?? 0;
+    return minutes === 0 ? [] : [`${label} ${formatMinutes(minutes)}`];
+  });
+  const entries = humanTime.entries === 1 ? '1 entry' : `${humanTime.entries} entries`;
+  return parts.length === 0
+    ? `${entries}, none of which measured any time — a review with a single comment is a window of zero length.`
+    : `${parts.join(' · ')} over ${entries}.`;
+};
+
+/** product/19 §16's order, and the labels a person reads rather than the enum's own spelling. */
+const HUMAN_TIME_KIND_LABELS: readonly (readonly [HumanTimeKind, string])[] = [
+  ['review', 'review'],
+  ['question', 'questions'],
+  ['approval', 'approvals'],
+  ['steer', 'steers'],
+];
 
 const QuestionCard = ({
   question,
@@ -382,7 +419,15 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     return <ErrorNotice title="Task could not be loaded." detail={String(detail.error)} />;
   }
 
-  const { task, stages, artifacts, questions, approvals, runs } = detail.data;
+  const {
+    task,
+    stages,
+    artifacts,
+    questions,
+    approvals,
+    runs,
+    human_time: humanTime,
+  } = detail.data;
   // The route may be entered without a project key (from the inbox or the agents view), so the
   // link back to the board is resolved from the task's own project rather than from the URL.
   const projectKey =
@@ -647,6 +692,43 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             }
             definition="What the task has spent, divided by the estimate (product/19 §10): 1.00× is on the nose, 2.00× is twice what was predicted. Computed from those two numbers and nothing else."
           />
+          {/*
+            **product/09:29's *"total cost of delivery"*, in the only honest form this build can
+            print it** (WP-29, Q73). The dollars and the minutes are two numbers side by side and
+            nothing here adds them: a single figure needs an hourly rate, no product document or
+            configuration key supplies one, and a default would be rendered on every task page as
+            though it had been measured.
+          */}
+          <Metric
+            label="Human time"
+            value={
+              humanTime.entries === 0
+                ? 'none recorded'
+                : `${formatUsd(task.cost_actual_usd)} tokens · ${formatMinutes(humanTime.total_minutes)} human`
+            }
+            definition="Human minutes derived from events, never from tracking (product/19 §16): review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per steer. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
+          />
+          <p className="-mt-2 text-[11px] text-fg-muted">{humanTimeBreakdown(humanTime)}</p>
+          {humanTime.by_user === null ? null : (
+            <ul className="-mt-1 flex flex-col gap-0.5">
+              {humanTime.by_user.map((entry) => (
+                <li
+                  key={entry.user_id ?? entry.external_author ?? 'unattributed'}
+                  className="flex justify-between text-[11px] text-fg-muted"
+                >
+                  {/*
+                    `user_name` is a platform user's own name and `external_author` is a provider
+                    account id — somebody else's text either way (BD-022), so both go through
+                    `UntrustedText` like every other string this app renders.
+                  */}
+                  <UntrustedText
+                    value={entry.user_name ?? entry.external_author ?? 'unmapped account'}
+                  />
+                  <span>{formatMinutes(entry.minutes)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <Metric
             label="Questions pending"
             value={String(openQuestions.length)}

@@ -169,6 +169,11 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('event_streams', 'read_only', null),
       row('events', 'append_only', 'occurred_at'),
       row('human_actions', 'append_only', null),
+      // WP-29 (migration 0025): the human-time projection. `read_write` because a **review** entry
+      // is a window that grows — the first comment opens it and every later activity moves its
+      // ending — and registered rather than defaulted so the "registry lists every table"
+      // invariant above stays true. It is the first row this table has ever had a writer for.
+      row('human_time_entries', 'read_write', null),
       // WP-15c (migration 0014): `inbox` was the one table 0005 created without registering it, and
       // the access it needs is the default — so the row changes no privilege and closes the gap in
       // the registry that made the omission invisible.

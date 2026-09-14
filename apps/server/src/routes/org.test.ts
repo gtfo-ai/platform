@@ -35,13 +35,15 @@ describe('toWireIdentityMapping (WP-31, PROGRESS backlog 79)', () => {
     created_at: new Date('2026-09-09T10:15:30.000Z'),
   };
 
-  it('renders the instant as ISO 8601 whichever shape the driver answered', () => {
-    // `pg` answers a `timestamptz` as a `Date`; a `sql` template can answer a string. Both reach
-    // this function and the two endpoints must not disagree about the field.
+  it('renders the instant the record carries as ISO 8601', () => {
+    // This used to read *"whichever shape the driver answered"*, over a `Date | string`, and the
+    // string half of that union is how both endpoints answered 500 on every real request: the
+    // query read the row through drizzle's raw `execute`, which hands a `timestamptz` back
+    // unparsed, and the branch published it untouched. The record carries a `Date` now, so there
+    // is no second branch to assert — a string is a type error at the call site, and what the
+    // database actually answers is measured in
+    // `test/integration/server/identity-queries.integration.test.ts`.
     expect(toWireIdentityMapping(row).created_at).toBe('2026-09-09T10:15:30.000Z');
-    expect(
-      toWireIdentityMapping({ ...row, created_at: '2026-09-09T10:15:30.000Z' }).created_at,
-    ).toBe('2026-09-09T10:15:30.000Z');
   });
 
   it('publishes the mapping and never the email the table also carries', () => {

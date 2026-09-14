@@ -49,6 +49,27 @@ const usd = (value: string | number | null): number =>
 const usdOrNull = (value: string | number | null): number | null =>
   value === null ? null : usd(value);
 
+/**
+ * The organisation a project belongs to, and the zone its calendar is read in (BD-010, Q12).
+ *
+ * Exported because it has a **second** caller since WP-29: the human-time projector's store asks the
+ * same question for product/19 §16's *"per calendar day"* cap. One statement rather than two, so a
+ * budget window, a rollup day and a review window cannot disagree about when the day turned
+ * (standing rule 9 — an obligation two paths can discharge needs one arbiter).
+ */
+export const organisationTimezoneOf = async (
+  sql: SqlExecutor,
+  projectId: Id,
+): Promise<string | null> => {
+  const { rows } = await sql.query<{ timezone: string | null }>(
+    `select o.timezone
+       from projects p join organizations o on o.id = p.org_id
+      where p.id = $1`,
+    [projectId],
+  );
+  return rows[0]?.timezone ?? null;
+};
+
 const iso = (value: Date | string | null): IsoDateTime | null =>
   value === null ? null : (new Date(value).toISOString() as IsoDateTime);
 
@@ -357,15 +378,7 @@ export const createPostgresCostStore = (): CostStore => ({
     }
   },
 
-  organisationTimezone: async (tx, projectId) => {
-    const { rows } = await sqlOf(tx).query<{ timezone: string | null }>(
-      `select o.timezone
-         from projects p join organizations o on o.id = p.org_id
-        where p.id = $1`,
-      [projectId],
-    );
-    return rows[0]?.timezone ?? null;
-  },
+  organisationTimezone: async (tx, projectId) => organisationTimezoneOf(sqlOf(tx), projectId),
 
   estimateHistory: async (tx, projectId, limit) => {
     const { rows } = await sqlOf(tx).query<{

@@ -172,8 +172,12 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   await expect(page.locator(`main a[href="${HOSTILE.safeUrl}"]`).first()).toBeVisible();
   // …and the `vbscript:` and `file:` artifacts and the `data:` merge request are not.
   await assertNoHostileHref(page);
-  // Each refused URL still shows its label, so nothing simply vanished.
-  await expect(page.getByText('Merge request')).toBeVisible();
+  // Each refused URL still shows its label, so nothing simply vanished. `exact` because
+  // `getByText` with a string matches a **substring**, case-insensitively: WP-29 put the words
+  // "merge request" into the human-time metric's definition text, two elements matched, and
+  // Playwright's strict mode failed the locator rather than the assertion. The label is what this
+  // line is about, so the locator now says so.
+  await expect(page.getByText('Merge request', { exact: true })).toBeVisible();
   await expect(page.getByText('ReviewVerdict')).toBeVisible();
   // Exactly three: the `data:` merge request and the `vbscript:` and `file:` artifacts. Counted
   // rather than bounded below, so a link that quietly disappears fails here too (rule 42).
@@ -183,4 +187,24 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   await expect(page.getByRole('heading', { name: 'DEMO-2' })).toBeVisible();
   await expect(page.getByText('Ticket', { exact: true })).toBeVisible();
   await assertNoHostileHref(page);
+});
+
+/**
+ * WP-29 put a **provider account id** on the task screen — the per-user breakdown of product/18:32
+ * — and a provider account id is somebody else's text (BD-022).
+ *
+ * The fixture's second row is `gitlab:<script>…</script>`, so this asserts the two things the rule
+ * is made of: the characters are there as text, and no element was created from them.
+ */
+test('a provider account in the human-time breakdown is text, not markup', async ({ page }) => {
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
+  await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
+
+  await expect(page.getByText('gitlab:<script>window.__pwned', { exact: false })).toBeVisible();
+  expect(await page.locator('main script').count()).toBe(0);
+  expect(await page.evaluate(PWNED)).toBeUndefined();
+
+  // And the two numbers product/09:29 keeps apart are both on the screen, unsummed.
+  await expect(page.getByText('tokens ·', { exact: false })).toBeVisible();
+  await expect(page.getByText('2 h 23 m human', { exact: false })).toBeVisible();
 });

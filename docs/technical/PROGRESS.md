@@ -82,7 +82,7 @@ majors, and the finding underneath — no run of any role can execute a project 
 Q69), **WP-15i** (the eleven task and run commands: the aggregate decides, one `human_actions` row per
 accepted command, `Idempotency-Key` scoped to the caller; one review round approving with three minors
 fixed before the merge; Q70, backlog 47 widened, 50–53 filed), **WP-15j** (the SPA served from the image with the platform's own realpath guard after `@fastify/static` was measured to serve a planted symlink; three review rounds — compression absent behind a docblock deferring it to a finished row, then a false CSP premise — ending with the full policy the measured bundle permits, proven in a browser, which found zod's JIT probe; backlog 33 closed), **WP-23** (the operator and user guides held to the evidence standard of code, a 63-second dogfood install that found five guide defects, and `THIRD_PARTY_NOTICES.md` generated from the lockfile and the Dockerfiles with a check inside `verify:static`; one review round, APPROVE with two minors and a nit fixed before the merge) — **M1 is complete**; **WP-24** (review-only mode: a one-stage template on the provider's diff, findings from `pipeline.outbound` keyed on the platform's own index after round 1 measured two same-id findings collapsing into one thread, the credential residual measured to be none; two review rounds; backlog 57–58, Q74), **WP-25** (the ticket readiness linter on WP-24's shape with a new `ticket.created` event; the orchestrator's own `verify:e2e` caught a rule-50 wait before the review, and round 1 found the already-a-delivery-task guard dead in the same-delivery case and never re-validated on fire; two review rounds; backlog 59–62, Q75), **WP-26** (the rebase gate's bounded resolution as a run behind `ci_gate`, conflict warnings as MR threads; round 1 measured the implementer's `git merge *` allow promoting `--no-verify` to `allow` and the refiner named it a widening of the organisation maximum, so an architect ruled **TD-027** — a stage-scoped, add-only command default — and round 2 measured one of its clauses wrong (an allow glob spans spaces) and the record was amended; the orchestrator's own `verify:e2e` caught a rule-87 wait in WP-24's merged e2e on the way; two review rounds; backlog 63–66, Q76–Q77), **WP-27** (steer into the live session on the CLI's stdin, take-over as product/19's protocol through the launcher with a hold marker volume because a label cannot be updated on this engine, hand-back to any named stage; the census's admitted gaps now empty; one review round, APPROVE with four minors fixed before the merge; backlog 67–71), **WP-30** (the dial materialised per BD-027:14 in `projects.autonomy_policies`, `planApprovalGate` reading it, one operating-mode screen for the wizard and the new project settings page, budgets with a production writer; backlog 52's project half, 53, 55 and 58 closed; two review rounds — a blocker in round 1 (an existing test suite overwritten), APPROVE in round 2 with a minor the orchestrator fixed; backlog 72–74 and Q78 filed), **WP-28** (the budget-approval gate on the materialised threshold with the estimate and its basis on the workpad, migration 0022; product/19:144 amended as built; one review round, APPROVE with two minors the orchestrator fixed before the merge (a stale discovered-work bullet; the accuracy ratio's understatement on intervened tasks stated at the DTO); backlog 75–77 and Q79 filed), **WP-32** (the notify band, the digest and quiet hours; two review rounds — the per-mode digest split unasserted in round 1, APPROVE in round 2 with a derivation sentence the orchestrator fixed; the Docker VM reached 100 % during the round and the user chose to prune images older than 30 days (124.8 GB reclaimed); backlog 60 resolved, 78–81 and Q80 filed), **WP-31** (ask-the-task; two review rounds — the identity route without an audit row or a route test in round 1, APPROVE in round 2 with a minor and three nits the orchestrator fixed; backlog 52 and 79 resolved, 82–87 and Q81 filed; the product/13 Ask row added) — plus three ci-fixes for harness flakes, an architect ruling (TD-026), TD-018 amended as built,
-product/13 amended twice, backlog entries 30–87, Q63–Q81, TD-027, and a refinement to rule 61. **M1 has no
+product/13 amended twice, backlog entries 30–90, Q63–Q81, TD-027, and refinements to rules 61 and 1. **M1 has no
 rows left.** M2 in this order: ~~WP-24~~ ~~WP-25~~ ~~WP-26~~ ~~WP-27~~ (done), then ~~WP-30~~ ~~WP-28~~ ~~WP-32~~ ~~WP-31~~ (done), WP-29 (Q73's; needs WP-27's steer), and WP-33 last, blocked on a human credential. Q71–Q73 are implemented per their recommendation like Q63–Q70 — an autonomous session does not wait on them. **The Docker VM was at 97 % for most of the session and hit 100 % during WP-32's round 2** (WP-15j's implementer had removed 18 437 anonymous dangling volumes; named volumes untouched); the orchestrator asked and **the user chose `docker image prune -a --filter until=720h`** — 124.8 GB reclaimed, the VM at 40 % with 116 GB free — so container tiers run normally again. Rule 66 still holds: never prune the user's images on an agent's own judgement; ask. **Both rows now exist** (refiner, session
 5): **WP-15i** is the eleven task and run commands — `POST /api/runs/:run_id/steer` stays WP-27's — and
 **WP-15j** is serving the SPA from the bundle the product image already carries, both in M1 after WP-15h,
@@ -552,7 +552,25 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 1. **A fake may be stricter than the real adapter, never kinder.** Every later WP's unit tier trusts the
    fake, so one that admits what production blocks, or fires earlier than production, launders a bug into a
    pass. Four such divergences were found in the pg-boss fake alone, three in the dangerous direction. Write
-   every deliberate difference down where the fake is defined.
+   every deliberate difference down where the fake is defined. **Instance, session 5 — a route's test double
+   rather than a port fake, and the one field the driver chooses** (WP-29's e2e found it in WP-31's route;
+   recorded by the refiner, no test run, rule 66): `POST /api/org/identities` answered **500** against a real
+   database. `toWireIdentityMapping` converts `created_at` only when it `instanceof Date`
+   (`apps/server/src/routes/org.ts:111-124`), and a row read back through `database.execute` carries
+   PostgreSQL's own rendering as a **string**, which `isoDateTimeSchema` refuses — so Fastify failed
+   serialisation (`FST_ERR_RESPONSE_SERIALIZATION`, `"Invalid ISO datetime"` at `created_at`, quoted from
+   the instance's log) while the route's own test stayed green, *because its fake returns a `Date`*. The
+   product's only identity-mapping command was unusable, and with it the only way to clear the
+   `unmapped_identity` refusal every ticket-side author meets. **No eighty-eighth rule is owed for "every new
+   route gets one real-instance case."** This rule names the cause, rule **4** names the audit that would
+   have caught it (*can the harness even reach the state my assertion is about?* — here, can it even produce
+   the shape the driver produces), and rule **30** says the remedy for a mechanically detectable defect is a
+   check rather than a sentence. The place for it is the census that already compares the SPA's paths with
+   the server's registrations (`apps/server/src/routes/client-census.test.ts`), extended to name per route
+   the tier that has driven it against a **migrated database**, with the routes that have none listed *in
+   the test* the way that file already carries its admitted gaps. The one-line conversion was fixed on this
+   tree by a pre-review round; **the tier was not**, and it **needs measurement** (rule 66): nobody has
+   counted which registered routes have never met a database.
 2. **A wall-clock assertion is a hardware assertion, not a correctness one.** CI is a 2-core runner. Property
    tests carry `PROPERTY_TEST_TIMEOUT_MS` (30s) and a pinned `MODEL_RUNS`.
 3. **An invariant asserted in a comment, an error message or `.env.example` is not evidence it holds** — and
@@ -2239,6 +2257,13 @@ So the remaining item is smaller and unchanged in urgency: **three values, all w
 all wrong on a screen today**, one of them a single line. The recommendation stands — take the three
 together, in one change, with the backfill question answered in the same commit.
 
+**Owner, session 5 (refiner): WP-36**, whose M3 row now carries it as criterion 4
+(`13-implementation-plan.md`). The attribution is not adjacency: a maintenance pipeline is the first
+thing that makes *"what did delivery cost, what did upkeep cost"* a question anybody asks of
+`runs.mode`, and `retro`/`librarian` are upkeep runs recorded as delivery. **WP-41** stays the
+downstream reader and its row refuses a per-mode breakdown until this is paid, which is this entry's
+own warning made mechanical.
+
 ### 59. **Nothing tells the platform that a ticket changed, so three separate promises rest on an event the catalogue does not have — and it is a one-normaliser change, not the two-provider one two documents price it at** (TODO, small — **no work package owns it**; found by WP-25, session 5; the product half is **Q61 (b)**)
 Placed directly above entry 23 because it is that entry's other half: 23 is *the platform never reads
 the ticket*, closed at WP-15f; this is *the platform is never told the ticket was rewritten*, which is
@@ -2373,6 +2398,14 @@ nothing. What was owed was this entry — the half the fix did not cover.
 `readTicket` is *slow* rather than 404-fast, or a project on a tight Jira rate limit, at which point a
 per-stage doomed call becomes a delay on every discovery and review-only run.
 
+**Owner, session 5 (refiner): WP-36**, whose M3 row takes the read half as criterion 3
+(`13-implementation-plan.md`). A maintenance chore is the **fourth** task kind to run on a
+platform-issued reference after `mr!<iid>`, `lint!<key>` and discovery, and unlike the first three it
+will be created on a schedule rather than by a delivery, so the doomed `readTicket` would fire on
+every project every week. That row also corrects `task-management.ts:127`'s docblock, which lists
+*"maintenance chore"* among `createTicket`'s callers against product/19:126's own feature card
+(external touch: **merge requests**, not tickets).
+
 ### 63. **The conflict warning reaches a merge-request thread and an `events` row, and the board both product documents name has no field to render it — the promised surface is the one surface with nothing on it** (TODO, small — **no work package owns it**; found by WP-26, session 5)
 **What is wrong.** product/04 S6b is *"the board warns when two active tasks touch the same files"* and
 product/18 is *"surfaced on the board ('touches the same files as PROJ-98')"*. What WP-26 ships is a
@@ -2408,10 +2441,16 @@ only one task of a warned pair has the event, so the badge would appear on one c
 *"PROJ-98 conflicts with PROJ-12 but not vice versa"*.
 
 **Depends on / owner.** No dependency; the events, the comparison and the read API all exist.
-**No work package owns it.** Cheapest owner is **WP-41** (statistics), which already owes the only
+~~**No work package owns it.**~~ Cheapest owner is **WP-41** (statistics), which already owes the only
 consumer of both WP-26 events and would traverse the same stream once for both — but WP-41 is M3 and the
 promise is M2, so if the badge is wanted in M2 it is a small row of its own and this entry is its brief.
 No measurement needed.
+
+**Owner, session 5 (refiner): WP-41**, on the reading this entry already recommends — its M3 row
+carries the board field in criterion 3 together with entries **64** and **65**'s residuals
+(`13-implementation-plan.md`). **If the badge is wanted in M2 the row above is still the answer** and
+this entry is still its brief; what changed is only that the M3 default now has a home instead of
+none.
 
 ### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5)
 **What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
@@ -2666,6 +2705,16 @@ the download link and the resume lines belong, so the two should be taken togeth
 ships with no caller. Trigger that makes it urgent: the first real take-over, which is also the first
 time a workpad comment promises a download.
 
+**Where it goes, session 5 (refiner): nowhere in M3, and that is stated rather than left implicit.**
+The nine M3 rows were written this session and **none** of them fits — in particular this is **not**
+WP-41's CSV export, which is an aggregate over `cost_rollup_daily` and not a run's bytes. Following
+this entry's own reading, it and entry **70** are one small row of their own at the next free number
+after WP-43, i.e. **WP-44**: one JSONL route over WP-15h's existing `run_messages` projection (no
+`blobs` writer), one authenticated tarball download behind WP-15j's realpath guard with a retention
+for the directory, and the take-over/hand-back control that gives both a caller. Named in
+`13-implementation-plan.md` § "Milestone M3" so the next orchestrator does not re-derive that no M3
+row owns it. Nothing is scheduled by this note.
+
 ### 69. **`tasks` records that a task is paused and not *why*, so a workpad render while a human holds the task drops the take-over block — and the timeout that would trigger it is product/19 § 19's one unbuilt clause** (TODO, small, latent — **no work package owns either half**; found by WP-27, session 5)
 **What is wrong.** The workpad's take-over block (branch, `claude --resume` line, how to hand back) is
 carried on the `pipeline.outbound` job payload rather than re-derived from state: the handler copies
@@ -2807,6 +2856,12 @@ criterion on that row rather than a separate piece of work. **WP-27's hand-back 
 consumer** and cannot meet product/19 § 19's re-provision sentence without it; entry **69**'s timeout
 and entry **68**'s export are the other two clauses of the same paragraph left unowned.
 
+**Second consumer, session 5 (refiner): WP-34.** Shadow mode's recommended answer (**Q82** (a)) is to
+check a shadow run out at the **merge-base of the human merge request**, so this entry is a
+prerequisite of that row and is named on it in `13-implementation-plan.md`. That does not give this
+entry an owner — WP-34 depends on it, it does not contain it — but it does mean a second row now
+fails without it, and both of them are downstream of the same production provisioner.
+
 ### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (TODO — **no work package owns any of the three**; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
 **What is wrong.** WP-30 materialised the dial and gave five policies a reader; the enumeration it
 left behind says the rest out loud. The discovered-work bullet, quoted: *"six are read by the
@@ -2894,7 +2949,10 @@ intake asks it; the `intake_check` duty asks the ticket label and the WIP limits
 (no shadow runner exists; `tasks.mode` is chosen by whoever creates the task). Owner: **WP-34**
 (M3 — *"shadow mode (closed tickets) + ShadowReport + UI"*), which is the row where an Observe
 project first has to both refuse live tickets and run shadow batches. It is the only pairing in this
-entry that is a single piece of work.
+entry that is a single piece of work. **Session 5 (refiner): WP-34 now has a row with acceptance
+criteria** (`13-implementation-plan.md`) and (c) is its criterion 3, asserted at both dial positions
+(rule 42) with both `AUTONOMY_POLICY_READERS` entries flipping to `kind: 'read'` in the same change —
+so the table's own test becomes the recurrence guard. (a) and (b) are still unowned.
 
 **What it costs to leave.** The screen publishes all fifteen as facts: `PolicyTable`
 (`apps/web/src/features/operating-mode.tsx:339-353`) renders *"The 15 policies this position set"*
@@ -3000,6 +3058,17 @@ and it is a one-line row: if it is planned from this entry, (c) is the piece to 
 it is the only one that can be done inside a row that is already open (WP-26's gate has the diff).
 `budget_approval` in (d) is **WP-28**'s by mechanism and should be a sentence on that row when it is
 implemented. Nothing here blocks anything else.
+
+**Owner, session 5 (refiner): WP-37, which now has a row** (`13-implementation-plan.md`) written from
+this entry — (a) ships as a *proposal* rather than as a default (criterion 1), (b) is the Discovery
+artifact field and its prompt (criterion 2), (c) is the narrow write at WP-26's existing diff read
+(criterion 3), and (d) is criterion 5, with `budget_approval` named there because WP-28's row does not
+name it. **Two things this entry did not carry are on that row**: the **reviewer-routing half** —
+`readCodeowners` was built at WP-09 (`packages/application/src/ports/integrations/git-provider.ts:502`)
+and has **no caller** anywhere, `MergeRequestUpdate.reviewers` (`:253`) is never set, and product/19:138's
+three-step precedence has **no middle step to write**, because there is no `reviewers` key in
+`packages/contracts/src/config.ts` at all; and **Q83**, filed for the `checklist:<name>` half, which
+that row refuses by name until it is answered rather than deferring the whole requirement.
 
 ### 74. **BD-006's one-working-day question timeout is unbuilt end to end — no deadline is written, no timer is armed, and the escalation that exists has no producer** (TODO — **no work package owns it**; found by the refiner while attributing WP-30's `questionTimeout` policy, session 5)
 **What is wrong.** A blocking question parks a task for ever. Every piece of the timeout exists
@@ -3171,6 +3240,12 @@ read.
 is DONE; its row records the gap and did not close it. Cheapest by need is **WP-41**, which is a
 one-line M3 row and the first consumer; cheapest by adjacency is any row that touches
 `queries/pipeline-queries.ts`'s task projection. Nothing blocks it and nothing blocks on it.
+
+**Session 5 (refiner): WP-41 now has a row and it does *not* silently absorb this.** Its criterion 3
+says the field is either given the projection recommended above **or excluded by name**, so the
+statistics row cannot publish the constant — which is the outcome this entry asked for when it said
+WP-41 must not be the row that discovers it. The entry still has **no owner** for the projection
+itself; the cheapest adjacency is unchanged.
 
 ### 76. **Neither approval gate passes a deadline, so `approvals.deadline_at` is null on every row, `expireApproval` has no producer and `expireTaskApproval` has no caller at all — and unlike the question timeout, no document says an approval expires** (TODO, latent — **no work package owns it**; the third instance of the class entries **69** and **74** record; found by WP-28, session 5)
 **What is wrong.** The whole expiry mechanism is written — column, predicate, aggregate command,
@@ -3386,6 +3461,15 @@ socket — so if it is scheduled it wants a **row of its own** rather than a cor
 it is the natural host for the inbound half of entry **79**. Entry **79** is its other half: a
 transport with no author mapping still drops every decision as `unmapped_identity`, so neither entry
 alone makes product/03's chat journey work.
+
+**Where it goes, session 5 (refiner): WP-43, and explicitly none of the nine M3 rows.** The M3 table
+was written this session and this is not an M3 feature — it completes WP-32's journey rather than
+showing new value — so attaching it to WP-34 or WP-41 for adjacency would be the shape this ledger
+files as *"the finding nobody's work package owned"*, one layer on. It takes the next free number,
+**WP-43**, with this entry as its brief and entry **79**'s remaining half riding with it; named in
+`13-implementation-plan.md` § "Milestone M3" so the absence is not re-derived. Its step 5 stays
+**needs measurement** (whether Slack delivers `block_actions` to a request URL while
+`socket_mode_enabled` is true) and `docs/TODO.md` still holds it. Nothing is scheduled by this note.
 
 ### 79. **`user_identities` has one reader and no writer anywhere, so every human decision arriving from a provider is dropped as `unmapped_identity` — three rows record it as a consequence and none owns the mapping** (**RESOLVED** at `a29de19`, WP-31 — the third route this entry asked for, as an operator-stated mapping: `POST /api/org/identities` upserts on the primary key `(provider, external_id)` under `org.users.manage` (**admin**) and `GET /api/org/identities` lists them (`apps/server/src/routes/org.ts:196-243`); the two automatic routes stay refused **on purpose** and the endpoint's docblock says so, and `email` is not taken for the same reason. **Deliberately no `Idempotency-Key`**, against this entry's own "done" list, and the reason is stated at the route: the write is an upsert on the natural key, so a repeat writes the same row and a second mechanism would be a second thing to keep true — which satisfies *"performs nothing twice"* by construction. **What remains is below.** Found by WP-15c's reader, recorded as a symptom in WP-29's plan row, WP-31's criterion 5 and Q72, measured again by WP-32, session 5)
 **What is wrong.** The only mapping from a provider account to a platform user is empty on every
@@ -3850,6 +3934,156 @@ whether the debt is concentrated or spread.
 is the wrong owner for entry **57**'s reason: it reports a change's delta per merge request, which is a
 different question from the absolute budget, and the row that measures a thing should not be the row
 that pays for it. Cheapest owner is whoever the gate stops first.
+
+### 88. **A bot that is not this platform opens and extends a human review window, so every reviewer-minutes figure over-counts by however many robots comment on a merge request — and the flag that would fix it cannot be written in the table the bullet proposes, nor on the wire** (TODO — **no work package owns it**; found by WP-29, session 5)
+**What is wrong.** The human-time projector tells its **own** merge-request comments from a person's
+by the HTML marker every comment this platform posts carries, and by nothing else. A CI bot, a
+dependency updater or a release bot carries no such marker, so its comment is *"the first human MR
+activity"* that **opens** a review window (product/19 §16) and every later one **extends** it. The
+platform is not wrong about its own comments; it has no way to be told about anybody else's.
+
+**Evidence** (read off the tree; no test run, rule 66). The residual is written at the constant and
+is quoted rather than paraphrased — `packages/application/src/human-time/projector.ts:100-104`:
+
+> **Two residuals, in opposite directions.** A human who pastes this prefix into a review comment
+> loses that comment's contribution to their own window (they can only under-report themselves). A
+> *different* bot — CI, a dependency updater — has no marker, so its comments are counted as human
+> review activity; the platform cannot tell a robot from a person in somebody else's issue tracker
+> without being told which accounts are bots, which nothing in this build records.
+
+The guard that keeps the marker honest states the same limit about its own scope
+(`packages/application/src/human-time/platform-comment-marker.test.ts:10-13`), so nothing here is
+hidden — what is missing is the input.
+
+**The bullet's proposed home does not fit, and that is the part worth recording.** WP-29's note reads
+*"`user_identities` is the natural place for the flag (an account that maps to no person and is
+declared a bot)"*. It cannot be, as the table stands: `user_id uuid not null references users (id) on
+delete cascade` (`packages/infrastructure/src/db/migrations/0003_identity.sql:39-47`), and `user_id`
+is **required** in both the command and the published row (`packages/contracts/src/api.ts:659-675`).
+An account declared a bot maps to no person *by definition*, so the flag costs a migration making
+`user_id` nullable plus a `kind`, and then a decision at each of the three readers about what *"mapped
+to nobody on purpose"* means: the inbound resolver
+(`packages/infrastructure/src/integrations/postgres-inbox.ts:181`), the projector's own lookup
+(`packages/infrastructure/src/human-time/postgres-human-time-store.ts:86`), and the
+`unverified_identity` refusal that gates every ticket-side ask
+(`packages/domain/src/ask/ask.ts:156,196`).
+
+**What it costs to leave.** product/16:16's *"Reviewer minutes per merged MR"* and the `human_time`
+block the task page already renders include robot activity, and the error is **upward** while entry
+**90**'s is downward — the two do not cancel, and nobody can say which dominates. It is **live, not
+latent**: the projector has been writing rows since WP-29, so a project whose repository has a
+commenting CI bot inflates from its first task. It is bounded rather than unbounded — the 2 h gap rule
+and the daily cap keep one window finite — but a bot that comments hourly through a nightly pipeline
+keeps a window open across the whole day. **Needs measurement, and it cannot be made here**: how large
+the inflation is needs a real merge-request stream, and this repository has no live provider corpus.
+The mechanism is measured; the magnitude is a hypothesis.
+
+**What "done" looks like.** An **operator-declared** statement that a provider account is a machine —
+never guessed, the same argument BD-022 and Q10 use to refuse an email match — consulted where the
+projector resolves the author, with the activity **refused** rather than written as a zero-minute row
+(rule 16: every other refusal in that file logs by name and writes nothing). The shape is the
+implementer's choice and both have a stated cost: a nullable `user_id` plus a `kind` on
+`user_identities` (migration, three readers, two wire schemas), or a declared list in
+`organizations.settings`, which is `jsonb not null default '{}'` (`0003_identity.sql:7`) and has **no
+reader or writer anywhere in the tree** — it would be its first, which is the same column Q73's rate
+would want. Whichever is chosen, the marker check stays: it is the one that still holds on the day
+somebody maps the platform's **own** bot account to a user (`packages/domain/src/ask/ask.ts:129`).
+
+**Depends on / owner.** **No work package owns it.** Two candidates. **WP-41** publishes the reviewer
+minutes and would otherwise inherit a migration it did not create (entry **87**'s objection). Whoever
+next opens the identity surface (`apps/server/src/routes/org.ts`, WP-31's) is the **cheapest**, because
+a bot flag is an identity fact and the command, the list and the DTO are all in that file.
+
+### 89. **The eight-hour day cap is applied per entry and product/19 §16 never says per what, so one person can be credited more than a day in a day — decided rather than defective, and the decision is safe only until something sums across tasks** (nit, TODO — the read half is **WP-41**'s; found by WP-29, session 5)
+**What is wrong — nothing, on this build.** This is a reading of an ambiguous sentence, not a defect,
+and it is filed so that the row which *publishes* a cross-task total does not rediscover it as one.
+product/19:145 says the review window is *"capped at 8 h per calendar day and excluding gaps > 2 h"*
+and never says per **what**; the projector applies it per entry.
+
+**Evidence.** The judgement and its residual are stated where the arithmetic lives,
+`packages/application/src/human-time/minutes.ts:19-27`, quoted:
+
+> **The daily cap is applied per entry, over the calendar days that entry spans**, not per (user,
+> day) across a task or across the platform. A cross-row cap needs a bucket key, and the only key
+> available for review minutes on a default instance is `user_id: null` — which would clamp *every
+> unmapped reviewer in the organisation* to one shared 8 h a day … Per entry the cap is stateless,
+> order-independent and idempotent, which is what a projection replayed from the log needs. **The
+> residual, stated:** one person reviewing two tasks on one day can be credited more than 8 h that
+> day.
+
+**What it costs to leave.** On the task page, nothing: one task's entries are what that page sums. It
+becomes a wrong number the moment a figure sums **across** tasks — product/16:16 and the per-user
+breakdown WP-41 owes — where a person's day can exceed the cap the tooltip will quote, and product/10:63
+requires every number to carry its definition beside it. The trigger is therefore WP-41 shipping, not
+time passing.
+
+**What "done" looks like — one of two, never both.** Either product/19 §16 is amended to say the cap is
+**per entry (per task)**, which is what ships, is one sentence and is the honest answer if nobody wants
+the cross-task arithmetic (rule 8: the doc changes first); or **WP-41's rollup applies a second cap at
+read time** over (`user_id` or `external_author`, calendar day) across tasks and says so where the
+number is defined. The projector must stay per entry in either case: a cross-row cap at fold time is
+order-dependent and would break the replay **equality** WP-41's own criterion 5 demands. What makes the
+read-side cap possible *now*, where it was not before, is `human_time_entries.external_author`
+(migration `0025_human_time.sql`), which gives an unmapped reviewer a bucket key.
+
+**Depends on / owner.** **WP-41** for the read half, stated on its row. The documentation amendment has
+no owner and is one line; whoever answers **Q73** is touching the same paragraph.
+
+### 90. **`mr.approved` is in product/08's git-provider contract and absent from technical/02's catalogue, so approving is the one review act the platform cannot see — and the minutes shipped at WP-29 under-count by exactly the reviewers who never comment** (TODO, small — **no work package owns the emission**; **WP-41** is the consumer; found by WP-29, session 5; the ticket-side twin is entry **59**)
+**What is wrong.** Two product-and-technical documents disagree, and the code follows the narrower one.
+product/08:10 lists the git provider's emitted events as *"`mr.opened`, `mr.updated`,
+`mr.review.comment`, `mr.approved`, `mr.merged`, `mr.closed`, `ci.pipeline.finished`"*;
+technical/02:180's catalogue row has `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` and
+`mr.review.comment` and **no approval type and no review-requested type**. So one document promises a
+capability the event catalogue cannot express, which is rule 8's case with no code to correct — the
+documents have to be reconciled before anything is built.
+
+**Evidence** (read off the tree; no test run, rule 66). The normaliser says so in its own table —
+`packages/integrations/src/providers/gitlab/inbound.ts:112-123`, quoted: *"`approval`, `unapproval`,
+`approved` and `unapproved` have no catalogue event: technical/02 has no approval event for a git
+provider, and folding them into `mr.updated` would put four pipeline wake-ups where nothing about the
+merge request changed"* — and those four actions fall to `ignored('unsupported_event')`. The consumer
+states the consequence, `packages/application/src/human-time/projector.ts:22-27`: *"**approval** →
+*nothing*. There is **no `mr.approved`** event in this build … **a reviewer who approves a merge
+request without writing a comment contributes zero minutes.**"* technical/02:141-147 carries the same
+residual since WP-29's amendment. And the approval fact the adapter *does* hold is unusable for this:
+`detailed_merge_status` folds CI, approvals and draft into *"may GitLab merge this right now"*
+(`packages/integrations/src/providers/gitlab/mapping.ts:36,93`), carrying **neither an actor nor an
+instant**, so no consumer could attribute a minute even by polling.
+
+**The price is one normaliser, not two — entry 59's correction, on the other side of the catalogue.**
+GitLab is the only provider this build registers as `type: 'git'`
+(`packages/integrations/src/providers/gitlab/index.ts:77`), so the emission is that one branch plus the
+fake and the shared suite (rule 23, `test/contract/support/integrations/git-provider-contract-suite.ts`).
+The delivery payloads are **composed builders** rather than recorded HTTP fixtures
+(`test/contract/support/integrations/gitlab-fixtures.ts:78-95`), so the provenance obligation lands in
+the normaliser's docblock, which already cites GitLab's webhook page at `inbound.ts:109-110`.
+**Needs measurement before it is built** (rule 66): which action strings GitLab actually sends for an
+approval and whether the payload names the approver — read from the documentation page that docblock
+cites, because the whole value of the event is the actor.
+
+**What it costs to leave.** product/16:16's *"Reviewer minutes per merged MR"* under-counts by exactly
+the reviewers who click approve and type nothing, which on a healthy project is the ordinary case; the
+*"review start"* anchor of product/19 §16 has nothing at all; and the error is **downward** while entry
+**88**'s is upward, so the published figure has unmeasured error in both directions and no reader can
+tell. Under-counting is the honest direction while the event is missing — the alternative is to invent
+minutes for something the platform never saw — but it is a definition the product has not agreed to.
+
+**What "done" looks like — again one of two.** Either the catalogue gains `mr.approved`: a type in
+`packages/contracts/src/events.ts` carrying the mr ref, the approver's identity and the provider's own
+instant; the GitLab branch; the fake and a contract-suite case (rule 23); an `EVENT_CONSUMPTION` row
+naming the human-time projector at priority 230 **or** declaring it unconsumed with an owner (rule 18);
+and technical/02:180 plus the projector's residual paragraph corrected in the same change (rule 83 — the
+sentence nearest the fix is the one nobody re-reads). Or product/08:10 is amended to drop `mr.approved`
+and the under-count becomes a **published definition** rather than a gap. A review-requested type is a
+separate question and is not made cheaper by this one.
+
+**Depends on / owner.** **No work package owns the emission.** **WP-41** is the consumer and its
+criterion 7 already names this exact gap with the alternative — *"each either gets its event through a
+normaliser change with its fake, its contract-suite case and a recorded fixture in the same change (rule
+23), or is listed as absent with the reason"* — so the default outcome, if nobody takes this, is that the
+metric ships incomplete with a footnote. Cheapest owner: whoever next opens `gitlab/inbound.ts`; no M3
+row does today.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -6571,6 +6805,16 @@ the browser tier has never seen the sentence this entry is about.
 | WP-33 | nightly real-LLM smoke + evals in CI (`llm-ci` environment). | TODO | — | |
 
 ## Milestone M3 — show the value
+
+> **All nine rows have acceptance criteria since session 5** — a refiner turned the one-line items
+> into rows of `13-implementation-plan.md` § "Milestone M3", each with its evidence in the tree, its
+> dependencies, what it costs to leave and what "done" looks like. Read the row before planning the
+> work package; the Notes column here stays for what the implementation finds. **Recommended order:
+> WP-37 → WP-39 → WP-38 → WP-34 → WP-35 → WP-36 → WP-40 → WP-41 → WP-42**, and the reasoning is on
+> that section. Backlog **78** (Socket Mode) and **68**+**70** (the export download and the take-over
+> control) fit **none** of the nine and are named there as **WP-43** and **WP-44**; neither is
+> scheduled. Four open questions were filed with the rows: **Q82** (WP-34), **Q83** (WP-37), **Q84**
+> (WP-38), **Q85** (WP-40); **WP-42 additionally waits on WP-33**, M2's remaining row.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
@@ -15340,7 +15584,292 @@ direction that matters. Each now states the measured floor and its derivation:
   `requiredPoolConnections`. What is still unstated is which of the two is *intended*.
 
 
+### WP-29 — human time accounting
+
+**What shipped.** The projector technical/03:88 has described since the schema existed and nothing
+implemented: one handler, `human.time`, at TD-005 priority **230**, on `mr.review.comment`,
+`mr.merged`, `task.question.answered`, `task.approval.decided` and `run.steered`, writing
+`human_time_entries` through a `HumanTimeStore` (`packages/application/src/human-time/`,
+`packages/infrastructure/src/human-time/`); migration **0025** — `human_time_kind` gains `'steer'`,
+the table gains `external_author`, two check constraints and a `platform_table_policy` row;
+`TaskDetailResponse.human_time` and its fold (`apps/server/src/queries/human-time-summary.ts`);
+`features.human_time.per_user_breakdown`; and the task page's *"$4.20 tokens · 2 h 15 m human"*
+line. The table had **no writer at all** before this row, and `run.steered` had **no consumer**.
+
+**1. Every cap is product/19 §16's, and the daily one is applied *per entry*.** The document says
+*"capped at 8 h per calendar day and excluding gaps > 2 h"*. A cross-row cap needs a bucket key, and
+the only key available for review minutes on a default instance is `user_id: null` — which would
+clamp **every unmapped reviewer in the organisation** to one shared 8 h a day and would make a
+task's total depend on the order the projector saw other tasks' events. Per entry the cap is
+stateless, order-independent and idempotent, which is what a projection replayed from the log needs:
+`reviewMinutes` splits a window at local midnight **in the organisation's zone** and caps each day.
+The residual is stated at the code: one person reviewing two tasks in a day can be credited more
+than 8 h that day. Equality is *inside* the window on both bounds (a gap of exactly two hours
+continues it, exactly eight hours is admitted), asserted at the value and one second past it.
+
+**2. The fourth kind is a migration, not a dropped requirement.** `human_time_kind` was
+`('review','question','approval')` and product/19 §16 defines `steer`. Migration 0025 appends the
+label — forward-only (TD-011), appended rather than placed because
+`test/integration/db/enums.integration.test.ts` compares the labels with the zod enum **in order**,
+and `alter type … add value` may run inside the runner's transaction as long as nothing uses the new
+label in it (0018 and 0024 are the precedent). `humanTimeKindSchema` is published, because the API
+carries the kind in `HumanTimeSummary.by_kind`, so that entry moved out of the enum test's
+storage-only block.
+
+**3. The review window's anchors, and the residual at the code.** product/19 §16 wants *"comment,
+approval, review start"*. This catalogue has `mr.review.comment` (the only MR event carrying an
+author) and `mr.merged`, and **no `mr.approved` and no review-requested type** — so *"a reviewer who
+approves without commenting contributes zero minutes"* is written at `projector.ts`, in technical/02
+beside the rows, and filed. Under-counting is the honest direction. `mr.updated` is **not** read and
+the reason is now in its `EVENT_CONSUMPTION` comment: it carries no author at all, so it could
+attribute a minute to nobody, and it fires for the platform's own pushes — the Developer stage
+pushing a commit would read as somebody reviewing. Its entry still names WP-41.
+
+**4. `external_author` is a new column, and it is what makes criterion 5 true rather than only
+literal.** `user_identities` has had a writer since WP-31 and is **empty until an operator maps an
+account**, so on a default instance every review minute resolves to `user_id: null`. Keyed on that
+alone, two people commenting on one merge request would extend one another's window and the task's
+total would be a number that is nobody's. So the provider account travels beside the user id
+(`"<provider>:<external id>"`, the pair `user_identities` is keyed by) and is the segment key when
+there is no user. An account id longer than 256 characters is **refused rather than truncated** —
+truncation is many-to-one and would answer one reviewer's minutes with another's, which is WP-19's
+argument for `cost_entries.model` and `idempotencyScopeFor`'s for an idempotency key.
+
+**5. The platform's own merge-request comments are not human review.** Every comment this platform
+posts carries an `<!-- agentic:… -->` marker, and `platform-comment-marker.test.ts` holds the prefix
+to the **real** builders (`reviewMarkerFor`, `reviewSummaryMarkerFor`, `conflictWarningMarker`,
+`LINT_COMMENT_MARKER`) rather than to a copy of the string. Two residuals are stated at the
+constant, in opposite directions: a human who pastes the prefix under-reports **themselves**, and a
+*different* bot — CI, a dependency updater — has no marker and is counted as a person, because
+nothing in this build records which accounts are bots. Filed.
+
+**6. Minutes and dollars are two fields, and nothing in this row multiplies (Q73).** The
+recommendation's primary clause is implemented exactly: `TaskRecord.cost_actual_usd` and
+`HumanTimeSummary.total_minutes` travel in one document, and the task page prints
+`"$4.20 tokens · 2 h 15 m human"`. The recommendation's *secondary* clause — an optional
+`human_hour_rate_usd` that gates a derived total — is **not** shipped, and that is a reading rather
+than an omission: the row's criterion 6 says *"no code path multiplies minutes by a rate this build
+does not have"*, and a setting shipped without the multiplication it gates is a control that does
+nothing (WP-30 rule 10's shape). Q73's own owner line puts the setting *"wherever org settings
+land"*. Filed under discovered work.
+
+**7. What is idempotent, and what it rests on.** The guarantee is TD-005's, not the fold's: every row
+commits with the `handler_executions` claim, so a redelivery never reaches the handler and neither
+does a second backfill pass. The **review** fold is idempotent on its own (re-folding an activity
+already inside a window moves nothing, and a window is never moved *backwards*); the three flat
+kinds are **not** — a second execution would append a second ten-minute approval — which is exactly
+why the backfill test asserts a flat kind and why every idempotency assertion counts rows rather
+than reading a return value (rule 79).
+
+**8. The backfill's equality is a comparison between two tasks.** One task's events are dispatched by
+a bus that **has** the projector; an identical sequence for a second task is dispatched by a bus that
+does **not** — which is what every `apps/server` before this row did, deleting the `event_dispatch`
+row and writing the `$dispatch` marker — and then `replayEvents` reads that range into the projector.
+The two tasks' rows are compared field by field, and a second pass changes nothing. `created_at` is
+the only exclusion, and it is the database's `now()`.
+
+**9. One writer, as a census.** `packages/infrastructure/src/human-time/human-time-writers.test.ts`
+reads every source file git knows about — tracked **and** untracked (rule 85) — for an
+`insert into`/`update`/`delete from` naming the table, **and** for the Drizzle spelling
+`.insert(humanTimeEntries)`, and expects exactly the adapter (SQL) and nothing at all (Drizzle). Its
+own anchor is a planted repository with a tracked, an untracked and an ignored file.
+
+**Assumptions, each implemented.**
+- **The projector is a statistics consumer at 230**, which is technical/02:166's own band for the
+  `mr.*` row (*"stats (230)"*). It also has to run after the core handlers: at 230 the task↔merge
+  request association an earlier handler wrote has already committed, so `taskForMergeRequest`
+  finds it.
+- **A merge request that belongs to no task produces no entry.** `human_time_entries.task_id` is
+  `not null`, and every human-authored merge request review-only mode observes is one of these.
+- **An expired approval and a decision with no decider record nothing** — nobody spent ten minutes
+  deciding — and neither writes a `minutes: 0` row, which would read as "they decided and it took no
+  time" (rule 16). The **one** measured zero the projector does write is a review window with a
+  single comment in it, which is the document's own arithmetic; `HumanTimeSummary.entries` is what
+  tells `0 minutes over 1 entry` from `no entries`.
+- **The organisation's timezone fails open to UTC with a named warning**, through the *same*
+  `resolveBudgetTimezone` the ledger, the budgets read and the guard use (rule 9), because a handler
+  that threw would park a stream and stop measuring for every project (rule 20).
+- **`features.human_time` has one key.** product/18:32 lists exactly one setting for this feature;
+  there is no `enabled`, because its Default column is *on*, it makes no provider call, and a switch
+  no document asks for is a key with a reader and no writer.
+- **The read refuses rather than defaults, in the direction that publishes fewer names**: a
+  `projects.config` document that does not parse is read as breakdown **off**.
+
+**What the tiers assert.** Unit: every cap at the value, one unit inside and one unit past (rule 42);
+the DST split, **canaried by mutation** — replacing `midnightMs(nextIsoDate(day))` with
+`dayStart + 24 h` leaves the file green against a window whose every day hits the cap and fails by
+name against a three-hour window across the spring-forward boundary, which is why the case is three
+hours rather than a day and a half (rule 4); the fold's branches and both sides of the breakdown
+switch. Contract: the store suite against the fake and against PostgreSQL. Integration: the backfill
+equality and the no-op second pass; the read projection's default and override. E2E
+(`test/e2e/cost/human-time.e2e.test.ts`): a **steer on a run that is really running** and **two
+reviewers' comments delivered as signed git webhooks** — one mapped, one not — folded into rows
+nothing seeded, and `GET /api/tasks/:id` publishing both numbers unsummed. Web e2e: the provider
+account in the breakdown is rendered as text, asserted against the DOM.
+
+**Sentences this change falsified, and what was done with them** (rule 83): `consumption.ts`'s
+`task.taken_over` docblock said *"`run.steered` stays unconsumed below"* — corrected at the line;
+its `mr.updated` entry now says why the projector does **not** read it; technical/02's *"differs from
+this column on 23 rows"* is **22**, the `run.steered` and `mr.review.comment` rows name the new
+consumer, and a note beside the Slack one states the missing review anchors; technical/03:96 gained
+the writer, the migration, the column and the `read_write` reasoning. **One an implementer may not
+make:** `TD-005-event-store-and-dispatch.md:50` still says a composed `apps/server` registers
+handlers for **24** and diverges on **25 rows**; both are stale (this build registers **32** types
+and the WP-32/WP-29 closures moved the divergence), and a decision record is the orchestrator's to
+edit. Left for it, with the numbers here.
+
+**Assumption a reviewer should check first:** the review window's *"per calendar day"* cap is applied
+to **one entry over the days it spans**, not to a person's whole day across tasks. §1 has the
+argument and the residual; if the founder means the person-day, the change is a cross-row read at
+fold time and a bucket key that survives an unmapped author — which is the thing `external_author`
+now makes possible.
+
+**For `CLAUDE.md`'s "Where to look" (the orchestrator's file, not mine):** *Human minutes and what
+they are worth (WP-29): the projector is `packages/application/src/human-time/` — one handler at
+TD-005 priority 230 over `mr.review.comment`, `mr.merged`, `task.question.answered`,
+`task.approval.decided` and `run.steered`, writing `human_time_entries` through the **only** writer
+that table has (`packages/infrastructure/src/human-time/`, held by a census). product/19 §16's caps
+are `human-time/minutes.ts`, and the two numbers product/09:29 puts side by side are never added:
+there is no hourly rate in this build and Q73 says why one must not be invented.*
+
+
+**Pre-review fix (WP-31's identity route):** `POST /api/org/identities` answered **500** on a real
+database, and the fix is not the one-line conversion the discovered-work bullet below predicted.
+
+**Reproduced first** (rule 76), by writing the missing case and running it against the defect:
+`test/e2e/server/identity-api.e2e.test.ts` on an unfixed tree — `exit=1`, `Tests 2 failed | 2
+passed`, the client seeing `{"error":{"code":"internal_error"}}` and the instance's log carrying
+`FST_ERR_RESPONSE_SERIALIZATION` / `ResponseSerializationError`, `"Invalid ISO datetime"` at path
+`created_at`. (The two that passed are the 409 and the 403, which never reach the mapping.)
+
+**The cause, measured rather than inferred.** Not `pg` — `pg` parses a `timestamptz` into a `Date`.
+It is **drizzle-orm 0.45.2's raw `execute` path**: `node-postgres/session.js` builds both
+`rawQueryConfig` and `queryConfig` with a `getTypeParser` that returns `TIMESTAMPTZ`, `TIMESTAMP`,
+`DATE` and `INTERVAL` **unparsed**, because drizzle maps timestamps itself per column on the
+**builder** path. So a `sql` template through `database.execute` answered `created_at` as
+`2026-09-14 11:47:18.53969+00` (measured, not quoted from the earlier report), the route's
+`row.created_at instanceof Date ? … : row.created_at` took its second branch, and
+`isoDateTimeSchema` refused the string. Both identity endpoints were on that path; the **`GET`**
+answered `{"items": []}` while the table was empty, which is why nothing had ever seen it fail.
+
+**The fix is at the query, and it removes the union rather than the symptom** (a `new Date(...)`
+at the mapping would have left the next `sql` template free to make the same mistake):
+`upsertIdentityMapping` and `listIdentityMappings` are the drizzle **builder** now — the path every
+other timestamp this server publishes already uses — and `IdentityMappingRow`/`IdentityMappingRecord`
+carry a `Date`, so the string branch is a **type error** at the call site rather than a 500 at
+runtime. `toWireIdentityMapping` is one unconditional `toISOString()`. The claim in
+`routes/org.ts` that the two shapes both reach it, and the unit case asserting *"whichever shape the
+driver answered"*, were the defect written down as a property; both are corrected (rule 83).
+
+**Tests added.** `test/e2e/server/identity-api.e2e.test.ts` (4 cases, the tier the pair never had):
+the 200 body against `identityMappingSchema`, `created_at` asserted to equal
+`user_identities.created_at.toISOString()` read back on a second connection — the assertion the
+fake could not make — the `human_actions` row (`org.identity.map`, the actor, `task_id: null`,
+`display_name_chars` and no display name in it), the `GET` over that row, the upsert re-mapping an
+account to another person (one row, two audit rows), and the two refusals whose answer depends on
+the database (`unknown_user`, and a member refused `org.users.manage`), each asserted to leave no
+row. `test/integration/server/identity-queries.integration.test.ts` pins the **cause** one layer
+down, because it is a property of a library version: a raw `execute` of the same column is a string
+matching PostgreSQL's rendering, the builder is a `Date` for the same row, and the upsert's conflict
+target is exercised both ways (one account moved, one person holding two accounts).
+**Mutation-checked** (rule 3): the pre-repair body planted back in kills the integration case by
+name — *"upserts on (provider, external_id) and publishes the instant the row holds"*,
+`expected '2026-09-14 11:49:23.22245+00' to be an instance of Date` — and the e2e is the run quoted
+above.
+
+**WP-29's e2e no longer seeds around it** (rule 4): `test/e2e/cost/human-time.e2e.test.ts` maps
+`fake-git:ada` through `POST /api/org/identities` with the signed-in operator, and the docblock
+explaining the workaround is replaced by the reason the call is there. The discovered-work bullet
+below is **resolved**; two of its sentences are falsified by this fix and are corrected here rather
+than left standing — the fix is not one line, and the seed is gone.
+
+**The sweep** (rule 49), per route, "does a case exist that drives it against a real instance":
+- `POST /api/org/identities` — was **defective**; fixed; **yes** now (this e2e).
+- `GET /api/org/identities` — **same defect, same cause, same fix**; **yes** now (driven in the same
+  case, over a row the `POST` wrote, because an empty list cannot falsify it).
+- `POST /api/tasks/:task_id/ask`, `GET /api/tasks/:task_id/asks`, `GET /api/tasks/:task_id/audit`
+  (WP-31's other three) — **yes, already**: `test/e2e/pipeline/ask.e2e.test.ts` drives all three
+  against a real instance and asserts their 200 bodies, so Fastify's serializer has validated each
+  of them against a real row. They are not on the raw-`execute` path: the ask store reads through
+  raw `pg`, which parses timestamps.
+- The class's one other live copy is `packages/infrastructure/src/ask/postgres-ask-store.ts`'s
+  `iso()` — the same `instanceof Date ? … : value` **pass-through** over a `Date | string`. It is
+  correct today only because its executor is raw `pg`; `packages/infrastructure/src/events/sql.ts`'s
+  `toIso` is the safe spelling of the same helper (it converts the string branch too). Filed as
+  discovered work, not changed here.
+
 ## Discovered work — session 5 (not in plan)
+- **`POST /api/org/identities` answers 500 against a real database** (WP-31, found by WP-29's e2e).
+  `toWireIdentityMapping` converts `created_at` only when it `instanceof Date`, and the driver hands
+  a row read through `database.execute` back with PostgreSQL's own rendering as a
+  **string** — `isoDateTimeSchema` refuses it, and Fastify fails serialisation —
+  `FST_ERR_RESPONSE_SERIALIZATION`, `"Invalid ISO datetime"` at `created_at`, quoted from the
+  instance's log. The route's own test passes because its fake returns a `Date`, and no tier drives
+  this endpoint against a database. So **the product's only identity-mapping command is unusable**,
+  which also means the `unmapped_identity` refusal every ticket-side author meets cannot be cleared
+  by an operator. The fix is one line (`new Date(row.created_at).toISOString()`), and what it needs
+  beside it is the tier that would have caught it: an integration test that drives both identity
+  endpoints through the real router against a migrated database. Not taken in WP-29 — a sibling
+  endpoint, a new test file and a tier that does not exist for this route are bigger than the row
+  that found it; `test/e2e/cost/human-time.e2e.test.ts` seeds the mapping with a comment naming
+  this entry.
+  *Refiner (session 5): **not a backlog entry — recorded as an instance of standing rule 1**, the
+  harness kinder than production in the one field the driver chooses. The one-line conversion is
+  being fixed on this tree by a pre-review round. **No eighty-eighth rule is owed** for "every new
+  route gets one real-instance case": rule 1 names the cause, rule 4 the instrument audit, and rule
+  30 says the remedy for a mechanically detectable defect is a check — so the obligation belongs in
+  `apps/server/src/routes/client-census.test.ts` as a per-route column naming the tier that has
+  driven each route against a migrated database, with the ones that have none listed in the test.
+  **Needs measurement** (rule 66): nobody has counted which registered routes have never met a
+  database.*
+- **Q73's optional `human_hour_rate_usd` has no owner.** WP-29 implemented the recommendation's
+  primary clause (minutes and dollars as two fields, never summed) and deliberately did **not** ship
+  the setting, because the row's own criterion 6 forbids the multiplication it exists to gate and a
+  control that does nothing is worse than an absent one. Whichever row owns organisation settings
+  should take the pair together — the setting, the derived total, and the label naming the rate it
+  used — or the question should be closed as "do not convert".
+  *Refiner (session 5): **folded into Q73** rather than filed — the question already owns the
+  setting, and its owner clause now names the home the bullet asks for: `apps/server/src/routes/
+  settings.ts` is the organisation settings surface WP-30 shipped (`GET`/`PUT /api/org/budgets`,
+  `apps/web/src/features/settings.tsx`), and `organizations.settings` is `jsonb not null default
+  '{}'` (`0003_identity.sql:7`) with **no reader or writer anywhere in the tree** — so the setting
+  is a contracts schema, a route and a screen rather than a migration, and it would be that
+  column's first reader. **WP-41** is the consumer that would print the derived total.*
+- **A bot that is not this platform is counted as a human reviewer** (WP-29). The projector excludes
+  its own merge-request comments by their `<!-- agentic:… -->` marker; CI bots, dependency updaters
+  and release bots have no such marker, and nothing in this build records which provider accounts
+  are machines. `user_identities` is the natural place for the flag (an account that maps to no
+  person and is declared a bot), which is also the table WP-31 gave a writer and no screen.
+  *Refiner (session 5): **filed as backlog 88**, and the proposed home is where it is widened —
+  `user_identities.user_id` is `uuid not null references users (id)` (`0003_identity.sql:39-47`)
+  and is **required** on the wire in both the command and the published row
+  (`packages/contracts/src/api.ts:659-675`), so an account declared a bot, which maps to no person
+  by definition, costs a migration plus a decision at each of the three readers rather than a
+  column. It is **live, not latent** (the projector writes rows today), and its error runs **upward**
+  where backlog **90**'s runs downward, so the two do not cancel.*
+- **Nothing reads `human_time_entries` except one task's detail page** (WP-29). The rows exist and
+  are correct; product/16:29's *"human minutes per merged MR and total cost of delivery"* is a
+  **statistics** read — per project, per user, over a window — and `GET /api/org/stats` has no
+  route, no DTO and no rollup. WP-41 owns it; this is the note that the data it needs is now there.
+  *Refiner (session 5): **already recorded — folded, no new number.** WP-41's M3 row names
+  `human_time_entries` among the seven signals nothing consumes, names Q73 (minutes and USD never
+  summed) and already records that `GET /api/org/stats` has no route, no DTO and no rollup. The row
+  is updated instead of duplicated: it now says the projector shipped at WP-29 and that the only
+  reader is the task-detail projection (`apps/server/src/queries/pipeline-queries.ts:657-671`), and
+  it carries backlog **88**, **89** and **90** as the three things it must not discover.*
+- **The review window's daily cap is per entry, not per person-day** (WP-29). One person reviewing
+  two tasks on one day can be credited more than eight hours that day. The alternative needs a
+  cross-row read at fold time keyed on something that survives an unmapped author — which
+  `human_time_entries.external_author` now provides, so the change is possible where it was not
+  before. `packages/application/src/human-time/minutes.ts` carries the argument for the shipped
+  reading.
+  *Refiner (session 5): **filed as backlog 89, and judged a stated residual rather than a defect** —
+  product/19:145 never says per **what**, and `minutes.ts:19-27` decides it per entry for a reason
+  that survives review (stateless, order-independent, idempotent, which is what `events/replay.ts`
+  equality needs). The two honest endings are exclusive: a one-line product/19 amendment saying the
+  cap is per entry, **or** a read-side cap in **WP-41** over (user, calendar day) across tasks. The
+  projector stays per entry either way. Nothing is wrong until a figure sums across tasks, so the
+  trigger is WP-41 shipping rather than time passing.*
 - **An ask is given a workspace it cannot read** (WP-31). `createWorkspaceClaudeRunner` provisions a
   container and a checkout for every `RunSpec`, and an ask's `TOOLS_BY_ROLE` row is **empty** — no
   `Read`, no `Bash`, no checkout to read — so when a provisioner is composed, a question that

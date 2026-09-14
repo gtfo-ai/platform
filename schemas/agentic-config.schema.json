@@ -421,6 +421,15 @@
           },
           "additionalProperties": false
         },
+        "human_time": {
+          "type": "object",
+          "properties": {
+            "per_user_breakdown": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
         "ask": {
           "type": "object",
           "properties": {

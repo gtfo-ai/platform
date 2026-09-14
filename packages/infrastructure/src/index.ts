@@ -12,14 +12,16 @@
  * `kb_*` index and the `code_files`/`code_maps` caches on PostgreSQL, the filesystem vault reader,
  * and the universal-ctags symbol extractor. WP-19 added the cost ledger's `CostStore` and the
  * price-table maintenance job (`cost/`). WP-32 added the notification outbox's `NotificationStore`
- * (`notify/`), which is what lets quiet hours defer a message rather than drop it. Later work
- * packages add the rest.
+ * (`notify/`), which is what lets quiet hours defer a message rather than drop it. WP-29 added the
+ * human-time projection's `HumanTimeStore` (`human-time/`), the first and only writer of a table
+ * that has had a schema since migration 0007. Later work packages add the rest.
  */
 export * as ask from './ask/index.js';
 export * as broadcast from './broadcast/index.js';
 export * as cost from './cost/index.js';
 export * as db from './db/index.js';
 export * as eventing from './events/index.js';
+export * as humanTime from './human-time/index.js';
 export * as integrations from './integrations/index.js';
 export * as jobs from './jobs/index.js';
 export * as knowledge from './knowledge/index.js';

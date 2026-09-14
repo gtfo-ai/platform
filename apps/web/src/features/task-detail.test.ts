@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateBasisText } from './task-detail.js';
+import { estimateBasisText, humanTimeBreakdown } from './task-detail.js';
 
 /**
  * The estimate's provenance line on the task page (WP-28, Q71 (b)).
@@ -56,5 +56,53 @@ describe('the estimate basis line', () => {
     expect(estimateBasisText(taskWith({ usd: 4, basis: null, samples: null }))).toContain(
       'before this platform recorded where the figure came from',
     );
+  });
+});
+
+/**
+ * The human-time line under the task page's metric (WP-29, Q73).
+ *
+ * The same reason the estimate line above exists: *"nothing has happened"* and *"something happened
+ * and it measured nothing"* are different facts about a task, and product/19 §16's arithmetic makes
+ * the second one ordinary — a merge request with a single comment on it is a **measured** window of
+ * zero length. Both are asserted, from both sides (standing rule 42).
+ */
+const humanTime = (
+  over: Partial<Parameters<typeof humanTimeBreakdown>[0]> = {},
+): Parameters<typeof humanTimeBreakdown>[0] => ({
+  total_minutes: 0,
+  by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
+  by_user: null,
+  entries: 0,
+  ...over,
+});
+
+describe('the human-time breakdown line', () => {
+  it('says nothing has happened when no entry exists', () => {
+    const line = humanTimeBreakdown(humanTime());
+    expect(line).toContain('No human activity recorded');
+    // …and names the four things that would create one, so the sentence is actionable.
+    expect(line).toContain('review comment, question, approval or steer');
+  });
+
+  it('distinguishes a measured zero from an absence', () => {
+    const line = humanTimeBreakdown(humanTime({ entries: 1 }));
+    expect(line).not.toContain('No human activity');
+    expect(line).toContain('1 entry');
+    expect(line).toContain('zero length');
+  });
+
+  it('names only the kinds that have minutes, in product/19 §16’s order', () => {
+    const line = humanTimeBreakdown(
+      humanTime({
+        total_minutes: 147.5,
+        by_kind: { review: 132.5, question: 0, approval: 10, steer: 5 },
+        entries: 4,
+      }),
+    );
+    expect(line).toBe('review 2 h 13 m · approvals 10 m · steers 5 m over 4 entries.');
+    // A kind with no minutes is left out rather than printed as a zero: the absent case must not
+    // be the quiet one, and here the absence is the *whole line's* job (rule 16, rule 18).
+    expect(line).not.toContain('questions');
   });
 });

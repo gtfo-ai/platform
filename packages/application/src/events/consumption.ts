@@ -74,9 +74,11 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * **A `handled` entry is not a count.** Six of the types below gained a *second* consumer at
    * WP-32 — the notification band at TD-005 priority 210 (`notify/handlers.ts`): `task.created`,
    * `task.stage.returned`, `task.question.asked`, `task.escalated`, `task.completed` and
-   * `task.cancelled`, which is exactly technical/02's Slack column. The table answers "must a
+   * `task.cancelled`, which is exactly technical/02's Slack column. Four more gained one at WP-29 —
+   * the human-time projector at priority 230 (`human-time/projector.ts`): `mr.review.comment`,
+   * `mr.merged`, `task.question.answered` and `task.approval.decided`. The table answers "must a
    * sweeper be able to handle this type", so a second handler does not move an entry; the two
-   * budget entries below **did** move, because they had none.
+   * budget entries below **did** move, and so did `run.steered`, because they had none.
    */
   'ticket.matched': 'handled',
   'task.created': 'handled',
@@ -119,8 +121,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * Consumed by the two **integrations**-band handlers rather than by the saga: neither event needs
    * the pipeline to decide anything (the commands that emit them have already moved the task), and
    * what they change is what a person reading the ticket sees — the workpad gains the branch and
-   * the resume command, and the board moves with the task's state. `run.steered` stays unconsumed
-   * below: the steer's effect is on the session, and its *minutes* are WP-29's.
+   * the resume command, and the board moves with the task's state. `run.steered` is **handled since
+   * WP-29** and used to be named here as the exception: the steer's effect is on the session, and
+   * its *minutes* are the human-time projector's (standing rule 83 — the sentence nearest the
+   * change is the one nobody re-reads).
    */
   'task.taken_over': 'handled',
   'task.handed_back': 'handled',
@@ -141,6 +145,19 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'run.failed': 'handled',
   /** The estimate at refinement reads the `RefinedSpec`'s size (product/09). */
   'artifact.created': 'handled',
+
+  // ── Human time accounting (WP-29), registered by `humanTimeHandlers` at priority 230 ──
+  /**
+   * A human steered a run — product/19 §16's *"steer = 5 min flat per steer"*.
+   *
+   * The **only** type this work package moved. Its four siblings — `mr.review.comment`,
+   * `mr.merged`, `task.question.answered` and `task.approval.decided` — were already `handled` by
+   * the pipeline, and a second consumer does not move an entry that answers *"must a sweeper be
+   * able to handle this type"*. This one had no consumer at all: WP-27 gave it a producer
+   * (`steerRunCommand`) and technical/02:163 names only the runner, which reads a steer
+   * **in-process** through `LiveRuns` rather than off the bus.
+   */
+  'run.steered': 'handled',
 
   // ── Ask-the-task (WP-31), registered by `askHandlers` in the core band at 60 ──
   /**
@@ -167,12 +184,17 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
 
   'run.created': 'unconsumed', // UI band, WP-20's realtime projection.
   'run.started': 'unconsumed', // UI band, WP-20.
-  // WP-27 gave it a producer (`steerRunCommand`); the consumer is WP-29's, which turns a steer
-  // into product/19 §15's five human minutes. Nothing else reads it.
-  'run.steered': 'unconsumed', // WP-29 human time accounting.
   'workspace.provisioned': 'unconsumed', // UI band, WP-20.
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.
+  /**
+   * Still WP-41's, and **WP-29 looked**: the human-time projector does not read it.
+   *
+   * product/19 §16 starts the review window at *"the first human MR activity"*, and this event
+   * cannot say whose activity it was — `mrPayload` carries no author at all — so it could not
+   * attribute a minute to anybody. It also fires for the platform's **own** pushes, so reading it
+   * as human activity would record the Developer stage pushing a commit as somebody reviewing.
+   */
   'mr.updated': 'unconsumed', // WP-41 statistics.
   // ── The notification band (WP-32), registered by `notifyHandlers` at TD-005 priority 210 ──
   /**

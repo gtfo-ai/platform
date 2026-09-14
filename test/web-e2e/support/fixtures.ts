@@ -273,6 +273,28 @@ export const taskDetail = taskDetailResponseSchema.parse({
   // WP-27: a task nobody has taken over. `null` rather than absent — the field is required and
   // nullable, so a client can tell "not taken over" from "this build does not report it".
   taken_over: null,
+  /**
+   * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
+   * is exactly why the corpus carries it: `by_user` is the one place the task screen renders a
+   * **provider account id**, and a provider account id is somebody else's text (BD-022). One of the
+   * two rows is therefore hostile, so `xss.spec.ts` asserts against the rendered DOM that it stayed
+   * a text node. The dollars and the minutes are two fields here as well: nothing in the corpus
+   * adds them, because nothing in the platform can (Q73).
+   */
+  human_time: {
+    total_minutes: 142.5,
+    by_kind: { review: 127.5, question: 0, approval: 10, steer: 5 },
+    by_user: [
+      { user_id: id(93), user_name: 'Ada Lovelace', external_author: null, minutes: 137.5 },
+      {
+        user_id: null,
+        user_name: null,
+        external_author: `gitlab:${HOSTILE.script}`,
+        minutes: 5,
+      },
+    ],
+    entries: 4,
+  },
   stages: [
     {
       stage: 'refinement',
@@ -312,6 +334,14 @@ export const taskDetail = taskDetailResponseSchema.parse({
 export const bugTaskDetail = taskDetailResponseSchema.parse({
   task: bugTask,
   taken_over: null,
+  // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
+  // and an empty list are different answers, and this is the first.
+  human_time: {
+    total_minutes: 0,
+    by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
+    by_user: null,
+    entries: 0,
+  },
   stages: [],
   artifacts: [],
   questions: [],

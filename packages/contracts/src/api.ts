@@ -46,6 +46,7 @@ import {
   budgetRecordSchema,
   configSourceSchema,
   contextPackRecordSchema,
+  humanTimeKindSchema,
   jsonObjectSchema,
   knowledgeProposalRecordSchema,
   projectRecordSchema,
@@ -379,10 +380,60 @@ export const takenOverSchema = z.strictObject({
   resume_commands: z.array(nonEmptyStringSchema),
 });
 
+/**
+ * One line of the per-user breakdown product/18:32 keeps **off by default** (WP-29).
+ *
+ * Two identity fields rather than one, because on this build most activity has only the second:
+ * `user_id` is the platform user a provider account is mapped to through `user_identities` (which
+ * has had a writer since WP-31 and is empty until an operator maps an account), and
+ * `external_author` is the provider account itself — `"<provider>:<external id>"` — for the review
+ * minutes that came from a merge-request comment. A row with both `null` is possible only for a
+ * kind the platform attributes to a platform user it then lost; nothing in this build writes one.
+ */
+export const humanTimeByUserSchema = z.strictObject({
+  user_id: idSchema.nullable(),
+  /** `users.name`, or `null` when the minutes belong to no mapped platform user. */
+  user_name: z.string().nullable(),
+  /** The provider account, untrusted text (BD-022) — rendered, never parsed. */
+  external_author: z.string().nullable(),
+  minutes: z.number().nonnegative(),
+});
+
+/**
+ * The human minutes recorded against a task — product/19 §16, product/09:29 (WP-29).
+ *
+ * **`minutes` and the task's `cost_actual_usd` are two numbers and this contract never adds them**
+ * (Q73). product/09:29 asks for human minutes *"shown next to token cost as total cost of
+ * delivery"*, and the sum needs an hourly rate that no product document, decision record or
+ * configuration key supplies; a default rate would be published on every task page as though it had
+ * been measured. So both fields travel and the screen prints them side by side.
+ *
+ * `by_user` is `null` when the project has not set `features.human_time.per_user_breakdown`
+ * (product/18:32's *"off by default"*) — a different answer from `[]`, which is "the breakdown is
+ * on and nobody has spent a minute yet".
+ */
+export const humanTimeSummarySchema = z.strictObject({
+  total_minutes: z.number().nonnegative(),
+  by_kind: z.record(humanTimeKindSchema, z.number().nonnegative()),
+  by_user: z.array(humanTimeByUserSchema).nullable(),
+  /**
+   * How many entries the total is made of — a review window, an answered question, an approval or a
+   * steer each count as one.
+   *
+   * It is here so that `0` minutes can be told apart from *nothing happened*: product/19 §16 measures
+   * a review as the wall clock between the first human activity and the last, so a merge request
+   * with exactly one comment on it is a **measured** zero-length window, and a task nobody has
+   * touched has no entry at all. One number, two very different states (standing rule 16).
+   */
+  entries: z.int().nonnegative(),
+});
+
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
   /** The take-over in force, or `null` — see {@link takenOverSchema}. */
   taken_over: takenOverSchema.nullable(),
+  /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
+  human_time: humanTimeSummarySchema,
   stages: z.array(
     z.strictObject({
       stage: stageIdSchema,
@@ -1092,6 +1143,8 @@ export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
+export type HumanTimeSummary = z.infer<typeof humanTimeSummarySchema>;
+export type HumanTimeByUser = z.infer<typeof humanTimeByUserSchema>;
 export type AnswerQuestionRequest = z.infer<typeof answerQuestionRequestSchema>;
 export type DecideApprovalRequest = z.infer<typeof decideApprovalRequestSchema>;
 export type SubmitFeedbackRequest = z.infer<typeof submitFeedbackRequestSchema>;

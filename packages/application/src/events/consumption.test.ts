@@ -14,8 +14,10 @@
 import { DOMAIN_EVENT_TYPES, type DomainEventType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { costHandlers } from '../cost/runtime.js';
+import { humanTimeHandlers } from '../human-time/runtime.js';
 import { notifyHandlers } from '../notify/handlers.js';
 import { createMemoryCostStore } from '../testing/memory-cost.js';
+import { createMemoryHumanTimeStore } from '../testing/memory-human-time.js';
 import { createPipelineHarness } from '../testing/pipeline-harness.js';
 import { EVENT_CONSUMPTION, HANDLED_EVENT_TYPES, sweepReadiness } from './consumption.js';
 import type { EventHandler } from './handler.js';
@@ -163,11 +165,13 @@ describe('sweepReadiness', () => {
  */
 describe('the declared table against the composed registrations', () => {
   /**
-   * Every handler this build registers, from **both** composition functions.
+   * Every handler this build registers, from **all three** composition functions.
    *
-   * It was the pipeline alone until WP-19; the cost ledger is the second, and a reader who assumes
-   * one registration will under-count by three types (standing rule 83 — closing a gap falsifies the
-   * sentence that described it).
+   * It was the pipeline alone until WP-19; the cost ledger is the second and the human-time
+   * projector (WP-29) the third, and a reader who assumes one registration will under-count
+   * (standing rule 83 — closing a gap falsifies the sentence that described it). The list is what
+   * `apps/server/src/pipeline.ts` really registers, which is the point: this file's equality is
+   * only an equality if both sides are read off the code.
    */
   const composedHandlers = () => [
     ...createPipelineHarness({ runs: {} }).runtime.handlers,
@@ -177,6 +181,7 @@ describe('the declared table against the composed registrations', () => {
         throw new Error('the consumption test never runs a handler');
       },
     }),
+    ...humanTimeHandlers({ store: createMemoryHumanTimeStore() }),
   ];
 
   it('has a real handler for every type it declares handled', () => {
@@ -221,6 +226,22 @@ describe('the declared table against the composed registrations', () => {
       handler.eventTypes === 'all' ? [] : [...handler.eventTypes],
     );
     expect(owned.length).toBe(8);
+    for (const type of owned) {
+      expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
+        type,
+        consumption: 'handled',
+      });
+    }
+  });
+
+  it('has no type left unconsumed that the human-time projector itself handles (WP-29)', () => {
+    // The same four lines WP-19's case asked the next consumer to copy. Four of the five types are
+    // already handled by the pipeline — a second consumer does not move an entry — and the fifth,
+    // `run.steered`, is the one this work package flipped.
+    const owned = humanTimeHandlers({ store: createMemoryHumanTimeStore() }).flatMap((handler) =>
+      handler.eventTypes === 'all' ? [] : [...handler.eventTypes],
+    );
+    expect(owned).toContain('run.steered');
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
         type,

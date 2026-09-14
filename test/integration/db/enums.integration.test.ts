@@ -17,6 +17,7 @@ import {
   configSourceSchema,
   contextPackRecordSchema,
   effortSchema,
+  humanTimeKindSchema,
   integrationTypeSchema,
   knowledgeProposalRecordSchema,
   knowledgeProposalStatusSchema,
@@ -68,6 +69,15 @@ const EXPECTED_LABELS: Record<string, readonly string[]> = {
   config_source: configSourceSchema.options,
   context_pack_reason: optionsOf(contextPackTier1.element.shape.reason, 'context pack reason'),
   effort: effortSchema.options,
+  /**
+   * Moved out of the storage-only block below at **WP-29**, because it now has a published
+   * counterpart: the API carries the kind in `HumanTimeSummary.by_kind`.
+   *
+   * The order is load-bearing. Migration 0025 **appends** `'steer'` — `alter type … add value`
+   * without `before`/`after` appends — so the zod enum lists it fourth, and this comparison is
+   * what would fail if a later release inserted a value in the middle of one and not the other.
+   */
+  human_time_kind: humanTimeKindSchema.options,
   integration_type: integrationTypeSchema.options,
   knowledge_proposal_kind: optionsOf(knowledgeProposalShape.kind, 'proposal kind'),
   knowledge_proposal_source: optionsOf(knowledgeProposalShape.source, 'proposal source'),
@@ -89,7 +99,6 @@ const EXPECTED_LABELS: Record<string, readonly string[]> = {
   // Storage-only vocabularies; technical/03 spells each of these out inline.
   blob_storage: ['db', 'file', 's3'],
   cost_mode: ['actual', 'estimated'],
-  human_time_kind: ['review', 'question', 'approval'],
   integration_direction: ['in', 'out'],
 };
 

@@ -115,9 +115,9 @@ handler for it, or it destroys a work item belonging to another process in the d
 **`—` declares the event unconsumed** — nothing is expected to handle it, and a sweeper needs no handler
 for it. `packages/application/src/events/consumption.ts` is that column as code, its keys held to
 `DOMAIN_EVENT_TYPES` so a new event type cannot be added without answering the question. **It differs
-from this column on 23 rows today** (25 before WP-32, which closed `budget.threshold.reached` and
-`budget.exhausted`; 28 before WP-19, which closed `run.finished`, `run.failed` and
-`artifact.created`) — the column states the finished product's consumers and the declaration states
+from this column on 22 rows today** (23 before WP-29, which closed `run.steered`; 25 before WP-32,
+which closed `budget.threshold.reached` and `budget.exhausted`; 28 before WP-19, which closed
+`run.finished`, `run.failed` and `artifact.created`) — the column states the finished product's consumers and the declaration states
 this build's, so each divergent entry names the work package that closes it (TD-005's amendment
 records the trade).
 
@@ -133,6 +133,20 @@ records the trade).
 > realtime projection). An **organisation**-scoped budget cannot be notified at all — a chat binding
 > belongs to a project and that payload carries no `project_id` — which `decideNotification` says at
 > the line.
+
+> **The human-time projector at priority 230 exists, since WP-29** (`human-time/projector.ts`,
+> product/19 §16). It is a **second** consumer of four types this column already marks consumed —
+> `mr.review.comment`, `mr.merged`, `task.question.answered` and `task.approval.decided` — plus
+> `run.steered`, which had none, and whose row below now names it.
+>
+> **Two of the three review anchors have no event in this catalogue, and that is the projector's
+> stated residual.** product/19 §16 starts the review window at *"the first human MR activity
+> (comment, approval, review start)"*, and there is **no `mr.approved`** type and no
+> review-requested type — so a reviewer who approves a merge request without writing a comment
+> contributes **zero minutes**. Under-counting is the honest direction: the alternative is to guess
+> minutes for an event the platform never saw. `mr.updated` is **not** read either, and
+> deliberately — it carries no author at all, so it could attribute a minute to nobody, and it
+> fires for the platform's own pushes.
 
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|
@@ -160,11 +174,11 @@ records the trade).
 | `run.created` | Runner | run, task, stage, role, mode, attempt, run key | UI (220) |
 | `run.started` | Runner | run, model, effort, prompt version, context pack | UI (220) |
 | `run.finished` / `run.failed` | Runner | run, status, usage, cost, exit reason | Cost ledger (10), stage executor (20), UI |
-| `run.steered` | Human | run, message, author | Runner (10) |
+| `run.steered` | Human | run, message, author | Runner (10), human time (230, WP-29) |
 | `artifact.created` | Stage executor | artifact | Workpad (120), UI |
 | `workspace.provisioned` / `.destroyed` / `.exported` | Workspace manager | workspace | UI |
 | `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10), review-only (10 on `opened`, 120 on `merged`/`closed`, WP-24), stats (230) |
-| `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30) |
+| `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30), human time (230, WP-29) |
 | `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10), flaky detector (15) |
 | `default_branch.moved` | git adapter | project, new head | Rebase gate (10), KB index (40) |
 | `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210, WP-32 — `reset` excepted: a window rolling over is not news) |

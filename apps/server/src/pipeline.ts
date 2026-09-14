@@ -71,6 +71,7 @@ import {
   createStageRunPlanner,
   createWebhookIngress,
   defaultProjectSettings,
+  humanTimeHandlers,
   silentLogger,
   startIntakeReconciliation,
 } from '@platform/application';
@@ -86,6 +87,7 @@ import type {
 import {
   ask as askAdapters,
   cost as costAdapters,
+  humanTime as humanTimeAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
   notify as notifyAdapters,
@@ -732,6 +734,20 @@ export const composePipeline = async (
       correlationId,
       causeEventId,
     }),
+    logger: options.logger,
+  })) {
+    options.eventing.bus.register(handler);
+  }
+  /**
+   * The human-time projection (WP-29), composed here for the same reason the ledger is: a process
+   * that registers the pipeline must register it too, because `EVENT_CONSUMPTION` now declares
+   * `run.steered` handled and `sweepReadiness` refuses to sweep a process that cannot handle it.
+   *
+   * It borrows no connection of its own — the projector runs inside the dispatcher's handler
+   * transaction — and it enqueues nothing, so `POOL_RESERVATIONS` is unchanged.
+   */
+  for (const handler of humanTimeHandlers({
+    store: humanTimeAdapters.createPostgresHumanTimeStore(),
     logger: options.logger,
   })) {
     options.eventing.bus.register(handler);
