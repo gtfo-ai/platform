@@ -301,6 +301,48 @@ describe('FakeGitProvider CI and CODEOWNERS', () => {
     expect(result.events[0]?.type).toBe('default_branch.moved');
     expect((await port.getDefaultBranchHead(PROJECT)).sha).toBe('f'.repeat(40));
   });
+
+  it('publishes the pipeline’s coverage on the delivery, which GitLab’s hook does not (divergence 13)', async () => {
+    /**
+     * The register's kindest claim, asserted rather than warned about (standing rule 12). The port's
+     * `ci.pipeline.finished` payload **can** carry a coverage and the only adapter this build ships
+     * fills it with `null` on every delivery, because GitLab's documented Pipeline Hook has none
+     * (`gitlab/inbound.ts:281-283`). So this fake is kinder here, and a platform feature that read
+     * the number off the *event* would be green on this file and blank in production — which is the
+     * reason WP-39's coverage duty reads `getPipelineStatus` for both sides instead.
+     */
+    const port = build();
+    const mr = await port.openMergeRequest({
+      project: PROJECT,
+      branch: 'agentic/task-9',
+      target: 'main',
+      title: 'Draft',
+      description: '',
+      draft: true,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    port.setPipeline({
+      project: PROJECT,
+      headSha: mr.head_sha,
+      status: 'success',
+      coveragePct: 81.5,
+    });
+
+    const delivered = await port.inbound.normalise(
+      port.emitPipelineFinished({ project: PROJECT, headSha: mr.head_sha }),
+      context,
+    );
+    const event = delivered.events[0];
+    expect(event?.type).toBe('ci.pipeline.finished');
+    expect((event?.payload as { coverage_pct?: number | null } | undefined)?.coverage_pct).toBe(
+      81.5,
+    );
+    // …and the read the platform actually uses agrees with it, which is what makes the divergence a
+    // *kindness* rather than a disagreement: both sources say the same number here.
+    expect((await port.getPipelineStatus(PROJECT, mr.head_sha))?.coverage_pct).toBe(81.5);
+  });
 });
 
 describe('FakeGitProvider discussions', () => {

@@ -270,6 +270,7 @@ const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<
       ticketSnapshotAt: null,
       reviewSubject: null,
       riskClasses: [],
+      coverage: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     };

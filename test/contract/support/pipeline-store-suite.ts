@@ -89,6 +89,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       ticketSnapshotAt: null,
       reviewSubject: null,
       riskClasses: [],
+      coverage: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
@@ -265,6 +266,93 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
       it('refuses to write risk classes for a task that does not exist', async () => {
         await expect(store.tasks.saveRiskClasses(tx, nextId(), ['data'])).rejects.toThrow();
+      });
+
+      /**
+       * WP-39's write, and the two properties that are this one's rather than the others' (rule 23:
+       * a new port obligation lands in the shared suite in the same change, or it is a
+       * provider-local promise).
+       *
+       * The first is the one every narrow write owes — a concurrent `addSpend` survives it, because
+       * the `coverage` duty fires on `ci.pipeline.finished` and runs beside the stage executor
+       * (standing rule 79). The second is **that the record comes back as it went in, nulls
+       * included**: the column is `jsonb` and every field inside it is how a *missing* number is
+       * spelled, so a store that dropped a `null` key, or that answered `0` for one, would publish
+       * "the agent added no coverage" on a task nobody measured (standing rule 16). An
+       * implementation that stored only the delta passes nothing here.
+       */
+      it('writes the coverage record whole, nulls and all, without writing anything else', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const stale = await store.tasks.load(tx, stored.task.id);
+        expect(stale?.coverage).toBeNull();
+        await store.tasks.save(tx, {
+          ...(stale as NonNullable<typeof stale>),
+          task: { ...stored.task, state: 'active', currentStage: 'ready_for_merge' },
+        });
+        await store.tasks.addSpend(tx, stored.task.id, 2.25);
+        const measured = {
+          head_sha: 'b'.repeat(40),
+          head_pct: 81.5,
+          base_branch: 'main',
+          base_sha: 'a'.repeat(40),
+          base_pct: 79,
+          delta_pct: 2.5,
+          measured_at: '2026-06-01T09:00:00.000Z',
+        } as const;
+        await store.tasks.saveCoverage(tx, stored.task.id, measured);
+
+        const first = await store.tasks.load(tx, stored.task.id);
+        expect(first?.coverage).toEqual(measured);
+        expect(first?.costActualUsd).toBeCloseTo(2.25, 6);
+        expect(first?.task.state).toBe('active');
+        expect(first?.task.currentStage).toBe('ready_for_merge');
+
+        // A second pipeline reported nothing at all: the record is replaced whole, so the previous
+        // measurement's numbers must not survive underneath it.
+        const reportedNothing = {
+          head_sha: 'c'.repeat(40),
+          head_pct: null,
+          base_branch: null,
+          base_sha: null,
+          base_pct: null,
+          delta_pct: null,
+          measured_at: '2026-06-01T10:00:00.000Z',
+        } as const;
+        await store.tasks.saveCoverage(tx, stored.task.id, reportedNothing);
+        expect((await store.tasks.load(tx, stored.task.id))?.coverage).toEqual(reportedNothing);
+      });
+
+      it('refuses a coverage record the published shape cannot describe', async () => {
+        // Same reason as the workpad case below: `jsonb` accepts any document, so the refusal has
+        // to be at the write, where the stack trace still names the caller (WP-15h).
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await expect(
+          store.tasks.saveCoverage(tx, stored.task.id, {
+            head_sha: 'b'.repeat(40),
+            head_pct: 120,
+            base_branch: null,
+            base_sha: null,
+            base_pct: null,
+            delta_pct: null,
+            measured_at: '2026-06-01T09:00:00.000Z',
+          }),
+        ).rejects.toThrow();
+      });
+
+      it('refuses to write coverage for a task that does not exist', async () => {
+        await expect(
+          store.tasks.saveCoverage(tx, nextId(), {
+            head_sha: 'b'.repeat(40),
+            head_pct: 81.5,
+            base_branch: 'main',
+            base_sha: 'a'.repeat(40),
+            base_pct: 79,
+            delta_pct: 2.5,
+            measured_at: '2026-06-01T09:00:00.000Z',
+          }),
+        ).rejects.toThrow();
       });
 
       /**

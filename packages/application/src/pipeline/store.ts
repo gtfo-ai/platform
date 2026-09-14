@@ -36,6 +36,7 @@ import type {
   RunStatus,
   RunTerminalReason,
   Slug,
+  TaskCoverage,
   TaskMode,
   TicketRef,
   TicketSnapshot,
@@ -85,6 +86,22 @@ export interface StoredTask {
    * a merge request, from the Implementation Plan's own paths (`risk-classes.ts` has the argument).
    */
   readonly riskClasses: readonly string[];
+  /**
+   * What the project's CI reported for this task's head revision, against its default branch
+   * (product/18:38, WP-39, migration 0027).
+   *
+   * Written by {@link TaskRepository.saveCoverage} from the `coverage` outbound duty and by nothing
+   * else. `null` means **nothing has been measured** — no pipeline has finished on the merge
+   * request, or the project's `policies.coverage_source` is `'none'` and the platform never asked —
+   * which is a different fact from a record whose `head_pct` is `null` (*the pipeline finished and
+   * reported no coverage*). The panel prints a different sentence for each, because a zero here
+   * would read as "the agent's change covers nothing" (standing rule 16).
+   *
+   * The record names its own base: `base_branch`, `base_sha` and `measured_at` are the default
+   * branch, its head at the moment of the write and that moment, so a reader can tell how stale the
+   * comparison is without re-deriving it (standing rule 63).
+   */
+  readonly coverage: TaskCoverage | null;
   /**
    * The human who asked for this task — step **three** of product/19:138's reviewer precedence.
    *
@@ -318,6 +335,25 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the other narrow writes.
    */
   saveRiskClasses(tx: Transaction, taskId: Id, classes: readonly string[]): Promise<void>;
+  /**
+   * Writes **only** `coverage` — the fifth narrow writer, and the fourth for the same reason
+   * (WP-39, migration 0027).
+   *
+   * The record is computed in the `coverage` duty, a `pipeline.outbound` job that fires on
+   * `ci.pipeline.finished` and therefore runs beside the stage executor's transactions: a whole-row
+   * `save` from there would put back the state, the stage and the cost as they were when the job
+   * started (standing rule 79, measured at 0.40 USD in WP-15d). One column, one statement, no
+   * version bump — `save` does not name this column.
+   *
+   * The record is written **whole**, replacing whatever was there: a new pipeline on the same merge
+   * request is a new measurement, and the head, the base and the delta have to move together or the
+   * panel would show a delta computed from two different revisions. It is also the **cache** the
+   * duty reads — `base_sha` is what tells the next wake-up whether the base it is about to read has
+   * already been read — which is another reason a partial write would be wrong.
+   *
+   * @throws when the task does not exist, like `save` and the other narrow writes.
+   */
+  saveCoverage(tx: Transaction, taskId: Id, coverage: TaskCoverage): Promise<void>;
   /**
    * Adds a run's spend to `tasks.cost_actual` — the third narrow writer, and the first that is
    * **not** a read-modify-write at all (WP-31).

@@ -18,6 +18,7 @@ import { artifactRefSchema } from './artifacts.js';
 import {
   actorSchema,
   agentRoleSchema,
+  coveragePctSchema,
   effortSchema,
   externalIdentitySchema,
   idSchema,
@@ -546,7 +547,7 @@ export const ciPipelineFinishedEvent = defineEvent('ci.pipeline.finished', {
       log_ref: nonEmptyStringSchema.nullish(),
     }),
   ),
-  coverage_pct: z.number().min(0).max(100).nullish(),
+  coverage_pct: coveragePctSchema.nullish(),
 });
 
 export const defaultBranchMovedEvent = defineEvent('default_branch.moved', {

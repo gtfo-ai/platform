@@ -30,6 +30,7 @@ import {
   narrowCommandPolicy,
   type ResolvedCommandPolicy,
 } from '../policies/command-policy.js';
+import { DEFAULT_COVERAGE_SOURCE } from '../policies/coverage.js';
 import { DEFAULT_URGENT_NOTIFICATION_CLASSES } from '../policies/notifications.js';
 import { DEFAULT_MAX_REVIEW_FINDINGS } from '../policies/review-only.js';
 import { DEFAULT_LINT_ISSUE_TYPES, DEFAULT_LINT_LABEL } from '../policies/ticket-lint.js';
@@ -88,6 +89,10 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
     probation_tasks: 5,
     knowledge_apply: { auto_apply: false, discard_below: 0.2, proposal_above: 0.6 },
     dependency_policy: 'ask',
+    // product/18:38's *"on when available"* — the provider's own per-commit coverage, with
+    // "available" meaning the pipeline reported a number (WP-39). One spelling, in
+    // `policies/coverage.ts` beside the reader that has to default it without this layer.
+    coverage_source: DEFAULT_COVERAGE_SOURCE,
     drift_without_direction: 'disabled',
     protected_paths: [
       'tests/**',

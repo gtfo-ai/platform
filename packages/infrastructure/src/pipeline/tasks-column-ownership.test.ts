@@ -72,6 +72,10 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // narrow writer for the third time the same reason applied: it runs in a `pipeline.outbound`
     // job beside the stage executor.
     'risk_classes',
+    // `saveCoverage` — what the CI reported for the head revision and for the default branch
+    // (WP-39). The fifth narrow writer, same reason again: the `coverage` duty fires on
+    // `ci.pipeline.finished`, which arrives whenever it arrives.
+    'coverage',
     // `addSpend` — the one column two *processes* write, and therefore the one whose statement is
     // an increment rather than an assignment (WP-31). It left `save`'s list with this row: the ask
     // executor adds a run's spend from a process that runs beside the stage executor, and the

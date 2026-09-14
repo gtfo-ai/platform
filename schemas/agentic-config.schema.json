@@ -200,6 +200,13 @@
             "block"
           ]
         },
+        "coverage_source": {
+          "type": "string",
+          "enum": [
+            "pipeline",
+            "none"
+          ]
+        },
         "drift_without_direction": {
           "type": "string",
           "enum": [

@@ -113,6 +113,12 @@ export interface PipelineOutboundData {
      * up when the project has no peer task — see `risk-routing.ts`.
      */
     | 'risk_route'
+    /**
+     * WP-39, the coverage delta: what the CI reported for this revision, against the default
+     * branch. The one duty that is not woken by a stage transition — `ci.pipeline.finished` arrives
+     * when the pipeline finishes, which is whenever the provider says.
+     */
+    | 'coverage'
     /** WP-32, the notify band: say one thing in the project's chat channel. */
     | 'notify'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */
@@ -153,6 +159,16 @@ export interface PipelineOutboundData {
   readonly status?: string;
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */
   readonly ask_id?: string;
+  /**
+   * `coverage` only (WP-39): the revision the pipeline that just finished ran on.
+   *
+   * It rides the payload rather than being re-derived from `tasks.mr_ref` because the two can
+   * disagree — a merge request whose head moved while its pipeline ran would otherwise have the old
+   * pipeline's number filed under the new revision, and the panel would name a sha the number is
+   * not about. It is re-validated on fire the only way it can be: the provider is asked for *that*
+   * revision's pipeline, and answers `null` when there is none.
+   */
+  readonly head_sha?: string;
   /** The three `review_only_*` duties: which merge request, and where it lives. */
   readonly iid?: number;
   readonly mr_url?: string;

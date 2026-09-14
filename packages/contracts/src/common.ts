@@ -63,6 +63,19 @@ export const sequenceSchema = z.int().nonnegative();
 export const unitIntervalSchema = z.number().min(0).max(1);
 
 /**
+ * A test-coverage percentage, `0`–`100`, as a CI pipeline reports it for one commit (WP-39).
+ *
+ * One spelling for what was four identical literals — the `ci.pipeline.finished` payload,
+ * `MergeRequest.coverage_pct`, `PipelineStatus.coverage_pct` and the task's own record — because a
+ * bound written out four times is four things that disagree later (standing rule 41).
+ *
+ * **It is a percentage, and a *difference* of two of them is not.** The delta the Checks panel
+ * shows is in percentage *points* (`taskCoverageSchema.delta_pct`), which is why that field is
+ * signed and this one is not.
+ */
+export const coveragePctSchema = z.number().min(0).max(100);
+
+/**
  * Human-readable duration used by `limits.question_timeout` (technical/12 writes
  * `1 working day`). "working" means the org calendar skips weekends and holidays.
  */

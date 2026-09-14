@@ -93,6 +93,18 @@
  *     **kinder** in one: only the root `CODEOWNERS` path exists, where GitLab also looks in `docs/`
  *     and `.gitlab/`, so an adapter's search order is the shared contract suite's business and not
  *     this fake's.
+ * 13. **Kinder — the pipeline webhook carries the pipeline's `coverage`, and GitLab's does not.**
+ *     `normalise` fills `ci.pipeline.finished.coverage_pct` from the stored pipeline, which is what
+ *     the port's payload *can* carry; the only real adapter this build ships publishes `null` there
+ *     on every delivery, because GitLab's documented Pipeline Hook has no `coverage` on
+ *     `object_attributes` or on `builds[]` (`gitlab/inbound.ts:281-283`). It is left kinder rather
+ *     than narrowed to GitLab's shape because the field is the **port's**, and a fake that emptied
+ *     it would make a provider that does publish coverage untestable here. The consequence is
+ *     stated where it bites: a platform feature that read the *event's* number would be green on
+ *     this fake and blank in production, which is why WP-39's coverage duty reads
+ *     `getPipelineStatus` for both sides and ignores the payload field entirely
+ *     (`packages/application/src/pipeline/coverage.ts`). Anything else that reaches for
+ *     `coverage_pct` on a delivery owes itself the same check.
  */
 import {
   type CodeownersRules,

@@ -215,6 +215,33 @@ describe('.agentic/config.yml', () => {
     ).toBe(false);
   });
 
+  /**
+   * product/18:38's one configuration key, *"coverage source"* (WP-39).
+   *
+   * Before this row the document told an operator to write a key a **strict** schema refused, which
+   * is the same defect `policies.reviewers` above was added to close. Both values are asserted, and
+   * so is the one an operator is most likely to reach for and this build cannot honour.
+   */
+  it('takes the coverage source product/18:38 names, and refuses a per-file one', () => {
+    expect(
+      agenticConfigSchema.parse({ version: 1, policies: { coverage_source: 'pipeline' } }).policies
+        ?.coverage_source,
+    ).toBe('pipeline');
+    expect(
+      agenticConfigSchema.parse({ version: 1, policies: { coverage_source: 'none' } }).policies
+        ?.coverage_source,
+    ).toBe('none');
+    // `artifact` is what somebody reading product/10:38's "coverage delta" would write for per-file
+    // coverage. Nothing in this build downloads a coverage artifact, so the key that promised it
+    // would be a key with no reader — the defect PROGRESS backlog 58 is about.
+    const refused = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: { coverage_source: 'artifact' },
+    });
+    expect(refused.success).toBe(false);
+    expect(refused.error?.issues[0]?.path).toEqual(['policies', 'coverage_source']);
+  });
+
   it('still constrains the shape of those map keys', () => {
     expect(
       agenticConfigSchema.safeParse({ version: 1, stages: { 'Not A Slug': {} } }).success,

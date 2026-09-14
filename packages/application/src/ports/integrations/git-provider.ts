@@ -13,6 +13,7 @@
  */
 import {
   ciStatusSchema,
+  coveragePctSchema,
   diffStatsSchema,
   isoDateTimeSchema,
   mergeRequestRefSchema,
@@ -47,7 +48,7 @@ export const mergeRequestSchema = z.strictObject({
   mergeable: z.boolean().nullish(),
   has_conflicts: z.boolean().nullish(),
   diff_stats: diffStatsSchema.nullish(),
-  coverage_pct: z.number().min(0).max(100).nullish(),
+  coverage_pct: coveragePctSchema.nullish(),
   labels: z.array(nonEmptyStringSchema),
   reviewers: z.array(externalIdentitySchema),
   author: externalIdentitySchema.nullish(),
@@ -137,7 +138,7 @@ export const pipelineStatusSchema = z.strictObject({
   status: pipelineStatusValueSchema,
   url: urlSchema.nullish(),
   jobs: z.array(pipelineJobSchema),
-  coverage_pct: z.number().min(0).max(100).nullish(),
+  coverage_pct: coveragePctSchema.nullish(),
   finished_at: isoDateTimeSchema.nullish(),
 });
 
@@ -302,6 +303,16 @@ export interface GitProviderCapabilities {
   readonly projectTokens: boolean;
   readonly groupTokens: boolean;
   readonly codeowners: boolean;
+  /**
+   * Whether the provider can hand back a coverage **artifact** — and **nothing in this build reads
+   * this flag or downloads one** (WP-39).
+   *
+   * Said here rather than left to be inferred, because it is what bounds the coverage feature:
+   * `PipelineStatus.coverage_pct` is **one percentage for a whole pipeline**, so the delta the
+   * Checks panel shows is one number for the whole change and never a per-file figure. Per-file
+   * coverage is this artifact, parsed — which is a work package nobody has scheduled, and which is
+   * why `policies.coverage_source` has no `'artifact'` value to promise it.
+   */
   readonly coverageArtifacts: boolean;
   /** Whether pipelines run on draft merge requests. */
   readonly draftPipelines: boolean;

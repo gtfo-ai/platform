@@ -1,5 +1,11 @@
+import type { TaskCoverage } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { estimateBasisText, humanTimeBreakdown } from './task-detail.js';
+import {
+  coverageBasisText,
+  coverageValueText,
+  estimateBasisText,
+  humanTimeBreakdown,
+} from './task-detail.js';
 
 /**
  * The estimate's provenance line on the task page (WP-28, Q71 (b)).
@@ -104,5 +110,78 @@ describe('the human-time breakdown line', () => {
     // A kind with no minutes is left out rather than printed as a zero: the absent case must not
     // be the quiet one, and here the absence is the *whole line's* job (rule 16, rule 18).
     expect(line).not.toContain('questions');
+  });
+});
+
+/**
+ * The Checks panel's coverage item (WP-39, product/18:38).
+ *
+ * Four answers and they must not collapse into each other — *"we did not look"*, *"we looked and
+ * the CI reports nothing"*, *"here is the number and there is no base"*, *"here is the delta"*. The
+ * one that matters most is the second: `0.0` or `+0.0 pp` there reads as **"the agent added no
+ * coverage"**, a claim about the change rather than about the pipeline (standing rules 16 and 18).
+ * Both directions of the delta are asserted, because a renderer that printed the head number, or
+ * subtracted the wrong way round, passes any one-sided test (standing rule 42).
+ */
+const measured = (over: Partial<TaskCoverage> = {}): TaskCoverage => ({
+  head_sha: 'b'.repeat(40),
+  head_pct: 81.5,
+  base_branch: 'main',
+  base_sha: 'a'.repeat(40),
+  base_pct: 79,
+  delta_pct: 2.5,
+  measured_at: '2026-06-01T09:00:00.000Z',
+  ...over,
+});
+
+describe('the coverage delta on the Checks panel', () => {
+  it('signs the delta, both ways, in percentage points', () => {
+    expect(coverageValueText(measured())).toBe('+2.5 pp');
+    expect(coverageValueText(measured({ head_pct: 70, delta_pct: -9 }))).toBe('-9.0 pp');
+  });
+
+  it('prints a measured zero as a zero, and says both numbers beneath it', () => {
+    expect(coverageValueText(measured({ head_pct: 79, delta_pct: 0 }))).toBe('0.0 pp');
+    const line = coverageBasisText(measured({ head_pct: 79, delta_pct: 0 }));
+    expect(line).toContain('79.0 %');
+    expect(line).toContain('against 79.0 %');
+  });
+
+  it('never renders a missing number as zero', () => {
+    // The pipeline finished and reported nothing…
+    const reportedNothing = measured({
+      head_pct: null,
+      base_branch: null,
+      base_sha: null,
+      base_pct: null,
+      delta_pct: null,
+    });
+    expect(coverageValueText(reportedNothing)).toBe('not reported');
+    expect(coverageValueText(reportedNothing)).not.toContain('0');
+    expect(coverageBasisText(reportedNothing)).toContain('not a change that covers nothing');
+    // …and nothing has been measured at all, which is a different sentence again.
+    expect(coverageValueText(null)).toBe('not measured');
+    expect(coverageBasisText(null)).toContain('coverage source is off');
+  });
+
+  it('shows the head number alone when the default branch has none', () => {
+    const noBase = measured({ base_pct: null, delta_pct: null });
+    expect(coverageValueText(noBase)).toBe('81.5 %');
+    expect(coverageBasisText(noBase)).toContain('not a delta');
+  });
+
+  it('names the base — the branch, the revision and when it was read', () => {
+    /**
+     * standing rule 63 on a screen: a delta whose base nobody states is a number a maintainer
+     * cannot act on. The revision is printed short, the way git prints one.
+     */
+    const line = coverageBasisText(measured());
+    expect(line).toContain('main');
+    expect(line).toContain('aaaaaaa');
+    expect(line).not.toContain('a'.repeat(40));
+    expect(line).toContain('bbbbbbb');
+    // …and the limit of what "coverage delta" means on this build is on the screen rather than in
+    // a docblock nobody using the product reads (WP-39 criterion 6).
+    expect(line).toContain('per-file coverage needs the CI');
   });
 });

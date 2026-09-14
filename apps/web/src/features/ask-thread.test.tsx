@@ -46,6 +46,8 @@ const TASK_DETAIL = {
     workpad_ref: null,
     iteration_counters: {},
     risk_classes: [],
+    // WP-39: this task has been measured by nothing, which is the state a task page starts in.
+    coverage: null,
     cost_actual_usd: 1.25,
     cost_estimated_usd: 0,
     estimate_usd: null,

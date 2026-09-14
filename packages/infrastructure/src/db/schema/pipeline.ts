@@ -16,6 +16,7 @@ import type {
   JsonValue,
   MergeRequestRef,
   MergeRequestSnapshot,
+  TaskCoverage,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
@@ -103,6 +104,17 @@ export const tasks = pgTable('tasks', {
   estimateBasis: text('estimate_basis').$type<EstimateBasis>(),
   estimateSamples: integer('estimate_samples'),
   riskClasses: text('risk_classes').array().notNull().default(emptyArray),
+  /**
+   * What the CI reported for this task's head revision and for the default branch it will merge
+   * into (WP-39, migration 0027).
+   *
+   * Nullable on purpose and in three places at once: the column is `null` until a pipeline has
+   * finished on the merge request (or for ever, when the project's `policies.coverage_source` is
+   * `'none'`), and `head_pct`/`base_pct`/`delta_pct` inside it are each `null` when that side
+   * reported no number. None of the three is ever a zero standing in for a missing number — see
+   * `taskCoverageSchema`, which every write is parsed against.
+   */
+  coverage: jsonb('coverage').$type<TaskCoverage>(),
   blockedBy: text('blocked_by').array().notNull().default(emptyArray),
   /**
    * The row's optimistic-concurrency token (WP-15e, migration 0019).

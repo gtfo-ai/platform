@@ -55,6 +55,7 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
+import { coverageHandlers } from './coverage.js';
 import {
   declarePipelineQueues,
   type PipelineJobOptions,
@@ -168,6 +169,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...conflictWarningHandlers(options),
       // WP-37: the rebase gate's other duty — classify the diff, route the reviewers.
       ...riskRoutingHandlers(options),
+      // WP-39: the coverage delta, on `ci.pipeline.finished` rather than on a stage transition.
+      ...coverageHandlers(options),
       // The notify band (WP-32), TD-005 priority 210 — the one handler outside the core and
       // integrations bands, and the reason `EVENT_CONSUMPTION`'s two budget entries are `handled`.
       ...notifyHandlers(options),

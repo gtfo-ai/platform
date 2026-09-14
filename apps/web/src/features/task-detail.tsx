@@ -7,10 +7,12 @@
  * **What the Checks panel shows, and what it cannot.** product/10 lists thirteen merge-readiness
  * checks (acceptance criteria, CI, rebase, review threads, business verdict, tamper check, coverage
  * delta, dependency status, risk classes, budget vs estimate, questions pending…). `taskDetail`
- * publishes five of them — questions, approvals, risk classes, and since WP-28 **cost against the
+ * publishes six of them — questions, approvals, risk classes, since WP-28 **cost against the
  * estimate**, which is product/10's *"budget vs estimate"* row and was the one this note used to
- * describe as *"cost against nothing"*. The panel shows those five and says plainly that the rest
- * arrive with WP-15 and WP-38 rather than drawing empty ticks that read as "passed".
+ * describe as *"cost against nothing"*, and since WP-39 the **coverage delta**. The panel shows
+ * those six and says plainly that the rest arrive with WP-15 and WP-38 rather than drawing empty
+ * ticks that read as "passed". WP-38 owns the census that will hold that list to product/10:38 in
+ * a test rather than in this paragraph.
  *
  * **Which commands are here, and which are named absences.** technical/09's screens table gives
  * this screen `answer, approve, retry, take over, feedback`; product/10 adds return-to-stage and
@@ -38,6 +40,7 @@ import type {
   HumanTimeKind,
   HumanTimeSummary,
   QuestionRecord,
+  TaskCoverage,
   TaskRecord,
 } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
@@ -109,6 +112,66 @@ export const humanTimeBreakdown = (humanTime: HumanTimeSummary): string => {
     ? `${entries}, none of which measured any time — a review with a single comment is a window of zero length.`
     : `${parts.join(' · ')} over ${entries}.`;
 };
+
+/**
+ * The coverage delta, as the one figure the Checks panel prints — product/18:38, WP-39.
+ *
+ * Four answers, and telling them apart is the whole job (standing rules 16 and 18):
+ *
+ *  - **`not measured`** — no pipeline has finished on this task's merge request yet, or the
+ *    project's `coverage source` is off. The platform has not looked.
+ *  - **`not reported`** — it looked, and this project's CI publishes no coverage number.
+ *  - **a bare percentage** — the change's own coverage, with no base to compare it against.
+ *  - **a signed delta in percentage points** — the number product/18:38 asks for.
+ *
+ * Never `0.0` for any of the first two. `+0.0 pp` on a merge-readiness panel reads as *"the agent
+ * added no coverage"*, which is a claim about the change rather than about the pipeline, and it is
+ * the sentence this feature exists not to print. A **measured** zero does print as `0.0 pp`, which
+ * is a different fact and one the line beneath spells out in full.
+ */
+export const coverageValueText = (coverage: TaskCoverage | null): string => {
+  if (coverage === null) {
+    return 'not measured';
+  }
+  if (coverage.head_pct === null) {
+    return 'not reported';
+  }
+  if (coverage.delta_pct === null) {
+    return `${coverage.head_pct.toFixed(1)} %`;
+  }
+  // `toFixed` carries its own minus sign; the plus is the one that has to be added, and a delta
+  // without a sign is the thing a maintainer cannot read at a glance.
+  return `${coverage.delta_pct > 0 ? '+' : ''}${coverage.delta_pct.toFixed(1)} pp`;
+};
+
+/**
+ * What the delta was measured against, in one sentence — the base **named**, never implied.
+ *
+ * standing rule 63's shape on a screen: a delta is meaningless without its base, so the branch, the
+ * two percentages and the revision are printed rather than left for a maintainer to assume. The
+ * staleness is stated too, because the base is the default branch's head *at the moment of the
+ * measurement* and the branch may have moved since.
+ *
+ * It contains a **branch name and two revisions, which are repository text somebody chose**
+ * (BD-022), so the caller renders it through `UntrustedText` like every other provider string.
+ */
+export const coverageBasisText = (coverage: TaskCoverage | null): string => {
+  if (coverage === null) {
+    return 'No pipeline has finished on this task’s merge request yet, or this project’s coverage source is off.';
+  }
+  const at = formatDateTime(coverage.measured_at);
+  if (coverage.head_pct === null) {
+    return `The pipeline for ${shortSha(coverage.head_sha)} finished and reported no coverage, so there is no number to compare — not a change that covers nothing.`;
+  }
+  const head = `${coverage.head_pct.toFixed(1)} % on ${shortSha(coverage.head_sha)}`;
+  if (coverage.base_pct === null || coverage.base_branch === null) {
+    return `${head}. The default branch has no coverage of its own to compare it with, so this is a number and not a delta.`;
+  }
+  return `${head}, against ${coverage.base_pct.toFixed(1)} % on ${coverage.base_branch} at ${shortSha(coverage.base_sha ?? '')} as it stood on ${at}. One percentage for the whole change: per-file coverage needs the CI's coverage artifact, which this platform does not download.`;
+};
+
+/** Seven characters, the way git prints one; the full sha is on the merge request. */
+const shortSha = (sha: string): string => (sha.length > 7 ? sha.slice(0, 7) : sha);
 
 /** product/19 §16's order, and the labels a person reads rather than the enum's own spelling. */
 const HUMAN_TIME_KIND_LABELS: readonly (readonly [HumanTimeKind, string])[] = [
@@ -739,6 +802,25 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             value={String(pendingApprovals.length)}
             definition="Plan, budget, knowledge or rework approvals awaiting a maintainer."
           />
+          {/*
+            **The coverage delta** (WP-39, product/18:38 and product/10:38's Checks item). The value
+            is four different answers and never a zero standing in for a missing number
+            (`coverageValueText`); the line beneath names the base it was measured against, because a
+            delta whose base nobody states is a number a maintainer cannot act on (standing rule 63).
+          */}
+          <Metric
+            label="Coverage delta"
+            value={coverageValueText(task.coverage)}
+            definition="What this project's CI reports for the change, minus what it reports for the default branch, in percentage points (product/18:38). Shown when the pipeline reports coverage; 'not reported' means it does not, which is never the same as zero."
+          />
+          {/*
+            The sentence carries a **branch name and two revisions** — repository text somebody
+            chose (BD-022) — so it goes through `UntrustedText` like every other provider string on
+            this screen, rather than being interpolated as though the platform had written it.
+          */}
+          <p className="-mt-2 text-[11px] text-fg-muted">
+            <UntrustedText value={coverageBasisText(task.coverage)} />
+          </p>
           <div>
             <p className="text-xs text-fg-muted">Risk classes</p>
             <div className="flex flex-wrap gap-1 pt-1">
@@ -753,10 +835,22 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
               )}
             </div>
           </div>
+          {/*
+            **Coverage delta left this list at WP-39** and is the metric two blocks up (standing
+            rule 83: closing a gap falsifies the sentence that described it, and the sentence
+            nearest the fix is the one nobody re-reads).
+
+            The rest of the sentence is left exactly as it was, and that is deliberate rather than
+            lazy: CI and rebase status have been *producible* since WP-15 and WP-26 and are still
+            not projected onto this panel, and correcting that half is WP-38's own acceptance
+            criterion 6, which also owns the eleven-item census product/10:38 asks for. Two work
+            packages editing one sentence in opposite directions is how a caveat ends up describing
+            neither build.
+          */}
           <p className="text-[11px] text-fg-muted">
-            CI, rebase status, review threads, coverage delta and dependency status are not on this
-            panel yet: the pipeline that produces them lands with WP-15 and WP-38. They are absent
-            rather than shown as passing.
+            CI, rebase status, review threads and dependency status are not on this panel yet: the
+            pipeline that produces them lands with WP-15 and WP-38. They are absent rather than
+            shown as passing.
           </p>
         </Card>
 

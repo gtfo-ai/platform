@@ -18,7 +18,7 @@
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  */
 import type { ArtifactType, EstimateBasis, Id, Size, Slug } from '@platform/contracts';
-import { workpadRefSchema } from '@platform/contracts';
+import { taskCoverageSchema, workpadRefSchema } from '@platform/contracts';
 import type { Approval, Question, QueuedTask } from '@platform/domain';
 import { countsAsActive, countsInPipeline, isActiveRunStatus } from '@platform/domain';
 import type {
@@ -179,6 +179,7 @@ export const createMemoryPipelineStore = (
      *
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
      * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
+     * `riskClasses` (WP-37), `coverage` (WP-39),
      * `costActualUsd` (WP-31: `addSpend` owns it),
      * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`)
      * belong to the narrow writers — or, for
@@ -230,6 +231,17 @@ export const createMemoryPipelineStore = (
       // (WP-37): the rebase gate is re-entered on every default-branch move, and a class the merge
       // request no longer touches has to leave the row.
       tasks.set(taskId, clone({ ...current, riskClasses: [...classes] }));
+    },
+    saveCoverage: async (_tx, taskId, coverage) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Only this field, the whole record, and **parsed** — for the reason `saveWorkpad` is (WP-15h
+      // and standing rule 1): `jsonb` accepts any document, the SQL adapter refuses one the
+      // published shape cannot describe, and a fake that accepted it would launder the defect into
+      // a pass in every tier that drives this store.
+      tasks.set(taskId, clone({ ...current, coverage: taskCoverageSchema.parse(coverage) }));
     },
     addSpend: async (_tx, taskId, usd) => {
       const current = tasks.get(taskId);

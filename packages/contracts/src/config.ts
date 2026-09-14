@@ -227,6 +227,31 @@ export const policiesConfigSchema = z.strictObject({
   probation_tasks: z.int().min(0).max(1000).optional(),
   knowledge_apply: knowledgeApplyPolicySchema.optional(),
   dependency_policy: z.enum(['allow', 'ask', 'block']).optional(),
+  /**
+   * Where the coverage number on the Checks panel comes from — product/18:38's one configuration
+   * key, *"coverage source"* (WP-39).
+   *
+   * The feature is *"Test coverage change of the MR shown in Checks **when the project's CI reports
+   * coverage**"*, default *"on when available"*, and `'pipeline'` **is** that default: the platform
+   * asks the git provider for the pipeline of a commit and reads the one number it reports
+   * (`PipelineStatus.coverage_pct`). A project whose pipeline reports none renders *"not reported"*
+   * rather than a zero, which is what "when available" means and is the failure mode standing rule
+   * 16 exists for — `+0.0` would read to a maintainer as *"the agent added no coverage"*.
+   *
+   *  - `'pipeline'` — the provider's own per-commit coverage. One provider read for the head
+   *    revision and one for the base, bounded by the cache `pipeline/coverage.ts` states.
+   *  - `'none'` — off. Nothing is read, nothing is stored, and no provider call is made for it: the
+   *    switch a project that pays per API request turns.
+   *
+   * **There is deliberately no `'artifact'` value, and that is this build's honest limit.** Per-file
+   * coverage needs the coverage *artifact* downloaded and parsed — which is what
+   * `GitProviderCapabilities.coverageArtifacts` is about, and nothing in this repository downloads
+   * one. So *"coverage delta"* here is **one percentage point for the whole change**, never a
+   * per-file figure, and accepting a value that promised otherwise would be a key with no reader
+   * (PROGRESS backlog 58's defect, which is exactly what this row was written to close for
+   * `coverage source` itself).
+   */
+  coverage_source: z.enum(['pipeline', 'none']).optional(),
   /** product/05 (Q7): what drift detection does when no `business/direction.md` exists. */
   drift_without_direction: z.enum(['disabled', 'label_unknown']).optional(),
   protected_paths: z.array(pathPatternSchema).optional(),

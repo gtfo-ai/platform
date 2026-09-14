@@ -43,11 +43,12 @@ import type {
   MergeRequestSnapshot,
   PipelineTemplate,
   Slug,
+  TaskCoverage,
   TaskState,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
-import { workpadRefSchema } from '@platform/contracts';
+import { taskCoverageSchema, workpadRefSchema } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
 import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -92,6 +93,7 @@ interface TaskRow extends Record<string, unknown> {
   ticket_snapshot_at: Date | null;
   review_subject: MergeRequestSnapshot | null;
   risk_classes: string[] | null;
+  coverage: TaskCoverage | null;
   requested_by_user_id: string | null;
   version: number;
   created_at: Date;
@@ -102,7 +104,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
-    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.risk_classes,
+    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.risk_classes, t.coverage,
     t.requested_by_user_id, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
@@ -147,6 +149,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   // `text[] not null default '{}'`, so the `?? []` is for a driver that hands back `null` rather
   // than for a row that can hold one (WP-37).
   riskClasses: row.risk_classes ?? [],
+  coverage: row.coverage,
   requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
   version: Number(row.version),
 });
@@ -374,6 +377,30 @@ export const createPostgresPipelineStore = (
       const result = await sqlOf(tx).query(
         'update tasks set risk_classes = $2::text[], updated_at = now() where id = $1',
         [taskId, [...classes]],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
+    /**
+     * `coverage` — one column, one statement, written whole (WP-39, migration 0027).
+     *
+     * The fifth narrow write and the fourth with the same argument behind it (standing rule 79):
+     * the `coverage` duty runs in a `pipeline.outbound` job beside the stage executor's
+     * transactions, so a whole-row `save` from here would put back a state, a stage and a cost it
+     * never read.
+     *
+     * **Parsed before it is written**, for the reason `saveWorkpad` is (WP-15h): `jsonb` accepts
+     * any document, so a shape the published `taskCoverageSchema` cannot describe would be stored
+     * happily here and answered as a 500 by the first reader — the task page. Fail closed on a
+     * mutation (standing rule 20), where the stack trace still names this caller.
+     */
+    saveCoverage: async (tx, taskId, coverage) => {
+      const parsed = taskCoverageSchema.parse(coverage);
+      const result = await sqlOf(tx).query(
+        'update tasks set coverage = $2::jsonb, updated_at = now() where id = $1',
+        [taskId, JSON.stringify(parsed)],
       );
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);

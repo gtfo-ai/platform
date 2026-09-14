@@ -133,6 +133,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   ticketSnapshot: null,
   reviewSubject: null,
   riskClasses: [],
+  coverage: null,
   requestedByUserId: null,
   ticketSnapshotAt: null,
   version: 1,

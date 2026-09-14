@@ -53,6 +53,26 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByText('From 7 finished tasks in this project.')).toBeVisible();
   await expect(page.getByText('0.35×')).toBeVisible();
   await expect(page.getByText('payments')).toBeVisible();
+  /**
+   * WP-39's Checks item, in a browser against the built bundle: the **signed** delta and the base
+   * it was measured against. product/18:38's *"coverage delta shown in Checks"* is this line, and
+   * the base is named on the screen rather than assumed (standing rule 63).
+   */
+  await expect(page.getByText('Coverage delta', { exact: true })).toBeVisible();
+  await expect(page.getByText('+2.5 pp')).toBeVisible();
+  await expect(page.getByText(/81\.5 % on bbbbbbb, against 79\.0 % on main/)).toBeVisible();
+});
+
+test('a task nothing has measured says so, rather than showing a zero coverage delta', async ({
+  page,
+}) => {
+  // The failure mode WP-39 exists to avoid, asserted in the browser: `0.0 pp` under "Coverage
+  // delta" reads as *"the agent added no coverage"* (standing rule 16), so the absent case has its
+  // own words and its own test rather than sharing the measured one's rendering.
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
+  await expect(page.getByText('Coverage delta', { exact: true })).toBeVisible();
+  await expect(page.getByText('not measured')).toBeVisible();
+  await expect(page.getByText('0.0 pp')).toHaveCount(0);
 });
 
 test('answering a question sends the command and the question leaves the inbox', async ({

@@ -11,6 +11,7 @@ import {
   approvalKindSchema,
   approvalStatusSchema,
   autonomyLevelSchema,
+  coveragePctSchema,
   effortSchema,
   externalIdentitySchema,
   idSchema,
@@ -224,6 +225,46 @@ export const humanTimeKindSchema = z.enum(['review', 'question', 'approval', 'st
  */
 export const estimateBasisSchema = z.enum(['project_history', 'org_history', 'unknown']);
 
+/**
+ * What the project's CI said about this task's coverage, and about the branch it will merge into —
+ * `tasks.coverage` (WP-39, migration 0027), product/18:38 and product/10:38's *"coverage delta"*.
+ *
+ * **The base is named in the row rather than implied** (standing rule 63): `base_branch` and
+ * `base_sha` are the project's default branch and **its head at the moment this record was
+ * written**, which is the instant `measured_at` carries. That is the base a maintainer is actually
+ * deciding against — *"what does `main` have now, and what will it have once this merges"* — and it
+ * is not the branch point, which this platform does not store anywhere. The staleness window
+ * follows from that and is stated rather than left to a reader: the record is as fresh as the last
+ * pipeline that finished on this task's merge request, and the default branch may have moved since;
+ * a screen that wants the base current must re-read it, which no screen does.
+ *
+ * **Every number here is missing rather than zero when it is missing** (standing rule 16).
+ *
+ *  - `head_pct: null` — the pipeline for `head_sha` reported no coverage. It is *not* `0`, which
+ *    would read as "the agent's change covers nothing".
+ *  - `base_pct: null` — the default branch's own pipeline reported none (or has not finished), so
+ *    there is nothing to subtract from. `base_branch`/`base_sha` are then still filled in, because
+ *    the platform did read them; all three are `null` only when `head_pct` is, which is the case
+ *    the duty stops at without asking the provider for a base it could not use.
+ *  - `delta_pct: null` — exactly when either side is missing. A delta is never inferred from one
+ *    number.
+ *
+ * `delta_pct` is `head_pct − base_pct` in **percentage points** and is signed: the sign is the
+ * whole point of the panel item, so it is stored rather than recomputed by each reader.
+ */
+export const taskCoverageSchema = z.strictObject({
+  head_sha: shaSchema,
+  head_pct: coveragePctSchema.nullable(),
+  base_branch: nonEmptyStringSchema.nullable(),
+  base_sha: shaSchema.nullable(),
+  base_pct: coveragePctSchema.nullable(),
+  /** Percentage **points**, `head_pct − base_pct`, so the range is twice a percentage's. */
+  delta_pct: z.number().min(-100).max(100).nullable(),
+  measured_at: isoDateTimeSchema,
+});
+
+export type TaskCoverage = z.infer<typeof taskCoverageSchema>;
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -238,6 +279,17 @@ export const taskRecordSchema = z.strictObject({
   workpad_ref: workpadRefSchema.nullish(),
   iteration_counters: z.record(slugSchema, z.int().nonnegative()),
   risk_classes: z.array(slugSchema),
+  /**
+   * `tasks.coverage` — what the CI reported for this task's head revision against the default
+   * branch (WP-39).
+   *
+   * `null` means **nothing has been measured**, which is a third answer beside the two inside the
+   * record: no pipeline has finished on this task's merge request yet, *or* the project's
+   * `policies.coverage_source` is `none` and the platform never asked. The Checks panel prints a
+   * different sentence for it than for a pipeline that reported nothing, because "we did not look"
+   * and "we looked and there was no number" are different facts about a project (standing rule 18).
+   */
+  coverage: taskCoverageSchema.nullable(),
   cost_actual_usd: usdSchema,
   cost_estimated_usd: usdSchema,
   /**

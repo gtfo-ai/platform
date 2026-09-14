@@ -107,6 +107,7 @@ export const runPipelineStoreConcurrencyContract = (
       reviewSubject: null,
       ticketSnapshotAt: null,
       riskClasses: [],
+      coverage: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     });

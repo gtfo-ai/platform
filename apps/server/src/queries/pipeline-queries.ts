@@ -491,6 +491,12 @@ const toTaskRecord = (row: typeof tasks.$inferSelect): TaskRecord => ({
   workpad_ref: row.workpadRef,
   iteration_counters: row.iterationCounters,
   risk_classes: row.riskClasses,
+  // WP-39: read straight off `tasks.coverage`, which the `coverage` duty wrote already parsed
+  // against this very schema. Nothing is computed here — in particular the delta is **not**
+  // recomputed from the two percentages, because a projection that derived it would be a second
+  // spelling of the subtraction and would disagree with the stored record the day one of them
+  // changed (standing rule 41). `null` is published as `null`: "nothing measured" is an answer.
+  coverage: row.coverage,
   cost_actual_usd: usd(row.costActual),
   cost_estimated_usd: usd(row.costEstimated),
   // The refinement estimate, its provenance, and product/19 §10's accuracy metric — which is

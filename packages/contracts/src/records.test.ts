@@ -48,6 +48,15 @@ describe('records', () => {
       workpad_ref: null,
       iteration_counters: { code_review: 1, ci_fix: 0 },
       risk_classes: ['auth'],
+      coverage: {
+        head_sha: 'a'.repeat(40),
+        head_pct: 81.5,
+        base_branch: 'main',
+        base_sha: 'b'.repeat(40),
+        base_pct: 79,
+        delta_pct: 2.5,
+        measured_at: AT,
+      },
       cost_actual_usd: 3.2,
       cost_estimated_usd: 0,
       estimate_usd: 2.5,
@@ -78,6 +87,44 @@ describe('records', () => {
     expect(taskRecordSchema.parse(unestimated)).toEqual(unestimated);
     const { estimate_basis: _dropped, ...withoutBasis } = task;
     expect(taskRecordSchema.safeParse(withoutBasis).success).toBe(false);
+    /**
+     * The coverage record, both ways (standing rule 42), because every field inside it is how a
+     * *missing* number is spelled and the one thing this schema must never do is let a zero stand
+     * in for one (WP-39, standing rule 16).
+     */
+    const unmeasured = { ...task, coverage: null };
+    expect(taskRecordSchema.parse(unmeasured)).toEqual(unmeasured);
+    const { coverage: _noCoverage, ...withoutCoverage } = task;
+    expect(taskRecordSchema.safeParse(withoutCoverage).success).toBe(false);
+    const reportedNothing = {
+      ...task,
+      coverage: {
+        head_sha: 'a'.repeat(40),
+        head_pct: null,
+        base_branch: null,
+        base_sha: null,
+        base_pct: null,
+        delta_pct: null,
+        measured_at: AT,
+      },
+    };
+    expect(taskRecordSchema.parse(reportedNothing)).toEqual(reportedNothing);
+    // A delta is signed — it is percentage **points** — and that is the half a `min(0)` would cost.
+    const dropped = { ...task, coverage: { ...task.coverage, head_pct: 70, delta_pct: -9 } };
+    expect(taskRecordSchema.parse(dropped)).toEqual(dropped);
+    // …and it is still bounded on both sides, and still strict about what it carries.
+    expect(
+      taskRecordSchema.safeParse({ ...task, coverage: { ...task.coverage, delta_pct: -101 } })
+        .success,
+    ).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({ ...task, coverage: { ...task.coverage, head_pct: 101 } })
+        .success,
+    ).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({ ...task, coverage: { ...task.coverage, lines_pct: 12 } })
+        .success,
+    ).toBe(false);
     expect(taskRecordSchema.safeParse({ ...task, estimate_basis: 'a_guess' }).success).toBe(false);
   });
 

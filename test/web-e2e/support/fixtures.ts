@@ -172,6 +172,18 @@ const baseTask = {
   workpad_ref: null,
   iteration_counters: { review: 1 },
   risk_classes: ['payments'],
+  // WP-39: a measured delta, with a **branch name a repository chose** as its base — so the line
+  // the panel prints under the metric is provider text going through `UntrustedText`, like every
+  // other string on that screen (BD-022).
+  coverage: {
+    head_sha: 'b'.repeat(40),
+    head_pct: 81.5,
+    base_branch: 'main',
+    base_sha: 'a'.repeat(40),
+    base_pct: 79,
+    delta_pct: 2.5,
+    measured_at: now,
+  },
   cost_actual_usd: 4.25,
   cost_estimated_usd: 6,
   // WP-28: the refinement estimate and its provenance. Deliberately **not** equal to
@@ -209,6 +221,9 @@ export const bugTask = taskRecordSchema.parse({
   current_stage: 'investigation',
   iteration_counters: {},
   risk_classes: [],
+  // The other half of WP-39's panel item: a task nothing has measured. The two tasks together are
+  // what keep *"not measured"* and a real delta from collapsing into one rendering.
+  coverage: null,
 });
 
 export const question = {

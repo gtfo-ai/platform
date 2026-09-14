@@ -45,6 +45,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { runConflictWarning } from './conflict-warning.js';
+import { runCoverage } from './coverage.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
@@ -107,6 +108,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'risk_route':
         await runRiskRouting(options, data);
+        return;
+      case 'coverage':
+        await runCoverage(options, data);
         return;
       case 'notify':
         await runNotification(options, data);

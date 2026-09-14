@@ -82,7 +82,7 @@ majors, and the finding underneath — no run of any role can execute a project 
 Q69), **WP-15i** (the eleven task and run commands: the aggregate decides, one `human_actions` row per
 accepted command, `Idempotency-Key` scoped to the caller; one review round approving with three minors
 fixed before the merge; Q70, backlog 47 widened, 50–53 filed), **WP-15j** (the SPA served from the image with the platform's own realpath guard after `@fastify/static` was measured to serve a planted symlink; three review rounds — compression absent behind a docblock deferring it to a finished row, then a false CSP premise — ending with the full policy the measured bundle permits, proven in a browser, which found zod's JIT probe; backlog 33 closed), **WP-23** (the operator and user guides held to the evidence standard of code, a 63-second dogfood install that found five guide defects, and `THIRD_PARTY_NOTICES.md` generated from the lockfile and the Dockerfiles with a check inside `verify:static`; one review round, APPROVE with two minors and a nit fixed before the merge) — **M1 is complete**; **WP-24** (review-only mode: a one-stage template on the provider's diff, findings from `pipeline.outbound` keyed on the platform's own index after round 1 measured two same-id findings collapsing into one thread, the credential residual measured to be none; two review rounds; backlog 57–58, Q74), **WP-25** (the ticket readiness linter on WP-24's shape with a new `ticket.created` event; the orchestrator's own `verify:e2e` caught a rule-50 wait before the review, and round 1 found the already-a-delivery-task guard dead in the same-delivery case and never re-validated on fire; two review rounds; backlog 59–62, Q75), **WP-26** (the rebase gate's bounded resolution as a run behind `ci_gate`, conflict warnings as MR threads; round 1 measured the implementer's `git merge *` allow promoting `--no-verify` to `allow` and the refiner named it a widening of the organisation maximum, so an architect ruled **TD-027** — a stage-scoped, add-only command default — and round 2 measured one of its clauses wrong (an allow glob spans spaces) and the record was amended; the orchestrator's own `verify:e2e` caught a rule-87 wait in WP-24's merged e2e on the way; two review rounds; backlog 63–66, Q76–Q77), **WP-27** (steer into the live session on the CLI's stdin, take-over as product/19's protocol through the launcher with a hold marker volume because a label cannot be updated on this engine, hand-back to any named stage; the census's admitted gaps now empty; one review round, APPROVE with four minors fixed before the merge; backlog 67–71), **WP-30** (the dial materialised per BD-027:14 in `projects.autonomy_policies`, `planApprovalGate` reading it, one operating-mode screen for the wizard and the new project settings page, budgets with a production writer; backlog 52's project half, 53, 55 and 58 closed; two review rounds — a blocker in round 1 (an existing test suite overwritten), APPROVE in round 2 with a minor the orchestrator fixed; backlog 72–74 and Q78 filed), **WP-28** (the budget-approval gate on the materialised threshold with the estimate and its basis on the workpad, migration 0022; product/19:144 amended as built; one review round, APPROVE with two minors the orchestrator fixed before the merge (a stale discovered-work bullet; the accuracy ratio's understatement on intervened tasks stated at the DTO); backlog 75–77 and Q79 filed), **WP-32** (the notify band, the digest and quiet hours; two review rounds — the per-mode digest split unasserted in round 1, APPROVE in round 2 with a derivation sentence the orchestrator fixed; the Docker VM reached 100 % during the round and the user chose to prune images older than 30 days (124.8 GB reclaimed); backlog 60 resolved, 78–81 and Q80 filed), **WP-31** (ask-the-task; two review rounds — the identity route without an audit row or a route test in round 1, APPROVE in round 2 with a minor and three nits the orchestrator fixed; backlog 52 and 79 resolved, 82–87 and Q81 filed; the product/13 Ask row added), **WP-29** (human time accounting; one review round, APPROVE with a minor and two nits the orchestrator fixed; WP-31's identity route 500 fixed on this tree in a pre-review round; backlog 88–90 filed; TD-005's counts amended) — **M2 is complete but for WP-33**, blocked on a human credential; **WP-37** (risk classes and reviewer routing, M3's first row; two review rounds — the CODEOWNERS-at-the-default-branch property unasserted in round 1, APPROVE in round 2 with two nits the orchestrator fixed; a live TypeError in the shadow path found by the added case; rule 77 refined; backlog 73 resolved, 91–92 filed, WP-45 named) — plus three ci-fixes for harness flakes, an architect ruling (TD-026), TD-018 amended as built,
-product/13 amended twice, backlog entries 30–92, Q63–Q85, TD-027, and refinements to rules 61 and 1. **M1 has no
+product/13 amended twice, backlog entries 30–94, Q63–Q85, TD-027, and refinements to rules 61 and 1. **M1 has no
 rows left.** M2 in this order: ~~WP-24~~ ~~WP-25~~ ~~WP-26~~ ~~WP-27~~ (done), then ~~WP-30~~ ~~WP-28~~ ~~WP-32~~ ~~WP-31~~ ~~WP-29~~ (done); **WP-33 stays blocked** on a human credential (a blocker brief is in this ledger). **M3 next, in the refiner's order** (a refiner expanded the nine one-line items into acceptance rows in the plan's M3 table this session, with Q82–Q85 filed and implemented per recommendation like every open question since Q63): ~~WP-37~~ (done) → **WP-39** (coverage delta) → WP-38 (dependency policy and the Checks panel, built once) → WP-34 (shadow mode, the reader of `picksUpNewTickets`/`shadowMode`, backlog 72) → WP-35 → WP-36 (the maintenance pipeline, `retro`/`librarian` in `runs.mode`, backlog 57) → WP-40 → WP-41 (statistics, after its three wrong inputs 57/75/63 are paid) → WP-42 (the release, which needs WP-33). Two rows proposed and unscheduled: **WP-43** (Slack Socket Mode, backlog 78) and **WP-44** (the export's delivery and the take-over screen, backlog 68 and 70). Q71–Q73 are implemented per their recommendation like Q63–Q70 — an autonomous session does not wait on them. **The Docker VM was at 97 % for most of the session and hit 100 % during WP-32's round 2** (WP-15j's implementer had removed 18 437 anonymous dangling volumes; named volumes untouched); the orchestrator asked and **the user chose `docker image prune -a --filter until=720h`** — 124.8 GB reclaimed, the VM at 40 % with 116 GB free — so container tiers run normally again. Rule 66 still holds: never prune the user's images on an agent's own judgement; ask. **Both rows now exist** (refiner, session
 5): **WP-15i** is the eleven task and run commands — `POST /api/runs/:run_id/steer` stays WP-27's — and
 **WP-15j** is serving the SPA from the bundle the product image already carries, both in M1 after WP-15h,
@@ -2452,7 +2452,7 @@ carries the board field in criterion 3 together with entries **64** and **65**'s
 this entry is still its brief; what changed is only that the M3 default now has a home instead of
 none.
 
-### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again**)
+### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again, and WP-39 a third duty that re-reads the pipeline status the CI gate reads**)
 **What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
 calls `getMergeRequestDiff` once for the task and once per peer and keeps `new_path`/`old_path`; the
 port's `FileDiff` carries `diff` as well, so every patch is fetched and discarded. One gate entry is
@@ -2515,6 +2515,41 @@ write, where before WP-37 it was one. Derived arithmetic, not a measurement; not
 removes a duplicate *within one gate entry* as well as the `K²` factor across tasks, which is a
 saving that needs no port change and no provider documentation — so (a) is the half to take first,
 and (b)'s documentation question is unchanged.
+
+**WP-39 added a third duty of the same shape, on a different read — and the remedy splits there**
+(refiner, session 5, folded in rather than filed as a second entry; file reads only, no test run —
+rule 66). The WP-39 discovered-work bullet, quoted: *"`gates.ts` polls `getPipelineStatus(head_sha)`
+to settle `ci_gate`, and the `coverage` duty reads the same pipeline for the same revision moments
+later, because the two are woken by different things … It is backlog **64**'s shape one duty later —
+derived arithmetic, not a measurement: one extra read per `ci.pipeline.finished`"*.
+
+**One correction to *"moments later"*, and it makes the duplicate smaller than the bullet reads.**
+When the pipeline finishes, `pipeline.ci` settles the gate **from the event payload**
+(`event.payload.status`, `packages/application/src/pipeline/saga.ts:1110-1145`) and makes **no**
+provider read; `gates.ts:146`'s `git.pipelineStatus(headSha, context)` runs when the gate is
+*evaluated* — once on stage entry, then once per re-check at `GATE_RECHECK_MS` = 30 s up to
+`MAX_GATE_CHECKS` = **5** (`gates.ts:63`, `jobs.ts:239-243`, whose own docblock says the event
+*"normally arrives long before that and settles the gate without a re-check at all"*). So the
+arithmetic for a task sitting at `ci_gate` is: **1 + up to 4** gate reads of `(project, head_sha)`,
+plus the coverage duty's **1** head read per `ci.pipeline.finished` (`coverage.ts:216`), plus **1**
+default-branch read and **0 or 1** base-pipeline read (cached per `(task_id, base_sha)`,
+`coverage.ts:259`) — WP-39's stated *"two or three reads"* per event, and **zero** when
+`policies.coverage_source` is `'none'` or the head pipeline reported no coverage. The rebase gate's
+own floor is unchanged at **four** reads per entry, as restated above; this is a different trigger,
+not a fifth read there.
+
+**Remedy (a) does not transfer to this read, which is the thing worth knowing before anyone plans
+it.** A merge request's changed paths for a fixed sha are stable, so coalescing on
+`(merge request, head sha)` is safe; a **pipeline status** for a fixed sha is not — it moves from
+`running` to a terminal state and a re-run on the same revision reports a different number, which is
+exactly why WP-39 refuses to cache the head at all (`coverage.ts:57-59`: *"The **head** is never
+cached: a pipeline can be re-run on the same revision and report a different number, and the whole
+point of the record is to be the last thing the CI said"*). A coalesce for `get_pipeline_status`
+must therefore be bounded in **time** — a wake-up- or request-scoped window — rather than keyed by
+sha, and a TTL chosen wrongly answers a gate with a stale status. That is behaviour, where the diff
+half is only bandwidth, so the two halves are not one change and the cheap one is still the diff's.
+**Needs measurement: none for the count above — it is read off the call sites; the window a
+pipeline-status coalesce would use is a design decision nobody has made.**
 
 **Depends on / owner.** No dependency. **No work package owns it**; nearest is whoever next touches the
 git adapter. Trigger that would make it urgent: a project with a busy default branch and ten or more
@@ -4296,6 +4331,126 @@ instance where nobody has mapped anybody it still resolves to `null`, and no scr
 next opens one of the three command modules. **WP-38** is the first surface that would *show* the
 result — its Checks panel item is *"risk classes and required reviewers"* — but it renders the outcome
 and does not own the writer.
+
+### 93. **No DTO fixture in the `apps/web` unit tier is held to its type, so a required field added to `taskRecordSchema` compiled clean everywhere and arrived as seven UI tests failing about a heading** (TODO, small — **no work package owns it**; a **typing and diagnostic** gap rather than standing rule 1's kinder-harness class, and the distinction decides the remedy; found by WP-39, session 5)
+**What is wrong.** One cause: an `apps/web` test fixture is an untyped object literal — or an `as`
+cast — so nothing compares it with the DTO it stands for. The runtime check is **not** missing: the
+file's fake `fetch` hands the literal to the **real** endpoint parser. What is missing is the
+annotation, and with it the diagnostic — the failure surfaces three layers away as a rendering
+assertion that names a heading rather than a field.
+
+**Evidence** (the failure is WP-39's implementer's; everything else is greps and file reads, rule 66
+— no test was run here).
+- The WP-39 discovered-work bullet, quoted: *"`apps/web/src/features/ask-thread.test.tsx` builds its
+  task fixture as an untyped object literal that the screen's own `taskDetailResponseSchema` parses
+  at **runtime**, so adding `coverage` to the DTO compiled clean everywhere and surfaced as seven UI
+  tests failing with *'Unable to find an element with the text: Ask the task'* — a message about a
+  heading, for a defect about a schema."*
+- **The value is validated, and by the production parser.** `const TASK_DETAIL = {`
+  (`apps/web/src/features/ask-thread.test.tsx:34`) is returned by that file's fake `fetch` at `:117`
+  (`json(TASK_DETAIL)`), and `createApp`'s real client parses it —
+  `client.get('/api/tasks/<id>', { schema: taskDetailResponseSchema })`
+  (`apps/web/src/api/endpoints.ts:318`, the path built from a template literal). So no validation
+  mechanism is owed; an annotation is.
+- **The census — thirteen untyped top-level DTO literals in four files**: `ask-thread.test.tsx:24,34,79`
+  (`SESSION`, `TASK_DETAIL`, `ANSWERED`); `project-settings.test.tsx:20,30,47,83` (`SESSION`,
+  `PROJECT_ROW`, `POLICIES`, `AUDIT`); `integrations.test.tsx:15,25` (`SESSION`, `INTEGRATIONS`);
+  `onboarding.test.tsx:21,34,51,77` (`SESSION`, `PROJECT_ROW`, `READINESS`, `AUTONOMY`). Two helpers
+  widen the same hole on purpose (`project-settings.test.tsx:65,118`, `Record<string, unknown>`).
+- **One file defeats the check on both sides rather than on one.** `realtime/query-bridge.test.ts:12-32`
+  builds an `SseFrame` from `Record<string, unknown>` overrides and closes with
+  `as SseFrame & { frame: 'domain_event' }`; nothing parses it at runtime either, because
+  `staleKeysForEvent` takes the frame directly. That is the only spelling here with no check at all.
+- **The remedy already exists in the sibling file, from the same change.**
+  `features/task-detail.test.ts:126` is `const measured = (over: Partial<TaskCoverage> = {}): TaskCoverage => ({ … })`
+  — same tier, same work package, annotated.
+- `test/web-e2e/support/fixtures.ts:202,213,286,349` **parses** rather than annotating, and there it
+  is deliberate: those fixtures are asserting that they are valid DTOs (the WP-39 bullet says so).
+
+**Is it standing rule 1's class? No, and saying so is half the entry.** Rule 1 is about a double that
+admits what production refuses; here the production parser is the one that runs, so nothing is
+laundered into a pass. What fails is rule **4**'s instrument question — *can the harness even be held
+to the thing it stands for?* — and the answer is no, so the instrument reports a schema defect as a
+missing heading. Filed as a typing/diagnostic gap so that nobody schedules a validation mechanism the
+tier already has.
+
+**What it costs to leave.** Every required field added to a published record — `taskRecordSchema`,
+`projectSummarySchema`, the readiness, autonomy and session DTOs — costs the next implementer the
+same debugging, and the cost lands on whoever **adds the field** rather than on whoever wrote the
+fixture, which is why it has survived four work packages that touched these files. It is bounded: the
+runtime parse means a stale fixture cannot pass, and nothing reaches production. The one unbounded
+spelling is the `as` cast, where a wrong frame shape is asserted against nothing.
+
+**What "done" looks like.** One annotation per fixture — `const TASK_DETAIL: TaskDetailResponse = …`
+— across the thirteen, which turns a runtime parse failure into a compile error **at the fixture**
+and catches the other direction too (an annotated object literal is excess-property checked, so a key
+the strict DTO would refuse also fails at the literal). The two `Record<string, unknown>` helpers
+either take the type or say at the line why they are wide, and `query-bridge.test.ts`'s cast is
+replaced by a construction the type accepts or states why a cast is right there. **The detector
+question is answered rather than built**: *"no unannotated DTO literal in `apps/web/src`"* is not
+mechanisable off a grep — nothing distinguishes a DTO fixture from any other object literal — so this
+is a sweep and whoever does it says so, instead of leaving a census that cannot exist implied. Half
+an hour. **Needs measurement: none.**
+
+**Depends on / owner.** Nothing. **No work package owns it.** Cheapest owner is the next row that adds
+a required field to a published record, which is **WP-38**: its criterion 5 decides where required
+reviewers live and records that `taskRecordSchema` has no `required_reviewers` field today, so it is
+the next change that would pay this cost in full. Any implementer touching one of the four files may
+take its share. Related but distinct: backlog **77** is the same family in the **application** unit
+tier (`ScriptedRun.structuredOutput` is cast and parsed by nothing), and the two remedies do not
+share code — there the deliverable is a detector because the validation is absent, here it is an
+annotation because the validation is present.
+
+### 94. **`ci.pipeline.finished.coverage_pct` now has no reader anywhere, the one shipped adapter writes `null` there on every delivery, and the fake writes a number** (nit, TODO, latent — **no work package owns it**; working as designed after WP-39 and filed so the next reader meets the decision rather than the trap; found by WP-39, session 5)
+**What is wrong.** Nothing today, and that is the entry. The payload field is published by the event
+catalogue, filled `null` by the only adapter this build ships, filled with a **number** by the fake,
+and read by no production code at all. The next feature that reaches for it would be green in every
+tier in this repository and blank on every GitLab project.
+
+**Evidence** (greps and file reads only, rule 66).
+- **The field**: `coverage_pct: coveragePctSchema.nullish()` on `ci.pipeline.finished`
+  (`packages/contracts/src/events.ts:550`).
+- **No reader.** A grep for `coverage_pct` over `packages/`, `apps/` and `test/` returns the schema,
+  the two port types (`ports/integrations/git-provider.ts:51,141`), the two GitLab producers
+  (`providers/gitlab/provider.ts:356,756`, from the **API**), the delivery producer
+  (`providers/gitlab/inbound.ts:283`, a literal `null`), the fake, and **tests**. The one consumer it
+  could have had declines by name: *"`ci.pipeline.finished` carries a `coverage_pct` field and **this
+  duty does not read it**"* (`packages/application/src/pipeline/coverage.ts:14`), which reads
+  `head?.coverage_pct ?? null` off `getPipelineStatus` instead (`:216-217`).
+- **Why it is `null` in production**, quoted from `gitlab/inbound.ts:281-283`: *"The documented
+  Pipeline Hook `builds[]` carries no `coverage`, and neither does `object_attributes`.
+  `getPipelineStatus` is the read that has it."*
+- **The fake is kinder and it is declared** — divergence **13**
+  (`packages/integrations/src/git/fake.ts:96-107`) with the positive assertion rule 12 asks for
+  (`fake.test.ts:339`), closing with *"Anything else that reaches for `coverage_pct` on a delivery
+  owes itself the same check."*
+- **The register that would carry this fact does not reach fields.** `EVENT_CONSUMPTION`
+  (`packages/application/src/events/consumption.ts:100`) marks the **event** `'handled'`, which it
+  correctly is: two handlers read `status`, `failed_jobs` and `mr`.
+
+**Is it a defect? No — it is the build working as WP-39 decided, and what is missing is one sentence
+where a reader starts.** Removing the field would be wrong: it is the **port's** payload, not
+GitLab's, and an adapter for a provider that does publish coverage on its hook needs it — which is
+also the fake's stated reason for keeping its own kindness rather than narrowing to GitLab's shape.
+
+**What it costs to leave.** One trap, latent until somebody writes a second reader — a notification, a
+statistics row (**WP-41**), or a second git provider. It is bounded by divergence 13 being written
+down, but it is written down at the **fake**, which is the place a person arrives at last: the field's
+own declaration says nothing, so the cheap path for a future implementer is to read the schema, see a
+percentage, and use it.
+
+**What "done" looks like.** A sentence at `packages/contracts/src/events.ts:550` recording that the
+field has **no reader on this build**, that the only shipped adapter writes `null` there, and that
+`getPipelineStatus` is the read that has the number — with a pointer to `FakeGitProvider`'s divergence
+13 and to WP-39's two reasons. **No mechanism**: this project has no field-level consumption register,
+and this entry does not propose building one; `EVENT_CONSUMPTION`'s granularity is deliberate and
+stays. **Needs measurement: none.**
+
+**Depends on / owner.** Nothing. **No work package owns it.** Cheapest owner: whoever next edits that
+payload or adds a git provider. **WP-41** is the first scheduled row likely to want a coverage number
+per merge request, and it must take it from `tasks.coverage` (WP-39's record, written from the API
+read) rather than from the delivery — a statistics row built on the payload field would publish zeros
+for every GitLab project.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -16183,8 +16338,172 @@ adds nothing, so a shadow pass over an already-assigned merge request would have
 the string "non-administrator users" does not appear on it, so the **two fixtures** were corrected to
 the adapter's spelling rather than the other way round (standing rule 39).
 
+### WP-39 — coverage delta
+
+**What existed and what was missing.** The head number was on three schemas since WP-09
+(`MergeRequest.coverage_pct`, `PipelineStatus.coverage_pct`, the `ci.pipeline.finished` payload) and
+GitLab filled two of them; there was no delta because nothing stored a **base**, and product/18:38's
+one configuration key had no schema to be written in. So this row is a base, a cache, a staleness
+rule and a panel item — not an integration. Twelve production files plus tests: the key
+(`policies.coverage_source`), the arithmetic (`packages/domain/src/policies/coverage.ts`), the duty
+(`packages/application/src/pipeline/coverage.ts`), the column (**migration 0027**, `tasks.coverage`),
+the fifth narrow writer (`TaskRepository.saveCoverage`), the DTO field and the Checks metric.
+
+**1. The base is named, and its staleness window is stated at the record.** The base is **the
+project's default branch and its head at the moment of the measurement** — `base_branch`, `base_sha`
+and `measured_at` are all on the row, and the panel prints them. Not the branch point: no column in
+this build records where a task branched, so a delta against it would have to be invented. The window
+follows from the trigger: the record is as fresh as the last pipeline that finished on the task's
+merge request, and the default branch may have moved since; nothing re-reads it on render. The
+alternative — *"the latest default-branch pipeline"* read at render time — was rejected because it
+puts a provider call on a screen.
+
+**2. Both numbers come off `get_pipeline_status`, and the event's `coverage_pct` is deliberately
+unread.** Two reasons, and the second one is the sharp one. A delta may only subtract two answers of
+the *same* read, and the base can only come from the API because no webhook arrives for a commit
+nobody is watching. And **GitLab publishes no coverage on its pipeline hook at all** — the documented
+Pipeline Hook carries it on neither `object_attributes` nor `builds[]`, so `gitlab/inbound.ts:281-283`
+fills the payload field with `null` — while `FakeGitProvider` *does* publish it. A duty that read the
+event's number would be green in every tier here and blank on every GitLab project: standing rule 1's
+most expensive shape. The fake's kindness is now **divergence 13** in its register with a positive
+assertion in `fake.test.ts` (rule 12), and the e2e's numbers only exist on the API side.
+
+**3. The cache is the task's own row.** Key `(task_id, base_sha)`; lifetime the life of the row;
+invalidated by exactly one thing, the default branch moving. `tasks.coverage` already has to carry
+`base_sha` and `base_pct` for the panel to name its base, so the next wake-up reads them back and
+skips `get_pipeline_status` for the base. An in-process `Map` was rejected: per process, needs a TTL
+nobody can derive, empty after every deploy, and able to disagree with what the panel is showing.
+**One stated deviation from criterion 4's wording**: a base whose stored `base_pct` is `null` **is**
+read again on the next pipeline event, because `null` there means *"the default branch's pipeline has
+not reported a number yet"* — it may still have been running — and caching that would pin "no base"
+for the life of the branch. The retry is bounded by the pipelines that finish on one merge request.
+The **head** is never cached: a re-run reports a different number and the record is meant to be the
+last thing the CI said. Cost per `ci.pipeline.finished`: **two or three reads**, and **zero** for a
+project whose source is off or whose pipeline reports no coverage — the base is never asked for when
+there is nothing to subtract it from.
+
+**4. `coverage source` is `policies.coverage_source: 'pipeline' | 'none'`, default `'pipeline'`**,
+which is product/18:38's *"on when available"* (`DEFAULT_COVERAGE_SOURCE`, one spelling, imported by
+`PLATFORM_DEFAULT_CONFIG` the way `DEFAULT_ASK_BUDGET_USD` is — a settings port built from `{}` never
+sees the platform layer, so the reader has to default it too). **There is no `'artifact'` value**, and
+that is criterion 6's answer: per-file coverage needs the coverage artifact downloaded and parsed,
+`GitProviderCapabilities.coverageArtifacts` is declared by the GitLab adapter and **read by nothing**
+(said at the capability now), so *"coverage delta"* here is one percentage point for the whole change.
+The limit is stated in four places a reader might start from: the schema, the domain module, the duty
+and the sentence the panel prints. **technical/12's example is unchanged and its fixture still matches
+the document byte for byte** — WP-37 left `policies.reviewers` out of it for the same reason. If the
+orchestrator wants the key in the example, the line is
+`  coverage_source: pipeline      # pipeline | none` under `policies:` in
+`docs/technical/12-configuration-and-schemas.md:72`; no product document needs amending, because
+product/18:38 already names the key and the default.
+
+**5. Four answers on the panel, and none of them is a zero standing for a missing number** (rule 16,
+the failure mode this row exists to prevent). `not measured` (nothing has looked: no pipeline has
+finished, or the source is off) · `not reported` (it looked and the CI publishes none) · `81.5 %` (a
+head number with no base to compare) · `+2.5 pp` / `-9.0 pp` (the delta, signed, in percentage
+**points** — the unit a difference of two percentages actually has). A **measured** zero prints
+`0.0 pp` and the line beneath gives both numbers, which is a different fact and is asserted as one.
+The `coverage === null` case does conflate *"no pipeline yet"* with *"the source is off"*; stated
+rather than fixed, because distinguishing them means writing a row for a feature somebody turned off,
+and the metric's definition text says both.
+
+**6. Rule 83's sweep.** `task-detail.tsx`'s caveat listed coverage delta among the absent items and no
+longer does; the file's own docblock said the panel publishes five of product/10's checks and now says
+six. **The rest of that caveat is left exactly as it was on purpose**: *CI* and *rebase status* have
+been producible since WP-15 and WP-26 and are still not projected, and correcting that half is
+**WP-38's own criterion 6**, which also owns product/10:38's eleven-item census. Two work packages
+editing one sentence in opposite directions is how a caveat ends up describing neither build; the
+reasoning is in the comment beside it. Checked and still true: `gitlab/provider.ts:26` (diff deltas
+remain invented-free), `:41` and divergence 5 (*"`getPipelineStatus` is the read that has it"* — this
+row is the first caller that needed it), `gitlab/inbound.ts:281-283`.
+
+**7. Seven mutants, each dead by a named test, each file restored to its pre-mutation md5** (rules 3,
+21, 62, 77 — applied **in place** with the Edit tool, because the duty is reached through
+`createPipelineRuntime` and a copied tree resolves `@platform/*` back to the original; WP-37's
+refinement). `coverageDeltaPoints`'s null guard → `answers null whenever either side is missing…` and
+`keeps the head number when the default branch has no coverage of its own`. `head?.coverage_pct ?? 0`
+→ `says nothing was reported rather than zero…` and `reports nothing for a revision the provider has
+no pipeline for`. The cache ignoring `base_sha` → `reads it again once the default branch has moved…`.
+The cache never consulted → `reads the base once per base sha however many pipelines finish`.
+`coverage_source` ignored → `reads nothing and stores nothing when the project turned the source off`.
+The panel answering `0.0 pp` for a missing number → `never renders a missing number as zero`. The
+store's `taskCoverageSchema.parse` dropped, in **both** implementations → `refuses a coverage record
+the published shape cannot describe` (contract tier for the memory store, integration tier for
+PostgreSQL).
+
+**8. What the tiers cover.** Unit: eleven cases through the real handler, the real duty and the real
+`IntegrationActionExecutor` over the harness's doubles — a raise and a drop (rule 42), a pipeline that
+reports nothing, a base that reports nothing, the cache and both of its invalidations, the source
+turned off, a project with no git binding, and a pipeline on a branch with no merge request. Domain:
+the arithmetic, including a property walk over arbitrary pairs asserting the sign follows the
+comparison. Contract: the narrow write, whole-record replacement, nulls surviving the round trip, a
+concurrent `addSpend` surviving it, and the refusal. E2E: one instance, three signed deliveries through
+the unauthenticated webhook route — a raise, a drop from a re-run, and a pipeline that stops reporting
+— with the head pipeline **replaced** between them, so a record that had trusted the delivery payload
+would be stale by name (rule 82). Every wait is on `tasks.coverage` itself and the read counts are
+asserted after it, because the duty reads before it writes (rule 87). Playwright: the signed delta and
+its base sentence on the built bundle, and a second task rendering `not measured` with `0.0 pp` absent.
+
+**9. Two things found on the way, neither fixed here.** The `get_pipeline_status` this duty makes for
+the **head** is a second read of what the CI gate has usually just read — the same shape as backlog 64,
+one duty later, and it is not shared for the same reason WP-37's is not: the gate only runs while the
+task is *at* `ci_gate`, and a pipeline finishes whenever it finishes. And the task DTO gaining a
+required field was caught by **no** typecheck: `apps/web/src/features/ask-thread.test.tsx` builds its
+fixture as an untyped literal that `taskDetailResponseSchema` parses at runtime, so the only signal was
+seven UI tests failing with *"Unable to find … Ask the task"*. Both are in "Discovered work" below.
+
+**Assumptions a reviewer may reverse.** (a) The base is the default branch's **current** head rather
+than the task's branch point — the branch point is not stored anywhere. (b) `coverage_source` takes two
+values; an operator who wants per-file coverage is refused by the enum rather than by a named message,
+which is weaker than `riskRequirementSchema`'s refusal and is the cheaper half of the same idea (the
+docblock carries the reason). (c) The duty writes a record even when the pipeline reported nothing,
+because *"the CI publishes no coverage"* is a fact about the project a maintainer should read once
+rather than infer from a blank. (d) A later pipeline's record replaces an earlier one unconditionally —
+last write wins, and two pipelines finishing out of order would leave the older number; ordering by
+`finished_at` was considered and rejected as a guess about a field the port marks nullish.
+
 
 ## Discovered work — session 5 (not in plan)
+- **The coverage duty reads the head revision's pipeline that the CI gate has usually just read**
+  (WP-39). `gates.ts` polls `getPipelineStatus(head_sha)` to settle `ci_gate`, and the `coverage`
+  duty reads the same pipeline for the same revision moments later, because the two are woken by
+  different things: the gate runs only while the task is *at* `ci_gate`, and a pipeline finishes
+  whenever the provider says. It is backlog **64**'s shape one duty later — derived arithmetic, not a
+  measurement: one extra read per `ci.pipeline.finished`, on top of the two or three WP-39 states.
+  Nothing is wrong today. The cheap remedy is the one backlog 64 names for the diff: a coalesced read
+  per `(project, head_sha)` shared by the gate and the duty, which needs no port change; the honest
+  alternative is for the gate to record the coverage it already holds, which couples a gate to a
+  panel. **No work package owns it**; nearest is whoever next touches `gates.ts`.
+  *Refiner (session 5): **folded into backlog 64 — no number**, because it is that entry's shape at a
+  second read site and a separate line would split one remedy across two entries. The fold corrects
+  *"moments later"*: `pipeline.ci` settles the gate **from the event payload** and makes no provider
+  read (`saga.ts:1110-1145`), so the duplicate is the gate's stage-entry read — 1, plus up to 4
+  re-checks 30 s apart, `MAX_GATE_CHECKS = 5` — against this duty's one head read per
+  `ci.pipeline.finished`, and the rebase gate's own four-read floor is unchanged. It also records
+  what the bullet's remedy assumes: **the coalesce does not transfer**, because a pipeline status for
+  a fixed sha changes (a re-run reports a different number, which is why WP-39 never caches the
+  head), so a shared read here must be bounded in **time** rather than keyed by sha — a decision
+  nobody has made. **Owner unchanged: none**; nearest whoever next touches `gates.ts`.*
+- **A required field added to `taskRecordSchema` is caught by no typecheck, in at least one tier**
+  (found by WP-39). `apps/web/src/features/ask-thread.test.tsx` builds its task fixture as an untyped
+  object literal that the screen's own `taskDetailResponseSchema` parses at **runtime**, so adding
+  `coverage` to the DTO compiled clean everywhere and surfaced as seven UI tests failing with
+  *"Unable to find an element with the text: Ask the task"* — a message about a heading, for a defect
+  about a schema. Standing rule 1's shape at a test double rather than a port fake, and rule 4's
+  instrument question: the fixture cannot be held to the type it stands for. The remedy is one
+  annotation per fixture (`const TASK_DETAIL: TaskDetailResponse = …`), which turns a runtime parse
+  failure into a compile error at the fixture. The same shape exists in
+  `test/web-e2e/support/fixtures.ts`, which parses rather than annotates, and there the parse is
+  deliberate — it is asserting the fixture is a valid DTO. **No work package owns it**; it is a
+  half-hour sweep of the `apps/web` test fixtures.
+  *Refiner (session 5): **filed as backlog 93**, and judged a **typing and diagnostic** gap rather
+  than standing rule 1's class — the fake `fetch` hands the literal to the **real** endpoint parser
+  (`apps/web/src/api/endpoints.ts:318`), so the value is validated and no mechanism is owed; what is
+  missing is the annotation and therefore the diagnostic (rule 4's instrument question). The entry
+  carries the census this bullet does not: **thirteen** untyped DTO literals across four files, two
+  `Record<string, unknown>` helpers, and one `as SseFrame` cast (`realtime/query-bridge.test.ts:12-32`)
+  that is checked on **neither** side. Cheapest owner named: **WP-38**, the next row that adds a
+  required field to a published record (its criterion 5, `required_reviewers`).*
 - **Q83's recommendation is implemented as a refusal, not as the feature** (WP-37). A review
   checklist as Q83 describes it — `policies.review_checklists` as `record<slug, string[]>`,
   `checklist:<name>` in `riskRequirementSchema`, and a class naming an undefined list refused at

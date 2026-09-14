@@ -355,6 +355,7 @@ export const runIntakeCheck = async (
       // Filled in at the rebase gate from the merge request's own diff (WP-37): a task that has
       // not written code yet has touched nothing to be classed.
       riskClasses: [],
+      coverage: null,
       // `tasks.requested_by_user_id` has no writer: a ticket the pick-up rule matched was not
       // requested by anybody the platform can name (`StoredTask.requestedByUserId` says what that
       // costs the reviewer fallback).
