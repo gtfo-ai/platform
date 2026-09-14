@@ -4,15 +4,17 @@
  * Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: the checks
  * panel, cost and links. Live on the `task:<id>` topic.
  *
- * **What the Checks panel shows, and what it cannot.** product/10 lists thirteen merge-readiness
- * checks (acceptance criteria, CI, rebase, review threads, business verdict, tamper check, coverage
- * delta, dependency status, risk classes, budget vs estimate, questions pending…). `taskDetail`
- * publishes six of them — questions, approvals, risk classes, since WP-28 **cost against the
- * estimate**, which is product/10's *"budget vs estimate"* row and was the one this note used to
- * describe as *"cost against nothing"*, and since WP-39 the **coverage delta**. The panel shows
- * those six and says plainly that the rest arrive with WP-15 and WP-38 rather than drawing empty
- * ticks that read as "passed". WP-38 owns the census that will hold that list to product/10:38 in
- * a test rather than in this paragraph.
+ * **What the Checks panel shows, and what it cannot.** product/10:38 lists **eleven**
+ * merge-readiness checks — acceptance criteria met, CI green, rebase status, review threads
+ * open/resolved, business verdict, tamper check, coverage delta, dependency status, risk classes and
+ * required reviewers, budget vs estimate, questions pending. This panel renders **five**: the
+ * coverage delta (WP-39), the dependency status (WP-38), risk classes **and required reviewers**
+ * (WP-37's routing, WP-38's record of it), cost against the estimate — product/10's *"budget vs
+ * estimate"* (WP-28) — and questions pending, with approvals beside it. The other six are named on
+ * the screen with what exists for each, and the whole list is held to product/10:38 by
+ * `apps/web/src/features/checks-panel.test.tsx` › "the Checks panel against product/10:38" **in
+ * both directions**, so neither this paragraph nor that sentence can go stale on its own (WP-38,
+ * criterion 5).
  *
  * **Which commands are here, and which are named absences.** technical/09's screens table gives
  * this screen `answer, approve, retry, take over, feedback`; product/10 adds return-to-stage and
@@ -41,7 +43,9 @@ import type {
   HumanTimeSummary,
   QuestionRecord,
   TaskCoverage,
+  TaskDependencies,
   TaskRecord,
+  TaskReviewers,
 } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
@@ -168,6 +172,138 @@ export const coverageBasisText = (coverage: TaskCoverage | null): string => {
     return `${head}. The default branch has no coverage of its own to compare it with, so this is a number and not a delta.`;
   }
   return `${head}, against ${coverage.base_pct.toFixed(1)} % on ${coverage.base_branch} at ${shortSha(coverage.base_sha ?? '')} as it stood on ${at}. One percentage for the whole change: per-file coverage needs the CI's coverage artifact, which this platform does not download.`;
+};
+
+/**
+ * The dependency item's value — product/04:58, product/10:38's *"dependency status"* (WP-38).
+ *
+ * Four answers and none of them is a zero standing in for a missing one (standing rule 16, the same
+ * rule `coverageValueText` was written to):
+ *
+ *  - `not checked` — the gate has not run. No implementation stage has completed on this task, so
+ *    no diff exists to read: it is **not** "no dependencies were added";
+ *  - `none added` — it ran and the diff touched no manifest or lockfile;
+ *  - `1 added` / `3 added` — packages were added; the decision and the licences are on the line
+ *    beneath and in the question the gate raised;
+ *  - `blocked` / `waiting` — the policy stopped the task or is asking a human about it, which is the
+ *    fact a maintainer looking at a merge request needs first.
+ */
+export const dependencyValueText = (dependencies: TaskDependencies | null): string => {
+  if (dependencies === null) {
+    return 'not checked';
+  }
+  if (dependencies.added.length === 0) {
+    return dependencies.unread.length === 0 ? 'none added' : 'none read';
+  }
+  const added = `${dependencies.added.length} added`;
+  switch (dependencies.decision) {
+    case 'block':
+      return `${added} · blocked`;
+    case 'ask':
+      // **`ask` with no question is not `waiting`.** The gate decides in a job, and a task that
+      // stopped being active before that job fired gets the packages on this panel and nobody
+      // asked — rare in production, where a stage takes minutes, and measured in the e2e tier where
+      // a whole template walks in a second. Printing "waiting" for it would name a human who is not
+      // coming (standing rule 18).
+      return dependencies.question_id === null ? `${added} · not asked` : `${added} · waiting`;
+    default:
+      return added;
+  }
+};
+
+/**
+ * What the gate found, in one sentence: the packages, their licences and what it could not read.
+ *
+ * It contains **package names, manifest paths and a registry's licence string** — third-party text
+ * somebody else wrote (BD-022) — so the caller renders it through `UntrustedText` like every other
+ * provider string on this screen. *"licence not checked"* is a statement about this instance rather
+ * than about the package: no registry host is declared (`APP_DEPENDENCY_REGISTRY_HOSTS`), so the
+ * platform asked nobody.
+ */
+export const dependencyBasisText = (dependencies: TaskDependencies | null): string => {
+  if (dependencies === null) {
+    return 'No implementation stage has completed on this task yet, so no diff has been read.';
+  }
+  const unread =
+    dependencies.unread.length === 0
+      ? ''
+      : ` ${dependencies.unread.length} manifest${dependencies.unread.length === 1 ? '' : 's'} could not be read on this build: ${dependencies.unread
+          .map((entry) => `${entry.path} (${entry.ecosystem})`)
+          .join(', ')}.`;
+  if (dependencies.added.length === 0) {
+    return `The change touches no dependency this build can read.${unread}`;
+  }
+  const packages = dependencies.added
+    .map((entry) => {
+      const licence =
+        entry.metadata.status === 'checked'
+          ? (entry.metadata.license ?? 'licence not published')
+          : entry.metadata.status === 'not_checked'
+            ? 'licence not checked'
+            : entry.metadata.status === 'unsupported'
+              ? 'no registry for this ecosystem'
+              : 'registry unavailable';
+      const published =
+        entry.metadata.last_published_at === null
+          ? ''
+          : `, last release ${entry.metadata.last_published_at.slice(0, 10)}`;
+      const allowed = entry.allowlisted ? ', allow-listed' : '';
+      return `${entry.ecosystem}:${entry.name} (${licence}${published}${allowed})`;
+    })
+    .join(', ');
+  const truncated = dependencies.truncated ? ' The list was cut, so there may be more.' : '';
+  const unasked =
+    dependencies.decision === 'ask' && dependencies.question_id === null
+      ? ' The task had already moved past the point where the platform parks it, so nobody was asked — decide here before you merge.'
+      : '';
+  return `${packages}.${truncated}${unasked}${unread}`;
+};
+
+/**
+ * The required-reviewer item — product/10:38's *"risk classes and required reviewers"* (WP-38).
+ *
+ * `null` is the routing not having run (no merge request, or the task has not reached the rebase
+ * gate); an empty `handles` is the routing having run and found nobody, which is a fact about the
+ * project's `CODEOWNERS` and `policies.reviewers` rather than about the platform. An `unresolved`
+ * handle is the case the audit trail cannot record at all — the platform routed somebody this
+ * provider has no account for and assigned nobody for them.
+ */
+export const reviewersValueText = (reviewers: TaskReviewers | null): string => {
+  if (reviewers === null) {
+    return 'not routed';
+  }
+  if (reviewers.handles.length === 0) {
+    return 'none';
+  }
+  const unresolved =
+    reviewers.unresolved.length === 0 ? '' : `, ${reviewers.unresolved.length} unresolved`;
+  return `${reviewers.assigned.length} of ${reviewers.handles.length} assigned${unresolved}`;
+};
+
+/** Who, by name — untrusted handles out of `CODEOWNERS` or the project's configuration. */
+export const reviewersBasisText = (reviewers: TaskReviewers | null): string => {
+  if (reviewers === null) {
+    return 'The rebase gate has not routed this merge request yet.';
+  }
+  const source =
+    reviewers.source === 'codeowners'
+      ? 'CODEOWNERS on the default branch'
+      : reviewers.source === 'project_config'
+        ? 'the project’s reviewers setting'
+        : reviewers.source === 'requester'
+          ? 'the human who asked for the task'
+          : 'nothing';
+  if (reviewers.handles.length === 0) {
+    return `No CODEOWNERS match, no project reviewers and no mapped requester, so this merge request was assigned to nobody.`;
+  }
+  const unresolved =
+    reviewers.unresolved.length === 0
+      ? ''
+      : ` No account on this provider for ${reviewers.unresolved.join(', ')}, so nobody was assigned for them.`;
+  const truncated = reviewers.truncated
+    ? ' More were routed than one merge request may carry.'
+    : '';
+  return `${reviewers.handles.join(', ')}, from ${source}.${unresolved}${truncated}`;
 };
 
 /** Seven characters, the way git prints one; the full sha is on the merge request. */
@@ -821,6 +957,58 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <p className="-mt-2 text-[11px] text-fg-muted">
             <UntrustedText value={coverageBasisText(task.coverage)} />
           </p>
+          {/*
+            **The dependency status** (WP-38, product/04:58 and product/10:38's Checks item). The
+            value is never a zero standing in for a missing number and never a blank standing in for
+            an unasked question: "not checked" is the gate not having run, "none added" is it having
+            run, and "licence not checked" is this instance having declared no registry host
+            (standing rules 16 and 18).
+          */}
+          <Metric
+            label="Dependencies"
+            value={dependencyValueText(task.dependencies)}
+            definition="Packages this change adds to a manifest or lockfile, and what the project's policy did about them (product/04:58): 'allow' proceeds, 'ask' raises the question below, 'block' sends the task back. Licence and last release come from a package registry an operator has declared; with none declared the platform asks nobody and says so."
+          />
+          {/*
+            Package names, manifest paths and a registry's licence string — third-party text
+            (BD-022) — so the sentence goes through `UntrustedText` like every other one here.
+          */}
+          <p className="-mt-2 text-[11px] text-fg-muted">
+            <UntrustedText value={dependencyBasisText(task.dependencies)} />
+          </p>
+          {/*
+            The package's page on the registry, when the platform asked one and it answered.
+            Composed by the platform from the encoded name rather than taken from a model or a
+            manifest — and still through `safeHref` like every URL this application renders, because
+            a DTO field is `z.url()` and `z.url()` accepts `data:` (Q49).
+          */}
+          {(task.dependencies?.added ?? []).some((entry) => entry.metadata.source_url !== null) ? (
+            <ul className="-mt-1 flex flex-wrap gap-2">
+              {(task.dependencies?.added ?? []).map((entry) =>
+                entry.metadata.source_url === null ? null : (
+                  <li key={`${entry.ecosystem}:${entry.name}`}>
+                    <ExternalLink
+                      url={entry.metadata.source_url}
+                      label={`${entry.ecosystem}:${entry.name}`}
+                      className="text-[11px] text-accent underline"
+                    />
+                  </li>
+                ),
+              )}
+            </ul>
+          ) : null}
+          {/*
+            **Required reviewers** (WP-38's record of WP-37's routing). The handles are untrusted:
+            `CODEOWNERS` is written by whoever can push to the repository.
+          */}
+          <Metric
+            label="Required reviewers"
+            value={reviewersValueText(task.required_reviewers)}
+            definition="Who this merge request needs a review from, as the platform routed them (product/19:138): CODEOWNERS on the default branch first, then the project's reviewers setting, then the human who asked — plus anyone a risk class requires. A handle with no account on this provider is named rather than dropped."
+          />
+          <p className="-mt-2 text-[11px] text-fg-muted">
+            <UntrustedText value={reviewersBasisText(task.required_reviewers)} />
+          </p>
           <div>
             <p className="text-xs text-fg-muted">Risk classes</p>
             <div className="flex flex-wrap gap-1 pt-1">
@@ -836,21 +1024,31 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             </div>
           </div>
           {/*
-            **Coverage delta left this list at WP-39** and is the metric two blocks up (standing
-            rule 83: closing a gap falsifies the sentence that described it, and the sentence
-            nearest the fix is the one nobody re-reads).
+            **The census of what this panel does not answer** (WP-38, criterion 5).
 
-            The rest of the sentence is left exactly as it was, and that is deliberate rather than
-            lazy: CI and rebase status have been *producible* since WP-15 and WP-26 and are still
-            not projected onto this panel, and correcting that half is WP-38's own acceptance
-            criterion 6, which also owns the eleven-item census product/10:38 asks for. Two work
-            packages editing one sentence in opposite directions is how a caveat ends up describing
-            neither build.
+            product/10:38 lists eleven merge-readiness checks and this panel renders five of them:
+            coverage delta, dependencies, risk classes and required reviewers, budget against the
+            estimate, and questions pending. The other six are named here **with what exists for
+            each** — rather than drawn as empty ticks that read as passed (standing rule 16) — and
+            the list is held to product/10:38 **in a test** rather than in this comment, so it
+            cannot go stale the way the sentence it replaces did:
+            `apps/web/src/features/checks-panel.test.tsx` › "the Checks panel against product/10:38".
+
+            That sentence said the pipeline producing CI and rebase status "lands with WP-15 and
+            WP-38". Both shipped — the CI gate settles from `ci.pipeline.finished` (WP-15) and the
+            rebase gate records `task.rebase.checked` (WP-26) — so what is missing is not a pipeline
+            but a **projection**: nothing on this screen's DTO carries either, and no work package
+            owns adding one (standing rule 83: a fix is what makes the old sentence false).
           */}
           <p className="text-[11px] text-fg-muted">
-            CI, rebase status, review threads and dependency status are not on this panel yet: the
-            pipeline that produces them lands with WP-15 and WP-38. They are absent rather than
-            shown as passing.
+            Not on this panel: acceptance criteria met, CI green, rebase status, review threads
+            open/resolved, business verdict, tamper check. The pipeline produces four of them and
+            this screen does not read them — the CI gate settles from the provider's own pipeline
+            event (WP-15), the rebase gate records every check (WP-26), the review window counts
+            unresolved threads (BD-007), and both verdicts are artifacts in the tab beside this one.
+            Acceptance criteria are written into the Refined Spec and judged in a verdict, and the
+            tamper check (BD-024) has no producer at all. They are absent rather than shown as
+            passing.
           </p>
         </Card>
 

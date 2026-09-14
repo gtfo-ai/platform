@@ -13,7 +13,7 @@
  */
 import type { PipelineStore, StoredTask, Transaction } from '@platform/application';
 import { INITIAL_TASK_VERSION } from '@platform/application';
-import type { Id, IsoDateTime, Slug } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug, TaskDependencies, TaskReviewers } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -72,6 +72,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           architecture_revisions: 2,
           rebase: 2,
           rebase_rechecks: 10,
+          dependency_policy: 2,
         },
         sequence: 1,
       },
@@ -90,6 +91,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       reviewSubject: null,
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
@@ -337,6 +340,142 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             base_pct: null,
             delta_pct: null,
             measured_at: '2026-06-01T09:00:00.000Z',
+          }),
+        ).rejects.toThrow();
+      });
+
+      /**
+       * WP-38's two records, held to the same property every narrow writer here is held to.
+       *
+       * The dependency gate's `ask` ending writes the **aggregate** in the same transaction as this
+       * record (the task moves to `waiting_answers`), which is exactly the arrangement that makes a
+       * whole-row write wrong: the record must survive its own transaction's aggregate write *and*
+       * a concurrent spend from another writer (standing rule 79 — assert a derived total).
+       */
+      it('writes the dependency record whole, beside an aggregate write and a concurrent spend', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const stale = await store.tasks.load(tx, stored.task.id);
+        expect(stale?.dependencies).toBeNull();
+        const saved = await store.tasks.save(tx, {
+          ...(stale as NonNullable<typeof stale>),
+          task: { ...stored.task, state: 'waiting_answers', currentStage: 'ci_gate' },
+        });
+        await store.tasks.addSpend(tx, stored.task.id, 1.5);
+        const found = {
+          head_sha: 'b'.repeat(40),
+          decision: 'ask',
+          added: [
+            {
+              ecosystem: 'npm',
+              name: 'lodash',
+              from: 'manifest',
+              path: 'package.json',
+              policy: 'ask',
+              allowlisted: false,
+              metadata: {
+                status: 'checked',
+                license: 'MIT',
+                last_published_at: '2026-04-02T11:00:00.000Z',
+                deprecated: false,
+                source_url: 'https://www.npmjs.com/package/lodash',
+              },
+            },
+          ],
+          unread: [{ ecosystem: 'maven', path: 'pom.xml' }],
+          truncated: false,
+          question_id: nextId(),
+          checked_at: '2026-06-01T09:00:00.000Z',
+        } satisfies TaskDependencies;
+        await store.tasks.saveDependencies(tx, stored.task.id, found);
+
+        const first = await store.tasks.load(tx, stored.task.id);
+        expect(first?.dependencies).toEqual(found);
+        expect(first?.costActualUsd).toBeCloseTo(1.5, 6);
+        expect(first?.task.state).toBe('waiting_answers');
+        expect(first?.version).toBe(saved.version);
+
+        // The next implementation run is a new diff: the record is replaced whole, so a package the
+        // change no longer adds has to leave the row.
+        const clean = {
+          head_sha: 'c'.repeat(40),
+          decision: 'none',
+          added: [],
+          unread: [],
+          truncated: false,
+          question_id: null,
+          checked_at: '2026-06-01T10:00:00.000Z',
+        } satisfies TaskDependencies;
+        await store.tasks.saveDependencies(tx, stored.task.id, clean);
+        expect((await store.tasks.load(tx, stored.task.id))?.dependencies).toEqual(clean);
+      });
+
+      it('refuses a dependency record the published shape cannot describe', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await expect(
+          store.tasks.saveDependencies(tx, stored.task.id, {
+            head_sha: 'b'.repeat(40),
+            // Not one of the four decisions the panel can render.
+            decision: 'maybe',
+            added: [],
+            unread: [],
+            truncated: false,
+            question_id: null,
+            checked_at: '2026-06-01T09:00:00.000Z',
+          } as never),
+        ).rejects.toThrow();
+        expect((await store.tasks.load(tx, stored.task.id))?.dependencies).toBeNull();
+      });
+
+      it('writes the routed reviewers whole, including the handles that resolved to nobody', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const routed = {
+          source: 'codeowners',
+          handles: ['@billing-team', '@ana'],
+          assigned: ['4242'],
+          unresolved: ['@billing-team'],
+          truncated: false,
+          routed_at: '2026-06-01T09:00:00.000Z',
+        } satisfies TaskReviewers;
+        await store.tasks.saveRequiredReviewers(tx, stored.task.id, routed);
+        expect((await store.tasks.load(tx, stored.task.id))?.requiredReviewers).toEqual(routed);
+
+        // The gate is re-entered on every default-branch move, so a reviewer the change no longer
+        // needs leaves the row — the same replacement rule `saveRiskClasses` has.
+        const none = {
+          source: 'none',
+          handles: [],
+          assigned: [],
+          unresolved: [],
+          truncated: false,
+          routed_at: '2026-06-01T10:00:00.000Z',
+        } satisfies TaskReviewers;
+        await store.tasks.saveRequiredReviewers(tx, stored.task.id, none);
+        expect((await store.tasks.load(tx, stored.task.id))?.requiredReviewers).toEqual(none);
+      });
+
+      it('refuses to write either WP-38 record for a task that does not exist', async () => {
+        await expect(
+          store.tasks.saveDependencies(tx, nextId(), {
+            head_sha: null,
+            decision: 'none',
+            added: [],
+            unread: [],
+            truncated: false,
+            question_id: null,
+            checked_at: '2026-06-01T09:00:00.000Z',
+          }),
+        ).rejects.toThrow();
+        await expect(
+          store.tasks.saveRequiredReviewers(tx, nextId(), {
+            source: 'none',
+            handles: [],
+            assigned: [],
+            unresolved: [],
+            truncated: false,
+            routed_at: '2026-06-01T09:00:00.000Z',
           }),
         ).rejects.toThrow();
       });

@@ -12,16 +12,27 @@
  *  - `dropped_citations` is shown rather than swallowed, because a reader who can see that two
  *    claims lost their evidence knows how much of the answer to trust (product/11:30).
  */
+import type { TaskAsk, TaskDetailResponse } from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
+import type { SessionResponse } from '../auth/session.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
 const RUN = '00000000-0000-4000-8000-0000000000c1';
 
-const SESSION = {
+/**
+ * **Annotated rather than bare** (PROGRESS backlog 93, closed by WP-38).
+ *
+ * These literals are handed to the **real** endpoint parsers by this file's fake `fetch`, so they
+ * were always validated; what was missing was the *diagnostic*. A required field added to
+ * `taskRecordSchema` used to surface here as seven rendering failures naming a heading — the
+ * annotation turns that into a compile error at the fixture, and excess-property checking catches
+ * the other direction too.
+ */
+const SESSION: SessionResponse = {
   user: {
     id: '00000000-0000-4000-8000-000000000001',
     email: 'operator@example.invalid',
@@ -31,7 +42,7 @@ const SESSION = {
   session: { id: '00000000-0000-4000-8000-000000000002' },
 };
 
-const TASK_DETAIL = {
+const TASK_DETAIL: TaskDetailResponse = {
   task: {
     id: TASK,
     project_id: PROJECT,
@@ -48,6 +59,10 @@ const TASK_DETAIL = {
     risk_classes: [],
     // WP-39: this task has been measured by nothing, which is the state a task page starts in.
     coverage: null,
+    // WP-38: and no implementation stage has completed, so the dependency gate has not run and
+    // nothing has been routed — the two `null`s a task page starts with.
+    dependencies: null,
+    required_reviewers: null,
     cost_actual_usd: 1.25,
     cost_estimated_usd: 0,
     estimate_usd: null,
@@ -76,7 +91,7 @@ const TASK_DETAIL = {
   runs: [],
 };
 
-const ANSWERED = {
+const ANSWERED: TaskAsk = {
   id: '00000000-0000-4000-8000-0000000000d1',
   task_id: TASK,
   source: 'ui',

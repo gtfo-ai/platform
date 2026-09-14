@@ -6,13 +6,17 @@
  * assertions here are the ones no existing tier made — that pressing a control produces the request
  * — plus the property backlog 53 is about, which only a double-submit can show.
  */
+
+import type { IntegrationsResponse } from '@platform/contracts';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
+import type { SessionResponse } from '../auth/session.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000d1';
 
-const SESSION = {
+/** Annotated rather than bare — PROGRESS backlog 93, closed by WP-38. */
+const SESSION: SessionResponse = {
   user: {
     id: '00000000-0000-4000-8000-000000000001',
     email: 'operator@example.invalid',
@@ -22,7 +26,7 @@ const SESSION = {
   session: { id: '00000000-0000-4000-8000-000000000002' },
 };
 
-const INTEGRATIONS = {
+const INTEGRATIONS: IntegrationsResponse = {
   items: [
     {
       id: INTEGRATION,

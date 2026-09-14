@@ -40,6 +40,23 @@ export const ITERATION_LOOPS = [
   'architecture_revisions',
   'rebase',
   'rebase_rechecks',
+  /**
+   * How many times the dependency gate may send a task back for the same blocked package (WP-38).
+   *
+   * A loop of its own rather than the leaving stage's, and the reason is standing rule 81's most
+   * expensive instance. The gate's job fires whenever the outbound worker reaches it, so the task
+   * may be at the CI gate, at the rebase gate or at `ready_for_merge` by then — and
+   * `RETURN_LOOPS['ready_for_merge']` is **`human_rounds`**, BD-008's *"human MR rounds"*. Measured
+   * on the e2e before this entry existed: a blocked package spent two `rebase` rounds and then
+   * three `human_rounds`, and the escalation read *"human_rounds iteration limit of 3 reached: the
+   * project's dependency policy blocks npm:lodash"* — a bound nobody had spent, named after a loop
+   * nobody had been round, which is precisely the defect `RETURN_LOOPS_BY_EDGE` was written for.
+   *
+   * It has **no `pipeline.limits` key**, like `refinement_questions` and `architecture_revisions`:
+   * no product document names one, and a project that wants a different answer sets the *policy*
+   * (`allow`, or the allow-list) rather than the number of times it is told the same thing.
+   */
+  'dependency_policy',
 ] as const;
 
 export type IterationLoop = (typeof ITERATION_LOOPS)[number];
@@ -65,6 +82,13 @@ export const DEFAULT_ITERATION_LIMITS = {
    * `pipeline.limits.rebase_rechecks`.
    */
   rebase_rechecks: 10,
+  /**
+   * Two, and it is the platform's number: the first return tells the Developer the package is
+   * blocked, the second is the same answer to the same change, and a third would be a loop nobody
+   * is learning from. The escalation at the end of it names the package and the allow-list
+   * (`dependency-gate.ts`).
+   */
+  dependency_policy: 2,
 } as const satisfies Record<IterationLoop, number>;
 
 export type IterationLimits = Record<IterationLoop, number>;
@@ -84,6 +108,9 @@ export const AGENT_ITERATION_LOOPS = [
   // A human decision refills it for the same reason it refills the others: the budget exists to
   // stop the *machine* looping, and a human who has just looked at the task has ended that concern.
   'rebase_rechecks',
+  // WP-38: a human who allow-listed the package, answered the question or changed the policy has
+  // ended exactly the concern this budget exists for.
+  'dependency_policy',
 ] as const satisfies readonly IterationLoop[];
 
 export type IterationCounters = Readonly<Partial<Record<IterationLoop, number>>>;
@@ -107,6 +134,8 @@ export const resolveIterationLimits = (
   architecture_revisions: DEFAULT_ITERATION_LIMITS.architecture_revisions,
   rebase: limits?.rebase_attempts ?? DEFAULT_ITERATION_LIMITS.rebase,
   rebase_rechecks: limits?.rebase_rechecks ?? DEFAULT_ITERATION_LIMITS.rebase_rechecks,
+  // No `pipeline.limits` key — see `ITERATION_LOOPS` for why.
+  dependency_policy: DEFAULT_ITERATION_LIMITS.dependency_policy,
 });
 
 export interface IterationDecision {

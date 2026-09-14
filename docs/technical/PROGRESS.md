@@ -348,6 +348,25 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    `RETURN_LOOPS_BY_EDGE`'s own docblock, which is where the next counter question (backlog **66**) will
    be asked, and a new rule restating this one costs every future reader of the list a re-read.
 
+   **A third instance, same counter, one work package later — WP-38, session 5, and this time the
+   defect was *created* by a new return edge rather than found on an old one.** The dependency gate's
+   `block` ending returns the task to the stage that added the package; `RETURN_LOOPS_BY_EDGE` had no
+   row for that edge, so it fell to the leaving stage's loop and spent **`human_rounds`** (BD-008,
+   ceiling 3). Quoted from the first e2e run: a blocked package spent two `rebase` rounds and then
+   three `human_rounds`, and the task escalated with *"human_rounds iteration limit of 3 reached: the
+   project's dependency policy blocks npm:lodash"* — again a bound nobody had spent, named after a
+   loop nobody had been round, and again with the **number** right (three returns *were* made) and the
+   **name** wrong. Closed by giving the ending a loop of its own: `ITERATION_LOOPS` gained
+   `dependency_policy` (default 2, in `AGENT_ITERATION_LOOPS` so a human decision refills it, and with
+   **no** `pipeline.limits` key — a project that wants a different answer changes the *policy*), and
+   the reasoning is at `packages/application/src/pipeline/dependency-gate.ts:40-49`. The transferable
+   half is not about counters at all: **a new return edge is a new loop question**, and the default —
+   attributing it to the leaving stage — is the answer that reads correctly in the code and wrongly in
+   the escalation brief a human is handed. Still no eighty-seventh rule owed; what this instance adds
+   is that the question now has a **trigger** anyone can apply — *if your change adds a
+   `task.stage.returned`, say which loop it spends and why, in the change* — and backlog **66** is
+   still where the keying question itself is asked.
+
 80. **"Nothing under `apps/web` changed" is not "nothing `apps/web` depends on changed", and the target you
    skip on that reasoning is the one that finds it.** WP-17's implementer declined to re-run
    `verify:web-e2e` in round 2 because no file under `apps/web` was touched. The verdict was right and the
@@ -2452,7 +2471,7 @@ carries the board field in criterion 3 together with entries **64** and **65**'s
 this entry is still its brief; what changed is only that the M3 default now has a home instead of
 none.
 
-### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again, and WP-39 a third duty that re-reads the pipeline status the CI gate reads**)
+### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again, WP-39 a third duty that re-reads the pipeline status the CI gate reads, and WP-38 a fourth diff read at a trigger of its own, so a task's diff is now downloaded four times**)
 **What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
 calls `getMergeRequestDiff` once for the task and once per peer and keeps `new_path`/`old_path`; the
 port's `FileDiff` carries `diff` as well, so every patch is fetched and discarded. One gate entry is
@@ -2550,6 +2569,33 @@ sha, and a TTL chosen wrongly answers a gate with a stale status. That is behavi
 half is only bandwidth, so the two halves are not one change and the cheap one is still the diff's.
 **Needs measurement: none for the count above — it is read off the call sites; the window a
 pipeline-status coalesce would use is a design decision nobody has made.**
+
+**WP-38 added a fourth read of the *diff*, at a trigger the other three do not share — and this is the
+number to quote from now on** (refiner, session 5, folded in rather than filed as a fourth entry: same
+read, same remedy family, and a separate line would split one coalesce across two entries. Call sites
+read off the tree; no test run, rule 66). The WP-38 implementer's note 11, quoted: *"A task's diff is
+now read **four** times — the dependency gate at the Developer stage, then the conflict warning, the
+risk routing and (per peer) the comparison at the rebase gate."* The dependency gate's read is
+`reads.mergeRequestDiff(stored.mr, MAX_CONFLICT_FILES, context)`
+(`packages/application/src/pipeline/dependency-gate.ts:240`) — the same 100-file cap, **with** the
+patches, because the detector reads *added lines* and paths would not answer it. The test that pinned
+the old cost moved again, exactly as it did at WP-37: `conflict-warning.test.ts`'s two read-count
+assertions went from `[IID, IID, PEER_IID]` to `[IID, IID, IID, PEER_IID]` and from `[IID]` to
+`[IID, IID]` (rule 83).
+
+**Two corrections the count invites, and both matter to whoever plans remedy (a).** First, the trigger
+is **not** the rebase gate: this read is woken by `task.stage.completed` for the stage that produces
+the `ImplementationNotes`, so it is **once per implementation completion** — a task returned to the
+Developer stage three times reads the diff three more times, at three different head revisions — while
+the other two diff reads are **per rebase-gate entry**. The per-gate-entry formula above is therefore
+*unchanged* at **2 + min(K−1, 10)**; what is new is a fourth read on a different clock, which is why
+*"four per task"* is right for a task that goes round once and an under-count for one that loops.
+Second, this is the one of the four reads that remedy (a) **helps least**: it happens at a different
+moment and usually at a *different* `head_sha` from the gate's, so a coalesce keyed on
+`(merge request, head sha)` finds nothing to share unless the gate is entered on the same revision —
+which is the ordinary case only when the implementation stage completes and nothing else pushes. It is
+also the one read that genuinely needs the patch text, so the paths-only port method (b), if it ever
+lands, must not be applied here. **Needs measurement: none** — the count is read off the call sites.
 
 **Depends on / owner.** No dependency. **No work package owns it**; nearest is whoever next touches the
 git adapter. Trigger that would make it urgent: a project with a busy default branch and ten or more
@@ -4332,7 +4378,7 @@ next opens one of the three command modules. **WP-38** is the first surface that
 result — its Checks panel item is *"risk classes and required reviewers"* — but it renders the outcome
 and does not own the writer.
 
-### 93. **No DTO fixture in the `apps/web` unit tier is held to its type, so a required field added to `taskRecordSchema` compiled clean everywhere and arrived as seven UI tests failing about a heading** (TODO, small — **no work package owns it**; a **typing and diagnostic** gap rather than standing rule 1's kinder-harness class, and the distinction decides the remedy; found by WP-39, session 5)
+### 93. **No DTO fixture in the `apps/web` unit tier is held to its type, so a required field added to `taskRecordSchema` compiled clean everywhere and arrived as seven UI tests failing about a heading** (**RESOLVED** at `<sha>`, WP-38 — the sweep this entry asked for, taken by the row this entry named as its cheapest owner; **one residual is named at the end** and is a nit rather than a re-opening; found by WP-39, session 5)
 **What is wrong.** One cause: an `apps/web` test fixture is an untyped object literal — or an `as`
 cast — so nothing compares it with the DTO it stands for. The runtime check is **not** missing: the
 file's fake `fetch` hands the literal to the **real** endpoint parser. What is missing is the
@@ -4401,6 +4447,30 @@ tier (`ScriptedRun.structuredOutput` is cast and parsed by nothing), and the two
 share code — there the deliverable is a detector because the validation is absent, here it is an
 annotation because the validation is present.
 
+**How it closed** (refiner, session 5, verified by reading the tree — no test was run, rule 66). WP-38
+took it, as this entry predicted, and it was the predicted trigger that paid for it: *"adding two
+required fields to `taskRecordSchema` surfaced as seven UI tests failing about a heading before the
+sweep"* (WP-38 note 10). All **thirteen** literals this entry enumerated now carry their type —
+`ask-thread.test.tsx:35,45,94` (`SessionResponse`, `TaskDetailResponse`, `TaskAsk`),
+`project-settings.test.tsx:29,39,56,92` (plus `CHAT_BINDINGS: ProjectBindingsResponse['items']` at
+`:109`), `integrations.test.tsx:19,29`, `onboarding.test.tsx:24,37,54,80` — the two
+`Record<string, unknown>` helpers take theirs (`project-settings.test.tsx:74,127`,
+`Partial<AutonomyResponse>`), and `realtime/query-bridge.test.ts` parses with `sseFrameSchema.parse`
+(`:25`) instead of casting. **One cast is kept and it is the right one**: `:79` builds a frame whose
+payload the published schema *refuses*, which is the case that proves the reader falls back to the
+stream rather than throwing, and the eight-line docblock above it says so. The new file of the same
+row is annotated from the start (`checks-panel.test.tsx:44`, `TaskRecord`), with this entry's number
+in its docblock — which is the sweep being self-sustaining rather than a one-off.
+
+**The residual, named rather than left for somebody to find** (a nit; **not** a re-opening). The
+census was *four files*, and a fourteenth literal of the same shape lives in a fifth:
+`apps/web/src/app/error-boundary.test.tsx:190`, `const SESSION = {` with no `: SessionResponse`. It is
+the bounded half of this entry's cost — the value still goes through the real endpoint parser at
+runtime, so it cannot pass while wrong, it just reports wrongly — and it is one annotation for
+whoever next opens that file. It is recorded here rather than as entry 95 because a new number for
+one line would split this entry's evidence in two, which is the thing this backlog's own preamble
+warns about.
+
 ### 94. **`ci.pipeline.finished.coverage_pct` now has no reader anywhere, the one shipped adapter writes `null` there on every delivery, and the fake writes a number** (nit, TODO, latent — **no work package owns it**; working as designed after WP-39 and filed so the next reader meets the decision rather than the trap; found by WP-39, session 5)
 **What is wrong.** Nothing today, and that is the entry. The payload field is published by the event
 catalogue, filled `null` by the only adapter this build ships, filled with a **number** by the fake,
@@ -4451,6 +4521,270 @@ payload or adds a git provider. **WP-41** is the first scheduled row likely to w
 per merge request, and it must take it from `tasks.coverage` (WP-39's record, written from the API
 read) rather than from the delivery — a statistics row built on the payload field would publish zeros
 for every GitLab project.
+
+### 95. **Six of product/10:38's eleven Checks items are named absent on the merge-readiness screen, and they are not one piece of work: two have no stored verdict to project because no gate's stage row is ever closed, two are blocked on an artifact body no route serves, one needs a narrow column and one has no producer at all** (TODO — **no work package owns it**; found by WP-38, session 5; the cheapest owner **differs per item** and **WP-41 is the wrong home for all six**)
+**What is wrong.** The Checks panel answers five of product/10:38's eleven items and names the other
+six absent. That is the honest ending WP-38's criterion 5 permits, and the census is held in a test in
+both directions so it cannot go stale. What is *not* established is the sentence the discovered-work
+bullet used to describe the remainder — *"each is a projection onto `taskRecordSchema` plus a `Metric`,
+not a pipeline"*. Read item by item it is true of **at most one** of the six. Two of them have nothing
+stored to project at all, two need a row the read API refuses to serve, and one has no producer
+anywhere. Filed as one entry with the split named, because six lines would be read as six similar
+jobs and they are four different ones.
+
+**Evidence** (file reads and greps only — no test was run, rule 66; the panel's own measurements are
+WP-38's).
+- **The census, quoted from where it lives**: `apps/web/src/features/checks-panel.test.tsx:133-156`
+  lists twelve rows for eleven checks (*"`risk classes and required reviewers` is one phrase in the
+  document and two items on the panel"*), of which six carry `absent`: *acceptance criteria met*,
+  *CI green*, *rebase status*, *review threads open/resolved*, *business verdict*, *tamper check*. The
+  screen's own sentence is `apps/web/src/features/task-detail.tsx:1042-1051`.
+
+- **(1) CI green and (2) rebase status are one cause, and it is not a missing projection: no gate's
+  `task_stages` row is ever closed, so there is no verdict stored to project.** The only writer of
+  `task_stages.outcome`/`exited_at` is `recordStageExited` — `update task_stages set state = 'exited',
+  exited_at = now(), outcome = $4, return_reason = $5`
+  (`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:578-585`) — and it has exactly
+  three callers: the stage executor for **agent** stages (`stage-executor.ts:829,1013,1097`), the
+  **return** path (`transitions.ts:202-208`, `outcome: 'returned'`) and the **system** stage
+  (`transitions.ts:276-282`, `outcome: 'system'`). A gate that **passes** takes neither: `interpret`
+  answers `gate_settled` with `transition(...)` (`packages/domain/src/pipeline/interpreter.ts:441-457`)
+  which for a forward target is an advance, and `apply`'s `enter` (`transitions.ts:231-261`) calls only
+  `recordStageEntered` **for the next stage**. So a `ci_gate` or `rebase_gate` row the pipeline walked
+  through keeps `state = 'entered'`, `exited_at = null`, `outcome = null`.
+- **The DTO already has the field, and the projection already publishes it**: `stages[].outcome:
+  z.string().nullable()` (`packages/contracts/src/api.ts:473`), mapped at
+  `apps/server/src/queries/pipeline-queries.ts:695`. So the panel item is not blocked on a schema — it
+  is blocked on a **writer**.
+- **The same cause has a second, visible symptom the panel does not cause**: `stageStateOf`
+  (`pipeline-queries.ts:566-573`) maps `state = 'entered'` with `exited_at === null` to **`running`**,
+  so a gate the task walked through is published to the task screen as *still running*. Nothing
+  anywhere asserts either field: a grep for `exited_at`/`exitedAt` across `test/`,
+  `apps/server/src/queries/` and `packages/application/src/` returns **no expectation at all**.
+- **Needs measurement**: the paragraph above is read off call sites, not observed against a database.
+  One integration read of `task_stages` after a passing CI gate settles whether the row is left open in
+  fact as well as in the code, and that read belongs **before** anyone plans the fix.
+- *Rebase status* has a richer producer the projection cannot reach: `task.rebase.checked` is appended
+  on every gate entry (`packages/application/src/pipeline/rebase.ts:95`), and the task-detail
+  projection reads no events.
+
+- **(3) Review threads open/resolved: the count is computed twice and stored in no place a task screen
+  can read.** The debounce handler filters unresolved discussions (`jobs.ts:664`) and turns the number
+  into a sentence that becomes a return reason —
+  `` `${unresolved.length} unresolved review thread${unresolved.length === 1 ? '' : 's'}` `` (`:706`).
+  Review-only mode stores its own count in an **event payload**, `threads_unresolved: ours.length -
+  resolved` (`review-only.ts:1010`), which the projection likewise cannot read. This is the one item
+  for which the bullet's description is right: a narrow `tasks` column written by the handler that
+  already has the number, in WP-15e's shape.
+
+- **(4) Business verdict and (5) acceptance criteria met are one dependency, and the derivation the
+  bullet asks for already exists in the contracts.** `acceptanceVerdictDataSchema` carries
+  `criteria: [{ id, status: 'met' | 'not_met' | 'untestable', evidence }]` beside its
+  `verdict: 'approve' | 'request_changes'` (`packages/contracts/src/artifacts.ts:164-176`). So
+  *"acceptance criteria met"* is a **read of a field that exists**, not *"a small derivation somebody
+  has to decide the shape of"*. What blocks both items is the body: the task-detail projection selects
+  `{ id, type, version }` from `artifacts` (`pipeline-queries.ts:652`) and **no route serves an
+  artifact's data at all** — backlog **85**, whose own headline is *"every artifact on every task
+  screen is a row you cannot open"*. Both items are cheap **after** 85 and impossible before it.
+
+- **(6) Tamper check is the only one with no producer, and the census comment is nearly right rather
+  than right.** BD-024's protected-path half **is** enforced, at the workspace: `policies.protected_paths`
+  is read into the run plan (`packages/application/src/pipeline/planner.ts:635-637,725`) and enforced by
+  `packages/infrastructure/src/runner/path-guard.ts`, whose docblock says it *"is the whole enforcement
+  rather than a second line"*. And the Reviewer's verdict has the field BD-024's second clause implies —
+  `protected_path_changes_confirmed: z.array(pathPatternSchema)` (`artifacts.ts:161`) — which a grep
+  shows is **read by nothing**: every other match in the tree is a test fixture. What is missing is not
+  the check but a **record of a result**: nothing compares the changed paths with what the plan listed,
+  and nothing stores a pass or a fail. That is BD-024's gate, which is a work package, not a panel item.
+
+**What it costs to leave.** The panel is product/10's *"merge-readiness at a glance"* — the one screen a
+maintainer uses to decide whether to merge — and it answers five of eleven questions. Five of the six
+gaps are honest absences and cost only the thing the maintainer then does by hand. The **sixth is worse
+than absent and is not on the panel at all**: a gate row left open publishes a passed CI gate as
+`running` on the task screen (`stageStateOf`), so the screen states something false about the pipeline
+rather than declining to state it — which is rule 16's direction, reversed, in the projection that
+WP-15h wrote the refusal rule for.
+
+**What "done" looks like, per item — four pieces of work, not one.**
+- **CI green + rebase status** (one change): close a gate's stage row on the advance path with the
+  verdict as `outcome`, then render the two items. The DTO field exists, so this is a writer, a
+  projection that already maps it and two lines of screen — **plus** the `stageStateOf` consequence,
+  which is the falsification the same change owes (rule 83). Guarded both ways: a passed gate's row has
+  an `outcome` and an `exited_at`, and a task still *at* the gate has neither.
+- **Review threads**: a narrow `tasks` column written where the count is already computed
+  (`jobs.ts:664`), the eighth narrow writer, with the column-ownership census updated
+  (`tasks-column-ownership.test.ts`).
+- **Business verdict + acceptance criteria**: **depends on backlog 85**; then a read of the latest
+  `AcceptanceVerdict`'s `criteria[]` and `verdict`, rendered as untrusted text.
+- **Tamper check**: BD-024's gate — a comparison of the change's paths against the plan's declared
+  exceptions, with a stored result. Not a panel item until it has a producer, and it should stay named
+  absent until then rather than being drawn as an empty tick.
+
+**Depends on / owner.** Backlog **85** for two of the six; nothing for the rest. **No work package owns
+any of them.** **WP-41 is the wrong home for all six** and saying so is part of this entry: that row is
+the organisation statistics deep-dive (`GET /api/org/stats`, per project, per user, over a window) and
+its own brief says it counts delivery performance — these are per-task projections on the task-detail
+DTO, and a statistics row that took them would be building a different screen. Cheapest owners: the
+gate-row change is whoever next touches `transitions.ts` or `gates.ts`; the review-thread column is
+whoever next touches the review window; the two verdict items ride with backlog 85's route. If the
+orchestrator would rather schedule the panel as one piece, that row is **WP-46** at the next free
+number, beside WP-43, WP-44 and WP-45 named on the M3 page — with this entry as its brief and the
+tamper check explicitly **not** in it.
+
+### 96. **The dependency gate decides once and never asks again, so a task that is not `active` when the job fires records the decision and asks nobody — and the `block` ending has the same shape, where the cost is a blocked package merging** (TODO — **no work package owns it**; found by WP-38, session 5, which measured the `ask` half in the e2e tier; **live for the human-owned stops, and the `ready_for_merge` case needs a product decision**)
+**What is wrong.** One cause: the gate is a **one-shot** `pipeline.outbound` duty with no re-entry.
+Both of its acting endings re-validate the task's state when the job fires (TD-004, correctly), both
+give up when the state is wrong (correctly, and the log says so), and **nothing ever re-attempts**. The
+record is written either way, so the screen is honest; the *gate*, on that path, is not a gate.
+
+**Evidence** (quoted from WP-38's notes and read off the tree; no test run, rule 66).
+- The discovered-work bullet, quoted: *"The gate decides in a `pipeline.outbound` job; `askQuestion`
+  needs an `active` task; and between the Developer stage completing and the job firing the task moves
+  on … **measured in the e2e tier, where a whole template walks in about a second, the task reached
+  `ready_for_merge` first and nobody was asked**"*.
+- **The `ask` ending's refusal**: `if (current.task.state !== 'active')` → write the record, log
+  *"dependency gate: the task stopped being active before the dependency question could be asked, so
+  the packages are on the panel and nobody was asked"*
+  (`packages/application/src/pipeline/dependency-gate.ts:452-461`). The docblock at `:424-429` states
+  the window as *"real but narrow: a human pauses, cancels or takes the task over in the seconds after
+  the stage completed"*.
+- **The `block` ending has the same shape and a wider door**:
+  `if (current === null || !isRunnableTaskState(current.task.state)) return null;`
+  (`dependency-gate.ts:534`), plus a second give-up when the task is already back at the producing
+  stage (`:538-542`).
+- **The two refusals are not the same set of states**, which is what makes them two symptoms rather
+  than one. `askQuestion` needs `active`, so the `ask` ending gives up in **seven** states —
+  `ready_for_merge`, `merged`, `retro`, `paused`, `needs_human`, `waiting_answers`, `waiting_approval`.
+  `isRunnableTaskState` (`packages/domain/src/aggregates/task-state-machine.ts:90-95`) excludes only
+  the terminal pair, `paused`, `needs_human` and the two waiting states, so the `block` ending gives up
+  in **four** — and `ready_for_merge`, the state the e2e measured, is *not* one of them, so a block
+  still blocks there.
+- **No re-entry exists.** The duty is woken by `task.stage.completed` for the stage that produces the
+  `ImplementationNotes`; nothing re-runs it when the task returns to a state it could act in, and the
+  record's own shape is what a re-entry would key on — `decision: 'ask'` with `question_id: null`
+  (`packages/contracts/src/records.ts:350-361`).
+
+**Is it live, and where?** Yes, in two of the three cases, and they want different answers.
+- **(a) The human-owned stops — live, narrow, and closable with no product decision.** `paused` (a
+  take-over or a budget pause), `needs_human`, `waiting_approval` and `waiting_answers` all end with
+  the task back under the pipeline's power, so a re-attempt when it next becomes `active` closes the
+  gap. Nothing about the aggregate's invariant has to change. This is the case the docblock describes
+  and the one nobody has measured in production.
+- **(b) `ready_for_merge`, `merged`, `retro` — live for `ask`, and the cheap remedy does not reach it.**
+  A task that passes review never becomes `active` again, so *"re-attempt when active"* never fires;
+  asking there means either changing the Task aggregate's *"a question comes from a running stage"*
+  invariant or accepting that the panel's `not asked` is the whole answer. This is the case WP-38
+  measured, and it is the one that needs the product decision the bullet names: **may the platform stop
+  a merge a human is already looking at?**
+- **(c) `block` in a human-owned stop — live, and the sharpest of the three**, because the failure is
+  *"a package the project's policy blocks is on a branch nobody was told about"* rather than *"a
+  question nobody was asked"*. The panel shows the record, so it is visible; it is not enforced.
+
+**The bullet's own attribution is wrong and correcting it is half this entry's value.** It reads
+*"it is the same family as backlog **74** (the question timeout), and an answer to that one would meet
+this."* It would not. Backlog 74 is a **deadline on a question that was asked** — no deadline is
+written, no timer armed, no escalation produced — and every part of its remedy presupposes a
+`questions` row. Here there is no row, and the missing thing is the *asking*, so a timeout mechanism
+would have nothing to attach to. The two entries touch the same aggregate and share no work.
+
+**What it costs to leave.** On the shipped defaults, nothing today: no operator has configured a
+registry host, `ask` is the documented default but no project of this platform has yet run a Developer
+stage against a real repository, and the panel prints `not asked` rather than a blank (WP-38 note 8),
+so the maintainer is not misled. It becomes real the moment either is true: a project sets `block` for
+an ecosystem (case (c) — the policy silently does not hold whenever a human has paused or is being
+asked something else), or a project is busy enough that a task is commonly waiting on an approval or
+another question when the implementation stage completes. **Needs measurement**: nobody has measured
+the delay between `task.stage.completed` and the duty firing in production, nor the distribution of
+task states at that instant — which is exactly the number that decides whether (a) is rare or routine.
+
+**What "done" looks like.** Two halves, and only the first is engineering.
+- **(a)+(c)**: a re-attempt with an idempotent trigger. The predicate is already stored — a
+  `tasks.dependencies` record whose `decision` is `ask` with `question_id === null`, or `block` whose
+  return was never applied — so the re-entry can be a check on the task resuming (`task.resumed` and
+  the hand-back path), with the record itself preventing a second question. Guarded both ways: a task
+  paused across the gate and then resumed raises exactly **one** question, and a task that was asked
+  before it paused raises **none**.
+- **(b)**: a decision, not a mechanism. Recommendation, stated strongly enough to be implemented
+  without further debate: **leave it refused and keep the record**. A task at `ready_for_merge` has
+  passed review and a human is deciding; interrupting that with a question the platform could have
+  asked earlier trades a visible panel line for a surprise, and the honest fix is to make the gate
+  fire *earlier* rather than to let it park a finished task. If that is accepted, the WP-38 docblock's
+  *"real but narrow"* and this entry are the whole answer and only (a)+(c) are built.
+
+**Depends on / owner.** No dependency. **No work package owns it.** Cheapest owner is whoever next
+touches `dependency-gate.ts`. Related and distinct: backlog **74** (a timeout for a question that
+exists) shares the aggregate and none of the work; WP-38 note 5's `settle` fix is the *same class at a
+different site* — a gate settling for a task that had stopped — and is the precedent for the re-entry
+shape, since that one already ends with *"the gate is re-entered when the task resumes"*.
+
+### 97. **`IntegrationActionExecutor` cannot audit a call that has no binding, because `integration_actions.integration_id` is `not null` — so the platform's first outbound call of its own gets no audit row at all, and nothing says which audit it should get instead** (TODO, small — **no work package owns it**; surfaced by WP-38, session 5, whose deviation is decided and reasoned; this entry is the **general** assumption underneath it, which no document states)
+**What is wrong.** The non-negotiable in `CLAUDE.md` is *"Every outbound provider call goes through
+`IntegrationActionExecutor` … never directly"*, and the audit table it writes assumes every outbound
+call belongs to a **binding**. That assumption held while every outbound call was a provider call. It
+stopped holding at WP-38, and the structure — not the implementer — is what forced the exception. The
+gap is not the exception; it is that no document says what a **platform-owned** outbound call is
+audited by, so the next one will be decided from scratch or not at all.
+
+**Evidence** (file reads only, rule 66).
+- **The foreign key**: `integration_id uuid not null references integrations (id)` on
+  `integration_actions` (`packages/infrastructure/src/db/migrations/0007_cost.sql:127`), and the same
+  on `integration_idempotency`. The executor identifies every call by an `IntegrationRef` and stamps
+  `integrationId` on the audit row and the limiter
+  (`packages/application/src/integrations/action-executor.ts:576,620,715,540-545`).
+- **The call that has no binding**, quoted from its own docblock: *"A package registry has no
+  `integrations` row — there is no binding, no credential and no project configuration — so routing it
+  through the executor would mean either inventing a row or attributing an npm request to the project's
+  GitLab binding in the audit trail, which is worse than not being in the audit trail"*
+  (`packages/infrastructure/src/dependencies/registry-metadata.ts:18-30`). Q84 priced the honest
+  alternative — a sixth integration type — and declined it: *"BD-017's machinery without BD-017's
+  problem"*.
+- **What the call does have** is asserted as counts of what reached the network in
+  `registry-metadata.test.ts`: no credential ever, exact host matching, the package name validated and
+  encoded, a timeout, `redirect: 'error'`, a 2 MB bounded body, never throwing, and
+  `assertOutsideTransaction`. **What it does not have**: an `integration_actions` row, an idempotency
+  record, and the executor's per-integration rate limiter. The only durable trace of a lookup is the
+  per-package `metadata` on `tasks.dependencies` and two log lines
+  (`registry-metadata.ts:294,308`); there is **no** org-level record that the process made an outbound
+  request.
+- **The bound that makes it small today**: at most `MAX_METADATA_LOOKUPS = 10` per implementation
+  completion (`dependency-gate.ts:140`), and **zero** unless an operator declared a host in
+  `APP_DEPENDENCY_REGISTRY_HOSTS`, which is empty by default.
+
+**Is it a defect? Not in WP-38 — the deviation is decided and its reasoning is in three places
+(Q84, the client's docblock, the WP-38 notes). The defect is the *silence above* it**: the executor's
+contract is stated as *"every outbound call"* and is implemented as *"every outbound call that has a
+binding"*, and nothing in `docs/technical/06`, in the executor's own docblock or in BD-017 records the
+distinction. A future implementer adding the next platform-owned call (a licence service, a CVE feed,
+an LLM-adjacent metadata read) meets the same `not null` and has to re-derive the whole argument, and
+the cheap wrong answer — attribute it to whatever binding is at hand — is *worse* than no row, because
+it makes the audit trail lie about which credential was in scope.
+
+**What it costs to leave.** One unrecorded class of outbound traffic, latent on the shipped defaults
+(no host declared → no request). It costs more the moment a second platform-owned call exists, and the
+question it leaves unanswered is the operator's: *"what has this process talked to?"* — which today is
+answerable for provider calls and unanswerable for everything else. It also quietly widens backlog
+**48**: that entry's subject is a *binding's* host having no allow-list, and this path closed its own
+half with an operator-declared list, so the platform now has **two** egress policies and one audit.
+
+**What "done" looks like.** A decision recorded, in one of exactly three shapes, and the entry is
+written so that whoever takes it does not have to invent a fourth. **(a) Say it out loud and audit
+nothing** — amend technical/06 and the executor's docblock to state that the audit is *per binding* and
+that a call with no binding is audited by its own module, with the conditions that make that
+acceptable (no credential in scope, an operator-declared host, a bounded body, no writes) as a named
+checklist. Cheapest, and it is what the build does today. **(b) Make `integration_actions.integration_id`
+nullable with a `source` discriminator** — a migration, a partition-wide backfill of nothing, and three
+readers to teach (the audit screen, the cost ledger's joins, `integration_actions_task_idx`); it gives
+one audit for all outbound traffic and is the shape an operator would expect. **(c) A platform-owned
+`outbound_calls` table** — separate, small, no foreign key to `integrations`, and the thing that would
+also give the rate limiting the registry client does not have. **Whichever is chosen, the deliverable
+includes the sentence the next implementer reads**: the executor's docblock saying which calls it is
+*for*. **Needs measurement: none.**
+
+**Depends on / owner.** No dependency; **no work package owns it**. Cheapest owner: whoever next adds a
+platform-owned outbound call — and the trigger that makes it urgent is exactly that, since the second
+one is where an unstated convention becomes two inconsistent ones. Related: **Q84** records WP-38's
+deviation and its reasoning (and should not be re-litigated here); backlog **48** is the egress-policy
+half and stays open for bindings; WP-38's plan row carries the deviation against its own criterion 4.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -16463,7 +16797,301 @@ last write wins, and two pipelines finishing out of order would leave the older 
 `finished_at` was considered and rejected as a guess about a field the port marks nullish.
 
 
+### WP-38 — dependency policy and the Checks panel
+
+**What shipped**: a policy key that has a reader, a detector that reads a *patch*, three endings with
+three countable effects, a registry client that calls nobody by default, the panel built once with
+product/10:38's eleven items decided in a test, and the required reviewers WP-37 computed and kept
+nowhere. Migration **0028** (`tasks.dependencies`, `tasks.required_reviewers`).
+
+**1. The schema now expresses what product/18:43 tells an operator to write, and the scalar stays.**
+`policies.dependency_policy` is a **union**: `allow | ask | block` (the shorthand technical/12's
+example has always carried) or `{default, ecosystems, allowlist}`. The ecosystem keys are
+`dependencyEcosystemSchema` — the four this build can read a dependency out of a diff for — so a
+policy for an ecosystem nothing detects is refused at the file rather than stored and never
+consulted (backlog 58's defect, which is what this row existed to close). An allow-list entry is
+`"<ecosystem>:<name>"`, split on the **first** colon, with the ecosystem refused by name. The union
+carries its own message, because zod answers `invalid_union` and *"Invalid input"* is exactly what an
+operator who typed `aks` must not get (WP-37's lesson). **technical/12's example still parses
+unchanged**; if the orchestrator wants the fuller form documented, the block under `policies:` is:
+`  dependency_policy:` / `    default: ask` / `    ecosystems: {npm: block}` / `    allowlist: ['npm:@scope/pkg']`.
+
+**2. The detector reads added lines, and it is written to under-report.** `packages/domain/src/policies/dependencies.ts`
+is pure: a file table (`DEPENDENCY_ECOSYSTEM_FILES`, `satisfies Record<DependencyEcosystem, …>`, so an
+enum value with no parser does not compile) and a per-format line reader over the patch. **npm, pypi,
+go and cargo** are read (manifests *and* lockfiles); **maven, gradle, composer, rubygems and nuget**
+are recognised and reported as `unread` with the file that changed — rule 18's answer to "a gate that
+reports a fact it did not establish". Three limits are stated at the code: a manifest hunk without its
+section header under-reports (the lockfile catches it); a lockfile addition is reported as one and is
+still gated, because a lockfile is where an undeclared package lands; and a **version bump is not an
+addition**, which is why the removed side of the patch is parsed at all. A property walk asserts no
+name ever escapes its ecosystem's own pattern, whatever the patch says.
+
+**3. Three endings, three countable effects, and the `ask` one is the existing gate.** The trigger is
+`task.stage.completed` for the stage that **produces `ImplementationNotes`** — product/04's own
+placement (S3), and the first moment a diff exists; `recordMergeRequest` is the core band's handler
+for the same event, so TD-005's ordering *within one event* puts the merge request on the row before
+this handler runs. `allow` → nothing but the record; `ask` → one `questions` row through
+`openQuestion`/`askQuestion` (same aggregate, same saga, same unbuilt timer — backlog 74), written in
+**one** transaction with the record so a crash cannot leave `question_id` pointing at nothing; `block`
+→ one `task.stage.returned` to the stage that added the package.
+
+**4. The block spends a loop of its own, and that was measured rather than reasoned.** The gate's job
+fires whenever the outbound worker reaches it, so the task is usually **past** the CI gate by then. On
+the first e2e run a blocked package spent two `rebase` rounds and then three **`human_rounds`**, and
+escalated with *"human_rounds iteration limit of 3 reached: the project's dependency policy blocks
+npm:lodash"* — a bound nobody had spent, named after a loop nobody had been round, which is exactly
+the defect `RETURN_LOOPS_BY_EDGE` exists for (standing rule 81). So `ITERATION_LOOPS` gained
+**`dependency_policy`** (default 2, in `AGENT_ITERATION_LOOPS` so a human decision refills it, and
+with **no** `pipeline.limits` key — like `refinement_questions` and `architecture_revisions`: a project
+that wants a different answer changes the *policy*). The block also re-reads `currentStage` **inside**
+its transaction rather than requiring the stage it saw before the provider call, because requiring it
+would make the gate fire almost never.
+
+**5. A defect this row made reachable, found by its own e2e and fixed here.** `settle` in `jobs.ts`
+re-read the task inside its transaction and checked the **stage**, not the **state** — so a gate whose
+provider read was in flight when the dependency question landed settled anyway,
+`waiting_answers → ready_for_merge` was refused by the state machine, and `applyDecision`'s generic
+fallback **escalated the task** with a brief blaming *"a template that does not match the platform's
+task states"*. Quoted from the run: `task.question.asked` immediately followed by `task.escalated`.
+It is latent for a human `pause` or take-over today (same shape, different parker); `settle` now
+refuses a settlement for a task that has stopped, which is the right ending — the gate is re-entered
+when the task resumes.
+
+**6. Q84 is implemented as its recommendation (2), narrowly, and the shipped default calls nobody.**
+`APP_DEPENDENCY_REGISTRY_HOSTS` is operator-declared and **empty by default**, the shape
+`APP_INTEGRATION_SECRET_ENV` already uses, and `apps/server` composes the client **only** when it
+names a host: with none, every package is `not_checked` — a stated non-answer the panel prints — and
+**no request leaves the process**. That is backlog **48** closed *for this path* rather than widened.
+The client (`packages/infrastructure/src/dependencies/registry-metadata.ts`) knows npm (two GETs:
+`/<name>/latest` for the licence and the deprecation, the abbreviated packument for `modified`) and
+PyPI (one GET), both **measured off the live services on 2026-09-14** and quoted with their sizes
+rather than written from memory (rule 86); `go` and `cargo` answer `unsupported` **by name**, because
+`proxy.golang.org` publishes no licence at all and shipping a half-answer under the same word would be
+worse than saying which ecosystems this build can describe.
+
+**7. It is the one outbound call the pipeline makes outside `IntegrationActionExecutor`, and the
+reason is structural.** `integration_actions.integration_id` is `uuid not null references
+integrations (id)` (`0007_cost.sql:127`), as is `integration_idempotency.integration_id`. A package
+registry has **no** `integrations` row — no binding, no credential, no per-project configuration — so
+the executor would need either an invented row or an npm request attributed to the project's GitLab
+binding in the audit trail. Creating the row properly is a **sixth integration type**, which Q84
+priced and rejected (*"BD-017's machinery without BD-017's problem"*). What the executor would have
+given it is given at the call and asserted in `registry-metadata.test.ts` as **counts of what reached
+the network**: no credential ever (which is *why* the audit costs less here than anywhere else — the
+property it polices is that a secret reached a host, and none can), exact host matching (never a
+suffix — `registry.npmjs.org.evil.test` enables nothing), the package name validated against the
+domain's own pattern and encoded, a timeout, `redirect: 'error'`, a 2 MB bounded body read, never
+throwing, and `assertOutsideTransaction` so WP-15d's shape is mechanical here too. **Deviation from
+criterion 4, stated rather than hidden.**
+
+**8. The Checks panel is built once and its census lives in a test.** `apps/web/src/features/checks-panel.test.tsx`
+holds the panel to product/10:38's eleven items **in both directions**: a shown item must be rendered
+*and not* named in the "not on this panel" sentence, and an absent one the reverse. Five are rendered
+— coverage delta (WP-39), dependencies, risk classes, required reviewers, budget vs estimate (WP-28),
+questions pending — and six are named absent with what exists for each. The stale caveat is gone
+(rule 83): it said CI and rebase status arrive *"with WP-15 and WP-38"*, and both shipped, so the
+sentence now says what is actually missing — a **projection**, not a pipeline. **No work package owns
+those six**; filed as discovered work. `ask` with no question prints `not asked` rather than
+`waiting`, because the gate can arrive after the task has left `active`.
+
+**9. Required reviewers: the column, not the projection.** The row priced three shapes; the audit
+projection is cheapest and is **wrong**, measured off WP-37's own code: `reviewWrites.reviewers` is
+called **only when at least one handle resolved**, so a `CODEOWNERS` naming a group, a team or
+somebody who has left leaves *no* `set_reviewers` row and the panel would print *"none required"* for
+exactly the case a maintainer must see. `tasks.required_reviewers` (the seventh narrow writer, written
+by WP-37's duty on every path) records what the platform **asked for** — `handles`, `assigned`,
+`unresolved`, `source`, `truncated` — while the merge request stays the record of who is assigned
+there, and the two may differ because `set_reviewers` adds and never replaces.
+
+**10. Backlog 93 closed.** Thirteen untyped DTO literals in four `apps/web` test files are annotated
+(`SessionResponse`, `TaskDetailResponse`, `TaskAsk`, `ProjectSummary`, `AutonomyResponse`,
+`AutonomyPolicies`, `ProjectAuditResponse`, `ProjectBindingsResponse`, `IntegrationsResponse`,
+`ReadinessResponse`), the two `Record<string, unknown>` helpers take their types, and
+`query-bridge.test.ts`'s `as SseFrame` is replaced by `sseFrameSchema.parse` — with **one** cast kept
+deliberately, for the frame whose payload the schema refuses, which is the case that proves the reader
+falls back rather than throws. The cost this closes was paid immediately: adding two required fields
+to `taskRecordSchema` surfaced as seven UI tests failing about a heading before the sweep.
+
+**11. Backlog 64's number moved and the test says so.** A task's diff is now read **four** times —
+the dependency gate at the Developer stage, then the conflict warning, the risk routing and (per
+peer) the comparison at the rebase gate. `conflict-warning.test.ts`'s two read-count assertions moved
+from `[IID, IID, PEER_IID]` to `[IID, IID, IID, PEER_IID]` and from `[IID]` to `[IID, IID]`, each with
+the sentence it falsified corrected beside it (rule 83).
+
+**12. Two contracts findings worth carrying.** `MAX_ROUTED_REVIEWERS` had to **move** from `config.ts`
+to `common.ts`: `records.ts → config.ts → pipeline.ts → events.ts → records.ts` is a real cycle, so
+the constant was `undefined` at module-evaluation time and `z.array(...).max(undefined)` threw inside
+zod's locale (`Cannot read properties of undefined (reading 'toString')`) the first time anything
+parsed the new schema. And `z.record(z.enum([...]), v)` in zod 4 is **exhaustive** — it requires every
+key — so the per-ecosystem map is `z.partialRecord`, measured rather than assumed.
+
+**Assumptions a reviewer may reverse.** (a) A lockfile-only addition is gated like a manifest one
+(criterion 1 names both; the record says which kind each is, and the allow-list is the way to quiet
+transitive noise). (b) The allow-list wins over `block`, because product/04:58 reads *"allow for
+allow-listed packages"* as the exception to the policy rather than as a third policy. (c) The gate
+reads the diff even when the policy is `allow` everywhere, because the panel item is the product's
+other half. (d) The metadata is looked up for at most ten packages per task, manifest first. (e) The
+`ask` ending's question is asked at the **stage that added the package**, so an answer resumes that
+stage rather than wherever the task drifted to.
+
+**Needs measurement (rule 66, not run here).** How often a real Developer run adds a dependency, which
+is what decides whether `ask` at the shipped default is a gate or a nuisance — the row's own criterion
+9, and still unmeasured because no run of this platform has yet written code against a real project.
+
+**13. Five canaries, each dead by a named test, each file restored to its pre-mutation md5** (rules
+3, 21, 62, 77 — applied **in place** with the Edit tool, whose writes persist here, and verified by
+`md5 -q` before and after). Dropping the removed-name suppression in `detectDependencyChanges` →
+*"reads a version bump as neither an addition nor a removal"* (`expected [ 'npm:lodash' ] to deeply
+equal []`). Making `dependencyPolicyFor` miss the allow-list → two, in two rings: the domain's
+*"lets an allow-listed package through whatever the policy says"* and the gate's *"proceeds with no
+question for an allow-listed package under ask"*. Turning the registry client's exact host match into
+a substring one → *"matches the host exactly, so a lookalike declaration enables nothing"* (`expected
+'unavailable' to be 'not_checked'` — the mutant **called the network**, which is the whole property).
+Disabling the block ending → *"returns the task to the stage that added the package"*. Rendering
+`null` as *"none added"* on the panel → *"never says 'none added' for a gate that has not run"*. A
+sixth was measured rather than planted, and it is the sharpest: the `settle` defect in point 5 was
+**found** by the e2e failing before the fix existed, and quoting that run is stronger evidence than
+re-breaking it.
+
+**For CLAUDE.md's "Where to look", if the orchestrator wants it** (this file is the orchestrator's, so
+the wording is here rather than there): *"**The dependency policy and the Checks panel** (WP-38):
+`packages/domain/src/policies/dependencies.ts` is the detector — a file table per ecosystem and a
+reader of a patch's **added lines**, written to under-report rather than guess — and
+`packages/application/src/pipeline/dependency-gate.ts` is the gate: a handler on the Developer stage's
+own completion, a `pipeline.outbound` duty, and three endings with three countable effects (nothing,
+one `questions` row, one `task.stage.returned` spending the `dependency_policy` loop). The licence and
+the last release come from `packages/infrastructure/src/dependencies/registry-metadata.ts`, which calls
+**nobody** unless an operator declares a host in `APP_DEPENDENCY_REGISTRY_HOSTS` — the one outbound
+call the pipeline makes outside `IntegrationActionExecutor`, and its docblock carries the foreign key
+that decided it. The Checks panel is `apps/web/src/features/task-detail.tsx` and it is held to
+product/10:38's eleven items **in a test** — `apps/web/src/features/checks-panel.test.tsx`, both
+directions — so the six it does not answer are named on the screen rather than drawn as empty ticks."*
+
+**Review round 2:** three majors, three minors and a nit, all taken; `verify`, `verify:ui`,
+`verify:integration` and `verify:e2e` all PASS (exit 0), branches 80.19 % against 80.
+
+1. **The gate failed open on a long licence string, and it was two defects.** npm's `license` was
+   read through `asString` (trim only) while `dependencyMetadataSchema.license` is `.max(200)`, so
+   one package publishing its whole licence made `taskDependenciesSchema.parse` throw in `save()`
+   and in `askAboutDependencies` — no record, no question, no `block`, a dead job. Fixed on **both**
+   sides, because they are different obligations. At the client: `MAX_LICENCE_CHARS` (200, the
+   schema's own number) drops rather than truncates — PyPI's stated reason, *"a truncated licence on
+   a merge-readiness panel reads as a licence nobody has"* — and it is applied **once to every
+   registry's answer** rather than in each reader (rule 44: a bound each new reader remembers is a
+   bound the next one forgets), with the finished answer put through
+   `dependencyMetadataSchema.safeParse` and a refusal answered `unavailable`. That second guard is
+   not belt-and-braces: `modified` is third-party text too, and
+   `new Date(Date.parse('+275760-09-13T00:00:00Z')).toISOString()` is an instant `isoDateTimeSchema`
+   refuses (measured, and asserted in the test so the premise cannot rot). At the **gate**:
+   `describeAll` parses every answer and substitutes `unavailable`, so a package the platform cannot
+   describe is still asked about or blocked — *the decision is the platform's, never the registry's*
+   (rules 16, 18, 20). Three cases: the 300-character licence both ways at the client, the refused
+   instant, and the gate's `ask` **and** `block` endings against a port that breaks its contract.
+2. **The cap was applied before the policy, not after.** `detectDependencyChanges` sliced to 25 and
+   the gate resolved policies over the slice, so package 26 was neither blocked nor asked about —
+   the docblock's *"the bound is on what is reported, never on what is decided"* was false. The
+   detector now returns **everything** it found (`truncated` there is the provider's cut alone) and
+   the new domain function `boundReportedDependencies` cuts **after** every package carries its
+   policy. Which 25 survive is decided by what they decided — every `block`, then every `ask`, then
+   the rest, put back into detection order — because `record.added` is what the return reason and
+   the question text quote, so a cut that dropped the twenty-sixth *because* it was last would block
+   a task with a reason naming nobody. The gate case is the 26-package diff whose first 25 are
+   allow-listed: the whole decision rests on the package the old cut threw away. A **consequence is
+   stated at the code** rather than left to be re-derived: since the decisive packages always
+   survive, deciding over the report would agree with deciding over the whole list today — the gate
+   still decides over the whole list so that the selection rule is not load-bearing for the verdict.
+   (That is also why the mutant *"decide over the report"* survives: it is equivalent. The canary
+   that kills the new case is the pre-fix design itself, the slice put back into the detector.)
+3. **`blockForDependencies`' docblock described the pre-fix design** — the leaving stage's loop and
+   *"no counter of its own"* — contradicting `loop: DEPENDENCY_POLICY_LOOP` twelve lines below, the
+   module docblock, `iteration-limits.ts` and point 4 above. Rewritten to the built thing, with the
+   measurement that decided it and the *"no `pipeline.limits` key"* rule kept.
+4. **technical/12's example now carries the object form** (`default` / `ecosystems` / `allowlist`,
+   the block point 1 drafted), with the scalar named in a comment as the shorthand, and the fixture
+   it is transcribed into moved with it — `packages/contracts/src/config.test.ts` › "parses the
+   example from technical/12 unchanged" is the test that holds them together, and the page now says
+   so in a sentence of its own. The scalar keeps its own coverage at `config.test.ts:259`.
+5. **The panel's two census citations named the wrong file** (`task-detail.test.ts`); both now read
+   `apps/web/src/features/checks-panel.test.tsx` › "the Checks panel against product/10:38" in the
+   citation guard's own grammar, so `scripts/citations.test.ts` resolves them instead of being blind
+   to them — which is why the wrong name survived in the first place.
+6. **`assigned` was written before the call it is the record of** (`risk-routing.ts`), so a revoked
+   token or an outage left the Checks panel stating a request nobody made (rule 87's family). The
+   row is now written **after** the call returns, still on every path, and `assigned` is empty when
+   nothing was asked — the routing itself (`handles`, `unresolved`, `source`) is what the platform
+   *chose* and is recorded either way. Two cases: a provider that throws (one `failed` audit row,
+   the row's `assigned` empty, the duty still fails and retries) and **the shadow task**, which is
+   the same defect on the routine path — the executor records `would_have` and calls nobody, so
+   `assigned` is empty there too. That half was found while fixing this one, not reported.
+7. **`.env.example` now says what *is* sent** to a declared registry host, not only what is not: a
+   plain GET for the package **name**, so the host learns which packages your repositories add and
+   roughly when — on a private repository those names are themselves information — arriving from
+   this server's address, with no project, ticket, branch or credential, and the headers measured
+   rather than claimed (`accept` plus Node's own defaults, including `user-agent: node`).
+
+**Seven canaries, each dead by a named test, each file restored to its pre-mutation md5** (rules 3,
+21, 62, 77, applied in place): the licence bound removed → *"drops an npm licence the record cannot
+hold and keeps one that fits — both ways"* (`expected 'unavailable' to be 'checked'`); the client's
+schema guard removed → *"answers 'unavailable' for an instant the record refuses…"*; the gate's
+validation removed → *"asks and blocks anyway when the lookup answers metadata the record cannot
+hold"*, failing with the reviewer's own probe, `Too big: expected string to have <=200 characters` at
+`taskDependenciesSchema.parse`; the slice put back into `detectDependencyChanges` → *"blocks on the
+twenty-sixth package…"* (`expected [] to not have a length of +0` — no return at all); the policy
+ranking flattened → *"cuts the report at the cap and keeps the package that decided the outcome"*;
+and both reviewer-record writes → *"records no assignment when the provider refuses the call the row
+is about"* and *"records a shadow task's assignment as would_have…"*.
+
+
 ## Discovered work — session 5 (not in plan)
+- **Six of product/10:38's eleven Checks items have a producer and no projection, and no work
+  package owns adding one** (WP-38). The census the panel is now held to
+  (`apps/web/src/features/checks-panel.test.tsx`) names them: *acceptance criteria met*, *CI green*,
+  *rebase status*, *review threads open/resolved*, *business verdict*, *tamper check*. Four of the six
+  are produced today and read by nothing on this screen — the CI gate settles from
+  `ci.pipeline.finished` and records the outcome on `task_stages` (WP-15), the rebase gate appends
+  `task.rebase.checked` on every entry (WP-26), the review window counts unresolved threads to decide
+  a return (BD-007, WP-26), and both verdicts are stored artifacts — so each is a projection onto
+  `taskRecordSchema` plus a `Metric`, not a pipeline. *Acceptance criteria met* needs a reading of the
+  Business Review Verdict against the Refined Spec's criteria, which is a small derivation somebody
+  has to decide the shape of; the **tamper check** (BD-024) has no producer anywhere: it exists in the
+  Reviewer's prompt and in no row. WP-38 corrected the sentence that described this and deliberately
+  did not build them — the row's criterion 5 permits naming an item absent, and six projections plus
+  their tests is a work package rather than a clause. **No work package owns it.**
+  *Refiner (session 5): **filed as backlog 95**, with the bullet's *"each is a projection … not a
+  pipeline"* corrected — it holds for **one** of the six. **CI green** and **rebase status** have no
+  stored verdict to project at all, because `recordStageExited` is the only writer of
+  `task_stages.outcome` and a gate that **passes** calls none of its three callers (the same cause
+  publishes a walked-through gate as `running`, `pipeline-queries.ts:566-573`); **business verdict**
+  and **acceptance criteria met** are blocked on backlog **85** and need no derivation, since
+  `acceptanceVerdictDataSchema.criteria[]` already carries `met | not_met | untestable`
+  (`artifacts.ts:164-176`); **tamper check**'s enforcement exists at the workspace and only its
+  *result* is missing. Four pieces of work, cheapest owner named per item, and **WP-41 is the wrong
+  home for all six**.*
+- **The dependency gate can arrive after the task has left `active`, and then it records without
+  asking** (WP-38). The gate decides in a `pipeline.outbound` job; `askQuestion` needs an `active`
+  task; and between the Developer stage completing and the job firing the task moves on. In
+  production a stage takes minutes and the queue is polled twice a second, so the decision lands
+  while the task is at the CI gate — but **measured in the e2e tier, where a whole template walks in
+  about a second, the task reached `ready_for_merge` first and nobody was asked** (the tier now seeds
+  a running CI pipeline to reproduce production's timing, and the panel prints `not asked` rather
+  than `waiting` for that record, so it is visible rather than silent). What would close it is a way
+  to park a task on a question from a state other than `active` — which is a change to the Task
+  aggregate's invariant (`task.ts`: *"a question comes from a running stage"*) and a product question
+  about whether the platform may stop a merge a human is already looking at. **No work package owns
+  it**; it is the same family as backlog 74 (the question timeout), and an answer to that one would
+  meet this.
+  *Refiner (session 5): **filed as backlog 96**, judged **live** — and the last clause is wrong:
+  backlog **74** is a deadline on a question that **was asked**, and here there is no `questions` row
+  for a timer to attach to, so the two share the aggregate and none of the work. The entry splits the
+  finding by state, because the two endings refuse on different sets: `ask` needs `active` (seven
+  states give up), `block` needs `isRunnableTaskState` (four), so `ready_for_merge` — the state the
+  e2e measured — still blocks and does not ask. The **human-owned stops** (`paused`, `needs_human`,
+  `waiting_*`) close with a re-attempt when the task resumes and **no** invariant change, keyed on the
+  record the gate already wrote (`decision: 'ask'`, `question_id: null`); only the forward states need
+  the product decision, and the entry recommends leaving those refused. The sharpest symptom is the
+  one the bullet does not name: the same shape on `block`, where the ending that fails is enforcement
+  rather than a question.*
 - **The coverage duty reads the head revision's pipeline that the CI gate has usually just read**
   (WP-39). `gates.ts` polls `getPipelineStatus(head_sha)` to settle `ci_gate`, and the `coverage`
   duty reads the same pipeline for the same revision moments later, because the two are woken by

@@ -61,6 +61,36 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByText('Coverage delta', { exact: true })).toBeVisible();
   await expect(page.getByText('+2.5 pp')).toBeVisible();
   await expect(page.getByText(/81\.5 % on bbbbbbb, against 79\.0 % on main/)).toBeVisible();
+  /**
+   * WP-38's two Checks items, in the browser: the dependency the gate found with the licence a
+   * **registry** published, and the reviewers the routing asked for — including the handle it could
+   * not resolve, which is the fact the `set_reviewers` audit row cannot record.
+   */
+  await expect(page.getByText('Dependencies', { exact: true })).toBeVisible();
+  await expect(page.getByText('1 added · waiting')).toBeVisible();
+  // Strict-mode exact: the same package is named twice on this panel — once in the sentence with
+  // its licence, and once as the registry link `safeHref` refused (`xss.spec.ts` counts that one).
+  await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
+  await expect(page.getByText('Required reviewers', { exact: true })).toBeVisible();
+  await expect(page.getByText('1 of 2 assigned, 1 unresolved')).toBeVisible();
+  // …and the six product/10:38 items this panel does **not** answer are named on the screen rather
+  // than drawn as empty ticks (WP-38 criterion 5; `checks-panel.test.tsx` holds the whole census).
+  await expect(
+    page.getByText(/Not on this panel: acceptance criteria met, CI green/),
+  ).toBeVisible();
+});
+
+test('a task whose gate has not run says so, rather than saying nothing was added', async ({
+  page,
+}) => {
+  // The dependency half of the rule above (WP-38): *"not checked"* is the gate not having run and
+  // *"none added"* is it having run and found nothing — and a blank would be neither (rule 18).
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
+  await expect(page.getByText('Dependencies', { exact: true })).toBeVisible();
+  await expect(page.getByText('not checked', { exact: true })).toBeVisible();
+  await expect(page.getByText('Required reviewers', { exact: true })).toBeVisible();
+  // `exact`, because the sentence beneath the metric also contains the words (strict mode).
+  await expect(page.getByText('not routed', { exact: true })).toBeVisible();
 });
 
 test('a task nothing has measured says so, rather than showing a zero coverage delta', async ({

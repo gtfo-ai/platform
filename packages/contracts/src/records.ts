@@ -12,6 +12,8 @@ import {
   approvalStatusSchema,
   autonomyLevelSchema,
   coveragePctSchema,
+  dependencyEcosystemSchema,
+  dependencyPolicyValueSchema,
   effortSchema,
   externalIdentitySchema,
   idSchema,
@@ -20,6 +22,7 @@ import {
   knowledgeProposalSourceSchema,
   knowledgeProposalStatusSchema,
   knowledgeProposalTypeSchema,
+  MAX_ROUTED_REVIEWERS,
   mergeRequestRefSchema,
   modelUsageSchema,
   nonEmptyStringSchema,
@@ -41,6 +44,7 @@ import {
   tokenCountSchema,
   tokenUsageSchema,
   unitIntervalSchema,
+  unreadEcosystemSchema,
   urlSchema,
   usdSchema,
   workpadRefSchema,
@@ -265,6 +269,135 @@ export const taskCoverageSchema = z.strictObject({
 
 export type TaskCoverage = z.infer<typeof taskCoverageSchema>;
 
+/**
+ * What the platform knows about one added package beyond its name (product/04:58's *"license and
+ * maintenance status"*, Q84, WP-38).
+ *
+ * **`not_checked` is the shipped answer and it is a statement, not a blank.** The platform calls a
+ * package registry only for a host an operator has declared in `APP_DEPENDENCY_REGISTRY_HOSTS`
+ * (empty by default, TD-020's shape and backlog 48's requirement), so a self-hoster who configures
+ * nothing sees *"licence: not checked"* on the Checks panel rather than getting a silent call to a
+ * host nobody approved. The other three are as different from each other as they are from it, and
+ * the panel prints a different sentence for each (standing rules 16 and 18):
+ *
+ *  - `not_checked` — no registry host is declared for this ecosystem, so nothing was asked;
+ *  - `checked` — the registry answered; `license` may still be `null`, because a package may
+ *    publish none and *"the registry does not say"* is not *"MIT"*;
+ *  - `unavailable` — the registry was asked and could not answer (down, rate-limited, 404 for a
+ *    package name the diff invented). **The gate never depends on this succeeding** (Q84): the
+ *    question is asked, or the block is applied, with or without the metadata;
+ *  - `unsupported` — this build knows no registry for the ecosystem (`go`, `cargo`), which is a
+ *    fact about the platform rather than about the package.
+ *
+ * Every string here is **third-party text** (BD-022) — a licence field is whatever the package's
+ * author typed — so it is bounded at the write and rendered as a React text node, and `source_url`
+ * goes through `safeHref` like every other URL the app renders.
+ */
+export const dependencyMetadataSchema = z.strictObject({
+  status: z.enum(['not_checked', 'checked', 'unavailable', 'unsupported']),
+  /** The registry's licence string, bounded; `null` when it publishes none. */
+  license: z.string().max(200).nullable(),
+  /** When the registry last saw a release — product/04:58's *"maintenance status"*, as a date. */
+  last_published_at: isoDateTimeSchema.nullable(),
+  /** The registry says the package is deprecated or yanked; `null` when it was not asked. */
+  deprecated: z.boolean().nullable(),
+  /** The package's page, composed by the platform from the registry host and the name. */
+  source_url: urlSchema.nullable(),
+});
+
+export type DependencyMetadata = z.infer<typeof dependencyMetadataSchema>;
+
+/** One package a task's diff added, with the policy that applied to it (WP-38). */
+export const addedDependencySchema = z.strictObject({
+  ecosystem: dependencyEcosystemSchema,
+  /** The package name exactly as the manifest spells it, bounded and validated per ecosystem. */
+  name: z.string().min(1).max(200),
+  /**
+   * Where it was seen. A `manifest` addition is somebody's decision; a `lockfile` one may be the
+   * transitive consequence of it. Both are gated — product/04:58 gates *"adding a third-party
+   * dependency"* and a lockfile is where one lands — and the distinction is recorded so the panel
+   * and the question can say which kind a package is.
+   */
+  from: z.enum(['manifest', 'lockfile']),
+  /** The file it was read out of — repository text, redacted at the write (BD-022). */
+  path: z.string().min(1).max(500),
+  /** The policy this package resolved to, after the allow-list. */
+  policy: dependencyPolicyValueSchema,
+  /** True when `policies.dependency_policy.allowlist` named it, which is why it says `allow`. */
+  allowlisted: z.boolean(),
+  metadata: dependencyMetadataSchema,
+});
+
+/** A manifest that changed in an ecosystem this build cannot read (standing rule 18, WP-38). */
+export const unreadManifestSchema = z.strictObject({
+  ecosystem: unreadEcosystemSchema,
+  path: z.string().min(1).max(500),
+});
+
+/**
+ * `tasks.dependencies` — what the dependency gate found in this task's diff and what it did about
+ * it (product/04:58, product/18:43, BD-030, migration 0028, WP-38).
+ *
+ * `null` on the column means **the gate has not run**: no implementation stage has completed on
+ * this task yet. That is a different fact from a record whose `added` is empty (*"it ran and the
+ * diff touched no manifest"*), and the Checks panel prints a different sentence for each.
+ *
+ * `decision` is what the gate did, and each value has a countable effect somewhere else:
+ * `none` — nothing was added, nothing happened; `allow` — the task carried on; `ask` — one
+ * `questions` row, whose id is on `question_id`, and the task waited for an answer; `block` — one
+ * `task.stage.returned` back to the stage that added the package.
+ */
+export const taskDependenciesSchema = z.strictObject({
+  /** The merge request revision the diff was read at, or `null` when the provider named none. */
+  head_sha: shaSchema.nullable(),
+  decision: z.enum(['none', 'allow', 'ask', 'block']),
+  added: z.array(addedDependencySchema),
+  unread: z.array(unreadManifestSchema),
+  /** The diff was cut — by the provider's file limit or by this platform's package cap. */
+  truncated: z.boolean(),
+  /** The question `ask` opened, so the panel can link what it is waiting for. */
+  question_id: idSchema.nullable(),
+  checked_at: isoDateTimeSchema,
+});
+
+export type TaskDependencies = z.infer<typeof taskDependenciesSchema>;
+export type AddedDependency = z.infer<typeof addedDependencySchema>;
+
+/**
+ * `tasks.required_reviewers` — who this merge request needs a review from, as the platform routed
+ * them (product/10:38's *"risk classes and required reviewers"*, product/19:138, migration 0028,
+ * WP-38).
+ *
+ * **Why a column rather than a projection over the audit.** WP-37 computes this in the `risk_route`
+ * duty and the only record it left was the `set_reviewers` row in `integration_actions` — and that
+ * row is written **only when at least one handle resolved to an account**. A `CODEOWNERS` naming a
+ * group, a team or somebody who has left produces no row at all, so a projection over the audit
+ * would show *"none required"* for the case a maintainer most needs to see: *"the platform routed
+ * @billing-team and could not ask anyone"*. The column records what the platform **asked for**,
+ * which is the question the panel puts; the merge request itself remains the record of who is
+ * assigned on the provider, and the two can differ (a human may add themselves — `set_reviewers`
+ * adds and never replaces).
+ *
+ * Every handle here is untrusted external text (BD-022): `CODEOWNERS` is written by whoever can
+ * push, and in a fork workflow that is a contributor. It is redacted at the write like every other
+ * repository string and rendered as a React text node.
+ */
+export const taskReviewersSchema = z.strictObject({
+  /** Which step of product/19:138's precedence produced the base list. */
+  source: z.enum(['codeowners', 'project_config', 'requester', 'none']),
+  /** Everything the routing chose, after the risk classes added theirs, capped and de-duplicated. */
+  handles: z.array(z.string().min(1).max(200)).max(MAX_ROUTED_REVIEWERS),
+  /** Provider account ids the platform actually asked for a review — `handles` minus `unresolved`. */
+  assigned: z.array(z.string().min(1).max(200)).max(MAX_ROUTED_REVIEWERS),
+  /** Handles that resolve to no account on this provider; nobody was assigned for them. */
+  unresolved: z.array(z.string().min(1).max(200)).max(MAX_ROUTED_REVIEWERS),
+  /** The cap dropped a handle, so "nobody else" is never mistaken for "nobody more". */
+  truncated: z.boolean(),
+  routed_at: isoDateTimeSchema,
+});
+
+export type TaskReviewers = z.infer<typeof taskReviewersSchema>;
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -290,6 +423,25 @@ export const taskRecordSchema = z.strictObject({
    * and "we looked and there was no number" are different facts about a project (standing rule 18).
    */
   coverage: taskCoverageSchema.nullable(),
+  /**
+   * `tasks.dependencies` — the dependency gate's finding and its decision (WP-38).
+   *
+   * `null` means the gate has not run on this task: no implementation stage has completed yet, so
+   * there is no diff to read. That is not the same as a record with an empty `added`, which is the
+   * gate saying *"it ran and this diff touched no manifest"* — the Checks panel prints a different
+   * sentence for each (standing rule 18).
+   */
+  dependencies: taskDependenciesSchema.nullable(),
+  /**
+   * `tasks.required_reviewers` — who the platform routed this merge request to (WP-37's producer,
+   * WP-38's record), product/10:38's *"risk classes and required reviewers"*.
+   *
+   * `null` means the routing has not run: the task has no merge request yet, or has not reached the
+   * rebase gate. A record whose `handles` is empty is the routing saying *"no CODEOWNERS match, no
+   * project reviewers and no mapped requester"*, which is a fact about the project's configuration
+   * rather than about the platform.
+   */
+  required_reviewers: taskReviewersSchema.nullable(),
   cost_actual_usd: usdSchema,
   cost_estimated_usd: usdSchema,
   /**

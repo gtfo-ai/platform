@@ -566,6 +566,8 @@ export const runTicketLintCheck = async (
       // A lint task posts one comment and opens no merge request (WP-37).
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

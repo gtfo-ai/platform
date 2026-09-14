@@ -42,6 +42,7 @@ import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime
 import type { ProjectSettings } from '../pipeline/settings.js';
 import { defaultProjectSettings, staticProjectSettings } from '../pipeline/settings.js';
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
+import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { CommunicationPort } from '../ports/integrations/communication.js';
 import type { GitProviderPort } from '../ports/integrations/git-provider.js';
@@ -243,6 +244,14 @@ export interface HarnessOptions {
    */
   readonly whileAskPlans?: () => Promise<void>;
   readonly git?: Partial<GitProviderPort> | null;
+  /**
+   * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
+   *
+   * Absent is **production's default** rather than a harness shortcut: `APP_DEPENDENCY_REGISTRY_HOSTS`
+   * ships empty, so every package is reported `not_checked` and no request is made. A test that
+   * wants the `checked` branch supplies a double.
+   */
+  readonly dependencyMetadata?: DependencyMetadataPort;
   readonly taskManagement?: Partial<TaskManagementPort> | null;
   /** The chat binding. **Absent by default** — see {@link HarnessCommunication} (WP-32). */
   readonly communication?: Partial<CommunicationPort> | null;
@@ -766,6 +775,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     clock: { now: () => clock.now() },
     unitOfWork: memory,
     baseUrl: 'https://agentic.example.test',
+    ...(options.dependencyMetadata === undefined
+      ? {}
+      : { dependencyMetadata: options.dependencyMetadata }),
     /**
      * Ask-the-task (WP-31), on the **same** runner every other run of this harness uses — which is
      * what makes `harnessScriptKey` the one place the stage-less case is expressed.

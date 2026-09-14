@@ -221,6 +221,8 @@ export const startProjectDiscovery = async (
       // is recorded in `human_actions` by the route (WP-37 reads both and says so).
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

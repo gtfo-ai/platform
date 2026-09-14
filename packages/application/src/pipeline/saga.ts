@@ -356,6 +356,8 @@ export const runIntakeCheck = async (
       // not written code yet has touched nothing to be classed.
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       // `tasks.requested_by_user_id` has no writer: a ticket the pick-up rule matched was not
       // requested by anybody the platform can name (`StoredTask.requestedByUserId` says what that
       // costs the reviewer fallback).

@@ -10,14 +10,23 @@
  *  - the audit of who changed a toggle is **visible**, which is what product/18:5 asks for and what
  *    PROGRESS backlog 52 records as missing.
  */
+import type {
+  AutonomyPolicies,
+  AutonomyResponse,
+  ProjectAuditResponse,
+  ProjectBindingsResponse,
+  ProjectSummary,
+} from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
+import type { SessionResponse } from '../auth/session.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 
-const SESSION = {
+/** Annotated rather than bare — PROGRESS backlog 93, closed by WP-38. */
+const SESSION: SessionResponse = {
   user: {
     id: '00000000-0000-4000-8000-000000000001',
     email: 'operator@example.invalid',
@@ -27,7 +36,7 @@ const SESSION = {
   session: { id: '00000000-0000-4000-8000-000000000002' },
 };
 
-const PROJECT_ROW = {
+const PROJECT_ROW: ProjectSummary = {
   id: PROJECT,
   key: 'acme_api',
   name: 'ACME API',
@@ -44,7 +53,7 @@ const PROJECT_ROW = {
   spent_usd_30d: 0,
 };
 
-const POLICIES = {
+const POLICIES: AutonomyPolicies = {
   picks_up_new_tickets: true,
   stop_after_stage: null,
   plan_approval: 'above_size',
@@ -62,7 +71,7 @@ const POLICIES = {
   suggested_readiness_min: 1,
 };
 
-const autonomy = (overrides: Record<string, unknown> = {}) => ({
+const autonomy = (overrides: Partial<AutonomyResponse> = {}): AutonomyResponse => ({
   level: 'supervised',
   materialised: true,
   preset_version: 1,
@@ -80,7 +89,7 @@ const autonomy = (overrides: Record<string, unknown> = {}) => ({
 });
 
 /** A settings change made by somebody else — the audit row product/18:5 wants visible. */
-const AUDIT = {
+const AUDIT: ProjectAuditResponse = {
   items: [
     {
       id: '00000000-0000-4000-8000-0000000000c1',
@@ -97,7 +106,7 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 /** The two bindings a project with a chat integration has (WP-32). */
-const CHAT_BINDINGS = [
+const CHAT_BINDINGS: ProjectBindingsResponse['items'] = [
   {
     integration_id: '00000000-0000-4000-8000-0000000000e1',
     type: 'git',
@@ -115,9 +124,9 @@ const CHAT_BINDINGS = [
 ];
 
 const fetchFor = (
-  dial: Record<string, unknown>,
+  dial: Partial<AutonomyResponse>,
   options: {
-    readonly bindings?: readonly unknown[];
+    readonly bindings?: ProjectBindingsResponse['items'];
     readonly onPut?: (url: string, body: unknown) => void;
   } = {},
 ) =>

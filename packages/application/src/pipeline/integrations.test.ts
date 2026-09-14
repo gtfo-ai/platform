@@ -88,6 +88,11 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-39's `coverage` duty: one resolution for the head pipeline, the default branch and the
   // base's pipeline — one wake-up, up to three reads, one binding.
   'coverage.ts': 1,
+  // WP-38's `dependency_gate` duty: one resolution for the merge request's diff. The registry
+  // lookup that follows is **not** a door — it goes to a package registry rather than to a
+  // binding, has no credential, and is the one outbound call the pipeline makes outside
+  // `IntegrationActionExecutor` (`registry-metadata.ts` carries the measurement that decided it).
+  'dependency-gate.ts': 1,
   'gates.ts': 1,
   'jobs.ts': 1,
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the

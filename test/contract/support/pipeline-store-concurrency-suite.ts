@@ -90,6 +90,7 @@ export const runPipelineStoreConcurrencyContract = (
           architecture_revisions: 2,
           rebase: 2,
           rebase_rechecks: 10,
+          dependency_policy: 2,
         },
         sequence: 1,
       },
@@ -108,6 +109,8 @@ export const runPipelineStoreConcurrencyContract = (
       ticketSnapshotAt: null,
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     });

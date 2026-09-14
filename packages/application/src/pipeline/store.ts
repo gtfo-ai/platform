@@ -37,7 +37,9 @@ import type {
   RunTerminalReason,
   Slug,
   TaskCoverage,
+  TaskDependencies,
   TaskMode,
+  TaskReviewers,
   TicketRef,
   TicketSnapshot,
   TokenUsage,
@@ -102,6 +104,28 @@ export interface StoredTask {
    * comparison is without re-deriving it (standing rule 63).
    */
   readonly coverage: TaskCoverage | null;
+  /**
+   * What the dependency gate found in this task's diff and what it did about it (product/04:58,
+   * WP-38, migration 0028).
+   *
+   * Written by {@link TaskRepository.saveDependencies} from the `dependency_gate` outbound duty and
+   * by nothing else. `null` means **the gate has not run** — no implementation stage has completed,
+   * so there is no diff — which is a different fact from a record whose `added` is empty (*it ran
+   * and the diff touched no manifest*), and the Checks panel prints a different sentence for each.
+   */
+  readonly dependencies: TaskDependencies | null;
+  /**
+   * Who this merge request needs a review from, as the routing computed it (product/10:38,
+   * WP-37's producer and WP-38's record, migration 0028).
+   *
+   * Written by {@link TaskRepository.saveRequiredReviewers} from the `risk_route` outbound duty and
+   * by nothing else. `null` means the routing has not run; a record whose `handles` is empty is the
+   * routing saying *"no CODEOWNERS match, no project reviewers and no mapped requester"*, and one
+   * whose `unresolved` is not empty is it saying *"these are the people this change needs and this
+   * provider has no account for them"* — which is the case the `set_reviewers` audit row cannot
+   * record, because no call is made when nothing resolved.
+   */
+  readonly requiredReviewers: TaskReviewers | null;
   /**
    * The human who asked for this task — step **three** of product/19:138's reviewer precedence.
    *
@@ -354,6 +378,43 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the other narrow writes.
    */
   saveCoverage(tx: Transaction, taskId: Id, coverage: TaskCoverage): Promise<void>;
+  /**
+   * Writes **only** `dependencies` — the sixth narrow writer, and the fifth for the same reason
+   * (WP-38, migration 0028).
+   *
+   * The record is computed in the `dependency_gate` duty, a `pipeline.outbound` job that fires when
+   * the Developer stage completes and therefore runs beside the stage executor's transactions: a
+   * whole-row `save` from there would put back the state, the stage and the cost as they were when
+   * the job started (standing rule 79, measured at 0.40 USD in WP-15d). One column, one statement,
+   * no version bump — `save` does not name this column.
+   *
+   * It is narrow **even in the `ask` ending**, which does write the whole task in the same
+   * transaction: the aggregate write moves the state to `waiting_answers` and the record is not the
+   * aggregate's, so the two are written by the two writers that own them rather than merged into
+   * one read-modify-write (the partition `tasks-column-ownership.test.ts` checks off disk).
+   *
+   * The record is written **whole**, replacing whatever was there: each implementation run is a new
+   * diff, and the packages, the decision and the question it opened have to move together.
+   *
+   * @throws when the task does not exist, like `save` and the other narrow writes.
+   */
+  saveDependencies(tx: Transaction, taskId: Id, dependencies: TaskDependencies): Promise<void>;
+  /**
+   * Writes **only** `required_reviewers` — the seventh narrow writer (WP-38, migration 0028).
+   *
+   * Written by the `risk_route` duty (WP-37's), which computed this and until now kept it nowhere:
+   * the people a merge request needs a review from lived only in the `set_reviewers` audit row, and
+   * that row is written **only when at least one handle resolved to an account**, so a `CODEOWNERS`
+   * naming a group left no record at all. product/10:38 asks the Checks panel for *"risk classes
+   * **and required reviewers**"*, and this is the half that was missing.
+   *
+   * Whole-record replacement for the reason `saveRiskClasses` replaces its list: the routing is
+   * re-run on every rebase-gate entry and a reviewer the change no longer needs has to leave the
+   * row.
+   *
+   * @throws when the task does not exist, like `save` and the other narrow writes.
+   */
+  saveRequiredReviewers(tx: Transaction, taskId: Id, reviewers: TaskReviewers): Promise<void>;
   /**
    * Adds a run's spend to `tasks.cost_actual` — the third narrow writer, and the first that is
    * **not** a read-modify-write at all (WP-31).

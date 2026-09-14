@@ -46,6 +46,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
+import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
@@ -57,6 +58,7 @@ export interface PipelineOutboundOptions
   extends PipelineSagaOptions,
     NotifyOptions,
     Pick<AskMirrorOptions, 'asks'>,
+    Pick<DependencyGateOptions, 'dependencyMetadata'>,
     Pick<RiskRoutingOptions, 'identities'> {
   readonly unitOfWork: UnitOfWork;
   /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
@@ -111,6 +113,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'coverage':
         await runCoverage(options, data);
+        return;
+      case 'dependency_gate':
+        await runDependencyGate(options, data);
         return;
       case 'notify':
         await runNotification(options, data);

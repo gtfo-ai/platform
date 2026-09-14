@@ -153,6 +153,8 @@ describe('a spend written in a transaction that rolls back', () => {
         reviewSubject: null,
         riskClasses: [],
         coverage: null,
+        dependencies: null,
+        requiredReviewers: null,
         requestedByUserId: null,
         version: INITIAL_TASK_VERSION,
       };

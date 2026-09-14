@@ -105,10 +105,11 @@ export * from './pipeline/verdicts.js';
 export * from './pipeline/workpad.js';
 // Ports
 export * from './ports/broadcast.js';
+// Integration type ports (technical/06, BD-017)
+export * from './ports/dependency-metadata.js';
 export * from './ports/dispatch-queue.js';
 export * from './ports/event-store.js';
 export * from './ports/handler-executions.js';
-// Integration type ports (technical/06, BD-017)
 export * from './ports/integrations/audit.js';
 export * from './ports/integrations/bindings.js';
 export * from './ports/integrations/common.js';

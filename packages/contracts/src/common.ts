@@ -316,6 +316,53 @@ export const ticketReadinessGapSchema = z.enum([
   'validation',
 ]);
 
+/**
+ * The package ecosystems this build can read a dependency **addition** out of a diff (WP-38).
+ *
+ * product/18:43 asks for the policy *"`allow | ask | block` per ecosystem"* and never says which
+ * ecosystems exist, so this enum is the platform's answer and it is deliberately **short**: an
+ * ecosystem is in it only when `packages/domain/src/policies/dependencies.ts` has a manifest
+ * matcher *and* a parser for its added lines. The table there is `satisfies Record<
+ * DependencyEcosystem, …>`, so a value added here without a parser does not compile.
+ *
+ * What a diff carries for an ecosystem that is **not** in this list is not silently ignored: it is
+ * reported as an unread manifest ({@link unreadEcosystemSchema}) with the file that changed, which
+ * is standing rule 18 — the absent case must not be the quiet one.
+ */
+export const dependencyEcosystemSchema = z.enum(['npm', 'pypi', 'go', 'cargo']);
+
+/** Every ecosystem a policy may name, in the order the domain's table declares them. */
+export const DEPENDENCY_ECOSYSTEMS = dependencyEcosystemSchema.options;
+
+/**
+ * The ecosystems whose manifests this build **recognises and cannot read** (WP-38).
+ *
+ * A `pom.xml` in a diff is evidence that somebody may have added a dependency, and answering
+ * *"nothing was added"* for it would be a gate reporting a fact it did not establish. So the file
+ * is named on the record and on the Checks panel with the ecosystem it belongs to, and the gate
+ * says plainly that it could not read it (standing rule 18).
+ *
+ * It does **not** raise a question by itself: the policy gates *detected additions*, and asking a
+ * human about every edit to a build file the platform cannot parse is the shape that gets a feature
+ * switched off. The residual is stated at `detectDependencyChanges`.
+ */
+export const unreadEcosystemSchema = z.enum(['maven', 'gradle', 'composer', 'rubygems', 'nuget']);
+
+/**
+ * How many reviewers one merge request may be routed to.
+ *
+ * A **provider-call budget** rather than a product number: each handle that is not already an
+ * account id costs one `resolveUserId` read before the assignment can be made (WP-37), so this is
+ * the fan-out of one rebase-gate entry. Eight is larger than any CODEOWNERS rule this repository's
+ * own parser caps at per rule (64 owners) is likely to produce for one change and small enough that
+ * a hostile `CODEOWNERS` cannot turn a gate entry into a hundred provider requests — the file is
+ * attacker-controlled in a fork workflow (BD-022).
+ */
+export const MAX_ROUTED_REVIEWERS = 8;
+
+/** What a project does when a run adds a third-party dependency (product/18:43, BD-030). */
+export const dependencyPolicyValueSchema = z.enum(['allow', 'ask', 'block']);
+
 /** Autonomy dial (BD-027, technical/12 `policies.autonomy`). */
 export const autonomyLevelSchema = z.enum(['observe', 'assist', 'supervised', 'autonomous']);
 
@@ -613,6 +660,9 @@ export type ProviderMode = z.infer<typeof providerModeSchema>;
 export type Size = z.infer<typeof sizeSchema>;
 export type Severity = z.infer<typeof severitySchema>;
 export type TicketReadinessGap = z.infer<typeof ticketReadinessGapSchema>;
+export type DependencyEcosystem = z.infer<typeof dependencyEcosystemSchema>;
+export type UnreadEcosystem = z.infer<typeof unreadEcosystemSchema>;
+export type DependencyPolicyValue = z.infer<typeof dependencyPolicyValueSchema>;
 export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
 export type Effort = z.infer<typeof effortSchema>;
 export type ArtifactType = z.infer<typeof artifactTypeSchema>;

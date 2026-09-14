@@ -56,6 +56,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
   webRoot: 'APP_WEB_ROOT',
   integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
+  dependencyRegistryHosts: 'APP_DEPENDENCY_REGISTRY_HOSTS',
   modelApiKey: 'ANTHROPIC_API_KEY',
   claudeBinary: 'APP_CLAUDE_BINARY',
 };
@@ -268,6 +269,25 @@ const serverConfigFields = z.strictObject({
    * thing they would have to type on purpose.
    */
   integrationSecretEnv: z.array(z.string().min(1)).readonly(),
+
+  /**
+   * The package-registry hosts the dependency gate may ask for a licence — `APP_DEPENDENCY_REGISTRY_HOSTS`
+   * (WP-38, Q84, PROGRESS backlog 48).
+   *
+   * **Operator-declared, empty by default, and exact.** product/04:58 wants the dependency question
+   * to carry *"license and maintenance status"* and the only honest way to get one is to ask a
+   * registry; backlog 48 records that this process has no outbound allow-list of any kind, so the
+   * answer is the same shape {@link integrationSecretEnv} uses: nothing is called unless an operator
+   * names it, and naming it is a thing they do on purpose. Empty (the default) means every package
+   * is reported as *"licence not checked"* on the Checks panel — a stated non-answer rather than a
+   * blank — and **no request leaves this process**.
+   *
+   * The two hosts this build knows what to ask are `registry.npmjs.org` and `pypi.org`
+   * (`packages/infrastructure/src/dependencies/registry-metadata.ts`). A host that is not one of
+   * them is simply never matched: it is not refused here, because a refusal would make a typo fatal
+   * to start-up for a feature that is off by default, and the composition logs the set it was given.
+   */
+  dependencyRegistryHosts: z.array(z.string().min(1)).readonly(),
 
   argon2: argon2ConfigSchema,
   database: db.databaseConfigSchema,
@@ -557,6 +577,26 @@ const nameListFromEnv = (raw: string | undefined): readonly string[] => [
   ),
 ];
 
+/**
+ * A comma-separated list of hosts, lower-cased, de-duplicated and in the order declared.
+ *
+ * The same shape {@link nameListFromEnv} has and the same failure direction: an entry that is not a
+ * plausible host (letters, digits, dots, hyphens — no scheme, no path, no port) is **dropped**,
+ * because this is an allow-list and admitting `https://registry.npmjs.org/` as a host name would
+ * make the comparison against the platform's own host silently never match, which reads as *"the
+ * registry is down"* rather than as *"you typed a URL"*.
+ */
+const hostListFromEnv = (raw: string | undefined): readonly string[] => [
+  ...new Set(
+    (raw ?? '')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) =>
+        /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(entry),
+      ),
+  ),
+];
+
 export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
   const problems: string[] = [];
   const collect = <T>(load: () => T): T | undefined => {
@@ -634,6 +674,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
     webRoot: nullableString(env.APP_WEB_ROOT),
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),
+    dependencyRegistryHosts: hostListFromEnv(env.APP_DEPENDENCY_REGISTRY_HOSTS),
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,

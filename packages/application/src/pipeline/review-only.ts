@@ -774,6 +774,8 @@ export const runReviewOnlyCheck = async (
       // runs for it and this list stays empty (WP-37).
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

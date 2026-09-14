@@ -50,12 +50,14 @@ import { markTransactions } from '../events/open-transaction.js';
 import { startDigestRuntime } from '../notify/digest.js';
 import { notifyHandlers } from '../notify/handlers.js';
 import type { NotifyOptions } from '../notify/options.js';
+import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
+import { dependencyGateHandlers } from './dependency-gate.js';
 import {
   declarePipelineQueues,
   type PipelineJobOptions,
@@ -96,6 +98,16 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
     Pick<StageExecutorOptions, 'context'>;
   /** How many stages this process runs at once. @default 1 */
   readonly stageConcurrency?: number;
+  /**
+   * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
+   *
+   * Optional, and the only optional collaborator here that is **not** standing rule 31's absent
+   * one: the shipped answer for an instance with no declared registry host is a *stated*
+   * `not_checked` (`UNCONFIGURED_DEPENDENCY_METADATA`), which the panel prints, and the gate works
+   * identically without it. `apps/server` composes the real client only when
+   * `APP_DEPENDENCY_REGISTRY_HOSTS` names a host.
+   */
+  readonly dependencyMetadata?: DependencyMetadataPort;
 }
 
 export interface PipelineRuntime {
@@ -149,6 +161,11 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     // WP-37: the same identity map the ask handler resolves an author with, read in the other
     // direction by the reviewer fallback. One collaborator rather than two of the same table.
     identities: options.ask.identities,
+    // WP-38: absent unless an operator declared a registry host, in which case every lookup
+    // answers `not_checked` and the gate still gates.
+    ...(options.dependencyMetadata === undefined
+      ? {}
+      : { dependencyMetadata: options.dependencyMetadata }),
   };
   const workers: JobWorker[] = [];
 
@@ -171,6 +188,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...riskRoutingHandlers(options),
       // WP-39: the coverage delta, on `ci.pipeline.finished` rather than on a stage transition.
       ...coverageHandlers(options),
+      // WP-38: the dependency gate, on the Developer stage's own completion (product/04:58).
+      ...dependencyGateHandlers(options),
       // The notify band (WP-32), TD-005 priority 210 — the one handler outside the core and
       // integrations bands, and the reason `EVENT_CONSUMPTION`'s two budget entries are `handled`.
       ...notifyHandlers(options),

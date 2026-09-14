@@ -31,7 +31,9 @@
  * handle up to {@link MAX_ROUTED_REVIEWERS}, and finally `set_reviewers`, which re-reads the merge
  * request because the union with whoever is already assigned is computed where the call is made
  * (standing rule 44). A project with no classes, no `CODEOWNERS` and no configured reviewers
- * therefore pays **three reads and no write**: nothing is looked up and nothing is assigned.
+ * therefore pays **three reads and no provider write**: nothing is looked up and nobody is assigned.
+ * It does write one **row** since WP-38 — `tasks.required_reviewers`, on every path including that
+ * one, because *"the routing ran and found nobody"* is what the Checks panel has to be able to say.
  *
  * The merge request itself is deliberately **not** read for its `target_branch`: the platform opens
  * every merge request it routes against the default branch (BD-025's namespace targets it), and
@@ -323,6 +325,36 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
     }
   }
 
+  /**
+   * **The record the Checks panel reads** (WP-38, migration 0028).
+   *
+   * Written rather than left to the `set_reviewers` audit row, and written on **every** path
+   * including the ones that assign nobody: the call below is only made when at least one handle
+   * resolved, so a `CODEOWNERS` naming a group, a team or somebody who has left would otherwise
+   * leave no record at all and the panel would print *"none required"* for the case a maintainer
+   * most needs to see. A narrow write, for the reason `saveRiskClasses` is (standing rule 79).
+   *
+   * **`assigned` is written after the call it describes, never before** (review round 2, standing
+   * rule 87's family). The field is *"the accounts the platform actually asked for a review"*, so
+   * writing it first made the panel claim a request that a provider outage, a 403 or a revoked
+   * token meant was never made — and the duty's retry would leave the claim standing in between.
+   * Every other field is what the routing *chose*, which is true the moment it is computed, so the
+   * row is still written when nothing is asked: the reader tells the two apart by `handles` and
+   * `unresolved` beside an empty `assigned`.
+   */
+  const record = async (assigned: readonly string[]): Promise<void> => {
+    await options.unitOfWork.transaction(async (scope) => {
+      await options.store.tasks.saveRequiredReviewers(scope.tx, stored.task.id, {
+        source: routing.source,
+        handles: [...routing.handles],
+        assigned: [...assigned],
+        unresolved,
+        truncated: routing.truncated,
+        routed_at: options.clock.now(),
+      });
+    });
+  };
+
   if (unresolved.length > 0) {
     // **Named, never silent** (standing rule 18, and PROGRESS backlog 79). A `CODEOWNERS` naming a
     // group, a team or somebody who has left is the ordinary state of a real repository, and the
@@ -339,6 +371,7 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
     );
   }
   if (resolved.length === 0) {
+    await record([]);
     logger.info(
       { task_id: stored.task.id, source: routing.source, routed: routing.handles.length },
       routing.source === 'none'
@@ -357,20 +390,39 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
    */
   const headSha = ref.head_sha ?? null;
   if (headSha === null) {
+    await record([]);
     logger.info(
       { task_id: stored.task.id, iid: ref.iid },
       'risk routing: no head commit on the merge request, so no reviewers were assigned',
     );
     return;
   }
-  await input.writes.reviewers(
-    {
-      ref,
-      externalIds: resolved,
-      idempotencyKey: reviewerRoutingIdempotencyKey(stored.task.id, headSha),
-    },
-    { ...context, mode: stored.task.mode },
-  );
+  try {
+    await input.writes.reviewers(
+      {
+        ref,
+        externalIds: resolved,
+        idempotencyKey: reviewerRoutingIdempotencyKey(stored.task.id, headSha),
+      },
+      { ...context, mode: stored.task.mode },
+    );
+  } catch (error) {
+    // The routing is still worth recording — it is what the platform *chose* — but nobody was
+    // asked, so `assigned` is empty and the job is left to fail and retry (the executor's audit row
+    // carries the provider's own error).
+    await record([]);
+    throw error;
+  }
+  /**
+   * Written after the call, and the four ways that call can end are not all the same.
+   *
+   * `ok`, a `replayed` idempotency record and the union that had **nothing to add** all leave these
+   * accounts on the merge request, so the row names them. A **shadow** task is the one that does
+   * not: the executor recorded `would_have` and called nobody (technical/06), so `assigned` is
+   * empty there for the same reason it is empty after a refusal — the handles it routed are still
+   * on the row, which is what the panel needs to show.
+   */
+  await record(stored.task.mode === 'shadow' ? [] : resolved);
   logger.info(
     {
       task_id: stored.task.id,

@@ -57,6 +57,39 @@ describe('records', () => {
         delta_pct: 2.5,
         measured_at: AT,
       },
+      dependencies: {
+        head_sha: 'a'.repeat(40),
+        decision: 'ask' as const,
+        added: [
+          {
+            ecosystem: 'npm' as const,
+            name: '@scope/pkg',
+            from: 'manifest' as const,
+            path: 'package.json',
+            policy: 'ask' as const,
+            allowlisted: false,
+            metadata: {
+              status: 'checked' as const,
+              license: 'MIT',
+              last_published_at: AT,
+              deprecated: false,
+              source_url: 'https://www.npmjs.com/package/@scope/pkg',
+            },
+          },
+        ],
+        unread: [{ ecosystem: 'maven' as const, path: 'pom.xml' }],
+        truncated: false,
+        question_id: uuid(4),
+        checked_at: AT,
+      },
+      required_reviewers: {
+        source: 'codeowners' as const,
+        handles: ['@ana', '@billing-team'],
+        assigned: ['4242'],
+        unresolved: ['@billing-team'],
+        truncated: false,
+        routed_at: AT,
+      },
       cost_actual_usd: 3.2,
       cost_estimated_usd: 0,
       estimate_usd: 2.5,
@@ -124,6 +157,63 @@ describe('records', () => {
     expect(
       taskRecordSchema.safeParse({ ...task, coverage: { ...task.coverage, lines_pct: 12 } })
         .success,
+    ).toBe(false);
+    /**
+     * The dependency record, both ways (WP-38, standing rules 16, 18 and 42). `null` is *"the gate
+     * has not run"* and an empty `added` is *"it ran and nothing was added"*: two different facts
+     * the panel prints differently, so both must parse and neither may be spelled by an absent key.
+     */
+    const ungated = { ...task, dependencies: null, required_reviewers: null };
+    expect(taskRecordSchema.parse(ungated)).toEqual(ungated);
+    const { dependencies: _noDependencies, ...withoutDependencies } = task;
+    expect(taskRecordSchema.safeParse(withoutDependencies).success).toBe(false);
+    const { required_reviewers: _noReviewers, ...withoutReviewers } = task;
+    expect(taskRecordSchema.safeParse(withoutReviewers).success).toBe(false);
+    const clean = {
+      ...task,
+      dependencies: { ...task.dependencies, decision: 'none' as const, added: [], unread: [] },
+    };
+    expect(taskRecordSchema.parse(clean)).toEqual(clean);
+    // A decision nothing renders, an ecosystem nothing detects and a licence longer than a name
+    // are all refused at the boundary rather than stored and puzzled over at the screen.
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        dependencies: { ...task.dependencies, decision: 'maybe' },
+      }).success,
+    ).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        dependencies: {
+          ...task.dependencies,
+          added: [{ ...task.dependencies.added[0], ecosystem: 'maven' }],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        dependencies: {
+          ...task.dependencies,
+          added: [
+            {
+              ...task.dependencies.added[0],
+              metadata: { ...task.dependencies.added[0]?.metadata, license: 'A'.repeat(201) },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+    // More reviewers than one merge request may carry (`MAX_ROUTED_REVIEWERS`).
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        required_reviewers: {
+          ...task.required_reviewers,
+          handles: Array.from({ length: 9 }, (_, index) => `@person-${index}`),
+        },
+      }).success,
     ).toBe(false);
     expect(taskRecordSchema.safeParse({ ...task, estimate_basis: 'a_guess' }).success).toBe(false);
   });

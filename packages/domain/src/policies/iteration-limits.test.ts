@@ -27,6 +27,9 @@ describe('BD-008 defaults', () => {
       // Not BD-008 either, and not product/04: the platform's own ceiling on a gate re-check the
       // outside world drives (WP-26). Ten, because a round costs a provider read and not a run.
       rebase_rechecks: 10,
+      // Not BD-008 either (WP-38): how many times the dependency gate sends a task back for the
+      // same blocked package. Two — the second return is the same answer to the same change.
+      dependency_policy: 2,
     });
     expect([...ITERATION_LOOPS].sort()).toEqual(Object.keys(DEFAULT_ITERATION_LIMITS).sort());
   });
@@ -56,6 +59,9 @@ describe('resolveIterationLimits', () => {
       architecture_revisions: 2,
       rebase: 3,
       rebase_rechecks: 25,
+      // No `pipeline.limits` key of its own, like the two above it: a project that wants a
+      // different answer changes the **policy** rather than the number of times it is told.
+      dependency_policy: 2,
     });
     // Both halves of WP-26's configuration, and the pair matters: `rebase_attempts` is the
     // product's key (product/18 § "Rebase gate … attempts") and it is named differently from the

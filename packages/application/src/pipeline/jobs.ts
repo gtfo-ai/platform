@@ -119,6 +119,11 @@ export interface PipelineOutboundData {
      * when the pipeline finishes, which is whenever the provider says.
      */
     | 'coverage'
+    /**
+     * WP-38, the dependency policy: read the Developer stage's own diff, apply the project's
+     * `allow | ask | block`, and record what it found for the Checks panel.
+     */
+    | 'dependency_gate'
     /** WP-32, the notify band: say one thing in the project's chat channel. */
     | 'notify'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */
@@ -169,6 +174,15 @@ export interface PipelineOutboundData {
    * revision's pipeline, and answers `null` when there is none.
    */
   readonly head_sha?: string;
+  /**
+   * `dependency_gate` only (WP-38): the stage whose completion caused the check.
+   *
+   * It rides the payload because it is the answer to two questions the row cannot give when the
+   * job fires: where a `block` sends the task **back to**, and which stage a question belongs to so
+   * that answering it resumes the run that added the package. `tasks.current_stage` is already the
+   * *next* stage by then — the saga moved it on in the same transaction that completed this one.
+   */
+  readonly stage?: string;
   /** The three `review_only_*` duties: which merge request, and where it lives. */
   readonly iid?: number;
   readonly mr_url?: string;
@@ -556,7 +570,28 @@ const settle = async (
     'settling a gate',
     async (scope) => {
       const stored = await options.store.tasks.load(scope.tx, request.taskId);
-      if (stored === null || stored.task.currentStage !== request.stage) {
+      /**
+       * **The state is re-read here, not only before the gate was evaluated** (WP-38).
+       *
+       * Evaluating a gate is a provider read, and anything may park the task while it is in flight:
+       * a human pauses or takes it over, or — since WP-38 — the dependency gate asks a blocking
+       * question from a `pipeline.outbound` job, which is a different queue from this `stately`
+       * one. The stage is unchanged in all of those cases, so the old check passed and
+       * `applyDecision` was handed a settlement for a task in `waiting_answers`; the state machine
+       * refused the move and the generic fallback **escalated the task**, with a blocker brief
+       * blaming *"a template that does not match the platform's task states"*.
+       *
+       * Measured on `dependency-gate.e2e.test.ts` before this line existed: `task.question.asked`
+       * followed by `task.escalated` — *"illegal transition waiting_answers -> ready_for_merge"* —
+       * on a task whose only fault was being asked a question while the rebase gate was reading.
+       * Dropping a settlement for a task that has stopped is the right ending: the gate is
+       * re-entered when the task resumes.
+       */
+      if (
+        stored === null ||
+        stored.task.currentStage !== request.stage ||
+        !isRunnableTaskState(stored.task.state)
+      ) {
         return null;
       }
       const pipeline = compilePipeline(stored.task.template, stored.template);

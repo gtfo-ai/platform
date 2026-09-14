@@ -69,7 +69,10 @@ policies:
   autonomy: supervised           # observe | assist | supervised | autonomous (+ overrides below)
   probation_tasks: 5
   knowledge_apply: { auto_apply: false, discard_below: 0.2, proposal_above: 0.6 }
-  dependency_policy: ask         # allow | ask | block
+  dependency_policy:             # or the shorthand `dependency_policy: ask`, which means the same
+    default: ask                 # allow | ask | block
+    ecosystems: { npm: block }   # per ecosystem; keys: npm | pypi | go | cargo (what a diff is read for)
+    allowlist: ["npm:@scope/pkg"]  # "<ecosystem>:<name>" — proceeds whatever the policy says
   drift_without_direction: disabled
   protected_paths: ["tests/**", ".gitlab-ci.yml", ".agentic/**", ".claude/**", "CLAUDE.md"]
   risk_classes:
@@ -94,6 +97,10 @@ status_mapping:                  # task state -> ticket status name (provider-sp
 ```
 
 Secrets are never accepted from the repo. Unknown keys are errors (fail loudly, BD: product/12 validation). The UI shows the effective value per key with its source.
+
+The example above is transcribed key for key into a fixture and parsed by
+`packages/contracts/src/config.test.ts` › "parses the example from technical/12 unchanged", so a key
+this page documents and the schema refuses fails the build rather than an operator's file.
 
 ## `.agentic/pipeline.yml` (optional full template definition)
 

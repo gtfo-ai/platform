@@ -1,4 +1,5 @@
 import type { SseFrame, SseTopic } from '@platform/contracts';
+import { sseFrameSchema } from '@platform/contracts';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { queryKeys } from '../api/keys.js';
@@ -8,10 +9,20 @@ const PROJECT = '11111111-1111-4111-8111-111111111111';
 const TASK = '22222222-2222-4222-8222-222222222222';
 const RUN = '33333333-3333-4333-8333-333333333333';
 
+/**
+ * **Parsed rather than cast** (PROGRESS backlog 93, closed by WP-38).
+ *
+ * This fixture used to be `Record<string, unknown>` overrides closed with `as SseFrame`, which is
+ * the one spelling in the `apps/web` tier that was checked on **neither** side: nothing compared it
+ * with the published frame, and nothing parsed it at runtime either, because `staleKeysForEvent`
+ * takes the frame directly rather than through the endpoint client. Parsing with the published
+ * schema restores both halves — a frame this application could never receive now fails here, at the
+ * fixture, which is the diagnostic rule 4 asks of an instrument.
+ */
 const domainEvent = (
   overrides: Record<string, unknown> = {},
-): SseFrame & { frame: 'domain_event' } =>
-  ({
+): SseFrame & { frame: 'domain_event' } => {
+  const frame = sseFrameSchema.parse({
     frame: 'domain_event',
     topic: `project:${PROJECT}` as SseTopic,
     seq: 1,
@@ -26,10 +37,23 @@ const domainEvent = (
       actor: { kind: 'system', component: 'pipeline' },
       occurred_at: '2026-09-10T09:00:00.000Z',
       type: 'run.started',
-      payload: { project_id: PROJECT, task_id: TASK, run_id: RUN },
+      payload: {
+        project_id: PROJECT,
+        task_id: TASK,
+        run_id: RUN,
+        model: 'claude-opus-5',
+        effort: 'medium',
+        prompt_version: 'developer@3',
+        context_pack: { tier0: [], tier1: [], budget_tokens: 0, total_tokens: 0, kb_commit: null },
+      },
       ...overrides,
     },
-  }) as SseFrame & { frame: 'domain_event' };
+  });
+  if (frame.frame !== 'domain_event') {
+    throw new Error('the fixture above is a domain-event frame by construction');
+  }
+  return frame;
+};
 
 describe('staleKeysForEvent', () => {
   it('names the project, task and run prefixes the event could have changed', () => {
@@ -42,9 +66,18 @@ describe('staleKeysForEvent', () => {
   });
 
   it('falls back to the stream when the payload names no id', () => {
-    const keys = staleKeysForEvent(
-      domainEvent({ stream_type: 'task', stream_id: TASK, correlation_id: null, payload: {} }),
-    );
+    /**
+     * **The one cast this file keeps, and why** (PROGRESS backlog 93): the frame below is a payload
+     * the published schema **refuses**, which is the point — the reader must fall back to the
+     * stream rather than throw when it is handed something it cannot read, and a fixture that
+     * parsed could not express that. It is built through the helper and then broken deliberately,
+     * so everything except the payload is still a real frame.
+     */
+    const withoutIds = {
+      ...domainEvent(),
+      data: { ...domainEvent().data, stream_type: 'task', stream_id: TASK, payload: {} },
+    } as SseFrame & { frame: 'domain_event' };
+    const keys = staleKeysForEvent(withoutIds);
 
     expect(keys).toContainEqual([...queryKeys.task(TASK)]);
   });

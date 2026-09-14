@@ -184,6 +184,47 @@ const baseTask = {
     delta_pct: 2.5,
     measured_at: now,
   },
+  /**
+   * WP-38: a gate that ran, found a package and is waiting for an answer — with a **package name
+   * and a licence a registry published**, which is third-party text on the one screen a maintainer
+   * merges from (BD-022). The hostile string is in the name rather than in a comment, so the
+   * Playwright assertion about it is about this application rather than about a fixture nobody
+   * renders (standing rule 4, the `file:` lesson above).
+   */
+  dependencies: {
+    head_sha: 'b'.repeat(40),
+    decision: 'ask',
+    added: [
+      {
+        ecosystem: 'npm',
+        name: 'left-pad',
+        from: 'manifest',
+        path: 'package.json',
+        policy: 'ask',
+        allowlisted: false,
+        metadata: {
+          status: 'checked',
+          license: `MIT ${HOSTILE.image}`,
+          last_published_at: now,
+          deprecated: true,
+          source_url: HOSTILE.mrUrlData,
+        },
+      },
+    ],
+    unread: [{ ecosystem: 'maven', path: 'services/pom.xml' }],
+    truncated: false,
+    question_id: IDS.question,
+    checked_at: now,
+  },
+  /** …and a `CODEOWNERS` handle nobody could resolve, which is the case the audit cannot record. */
+  required_reviewers: {
+    source: 'codeowners',
+    handles: [`@ana ${HOSTILE.script}`, '@billing-team'],
+    assigned: ['4242'],
+    unresolved: ['@billing-team'],
+    truncated: false,
+    routed_at: now,
+  },
   cost_actual_usd: 4.25,
   cost_estimated_usd: 6,
   // WP-28: the refinement estimate and its provenance. Deliberately **not** equal to
@@ -224,6 +265,10 @@ export const bugTask = taskRecordSchema.parse({
   // The other half of WP-39's panel item: a task nothing has measured. The two tasks together are
   // what keep *"not measured"* and a real delta from collapsing into one rendering.
   coverage: null,
+  // …and the same both-ways rule for WP-38's two: a task whose gate has not run and whose merge
+  // request has not been routed, so *"not checked"* and *"not routed"* are rendered somewhere.
+  dependencies: null,
+  required_reviewers: null,
 });
 
 export const question = {

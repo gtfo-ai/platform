@@ -44,11 +44,18 @@ import type {
   PipelineTemplate,
   Slug,
   TaskCoverage,
+  TaskDependencies,
+  TaskReviewers,
   TaskState,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
-import { taskCoverageSchema, workpadRefSchema } from '@platform/contracts';
+import {
+  taskCoverageSchema,
+  taskDependenciesSchema,
+  taskReviewersSchema,
+  workpadRefSchema,
+} from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
 import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -94,6 +101,8 @@ interface TaskRow extends Record<string, unknown> {
   review_subject: MergeRequestSnapshot | null;
   risk_classes: string[] | null;
   coverage: TaskCoverage | null;
+  dependencies: TaskDependencies | null;
+  required_reviewers: TaskReviewers | null;
   requested_by_user_id: string | null;
   version: number;
   created_at: Date;
@@ -105,6 +114,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
     t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.risk_classes, t.coverage,
+    t.dependencies, t.required_reviewers,
     t.requested_by_user_id, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
@@ -150,6 +160,8 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   // than for a row that can hold one (WP-37).
   riskClasses: row.risk_classes ?? [],
   coverage: row.coverage,
+  dependencies: row.dependencies,
+  requiredReviewers: row.required_reviewers,
   requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
   version: Number(row.version),
 });
@@ -396,6 +408,38 @@ export const createPostgresPipelineStore = (
      * happily here and answered as a 500 by the first reader — the task page. Fail closed on a
      * mutation (standing rule 20), where the stack trace still names this caller.
      */
+    /**
+     * `dependencies` — one column, one statement, written whole (WP-38, migration 0028).
+     *
+     * Narrow for the reason `saveCoverage` is: the `dependency_gate` duty runs in a
+     * `pipeline.outbound` job beside the stage executor's transactions, so a whole-row `save` from
+     * there would put back the state, the stage and the cost as they were when the job started
+     * (standing rule 79). **Parsed before it is written** (WP-15h): `jsonb` accepts any document and
+     * the disagreement would surface at the task page, which is the reader.
+     */
+    saveDependencies: async (tx, taskId, dependencies) => {
+      const parsed = taskDependenciesSchema.parse(dependencies);
+      const result = await sqlOf(tx).query(
+        'update tasks set dependencies = $2::jsonb, updated_at = now() where id = $1',
+        [taskId, JSON.stringify(parsed)],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
+    /** `required_reviewers` — the same shape, written by the `risk_route` duty (WP-38). */
+    saveRequiredReviewers: async (tx, taskId, reviewers) => {
+      const parsed = taskReviewersSchema.parse(reviewers);
+      const result = await sqlOf(tx).query(
+        'update tasks set required_reviewers = $2::jsonb, updated_at = now() where id = $1',
+        [taskId, JSON.stringify(parsed)],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
     saveCoverage: async (tx, taskId, coverage) => {
       const parsed = taskCoverageSchema.parse(coverage);
       const result = await sqlOf(tx).query(

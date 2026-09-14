@@ -18,8 +18,12 @@ import * as z from 'zod';
 import {
   autonomyLevelSchema,
   communicationLanguageSchema,
+  DEPENDENCY_ECOSYSTEMS,
+  dependencyEcosystemSchema,
+  dependencyPolicyValueSchema,
   durationSchema,
   effortSchema,
+  MAX_ROUTED_REVIEWERS,
   nonEmptyStringSchema,
   notificationClassSchema,
   pathPatternSchema,
@@ -150,18 +154,6 @@ export const knowledgeApplyPolicySchema = z.strictObject({
 export const REVIEWER_REQUIREMENT = /^reviewer:@?[A-Za-z0-9._\-/]+$/;
 
 /**
- * How many reviewers one merge request may be routed to.
- *
- * A **provider-call budget** rather than a product number: each handle that is not already an
- * account id costs one `resolveUserId` read before the assignment can be made (WP-37), so this is
- * the fan-out of one rebase-gate entry. Eight is larger than any CODEOWNERS rule this repository's
- * own parser caps at per rule (64 owners) is likely to produce for one change and small enough that
- * a hostile `CODEOWNERS` cannot turn a gate entry into a hundred provider requests — the file is
- * attacker-controlled in a fork workflow (BD-022).
- */
-export const MAX_ROUTED_REVIEWERS = 8;
-
-/**
  * What a risk class requires before the task may proceed — product/19 §14, WP-37.
  *
  * **Every value this accepts has a consumer, and the two it refuses are refused by name.** That is
@@ -222,11 +214,91 @@ export const riskClassSchema = z.strictObject({
   require: z.array(riskRequirementSchema).min(1),
 });
 
+/**
+ * One allow-list entry: `<ecosystem>:<package>` — product/18:43's *"allow-listed packages"*
+ * (WP-38).
+ *
+ * The ecosystem is part of the entry rather than a nesting level, because a package name is only
+ * unique inside one: `requests` on PyPI and `requests` on npm are different code from different
+ * people, and an allow-list that could not tell them apart would let a typo-squat through on the
+ * strength of a decision somebody made about another registry.
+ *
+ * The split is on the **first** colon only, so a name that contains one (a Maven coordinate, if a
+ * later build parses that ecosystem) survives. The name half is not pattern-checked here: each
+ * ecosystem has its own rules and `packages/domain/src/policies/dependencies.ts` owns them, where
+ * the same patterns decide what may be read out of a diff — one spelling, not two (standing rule
+ * 41). What is checked here is the part an operator gets wrong: naming an ecosystem this build has
+ * never heard of, which would otherwise sit in the file looking like a decision.
+ */
+export const dependencyAllowEntrySchema = z
+  .string()
+  .meta({
+    description:
+      'An allow-listed package as "<ecosystem>:<name>", e.g. "npm:@scope/pkg" or "pypi:requests".',
+  })
+  .superRefine((value, ctx) => {
+    const colon = value.indexOf(':');
+    const ecosystem = colon === -1 ? '' : value.slice(0, colon);
+    const name = colon === -1 ? '' : value.slice(colon + 1).trim();
+    if (colon === -1 || name === '') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${JSON.stringify(value)} is not an allow-list entry — write "<ecosystem>:<package>", for example "npm:lodash"`,
+      });
+      return;
+    }
+    if (!(DEPENDENCY_ECOSYSTEMS as readonly string[]).includes(ecosystem)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${JSON.stringify(ecosystem)} is not an ecosystem this build reads a dependency out of a diff for — expected one of ${DEPENDENCY_ECOSYSTEMS.join(', ')}`,
+      });
+    }
+  });
+
+/**
+ * The dependency policy — product/18:43's configuration column, *"`allow | ask | block` per
+ * ecosystem; allow-listed packages"* (BD-030, product/04:58, WP-38).
+ *
+ * **Two forms, and the scalar is the shorthand.** `dependency_policy: ask` is what technical/12's
+ * example file has said since the key existed and is what a project that wants one answer for
+ * everything writes; the object form is the document's own *"per ecosystem"* plus its allow-list.
+ * A scalar layer under an object layer merges the way every other key does — an object replaces a
+ * scalar, a scalar replaces an object (`effective-config.ts`) — so an organisation's `ask` and a
+ * project's `{ecosystems: {npm: block}}` do not silently combine into something neither wrote.
+ *
+ * A **union** rather than one optional-heavy object, with its own message: zod answers
+ * `invalid_union` by default, and *"Invalid input"* is exactly what an operator who typed `aks`
+ * must not get (the lesson {@link riskRequirementSchema} was rewritten for at WP-37).
+ *
+ * The ecosystem keys are {@link dependencyEcosystemSchema} — the four this build can read a
+ * dependency addition out of a diff — so a policy for an ecosystem nothing detects is refused at
+ * the file rather than stored and never consulted (PROGRESS backlog 58's defect, and the one this
+ * whole row exists to close for `dependency_policy` itself).
+ */
+export const dependencyPolicyConfigSchema = z.union(
+  [
+    dependencyPolicyValueSchema,
+    z.strictObject({
+      /** What every ecosystem gets unless `ecosystems` names it. Defaults to `ask` (product/18:43). */
+      default: dependencyPolicyValueSchema.optional(),
+      ecosystems: z
+        .partialRecord(dependencyEcosystemSchema, dependencyPolicyValueSchema)
+        .optional(),
+      /** Packages that proceed whatever the policy says — product/04:58's *"allow for allow-listed packages"*. */
+      allowlist: z.array(dependencyAllowEntrySchema).max(500).optional(),
+    }),
+  ],
+  {
+    error: () =>
+      'expected "allow", "ask" or "block", or an object with "default", "ecosystems" and "allowlist" — see policies.dependency_policy in technical/12',
+  },
+);
+
 export const policiesConfigSchema = z.strictObject({
   autonomy: autonomyLevelSchema.optional(),
   probation_tasks: z.int().min(0).max(1000).optional(),
   knowledge_apply: knowledgeApplyPolicySchema.optional(),
-  dependency_policy: z.enum(['allow', 'ask', 'block']).optional(),
+  dependency_policy: dependencyPolicyConfigSchema.optional(),
   /**
    * Where the coverage number on the Checks panel comes from — product/18:38's one configuration
    * key, *"coverage source"* (WP-39).

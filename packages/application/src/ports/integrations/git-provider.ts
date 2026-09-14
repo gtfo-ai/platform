@@ -444,6 +444,12 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * On the port rather than on one adapter for BD-017's reason: review-only mode is pipeline
    * behaviour, and the pipeline may not know which provider it is talking to.
    *
+   * **Its second reader is the dependency gate** (WP-38), which is the first thing in this platform
+   * to read a `diff` rather than a path: `detectDependencyChanges` parses the *added lines* of a
+   * manifest or lockfile patch. So `diff: null` and `omitted` are load-bearing there too — a file
+   * the provider will not render is a file the gate cannot answer about, and it says so rather than
+   * reporting that nothing was added.
+   *
    * `limit` bounds the **number of files**, and the adapter applies it: a merge request with four
    * thousand files is a request whose size somebody else chose, and paginating all of it to throw
    * most of it away costs the provider's rate limit rather than ours. A caller learns that it was

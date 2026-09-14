@@ -334,6 +334,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           timezone: config.timezone,
           // `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31).
           baseUrl: config.baseUrl,
+          // `APP_DEPENDENCY_REGISTRY_HOSTS` (WP-38, Q84): empty by default, and then the dependency
+          // gate makes no request at all and the panel says "licence not checked".
+          dependencyRegistryHosts: config.dependencyRegistryHosts,
           logger: loggerPort,
         });
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });

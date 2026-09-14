@@ -193,11 +193,41 @@
           "additionalProperties": false
         },
         "dependency_policy": {
-          "type": "string",
-          "enum": [
-            "allow",
-            "ask",
-            "block"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/anon_02e7dfb8"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "default": {
+                  "$ref": "#/$defs/anon_02e7dfb8"
+                },
+                "ecosystems": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "enum": [
+                      "npm",
+                      "pypi",
+                      "go",
+                      "cargo"
+                    ]
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/anon_02e7dfb8"
+                  }
+                },
+                "allowlist": {
+                  "maxItems": 500,
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_ca92bbb4"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
           ]
         },
         "coverage_source": {
@@ -625,6 +655,14 @@
       "type": "number",
       "minimum": 0
     },
+    "anon_02e7dfb8": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "ask",
+        "block"
+      ]
+    },
     "anon_0a99e8c4": {
       "$ref": "#/$defs/Slug"
     },
@@ -643,6 +681,10 @@
     },
     "anon_903202da": {
       "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_ca92bbb4": {
+      "type": "string",
+      "description": "An allow-listed package as \"<ecosystem>:<name>\", e.g. \"npm:@scope/pkg\" or \"pypi:requests\"."
     },
     "anon_e6c200cc": {
       "$ref": "#/$defs/PathPattern"

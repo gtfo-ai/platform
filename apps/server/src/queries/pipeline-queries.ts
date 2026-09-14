@@ -497,6 +497,17 @@ const toTaskRecord = (row: typeof tasks.$inferSelect): TaskRecord => ({
   // spelling of the subtraction and would disagree with the stored record the day one of them
   // changed (standing rule 41). `null` is published as `null`: "nothing measured" is an answer.
   coverage: row.coverage,
+  // WP-38: the same rule one column across. The gate wrote this record already parsed against
+  // `taskDependenciesSchema`, so nothing is re-derived here — in particular the decision is **not**
+  // recomputed from the packages and the project's policy, because that would be a second reader of
+  // a configuration that may have changed since, answering a question about what the gate *did*
+  // with what the policy *now says*. `null` is published as `null`: "the gate has not run" is an
+  // answer the panel prints differently from "it ran and nothing was added".
+  dependencies: row.dependencies,
+  // WP-38, product/10:38's other half: who the routing asked for a review from, including the
+  // handles it could not resolve — which the `set_reviewers` audit row cannot say, because no call
+  // is made when nothing resolved.
+  required_reviewers: row.requiredReviewers,
   cost_actual_usd: usd(row.costActual),
   cost_estimated_usd: usd(row.costEstimated),
   // The refinement estimate, its provenance, and product/19 §10's accuracy metric — which is

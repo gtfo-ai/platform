@@ -246,6 +246,7 @@ const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<
           architecture_revisions: 2,
           rebase: 2,
           rebase_rechecks: 10,
+          dependency_policy: 2,
         },
         sequence: 1,
       },
@@ -271,6 +272,8 @@ const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<
       reviewSubject: null,
       riskClasses: [],
       coverage: null,
+      dependencies: null,
+      requiredReviewers: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
     };
@@ -331,12 +334,15 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
      * …and it looked: the negative is a comparison that happened, not a duty that never ran
      * (standing rule 4 — every assertion above is satisfied by a duty that did nothing).
      *
-     * **Three reads, not two, since WP-37**: the gate now enqueues a second duty that reads *this*
-     * task's own diff to classify it, so the merge request under test is read once per duty. They
-     * are counted sorted because the two duties are separate jobs and their order on the queue is
-     * the queue's, not this test's (the same property WP-15d states for every outbound duty).
+     * **Four reads since WP-38, three of them of this task's own merge request.** The rebase gate
+     * enqueues two duties that each read this diff — the warning and WP-37's classification — and
+     * WP-38's dependency gate reads it a third time, *earlier in the walk*, when the Developer
+     * stage completes. They are counted sorted because the duties are separate jobs and their order
+     * on the queue is the queue's, not this test's (the property WP-15d states for every outbound
+     * duty). The growth is PROGRESS backlog **64**'s: four reads of one diff per task, none of them
+     * shared, and this is the count that entry is about.
      */
-    expect([...started.diffReads].sort()).toEqual([IID, IID, PEER_IID]);
+    expect([...started.diffReads].sort()).toEqual([IID, IID, IID, PEER_IID]);
   });
 
   it('reads no diff at all when the project has no other task with a merge request', async () => {
@@ -349,12 +355,16 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
      * The peer list is read first and *this* duty gives up on an empty one, so an ordinary project
      * pays nothing **for the warning**.
      *
-     * The one read that remains is WP-37's: the same gate entry classifies this task's own changed
-     * paths, and it must not be skipped for a project with no peer task — which is precisely why
-     * that is a duty of its own rather than a branch inside this one (`risk-routing.ts` carries the
-     * argument).
+     * The two reads that remain are WP-37's and WP-38's, and neither may be skipped for a project
+     * with no peer task: the gate entry classifies this task's own changed paths, and the Developer
+     * stage's completion reads them for the dependency policy. That is precisely why each is a duty
+     * of its own rather than a branch inside this one (`risk-routing.ts` carries the argument).
+     *
+     * In **walk order**, which this assertion keeps rather than sorting: the dependency gate fires
+     * on `task.stage.completed` for the implementation stage, several transitions before the rebase
+     * gate this duty is woken by.
      */
-    expect(started.diffReads).toEqual([IID]);
+    expect(started.diffReads).toEqual([IID, IID]);
   });
 
   it('keeps a credential out of the thread and out of the stored event', async () => {

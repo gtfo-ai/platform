@@ -20,6 +20,7 @@ export * as ask from './ask/index.js';
 export * as broadcast from './broadcast/index.js';
 export * as cost from './cost/index.js';
 export * as db from './db/index.js';
+export * as dependencies from './dependencies/index.js';
 export * as eventing from './events/index.js';
 export * as humanTime from './human-time/index.js';
 export * as integrations from './integrations/index.js';

@@ -396,11 +396,18 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
     expect(warnings[0]).not.toContain('ACME-99');
     expect(warnings[0]).not.toContain('src/footer.ts');
 
-    // The read is audited like every other provider call, and it is bounded: this task's diff plus
-    // one per peer, never one per task in the project.
+    /**
+     * The read is audited like every other provider call, and it is bounded: this task's diff plus
+     * one per peer, never one per task in the project.
+     *
+     * **Four since WP-38, three of them of this task's own merge request** (rule 83, and the count
+     * PROGRESS backlog 64 is about): the dependency gate reads the diff when the Developer stage
+     * completes, and the rebase gate's two duties — this warning and WP-37's classification — each
+     * read it again. The fourth is the peer's, which is the one this test is actually about.
+     */
     const diffReads = (await pipeline.auditRows()).filter(
       (row) => row.action === 'get_merge_request_diff',
     );
-    expect(diffReads).toHaveLength(3);
+    expect(diffReads).toHaveLength(4);
   }, 180_000);
 });

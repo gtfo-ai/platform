@@ -51,6 +51,13 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * (`task-conflict.ts` has the argument). `task-conflict.ts`'s own site is the **ending**:
  * `escalateTaskAfterConflict` parks a task whose write lost every race.
  *
+ * `dependency-gate.ts` joined them at WP-38 with **one** site and the **job's** ending: the `ask`
+ * branch moves the task to `waiting_answers` through the aggregate, inside a transaction the duty
+ * owns, so it retries through `retryOnTaskConflict` and escalates when the bound is spent — the
+ * same ending `jobs.ts` gives, spelled locally because that module's helper takes a
+ * `PipelineJobOptions` this duty has no `StageExecutor` for. The gate's **other** write is narrow
+ * (`saveDependencies`) and is not in this census by design: it is a column `save` does not name.
+ *
  * `commands.ts` joined them at WP-15i, and its ending is the **other** one: a human command owns
  * its transaction and retries through `retryOnTaskConflict` like a job, but when the bound is spent
  * the error reaches the caller as a typed `409` rather than escalating the task — a person can press
@@ -61,6 +68,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
+  ['packages/application/src/pipeline/dependency-gate.ts', 1],
   ['packages/application/src/pipeline/saga.ts', 13],
   ['packages/application/src/pipeline/stage-executor.ts', 5],
   ['packages/application/src/pipeline/transitions.ts', 5],
@@ -128,7 +136,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts twenty-eight, which is the number the change states', () => {
+  it('counts twenty-nine, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -141,8 +149,11 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // narrow `addSpend` (the ask executor writes the same column from another process, and the
     // version token cannot arbitrate an increment). The save that went was the one on a task a
     // human stopped mid-run: with the spend written separately it had nothing left to write.
+    // **Plus one at WP-38**: the dependency gate's `ask` ending, which parks the task on the
+    // existing question gate from a `pipeline.outbound` job and therefore owns its own transaction,
+    // its own retry and its own escalation.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(28);
+    expect(total).toBe(29);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

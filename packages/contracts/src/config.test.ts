@@ -58,7 +58,11 @@ const DOC_EXAMPLE = {
     autonomy: 'supervised',
     probation_tasks: 5,
     knowledge_apply: { auto_apply: false, discard_below: 0.2, proposal_above: 0.6 },
-    dependency_policy: 'ask',
+    dependency_policy: {
+      default: 'ask',
+      ecosystems: { npm: 'block' },
+      allowlist: ['npm:@scope/pkg'],
+    },
     drift_without_direction: 'disabled',
     protected_paths: ['tests/**', '.gitlab-ci.yml', '.agentic/**', '.claude/**', 'CLAUDE.md'],
     risk_classes: {
@@ -240,6 +244,65 @@ describe('.agentic/config.yml', () => {
     });
     expect(refused.success).toBe(false);
     expect(refused.error?.issues[0]?.path).toEqual(['policies', 'coverage_source']);
+  });
+
+  /**
+   * product/18:43's configuration column, both forms (WP-38, criterion 3).
+   *
+   * The document says *"`allow | ask | block` per ecosystem; allow-listed packages"* and until this
+   * work package the key was a **scalar enum** with no allow-list at all — so the configuration the
+   * product tells an operator to write could not be written, and a strict schema refused it. The
+   * scalar stays as the shorthand, which is what technical/12's example file has always carried.
+   */
+  it('takes product/18:43’s per-ecosystem policy and its allow-list, and the scalar shorthand', () => {
+    expect(
+      agenticConfigSchema.parse({ version: 1, policies: { dependency_policy: 'block' } }).policies
+        ?.dependency_policy,
+    ).toBe('block');
+    const perEcosystem = {
+      default: 'ask',
+      ecosystems: { npm: 'block', pypi: 'allow' },
+      allowlist: ['npm:@scope/pkg', 'pypi:requests'],
+    } as const;
+    expect(
+      agenticConfigSchema.parse({ version: 1, policies: { dependency_policy: perEcosystem } })
+        .policies?.dependency_policy,
+    ).toEqual(perEcosystem);
+  });
+
+  it('refuses an ecosystem nothing detects, an allow-list entry with no ecosystem, and a typo', () => {
+    // A policy for an ecosystem no detector reads would be a key with no reader — PROGRESS backlog
+    // 58's defect, and the one this whole row exists to close for `dependency_policy` itself.
+    const unknownEcosystem = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: { dependency_policy: { ecosystems: { maven: 'block' } } },
+    });
+    expect(unknownEcosystem.success).toBe(false);
+    expect(JSON.stringify(unknownEcosystem.error?.issues)).toContain('maven');
+
+    const badEntry = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: { dependency_policy: { allowlist: ['lodash'] } },
+    });
+    expect(badEntry.success).toBe(false);
+    expect(JSON.stringify(badEntry.error?.issues)).toContain('<ecosystem>:<package>');
+
+    const wrongEcosystem = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: { dependency_policy: { allowlist: ['maven:com.google.guava'] } },
+    });
+    expect(wrongEcosystem.success).toBe(false);
+    expect(JSON.stringify(wrongEcosystem.error?.issues)).toContain('npm, pypi, go, cargo');
+
+    // A typo in the scalar says **which three values** rather than zod's `invalid_union` — the
+    // lesson `riskRequirementSchema` was rewritten for at WP-37.
+    const typo = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: { dependency_policy: 'aks' },
+    });
+    expect(typo.success).toBe(false);
+    expect(typo.error?.issues[0]?.message).toContain('"allow", "ask" or "block"');
+    expect(typo.error?.issues[0]?.path).toEqual(['policies', 'dependency_policy']);
   });
 
   it('still constrains the shape of those map keys', () => {

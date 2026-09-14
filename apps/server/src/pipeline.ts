@@ -87,6 +87,7 @@ import type {
 import {
   ask as askAdapters,
   cost as costAdapters,
+  dependencies as dependencyAdapters,
   humanTime as humanTimeAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
@@ -277,6 +278,16 @@ export interface ComposePipelineOptions {
   readonly timezone: string;
   /** `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31). */
   readonly baseUrl: string;
+  /**
+   * `APP_DEPENDENCY_REGISTRY_HOSTS` — the package registries the dependency gate may ask for a
+   * licence (WP-38, Q84, PROGRESS backlog 48).
+   *
+   * Empty is the shipped default and is a decision rather than an omission: the platform calls a
+   * host an operator declared or it calls nothing, and the Checks panel prints *"licence not
+   * checked"* with the setting that would change it. The composition below logs which of the two it
+   * did, because "switched off" and "never composed" must not look the same in a log either.
+   */
+  readonly dependencyRegistryHosts: readonly string[];
   readonly logger: Logger;
 }
 
@@ -603,6 +614,20 @@ export const composePipeline = async (
   });
   const runEnvironment = agentRunEnvironment(options.agent);
 
+  const dependencyMetadata =
+    options.dependencyRegistryHosts.length === 0
+      ? null
+      : dependencyAdapters.createDependencyMetadataClient({
+          allowedHosts: options.dependencyRegistryHosts,
+          logger: options.logger,
+        });
+  options.logger.info(
+    { hosts: options.dependencyRegistryHosts },
+    dependencyMetadata === null
+      ? 'no package-registry host is declared (APP_DEPENDENCY_REGISTRY_HOSTS), so the dependency gate gates and reports every licence as not checked'
+      : 'the dependency gate will ask these package registries for a licence and a last release',
+  );
+
   const runtime = createPipelineRuntime({
     store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
     settings,
@@ -619,6 +644,14 @@ export const composePipeline = async (
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
     baseUrl: options.baseUrl,
+    /**
+     * The registry client, composed **only** when an operator declared a host (WP-38, Q84).
+     *
+     * Absent is the shipped state and the gate works identically without it: every package is
+     * reported `not_checked`, which the panel prints. This is the one place that decision is made,
+     * so an instance cannot reach a registry by accident.
+     */
+    ...(dependencyMetadata === null ? {} : { dependencyMetadata }),
     /**
      * Ask-the-task (WP-31) — a run with a task and no stage, on the same runner, the same budget
      * guard and the same stop-reason register the stage executor is given.

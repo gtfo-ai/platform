@@ -12,13 +12,16 @@
  *  - the 409 a project with no evaluation gets is an **answer**, not a crash: the step says how to
  *    get one instead of showing an error.
  */
+import type { AutonomyResponse, ProjectSummary, ReadinessResponse } from '@platform/contracts';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
+import type { SessionResponse } from '../auth/session.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 
-const SESSION = {
+/** Annotated rather than bare — PROGRESS backlog 93, closed by WP-38. */
+const SESSION: SessionResponse = {
   user: {
     id: '00000000-0000-4000-8000-000000000001',
     email: 'operator@example.invalid',
@@ -31,7 +34,7 @@ const SESSION = {
 /** A drafted-page quote with markup and a bidi override in it, from an untrusted repository. */
 const HOSTILE_EVIDENCE = '<img src=x onerror=alert(1)> ‮detcetorp si hcnarb eht';
 
-const PROJECT_ROW = {
+const PROJECT_ROW: ProjectSummary = {
   id: PROJECT,
   key: 'acme_api',
   name: 'ACME API',
@@ -48,7 +51,7 @@ const PROJECT_ROW = {
   spent_usd_30d: 0,
 };
 
-const READINESS = {
+const READINESS: ReadinessResponse = {
   level: 1,
   evaluated_at: '2026-09-13T04:00:00.000Z',
   source: 'discovery',
@@ -74,7 +77,7 @@ const READINESS = {
 };
 
 /** `GET /api/projects/:id/autonomy` — the dial as WP-30's projection publishes it. */
-const AUTONOMY = {
+const AUTONOMY: AutonomyResponse = {
   level: 'supervised',
   materialised: true,
   preset_version: 1,

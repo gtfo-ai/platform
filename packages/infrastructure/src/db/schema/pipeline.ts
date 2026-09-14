@@ -17,6 +17,8 @@ import type {
   MergeRequestRef,
   MergeRequestSnapshot,
   TaskCoverage,
+  TaskDependencies,
+  TaskReviewers,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
@@ -115,6 +117,24 @@ export const tasks = pgTable('tasks', {
    * `taskCoverageSchema`, which every write is parsed against.
    */
   coverage: jsonb('coverage').$type<TaskCoverage>(),
+  /**
+   * What the dependency gate found in this task's diff and what it did about it (WP-38, migration
+   * 0028).
+   *
+   * `null` until an implementation stage has completed — the gate has no diff to read before that —
+   * which is a different fact from a record whose `added` is empty, and the Checks panel prints a
+   * different sentence for each. Every write is parsed against `taskDependenciesSchema`.
+   */
+  dependencies: jsonb('dependencies').$type<TaskDependencies>(),
+  /**
+   * Who this merge request needs a review from, as `risk_route` computed it (WP-38, migration
+   * 0028) — product/10:38's *"risk classes and required reviewers"*.
+   *
+   * It is the platform's record of what it **asked for**, including handles no account could be
+   * found for: the `set_reviewers` audit row is written only when at least one resolved, so it
+   * cannot answer that question.
+   */
+  requiredReviewers: jsonb('required_reviewers').$type<TaskReviewers>(),
   blockedBy: text('blocked_by').array().notNull().default(emptyArray),
   /**
    * The row's optimistic-concurrency token (WP-15e, migration 0019).

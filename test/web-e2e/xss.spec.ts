@@ -179,9 +179,11 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   // line is about, so the locator now says so.
   await expect(page.getByText('Merge request', { exact: true })).toBeVisible();
   await expect(page.getByText('ReviewVerdict')).toBeVisible();
-  // Exactly three: the `data:` merge request and the `vbscript:` and `file:` artifacts. Counted
-  // rather than bounded below, so a link that quietly disappears fails here too (rule 42).
-  expect(await page.locator('[data-link-refused]').count()).toBe(3);
+  // Exactly four: the `data:` merge request, the `vbscript:` and `file:` artifacts, and — since
+  // WP-38 — the dependency whose registry page the fixture gives a `data:` URL. Counted rather
+  // than bounded below, so a link that quietly disappears fails here too (rule 42).
+  await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
+  expect(await page.locator('[data-link-refused]').count()).toBe(4);
 
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
   await expect(page.getByRole('heading', { name: 'DEMO-2' })).toBeVisible();

@@ -230,6 +230,8 @@ const startHarness = (options: {
   readonly accounts?: Readonly<Record<string, string>>;
   /** Reviewers already on the merge request when the platform gets there. */
   readonly existing?: readonly string[];
+  /** The provider refuses the assignment — a revoked token, a 403, an outage. */
+  readonly assignmentFails?: boolean;
   readonly harness?: HarnessOptions;
 }): RoutingHarness => {
   const lookups: string[] = [];
@@ -271,6 +273,11 @@ const startHarness = (options: {
         return options.accounts?.[handle] ?? null;
       },
       updateMergeRequest: async (_ref, update) => {
+        if (options.assignmentFails === true) {
+          // Not an `IntegrationError`, so the executor does not retry: one attempt, one `failed`
+          // audit row, one throw — which is the shape a 403 from a revoked token has.
+          throw new Error('the provider refused the assignment');
+        }
         assigned.push([...(update.reviewers ?? [])]);
         current = [...(update.reviewers ?? [])];
         return mergeRequest(current);
@@ -286,6 +293,14 @@ const taskId = async (harness: PipelineHarness): Promise<Id> => {
     payload: { task_id: Id };
   };
   return created.payload.task_id;
+};
+
+const requiredReviewers = async (harness: PipelineHarness) => {
+  const id = await taskId(harness);
+  return await harness.memory.transaction(async (scope) => {
+    const stored = await harness.store.tasks.load(scope.tx, id);
+    return stored?.requiredReviewers ?? null;
+  });
 };
 
 const riskClasses = async (harness: PipelineHarness): Promise<readonly string[]> => {
@@ -523,6 +538,41 @@ describe('reviewer routing (product/19:138, WP-37)', () => {
     expect(entry?.status).toBe('would_have');
     expect(entry?.payload).toMatchObject({ iid: IID, reviewers: ['4242'] });
     expect(started.assigned, 'a shadow task assigns nobody on the provider').toEqual([]);
+    // …and the row says so too: `assigned` is what a provider was told, and in shadow mode nothing
+    // was (review round 2 — the same field, the same rule as the failed call above).
+    const record = await requiredReviewers(started.harness);
+    expect(record?.handles).toEqual(['@dana']);
+    expect(record?.assigned).toEqual([]);
+  });
+
+  it('records no assignment when the provider refuses the call the row is about', async () => {
+    /**
+     * Review round 2's third minor, and standing rule 87's family: `assigned` is *"the accounts the
+     * platform actually asked for a review"*, and it used to be written **before** the call. A
+     * revoked token, a 403 or an outage therefore left the Checks panel stating a request that was
+     * never made — the panel being the one screen a maintainer uses to decide whether to merge.
+     *
+     * The routing itself is still recorded, because it is what the platform *chose* and it is true:
+     * `handles` names @dana, `assigned` names nobody, and the two together are the honest sentence.
+     */
+    const started = startHarness({
+      codeowners: codeowners(['@dana']),
+      accounts: { '@dana': '4242' },
+      assignmentFails: true,
+    });
+
+    await expect(started.harness.publish([ticketMatched()])).rejects.toThrow(
+      /refused the assignment/,
+    );
+
+    const record = await requiredReviewers(started.harness);
+    expect(record?.handles).toEqual(['@dana']);
+    expect(record?.assigned, 'nobody was asked: the call threw').toEqual([]);
+    // The call was really attempted — otherwise an empty `assigned` would prove nothing.
+    expect(actions(started.harness, 'set_reviewers').map((entry) => entry.status)).toEqual([
+      'failed',
+    ]);
+    expect(started.assigned, 'and the provider never got as far as a reviewer list').toEqual([]);
   });
 
   it('is keyed on the revision, so a second gate entry assigns nobody twice', async () => {
