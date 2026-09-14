@@ -764,6 +764,8 @@ export const runReviewOnlyCheck = async (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       version: INITIAL_TASK_VERSION,
       ticketSnapshot: null,
       ticketSnapshotAt: null,

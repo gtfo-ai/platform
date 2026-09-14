@@ -7,9 +7,10 @@
  * **What the Checks panel shows, and what it cannot.** product/10 lists thirteen merge-readiness
  * checks (acceptance criteria, CI, rebase, review threads, business verdict, tamper check, coverage
  * delta, dependency status, risk classes, budget vs estimate, questions pending…). `taskDetail`
- * publishes four of them — questions, approvals, risk classes, cost against nothing — so the panel
- * shows those four and says plainly that the rest arrive with WP-15 and WP-38 rather than drawing
- * empty ticks that read as "passed".
+ * publishes five of them — questions, approvals, risk classes, and since WP-28 **cost against the
+ * estimate**, which is product/10's *"budget vs estimate"* row and was the one this note used to
+ * describe as *"cost against nothing"*. The panel shows those five and says plainly that the rest
+ * arrive with WP-15 and WP-38 rather than drawing empty ticks that read as "passed".
  *
  * **Which commands are here, and which are named absences.** technical/09's screens table gives
  * this screen `answer, approve, retry, take over, feedback`; product/10 adds return-to-stage and
@@ -27,7 +28,7 @@
  * - **ask the task** (WP-31). `askTaskRequestSchema` exists; the answers are a thread, and
  *   `taskDetailResponseSchema` has nowhere to carry one, so a question would post into a void.
  */
-import type { ApprovalRecord, QuestionRecord } from '@platform/contracts';
+import type { ApprovalRecord, QuestionRecord, TaskRecord } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import { useProjects, useTask, useTaskCommands } from '../app/queries.js';
@@ -48,6 +49,31 @@ import {
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
+
+/**
+ * What the task's estimate rests on, as one sentence — the same four states the workpad prints.
+ *
+ * Platform text only: the numbers are the platform's own and no provider string reaches it, which
+ * is why it is a plain string rather than an `UntrustedText`. The point of the line is that "the
+ * estimator has not run" and "it ran and found nothing to estimate from" are different facts about
+ * a project, and a blank field says neither (Q71 (b)).
+ */
+export const estimateBasisText = (task: TaskRecord): string => {
+  const samples = task.estimate_samples ?? 0;
+  const tasks = samples === 1 ? '1 finished task' : `${samples} finished tasks`;
+  switch (task.estimate_basis) {
+    case 'project_history':
+      return `From ${tasks} in this project.`;
+    case 'org_history':
+      return `From ${tasks} elsewhere in this organisation — this project has none of its own yet.`;
+    case 'unknown':
+      return 'No estimate: this project has no finished task to estimate from. The per-task budget cap is what bounds the spend meanwhile.';
+    default:
+      return task.estimate_usd === null
+        ? 'Not estimated yet: a task is estimated when refinement completes.'
+        : 'Estimated before this platform recorded where the figure came from.';
+  }
+};
 
 const QuestionCard = ({
   question,
@@ -535,10 +561,28 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             value={formatUsd(task.cost_actual_usd)}
             definition="Provider-reported cost of every run on this task; estimated in local provider mode (BD-011)."
           />
+          {/*
+            **The estimate, and the sentence this replaced** (WP-28, standing rule 83).
+            This metric used to read `task.cost_estimated_usd` under the definition *"Predicted cost
+            from the price table before the work ran"*. Both halves were wrong: that field is
+            `tasks.cost_estimated`, which is the part of what a task has **already** spent that was
+            priced rather than reported (BD-011) — and no writer in this build ever moves it, so the
+            screen printed `$0.00` and called it a prediction. The prediction is `estimate_usd`, made
+            at refinement from the project's finished tasks, and its absence is *named* rather than
+            rendered as a zero (Q71 (b)).
+          */}
           <Metric
             label="Estimate"
-            value={formatUsd(task.cost_estimated_usd)}
-            definition="Predicted cost from the price table before the work ran (WP-28)."
+            value={task.estimate_usd === null ? 'none' : formatUsd(task.estimate_usd)}
+            definition="Predicted at refinement from this project's finished tasks, before the work ran; above the project's threshold it waits for a budget approval (product/09)."
+          />
+          <p className="-mt-2 text-[11px] text-fg-muted">{estimateBasisText(task)}</p>
+          <Metric
+            label="Estimate accuracy"
+            value={
+              task.estimate_accuracy === null ? 'not yet' : `${task.estimate_accuracy.toFixed(2)}×`
+            }
+            definition="What the task has spent, divided by the estimate (product/19 §10): 1.00× is on the nose, 2.00× is twice what was predicted. Computed from those two numbers and nothing else."
           />
           <Metric
             label="Questions pending"

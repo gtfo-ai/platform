@@ -59,7 +59,7 @@ import type {
   TranscriptEvent,
 } from '@platform/contracts';
 import { transcriptEventSchema } from '@platform/contracts';
-import { resumeCommands } from '@platform/domain';
+import { estimateAccuracy, resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
@@ -447,6 +447,17 @@ const toTaskRecord = (row: typeof tasks.$inferSelect): TaskRecord => ({
   risk_classes: row.riskClasses,
   cost_actual_usd: usd(row.costActual),
   cost_estimated_usd: usd(row.costEstimated),
+  // The refinement estimate, its provenance, and product/19 §10's accuracy metric — which is
+  // **computed from `estimate_usd` and `cost_actual` and from nothing else** (`estimateAccuracy`),
+  // so there is no third number to keep in step. `estimate_basis` is null for a task the estimator
+  // has not run on; `'unknown'` is the estimator's own refusal and is a different answer (WP-28).
+  estimate_usd: row.estimateUsd === null ? null : usd(row.estimateUsd),
+  estimate_basis: row.estimateBasis,
+  estimate_samples: row.estimateSamples,
+  estimate_accuracy: estimateAccuracy(
+    row.estimateUsd === null ? null : usd(row.estimateUsd),
+    usd(row.costActual),
+  ),
   requested_by_user_id: row.requestedByUserId as Id | null,
   requested_by_identity: row.requestedByIdentity,
   created_at: isoRequired(row.createdAt),

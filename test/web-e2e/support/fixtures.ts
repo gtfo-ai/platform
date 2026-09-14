@@ -174,6 +174,12 @@ const baseTask = {
   risk_classes: ['payments'],
   cost_actual_usd: 4.25,
   cost_estimated_usd: 6,
+  // WP-28: the refinement estimate and its provenance. Deliberately **not** equal to
+  // `cost_actual_usd`, so the accuracy the page renders is a ratio a constant could not produce.
+  estimate_usd: 12,
+  estimate_basis: 'project_history',
+  estimate_samples: 7,
+  estimate_accuracy: 4.25 / 12,
   requested_by_user_id: IDS.user,
   requested_by_identity: null,
   created_at: now,

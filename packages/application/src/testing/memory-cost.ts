@@ -16,7 +16,7 @@
  * | 5 | Everything is returned by structural clone. | **stricter** | A caller mutating what it read cannot change the store, which PostgreSQL also does not allow. |
  * | 6 | `StoredBudget.sequence` is **re-derived** from what a fold must have emitted (one event per newly notified threshold, plus one for the first crossing of the limit); the SQL adapter reads `max(stream_seq) + 1` off the `events` table. | **different** | The fake cannot see the log, and a sequence that did not advance makes the *second* fold of one budget fail its append with a stream conflict — so the alternative is a fake that cannot charge a budget twice. Both answers are the same number for every sequence of folds the ledger performs, which is what `memory-cost.test.ts` asserts against `MemoryEventing`'s own log. |
  */
-import type { BudgetWindow, Id, IsoDateTime, Size } from '@platform/contracts';
+import type { BudgetWindow, EstimateBasis, Id, IsoDateTime, Size } from '@platform/contracts';
 import type { CostLedgerEntry, PriceRates, RollupDelta, TaskCostSample } from '@platform/domain';
 import { roundUsd } from '@platform/domain';
 import type {
@@ -68,7 +68,14 @@ export interface MemoryCostStore extends CostStore {
     spentUsd: number;
     notifiedPct: readonly number[];
   }[];
-  readonly estimates: readonly { taskId: Id; size: Size; estimateUsd: number | null }[];
+  /** Every `saveEstimate` call, in write order — all four columns, so a test can read the basis. */
+  readonly estimates: readonly {
+    taskId: Id;
+    size: Size;
+    estimateUsd: number | null;
+    basis: EstimateBasis;
+    samples: number;
+  }[];
 }
 
 const clone = <T>(value: T): T => structuredClone(value) as T;
@@ -81,6 +88,21 @@ export interface MemoryCostStoreOptions {
    * test is how an acceptance criterion passes on nothing).
    */
   readonly runs?: (tx: Transaction, runId: Id) => Promise<RunCostRow | null>;
+  /**
+   * The three estimate methods, backed by somebody else's tasks — the same seam as {@link runs},
+   * for the same reason (standing rule 82).
+   *
+   * In PostgreSQL `tasks.size`/`estimate_usd`/`estimate_basis`/`estimate_samples` and the
+   * `artifacts` a run produced are the **same rows** the pipeline store reads; in this ring they are
+   * two objects, so a harness that composes both has to join them. `createPipelineHarness` passes a
+   * reader over its own artifacts and a writer onto its own task row, which is what lets a saga test
+   * drive the real `costEstimateHandler` over the real `RefinedSpec` instead of seeding the number
+   * its budget gate is about to read.
+   *
+   * `estimateHistory` is deliberately **not** here: it is other, already-finished tasks, which a
+   * harness that runs one task genuinely does not have, so it stays `seedHistory`'s.
+   */
+  readonly estimates?: Pick<CostStore, 'refinedSize' | 'taskEstimate' | 'saveEstimate'>;
 }
 
 export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): MemoryCostStore => {
@@ -98,7 +120,13 @@ export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): Mem
     string,
     { budgetId: Id; windowStart: IsoDateTime; spentUsd: number; notifiedPct: readonly number[] }
   >();
-  const estimates: { taskId: Id; size: Size; estimateUsd: number | null }[] = [];
+  const estimates: {
+    taskId: Id;
+    size: Size;
+    estimateUsd: number | null;
+    basis: EstimateBasis;
+    samples: number;
+  }[] = [];
   const sequences = new Map<Id, number>();
 
   const windowKey = (budgetId: Id, windowStart: IsoDateTime) => `${budgetId}@${windowStart}`;
@@ -255,23 +283,44 @@ export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): Mem
       org: clone([...history.values()].flat()).slice(0, limit),
     }),
 
-    refinedSize: async (_tx, taskId) => refinedSizes.get(taskId) ?? null,
+    refinedSize: async (tx, taskId) =>
+      options.estimates === undefined
+        ? (refinedSizes.get(taskId) ?? null)
+        : options.estimates.refinedSize(tx, taskId),
 
-    saveEstimate: async (_tx, taskId, estimate) => {
-      if (!tasks.has(taskId)) {
+    saveEstimate: async (tx, taskId, estimate) => {
+      if (options.estimates !== undefined) {
+        await options.estimates.saveEstimate(tx, taskId, estimate);
+      } else if (!tasks.has(taskId)) {
         throw new CostStoreError(`cost store: no task ${taskId} to estimate`);
       }
-      estimates.push({ taskId, size: estimate.size, estimateUsd: estimate.estimateUsd });
+      // Recorded either way: `estimates` is what a test reads back, and a delegating store that
+      // stopped recording would make every existing assertion about it silently vacuous.
+      estimates.push({
+        taskId,
+        size: estimate.size,
+        estimateUsd: estimate.estimateUsd,
+        basis: estimate.basis,
+        samples: estimate.samples,
+      });
     },
 
-    taskEstimate: async (_tx, taskId) => {
+    taskEstimate: async (tx, taskId) => {
+      if (options.estimates !== undefined) {
+        return options.estimates.taskEstimate(tx, taskId);
+      }
       if (!tasks.has(taskId)) {
         return null;
       }
       const written = [...estimates].reverse().find((row) => row.taskId === taskId);
       return written === undefined
-        ? { size: null, estimateUsd: null }
-        : { size: written.size, estimateUsd: written.estimateUsd };
+        ? { size: null, estimateUsd: null, basis: null, samples: null }
+        : {
+            size: written.size,
+            estimateUsd: written.estimateUsd,
+            basis: written.basis,
+            samples: written.samples,
+          };
     },
 
     budgets: {

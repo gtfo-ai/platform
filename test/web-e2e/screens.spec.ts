@@ -45,7 +45,13 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.locator('ol').getByText('refinement')).toBeVisible();
   await expect(page.getByText('spec accepted')).toBeVisible();
   await expect(page.getByRole('link', { name: 'implementation · developer' })).toBeVisible();
-  await expect(page.getByText('Cost so far')).toBeVisible();
+  await expect(page.getByText('Cost so far', { exact: true })).toBeVisible();
+  // WP-28: the refinement estimate, what it rests on and product/19 §10's accuracy — three numbers
+  // the Checks panel showed as `$0.00` under the label *"Estimate"* before this row, because it read
+  // `cost_estimated_usd` (a column nothing writes) instead of `estimate_usd`.
+  await expect(page.getByText('$12.00')).toBeVisible();
+  await expect(page.getByText('From 7 finished tasks in this project.')).toBeVisible();
+  await expect(page.getByText('0.35×')).toBeVisible();
   await expect(page.getByText('payments')).toBeVisible();
 });
 

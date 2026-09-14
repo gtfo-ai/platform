@@ -36,7 +36,12 @@ describe('the memory cost store', () => {
   it('divergence 4: refuses to estimate a task it has never seen', async () => {
     const store = createMemoryCostStore();
     await expect(
-      store.saveEstimate(TX, TASK, { size: 'M', estimateUsd: 1 }),
+      store.saveEstimate(TX, TASK, {
+        size: 'M',
+        estimateUsd: 1,
+        basis: 'project_history',
+        samples: 4,
+      }),
     ).rejects.toBeInstanceOf(CostStoreError);
   });
 

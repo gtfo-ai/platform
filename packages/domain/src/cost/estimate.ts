@@ -23,7 +23,7 @@
  * BD-013's model defaults were accepted "provisionally; revisit after 20 dogfood tasks" (Q23) and
  * the same applies here. `estimateAccuracy` exists so the revisit has a number to work from.
  */
-import type { Size } from '@platform/contracts';
+import type { EstimateBasis, Size } from '@platform/contracts';
 import { roundUsd } from '../aggregates/budget.js';
 
 /**
@@ -47,8 +47,12 @@ export interface TaskCostSample {
  * `project_history` is the product's own answer; `org_history` is the fallback for a project's
  * first task, which is exactly when an estimate is least informed and most wanted; `unknown` is the
  * refusal.
+ *
+ * Re-exported from `@platform/contracts` rather than declared twice: since WP-28 the basis is
+ * **stored** (`tasks.estimate_basis`, migration 0022) and published on the task DTO, so the wire
+ * spelling and the domain's are one set or they are two things to keep in step (standing rule 9).
  */
-export type EstimateBasis = 'project_history' | 'org_history' | 'unknown';
+export type { EstimateBasis };
 
 export interface TaskCostEstimate {
   /** USD, or `null` when there is nothing to estimate from. */

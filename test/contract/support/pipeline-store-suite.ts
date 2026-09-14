@@ -83,6 +83,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
       reviewSubject: null,
@@ -857,6 +859,96 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           attempt: 1,
         });
         expect((await store.approvals.load(tx, approvalId))?.approval.status).toBe('approved');
+      });
+
+      /**
+       * `latestOfKind` — the **budget** gate's lookup (WP-28).
+       *
+       * It answers the opposite question from `forStageAttempt` on purpose, and the difference is
+       * the difference between the two gates: a plan approval is about *a plan*, so a second plan
+       * needs a second approval; a budget approval is about *the estimate*, which is written once,
+       * so a task that has been asked is not asked again however many attempts its stage has had.
+       * Both directions here (standing rule 42), plus the kind filter — a lookup that ignored the
+       * kind would answer a budget question with a plan approval.
+       */
+      it('finds the newest approval of a kind whatever attempt asked for it', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const approvalOf = (id: Id, kind: 'plan' | 'budget', requestedAt: string) => ({
+          id,
+          taskId: stored.task.id,
+          projectId,
+          kind,
+          status: 'pending' as const,
+          requestedAt: requestedAt as IsoDateTime,
+          deadlineAt: null,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          sequence: 1,
+        });
+
+        expect(
+          await store.approvals.latestOfKind(tx, { taskId: stored.task.id, kind: 'budget' }),
+        ).toBeNull();
+
+        const budgetId = nextId();
+        await store.approvals.insert(tx, {
+          approval: approvalOf(budgetId, 'budget', '2026-06-01T09:00:00.000Z'),
+          stage: 'refinement',
+          attempt: 1,
+        });
+        await store.approvals.insert(tx, {
+          approval: approvalOf(nextId(), 'plan', '2026-06-01T11:00:00.000Z'),
+          stage: 'architecture',
+          attempt: 3,
+        });
+
+        // Recorded at attempt 1 and found while the task is on attempt 3: the attempt is stored
+        // truthfully and is not part of this key.
+        const found = await store.approvals.latestOfKind(tx, {
+          taskId: stored.task.id,
+          kind: 'budget',
+        });
+        expect(found?.approval.id).toBe(budgetId);
+        expect(found?.attempt).toBe(1);
+        expect(found?.stage).toBe('refinement');
+
+        // A decided approval still counts as *asked*: the question a second ask would put is the
+        // one already answered.
+        await store.approvals.save(tx, {
+          approval: {
+            ...approvalOf(budgetId, 'budget', '2026-06-01T09:00:00.000Z'),
+            status: 'rejected',
+            decidedByUserId: userId,
+            decidedAt: '2026-06-01T10:00:00.000Z' as IsoDateTime,
+          },
+          stage: 'refinement',
+          attempt: 1,
+        });
+        expect(
+          (await store.approvals.latestOfKind(tx, { taskId: stored.task.id, kind: 'budget' }))
+            ?.approval.status,
+        ).toBe('rejected');
+
+        // Newest wins when there are two of the same kind…
+        const newer = nextId();
+        await store.approvals.insert(tx, {
+          approval: approvalOf(newer, 'budget', '2026-06-02T09:00:00.000Z'),
+          stage: 'refinement',
+          attempt: 2,
+        });
+        expect(
+          (await store.approvals.latestOfKind(tx, { taskId: stored.task.id, kind: 'budget' }))
+            ?.approval.id,
+        ).toBe(newer);
+
+        // …and another task's approvals are not this task's.
+        const other = task();
+        await store.tasks.insert(tx, other);
+        expect(
+          await store.approvals.latestOfKind(tx, { taskId: other.task.id, kind: 'budget' }),
+        ).toBeNull();
       });
     });
   });

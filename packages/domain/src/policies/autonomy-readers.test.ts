@@ -119,23 +119,25 @@ describe('the dial’s reader table (standing rule 18)', () => {
     expect(Object.keys(AUTONOMY_POLICY_READERS)).toHaveLength(15);
   });
 
-  it('splits into the five policies something reads and the ten it does not', () => {
+  it('splits into the six policies something reads and the nine it does not', () => {
     const byKind = (kind: 'read' | 'unread'): string[] =>
       Object.entries(AUTONOMY_POLICY_READERS)
         .filter(([, entry]) => entry.kind === kind)
         .map(([policy]) => policy)
         .sort();
-    // The plan-approval gate's five. `suggestedReadinessMin` is **not** among them: the document it
-    // travels in is published, and the *suggestion* the screen shows is `suggestedAutonomyCap` over
-    // `projects.readiness_level` — a separate function that never reads this field.
+    // The plan-approval gate's five, and since WP-28 the budget gate's one.
+    // `suggestedReadinessMin` is **not** among them: the document it travels in is published, and
+    // the *suggestion* the screen shows is `suggestedAutonomyCap` over `projects.readiness_level` —
+    // a separate function that never reads this field.
     expect(byKind('read')).toEqual([
+      'budgetApprovalThresholdUsd',
       'planApproval',
       'planApprovalForRiskClasses',
       'planApprovalSizeThreshold',
       'probation',
       'probationTasks',
     ]);
-    expect(byKind('unread')).toHaveLength(10);
+    expect(byKind('unread')).toHaveLength(9);
   });
 
   it('never leaves an absence unexplained', () => {

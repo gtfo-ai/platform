@@ -35,6 +35,7 @@ import type {
 } from '@platform/application';
 import { TaskConcurrentModificationError } from '@platform/application';
 import type {
+  EstimateBasis,
   Id,
   IsoDateTime,
   JsonValue,
@@ -85,6 +86,8 @@ interface TaskRow extends Record<string, unknown> {
   iteration_counters: IterationCounters;
   cost_actual: string;
   estimate_usd: string | null;
+  estimate_basis: EstimateBasis | null;
+  estimate_samples: number | string | null;
   ticket_snapshot: TicketSnapshot | null;
   ticket_snapshot_at: Date | null;
   review_subject: MergeRequestSnapshot | null;
@@ -96,7 +99,8 @@ interface TaskRow extends Record<string, unknown> {
 const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.template,
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
-    t.estimate_usd, t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.version,
+    t.estimate_usd, t.estimate_basis, t.estimate_samples,
+    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
@@ -132,6 +136,8 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   workpad: row.workpad_ref,
   costActualUsd: usd(row.cost_actual),
   estimateUsd: row.estimate_usd === null ? null : usd(row.estimate_usd),
+  estimateBasis: row.estimate_basis,
+  estimateSamples: row.estimate_samples === null ? null : Number(row.estimate_samples),
   ticketSnapshot: row.ticket_snapshot,
   ticketSnapshotAt: iso(row.ticket_snapshot_at),
   reviewSubject: row.review_subject,
@@ -269,10 +275,11 @@ export const createPostgresPipelineStore = (
         `insert into tasks (id, project_id, ticket_provider, ticket_key, ticket_url, template, mode,
                             state, current_stage, priority, template_snapshot, branch, mr_ref,
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
-                            cost_actual, estimate_usd, ticket_snapshot, ticket_snapshot_at,
-                            review_subject, version)
+                            cost_actual, estimate_usd, estimate_basis, estimate_samples,
+                            ticket_snapshot, ticket_snapshot_at, review_subject, version)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
-                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20::jsonb, $21, $22::jsonb, $23)`,
+                 $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
+                 $25)`,
         [
           task.id,
           task.projectId,
@@ -293,6 +300,12 @@ export const createPostgresPipelineStore = (
           JSON.stringify(task.iterationCounters),
           stored.costActualUsd,
           stored.estimateUsd,
+          // The estimate's three companion columns round-trip through the insert too, so a
+          // `StoredTask` that carries a basis is the one that loads back (the contract suite asserts
+          // it). Nothing the pipeline creates has an estimate at insert time — `saveEstimate` is the
+          // only writer that ever fills them — so in production all three are null here.
+          stored.estimateBasis,
+          stored.estimateSamples,
           // Intake writes the ticket's text here rather than through a later update, so the row
           // exists with it and there is no window for a concurrent writer to lose (WP-15f).
           stored.ticketSnapshot === null ? null : JSON.stringify(stored.ticketSnapshot),
@@ -751,6 +764,19 @@ export const createPostgresPipelineStore = (
           where a.task_id = $1 and a.kind = $2 and a.stage = $3 and a.attempt = $4
           order by a.requested_at desc limit 1`,
         [query.taskId, query.kind, query.stage, query.attempt],
+      );
+      const row = rows[0];
+      return row === undefined ? null : toStoredApproval(row);
+    },
+    latestOfKind: async (tx, query) => {
+      // `approvals_task_id_idx` serves the predicate; the `id desc` tie-break is there because two
+      // approvals written in one transaction share `requested_at` to the microsecond, and an answer
+      // that depends on the planner is an answer the in-memory fake cannot be held to (rule 1).
+      const { rows } = await sqlOf(tx).query<ApprovalRow>(
+        `${APPROVAL_SELECT}
+          where a.task_id = $1 and a.kind = $2
+          order by a.requested_at desc, a.id desc limit 1`,
+        [query.taskId, query.kind],
       );
       const row = rows[0];
       return row === undefined ? null : toStoredApproval(row);

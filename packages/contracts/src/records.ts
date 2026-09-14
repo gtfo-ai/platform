@@ -204,6 +204,16 @@ export const budgetRecordSchema = z.strictObject({
   window_start: isoDateTimeSchema.nullish(),
 });
 
+/**
+ * Where a task's cost estimate came from (product/09, Q65, Q71).
+ *
+ * `unknown` is the estimator's **refusal** and not an error: a project with no finished task has no
+ * history, and a number invented for it would route real tasks past a maintainer or park cheap ones
+ * in front of one (standing rule 16). It is distinct from *no basis at all*, which is how a task
+ * that has not been through refinement yet is spelled — `null`.
+ */
+export const estimateBasisSchema = z.enum(['project_history', 'org_history', 'unknown']);
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -220,6 +230,29 @@ export const taskRecordSchema = z.strictObject({
   risk_classes: z.array(slugSchema),
   cost_actual_usd: usdSchema,
   cost_estimated_usd: usdSchema,
+  /**
+   * `tasks.estimate_usd` — the cost predicted **at refinement**, before the spend (WP-19, WP-28).
+   *
+   * Not the same number as {@link taskRecordSchema}'s `cost_estimated_usd`, which is the part of
+   * what the task has *already* spent that was priced from the price list rather than reported by
+   * the provider (BD-011). Two fields, two questions: what the platform expected to spend, and how
+   * much of what it did spend is measured.
+   */
+  estimate_usd: usdSchema.nullable(),
+  /** `tasks.estimate_basis`; `null` means the estimator has not run on this task at all. */
+  estimate_basis: estimateBasisSchema.nullable(),
+  /** How many finished tasks the estimate rests on; `null` exactly when `estimate_basis` is. */
+  estimate_samples: z.int().nonnegative().nullable(),
+  /**
+   * product/19 §10's *"Cost estimate accuracy"*, per task: `cost_actual ÷ estimate_usd`.
+   *
+   * Computed from those two fields and from **nothing else** (`estimateAccuracy`), so 1 is perfect
+   * and 2 is twice the estimate. `null` when either side is missing or the estimate was zero — a
+   * task with no estimate has no accuracy, and `Infinity` is not a data point. **It understates on
+   * a task a human intervened in**: a cancelled run's spend reaches no `cost_entries` row and so no
+   * `cost_actual` (PROGRESS backlog 50), which is stated here rather than corrected by this field.
+   */
+  estimate_accuracy: z.number().nonnegative().nullable(),
   requested_by_user_id: idSchema.nullish(),
   requested_by_identity: externalIdentitySchema.nullish(),
   created_at: isoDateTimeSchema,
@@ -296,6 +329,7 @@ export type TaskTotals = z.infer<typeof taskTotalsSchema>;
 export type BudgetScope = z.infer<typeof budgetScopeSchema>;
 export type BudgetWindow = z.infer<typeof budgetWindowSchema>;
 export type BudgetRecord = z.infer<typeof budgetRecordSchema>;
+export type EstimateBasis = z.infer<typeof estimateBasisSchema>;
 export type TaskRecord = z.infer<typeof taskRecordSchema>;
 export type RunRecord = z.infer<typeof runRecordSchema>;
 export type ConfigSource = z.infer<typeof configSourceSchema>;

@@ -30,7 +30,7 @@ import type {
   Transaction,
   WindowStartOf,
 } from '@platform/application';
-import type { Id, IsoDateTime, Size } from '@platform/contracts';
+import type { EstimateBasis, Id, IsoDateTime, Size } from '@platform/contracts';
 import { refinedSpecDataSchema } from '@platform/contracts';
 import type { PriceRates, RollupDelta, TaskCostSample } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -413,9 +413,14 @@ export const createPostgresCostStore = (): CostStore => ({
   },
 
   saveEstimate: async (tx, taskId, estimate) => {
+    // Four columns, one statement, and `tasks-column-ownership.test.ts` holds them to this writer:
+    // `basis` and `samples` were a log line until WP-28 (migration 0022), so the approval card had
+    // no way to say whether the figure rested on this project, the organisation, or nothing (Q71).
     const result = await sqlOf(tx).query(
-      `update tasks set size = $2, estimate_usd = $3, updated_at = now() where id = $1`,
-      [taskId, estimate.size, estimate.estimateUsd],
+      `update tasks set size = $2, estimate_usd = $3, estimate_basis = $4, estimate_samples = $5,
+              updated_at = now()
+        where id = $1`,
+      [taskId, estimate.size, estimate.estimateUsd, estimate.basis, estimate.samples],
     );
     if (result.rowCount === 0) {
       throw new CostRowMissingError(`no task ${taskId} to write an estimate to`);
@@ -423,12 +428,23 @@ export const createPostgresCostStore = (): CostStore => ({
   },
 
   taskEstimate: async (tx, taskId) => {
-    const { rows } = await sqlOf(tx).query<{ size: Size | null; estimate_usd: string | null }>(
-      `select size, estimate_usd from tasks where id = $1`,
-      [taskId],
-    );
+    const { rows } = await sqlOf(tx).query<{
+      size: Size | null;
+      estimate_usd: string | null;
+      estimate_basis: EstimateBasis | null;
+      estimate_samples: number | string | null;
+    }>(`select size, estimate_usd, estimate_basis, estimate_samples from tasks where id = $1`, [
+      taskId,
+    ]);
     const row = rows[0];
-    return row === undefined ? null : { size: row.size, estimateUsd: usdOrNull(row.estimate_usd) };
+    return row === undefined
+      ? null
+      : {
+          size: row.size,
+          estimateUsd: usdOrNull(row.estimate_usd),
+          basis: row.estimate_basis,
+          samples: row.estimate_samples === null ? null : Number(row.estimate_samples),
+        };
   },
 
   budgets: budgetRepository,

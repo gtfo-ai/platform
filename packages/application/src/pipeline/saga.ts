@@ -38,7 +38,12 @@ import {
   type Slug,
   ticketRefSchema,
 } from '@platform/contracts';
-import type { AutonomyPreset, CommandContext, PipelineSignal } from '@platform/domain';
+import type {
+  AutonomyPreset,
+  CommandContext,
+  CompiledPipeline,
+  PipelineSignal,
+} from '@platform/domain';
 import {
   compilePipeline,
   createApproval,
@@ -53,6 +58,7 @@ import {
   orderQueue,
   queueTask,
   requestApproval,
+  requiresBudgetApproval,
   requiresPlanApproval,
   resolveIterationLimits,
   resumeStage,
@@ -339,6 +345,8 @@ export const runIntakeCheck = async (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       version: INITIAL_TASK_VERSION,
       ticketSnapshot,
       ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
@@ -483,6 +491,15 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
 
     const gate = await planApprovalGate(options, context, withMr, event.payload.stage, signal);
     if (gate) {
+      return;
+    }
+
+    // The two gates are disjoint by construction — the plan gate fires on the stage that produces
+    // an `ImplementationPlan` and the budget gate on the one that produces a `RefinedSpec` — so the
+    // order between them is not load-bearing. It is stated because a template that ever produced
+    // both from one stage would need an arbiter rather than a sequence (standing rule 9).
+    const budget = await budgetApprovalGate(options, context, withMr, event.payload.stage, signal);
+    if (budget) {
       return;
     }
 
@@ -706,6 +723,141 @@ const planApprovalGate = async (
 };
 
 /**
+ * Is this the moment product/09 calls *"before Implementation"* — and is there an Implementation?
+ *
+ * The estimate is made at refinement (`costEstimateHandler` on the `RefinedSpec`), so the first
+ * stage completion that can read it is the one that produced the spec. "Before Implementation" is
+ * then the rest of the question, and it is asked of the **compiled pipeline** rather than of a
+ * template name: the three ticket templates put a different number of stages between refinement and
+ * implementation (`chore` has no architecture stage at all), and two templates have no
+ * implementation stage whatever — `ticket_lint`'s one stage also produces a `RefinedSpec`
+ * (WP-25) and `discovery`'s produces a draft. Gating those would park a linter comment in front of
+ * a maintainer for a spend that is one short run.
+ *
+ * `conflict_resolution` also produces `ImplementationNotes` and sits *after* refinement in
+ * declaration order, so it satisfies this on its own; that is harmless and deliberate — a template
+ * that can reach a conflict resolution has an `implementation` stage in front of it in all three
+ * cases, and the question this predicate exists to answer is "is there still agent work to pay for".
+ */
+export const spendIsStillAhead = (pipeline: CompiledPipeline, stage: Slug): boolean => {
+  const index = pipeline.stages.findIndex((entry) => entry.id === stage);
+  if (index < 0 || pipeline.stages[index]?.produces !== 'RefinedSpec') {
+    return false;
+  }
+  return pipeline.stages.slice(index + 1).some((entry) => entry.produces === 'ImplementationNotes');
+};
+
+/**
+ * product/09: *"an optional per-project threshold routes expensive tasks to budget approval by a
+ * maintainer before Implementation"* — WP-28, and the gate `requiresBudgetApproval` was written for.
+ *
+ * It is `planApprovalGate`'s sibling in every mechanical respect and differs in three decided ones.
+ *
+ * **What it reads.** `AutonomyPreset.budgetApprovalThresholdUsd`, out of the project's
+ * **materialised** preset (`autonomyPresetFor`, BD-027:14) — never `AUTONOMY_PRESETS[level]`, which
+ * is the read-time re-derivation that decision forbids. A project whose dial has never been
+ * materialised is **not gated**: that is the pre-WP-28 behaviour exactly, and it is a named branch
+ * rather than a substituted preset, for the reason {@link UNMATERIALISED_PLAN_APPROVAL} gives one
+ * function up. A materialised preset whose threshold is `null` is the dial saying *"no budget
+ * approval at this position"* (Observe and Autonomous both do), and is likewise not gated.
+ *
+ * **Which number crosses it (Q71 (a), implemented).** The **point estimate** on the task row, not
+ * the p75 of a range: product/19 §15's range was specified for a median-of-30 model that Q65
+ * already replaced, and there is no distribution to take a quantile of. `tasks.estimate_usd` beside
+ * `tasks.cost_actual` is what the revisit will be made from.
+ *
+ * **What happens when there is no estimate (Q71 (b), implemented).** Nothing: `estimate_usd is
+ * null` does **not** gate. A gate that fires on a missing number is standing rule 16 inverted, and
+ * `basis: 'unknown'` is exactly a project's first tasks — parking every one of them in front of a
+ * maintainer is the worst possible first impression. The absence is made *visible* instead, on the
+ * workpad (`renderWorkpad`) and on the task DTO (`estimate_basis`), and the per-task cap (BD-010,
+ * default $50) is what bounds the spend meanwhile.
+ *
+ * **Keyed on the task and the kind, not on the stage attempt.** The estimate is written once
+ * (`costEstimateHandler`'s `estimateUsd !== null` guard), so a re-refinement produces the same
+ * number and a second ask would be the same question — see `ApprovalRepository.latestOfKind`, which
+ * carries the measurement.
+ */
+const budgetApprovalGate = async (
+  options: PipelineSagaOptions,
+  context: HandlerContext,
+  stored: StoredTask,
+  stage: Slug,
+  signal: PipelineSignal,
+): Promise<boolean> => {
+  if (signal.kind !== 'stage_completed' || signal.verdict !== 'approve') {
+    return false;
+  }
+  if (!spendIsStillAhead(compilePipeline(stored.task.template, stored.template), stage)) {
+    return false;
+  }
+  const estimateUsd = stored.estimateUsd;
+  if (estimateUsd === null) {
+    // Named rather than silent: "this project has no finished task to estimate from" is the one
+    // case where the gate is off *and* somebody might have expected it on.
+    (options.logger ?? silentLogger).debug(
+      { task_id: stored.task.id, estimate_basis: stored.estimateBasis },
+      'budget approval: the task has no estimate, so no threshold can be crossed',
+    );
+    return false;
+  }
+  const already = await options.store.approvals.latestOfKind(context.scope.tx, {
+    taskId: stored.task.id,
+    kind: 'budget',
+  });
+  if (already !== null) {
+    return false;
+  }
+  const settings = await options.settings.forProject(stored.task.projectId);
+  const preset = autonomyPresetFor(settings);
+  if (preset === null) {
+    // Never materialised: the pre-WP-28 behaviour, which is no budget gate at all. A named branch
+    // rather than a substituted preset, for the reason {@link UNMATERIALISED_PLAN_APPROVAL} gives.
+    return false;
+  }
+  // The one place the threshold is read, and the only guard: `requiresBudgetApproval` answers false
+  // for a `null` threshold, so a second check for it here would be an inner layer the outer one
+  // makes unreachable — untestable by construction (standing rule 22).
+  if (!requiresBudgetApproval(preset, estimateUsd)) {
+    return false;
+  }
+  (options.logger ?? silentLogger).info(
+    {
+      task_id: stored.task.id,
+      estimate_usd: estimateUsd,
+      threshold_usd: preset.budgetApprovalThresholdUsd,
+      estimate_basis: stored.estimateBasis,
+      estimate_samples: stored.estimateSamples,
+    },
+    'budget approval: the estimate is over this project’s threshold; the task waits for a maintainer',
+  );
+
+  const attempt = stored.task.stageAttempts[stage] ?? 1;
+  const commandContext = contextFor(options, stored.task.id, context.event.event.id);
+  const approval = createApproval(
+    {
+      id: options.ids.next(),
+      taskId: stored.task.id,
+      projectId: stored.task.projectId,
+      kind: 'budget',
+    },
+    commandContext,
+  );
+  // The stage and attempt are recorded truthfully even though the lookup above does not use them:
+  // they are what `approvalHandler` resumes from, and what an audit reads to say where the task was
+  // when the spend was questioned.
+  await options.store.approvals.insert(context.scope.tx, { approval, stage, attempt });
+  const requested = requestApproval(
+    stored.task,
+    { approval: toApprovalRecord(approval) },
+    commandContext,
+  );
+  await options.store.tasks.save(context.scope.tx, { ...stored, task: requested.aggregate });
+  await context.emit(requested.events);
+  return true;
+};
+
+/**
  * The developer stage reports the merge request it opened in its `ImplementationNotes`
  * (technical/12: `mr: {url, iid, head_sha}`). That is how the platform learns which merge request
  * a task owns — the git provider's own `mr.opened` webhook cannot say which *task* it belongs to.
@@ -867,6 +1019,35 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
         stage,
         verdict: 'approve',
       });
+      return;
+    }
+
+    if (event.payload.decision === 'rejected' && record?.approval.kind === 'budget') {
+      // **A rejected budget is not a rejected plan, and it does not go round the loop again.**
+      //
+      // Rejecting a plan is a statement about *this plan*, so product/04 S2 sends the task back to
+      // Architecture to write a better one. Rejecting a spend is a statement about *the task*: the
+      // estimate is written once and a second refinement round would produce the same number, so
+      // resuming the stage would walk straight back into a gate that is already keyed as asked and
+      // spend the money the maintainer just refused. The task stops and says why — `needs_human`,
+      // which is the existing vocabulary rather than a state of its own (Q59).
+      const refused = escalateTask(
+        stored.task,
+        {
+          reason: 'a maintainer rejected the cost estimate for this task',
+          blockerBrief:
+            `The estimated cost of ${stored.task.ticket.key} was not approved${
+              typeof event.payload.reason === 'string' && event.payload.reason.length > 0
+                ? `: ${event.payload.reason}`
+                : ''
+            }. ` +
+            'Nothing has been spent on Implementation. Either raise the project’s budget-approval ' +
+            'threshold and hand the task back at the stage it should resume from, or cancel it.',
+        },
+        commandContext,
+      );
+      await options.store.tasks.save(context.scope.tx, { ...stored, task: refused.aggregate });
+      await context.emit(refused.events);
       return;
     }
 

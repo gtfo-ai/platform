@@ -555,6 +555,8 @@ export const runTicketLintCheck = async (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       version: INITIAL_TASK_VERSION,
       // Written by the insert that creates the row, so no `update tasks` statement names the
       // column and PROGRESS backlog 18's lost-update class cannot reach it.

@@ -24,6 +24,7 @@
 import type {
   Actor,
   ArtifactType,
+  EstimateBasis,
   Id,
   IsoDateTime,
   JsonObject,
@@ -59,6 +60,18 @@ export interface StoredTask {
   /** Sum of the runs' reported cost, in USD (`tasks.cost_actual`). */
   readonly costActualUsd: number;
   readonly estimateUsd: number | null;
+  /**
+   * What {@link StoredTask.estimateUsd} rests on (WP-28, migration 0022).
+   *
+   * `null` means **the estimator has not run on this task** — a task that has not finished
+   * refinement, or a row written before the column existed. It is *not* how "there was nothing to
+   * estimate from" is spelled: that is `'unknown'` with a `null` estimate and zero samples, which
+   * is the estimator's stated refusal (standing rule 16). The budget gate distinguishes the two by
+   * reading the number and never the word, and the workpad prints a different sentence for each.
+   */
+  readonly estimateBasis: EstimateBasis | null;
+  /** How many finished tasks the estimate averaged; `null` exactly when {@link estimateBasis} is. */
+  readonly estimateSamples: number | null;
   /**
    * The ticket's own words as the platform read them once (WP-15f, migration 0015).
    *
@@ -192,9 +205,9 @@ export interface TaskRepository {
    *    caller to retry against a fresh read. Silently winning is the lost update that put a task's
    *    recorded spend back from 2.80 to 2.40 and left a feature ticket sitting at `ci_gate`.
    * 2. **It writes only what it owns.** `workpad_ref`, `ticket_snapshot`, `ticket_snapshot_at`,
-   *    `size` and `estimate_usd` belong to the narrow writers below and to
-   *    `CostStore.saveEstimate`; `save` does not name them, so it cannot put back a `null` one of
-   *    them filled in. That direction was live until WP-15e: `saveWorkpad` stopped the workpad job
+   *    `size`, `estimate_usd`, `estimate_basis` and `estimate_samples` belong to the narrow writers
+   *    below and to `CostStore.saveEstimate`; `save` does not name them, so it cannot put back a
+   *    `null` one of them filled in. That direction was live until WP-15e: `saveWorkpad` stopped the workpad job
    *    from clobbering the executor, and nothing stopped the executor from clobbering the workpad.
    *
    * The partition is enforced rather than described: `tasks-column-ownership.test.ts` reads the SQL
@@ -471,6 +484,28 @@ export interface ApprovalRepository {
       readonly stage: Slug;
       readonly attempt: number;
     },
+  ): Promise<StoredApproval | null>;
+  /**
+   * The newest approval of this kind on the task, whatever stage attempt asked for it.
+   *
+   * The **budget** gate's lookup, and the difference from {@link forStageAttempt} is a difference
+   * between the two questions rather than a second way of asking one (WP-28). A plan approval is a
+   * statement about *a plan*: a task that returns to Architecture and produces a second
+   * `ImplementationPlan` has to be approved again, which is why that lookup carries the attempt. A
+   * budget approval is a statement about *the estimate*, and the estimate is written **once** —
+   * `costEstimateHandler`'s `estimateUsd !== null` guard — so a re-refinement produces the same
+   * number and asking a maintainer to release the same spend twice is asking the same question
+   * twice. Measured before it was written: `enteredAttempt`
+   * (`packages/domain/src/aggregates/task.ts`) increments on every re-entry, so keying the budget
+   * gate on `(task, kind, stage, attempt)` would have asked again on attempt 2.
+   *
+   * Any status counts as *asked*, including `rejected` and `expired`: the question a second ask
+   * would put is the one already answered, and a maintainer who wants the task to proceed raises
+   * the threshold or hands the task back rather than waiting to be asked again.
+   */
+  latestOfKind(
+    tx: Transaction,
+    query: { readonly taskId: Id; readonly kind: string },
   ): Promise<StoredApproval | null>;
 }
 

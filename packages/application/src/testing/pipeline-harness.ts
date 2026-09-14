@@ -23,7 +23,7 @@ import type {
   IsoDateTime,
   PipelineTemplate,
 } from '@platform/contracts';
-import { agentRoleSchema } from '@platform/contracts';
+import { agentRoleSchema, refinedSpecDataSchema } from '@platform/contracts';
 import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { createBudgetGuard } from '../cost/guard.js';
@@ -420,6 +420,40 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const cost =
     options.cost === true
       ? createMemoryCostStore({
+          /**
+           * The estimate's three reads and its one write, over this harness's **own** rows.
+           *
+           * `refinedSize` parses the `RefinedSpec` the scripted refinement really produced, and
+           * `saveEstimate` writes the task row the budget gate really reads — so a gate case here
+           * rests on a number the real estimator computed rather than one the test typed in
+           * (standing rule 82). The history the estimator averages is still `seedHistory`'s: those
+           * are other, already-finished tasks, which a harness running one task does not have.
+           */
+          estimates: {
+            refinedSize: async (tx, taskId) => {
+              const artifact = await store.artifacts.latest(tx, taskId, 'RefinedSpec');
+              const parsed = refinedSpecDataSchema.safeParse(artifact?.data);
+              return parsed.success ? parsed.data.size : null;
+            },
+            taskEstimate: async (tx, taskId) => {
+              const task = await store.tasks.load(tx, taskId);
+              // `size` is `null` because `StoredTask` does not carry `tasks.size` — the pipeline
+              // store's SELECT never took that column, since nothing in the pipeline reads it. The
+              // handler reads `estimateUsd` and nothing else off this answer (its write-once
+              // guard), so the divergence is stated rather than papered over with a guess.
+              return task === null
+                ? null
+                : {
+                    size: null,
+                    estimateUsd: task.estimateUsd,
+                    basis: task.estimateBasis,
+                    samples: task.estimateSamples,
+                  };
+            },
+            saveEstimate: async (_tx, taskId, estimate) => {
+              store.writeEstimate(taskId, estimate);
+            },
+          },
           runs: async (tx, runId) => {
             const run = await store.runs.load(tx, runId);
             if (run === null) {

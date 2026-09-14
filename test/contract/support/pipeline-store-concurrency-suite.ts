@@ -101,6 +101,8 @@ export const runPipelineStoreConcurrencyContract = (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       ticketSnapshot: null,
       reviewSubject: null,
       ticketSnapshotAt: null,

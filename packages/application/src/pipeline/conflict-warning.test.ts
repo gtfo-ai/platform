@@ -264,6 +264,8 @@ const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
       reviewSubject: null,

@@ -17,7 +17,7 @@
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  */
-import type { ArtifactType, Id, Slug } from '@platform/contracts';
+import type { ArtifactType, EstimateBasis, Id, Size, Slug } from '@platform/contracts';
 import { workpadRefSchema } from '@platform/contracts';
 import type { Approval, Question, QueuedTask } from '@platform/domain';
 import { countsAsActive, countsInPipeline, isActiveRunStatus } from '@platform/domain';
@@ -56,6 +56,28 @@ export interface MemoryPipelineStore extends PipelineStore {
   /** Every task, for a test that wants to look without a transaction. */
   snapshot(): readonly StoredTask[];
   readonly stageRows: readonly StageRow[];
+  /**
+   * The in-memory twin of the one narrow write `CostStore.saveEstimate` makes on `tasks`.
+   *
+   * It lives here rather than on the cost store because the two stores are the same **row** in
+   * PostgreSQL and two different objects in this ring, and the harness that composes them has to
+   * join them somewhere. `createPipelineHarness` passes it as the memory cost store's `estimates`
+   * seam, so a saga test's budget gate reads a number the **real** estimator computed from the
+   * **real** `RefinedSpec` the scripted refinement produced, rather than one the test typed in
+   * (standing rule 82).
+   *
+   * The four columns are exactly the SQL's, and it is not a `save`: it never touches the
+   * aggregate's own columns and never bumps `version`, for the reason `save`'s docblock gives.
+   */
+  writeEstimate(
+    taskId: Id,
+    estimate: {
+      readonly size: Size;
+      readonly estimateUsd: number | null;
+      readonly basis: EstimateBasis;
+      readonly samples: number;
+    },
+  ): void;
 }
 
 export interface MemoryPipelineStoreOptions {
@@ -157,7 +179,8 @@ export const createMemoryPipelineStore = (
      *
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
      * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
-     * `estimateUsd`, `priorityRank`, `createdAt`, `template`) belong to the narrow writers — or, for
+     * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`)
+     * belong to the narrow writers — or, for
      * `reviewSubject`, to the insert alone (WP-24) — and a fake that let a
      * whole-row save carry them would answer a question the database cannot be asked — which is how
      * WP-15h found the memory store certifying behaviour PostgreSQL does not have.
@@ -404,6 +427,23 @@ export const createMemoryPipelineStore = (
       );
       return found === undefined ? null : clone(found);
     },
+    latestOfKind: async (_tx, query) => {
+      // The SQL's `order by requested_at desc, id desc limit 1`, spelled out: a fake clock gives
+      // every approval of one test the same `requestedAt`, so the tie-break is not decoration — it
+      // is what keeps this answer and PostgreSQL's the same one (standing rule 1).
+      const matching = [...approvals.values()]
+        .filter(
+          (stored: StoredApproval) =>
+            stored.approval.taskId === query.taskId && stored.approval.kind === query.kind,
+        )
+        .sort((left, right) =>
+          left.approval.requestedAt === right.approval.requestedAt
+            ? right.approval.id.localeCompare(left.approval.id)
+            : right.approval.requestedAt.localeCompare(left.approval.requestedAt),
+        );
+      const found = matching[0];
+      return found === undefined ? null : clone(found);
+    },
   };
 
   return {
@@ -412,6 +452,22 @@ export const createMemoryPipelineStore = (
     runs: runRepository,
     questions: questionRepository,
     approvals: approvalRepository,
+    writeEstimate: (taskId, estimate) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      tasks.set(
+        taskId,
+        clone({
+          ...current,
+          task: { ...current.task },
+          estimateUsd: estimate.estimateUsd,
+          estimateBasis: estimate.basis,
+          estimateSamples: estimate.samples,
+        }),
+      );
+    },
     snapshot: () => [...tasks.values()].map(clone),
     get stageRows() {
       return stages.map((row) => ({ ...row }));

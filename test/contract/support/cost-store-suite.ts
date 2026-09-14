@@ -312,25 +312,59 @@ export const runCostStoreContract = (harness: CostStoreHarness): void => {
     });
 
     describe('estimates', () => {
-      it('writes the size and the estimate, and reads them back', async () => {
+      it('writes the size, the estimate and its provenance, and reads them back', async () => {
         const taskId = nextId();
         await seed.task({ id: taskId });
-        expect(await store.taskEstimate(tx, taskId)).toEqual({ size: null, estimateUsd: null });
+        // A task nobody has estimated answers with **four** absences, not with a zero-sample
+        // `unknown`: "never asked" and "asked and refused" are different facts (WP-28).
+        expect(await store.taskEstimate(tx, taskId)).toEqual({
+          size: null,
+          estimateUsd: null,
+          basis: null,
+          samples: null,
+        });
 
-        await store.saveEstimate(tx, taskId, { size: 'L', estimateUsd: 42.5 });
-        expect(await store.taskEstimate(tx, taskId)).toEqual({ size: 'L', estimateUsd: 42.5 });
+        await store.saveEstimate(tx, taskId, {
+          size: 'L',
+          estimateUsd: 42.5,
+          basis: 'project_history',
+          samples: 9,
+        });
+        expect(await store.taskEstimate(tx, taskId)).toEqual({
+          size: 'L',
+          estimateUsd: 42.5,
+          basis: 'project_history',
+          samples: 9,
+        });
       });
 
       it('stores a null estimate as an absence rather than as zero (standing rule 18)', async () => {
         const taskId = nextId();
         await seed.task({ id: taskId });
-        await store.saveEstimate(tx, taskId, { size: 'S', estimateUsd: null });
-        expect(await store.taskEstimate(tx, taskId)).toEqual({ size: 'S', estimateUsd: null });
+        // The estimator's own refusal: a basis of `unknown`, no number, and zero samples — which
+        // the budget gate reads as "no gate" and the workpad prints as a named absence.
+        await store.saveEstimate(tx, taskId, {
+          size: 'S',
+          estimateUsd: null,
+          basis: 'unknown',
+          samples: 0,
+        });
+        expect(await store.taskEstimate(tx, taskId)).toEqual({
+          size: 'S',
+          estimateUsd: null,
+          basis: 'unknown',
+          samples: 0,
+        });
       });
 
       it('refuses to write an estimate for a task that does not exist', async () => {
         await expect(
-          store.saveEstimate(tx, nextId(), { size: 'M', estimateUsd: 1 }),
+          store.saveEstimate(tx, nextId(), {
+            size: 'M',
+            estimateUsd: 1,
+            basis: 'org_history',
+            samples: 2,
+          }),
         ).rejects.toThrow();
       });
 

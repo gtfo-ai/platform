@@ -261,10 +261,18 @@ export const requiresPlanApproval = (input: PlanApprovalInput): boolean => {
 /**
  * Does the estimate need a budget approval first (product/18 "Cost estimate before spend")?
  *
- * **Still unconsumed, and WP-28 is the row that consumes it** — what WP-30 owed it is the *input*:
- * `budgetApprovalThresholdUsd` is now materialised per project by {@link materialiseAutonomy} and
- * reaches a query, so a gate can read a stored threshold instead of re-deriving one from the level
- * (which BD-027:14 forbids). {@link AUTONOMY_POLICY_READERS} is where that is recorded.
+ * **Consumed since WP-28**, by `budgetApprovalGate` in `packages/application/src/pipeline/saga.ts`,
+ * which reads the threshold out of the project's **materialised** preset ({@link
+ * materialiseAutonomy}, BD-027:14) rather than re-deriving it from the level.
+ * {@link AUTONOMY_POLICY_READERS} records the reader.
+ *
+ * Two properties the caller depends on, both stated here because they are the difference between a
+ * gate and a trap. A `null` threshold is the dial saying *"no budget approval at this position"* —
+ * Observe and Autonomous both do — and answers **false** rather than gating everything. And the
+ * argument is a **number**: a task with no estimate has nothing to compare, and the caller must not
+ * pass a zero for it, because zero is below every threshold and would read as "cheap" (standing
+ * rule 16). The comparison is strictly greater-than, so a task estimated at exactly the threshold
+ * is *not* gated — the boundary is asserted from both sides in `autonomy.test.ts` (rule 42).
  */
 export const requiresBudgetApproval = (preset: AutonomyPreset, estimateUsd: number): boolean =>
   preset.budgetApprovalThresholdUsd !== null && estimateUsd > preset.budgetApprovalThresholdUsd;
@@ -432,9 +440,8 @@ export const AUTONOMY_POLICY_READERS = {
     why: "the readiness a position expects (product/19 §11's last row). It travels inside the published document, and the *suggestion* an operator sees is `suggestedAutonomyCap` over `projects.readiness_level` — a separate function that never reads this field. Two sources for one suggestion would be two answers, which is `reviewOnly`'s argument again; `autonomy.test.ts` holds the two encodings of the ladder to each other instead",
   },
   budgetApprovalThresholdUsd: {
-    kind: 'unread',
-    owner: 'WP-28',
-    why: 'the `kind: budget` approval `requiresBudgetApproval` is written for; that row names this field and WP-30 is what stores the threshold it reads',
+    kind: 'read',
+    by: 'packages/application/src/pipeline/saga.ts — budgetApprovalGate (WP-28)',
   },
   reviewOnly: {
     kind: 'unread',

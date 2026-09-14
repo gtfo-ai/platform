@@ -50,6 +50,10 @@ describe('records', () => {
       risk_classes: ['auth'],
       cost_actual_usd: 3.2,
       cost_estimated_usd: 0,
+      estimate_usd: 2.5,
+      estimate_basis: 'project_history' as const,
+      estimate_samples: 6,
+      estimate_accuracy: 1.28,
       requested_by_user_id: null,
       requested_by_identity: null,
       created_at: AT,
@@ -61,6 +65,20 @@ describe('records', () => {
     expect(
       taskRecordSchema.safeParse({ ...task, iteration_counters: { code_review: -1 } }).success,
     ).toBe(false);
+    // The estimate's four fields are **nullable and required**, not optional: a task with no
+    // estimate publishes four explicit nulls, so a reader can tell "not estimated" from a field
+    // the projection forgot (standing rules 16 and 18).
+    const unestimated = {
+      ...task,
+      estimate_usd: null,
+      estimate_basis: null,
+      estimate_samples: null,
+      estimate_accuracy: null,
+    };
+    expect(taskRecordSchema.parse(unestimated)).toEqual(unestimated);
+    const { estimate_basis: _dropped, ...withoutBasis } = task;
+    expect(taskRecordSchema.safeParse(withoutBasis).success).toBe(false);
+    expect(taskRecordSchema.safeParse({ ...task, estimate_basis: 'a_guess' }).success).toBe(false);
   });
 
   it('round-trips a run record and rejects a negative counter', () => {

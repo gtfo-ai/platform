@@ -12,7 +12,7 @@
  * Standing rule 79, measured at WP-15d: a whole-row `tasks.save` from a writer that runs beside the
  * stage executor is a lost update, and it cost 0.40 USD of a task's recorded spend. The ledger runs
  * in an **event handler**, concurrently with the `stage.execute` job that owns the task row, so it
- * touches `tasks` through exactly one narrow write ({@link CostStore.saveEstimate}, two columns
+ * touches `tasks` through exactly one narrow write ({@link CostStore.saveEstimate}, four columns
  * nothing else writes) and keeps everything else in tables of its own. It is deliberately **not** a
  * `tasks.save` site — a count `task-save-sites.test.ts` now produces rather than a number stated
  * here, because it had already moved by the time WP-15e read it (standing rule 63).
@@ -20,6 +20,7 @@
 import type {
   BudgetScope,
   BudgetWindow,
+  EstimateBasis,
   Id,
   IsoDateTime,
   Size,
@@ -172,12 +173,18 @@ export interface CostStore {
   refinedSize(tx: Transaction, taskId: Id): Promise<Size | null>;
 
   /**
-   * Writes **only** `tasks.size` and `tasks.estimate_usd`.
+   * Writes **only** `tasks.size`, `tasks.estimate_usd`, `tasks.estimate_basis` and
+   * `tasks.estimate_samples` — the four columns of the estimate, and nothing else on the row.
    *
    * The third narrow task write, after `saveWorkpad` (WP-15d) and `saveTicketSnapshot` (WP-15f),
    * and for the same measured reason: this runs in an event handler beside the `stage.execute`
    * job's transactions, so a whole-row `save` would put the task's state, stage and cost back as
    * they were when the handler loaded them.
+   *
+   * **The basis and the sample count travel with the number** (WP-28, migration 0022). Until then
+   * they were written to a debug log line, so nothing downstream could tell a figure derived from
+   * this project's own finished tasks from one derived from the organisation — which is exactly
+   * what the budget-approval card has to state when it asks a maintainer to release a spend (Q71).
    *
    * @throws when the task does not exist — a write that hit no row is how a projection silently
    * stops being written.
@@ -185,14 +192,31 @@ export interface CostStore {
   saveEstimate(
     tx: Transaction,
     taskId: Id,
-    estimate: { readonly size: Size; readonly estimateUsd: number | null },
+    estimate: {
+      readonly size: Size;
+      readonly estimateUsd: number | null;
+      readonly basis: EstimateBasis;
+      readonly samples: number;
+    },
   ): Promise<void>;
 
-  /** `tasks.estimate_usd`, `tasks.size` and whether the ledger has already estimated this task. */
+  /**
+   * The four estimate columns, or `null` when the task does not exist.
+   *
+   * `estimateUsd !== null` is the **write-once** guard `costEstimateHandler` asks about; `basis` is
+   * read back by the contract suite and by nothing in production, and it is on this answer rather
+   * than only on the write so the round trip is checkable at all (standing rule 3 — a column a
+   * reader cannot see is a column a test cannot hold).
+   */
   taskEstimate(
     tx: Transaction,
     taskId: Id,
-  ): Promise<{ readonly size: Size | null; readonly estimateUsd: number | null } | null>;
+  ): Promise<{
+    readonly size: Size | null;
+    readonly estimateUsd: number | null;
+    readonly basis: EstimateBasis | null;
+    readonly samples: number | null;
+  } | null>;
 
   readonly budgets: BudgetRepository;
 }

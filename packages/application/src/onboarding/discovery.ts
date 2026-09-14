@@ -197,6 +197,8 @@ export const startProjectDiscovery = async (
       workpad: null,
       costActualUsd: 0,
       estimateUsd: null,
+      estimateBasis: null,
+      estimateSamples: null,
       version: INITIAL_TASK_VERSION,
       // There is no ticket to read, so there is no snapshot. `null` is exactly what
       // `ensureTicketSnapshot` reads as "the platform has not read this ticket".

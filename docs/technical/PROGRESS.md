@@ -245,7 +245,7 @@ Each of these cost at least one review round to learn; all are evidenced in the 
    labels its hypotheses (rule 39) precisely so that a later reader can tell them apart; copying one
    without the label strips the one word that made it honest.
 
-87. **A wait that binds the provider's record binds the wrong thing; the assertion belongs to the last row the platform writes, and the record is asserted as what that row implies.** Five instances in session 5, one mechanism: the librarian e2e waited on the fake git's commit and read `kb_proposals.applied` (ci-fix `93ffb32`); WP-25's ticket-lint e2e waited on the fake's comment and read `task.lint.posted`; WP-24's review-only e2e waited on the fake's discussions and read `integration_actions` — each time the platform writes the row **after** the provider call returns, in its own transaction, and each time the implementer's run passed and the orchestrator's or CI's did not, because the race is a scheduling accident and one green sample proves nothing. The fix is always the same shape: `waitFor` over the row the assertions read, then assert the provider's record as what the row implies; reproduce once on a copy by delaying the post-call write (rule 76) so the old wait fails by name. Rule 49 applies on every instance: sweep the file's other waits with the one question — is the thing waited on written before or after the thing asserted? — and `verify:e2e` runs twice before a report says green.
+87. **A wait that binds the provider's record binds the wrong thing; the assertion belongs to the last row the platform writes, and the record is asserted as what that row implies.** Five instances in session 5, one mechanism: the librarian e2e waited on the fake git's commit and read `kb_proposals.applied` (ci-fix `93ffb32`); WP-25's ticket-lint e2e waited on the fake's comment and read `task.lint.posted`; WP-24's review-only e2e waited on the fake's discussions and read `integration_actions` — each time the platform writes the row **after** the provider call returns, in its own transaction, and each time the implementer's run passed and the orchestrator's or CI's did not, because the race is a scheduling accident and one green sample proves nothing. The fix is always the same shape: `waitFor` over the row the assertions read, then assert the provider's record as what the row implies; reproduce once on a copy by delaying the post-call write (rule 76) so the old wait fails by name. Rule 49 applies on every instance: sweep the file's other waits with the one question — is the thing waited on written before or after the thing asserted? — and `verify:e2e` runs twice before a report says green. **A sixth, adjacent rather than identical, and worth the line because the sweep question above does not catch it (WP-28, session 5):** the budget-gate e2e waited for the workpad body to contain `'Estimate:'` and then asserted the figure — and the render *before* the gate already satisfies that substring, with `Estimate: not yet …`. Nothing was written in the wrong order; the **predicate was true before the event**, so the wait bound the previous render and the assertion raced it. It now waits on the exact line it asserts plus the header. The transferable half: after asking *is it written before or after?*, ask *was it already true?* — a wait whose predicate the pre-change state satisfies is not a wait.
 85. **A `close()` that has resolved is a claim about the library's bookkeeping, not about the socket — and
    the guard you wrote today is green only until the file it lives in is tracked.** Two lessons from one
    repair, backlog 28. First: CI's `e2e-fake-claude` died on `5b01f73` with every test passing because
@@ -941,7 +941,13 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 45. **A fixture named for the property under test guarantees the property is never tested.** WP-20's
    web-e2e fixture field is called `safeUrl`, so no tier ever fed a hostile scheme into the `href` path that
    had no guard. Name fixtures for what they *are*, not for what you hope they satisfy — and feed the
-   hostile value somewhere.
+   hostile value somewhere. **Second instance, one step out (WP-28, session 5): a fixture nothing ever
+   parses is a fixture nobody validates.** `saga.test.ts`'s `REFINED_SPEC` carried `drift.flag: 'none'`
+   where `refinedSpecDataSchema` says `z.boolean()`, and it had been wrong since WP-15 (`79582c6`)
+   because no unit test had ever asked it for a parsed field — the harness casts a scripted
+   `structuredOutput` where the real runner validates it, so the double is *kinder* than the adapter
+   (rule 1). The sweep rule 49 asks for finds two copies still in the tree; the detector, the count and
+   the owner are backlog **77**.
 43. **A negative test whose payload every candidate implementation would reject proves nothing — an
    allow-list needs a negative case that only *exact* matching refuses.** WP-13's credential allow-list had
    `evil.example.com` as its only negative; mutating the check to `host.endsWith(allowed)` **survived all 134
@@ -2818,6 +2824,44 @@ what "park" means for `stopAfterStage` (a `needs_human` escalation is the existi
 task state is what Q59 refused). Cheapest by adjacency: **WP-28**, the only open row that opens the
 gate machinery and already reads `autonomyPresetFor(settings)` (`packages/application/src/pipeline/saga.ts:659`).
 
+**Update (b) — WP-28 was offered it and *declined*, with the measurement; the adjacency argument
+above is withdrawn** (refiner, session 5). WP-28's brief carried the condition *"take them if the
+row's shape makes it one table line"*, and the row's answer, quoted: *"It does not, and the number is:
+besides this row's own, `compilePipeline(template, storedTemplate)` has **fourteen** production call
+sites — `saga.ts` (5), `jobs.ts` (3), `commands.ts` (2), `stage-executor.ts`, `review-only.ts`,
+`ticket-lint.ts` and `onboarding/discovery.ts`, and a compile step that reads the dial changes the
+*signature* — every one of them would have to resolve the project's materialised preset first, which
+several of them are in no position to do (the interpreter is pure, and two of those sites are inside
+a transaction the settings port must not be asked from). This row's gate touches none of that: it
+reads one field off a preset it already had."* Re-derived independently (refiner; grep only, rule
+66): **15** production call sites of `compilePipeline(` across `packages/` and `apps/`, of which one
+is the budget gate itself — so the row's fourteen is right, and the shape of the work is a
+**signature change across fifteen sites**, not a table line. The declination is correct.
+
+Two consequences, and they change the entry rather than only record it. **(i) The pair splits after
+all, and in one order.** `businessReview` needs **no** product decision — the interpreter already
+honours a disabled stage — so it is the cheapest way to build the carrier (a compile step that takes
+the project's materialised preset), and once the carrier exists `stopAfterStage` is a halt on top of
+it. Building `stopAfterStage` first is what the row's *"splitting them would build the carrier for one
+policy and leave the other needing it again"* warns against; building `businessReview` first does not
+have that shape. **(ii) `businessReview` is, on this build, a policy no shipped preset can
+demonstrate** — which is why it is cheap to build and worth almost nothing until *Custom* exists.
+`businessReview: false` occurs at exactly two positions, `observe` (`autonomy.ts:91`) and `assist`
+(`:108`), and those are the two positions where a task never reaches the stage anyway: Observe does
+not pick tickets up at all (`picksUpNewTickets: false`) and Assist stops after `architecture`, while
+`business_review` sits in the shared merge tail after `code_review`
+(`packages/domain/src/pipeline/templates.ts:113`). So its only observable use is a project that
+overrides it — which Q78 shows cannot be spelled today. An implementer who takes (b) should assert the
+carrier through `stopAfterStage`'s boundary (rule 42: Assist parks after `architecture`, Supervised
+does not), because that is the half with an observable effect.
+
+**Owner of (b), named plainly: none, and it is not WP-28's.** No M2 row opens the compile path —
+WP-29 is human time, WP-30 is merged, WP-31 is ask-the-task, WP-32 is notifications — so unless a
+future row takes it, (b) is a small row of its own whose acceptance is already written above. It is
+**blocked on a product answer for one of its two halves**: *what "park after architecture" means for a
+task that has produced its plan and will produce nothing else*, filed as **Q79** with a
+recommendation. `businessReview` is not blocked on anything.
+
 **(c) Two are what *Observe* means, and they belong to shadow mode.** `picksUpNewTickets` (nothing in
 intake asks it; the `intake_check` duty asks the ticket label and the WIP limits) and `shadowMode`
 (no shadow runner exists; `tasks.mode` is chosen by whoever creates the task). Owner: **WP-34**
@@ -2844,7 +2888,9 @@ recurrence guard that already exists. **Needs measurement: none** for (a) and (b
 whatever WP-34's shadow batch needs.
 
 **Depends on / owner.** **No work package owns any of the three.** (a) and (b) are M2-shaped and
-WP-28 is the cheapest host for both by adjacency; (c) is **WP-34**, M3. The product half of (a) —
+~~WP-28 is the cheapest host for both by adjacency~~ — **withdrawn: WP-28 was offered (b) and declined
+it with a measurement, and the update under (b) carries the number and the new shape**; (c) is
+**WP-34**, M3. The product half of (a) —
 *which* of the fifteen a project may override at all — is **Q78**, filed with a recommendation, and
 it does not block: the three keys named here already exist in the configuration schema.
 
@@ -2991,6 +3037,204 @@ an injected clock and a calendar-aware schedule, and its own cost sentence is *"
 one-working-day question timeout expires against a human nobody told"*, which on this build does not
 expire at all. If WP-32 does not take it, it is a small row of its own and should carry entry **69**'s
 take-over timeout with it.
+
+**Update (refiner, session 5) — a third instance, and it is one mechanism.** WP-28 measured that
+neither approval gate passes a `deadlineAt` either, so `expireApproval` has no producer on the
+**approval** aggregate for the same reason it has none on the question. It is filed as entry **76**
+rather than folded here, because the two are missing different halves: this entry's is *engineering*
+(BD-006 fixes the limit, `questionTimeoutAt` computes it, the two queue names are declared), and
+**76**'s is *product* — no document anywhere says an approval expires at all. The arming handler, the
+working-day calendar and the re-validate-on-fire shape are one piece of work across **69**, **74** and
+**76**, and whoever builds the second writes almost none of it.
+
+### 75. **`tasks.cost_estimated` is published on the task DTO and nothing has ever written it, so every task the product has served reports `$0.00` of estimated spend** (TODO, small, latent — **no work package owns it**; recorded as a discovered-work bullet **twice**, at WP-19 and again at WP-28, and never given a number; found by WP-28, session 5)
+**What is wrong.** A `not null default 0` column with no writer is published as a task's estimated
+spend. It is standing rule **16**'s shape one layer out: the absent case and the measured-zero case
+are spelled the same, so *"nobody counted"* is served as *"nothing was estimated"*.
+
+**Evidence.** The WP-28 bullet, quoted: *"The column is `not null default 0` since migration 0004,
+`TaskRecord.cost_estimated_usd` publishes it, and a grep over `packages/` and `apps/` finds no
+`update tasks set cost_estimated` and no insert that fills it — so every task the product has ever
+shown reports `$0.00` of estimated spend."* The WP-19 bullet that recorded it first, quoted:
+*"`estimate_usd` is the estimate before the spend and is written by `cost.estimate`; `cost_estimated`
+is technical/03's running total of estimated cost for a task whose runs were priced rather than
+invoiced (BD-004 `local` mode), and nothing accumulates it — `tasks.cost_actual` takes every run's
+`cost.usd` whether or not `is_estimate` is set. So a `local`-mode deployment's task row calls an
+estimate an actual."* WP-19's own plan row says the same in its *"Left behind"* sentence.
+
+Four reads off the tree (refiner, session 5; greps and file reads only, rule 66 — no test was run).
+**(a) The sites are four and they agree**: `packages/infrastructure/src/db/migrations/0004_pipeline.sql:27`
+(`cost_estimated numeric(12, 6) not null default 0`),
+`packages/infrastructure/src/db/schema/pipeline.ts:92`,
+`apps/server/src/queries/pipeline-queries.ts:449` (`cost_estimated_usd: usd(row.costEstimated)`) and
+`packages/contracts/src/records.ts:232`. **(b) The two bullets' definitions do not conflict**: both
+are *"the part of the spend that was priced rather than reported"*, one stated from BD-011 and one
+from BD-004's `local` mode, and both are the same arithmetic — `cost_entries` has carried the per-row
+flag since WP-19 (`packages/infrastructure/src/cost/postgres-cost-store.ts:265`, `is_estimate`), so
+the number already exists per entry and is only never summed onto the task. **(c) No screen renders
+it today**, which is what makes this latent rather than live: the only remaining mention in
+`apps/web` is the corrected docblock at `apps/web/src/features/task-detail.tsx:566`, and the
+web-e2e fixture still sets `cost_estimated_usd: 6` (`test/web-e2e/support/fixtures.ts:176`) against a
+production value that is always 0. The exposure is the **API**. **(d) The near-namesake is now live**:
+WP-28 gave `estimate_usd` a writer, a basis, an accuracy and a panel, so the tree holds two fields one
+word apart of which one is real — which is exactly the confusion that put *"Predicted cost … (WP-28)"*
+on a `$0.00` metric from WP-20 until WP-28 found it.
+
+**What it costs to leave.** product/09's cost surface is the product's answer to *"what did this
+cost"*, and one of its two published numbers is a constant. Nothing is wrong on a screen today, so
+the cost is paid later and once: the first row to read the field believes it, and entry **57**'s
+lesson applies unchanged — **WP-41** (statistics deep-dive, whose own line names *"estimate
+accuracy"*) must not be the row that discovers this, because it would then be measuring the defect.
+For a BD-004 `local`-mode deployment it is worse than cosmetic: priced spend is the only spend there
+is, and the task row calls all of it an actual.
+
+**What "done" looks like.** One decision, then three lines. The recommendation is a **projection**
+rather than a writer: the read computes `sum(usd) where is_estimate and task_id = $1` from
+`cost_entries` beside `cost_actual`, so there is no fourth number to keep in step, no backfill for
+every task that already exists, and no new writer to add to the partition
+`tasks-column-ownership.test.ts` enforces. Whoever does it says in the same change whether the
+**column** survives — if it does not, the migration and `docs/technical/03-data-model.md:25` move
+together, and if it does, its docblock says it is the ledger's cache and names the query. The
+assertion is the countable effect at both boundaries (rule 42): a task with one priced run and one
+reported run publishes the priced one's amount and **not** the sum, and a task with no priced run
+publishes 0 for a reason that is now true. **Needs measurement: none** — every fact above is a file
+read.
+
+**Depends on / owner.** **No work package owns it.** WP-19 built the ledger this is computed from and
+is DONE; its row records the gap and did not close it. Cheapest by need is **WP-41**, which is a
+one-line M3 row and the first consumer; cheapest by adjacency is any row that touches
+`queries/pipeline-queries.ts`'s task projection. Nothing blocks it and nothing blocks on it.
+
+### 76. **Neither approval gate passes a deadline, so `approvals.deadline_at` is null on every row, `expireApproval` has no producer and `expireTaskApproval` has no caller at all — and unlike the question timeout, no document says an approval expires** (TODO, latent — **no work package owns it**; the third instance of the class entries **69** and **74** record; found by WP-28, session 5)
+**What is wrong.** The whole expiry mechanism is written — column, predicate, aggregate command,
+application command, event value, saga escalation — and the one piece that would start it is missing
+at both call sites. Unlike entry **74**, it cannot simply be built: nothing in the product documents
+says what the deadline should be, or whether an approval expires at all.
+
+**Evidence.** The WP-28 bullet, quoted: *"`createApproval` takes an optional `deadlineAt` and neither
+gate passes one, so `approvals.deadline_at` is null on every row, `isApprovalOverdue` is false for
+ever, and the `approvalHandler`'s third branch — the escalation for 'nobody decided in time' — is
+reachable only from a test."* WP-28 inherited the shape deliberately and said so: *"an expired budget
+approval follows the plan gate's own timeout behaviour rather than inventing a second one"*, so this
+is **one** fix for both kinds.
+
+Six reads off the tree (refiner, session 5; greps and file reads only, rule 66 — no test was run).
+- **Both call sites pass nothing**: `packages/application/src/pipeline/saga.ts:705` (`planApprovalGate`)
+  and `:837` (`budgetApprovalGate`), against `deadlineAt: input.deadlineAt ?? null`
+  (`packages/domain/src/aggregates/approval.ts:67,78`).
+- **`isApprovalOverdue` is therefore false for ever** (`approval.ts:97-100`); its only callers are
+  `approval.test.ts:81,155,156`.
+- **`expireTaskApproval` has *no* caller — production or test.** A grep over `packages/`, `apps/` and
+  `test/` returns the definition alone (`packages/application/src/pipeline/commands.ts:191-203`).
+  That is one step worse than entry **74**'s question half, whose `expireTaskQuestion` at least has
+  two test callers, and it is why no coverage or census signal points at this.
+- **The ending exists and is unreachable**: `saga.ts:1084-1095` escalates with *"Nobody decided the
+  {kind} approval for {ticket} in time"*, and `expireApproval` emits `task.approval.decided` with
+  `decision: 'expired'`, `reason: 'deadline passed'` (`approval.ts:144-160`) — a declared enum value
+  no producer can reach (`packages/contracts/src/events.ts:241`).
+- **There is no queue for it at all.** Entry 74's question timeout at least has two declared names
+  (`JOB_QUEUES.questionTimeout`, `questionReminder`); a grep for `approval` over
+  `packages/application/src/ports/jobs.ts` returns nothing.
+- **And no document asks for one.** BD-006 bounds **questions** only — *"Unanswered questions escalate
+  to `Needs human` after 1 working day by default (configurable per project)"* — and product/19 §11's
+  dial table has a *"Question timeout"* row and no approval row; product/04, product/09 and
+  product/19 name no approval deadline anywhere. The field is published
+  (`apps/server/src/queries/pipeline-queries.ts:643,749`) and rendered nowhere: the inbox prints an
+  approval's `requested_at` (`apps/web/src/features/inbox.tsx:128`) and prints *"· due …"* only for a
+  question (`:86-88`), from the column entry **74** shows is also always null.
+
+**What it costs to leave.** A plan or budget approval nobody decides parks its task for ever and holds
+a WIP slot — the same cost entry **74** records for a question, through a different door, and on this
+build nothing tells the maintainer it is waiting (no notification of any kind exists; WP-32). The
+**trigger condition** is worth stating because it is not today: nothing expires, so no task is
+wrongly expired, and the defect is entirely *dead machinery that looks finished* — the most expensive
+kind to leave, because the next reader assumes the timer runs. WP-28 made it likelier to matter: a
+budget approval is created by an automatic gate on any task over a project's threshold, so approvals
+stop being rare.
+
+**What "done" looks like.** The product half first, and the recommendation is strong enough to build
+from without another round: **an approval expires on the same working-day calendar as a question, at
+the same default (BD-006's 1 working day), read from the template's limits and not from a new dial
+cell** — the dial has fifteen policies of which seven have no reader (entry **72**), and a sixteenth
+is the wrong direction. Then the engineering half is entry **74**'s, twice: a handler on
+`task.approval.requested` (which already carries the whole `approvalRecordSchema`,
+`packages/contracts/src/events.ts:236-239`) at a declared TD-005 priority, writing `deadline_at` in
+the transaction that stores the approval and enqueuing through `HandlerContext.afterCommit`, with the
+job re-validating on fire (TD-004) — `expireTaskApproval`'s *"not pending → return"* **is** that
+re-validation, already written. Asserted as a countable effect with an injected clock (rules 2 and
+42), at the boundary and one unit past it, read back from the approval's status and the task's
+escalation. **If the product answer is instead that an approval never expires, the deliverable is a
+deletion**: `deadline_at`, `isApprovalOverdue`, `expireApproval`, `expireTaskApproval`, the saga's
+third branch and the `expired` enum value go together, and the DTO stops publishing a field that can
+only ever be null. Either answer covers `plan` and `budget` in one change. **Needs measurement:
+none.** The one sentence in product/19 §11 or BD-006 is the orchestrator's to write; a refiner writes
+no product document.
+
+**Depends on / owner.** **No work package owns it.** Same answer as entry **74**: **WP-32** is the
+only open row that already owes an injected clock, a calendar-aware schedule and a consumer band on
+`task.*`, and if it takes 74 this is a copy of the handler it will just have written. If it takes
+neither, this is one small row carrying **69**, **74** and **76** — three deadlines, one mechanism,
+and each one filed separately only because each is missing a different half.
+
+### 77. **The pipeline harness accepts a scripted artifact the production runner would refuse, so every hand-written artifact fixture in the unit tier is unvalidated — one has been wrong since WP-15 and two copies of it are still in the tree** (TODO, small — **no work package owns it**; the detector is a few lines; found by WP-28, session 5, and swept by the refiner)
+**What is wrong.** One cause: `ScriptedRun.structuredOutput` is `unknown` and is cast into the run
+outcome, so the harness is **kinder than the real adapter** (standing rule **1**) about the one thing
+a stage exists to produce. Production parses the same value against `artifactDataSchemas` and refuses
+a failure; the harness parses nothing, so a fixture can claim to be a `RefinedSpec` and not be one.
+
+**Evidence.** WP-28's note, quoted: *"**`saga.test.ts`'s `REFINED_SPEC` did not satisfy
+`refinedSpecDataSchema`**: `drift.flag` was the string `'none'` where the schema says `z.boolean()`.
+Nothing noticed because nothing in the unit tier had ever asked that fixture for its *size* —
+`CostStore.refinedSize` parses the artifact, and until this row no unit test reached it. Standing rule
+45's shape: a fixture that never has to satisfy the thing under test is a fixture nobody validates."*
+
+Three reads off the tree (refiner, session 5; greps, `git log -S` and file reads only, rule 66 — no
+test was run).
+- **The seam**: `readonly structuredOutput?: unknown` (`packages/application/src/testing/pipeline-harness.ts:153`)
+  is cast straight into the outcome (`:186`, `as RunOutcome['structuredOutput']`), while the real
+  runner builds the model's schema **and** validates the answer from the same
+  `artifactDataSchemas` entry (`packages/infrastructure/src/runner/structured-output.ts:22,38,74`).
+- **What masked it**: the first reader that would have noticed fails soft *by design* —
+  `refinedSize` is a `safeParse` returning `null` (`pipeline-harness.ts:435`, mirroring the
+  production store), so an invalid fixture reads as *"this task has no size"* rather than as an
+  error. Rule **16**'s shape inside a harness.
+- **The sweep rule 49 asks for was not done, and it finds two survivors.** `drift: { flag: 'none', …
+  }` is still in `packages/application/src/pipeline/human-commands.test.ts:93` and
+  `packages/application/src/cost/guard.test.ts:170`; every other copy in the tree already writes
+  `flag: false` (`saga.test.ts:75`, `conflict-warning.test.ts:91`, `ticket-lint.test.ts:55`,
+  `test/e2e/support/scenarios.ts:31`, `test/e2e/pipeline/ticket-lint.e2e.test.ts:59`).
+  `git log -S"flag: 'none'"` dates the value to `79582c6` — **WP-15**, the commit that introduced the
+  harness — so the fixture has been invalid for the whole of the pipeline's history, and it **spreads
+  by copy**: the same `-S` over the two survivors returns `8abccbf` (**WP-15i**, `human-commands.test.ts`)
+  and `8100c50` (**WP-19**, `guard.test.ts`), each a new file that started from the old one. That is
+  the recurrence argument for a detector rather than a fix: three work packages copied a payload no
+  boundary would accept, and none of the three could have noticed.
+
+**What it costs to leave.** Any test that scripts a run proves something about a payload the
+production path would have rejected, so an artifact-shaped acceptance criterion can be green on data
+no model could produce. The blast radius is bounded in the direction that matters least: the real
+boundary does validate, so production cannot *store* an invalid artifact — the tier with the invalid
+data is the tier that proves the pipeline's behaviour. The two survivors are live rather than
+historical: the next consumer that asks either file's `RefinedSpec` for a parsed field gets `null` and
+a quietly different path, which is exactly how WP-28 found the third one.
+
+**What "done" looks like.** The deliverable is the **detector**, not the fix (standing rule 30): the
+harness parses what it is scripted with against `artifactDataSchemas[<the stage's `produces`>]` and
+**throws** with the zod issue, in the outcome builder, so every test that scripts a run is checked
+the moment it exists — the shape `tasks-column-ownership.test.ts` and
+`fixture-provenance.contract.test.ts` already use, a check read off what is there rather than a list
+somebody maintains. The two known fixtures are corrected in the same change and the harness docblock
+gains the sentence, so the lesson lives where it binds rather than only here. Assertion: a scripted
+run whose structured output fails its schema fails by name. **Needs measurement: how many other
+scripted fixtures do not parse** — the two above were found by grepping one field of one artifact
+type across nine harness-using test files, not by parsing them, so the count is a lower bound and the
+detector is what produces the real number.
+
+**Depends on / owner.** **No work package owns it**: the harness is WP-15's and that row is DONE. It
+is a test-infrastructure change of a few lines and belongs to the next row that scripts a run —
+**WP-29** and **WP-31** both will — and any implementer may take it inside a row that already touches
+`pipeline-harness.ts`. Nothing blocks. It is recorded on standing rules **45** (second instance) and
+**1**, so a future reader meets it at the rule as well as here.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -12051,6 +12295,11 @@ that leaks a handle is untidy, and one that leaks a *lock* is a time bomb for wh
    `GET /api/projects/:id/autonomy`, so WP-28 reads a stored threshold instead of re-deriving one
    from the level — which BD-027:14 forbids. It is recorded as `kind: 'unread', owner: 'WP-28'` in
    `AUTONOMY_POLICY_READERS`, which a test holds to `AutonomyPreset`'s own key set.*
+   *Implementer (WP-28, session 5 — standing rule 83): the heading above is now **false**, and it is
+   left in place with this correction under it rather than rewritten, because the sentence is the
+   evidence for how long the gap stood. `requiresBudgetApproval` is consumed by `budgetApprovalGate`
+   (`packages/application/src/pipeline/saga.ts`), the reader table entry is
+   `kind: 'read'`, and `autonomy-readers.test.ts` resolves that citation against the tree.*
 5. **Step 3 (the business interview) is not built, and the wizard says so.** product/06 describes a
    conversational form driven by the Product Manager role; nothing in this build runs one, and a
    form that collected answers nobody reads would be worse than an honest gap. The screen links to
@@ -13575,7 +13824,229 @@ censuses by name.
   `budgetsWithSpend` is the window-and-spend half, which is the thing Q12 needs the two endpoints to
   agree about.
 
+### WP-28 — the budget-approval gate
+
+**What shipped.** `budgetApprovalGate` (`packages/application/src/pipeline/saga.ts`), a
+`kind: 'budget'` approval created beside `planApprovalGate` and decided through WP-15i's existing
+route; migration **0022** (`tasks.estimate_basis`, `tasks.estimate_samples`) with `saveEstimate` as
+their only writer; the estimate, its provenance and product/19 §10's accuracy on `TaskRecord` and on
+the task page; and the `Estimate:` line product/18:31 asks for on the workpad. Q71 is implemented as
+recommended; `AUTONOMY_POLICY_READERS.budgetApprovalThresholdUsd` is now `kind: 'read'` and the
+**sixth** policy the dial sets that something reads.
+
+**1. Where it fires, and why the predicate is over the compiled pipeline.** product/09 says
+*"before Implementation"* and product/18 says the estimate is made *at refinement*, so the gate
+fires when the stage that produced the `RefinedSpec` completes — and only when an
+`ImplementationNotes`-producing stage is still ahead of it (`spendIsStillAhead`, exported so it can
+be driven directly). Asking the *template name* would have been wrong twice: `chore` has no
+architecture stage between the two, and `ticket_lint`'s one stage also produces a `RefinedSpec`
+(WP-25), so a name-based rule would park a lint comment in front of a maintainer for a spend that
+has already happened. `discovery` has no `RefinedSpec` stage at all, which the suite states rather
+than leaves implicit.
+
+**2. The key is `(task, kind)`, not `(task, kind, stage, attempt)` — measured, and it is a deviation
+from the row's prescribed mechanism.** The row says *"keyed through `approvals.forStageAttempt` so a
+re-refinement does not ask twice"*; those two clauses cannot both hold. `enteredAttempt`
+(`packages/domain/src/aggregates/task.ts`) increments on every re-entry, so an attempt-keyed lookup
+asks again on attempt 2 — **canaried**: swapping the new lookup for `forStageAttempt` fails
+`saga.test.ts` › *"does not ask again when the task goes round refinement a second time"* by name,
+and nothing else. The property the row states is the one implemented, through a new port method
+`ApprovalRepository.latestOfKind`, added to the shared contract suite in the same change (standing
+rule 23) with a case that plants a budget approval at attempt 1, finds it while the task is on
+attempt 3, and shows a plan approval does not answer a budget question. The difference is not a
+style choice: a plan approval is a statement about *a plan* and a budget approval is a statement
+about *the estimate*, which is written once. Standing rule 27's shape — the defect was right and the
+patch was not.
+
+**3. Which number crosses the threshold, and what a missing one does (Q71, implemented).** The
+**point estimate** on the task row, compared with `>` against the project's **materialised**
+`budgetApprovalThresholdUsd` (BD-027:14 — never `AUTONOMY_PRESETS[level]`). A task at *exactly* the
+threshold is not gated, asserted from both sides. `estimate_usd is null` does **not** gate: a gate
+that fires on a missing number is standing rule 16 inverted, and `basis: 'unknown'` is exactly a
+project's first tasks. Two branches are named rather than defaulted — a project whose dial was never
+materialised keeps the pre-WP-28 behaviour (no gate), and a materialised `null` threshold is the
+dial saying *"no budget approval at this position"*, which `requiresBudgetApproval` already answers
+`false` for. That is why there is **no** second `budgetApprovalThresholdUsd === null` check in the
+gate: an inner layer the outer one makes unreachable is untestable by construction (standing rule
+22), so the threshold is read once, by `requiresBudgetApproval`, and named in the log line the gate
+writes when it fires.
+
+**4. Rejected is not "go round again", and it is the existing vocabulary.** A rejected *plan* returns
+to Architecture, because there is a better plan to write. A rejected *budget* has nothing to re-make:
+the estimate is write-once, so resuming the stage would walk straight back into a gate already keyed
+as asked. The task escalates to `needs_human` with a brief naming the maintainer's reason and the two
+ways out (raise the threshold and hand it back, or cancel). **No new task state** (Q59), no second
+route, and the expired branch is the plan gate's own — unchanged, and still armed by nothing, because
+`createApproval` is given no deadline (backlog 74's class).
+
+**5. Four columns, one narrow writer, and the third state a nullable column buys.**
+`CostStore.saveEstimate` now writes `size`, `estimate_usd`, `estimate_basis` and `estimate_samples`
+in one statement; `tasks-column-ownership.test.ts` holds all four to it off disk. The basis is
+**nullable with no default and no backfill**: `null` is *"the estimator has not run"*, `'unknown'` is
+*"it ran and refused"*, and a word written into a pre-0022 row would be inventing the provenance the
+column exists to carry (standing rule 86). `estimate_samples` is paired to it by a check constraint
+rather than defaulted to zero, for the same reason — and the constraint is asserted from both
+directions in `test/integration/db/estimate-basis.integration.test.ts` rather than described in the
+migration's prose.
+
+**6. What the workpad and the task page print.** Four sentences, one per state, both places: the
+figure with *"from N finished tasks in this project"* or *"in this organisation"*; *"none — this
+project has no finished task to estimate from"*; *"not yet — a task is estimated when refinement
+completes"*; and *"(basis not recorded)"* for a pre-0022 row. The absence is named rather than
+rendered as `0.00`, which is Q71 (b)'s whole point.
+
+**7. A false sentence the task page had been printing since WP-20.** Its Checks panel carried a
+metric labelled **Estimate** reading `task.cost_estimated_usd`, with the definition *"Predicted cost
+from the price table before the work ran (WP-28)"*. Both halves were wrong: that field is
+`tasks.cost_estimated`, the part of what a task has **already** spent that was priced rather than
+reported (BD-011), and **no writer in this build ever moves it** — so the screen printed `$0.00` and
+called it a prediction. It now reads `estimate_usd`, with the basis line and the accuracy beside it,
+and the file's docblock no longer says the panel shows *"cost against nothing"*.
+
+**Assumptions, each implemented.**
+- **The gate fires at the refinement stage's completion**, not at the plan's. product/09 and
+  product/18 name two different moments (*"before Implementation"* and *"at refinement"*); gating at
+  the earlier one satisfies both for all three ticket templates and is the only one that works for
+  `chore`, which has no plan stage.
+- **Any existing budget approval counts as *asked***, including `rejected` and `expired`: the
+  question a second ask would put is the one already answered, and a maintainer who wants the task
+  to proceed raises the threshold rather than waiting to be asked again.
+- **`estimate_accuracy` is computed in the projection**, from `estimate_usd` and `cost_actual` and
+  nothing else (`estimateAccuracy`), so there is no third number to keep in step and no column to
+  backfill.
+- **product/19 §15's *"p75"* is left to the orchestrator to amend.** Q71 (a)'s recommendation is
+  implemented — the gate reads the point estimate — and the product document still says p75. An
+  implementer does not edit product documents; the note is on Q71.
+
+**What the tiers assert.** Unit: the gate's nine cases (over the threshold, exactly at it, no
+estimate, the stored threshold both ways, never materialised, approved, rejected, not asked twice)
+plus `spendIsStillAhead` over every shipped template, the workpad's four sentences, the estimate
+handler's four columns, and the task page's basis line. Contract: `latestOfKind` in the shared
+pipeline-store suite (fake **and** PostgreSQL) and the four-column estimate round trip in the
+cost-store suite. Integration: migration 0022's two check constraints from both directions.
+ui: the basis line's five branches. web-e2e: the panel's three new numbers. e2e: the whole chain on a
+real instance — a task that finishes and becomes the project's history, a dial materialised over
+HTTP, the same estimate not gated at Supervised and gated at Assist, the workpad line, the task DTO,
+an approval and a rejection over HTTP with a replayed `Idempotency-Key`.
+
+**Canaries** (rule 3; all on the real file, restored from a byte-exact copy and `cmp`-verified —
+rule 77's copy recipe does **not** work here, measured: `saga.test.ts` reaches the saga through
+`createPipelineRuntime`, so a mutant `saga.zzmutant.ts` imported by a copied test file is never the
+code under test, and a planted `throw` left 58/58 green).
+- Gate never fires → 5 named failures.
+- Gate always fires → 1, the boundary case.
+- `autonomyPresetFor(settings) ?? AUTONOMY_PRESETS.supervised` → the never-materialised case.
+- `forStageAttempt` instead of `latestOfKind` → the re-refinement case.
+- The budget branch of the rejection removed → the escalation case.
+
+**Two defects found on the way, both fixed here.**
+- **`saga.test.ts`'s `REFINED_SPEC` did not satisfy `refinedSpecDataSchema`**: `drift.flag` was the
+  string `'none'` where the schema says `z.boolean()`. Nothing noticed because nothing in the unit
+  tier had ever asked that fixture for its *size* — `CostStore.refinedSize` parses the artifact, and
+  until this row no unit test reached it. Standing rule 45's shape: a fixture that never has to
+  satisfy the thing under test is a fixture nobody validates.
+- **The e2e's first draft escalated its history task at refinement**, and the cause was
+  re-derived rather than guessed (rule 81): `FakeClaudeRunner`'s divergence **5** throws when a
+  scenario's cost exceeds `RunSpec.limits.maxBudgetUsd` without ending in `budget_exceeded`, and
+  `refinement`'s cap is 2.00 against the fixture's 4.00. The fake is right; the fixture was wrong,
+  and every per-stage figure is now under its own cap with the total **produced** by the test.
+- **And a third, in the e2e's own wait** (rules 76/87): it waited for the workpad body to contain
+  `'Estimate:'` and then asserted the figure — which the *previous* render already satisfies with
+  `Estimate: not yet …`. It now waits on the exact line it asserts plus the header, so the assertion
+  is about the render the gate caused.
+
+**Backlog 72 (b) — `stopAfterStage` and `businessReview` — was offered to this row and is
+*declined*, with the measurement.** The brief's condition was *"take them if the row's shape makes
+it one table line"*. It does not, and the number is: besides this row's own,
+`compilePipeline(template, storedTemplate)` has **fourteen** production call sites — `saga.ts` (5),
+`jobs.ts` (3), `commands.ts` (2),
+`stage-executor.ts`, `review-only.ts`, `ticket-lint.ts` and `onboarding/discovery.ts`, and a compile
+step that reads the dial changes the *signature* — every one of them would have to resolve the
+project's materialised preset first, which several of them are in no position to do (the interpreter
+is pure, and two of those sites are inside a transaction the settings port must not be asked from).
+This row's gate touches none of that: it reads one field off a preset it already had. And
+`stopAfterStage` needs a **product decision** this row has no standing to take — what *"park after
+architecture"* means when Q59 refused a new task state, and whether a scoping-only task that has
+produced its plan is `needs_human` (which reads as a fault) or `done` (which reads as delivered).
+`businessReview` is closer — the interpreter already honours `enabled: false`
+(`packages/domain/src/pipeline/interpreter.test.ts` ›
+*"walks past a disabled stage a transition names by hand"*) — but it is the same compile step, so splitting them would build the carrier for one policy and leave the other needing
+it again. Both stay where the refiner put them,
+`AUTONOMY_POLICY_READERS` unchanged at `owner: 'none'`, and backlog 72's own *"what done looks
+like"* already states the acceptance (rule 42 at both boundaries: Assist parks after `architecture`
+and Supervised does not).
+
+**For the orchestrator.** `docs/technical/03-data-model.md`'s `tasks(...)` row is now **three**
+migrations behind — 0020's `review_subject`, 0021's `autonomy_policies` and 0022's two estimate
+columns. Session 5's precedent is that an implementer does not amend it (neither 0020 nor 0021 did),
+so it is filed under discovered work rather than edited here.
+
+
 ## Discovered work — session 5 (not in plan)
+- **`docs/technical/03-data-model.md`'s `tasks(...)` row is three migrations behind** (WP-28).
+  It does not name `review_subject` (migration 0020, WP-24), `autonomy_policies` (0021, WP-30) or
+  `estimate_basis`/`estimate_samples` (0022, this row). Rule 8 says docs win and the doc is amended
+  first — but neither of the two preceding rows amended it, so the convention in session 5 is that
+  the **orchestrator** carries a schema change into technical/03 rather than the implementer, and a
+  fourth silent divergence is worth one line here rather than a fourth unannounced edit. The columns
+  themselves are enforced against the Drizzle definitions by `schema-parity.integration.test.ts`;
+  what the document is behind on is the *prose*, which is what a reader of the data model reads.
+  *Refiner (session 5): **recorded here as a doc pointer and deliberately not as a backlog entry** —
+  the backlog is for defects and loose ends, and a stale document row is a doc amendment (rule 8) the
+  **orchestrator** owns, the same disposition as the product/14 roadmap line below. Two corrections
+  and the exact list, measured against the Drizzle table
+  (`packages/infrastructure/src/db/schema/pipeline.ts`, 35 columns) and
+  `docs/technical/03-data-model.md:25` (30): **(1) the `tasks(…)` row is missing five columns from
+  four migrations, not three** — `stage_attempts` and `iteration_limits` (both migration **0012**,
+  WP-15, so the divergence predates session 5 by fourteen rows), `review_subject` (**0020**, WP-24)
+  and `estimate_basis`/`estimate_samples` (**0022**, WP-28). **(2) `autonomy_policies` is not a
+  `tasks` column at all**: migration `0021_autonomy_materialised.sql:36` is `alter table projects add
+  column autonomy_policies jsonb`, so it belongs on the **`projects(…)`** row at
+  `docs/technical/03-data-model.md:18`, which does not name it either. Paste positions, so the edit is
+  mechanical: `… workpad_ref jsonb, stage_attempts jsonb, iteration_limits jsonb, iteration_counters
+  jsonb, …` and `… estimate_usd numeric(12,6), estimate_basis text, estimate_samples int, …` on line
+  25, with `review_subject jsonb` beside `ticket_snapshot_at`; and `… config_hash, autonomy_level,
+  autonomy_policies jsonb, readiness_level, …` on line 18. The prose each column needs is already
+  written in its own migration's header and in the WP-24/WP-28 notes above.*
+- **`tasks.cost_estimated` has no writer anywhere, and two surfaces publish it** (found by WP-28
+  while fixing the task page's false *"Estimate"* metric). The column is `not null default 0` since
+  migration 0004, `TaskRecord.cost_estimated_usd` publishes it, and a grep over `packages/` and
+  `apps/` finds no `update tasks set cost_estimated` and no insert that fills it — so every task the
+  product has ever shown reports `$0.00` of estimated spend. Its intended meaning is BD-011's: the
+  part of a task's spend that was **priced from `price_list`** rather than reported by the provider,
+  which the cost ledger already computes per entry (`cost_entries.is_estimate`). So the fix is a
+  projection or a narrow write from the ledger, not a new number; what makes it worth filing is that
+  a published field nobody writes reads as *"nothing was estimated"* rather than as *"nobody
+  counted"* (standing rule 16). **No work package owns it**; cheapest owner is WP-19's, whose tables
+  hold the answer.
+  *Refiner (session 5): **filed as backlog 75**, folding WP-19's own bullet of the same finding — it
+  has now been recorded twice and numbered neither time, which is the shape entry 35 records. Three
+  things the entry adds: the two bullets' definitions **agree** (both are "the part of the spend that
+  was priced rather than reported", and `cost_entries.is_estimate` already holds it per row); **no
+  screen renders the field today**, so this is latent and the exposure is the API, with **WP-41** the
+  first consumer and entry 57's lesson applying (the row that measures it must not be the row that
+  discovers it); and the recommendation is a **projection** rather than a writer, so there is no
+  backfill and no new entry in the `tasks` column partition. WP-19 is DONE, so "cheapest owner is
+  WP-19's" names no open row.*
+- **An approval is created with no deadline, so `expireApproval` has no producer** (WP-28, and it is
+  backlog **74**'s shape one aggregate across). `createApproval` takes an optional `deadlineAt` and
+  neither gate passes one, so `approvals.deadline_at` is null on every row, `isApprovalOverdue` is
+  false for ever, and the `approvalHandler`'s third branch — the escalation for *"nobody decided in
+  time"* — is reachable only from a test. WP-28 inherits the shape deliberately (*"an expired budget
+  approval follows the plan gate's own timeout behaviour rather than inventing a second one"*), so
+  this is one fix for both kinds and not two. **No work package owns it**; it belongs with whatever
+  arms BD-006's one-working-day timer for questions, which is backlog 74.
+  *Refiner (session 5): **filed as backlog 76 and deliberately not folded into 74** — same mechanism,
+  different missing half. 74's is engineering (BD-006 fixes the limit, `questionTimeoutAt` computes
+  it, the queue names are declared); **76's is product**: BD-006 bounds questions only, product/19
+  §11's dial table has a "Question timeout" row and no approval row, and no document anywhere says an
+  approval expires — so the recommendation is stated in the entry rather than left open (same
+  calendar, same 1-working-day default, from the template's limits and **not** a sixteenth dial
+  policy), together with the deletion that is the honest alternative. Two measurements the bullet did
+  not have: `expireTaskApproval` (`commands.ts:191`) has **no caller at all**, production or test —
+  one step worse than the question half, which has two test callers — and there is **no job queue**
+  for an approval timeout even by name, where questions have two. 74 now points here; 69, 74 and 76
+  are one piece of work.*
 - **Seven of the dial's fifteen policies have no reader and no work package**, and they are now
   enumerated where that is visible rather than implied (WP-30). `AUTONOMY_POLICY_READERS`
   (`packages/domain/src/policies/autonomy.ts`) is `EVENT_CONSUMPTION`'s shape and a test holds its
@@ -14265,6 +14736,7 @@ censuses by name.
   `requiresBudgetApproval(preset, estimateUsd)` exists in `packages/domain/src/policies/autonomy.ts`
   and has no caller, so an expensive task is never routed to a budget approval. WP-19 produces the
   number; the gate belongs with the autonomy work (BD-027, product/18).
+  *Orchestrator (WP-28): **closed** — `budgetApprovalGate` in `packages/application/src/pipeline/saga.ts` is the caller, reading the materialised threshold WP-30 stores; `AUTONOMY_POLICY_READERS` names it.*
 - **`budget.window.reset` is a queue name with no job** (WP-19). Windows roll over implicitly, so
   correctness does not need it; what nobody gets without it is the `budget.reset` event technical/02
   publishes, which is a notification rather than a projection. Stated in `cost/window.ts`.

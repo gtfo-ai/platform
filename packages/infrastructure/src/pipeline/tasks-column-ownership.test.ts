@@ -55,7 +55,13 @@ const SHARED_COLUMNS: ReadonlySet<string> = new Set(['updated_at']);
 
 /** The owner of every `tasks` column that any statement in this repository writes. */
 const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
-  'packages/infrastructure/src/cost/postgres-cost-store.ts': ['size', 'estimate_usd'],
+  'packages/infrastructure/src/cost/postgres-cost-store.ts': [
+    // `saveEstimate` — the four columns of the cost estimate (WP-19, and WP-28's basis/samples)
+    'size',
+    'estimate_usd',
+    'estimate_basis',
+    'estimate_samples',
+  ],
   'packages/infrastructure/src/pipeline/postgres-pipeline-store.ts': [
     // `saveTicketSnapshot`
     'ticket_snapshot',

@@ -59,6 +59,11 @@ describe('renderWorkpad', () => {
     ],
     costUsd: 1.5,
     budgetUsd: 50,
+    estimate: {
+      usd: 12,
+      basis: 'project_history' as const,
+      samples: 7,
+    },
     mrUrl: 'https://git.example.test/acme/api/-/merge_requests/7',
     blocker: null,
     takenOver: null,
@@ -71,6 +76,7 @@ describe('renderWorkpad', () => {
     expect(markdown).toContain('- ▶ implementation');
     expect(markdown).toContain('- · code_review');
     expect(markdown).toContain('Cost so far: 1.50 of 50.00 USD');
+    expect(markdown).toContain('Estimate: 12.00 USD (from 7 finished tasks in this project)');
     expect(markdown).toContain('merge_requests/7');
     expect(markdown).not.toContain('Needs a human');
   });
@@ -106,6 +112,58 @@ describe('renderWorkpad', () => {
 
   it('says nothing about a take-over on an ordinary render', () => {
     expect(renderWorkpad(view)).not.toContain('Taken over');
+  });
+
+  /**
+   * product/18:31 — *"shown in the workpad"* — and Q71 (b)'s *"make the absence visible instead"*.
+   *
+   * Four states, one line each, asserted from **both** sides (standing rule 42): a workpad that
+   * printed the same sentence for every one of them would pass any single case. The distinction
+   * that matters is the middle pair — *"the estimator has not run"* and *"it ran and there was
+   * nothing to estimate from"* are different facts about a project, and a blank collapses them.
+   */
+  describe('the estimate line (product/18:31, Q71)', () => {
+    it('names the figure and how many finished tasks of this project it rests on', () => {
+      expect(renderWorkpad(view)).toContain(
+        'Estimate: 12.00 USD (from 7 finished tasks in this project)',
+      );
+    });
+
+    it('says the organisation when the project’s own history was empty', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        estimate: { usd: 8.5, basis: 'org_history', samples: 1 },
+      });
+      expect(markdown).toContain('Estimate: 8.50 USD (from 1 finished task in this organisation)');
+    });
+
+    it('names the refusal rather than printing a blank or a zero', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        estimate: { usd: null, basis: 'unknown', samples: 0 },
+      });
+      expect(markdown).toContain(
+        'Estimate: none — this project has no finished task to estimate from',
+      );
+      expect(markdown).not.toContain('Estimate: 0.00 USD');
+    });
+
+    it('says "not yet" before refinement has produced a spec, which is a different statement', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        estimate: { usd: null, basis: null, samples: null },
+      });
+      expect(markdown).toContain('Estimate: not yet');
+      expect(markdown).not.toContain('no finished task to estimate from');
+    });
+
+    it('does not invent a provenance for a row written before migration 0022', () => {
+      const markdown = renderWorkpad({
+        ...view,
+        estimate: { usd: 4, basis: null, samples: null },
+      });
+      expect(markdown).toContain('Estimate: 4.00 USD (basis not recorded)');
+    });
   });
 
   it('adds the blocker brief when the task is parked', () => {

@@ -42,7 +42,7 @@
  * transition" — not "guess": a wrong transition on somebody's board is worse than none, and
  * `transition` refuses a status the workflow does not have anyway (product/08).
  */
-import type { Id, Slug, TaskState } from '@platform/contracts';
+import type { EstimateBasis, Id, Slug, TaskState } from '@platform/contracts';
 import type { EventHandler } from '../events/handler.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -112,6 +112,21 @@ export interface WorkpadView {
   readonly stages: readonly { readonly id: Slug; readonly entered: boolean }[];
   readonly costUsd: number;
   readonly budgetUsd: number;
+  /**
+   * The estimate made at refinement, and what it rests on (product/18:31, WP-28).
+   *
+   * product/18's *"Cost estimate before spend"* card says the figure is *"shown in the workpad"*,
+   * and until WP-28 the workpad said nothing about it. Three shapes, because there are three
+   * answers and a blank would collapse two of them (standing rules 16 and 18):
+   * `basis: null` — the estimator has not run; `basis: 'unknown'` — it ran and refused, because the
+   * project has no finished task to estimate from; a basis with a number — the figure, and where it
+   * came from.
+   */
+  readonly estimate: {
+    readonly usd: number | null;
+    readonly basis: EstimateBasis | null;
+    readonly samples: number | null;
+  };
   readonly mrUrl: string | null;
   /** The last blocker brief, when the task is parked. */
   readonly blocker: string | null;
@@ -141,6 +156,34 @@ export interface WorkpadView {
  * which the platform received from the provider and stores verbatim (BD-022: rendered, never
  * executed).
  */
+/**
+ * The `Estimate:` line, as one sentence per state of the estimate.
+ *
+ * Platform text around two numbers the platform itself computed — no untrusted bytes reach it, and
+ * a missing figure is *named* rather than printed as `0.00` or left out, because a maintainer
+ * reading a workpad has to be able to tell "cheap" from "we do not know".
+ */
+const estimateLine = (estimate: WorkpadView['estimate']): string => {
+  if (estimate.basis === 'unknown') {
+    return 'Estimate: none — this project has no finished task to estimate from';
+  }
+  if (estimate.usd === null) {
+    return 'Estimate: not yet — a task is estimated when refinement completes';
+  }
+  const amount = `Estimate: ${estimate.usd.toFixed(2)} USD`;
+  const tasks = estimate.samples === 1 ? '1 finished task' : `${estimate.samples} finished tasks`;
+  if (estimate.basis === 'project_history') {
+    return `${amount} (from ${tasks} in this project)`;
+  }
+  if (estimate.basis === 'org_history') {
+    return `${amount} (from ${tasks} in this organisation)`;
+  }
+  // A number with no basis: a row written before migration 0022. Saying "basis not recorded" is the
+  // honest reading; inventing `project_history` for it would be the provenance the column exists to
+  // carry, made up (standing rule 86).
+  return `${amount} (basis not recorded)`;
+};
+
 export const renderWorkpad = (view: WorkpadView): string => {
   const checklist = view.stages
     .map((stage) => {
@@ -154,6 +197,7 @@ export const renderWorkpad = (view: WorkpadView): string => {
     checklist,
     '',
     `Cost so far: ${view.costUsd.toFixed(2)} of ${view.budgetUsd.toFixed(2)} USD`,
+    estimateLine(view.estimate),
   ];
   if (view.mrUrl !== null) {
     lines.push(`Merge request: ${view.mrUrl}`);
@@ -198,6 +242,11 @@ const viewOf = (
   })),
   costUsd: stored.costActualUsd,
   budgetUsd,
+  estimate: {
+    usd: stored.estimateUsd,
+    basis: stored.estimateBasis,
+    samples: stored.estimateSamples,
+  },
   mrUrl: stored.mr?.url ?? null,
   blocker,
   takenOver,

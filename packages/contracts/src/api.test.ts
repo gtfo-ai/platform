@@ -334,6 +334,10 @@ describe('the list envelopes and the KB health report', () => {
       risk_classes: [],
       cost_actual_usd: 0,
       cost_estimated_usd: 0,
+      estimate_usd: null,
+      estimate_basis: null,
+      estimate_samples: null,
+      estimate_accuracy: null,
       created_at: AT,
       updated_at: AT,
     };

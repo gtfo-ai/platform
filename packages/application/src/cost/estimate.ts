@@ -8,12 +8,13 @@
  * step inside the saga; a handler keeps the pipeline's state machine free of a projection it does
  * not read, and the whole thing is additive: if it fails, the task still moves.
  *
- * ## Two columns, one narrow write
+ * ## Four columns, one narrow write
  *
- * `tasks.size` and `tasks.estimate_usd` are written by {@link CostStore.saveEstimate} and by
- * nothing else. Not `tasks.save`: this runs in an event handler beside the `stage.execute` job's
- * transactions, which is precisely the premise that turned a whole-row write into a lost update at
- * WP-15d (standing rule 79, measured at 0.40 USD of a task's recorded spend).
+ * `tasks.size`, `tasks.estimate_usd`, `tasks.estimate_basis` and `tasks.estimate_samples` are
+ * written by {@link CostStore.saveEstimate} and by nothing else. Not `tasks.save`: this runs in an
+ * event handler beside the `stage.execute` job's transactions, which is precisely the premise that
+ * turned a whole-row write into a lost update at WP-15d (standing rule 79, measured at 0.40 USD of
+ * a task's recorded spend).
  *
  * ## The **estimate** is written once; the size is not, and the difference is deliberate
  *
@@ -26,7 +27,7 @@
  * task, which had no history to estimate from (`basis: 'unknown'`), and the second round is the
  * first chance to give it a number now that other tasks may have finished. `tasks.size` is rewritten
  * in the same narrow write, from the newest spec, which is the value a reader should see when the
- * two rounds disagree. The cost of this branch is one extra read plus one two-column update per
+ * two rounds disagree. The cost of this branch is one extra read plus one four-column update per
  * re-refinement of an unestimated task; `estimate.test.ts` pins both directions.
  */
 import type { Id } from '@platform/contracts';
@@ -91,9 +92,14 @@ export const costEstimateHandler = (options: CostEstimateOptions): EventHandler 
       ESTIMATE_HISTORY_LIMIT,
     );
     const estimate = estimateTaskCostUsd(size, history);
+    // The basis and the sample count are **stored** since WP-28 (migration 0022), not only logged:
+    // the budget gate's approval card has to say what the figure rests on, and a debug line is not
+    // a place a projection can read from (Q71).
     await options.store.saveEstimate(context.scope.tx, taskId, {
       size,
       estimateUsd: estimate.usd,
+      basis: estimate.basis,
+      samples: estimate.samples,
     });
     logger.debug(
       {

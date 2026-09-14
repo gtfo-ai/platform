@@ -75,14 +75,20 @@ describe('the estimate handler', () => {
       { size: 'M', costUsd: 20 },
     ]);
     await world.publish([artifactCreated('RefinedSpec')]);
-    expect(world.store.estimates).toEqual([{ taskId: TASK, size: 'XL', estimateUsd: 80 }]);
+    // The basis and the sample count travel with the number since WP-28 (migration 0022): an
+    // approval card that cannot say what a figure rests on is the defect Q71 filed.
+    expect(world.store.estimates).toEqual([
+      { taskId: TASK, size: 'XL', estimateUsd: 80, basis: 'project_history', samples: 2 },
+    ]);
   });
 
   it('records the size with no estimate when nothing has finished yet (rule 16)', async () => {
     const world = harness();
     world.store.seedRefinedSize(TASK, 'S');
     await world.publish([artifactCreated('RefinedSpec')]);
-    expect(world.store.estimates).toEqual([{ taskId: TASK, size: 'S', estimateUsd: null }]);
+    expect(world.store.estimates).toEqual([
+      { taskId: TASK, size: 'S', estimateUsd: null, basis: 'unknown', samples: 0 },
+    ]);
   });
 
   it('ignores every other artifact type', async () => {
@@ -106,12 +112,20 @@ describe('the estimate handler', () => {
     const world = harness();
     world.store.seedRefinedSize(TASK, 'M');
     await world.publish([artifactCreated('RefinedSpec')]);
-    expect(world.store.estimates).toEqual([{ taskId: TASK, size: 'M', estimateUsd: null }]);
+    expect(world.store.estimates).toEqual([
+      { taskId: TASK, size: 'M', estimateUsd: null, basis: 'unknown', samples: 0 },
+    ]);
 
     world.store.seedHistory(PROJECT, [{ size: 'M', costUsd: 12 }]);
     world.store.seedRefinedSize(TASK, 'L');
     await world.publish([artifactCreated('RefinedSpec')]);
-    expect(world.store.estimates.at(-1)).toEqual({ taskId: TASK, size: 'L', estimateUsd: 24 });
+    expect(world.store.estimates.at(-1)).toEqual({
+      taskId: TASK,
+      size: 'L',
+      estimateUsd: 24,
+      basis: 'project_history',
+      samples: 1,
+    });
   });
 
   it('estimates once: a second refinement round does not move the expectation', async () => {
@@ -121,7 +135,9 @@ describe('the estimate handler', () => {
     await world.publish([artifactCreated('RefinedSpec')]);
     world.store.seedHistory(PROJECT, [{ size: 'M', costUsd: 99 }]);
     await world.publish([artifactCreated('RefinedSpec')]);
-    expect(world.store.estimates).toEqual([{ taskId: TASK, size: 'M', estimateUsd: 10 }]);
+    expect(world.store.estimates).toEqual([
+      { taskId: TASK, size: 'M', estimateUsd: 10, basis: 'project_history', samples: 1 },
+    ]);
   });
 
   it('writes nothing for a task the platform does not have', async () => {

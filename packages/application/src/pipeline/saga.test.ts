@@ -6,13 +6,16 @@
  * PostgreSQL with the real fake-Claude runner; this tier is where the branches live, because a
  * branch is cheap to reach here and expensive to reach there.
  */
-import type { DomainEvent, IsoDateTime } from '@platform/contracts';
+import type { DomainEvent, IsoDateTime, Slug } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
+import type { CompiledPipeline } from '@platform/domain';
 import {
   AUTONOMY_PRESETS,
+  compilePipeline,
   DEFAULT_ITERATION_LIMITS,
   materialiseAutonomy,
   readDataBlocks,
+  SHIPPED_TEMPLATES,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -22,12 +25,18 @@ import {
   type HarnessOptions,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
-import { answerTaskQuestion, decideTaskApproval, expireTaskQuestion } from './commands.js';
+import {
+  answerTaskQuestion,
+  decideTaskApproval,
+  expireTaskQuestion,
+  returnToStageCommand,
+} from './commands.js';
 import { MAX_GATE_CHECKS } from './gates.js';
 import { GATE_RECHECK_MS } from './jobs.js';
 import {
   DEFAULT_REVIEW_COMMENT_WINDOW_MS,
   priorityRankOf,
+  spendIsStillAhead,
   UNMATERIALISED_PLAN_APPROVAL,
 } from './saga.js';
 
@@ -59,7 +68,11 @@ const REFINED_SPEC = {
   non_functional: [],
   dependencies: [],
   size: 'M',
-  drift: { flag: 'none', justification: 'in the documented direction' },
+  // `flag` is a **boolean** in `refinedSpecDataSchema`, and it used to read `'none'` here — which
+  // made this fixture fail its own published schema and gave `CostStore.refinedSize` nothing to
+  // read. Nothing noticed until WP-28 asked the harness for the spec's size (standing rule 45: a
+  // fixture that never has to satisfy the thing under test is a fixture nobody validates).
+  drift: { flag: false, justification: 'in the documented direction' },
   assumptions: [],
   questions: [],
   decision: 'proceed',
@@ -764,6 +777,303 @@ describe('plan approval (product/04 S2, BD-006)', () => {
       }),
     ).rejects.toThrow();
     expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+});
+
+/**
+ * **The budget-approval gate — product/09's *"Estimate before spend"*, WP-28.**
+ *
+ * `requiresBudgetApproval` had been defined and unconsumed since WP-19, and `budgetApprovalGate` is
+ * its one caller. Every case below drives the **real** estimator: the harness composes the cost
+ * ledger (`cost: true`), which registers `costEstimateHandler` on the same bus, reads the size out
+ * of the `RefinedSpec` the scripted refinement really produced and writes the four estimate columns
+ * onto the task row the gate then reads. Only the *history* is seeded, because those are other,
+ * already-finished tasks that a harness running one task genuinely does not have — the number the
+ * gate compares is computed, never typed in (standing rule 82).
+ *
+ * The happy path's spec is size `M` and `SIZE_COST_WEIGHTS.M` is 2, so one finished `M` task
+ * costing `c` gives this task an estimate of exactly `c`. That is what makes the threshold cases
+ * below readable, and it is asserted once rather than assumed.
+ */
+describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
+  const THRESHOLD = AUTONOMY_PRESETS.supervised.budgetApprovalThresholdUsd ?? 0;
+
+  const estimating = (
+    history: readonly { size: 'S' | 'M' | 'L' | 'XL'; costUsd: number }[],
+    extra: Partial<HarnessOptions> = {},
+  ): PipelineHarness => {
+    const harness = harnessWith({
+      cost: true,
+      ...extra,
+      settings: {
+        autonomy: materialiseAutonomy({
+          level: 'supervised',
+          at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          appliedBy: null,
+        }),
+        // Probation off, so the *plan* gate cannot be the thing that stopped the task: Supervised
+        // gates the first five tasks on their plan, and a case that asserted `waiting_approval`
+        // without this would pass whichever gate fired (standing rule 10).
+        config: { policies: { probation_tasks: 0 } },
+        ...extra.settings,
+      },
+    });
+    harness.cost?.seedHistory(PROJECT, [...history]);
+    return harness;
+  };
+
+  const requestedApproval = (harness: PipelineHarness) =>
+    harness.events().find((entry) => entry.type === 'task.approval.requested') as
+      | Extract<DomainEvent, { type: 'task.approval.requested' }>
+      | undefined;
+
+  it('stops the task before Implementation when the estimate is over the threshold', async () => {
+    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.estimateUsd).toBe(THRESHOLD + 10);
+    expect(task.estimateBasis).toBe('project_history');
+    expect(task.estimateSamples).toBe(1);
+    expect(task.task.state).toBe('waiting_approval');
+    expect(requestedApproval(harness)?.payload.approval.kind).toBe('budget');
+    // product/09: *"before Implementation"*. Refinement ran and nothing after it did.
+    expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement']);
+  });
+
+  it('lets a task estimated at exactly the threshold through (standing rule 42)', async () => {
+    // The other side of the boundary, one cent away from the case above: a gate that fired on
+    // everything, or one that read `>=`, passes the first half alone.
+    const harness = estimating([{ size: 'M', costUsd: THRESHOLD }]);
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).estimateUsd).toBe(THRESHOLD);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  it('does not gate a task with no estimate, and records the refusal on the row (Q71 (b))', async () => {
+    // The project's first task: no finished task to estimate from. `basis: 'unknown'` is the
+    // estimator's refusal and must not be read as zero or as "gate everything" (standing rule 16),
+    // and the absence is *recorded* rather than left as a blank the workpad cannot explain.
+    const harness = estimating([]);
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.estimateUsd).toBeNull();
+    expect(task.estimateBasis).toBe('unknown');
+    expect(task.estimateSamples).toBe(0);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(task.task.state).toBe('ready_for_merge');
+  });
+
+  /**
+   * **BD-027:14, for this gate**: the threshold comes from what the project was *given*.
+   *
+   * The stored document says `budget_approval_threshold_usd: 5` while `AUTONOMY_PRESETS.autonomous`
+   * says `null` — a dial position with no budget gate at all. A gate that re-derived the preset from
+   * `projects.autonomy_level` would let the task through; one that reads the materialised copy stops
+   * it. The falsification is the same shape the plan gate's uses: a document the current table
+   * cannot produce.
+   */
+  it('reads the threshold the project was given, not the one the release now ships', async () => {
+    const shipped = materialiseAutonomy({
+      level: 'autonomous',
+      at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+      appliedBy: null,
+    });
+    const harness = harnessWith({
+      cost: true,
+      settings: {
+        autonomy: {
+          ...shipped,
+          policies: { ...shipped.policies, budget_approval_threshold_usd: 5 },
+        },
+      },
+    });
+    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 6 }]);
+    await harness.publish([ticketMatched()]);
+
+    expect(requestedApproval(harness)?.payload.approval.kind).toBe('budget');
+    // …and the source table still says this position has no budget gate, which is the difference.
+    expect(AUTONOMY_PRESETS.autonomous.budgetApprovalThresholdUsd).toBeNull();
+  });
+
+  it('does not gate when the stored threshold is null, whatever the level’s name says', async () => {
+    // The mirror of the case above, and the reason `null` is a statement rather than a missing
+    // value: Observe and Autonomous both mean *"no budget approval at this position"*.
+    const shipped = materialiseAutonomy({
+      level: 'supervised',
+      at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+      appliedBy: null,
+    });
+    const harness = harnessWith({
+      cost: true,
+      settings: {
+        autonomy: {
+          ...shipped,
+          policies: {
+            ...shipped.policies,
+            budget_approval_threshold_usd: null,
+            probation: false,
+          },
+        },
+      },
+    });
+    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 10_000 }]);
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).estimateUsd).toBe(10_000);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(AUTONOMY_PRESETS.supervised.budgetApprovalThresholdUsd).toBe(THRESHOLD);
+  });
+
+  it('does not gate a project whose dial was never materialised', async () => {
+    // `autonomy: null` keeps the **pre-WP-28** behaviour, which is no budget gate at all —
+    // substituting a preset here would invent a threshold the project never chose (rule 16).
+    const harness = harnessWith({
+      cost: true,
+      settings: { config: { policies: { probation_tasks: 0 } } },
+    });
+    harness.cost?.seedHistory(PROJECT, [{ size: 'M', costUsd: 10_000 }]);
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).estimateUsd).toBe(10_000);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  it('carries on to Implementation when a maintainer approves the spend', async () => {
+    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    await harness.publish([ticketMatched()]);
+    const requested = requestedApproval(harness);
+
+    await decideTaskApproval(harness.commands, {
+      approvalId: requested?.payload.approval.id ?? '',
+      decision: 'approved',
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      role: 'maintainer',
+    });
+    await harness.drain();
+
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(harness.specs.map((spec) => spec.stage)).toContain('implementation');
+    // Countable effects, not a status code (standing rule 79): one approval row, one request, one
+    // decision, and nothing asked a second time on the way through.
+    expect(harness.types().filter((type) => type === 'task.approval.requested')).toHaveLength(1);
+    expect(harness.types().filter((type) => type === 'task.approval.decided')).toHaveLength(1);
+  });
+
+  it('parks the task for a human when a maintainer rejects the spend, without spending it', async () => {
+    // A rejected *budget* is not a rejected *plan*: there is no better plan to write, because the
+    // estimate is written once and a second refinement round produces the same number. So the task
+    // stops in the existing vocabulary — `needs_human` — instead of walking back into its own gate.
+    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    await harness.publish([ticketMatched()]);
+    const requested = requestedApproval(harness);
+
+    await decideTaskApproval(harness.commands, {
+      approvalId: requested?.payload.approval.id ?? '',
+      decision: 'rejected',
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      role: 'maintainer',
+      reason: 'not worth it this quarter',
+    });
+    await harness.drain();
+
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement']);
+    const escalated = harness.events().find((entry) => entry.type === 'task.escalated') as Extract<
+      DomainEvent,
+      { type: 'task.escalated' }
+    >;
+    expect(escalated.payload.blocker_brief).toContain('not worth it this quarter');
+    expect(escalated.payload.blocker_brief).toContain('threshold');
+    // Neither a second approval nor a return to refinement: the round is not spent.
+    expect(harness.types().filter((type) => type === 'task.approval.requested')).toHaveLength(1);
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(1);
+  });
+
+  it('does not ask again when the task goes round refinement a second time', async () => {
+    // The estimate is written once, so a second round would put the *same* question to the same
+    // maintainer. The lookup is therefore `(task, kind)` and not `(task, kind, stage, attempt)` —
+    // `enteredAttempt` increments on every re-entry, which is what makes the attempt-keyed form
+    // (the plan gate's, correctly) the wrong key here.
+    const harness = estimating([{ size: 'M', costUsd: THRESHOLD + 10 }]);
+    await harness.publish([ticketMatched()]);
+    const requested = requestedApproval(harness);
+    await decideTaskApproval(harness.commands, {
+      approvalId: requested?.payload.approval.id ?? '',
+      decision: 'approved',
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      role: 'maintainer',
+    });
+    await harness.drain();
+    const firstEstimate = taskOf(harness).estimateUsd;
+
+    await returnToStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      stage: 'refinement',
+      reason: 'the scope changed',
+    });
+    await harness.drain();
+
+    expect(taskOf(harness).task.stageAttempts.refinement).toBe(2);
+    expect(taskOf(harness).estimateUsd).toBe(firstEstimate);
+    expect(harness.types().filter((type) => type === 'task.approval.requested')).toHaveLength(1);
+  });
+
+  /**
+   * The *"before Implementation"* half of product/09, over every shipped template.
+   *
+   * `ticket_lint`'s one stage also produces a `RefinedSpec` (WP-25) and its whole task is that one
+   * short run, so gating it would park a lint comment in front of a maintainer for a spend that has
+   * already happened. The predicate therefore asks the **compiled pipeline** rather than the
+   * artifact type, and it is exported so this can drive it directly: reached through the saga it is
+   * unreachable from the templates the harness runs, which would make it an untested inner layer
+   * (standing rule 22).
+   */
+  describe('spendIsStillAhead, over every shipped template (standing rule 68)', () => {
+    const compiled = (template: string): CompiledPipeline => {
+      const shipped = SHIPPED_TEMPLATES[template];
+      if (shipped === undefined) {
+        throw new Error(`no shipped template "${template}"`);
+      }
+      return compilePipeline(template, shipped);
+    };
+
+    const specStageOf = (template: string): Slug => {
+      const stage = compiled(template).stages.find((entry) => entry.produces === 'RefinedSpec');
+      if (stage === undefined) {
+        throw new Error(`no RefinedSpec stage in "${template}"`);
+      }
+      return stage.id;
+    };
+
+    it.each([
+      ['feature', true],
+      ['bug', true],
+      ['chore', true],
+      ['ticket_lint', false],
+    ] as const)('answers %s with %s', (template, expected) => {
+      expect(spendIsStillAhead(compiled(template), specStageOf(template))).toBe(expected);
+    });
+
+    it('answers false for a stage that does not produce the spec, and for one nobody has', () => {
+      // Both halves of the first condition, so a predicate that returned true for every stage of a
+      // template with an implementation in it would fail here rather than pass three cases above.
+      expect(spendIsStillAhead(compiled('feature'), 'implementation' as Slug)).toBe(false);
+      expect(spendIsStillAhead(compiled('feature'), 'nowhere' as Slug)).toBe(false);
+    });
+
+    it('has no RefinedSpec stage to gate at all in the discovery template', () => {
+      // Stated rather than left implicit: `discovery` produces a draft, so the gate's first
+      // condition can never hold for it and there is no stage id to pass above.
+      expect(compiled('discovery').stages.some((stage) => stage.produces === 'RefinedSpec')).toBe(
+        false,
+      );
+    });
   });
 });
 

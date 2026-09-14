@@ -377,6 +377,22 @@ export interface StartPipelineOptions {
    * the iid is the provider's to choose, not the fixture's.
    */
   readonly scenarios: (world: SeededWorld) => Readonly<Record<string, ScenarioSpec>>;
+  /**
+   * A scenario picked from the **whole `RunSpec`**, consulted before {@link scenarios} (WP-28).
+   *
+   * Standing rule 82 in its narrow form. `scenarios` is a `Record<stageId, …>`, so every task the
+   * instance runs gets the same output and the same cost for a given stage — which is exactly what
+   * a budget-gate case cannot live with: it needs a *finished* task whose spend becomes the
+   * project's history, and then a *second* task whose recorded cost differs from the estimate made
+   * from it. A stage-keyed map can express neither, because both tasks call with
+   * `stage: 'refinement'`.
+   *
+   * Returning `undefined` falls through to the stage map, so the fourteen files that use `scenarios`
+   * alone are untouched. It is wired into the **fake-runner** half only: `real-over-fake-cli`'s
+   * scripted CLI is addressed by stage id (`scriptedWorkspaces`) and has no spec to offer, which is
+   * stated here rather than discovered by a test that silently got the stage map instead.
+   */
+  readonly scenarioFor?: (spec: RunSpec, world: SeededWorld) => ScenarioSpec | undefined;
   readonly label?: string;
   /** CI status for the merge request's head commit. `null` seeds none (a project with no CI). */
   readonly ciStatus?: 'success' | 'failed' | null;
@@ -662,7 +678,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     sink: { append: async () => {} },
     clock: { now: () => Date.now(), setTimer: () => () => {} },
     select: (spec) => {
-      const scenario = scenarios[spec.stage ?? ''];
+      const scenario = options.scenarioFor?.(spec, world) ?? scenarios[spec.stage ?? ''];
       if (scenario === undefined) {
         throw new runnerAdapters.FakeScenarioError(`no scenario for stage "${spec.stage ?? ''}"`);
       }

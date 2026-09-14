@@ -10,6 +10,7 @@
  * is the projection that joins.
  */
 import type {
+  EstimateBasis,
   ExternalIdentity,
   JsonObject,
   JsonValue,
@@ -90,6 +91,16 @@ export const tasks = pgTable('tasks', {
   costActual: numeric('cost_actual', { precision: 12, scale: 6 }).notNull().default('0'),
   costEstimated: numeric('cost_estimated', { precision: 12, scale: 6 }).notNull().default('0'),
   estimateUsd: numeric('estimate_usd', { precision: 12, scale: 6 }),
+  /**
+   * What {@link tasks.estimateUsd} rests on, and how many finished tasks it was averaged over
+   * (WP-28, migration 0022).
+   *
+   * Both nullable and paired by a check constraint: `null` is *"the estimator has not run"*, which
+   * is a different answer from `'unknown'` (*"it ran and there was no history"*) and from a count of
+   * zero. Written only by `CostStore.saveEstimate`, beside `size` and `estimate_usd`.
+   */
+  estimateBasis: text('estimate_basis').$type<EstimateBasis>(),
+  estimateSamples: integer('estimate_samples'),
   riskClasses: text('risk_classes').array().notNull().default(emptyArray),
   blockedBy: text('blocked_by').array().notNull().default(emptyArray),
   /**

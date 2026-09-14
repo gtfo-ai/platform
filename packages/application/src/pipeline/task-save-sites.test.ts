@@ -61,7 +61,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
-  ['packages/application/src/pipeline/saga.ts', 11],
+  ['packages/application/src/pipeline/saga.ts', 13],
   ['packages/application/src/pipeline/stage-executor.ts', 6],
   ['packages/application/src/pipeline/transitions.ts', 5],
   ['packages/application/src/pipeline/task-conflict.ts', 1],
@@ -128,15 +128,17 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts twenty-seven, which is the number the change states', () => {
+  it('counts twenty-nine, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
     // from WP-15i — three human commands and the executor's sixth, which writes a run's spend onto
     // a task a human stopped mid-run without completing its stage; plus WP-27's take-over, which is
-    // a fourth human command with the same ending as the other three.
+    // a fourth human command with the same ending as the other three; plus WP-28's two, both in
+    // `saga.ts` and both with the handler's ending — the budget gate's `requestApproval` and the
+    // escalation a rejected spend leaves, which are the plan gate's two shapes one kind across.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(27);
+    expect(total).toBe(29);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 
