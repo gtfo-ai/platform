@@ -546,9 +546,14 @@ Stated here so an operator meets them in a document rather than in production:
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's
   environment until you add the override in §2. Every credential and every optional feature switch is
   behind that.
-- **No screen creates an integration** (§4): the endpoint is served, the wizard binds and tests, and
-  nothing renders a form.
+- **Creating an integration from a screen landed with WP-30** (§4): the wizard's integrations step and
+  the project settings page both carry the create and test buttons over the endpoints §4 documents.
 - **No SBOM attestation** is published (§2).
 - **The business-interview step of onboarding is not built** (see the user guide).
-- One endpoint the browser application calls is not served: steering a live run. The user guide lists
-  what that means at the screen.
+- Every endpoint the browser application calls is served (the census in
+  `apps/server/src/routes/client-census.test.ts` holds it, admitted gaps empty since WP-27, which added
+  steer, take-over and hand-back). A steer reaches only a run held by the process that serves the API;
+  in a split deployment it answers `409 run_not_reachable` and take-over exports nothing.
+- **Chat notifications ship since WP-32**: a project bound to a Slack integration with a channel gets a
+  thread per task and the org's quiet hours and daily digest apply; an organisation-level budget has
+  no channel yet, and Slack's buttons do nothing until the Socket Mode connection exists.

@@ -50,23 +50,27 @@ export const slackConfigSchema = z.strictObject({
     .string()
     .regex(/^[A-Z0-9]{2,}$/, 'expected a Slack team id such as T0FAKETEAM')
     .nullish(),
-  /** Where task threads are opened (product/08: one channel per project). */
+  /**
+   * Where task threads are opened (product/08: one channel per project).
+   *
+   * Read by the **binding loader** since WP-32 — `communicationChannels` on the registration says
+   * that this is the key — so a project overrides it in `bindings.config` while the account's value
+   * is the default. It is the one channel setting a human edits, and the settings screen writes it.
+   */
   channel: channelSchema,
-  /** Where the digest is posted; falls back to `channel`. WP-32 owns *what* goes in it. */
+  /** Where the digest is posted; the loader falls back to `channel` when it is absent. */
   digest_channel: channelSchema.nullish(),
   /**
-   * Five cron fields for the digest job, read in `digest_timezone`.
+   * **`digest_cron` and `digest_timezone` were here and are gone** (WP-32, standing rule 83).
    *
-   * A default, not a policy: WP-32 owns the digest's schedule and its quiet hours, and overrides
-   * both when it lands. Weekday mornings is the least surprising placeholder.
+   * They configured `providers/slack/digest.ts`, the per-binding digest job WP-10 left behind and
+   * nothing ever scheduled. WP-32 moved the digest into the application ring — one instance-wide
+   * tick in the **organisation's** zone (Q38), with *when* it is posted read from the project's own
+   * `features.digest.at` — so both keys lost their reader, and a stored key nothing reads is the
+   * defect PROGRESS backlog 58 and 60 are instances of. They are removed rather than kept: this
+   * schema is strict, so a binding that still carries one is refused by name at load with the path,
+   * which is the loud direction.
    */
-  digest_cron: z.string().min(1).default('0 9 * * 1-5'),
-  /**
-   * IANA zone the cron expression is read in. **Required by the Jobs port** and defaulted here to
-   * UTC rather than to the host zone: a schedule that means "09:00" has to say whose 09:00, and
-   * inheriting `TZ` is how a container migration silently moves it (Q38).
-   */
-  digest_timezone: z.string().min(1).default('UTC'),
   /** Secret. `xoxb-…`, the bot token every Web API call authenticates with. */
   bot_token: z.string().nullish(),
   /** Secret. `xapp-…`, the app-level token `apps.connections.open` needs. Socket Mode only. */

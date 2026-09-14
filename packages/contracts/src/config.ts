@@ -17,10 +17,11 @@
 import * as z from 'zod';
 import {
   autonomyLevelSchema,
+  communicationLanguageSchema,
   durationSchema,
   effortSchema,
-  languageTagSchema,
   nonEmptyStringSchema,
+  notificationClassSchema,
   pathPatternSchema,
   severitySchema,
   sizeSchema,
@@ -70,8 +71,15 @@ export const projectConfigSchema = z.strictObject({
    * Bounded at {@link MAX_CONTEXT_BUDGET_TOKENS} since WP-17 (PROGRESS backlog 13).
    */
   context_budget_tokens: contextBudgetTokensSchema.optional(),
-  /** `auto` follows the ticket's language (BD-016). */
-  communication_language: z.union([z.literal('auto'), languageTagSchema]).optional(),
+  /**
+   * `auto` follows the ticket's language (BD-016), and is the default.
+   *
+   * **It has a reader since WP-32** (PROGRESS backlog 60): `assemblePrompt` puts it in layers 1–3
+   * as platform text, so a project that sets `cs` gets its questions, summaries and comments in
+   * Czech and the change is visible in `promptVersion`. It governs what a **model** writes; the
+   * platform's own notification text is English in this build, which is stated in the ledger.
+   */
+  communication_language: communicationLanguageSchema.optional(),
   commit_convention: z.enum(['conventional', 'none']).optional(),
   default_branch: nonEmptyStringSchema.optional(),
 });
@@ -248,6 +256,29 @@ export const featuresConfigSchema = z.strictObject({
       chores: z.array(z.enum(['deps', 'flaky', 'docs', 'lint', 'kb'])).optional(),
     })
     .optional(),
+  /**
+   * The daily digest and its quiet window — product/18:33, WP-32.
+   *
+   * *"Slack notifications batched into a daily digest outside configured hours; urgent classes
+   * (escalation, budget 100%) still immediate … Wizard: channel, quiet hours, urgent classes"*.
+   * Three of those four are keys here; the **channel is not**, and that is a decision rather than
+   * an omission: a channel is a property of a `communication` binding (`bindings.config.channel`,
+   * merged over the account's), so a copy here would be a second place to change it and the two
+   * would disagree the first time an operator moved the project to another workspace.
+   *
+   *  - `at` is read in the **organisation's** zone (`TZ`, Q38's organisation-level calendar), not
+   *    in a per-project one: a digest that means 09:00 has to say whose 09:00, and a project-level
+   *    zone would be a second zone to keep true.
+   *  - `quiet_hours` is a wall-clock window in that same zone and **may wrap midnight**
+   *    (`22:00`–`08:00` is a night, not an empty set). `null` is quiet hours off, which is the
+   *    shipped default: with no window nothing is ever deferred and the digest posts nothing.
+   *  - `urgent` is product/18's third configurable. It defaults to escalation and budget-100 %
+   *    (`PLATFORM_DEFAULT_CONFIG`), and an **explicitly empty list means nothing is urgent** —
+   *    every notification raised inside the window waits for the digest. That is the fail-quiet
+   *    direction on purpose: this key decides how often a bot interrupts a human at night, and the
+   *    only thing an empty list can lose is immediacy, never the message (a deferred notification
+   *    is delivered by the next digest).
+   */
   digest: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -256,6 +287,7 @@ export const featuresConfigSchema = z.strictObject({
         .strictObject({ from: timeOfDaySchema, to: timeOfDaySchema })
         .nullable()
         .optional(),
+      urgent: z.array(notificationClassSchema).optional(),
     })
     .optional(),
   shadow_mode: z

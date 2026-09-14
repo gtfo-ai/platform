@@ -7,8 +7,9 @@
  * ticket from `ticket.matched` to `task.completed`, and **nothing that read the `bindings` table**.
  * This is the step between them. Given a project it reads the bindings, decrypts each integration's
  * credentials, validates the merged config against the provider's own schema, builds the adapter
- * through the provider's registration, and wraps the two the pipeline knows about — the git
- * provider and the task manager — in `IntegrationActionExecutor`.
+ * through the provider's registration, and wraps the three the pipeline knows about — the git
+ * provider, the task manager and (since WP-32) the chat binding the notification band posts
+ * through — in `IntegrationActionExecutor`.
  *
  * ## Absent is not broken (standing rule 20)
  *
@@ -149,11 +150,59 @@ export interface PipelineIntegrationsLoaderOptions {
 const secretName = (binding: ProjectBinding, field: string): string =>
   `${binding.provider}:${binding.integrationId}:${field}`;
 
-/** A built adapter and the redactor it was built with (WP-15f). */
+/** A built adapter and the redactor it was built with (WP-15f), plus WP-32's channels. */
 interface Built<TType extends IntegrationType> {
   readonly port: IntegrationPortByType[TType];
   readonly redactor: SecretRedactor;
+  /**
+   * Where a `communication` binding posts, read from the key the **registration** declares and out
+   * of the **validated** config (WP-32).
+   *
+   * `''` for every other type, because the field is not optional on the interface: a type that has
+   * no channel must not be able to be *given* one by accident, and a consumer only ever reads it
+   * through `PipelineIntegrations.communication`, which exists exactly when this was filled in.
+   */
+  readonly channel: string;
+  readonly digestChannel: string;
 }
+
+/**
+ * The channel a communication binding names, out of the config the provider's schema just accepted.
+ *
+ * It is read here rather than in the adapter because it is the *pipeline* that needs to know where
+ * a notification goes, and the adapter's `postTaskThread` takes the channel as an argument. A value
+ * that is not a non-empty string is a `BindingLoadError`, not a default: a chat binding with no
+ * channel would post nowhere, and standing rule 18 is about exactly the case where an absent value
+ * silently produces a permissive result.
+ */
+const channelsOf = (
+  projectId: Id,
+  binding: ProjectBinding,
+  config: unknown,
+  fields: { readonly channel: string; readonly digestChannel?: string } | undefined,
+): { channel: string; digestChannel: string } => {
+  if (fields === undefined) {
+    throw new BindingLoadError(
+      projectId,
+      binding.bindingId,
+      `binding "${binding.name}" (${binding.provider}) is a communication provider that declares no channel field`,
+    );
+  }
+  const values = config as Record<string, unknown>;
+  const channel = values[fields.channel];
+  if (typeof channel !== 'string' || channel.trim() === '') {
+    throw new BindingLoadError(
+      projectId,
+      binding.bindingId,
+      `binding "${binding.name}" (${binding.provider}) names no channel in "${fields.channel}"; a notification would be posted nowhere`,
+    );
+  }
+  const digest = fields.digestChannel === undefined ? undefined : values[fields.digestChannel];
+  return {
+    channel,
+    digestChannel: typeof digest === 'string' && digest.trim() !== '' ? digest : channel,
+  };
+};
 
 const only = <T>(
   projectId: Id,
@@ -235,8 +284,14 @@ export const createPipelineIntegrationsLoader = (
       );
     }
 
+    const channels =
+      type === 'communication'
+        ? channelsOf(projectId, binding, parsed.data, registration.communicationChannels)
+        : { channel: '', digestChannel: '' };
+
     try {
       return {
+        ...channels,
         port: registration.create({
           integrationId: binding.integrationId,
           config: parsed.data,
@@ -277,8 +332,17 @@ export const createPipelineIntegrationsLoader = (
         });
       }
 
+      const chatCandidates = [];
+      for (const binding of bindings.filter((row) => row.type === 'communication')) {
+        chatCandidates.push({
+          binding,
+          built: await build(projectId, binding, 'communication', scope),
+        });
+      }
+
       const git = only(projectId, 'git', gitCandidates);
       const taskManagement = only(projectId, 'task_management', ticketCandidates);
+      const chat = only(projectId, 'communication', chatCandidates);
 
       return {
         executor: options.executor,
@@ -300,6 +364,21 @@ export const createPipelineIntegrationsLoader = (
                 port: taskManagement.built.port,
                 ref: taskManagement.built.port.ref,
                 redactor: taskManagement.built.redactor,
+              },
+        communication:
+          chat === null
+            ? null
+            : {
+                port: chat.built.port,
+                ref: chat.built.port.ref,
+                // The provider says which key holds it (`communicationChannels`) and the registry
+                // refuses a registration that does not; this reads the declared key out of the
+                // **validated** config, so a channel that failed the provider's own schema never
+                // reaches a call.
+                channel: chat.built.channel,
+                digestChannel: chat.built.digestChannel,
+                // WP-32: the notify duty stores the text it sends (`notifications.title`/`detail`).
+                redactor: chat.built.redactor,
               },
       };
     },

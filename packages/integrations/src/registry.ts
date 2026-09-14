@@ -16,6 +16,10 @@
  *     invisible in review; the check is not.
  *  - **`type` must match what the registry is asked for**, so a `git` provider cannot be handed
  *    to a caller that wants a task manager and fail three layers later on a missing method.
+ *  - **a `communication` provider must declare where its channel lives** (WP-32). Without it the
+ *    binding loader resolves a chat binding with no channel and the symptom is a notification that
+ *    was never posted — a failure with no error, which is the kind this file exists to convert
+ *    into a boot-time refusal.
  */
 import type {
   AgentTooling,
@@ -101,6 +105,25 @@ export interface GitStaticCredential {
   readonly username: string;
 }
 
+/**
+ * Which config keys hold the channels a `communication` binding posts into (WP-32).
+ *
+ * A channel is **binding** configuration — `bindings.config.channel` merged over the account's —
+ * and *which key holds it* is the provider's knowledge, so the provider declares it here rather
+ * than the loader carrying a table of provider names (standing rule 7; BD-017: adding a provider
+ * touches no consumer). It is the shape {@link GitStaticCredential} already has one type over.
+ *
+ * Reading a conventional key called `channel` was the alternative and it is the quiet kind of
+ * wrong: a provider whose key is `conversation` would get `undefined`, and the first thing anybody
+ * would see is a notification that never arrived.
+ */
+export interface CommunicationChannelFields {
+  /** The key holding the channel task threads are opened in. Checked against `configSchema`. */
+  readonly channel: string;
+  /** The key holding the digest's channel, when the provider has one. Falls back to `channel`. */
+  readonly digestChannel?: string;
+}
+
 export interface ProviderRegistration<TType extends IntegrationType> {
   /** Stable slug: `jira-cloud`, `gitlab`, `slack`, `sentry`, `loki`. */
   readonly id: string;
@@ -120,6 +143,15 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    * for this binding and refuses rather than fetching anonymously.
    */
   readonly gitCredential?: GitStaticCredential;
+  /**
+   * For a `communication` provider: which config keys name the channels (WP-32).
+   *
+   * **Required for that type** and refused for every other one, checked at registration like
+   * `secretFields` and for the same reason: a provider registered without it would resolve to a
+   * binding with no channel, and the failure would surface as a notification nobody received
+   * rather than as a boot error an operator can read.
+   */
+  readonly communicationChannels?: CommunicationChannelFields;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 
@@ -192,6 +224,31 @@ export const createIntegrationRegistry = (
           registration.id,
           'git credential username is blank; git sends it verbatim and a blank one fails the fetch',
         );
+      }
+    }
+    const channels = registration.communicationChannels;
+    if (registration.type === 'communication' && channels === undefined) {
+      throw new ProviderRegistrationError(
+        registration.id,
+        'is a "communication" provider and declares no communicationChannels; the binding loader ' +
+          'would resolve it with no channel and every notification would be posted nowhere (WP-32)',
+      );
+    }
+    if (channels !== undefined) {
+      if (registration.type !== 'communication') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `declares communicationChannels but is a "${registration.type}" provider`,
+        );
+      }
+      for (const field of [channels.channel, channels.digestChannel]) {
+        if (field !== undefined && !(field in shape)) {
+          throw new ProviderRegistrationError(
+            registration.id,
+            `channel field "${field}" does not exist in the config schema; the loader reads the ` +
+              'declared key and would find nothing there',
+          );
+        }
       }
     }
     byId.set(registration.id, registration);

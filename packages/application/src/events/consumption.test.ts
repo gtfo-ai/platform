@@ -14,6 +14,7 @@
 import { DOMAIN_EVENT_TYPES, type DomainEventType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { costHandlers } from '../cost/runtime.js';
+import { notifyHandlers } from '../notify/handlers.js';
 import { createMemoryCostStore } from '../testing/memory-cost.js';
 import { createPipelineHarness } from '../testing/pipeline-harness.js';
 import { EVENT_CONSUMPTION, HANDLED_EVENT_TYPES, sweepReadiness } from './consumption.js';
@@ -211,6 +212,23 @@ describe('the declared table against the composed registrations', () => {
    * `handled`, with the set read off the handlers rather than written out here. WP-19 is the first
    * to owe it; the next consumer copies these four lines.
    */
+  it('has no type left unconsumed that the notification band itself handles (WP-32)', () => {
+    // The four lines WP-19's case asked the next consumer to copy. The band is registered by
+    // `createPipelineRuntime`, so this reads it off `notifyHandlers` directly rather than out of the
+    // composed list: what is being asserted is that *these* types are declared, not that the
+    // harness happened to include them.
+    const owned = notifyHandlers({} as never).flatMap((handler) =>
+      handler.eventTypes === 'all' ? [] : [...handler.eventTypes],
+    );
+    expect(owned.length).toBe(8);
+    for (const type of owned) {
+      expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
+        type,
+        consumption: 'handled',
+      });
+    }
+  });
+
   it('has no type left unconsumed that the cost ledger itself handles (WP-19)', () => {
     const owned = costHandlers({
       store: createMemoryCostStore(),

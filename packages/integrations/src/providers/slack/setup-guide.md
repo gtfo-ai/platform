@@ -63,10 +63,10 @@ which the platform reports as `forbidden` with that fix in the message — a dif
 
 | Field | Required | What it is |
 |---|---|---|
-| `channel` | yes | Where task threads are opened. A channel id (`C0123456789`, from *View channel details*) is safer than a name, which changes when somebody renames the channel. |
+| `channel` | yes | Where task threads are opened, and where a notification with no task (a budget window) is posted. A channel id (`C0123456789`, from *View channel details*) is safer than a name, which changes when somebody renames the channel. A **project** can override it on its own binding, from the project settings page. |
 | `team_id` | recommended | `T…`, the workspace id (`auth.test` reports it, and *Test connection* shows it). With it set, a delivery from another workspace is rejected as `not_for_this_project`. |
 | `digest_channel` | no | Where the digest goes; falls back to `channel`. |
-| `digest_cron` / `digest_timezone` | no (`0 9 * * 1-5`, `UTC`) | The digest schedule and the zone it is read in. Never the host's zone. WP-32 owns the policy that overrides these. |
+| ~~`digest_cron` / `digest_timezone`~~ | — | **Removed at WP-32.** *When* the digest goes out is `features.digest.at` in the project's own configuration, read in the organisation's zone (`TZ`, Q38); this schema is strict, so a binding that still carries either key is refused at load with the key named. |
 | `socket_mode` | no (on) | Off means inbound arrives over HTTP at `/webhooks/slack/<integrationId>` instead. |
 | `signature_tolerance_seconds` | no (300) | How old a delivery may be before it is treated as a replay. Slack's own sample uses five minutes. |
 | `bot_token`, `app_token`, `signing_secret` | yes | Secrets, from step 2. |

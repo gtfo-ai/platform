@@ -48,7 +48,11 @@ citation. Those remain a reviewer's job.
 
 ## Sources
 
-All retrieved **2026-09-10**.
+All retrieved **2026-09-10**, except the one interaction added at WP-32 (2026-09-14), which cites
+the `chat.postMessage` page already listed below: the **channel** message — `postChannelMessage`,
+the port method a budget notification needs because a budget window has no task and therefore no
+thread. Its body is the documented success envelope reduced to the members the adapter reads, which
+is what `documented-adapted` means here.
 
 - `https://docs.slack.dev/reference/methods/chat.postMessage` — the arguments (`channel`, `text`,
   `blocks`, `thread_ts`), "Accepted content types: `application/x-www-form-urlencoded`,

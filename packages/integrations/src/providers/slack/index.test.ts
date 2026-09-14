@@ -181,13 +181,26 @@ describe('createSlackRegistration threads the redactor into the port it builds',
 });
 
 describe('slackConfigSchema', () => {
-  it('defaults the Web API root, the tolerance and the digest schedule', () => {
+  it('defaults the Web API root, the tolerance and Socket Mode', () => {
     const parsed = slackConfigSchema.parse(config);
     expect(parsed.base_url).toBe('https://slack.com/api');
     expect(parsed.signature_tolerance_seconds).toBe(300);
     expect(parsed.socket_mode).toBe(true);
-    // Never the host zone (Q38).
-    expect(parsed.digest_timezone).toBe('UTC');
+  });
+
+  /**
+   * WP-32 removed `digest_cron` and `digest_timezone` with the per-binding digest job they
+   * configured; the schema is strict, so a binding that still carries one is refused by name rather
+   * than quietly ignored. The assertion is kept because a *silently accepted* leftover key is
+   * exactly what the removal must not turn into (standing rule 83, and rule 42's other side).
+   */
+  it('refuses the digest schedule keys the per-binding job used to carry', () => {
+    expect(() => slackConfigSchema.parse({ ...config, digest_cron: '0 9 * * 1-5' })).toThrow(
+      /digest_cron/,
+    );
+    expect(() => slackConfigSchema.parse({ ...config, digest_timezone: 'UTC' })).toThrow(
+      /digest_timezone/,
+    );
   });
 
   it('refuses a base URL with a trailing slash and a channel with a space', () => {

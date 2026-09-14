@@ -42,9 +42,10 @@ import type { ProjectSettings } from '../pipeline/settings.js';
 import { defaultProjectSettings, staticProjectSettings } from '../pipeline/settings.js';
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import type { CommunicationPort } from '../ports/integrations/communication.js';
 import type { GitProviderPort } from '../ports/integrations/git-provider.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
-import type { EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
+import type { CronScheduleDefinition, EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
@@ -57,6 +58,10 @@ import {
 } from './memory-integrations.js';
 import type { MemoryKnowledgeStore } from './memory-knowledge.js';
 import { memoryKnowledgeStore } from './memory-knowledge.js';
+import {
+  createMemoryNotificationStore,
+  type MemoryNotificationStore,
+} from './memory-notifications.js';
 import { createMemoryPipelineStore, type MemoryPipelineStore } from './memory-pipeline.js';
 
 /** Enough for the longest template plus every bounded loop; a runaway pipeline passes it. */
@@ -100,6 +105,14 @@ export const testIds = (prefix = 'aaaaaaaa'): { next(): Id } => {
 export interface RecordingJobs extends Jobs {
   readonly enqueued: readonly EnqueueRequest[];
   readonly handlers: ReadonlyMap<string, JobHandler>;
+  /**
+   * Every cron schedule declared on this instance (WP-32).
+   *
+   * It used to be a no-op, which made "the digest tick is scheduled, in the organisation's zone"
+   * an unassertable claim in this tier — a schedule nobody records is a schedule a test cannot tell
+   * from an absent one (standing rule 4: ask whether the harness can even reach the state).
+   */
+  readonly crons: readonly CronScheduleDefinition[];
   take(queue: string): readonly EnqueueRequest[];
   /** Only the jobs whose `startAfter` has passed on the test's clock. */
   takeDue(queue: string, nowMs: number): readonly EnqueueRequest[];
@@ -108,21 +121,27 @@ export interface RecordingJobs extends Jobs {
 export const recordingJobs = (): RecordingJobs => {
   const enqueued: EnqueueRequest[] = [];
   const handlers = new Map<string, JobHandler>();
+  const crons: CronScheduleDefinition[] = [];
   return {
     defineQueue: async () => {},
     enqueue: async (request) => {
       enqueued.push(request as EnqueueRequest);
       return { status: 'enqueued', jobId: `job-${enqueued.length}` };
     },
-    scheduleCron: async () => {},
+    scheduleCron: async (definition) => {
+      crons.push(definition);
+    },
     unscheduleCron: async () => {},
-    listCronSchedules: async () => [],
+    listCronSchedules: async () => crons.map((cron) => ({ ...cron, key: cron.key ?? '' })),
     work: async (request) => {
       handlers.set(request.queue, request.handler as JobHandler);
       return { queue: request.queue, stop: async () => {} };
     },
     get enqueued() {
       return [...enqueued];
+    },
+    get crons() {
+      return [...crons];
     },
     handlers,
     take: (queue) => {
@@ -195,8 +214,14 @@ export interface HarnessOptions {
   readonly runs?: Readonly<Record<string, ScriptedRun>>;
   readonly git?: Partial<GitProviderPort> | null;
   readonly taskManagement?: Partial<TaskManagementPort> | null;
+  /** The chat binding. **Absent by default** — see {@link HarnessCommunication} (WP-32). */
+  readonly communication?: Partial<CommunicationPort> | null;
+  /** The organisation's zone, which the digest and quiet hours are read in (Q38). */
+  readonly timezone?: string;
   /** The binding's redactor, for a test that plants a secret in a ticket (WP-15f). */
   readonly ticketRedactor?: SecretRedactor;
+  /** The **chat** binding's redactor, for a test that plants a secret in a notification (WP-32). */
+  readonly chatRedactor?: SecretRedactor;
   /**
    * The **git** binding's redactor, for a test that plants a secret in a merge request or in a
    * review finding (WP-24). Same default and same reasoning as {@link ticketRedactor}.
@@ -243,6 +268,9 @@ export interface PipelineHarness {
   readonly projectId: Id;
   readonly settings: ProjectSettings;
   readonly integrations: PipelineIntegrations;
+  /** The notification outbox the band writes to, and the chat double, when one was asked for. */
+  readonly notifications: MemoryNotificationStore;
+  readonly communication: HarnessCommunication | null;
   /** The store the planner's context-pack assembler reads; seed it to get a non-empty pack. */
   readonly knowledge: MemoryKnowledgeStore;
   /** The ledger's store when `cost: true` was asked for, and `null` otherwise. */
@@ -290,6 +318,96 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
         listDiscussions: async () => [],
         ...overrides,
       } as unknown as GitProviderPort);
+
+/**
+ * The chat double, and it records rather than pretends (WP-32).
+ *
+ * `null` by default — a harness project has **no** chat binding unless a test asks for one, which
+ * is a divergence from production stated here rather than discovered later (standing rule 1, and
+ * it is the *kinder* direction): every saga test would otherwise run the notify duty on every
+ * `task.created`, so an assertion counting `integration_actions` rows would silently be counting
+ * this file's messages too.
+ *
+ * It is a stub rather than `FakeCommunication` because that fake lives in `@platform/integrations`
+ * and this ring may not import it (the dependency rule). The tier that drives the **real** fake
+ * through the **real** registration and the **real** loader is the e2e one, which is where the
+ * acceptance criterion puts it.
+ */
+export interface HarnessCommunication {
+  readonly messages: { channel: string; thread: string | null; markdown: string }[];
+  readonly port: CommunicationPort;
+}
+
+const stubCommunication = (
+  overrides: Partial<CommunicationPort> | null | undefined,
+): HarnessCommunication | null => {
+  if (overrides === null || overrides === undefined) {
+    return null;
+  }
+  const messages: HarnessCommunication['messages'] = [];
+  let counter = 0;
+  const next = (): string => {
+    counter += 1;
+    return `m-${counter}`;
+  };
+  const port = {
+    ref: {
+      integrationId: '00000000-0000-4000-8000-00000000a003',
+      provider: 'fake-chat',
+      type: 'communication',
+    },
+    capabilities: () => ({
+      threads: true,
+      buttons: true,
+      messageUpdate: true,
+      socketMode: true,
+      digest: true,
+    }),
+    postTaskThread: async (request: {
+      channel: string;
+      taskId: Id;
+      body: { markdown: string };
+    }) => {
+      const id = next();
+      messages.push({ channel: request.channel, thread: null, markdown: request.body.markdown });
+      return { provider: 'fake-chat', channel: request.channel, thread_id: id, url: null };
+    },
+    postMessage: async (
+      thread: { channel: string; thread_id: string },
+      body: { markdown: string },
+    ) => {
+      const id = next();
+      messages.push({
+        channel: thread.channel,
+        thread: thread.thread_id,
+        markdown: body.markdown,
+      });
+      return {
+        provider: 'fake-chat',
+        channel: thread.channel,
+        message_id: id,
+        thread_id: thread.thread_id,
+        url: null,
+      };
+    },
+    postChannelMessage: async (channel: string, body: { markdown: string }) => {
+      const id = next();
+      messages.push({ channel, thread: null, markdown: body.markdown });
+      return { provider: 'fake-chat', channel, message_id: id, thread_id: null, url: null };
+    },
+    postDigest: async (channel: string, items: readonly { title: string }[]) => {
+      const id = next();
+      messages.push({
+        channel,
+        thread: null,
+        markdown: items.map((item) => item.title).join('\n'),
+      });
+      return { provider: 'fake-chat', channel, message_id: id, thread_id: null, url: null };
+    },
+    ...overrides,
+  } as unknown as CommunicationPort;
+  return { messages, port };
+};
 
 const stubTaskManagement = (
   overrides: Partial<TaskManagementPort> | null | undefined,
@@ -477,6 +595,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
 
   const gitPort = stubGit(options.git);
   const taskManagementPort = stubTaskManagement(options.taskManagement);
+  const communication = stubCommunication(options.communication);
+  const notifications = createMemoryNotificationStore();
   const integrations: PipelineIntegrations = {
     executor: createIntegrationActionExecutor({
       auditLog: audit,
@@ -509,6 +629,18 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
             // `ticket-snapshot.test.ts`, because a test whose redactor is disarmed proves nothing
             // (standing rules 31 and 35).
             redactor: options.ticketRedactor ?? exactSecretRedactor([]),
+          },
+    communication:
+      communication === null
+        ? null
+        : {
+            port: communication.port,
+            ref: communication.port.ref,
+            channel: '#agentic',
+            digestChannel: '#agentic',
+            // The binding's own redactor, for the same reason the other two carry one: the notify
+            // duty **stores** the text it sends. A test that plants a credential passes its own.
+            redactor: options.chatRedactor ?? exactSecretRedactor([]),
           },
   };
 
@@ -544,6 +676,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     store,
     settings: staticProjectSettings(() => settings),
     jobs,
+    notifications,
+    timezone: options.timezone ?? 'UTC',
     // One composed set for the harness's one project. Production reads the `bindings` table
     // through `createPipelineIntegrationsLoader` (WP-15a).
     integrations: staticPipelineIntegrations(integrations),
@@ -723,6 +857,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     projectId,
     settings,
     integrations,
+    notifications,
+    communication,
     knowledge,
     cost,
     audit,

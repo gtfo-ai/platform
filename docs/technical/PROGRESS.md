@@ -2087,7 +2087,29 @@ The migration is independent of it. **Needs no measurement**: everything above w
 What is *not* measured is whether any instance in existence holds the value; the honest answer is
 that no release exists, so the population is whatever a dogfood instance hand-wrote.
 
-### 60. **`project.communication_language` has a schema, a default and no reader anywhere, so every word the platform writes to a human is in whatever language a model chose** (TODO, small — **no work package owns it**; found by WP-25, session 5)
+### 60. **`project.communication_language` has a schema, a default and no reader anywhere, so every word the platform writes to a human is in whatever language a model chose** (**RESOLVED** at `<sha>`, WP-32 — through the **prompt**, which is the route this entry's *"what done looks like"* asked for and not through the notification text; found by WP-25, session 5)
+
+**The fix, and it is the one this entry specified.** `assemblePrompt` gained a **required**
+`language` in layers 1–3 (`packages/domain/src/prompt/assembly.ts:310-327`, the instruction itself at
+`:480-493`), so it is platform text, `promptVersion` digests it and a project that changes the
+setting is visible in the audit; `auto` keeps today's behaviour (*"write … in the language of the
+ticket you were given"*) and stays the default. `planner.ts:391-401` reads the **effective**
+`project.communication_language` and **parses** it with `communicationLanguageSchema` rather than
+casting, because the value reaches the platform's own voice (`assertPlatformVoice` at
+`assembly.ts:492` is the second guard). No per-feature `comment language` key was added, which is
+what this entry asked for.
+
+**The residual, stated rather than closed quietly.** The platform's *own* notification text is
+English in this build — a message body is platform text with the event's words quoted into it, and
+translating it needs a catalogue nothing has (WP-32 note 11). So the setting now governs everything a
+**model** writes to a human and nothing the **platform** writes to a human; the digest, the thread
+root and a budget message are English whatever a project chose. That is a smaller gap than the one
+this entry recorded (the loud case was the ticket comment, which is model text), and it has no owner.
+The artifact envelope's `language` stays a **report** of what the model wrote and is deliberately not
+asserted against the setting: `auto` has no single right answer, and refusing an artifact over it
+would throw away a completed run (rule 20). So the second half of `common.ts:33`'s sentence is still
+decoration, by decision.
+
 Placed beside entry 58 because it is the same class one step earlier: 58 is a stored key the read
 refuses, this is a stored key nothing ever asks for.
 
@@ -3047,6 +3069,46 @@ rather than folded here, because the two are missing different halves: this entr
 working-day calendar and the re-validate-on-fire shape are one piece of work across **69**, **74** and
 **76**, and whoever builds the second writes almost none of it.
 
+**Update (session 5) — WP-32 was offered it and declined, with a reason worth keeping.** The brief
+offered this entry to WP-32 *"if the row's shape makes the reminder and the expiry one duty each"*.
+It does not, and the refusal is quoted rather than paraphrased because it is the sizing a future row
+needs:
+
+> This row's duty shape is `pipeline.outbound`, which exists to make a **provider call** outside a
+> transaction; a question timeout is a **timer that changes aggregate state** on two queues TD-004
+> already names (`question.timeout`, `question.reminder`), and it needs three things this row builds
+> none of: the working calendar composed from `APP_WORKING_DAYS`/`APP_WORKING_HOURS`/`APP_HOLIDAYS`,
+> which `apps/server/src/config.ts` does not parse today; `questions.deadline_at` written where the
+> question is **stored** (`openQuestion` in the stage executor, not a handler); and two more job
+> workers, which move `POOL_RESERVATIONS` again.
+
+That is a correct reading of this entry's own *"what done looks like"* and the decline is accepted.
+
+**One measurement the refusal implies and nobody had written down** (read off the tree, rule 66):
+the three variables are **declared to operators and parsed by nothing**. `.env.example:321-326` ships
+`APP_WORKING_DAYS=1,2,3,4,5`, `APP_WORKING_HOURS=09:00-17:00` and `APP_HOLIDAYS=` under a heading
+saying *"`1 working day` in .agentic/config.yml is resolved on this calendar (BD-006)"*, and a grep
+for `WORKING` or `HOLIDAY` over `apps/server/src/config.ts` returns **nothing**. So the calendar has
+no production composition at all — it is backlog **60**'s class one layer out (a documented setting
+with no reader, here an *environment variable* rather than a config key), and composing it is part of
+this entry rather than a separate finding.
+
+**The next cheapest owner, named honestly: a row of its own, carrying 69 and 76 with it.** WP-32's
+reasons are structural and apply to **every** other open row equally — WP-29 registers handlers and
+composes no worker, WP-31 composes a run and no timer, WP-33 is CI — so there is no cheaper host and
+picking one by adjacency would repeat this decline. What that row contains, so it can be sized
+without re-deriving it: parse the three variables into a `WorkingCalendar` at composition; write
+`questions.deadline_at` at `openQuestion` and `approvals.deadline_at` at both gates (entry **76**);
+one arming handler per aggregate at a declared TD-005 priority, enqueued through
+`HandlerContext.afterCommit`; and the re-validate-on-fire check TD-004 requires, which
+`expireTaskQuestion` and `expireApproval` already are. **One design choice it must make rather than
+inherit**: TD-004 names two queues and this work wants four timers (question timeout, question
+reminder, approval expiry, and entry **69**'s 5-working-day take-over escalation). Four queues is
+`POOL_RESERVATIONS.pipeline` **+4** — the floor moves from 18 to 22 and `APP_DB_POOL_MAX` with it
+(entry **22**); one `deadline.sweep` queue carrying `(aggregate, id, kind)` in its payload is **+1**
+and is a deviation from TD-004's two names that has to be argued in the change. Either is defensible;
+shipping four workers without noticing the floor is not.
+
 ### 75. **`tasks.cost_estimated` is published on the task DTO and nothing has ever written it, so every task the product has served reports `$0.00` of estimated spend** (TODO, small, latent — **no work package owns it**; recorded as a discovered-work bullet **twice**, at WP-19 and again at WP-28, and never given a number; found by WP-28, session 5)
 **What is wrong.** A `not null default 0` column with no writer is published as a task's estimated
 spend. It is standing rule **16**'s shape one layer out: the absent case and the measured-zero case
@@ -3235,6 +3297,251 @@ is a test-infrastructure change of a few lines and belongs to the next row that 
 **WP-29** and **WP-31** both will — and any implementer may take it inside a row that already touches
 `pipeline-harness.ts`. Nothing blocks. It is recorded on standing rules **45** (second instance) and
 **1**, so a future reader meets it at the rule as well as here.
+
+### 78. **Nothing opens the Socket Mode connection the shipped Slack app manifest selects, so every inbound chat decision — a button click, a thread answer — reaches no door; the transport the composition *can* serve is the one the manifest disables** (TODO — **no work package owns it**; found by WP-32, session 5)
+**What is wrong.** The platform now speaks into a chat channel and cannot hear the answer. Slack has
+two inbound transports and this build ships both halves of neither: the one the shipped manifest
+selects (Socket Mode) is started by no composition root, and the one a composition root can serve
+(the `/webhooks/slack/<integrationId>` door) is the one the shipped manifest turns off. Everything
+between them — the envelope parser, the signature, the normaliser, the door — is built and tested.
+
+**Evidence** (greps and file reads only, rule 66 — no test was run, no Slack workspace contacted):
+- **WP-32's own note, quoted**: *"**Approvals are not notified.** `postApproval` renders buttons, and
+  this build starts no Socket Mode connection, so a button would be dead. Filed as discovered work
+  rather than shipped as a control that does nothing."*
+- **The socket client is complete and has no production caller.** `createSlackSocket`
+  (`packages/integrations/src/providers/slack/socket.ts:103`), `webSocketConnect` (`:291`) and the
+  provider's factory (`slack/provider.ts:550-577`, gated on `config.socket_mode`, the `xapp-…` token
+  and an injected timer). A grep for `createSlackSocket` over `packages/` and `apps/` returns the
+  module, its own unit test and `provider.ts`; **nothing under `apps/` calls the factory**.
+- **A click is a WP-15c delivery on either transport, by design.** `socket.ts:15-26`: *"A Socket Mode
+  payload arrives over a connection that was authenticated by an app-level token, so there is no
+  Slack signature on it. This module does **not** therefore hand the ring an unverified payload: it
+  wraps each envelope into a `WebhookDelivery` signed with *this binding's own* signing secret … so
+  `inbound.verify` is the single place that decides whether a payload may be acted on, on either
+  transport."* So the answer to *"is a button an inbound path — WP-15c's door?"* is **yes, and it is
+  already wired that way**; the missing piece is the connection, not the door.
+- **The normaliser for a button and for a thread reply is finished**: `normaliseSlackDelivery` maps
+  `block_actions` to `task.question.answered` (`slack/inbound.ts:208`) and to
+  `task.approval.decided` (`:238`), and a thread reply to `task.question.answered`/`feedback.received`
+  (`:344`).
+- **The HTTP door resolves since WP-32 and the registry says so**:
+  `packages/integrations/src/bindings/shipped-registry.ts:23-26` — *"Registering Slack has one
+  consequence beyond the notification band … `POST /webhooks/slack/<integrationId>` now resolves a
+  provider and can verify and normalise a delivery (WP-10 built both halves and WP-15c built the
+  door)."*
+- **And the shipped manifest disables that door.**
+  `packages/integrations/src/providers/slack/app-manifest.json` ships `"socket_mode_enabled": true`
+  and `"interactivity": {"is_enabled": true}` with **no request URL**, and the setup guide's config
+  table is *"`socket_mode` | no (on) | Off means inbound arrives over HTTP at
+  `/webhooks/slack/<integrationId>` instead"* (`slack/setup-guide.md:70`). So an operator who follows
+  the guide as written gets the transport nothing starts.
+- **technical/02 already names it as an absence**, at `:130-131`: *"the **buttons** on
+  `task.approval.requested` (the inbound half needs a Socket Mode connection nothing starts, so a
+  button would be dead)"*.
+- **One sentence in the tree is now wrong and belongs with the fix** (rule 83): the setup guide's
+  troubleshooting row *"Nothing arrives at all | The app-level token is missing or lacks
+  `connections:write`, or `socket_mode` is off and no public URL is configured"*
+  (`slack/setup-guide.md:110`) lists two causes and not the one that holds on every instance of this
+  build — no process opened a connection.
+
+**What it costs to leave.** product/03 UJ-2 step 4 is *"PM answers in Jira (reply comment) or Slack
+thread or UI. The pipeline resumes automatically."* The chat third of that sentence reaches nothing:
+with the shipped `socket_mode` on, nobody is listening; with it off, Slack has no request URL to call.
+The platform posts a question into a channel and cannot receive the answer **there**, which is the
+worst failure mode a chat integration has, because it looks live. Approvals are not posted at all —
+correctly, given the transport — so product/03 UJ-2 step 5's human 👍 has no chat surface either. The
+SPA still works, which is what keeps this out of "the product is broken" and in "the product is
+half a journey".
+
+**What "done" looks like.**
+1. A composition root opens one socket per `communication` binding whose config has `socket_mode` on
+   and closes them at shutdown; the delivery reaches the **same** `inbound` entry point the HTTP route
+   calls, asserted by driving one assertion through both transports rather than two similar ones.
+2. **Which `ROLE` owns the connection is decided in the change and written down.** It is a long-lived
+   inbound connection, so it belongs with the process serving `/webhooks/*` (`api`) rather than with
+   `worker`; two `api` replicas then hold two connections, which Slack load-balances envelopes
+   across, and the `inbox` dedup key is the backstop. Entry **38** is the class of leaving this
+   implicit.
+3. **One configuration an operator can actually reach**: either the manifest gains a request URL
+   beside Socket Mode and the guide says which to pick, or `socket_mode` stays the default and the
+   socket starts. Shipping neither is what this entry is; `setup-guide.md:110`'s row is corrected in
+   the same change.
+4. **The failure is loud**: a binding configured for Socket Mode in a process that opens no socket
+   says so by name at composition, the way `startRuntime` already names the runner piece it lacks.
+5. **Needs measurement** (rule 66, not run by the refiner): whether Slack will deliver `block_actions`
+   to a request URL while `socket_mode_enabled` is true — i.e. whether the two transports can be
+   configured at once or the choice is exclusive. It decides whether step 3 has one answer or two.
+   Filed in `docs/TODO.md`.
+
+**Depends on / owner.** **No work package owns it.** WP-10 built both halves of the provider and is
+DONE; WP-15c built the door and is DONE; WP-32 is outbound-only **by decision** and said so. This is
+not a backlog-sized change — composition, a lifecycle, a `ROLE` decision and an e2e over an injected
+socket — so if it is scheduled it wants a **row of its own** rather than a corner of another row, and
+it is the natural host for the inbound half of entry **79**. Entry **79** is its other half: a
+transport with no author mapping still drops every decision as `unmapped_identity`, so neither entry
+alone makes product/03's chat journey work.
+
+### 79. **`user_identities` has one reader and no writer anywhere, so every human decision arriving from a provider is dropped as `unmapped_identity` — three rows record it as a consequence and none owns the mapping** (TODO — **no work package owns it**; recorded as a symptom in WP-29's plan row, WP-31's criterion 5 and Q72 and never given a number; measured again by WP-32, session 5)
+**What is wrong.** The only mapping from a provider account to a platform user is empty on every
+instance that has ever run, and the platform is fail-closed on it. So the inbound half of BD-006's
+human loop is shut on **every** transport at once — including the ticket path, which is fully built
+and live since WP-15c.
+
+**Evidence** (greps and file reads only, rule 66):
+- **The one reader**: `createPostgresIdentityDirectory`
+  (`packages/infrastructure/src/integrations/postgres-inbox.ts:176`), `select external_id, user_id
+  from user_identities where provider = $1`. Its docblock, quoted: *"This query is the only thing in
+  the tree that reads the table, and nothing anywhere inserts into it (WP-32 looked: `git grep
+  user_identities` finds this file, migration 0003 and the Drizzle definition)."*
+- **Every reader of the consequence, named here because they are scattered** — this is the list this
+  entry exists to hold in one place:
+  - the **normalisers**: `InboundContext.resolveUser` is synchronous, so the map is loaded before
+    `normalise` runs; an unmapped author is `ignored: unmapped_identity` and never a decision (Slack
+    at `providers/slack/inbound.ts:191-193` and `:342`, *"Q10 / BD-022: an unmapped chat user cannot
+    answer or approve"*);
+  - **WP-29's plan row**: `human_time_entries.user_id references users(id)`, so *"on this build every
+    minute derived from an MR comment has `user_id: null`"*;
+  - **WP-31's criterion 5 and Q72**: *"a comment from an unverified identity is refused (technical
+    /02:161, BD-022), which on this build is every ticket-side comment"*;
+  - **`CommunicationPort.resolveIdentity`** (`packages/application/src/ports/integrations/communication.ts:164`),
+    whose destination this table is and which has **no caller**: Jira
+    (`providers/jira-cloud/index.ts:803`), Slack (`providers/slack/provider.ts:534`) and the fake all
+    implement it and nothing asks.
+- **The two automatic routes are refused on purpose**, which is why this is a gap and not an
+  oversight: an OAuth sign-in with the provider (TD-022 ships email and password), and an email match
+  the platform performed itself — *"an identity the platform *guessed* would then be allowed to answer
+  questions and approve plans"* (BD-022, Q10).
+
+**What it costs to leave.** Every provider-side human action is recorded and ignored. The PM who
+answers in the Jira thread — the path product/03 UJ-2 step 4 lists **first**, whose transport has been
+complete since WP-15c — gets no resumption, and the task waits until somebody opens the SPA. It is
+also the reason several separately-filed gaps read as unfinished features rather than as one missing
+writer: entry **78**'s chat journey, WP-29's per-user minutes, WP-31's ticket-side ask.
+
+**What "done" looks like.** The third route — the one BD-022 does not refuse — as an **operator-facing
+mapping**. `POST /api/org/identities` and its delete, in WP-15i's command shape: strict snake_case
+body, `Idempotency-Key` performing nothing twice on a countable effect, one `human_actions` row per
+accepted write and none for a refused one, 401 per route and at least one wrong-role 403; plus the
+screen on the organisation settings surface. The pairing is **stated by a human** (a platform user and
+a provider account id), and `resolveIdentity` is used as a *lookup aid that proposes* — never as a
+writer. The assertion is the one that fails today, in both directions (rule 42): an answer from a
+mapped author resumes the task, and the same answer from an unmapped one is `ignored:
+unmapped_identity`, read back from the task's state rather than from a return value. **Needs
+measurement: none.**
+
+**Depends on / owner.** **No work package owns it.** WP-10 built the provider side, WP-15c the door,
+WP-21 the org surfaces a screen would join, WP-32 measured it again. Cheapest by **need** is
+**WP-31**, whose criterion 5 already states that every ticket-side comment is refused on this build
+and which cannot deliver an ask arriving from a ticket without it; WP-29's minutes want the same
+table and do not block. It is a hard dependency of entry **78** being observable — a chat transport
+with no author mapping drops every envelope it receives — and of nothing else.
+
+### 80. **An organisation-scoped budget notifies nobody, and `notifications.project_id` is `not null`, so the one cap that stops every project cannot even be recorded** (TODO, small — **no work package owns it**; found by WP-32, session 5)
+**What is wrong.** The budget with the widest blast radius is the only one with no channel. It is
+decided and logged rather than crashing, which is the right direction; what it costs is that the stop
+nobody hears about is the loudest one.
+
+**Evidence** (file reads only, rule 66):
+- `decideNotification`'s budget branch (`packages/application/src/notify/handlers.ts:123-126`) returns
+  `null` for a window whose `project_id` is null, with the reason at the line: *"**An org-scoped
+  budget has no project and therefore no channel** (standing rule 18's shape: the absent case must not
+  be the quiet one)"*. `EVENT_CONSUMPTION` repeats it (`events/consumption.ts:172-175`).
+- Both directions are pinned in the unit tier: `notify/notify.test.ts:178-179` —
+  `decideNotification(budget(null))` is `null`, `decideNotification(budget(PROJECT))` matches.
+- **Two measurements the discovered-work bullet did not have.** `notifications.project_id` is `uuid
+  not null references projects (id) on delete cascade`
+  (`packages/infrastructure/src/db/migrations/0023_notifications.sql:45`), so an org-scoped
+  notification has **no row to live in**: every variant of this fix is a migration, not a handler
+  change. And the idempotency key is `constraint notifications_cause_unique unique (project_id,
+  cause_event_id, class)` (`:83`) — PostgreSQL's default is `NULLS DISTINCT`, so merely making the
+  column nullable **removes the guarantee for exactly the rows that become org-scoped**, and an
+  at-least-once wake-up would post twice. Whichever answer is taken, the migration carries `nulls not
+  distinct` or a second unique index.
+- **There is a producer today**: `GET/PUT /api/org/budgets` shipped at WP-30, so an operator can set
+  an org cap and cross it. This is **live**, not latent.
+
+**Three candidate answers, and the cheapest is not one of the two the bullet named.**
+- **(a) an organisation-level chat binding** — a new binding scope, which `bindings(project_id)`
+  cannot express;
+- **(b) a fan-out to every bound project's channel** — N messages for one event, each reading as
+  though that project's own cap was spent; it is the only one that fits the table unchanged (N
+  ordinary rows, unique key intact);
+- **(c) the account's own channel**, which already exists. `slackConfigSchema.channel` is read at
+  **two** levels — *"a project overrides it in `bindings.config` while the account's value is the
+  default"* (`providers/slack/config.ts:53-59`) — and `integrations` is org-scoped by construction
+  (`integrations.org_id`). So the organisation already has a channel an operator chose. What is
+  missing is a path that builds a communication adapter from an **integration with no binding**:
+  `createPipelineIntegrationsLoader` resolves per project, and that is the real cost of (c) — the same
+  piece every future org-scoped outbound call needs.
+
+*Recommendation: **(c)***, with the message naming the organisation rather than a project, because it
+is the only answer that sends exactly one message to a channel a human already configured. It is not
+this entry's to impose: it is the platform's first org-scoped outbound call, and the
+`integration_actions` audit row it writes has no project either, which is the second thing the change
+decides.
+
+**What it costs to leave.** An org cap at 100 % stops every project's runs while the channel stays
+silent; the only trace is a log line and a row that was never written. product/18:33 makes *"budget
+100 %"* one of the two urgent classes — this is the single instance of it that cannot be urgent at
+all.
+
+**What "done" looks like.** An org-scoped `budget.exhausted` produces **exactly one** chat message,
+read back from `integration_actions` rather than from the port's return value (rule 79), a replay
+produces none extra, and the project-scoped path is unchanged. The migration's `nulls not distinct`
+(or its second index) is asserted by inserting the same `(cause_event_id, class)` twice. **Needs
+measurement: none.**
+
+**Depends on / owner.** **No work package owns it**, and the question *"which row owns the
+organisation's channel?"* has a documented answer: **none**. technical/08:14 lists `GET/PATCH
+/api/org` in the organisation's own surface and technical/08:107 records `PATCH /api/org` (with
+`GET /api/org` at `:48`) as **still unbuilt**, with no work package named — so the organisation has
+budgets it can set (`GET/PUT /api/org/budgets`, WP-30) and no settings document to hang a channel on.
+Under answer (c) nothing new is needed there, which is a further argument for it: the channel is the
+integration's, and the integration screen already exists. It is small once the loader path exists.
+Entry **81** is its neighbour rather than its duplicate: this one is a notification that cannot be
+recorded, that one is recorded notifications nobody reads.
+
+### 81. **The `notifications` outbox has no reader outside the digest, so a notification whose delivery failed is invisible — and on the shipped defaults nothing ever retries it** (TODO, small — working as designed, with the observability missing; **no work package owns it**; found by WP-32, session 5)
+**What is wrong.** `delivered_at` is the only column that says a human was told, and nothing ever
+reads it to ask *who was not told*. The notify band's own failure mode is silent.
+
+**Evidence** (greps and file reads only, rule 66):
+- **Four callers of the store, all of them inside the band**: `notify/duty.ts:141` (`record`),
+  `duty.ts:212` (`markDelivered`), `notify/digest.ts:124` (`digestDelivered`), `digest.ts:141`
+  (`claimForDigest`). A grep for `notifications` over `apps/server/src` returns the composition line
+  (`apps/server/src/pipeline.ts:587`) and nothing else — **no route, no projection, no screen, no
+  metric**.
+- **The gap is stated correctly by WP-32 and is not a defect**: *"A row whose **immediate** delivery
+  failed stays undelivered and is therefore carried by the next digest: a failure is a delay, never a
+  loss. The one case that is not carried is a project with the digest **off** — nothing is ever
+  deferred for it, so an undelivered row there is a failed immediate delivery … The job counts it and
+  names it."* The count goes to a log line.
+- **The read's index already exists**: `notifications_undelivered_idx on notifications (project_id,
+  created_at) where delivered_at is null` (`0023_notifications.sql:88-90`).
+
+**Is it a defect?** No — this is the system working as designed and the *operability* missing. It is
+filed because the class has a history in this ledger: a table whose rows nobody reads is how entries
+**29**, **33**, **37**, **52** and **75** each hid, and because these particular rows are the evidence
+that the platform's promises to a human were kept.
+
+**What it costs to leave.** Quiet hours default **off**, so on the shipped configuration nothing is
+ever deferred — which makes the digest-off project both the default case *and* the one case where a
+failed notification is never retried and never surfaced. An operator whose chat token was revoked
+learns about it from an absence of messages.
+
+**What "done" looks like — a metric, not a screen.** `countUndelivered` older than the job's own retry
+window, registered beside the existing `event_dispatch_pending` gauge in `apps/server/src/metrics.ts`:
+one query on the partial index above, no DTO and no component. The **panel** is a separate and later
+thing, in the shape `human_actions` got at WP-30 (a project-scoped list on the project page), and it
+is worth doing only once somebody is looking. **Needs measurement: none.**
+
+**Depends on / owner.** **No work package owns it.** WP-41 is named by adjacency in the discovered-work
+bullet and is the wrong home: it is M3, it counts delivery *performance* rather than platform health,
+and entry **57**'s lesson applies — the row that measures a thing must not be the row that discovers
+it. Cheapest is whoever next touches `apps/server/src/metrics.ts`; the same change is owed for
+queue-depth alerting on `event_dispatch_pending`, which `docs/TODO.md` already records as open with no
+work package, so one row could take both.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -4543,6 +4850,36 @@ arithmetic and a different defect* — what the number **counts** (a transient b
 reserved), not how many places restate it, so neither entry covers the other; and WP-15e's acceptance
 criterion already carries rule 63's *"with the count stated in the change rather than left to a
 reader to recount"*.
+
+**Update (refiner, session 5) — the floor is 18 at WP-32, the *value* half of this entry is closed,
+and no document ever stated the number.** Read off the tree, rule 66; nothing run.
+- **The arithmetic moved twice more since this entry was written** and each site was carried with it:
+  WP-21 added `onboarding.discovery` (`2N + 15`, 17 at N=1) and **WP-32 added the digest tick**
+  `notify.digest` as the fifth pipeline worker — **`2N + 16`, 18 at N=1**, 24 at N=4
+  (`apps/server/src/config.ts:325-356`, `POOL_RESERVATIONS.pipeline: 5`).
+- **The divergent-default half is RESOLVED.** This entry's sharpest measurement was that the two
+  shipped defaults for one knob disagreed — `poolMax: 13` in code against `APP_DB_POOL_MAX=14` in
+  `.env.example`, with no test reading the latter. Both now say **19**
+  (`packages/infrastructure/src/db/config.ts:84-97`, `.env.example:218`), and that docblock derives
+  it — *"19 is the floor plus one connection of slack"* — rather than restating a stale sum. The
+  **class** is not closed: still nothing parses `.env.example`, so the two would drift again silently.
+- **Both sites this entry named as stale are repaired**, and one of them now cites this entry by
+  number: `apps/server/src/config.test.ts:191-206` is fully symbolic over `POOL_RESERVATIONS` with the
+  comment *"this comment saying 'three' while the constant said four is PROGRESS backlog 22's seventh
+  site"*. The count of sites is unchanged at **seven**, and site 3 — `UndersizedPoolError`'s message,
+  which reads *"the pipeline's **five** job workers"* beside a `POOL_RESERVATIONS.pipeline` it could
+  interpolate (`config.ts:483`) — is still the one that is genuinely derivable and still not derived.
+- **The question "does technical/12 or the operator guide state the floor?" has a clean answer:
+  neither mentions it at all.** A grep for `APP_DB_POOL_MAX` and for `pool` over
+  `docs/technical/12-configuration-and-schemas.md` and `docs/operator-guide.md` returns **nothing**,
+  and the operator guide delegates explicitly at `:12` — *"The full variable reference is
+  `.env.example`; it is the source"*. So there is **no stale document sentence to amend** and no
+  eighth site in a document; the derivation lives in the one file an operator copies. That is the
+  right place for it, and it is worth recording here so the next person to move the floor does not go
+  looking for a document to update.
+- **What would make this urgent**: entry **74**'s row adds up to four timer workers, which moves the
+  floor to 22 and every one of the seven sites with it — the first change since this entry was filed
+  that touches more than one term at once.
 
 ### 38. **`ROLE` splits the product across containers and no tier has ever started two processes with different roles** (TODO — **no work package owns it**; the general form of a risk WP-18b stated about one command)
 **What is wrong.** `ROLE` is the platform's scaling story — *“splitting the roles across containers is the
@@ -13982,7 +14319,372 @@ columns. Session 5's precedent is that an implementer does not amend it (neither
 so it is filed under discovered work rather than edited here.
 
 
+### WP-32 — the notify band, the digest and quiet hours
+
+**What shipped.** The platform sends its first chat message. `notifyHandlers` at TD-005 priority
+**210** (`packages/application/src/notify/handlers.ts`) over technical/02's eight types; the
+`pipeline.outbound` duty `notify` that makes the call; `notifications` (migration **0023**) as the
+outbox quiet hours defer into; `notify.digest`, a five-minute tick in the organisation's zone that
+serves every project in the tick its own `features.digest.at` has reached; `features.digest.urgent`
+as the third configurable product/18:33 names; Slack in the shipped registry and a `communication`
+binding in the loader; and the notification **channel** on `features/operating-mode.tsx`, with the
+gap panel deleted. Backlog **60** is closed on the way past.
+
+**1. The digest moved out of `packages/integrations`, and the module WP-10 left is deleted.**
+`providers/slack/digest.ts` was a queue, a cron, an injected clock and one executor call, with a
+docblock reading *"WP-32 owns the digest … This module is what that decision will run on."* It runs
+on it **one ring in**: a digest is a behaviour of the **communication type**, not of Slack (BD-017),
+and a scheduler living in an adapter package could only ever schedule the provider it was written
+for. Its four properties are kept verbatim in `notify/digest.ts` — timezone on the schedule, clock
+injected, executor for every call, an empty digest not posted — and the `dayOf` DST measurement
+moved with them into `notify/policy.ts`'s `localDayOf`. `digest_cron` and `digest_timezone` left
+`slackConfigSchema` with it: they configured the deleted job, and an unread stored key is the defect
+backlog 58 and 60 are instances of. The schema is strict, so a binding that still carries one is
+refused by name.
+
+**2. One instance-wide tick, not one cron per project.** `features.digest.at` is a *project* key and
+a cron entry is an *instance* schedule. A per-project entry needs a `bindings` sweep at boot and a
+new entry whenever somebody creates a project — so a project created at 10:00 would get no digest
+until the next restart. The tick fires every five minutes (finer than an hour, because `at` is
+`HH:MM` and an hourly tick reads 09:30 as 09:00 — a stored key half-read; coarser than a minute,
+because each tick is a query) and each project is served in the tick its local time has reached.
+
+**3. Three guards stop a second digest, in this order**: the **claim** (`digest_day` stamped inside a
+transaction before anything is sent, so a retried job posts the same set rather than a growing one),
+`digestDelivered` (a day already delivered is skipped), and the executor's idempotency key
+`<provider>:digest:<channel>:<day>`, which is the last line rather than the first — it makes a replay
+free, and a replay is not a plan. A claim left behind by a day that **failed** is re-claimed by the
+next day rather than stranded, which is the difference between a late digest and a lost notification.
+
+**4. The mode is on the row, and the digest groups by it.** A digest spans tasks and the executor's
+shadow guard takes the mode of the *call*, so a digest that mixed a shadow task's lines into a real
+message would post what BD-021 says must only ever be recorded as `would_have`. `notifications.mode`
+is the task's, the digest makes one call per mode present, and the mode is part of the idempotency
+key rather than part of the `day` — two calls sharing a key would make the second replay the first.
+
+**5. Quiet hours defer and never drop, and the three rules compose in one order.** An urgent class is
+immediate *before* the digest is consulted (so switching the digest off can never make an escalation
+quieter than switching it on); with the digest off there is nothing to defer *into*, so everything is
+immediate; inside the window everything else waits. `notificationDelivery` has two possible answers
+and no third. A row whose **immediate** delivery failed stays undelivered and is therefore carried by
+the next digest: a failure is a delay, never a loss. The one case that is not carried is a project
+with the digest **off** — nothing is ever deferred for it, so an undelivered row there is a failed
+immediate delivery, and turning it into a daily message the project did not ask for would be the
+platform overriding the setting. The job counts it and names it.
+
+**6. The channel is `bindings.config.channel`, not `features.digest.channel`.** One chat account
+serves every project in an organisation; `bindings.config` is the documented place for a project's
+override of an account setting, and a feature key would be a second place to change one thing. Which
+config key holds it is the **provider's** knowledge, so the registration declares it
+(`communicationChannels`, the shape `gitCredential` already has) and `createIntegrationRegistry`
+**refuses a `communication` registration that declares none** — reading a conventional `channel` key
+would give a provider whose key is `conversation` an empty channel and a notification nobody
+received. The loader reads the declared key out of the **validated** config and throws
+`BindingLoadError` when it is missing or blank.
+
+**7. `putBindings` now sends each binding's configuration back**, at both call sites. `PUT
+…/bindings` replaces the whole set, so the two existing "Save bindings" buttons would have erased
+the channel every time they were pressed. Found by asking what the *other* writer of that row does,
+which is the question standing rule 79 is about.
+
+**8. A new port method, and it earned its place.** `postChannelMessage(channel, body)` exists because
+a **budget** window is a property of a project or an organisation and has no `task_id` — there is no
+thread to reply in, and the alternative was a "task thread" keyed by a budget id, which would put a
+budget into the `task_id` of every audit row the call writes. It landed in the shared contract suite
+in the same change (standing rule 23), asserted from both sides, and against Slack in replay with
+one new fixture carrying its provenance.
+
+**9. An organisation-scoped budget cannot be notified on this build**, and that is a decision with a
+name rather than a crash: a chat binding belongs to a project and `budget.exhausted`'s payload
+carries no `project_id` for an org cap. `decideNotification` returns `null` and says why; filed as
+discovered work.
+
+**10. `user_identities` still has no writer, and the absence is stated at the line.** A row maps a
+provider account to a platform user, and the platform can only learn that pairing from an operator
+saying so (an endpoint no work package owns), an OAuth sign-in (TD-022 ships email and password) or
+an email match through `resolveIdentity` — which has no caller either, because this build starts no
+Socket Mode connection and the band is **outbound only**. Writing rows from an email match without a
+human confirming it is the one thing BD-022 and Q10 refuse: a guessed identity would then be allowed
+to answer questions and approve plans. The reasoning is on
+`createPostgresIdentityDirectory` and on `CommunicationPort.resolveIdentity`; filed as discovered
+work.
+
+**11. Backlog 60 is closed by the prompt, not by the notification text.** `assemblePrompt` gains a
+required `language` in layers 1–3, so `promptVersion` digests it and an edit is visible in the audit;
+`planner.ts` reads the **effective** `project.communication_language` and parses it rather than
+casting, because the value reaches the platform's own voice. The artifact envelope's `language` stays
+a **report** of what the model wrote and is deliberately not asserted against the setting: `auto` has
+no single right answer, and refusing an artifact over it would throw away a completed run (rule 20).
+The platform's own notification text is English in this build — a message body is platform text with
+the event's words quoted into it, and translating it would need a catalogue nothing has.
+
+**Assumptions, each implemented.**
+- **The digest carries what quiet hours held back, and nothing else** — filed as **Q80** with the
+  recommendation implemented, because product/18:33 and product/19 §12 describe two different
+  products (a carrier for what was deferred, and a daily summary of everything) and the shipped
+  defaults make the difference observable. product/19's card says *"one
+  Slack summary a day"* and product/18:33 says *"batched into a daily digest"*; with quiet hours off
+  (the shipped default) nothing is deferred and no digest is posted. The alternative reading — a
+  daily summary of everything, including what the channel already saw immediately — was refused for
+  the reason the mechanism already gives for not posting an empty one: it trains people to ignore the
+  channel. The cost is stated at the question: with quiet hours off (the default), the digest switch
+  does nothing an operator can observe until they set a window.
+- **Q38's open half is answered: quiet hours do not reuse the working window.** They share the
+  organisation's **zone** and nothing else. `working_hours` says when a deadline advances; quiet
+  hours say when a bot may interrupt somebody; the two default differently (09:00–17:00 on, quiet
+  hours off), and deriving one from the other would move every question deadline the first time
+  somebody asked not to be pinged at night. Written at `notify/policy.ts` and in `.env.example`.
+- **The band is one handler over eight types, not eight handlers.** `sweepReadiness` counts a type
+  only when something registered **for that type by name**, and an array of eight named types is that
+  eight times over.
+- **`task_started`, `task_completed` and `task_cancelled` are silent for a platform-issued ticket**
+  (a lint, a review-only subject, a discovery task): there is no ticket for a human to open, and the
+  platform's own housekeeping in a channel is what makes a bot unwelcome. Questions and escalations
+  still notify, because those are the two classes where a human is the point.
+- **Approvals are not notified.** `postApproval` renders buttons, and this build starts no Socket
+  Mode connection, so a button would be dead. Filed as discovered work rather than shipped as a
+  control that does nothing.
+
+**Measurement (criterion 10), and it is produced rather than quoted.** One feature ticket driven
+through every stage to `ready_for_merge` produces **one** notification and **one** chat message — the
+thread root, `ACME-1 picked up` — because the six task classes the band consumes are the *ends* of
+things and a feature ticket that never asks a question, never returns a stage and is not yet merged
+reaches none of the others. The figure is pinned in
+`test/e2e/pipeline/notifications.e2e.test.ts` (an equality on the class list, not a lower bound), so a
+change that made the band chattier fails a test rather than a channel. What that says about the
+question the criterion asks: an unbatched path is **not** on its own the risk; the classes that fire
+per *iteration* — `stage_returned` on every review round — are, and that is what quiet hours and the
+digest bound.
+
+**What the tiers assert.** Unit: the policy's boundaries at the instant and one minute either side,
+the midnight-wrapping window, an empty window, the urgent set by default and overridden and
+explicitly emptied, the event→class mapping including the org-budget refusal, the duty's six
+refusals, the redaction of a planted credential out of the stored row *and* the message, a shadow
+task's `would_have`, and the digest's not-due / disabled / empty / posted / already-sent branches
+with an injected clock. Contract: the `NotificationStore` suite against the in-memory store, and
+`postChannelMessage` in the shared communication suite against the fake **and** Slack in replay.
+Integration: the same store suite against PostgreSQL plus the constraints only a database has (the
+unique cause key, the delivered pair, the three vocabularies). e2e: a ticket through a composed
+instance posting the thread and writing the row, the audit rows the instance's own adapter wrote, a
+notification held inside quiet hours and carried by a digest the test enqueues through a **second**
+pg-boss client (which is what a second replica is), and the cron schedule pg-boss holds, in UTC.
+
+**Canaries** (standing rule 3; mutated in place and restored, with the restoration grepped for).
+Making `notificationDelivery` always answer `immediate` fails **ten** named cases across the policy,
+the duty and the digest — not a timeout, a name each. Dropping the in-memory store's duplicate check
+fails *"records a notification once per (project, cause event, class)"* and *"records a duplicated
+wake-up once and posts once"*. Disabling the registry's refusal of a `communication` provider that
+declares no channel fails *"refuses a communication provider that declares no channel at all"* — a
+case written **before** the mutation, because the guard was new and the rule is that a guard without
+a test is a guard nobody can tell from a comment.
+
+**Standing rule 83 — every sentence this falsified.** `shipped-registry.ts`'s *"why two and not
+five"*; `threads.ts` and `provider.ts`'s *"no production caller writes one"* and *"`slack/digest.ts`
+is the only place in this repository that ships one"*; `integrations.ts`'s `replayable` docblock
+naming that module as *"the one other plan"*; `consumption.ts`'s two budget entries attributing
+themselves to a **finished** WP-10 and its *"25 of them"* count; technical/02's divergence count, its
+budget row and the absence of any statement that the 210 band exists; technical/03's missing table;
+technical/06's file list; technical/12's `digest` example; `slackConfigSchema`'s digest keys and the
+setup guide's row for them; `operating-mode.tsx`'s channel gap panel and the two UI tests that
+asserted it (*"the two it cannot honestly build"* is now one); and `.env.example`'s working-calendar
+heading, which claimed the calendar covered digests.
+
+**For `CLAUDE.md` (the orchestrator's file, so the wording is here).** A "Where to look" entry:
+
+> - **What the platform says to a human** (WP-32): the notify band is
+>   `packages/application/src/notify/` — one handler at TD-005 priority **210** over technical/02's
+>   eight types, which **decides**, and the `pipeline.outbound` duty `notify`, which **calls**. What
+>   quiet hours defer into is the `notifications` outbox (migration 0023): `delivered_at` is the only
+>   column that says a human was told, `digest_day` is a **claim** by the day's digest, and a row
+>   whose immediate delivery failed is carried by the next one — a failure is a delay, never a loss.
+>   The digest is `notify/digest.ts`, one five-minute tick in the **organisation's** zone (Q38)
+>   serving each project in the tick its own `features.digest.at` has reached, with three guards
+>   against a second message (the claim, `digestDelivered`, then the executor's
+>   `<provider>:digest:<channel>:<day>` key) and one call **per mode**, because a shadow task's lines
+>   may not ride in a real message. The policy itself is pure and in the domain
+>   (`policies/notifications.ts`): an urgent class is immediate *before* the digest is consulted,
+>   deferral needs a carrier, and there is no third answer. The **channel** is
+>   `bindings.config.channel` — per binding, not per feature — read by the loader off the key the
+>   *provider's registration* declares (`communicationChannels`), which
+>   `createIntegrationRegistry` refuses to let a `communication` provider omit.
+
+**Backlog 74 (BD-006's question timeout) — not taken, and why.** The brief offered it *"if the row's
+shape makes the reminder and the expiry one duty each"*. It does not. This row's duty shape is
+`pipeline.outbound`, which exists to make a **provider call** outside a transaction; a question
+timeout is a **timer that changes aggregate state** on two queues TD-004 already names
+(`question.timeout`, `question.reminder`), and it needs three things this row builds none of: the
+working calendar composed from `APP_WORKING_DAYS`/`APP_WORKING_HOURS`/`APP_HOLIDAYS`, which
+`apps/server/src/config.ts` does not parse today; `questions.deadline_at` written where the question
+is **stored** (`openQuestion` in the stage executor, not a handler); and two more job workers, which
+move `POOL_RESERVATIONS` again. Taking it would have made this change unreviewable, and entry 74's
+own note says it wants to be scheduled with entries **69** and **76** as one mechanism. Left where
+the refiner put it.
+
+**Review round 2:** one major, two minors and two nits. All five closed, each with a test that fails
+before and passes after, and one docblock falsified on the way.
+
+- **The major — the per-mode split of the digest was held by nothing, and the reviewer's mutation is
+  now a named failure.** Reproduced first (standing rule 77's recipe: a copy of `digest.ts` and of
+  its suite, calibrated unmutated at **10/10** before anything was changed): replacing
+  `byMode(claimed)` with one `chats.digest(…, { mode: 'normal' })` left the suite **green, 10/10**.
+  The new case — *"makes one call per mode, so a shadow task's lines never ride in a real
+  message"* — drives a normal row and a shadow row of the **same project** through the real duty
+  (the task is moved into `shadow` between the two, so the mode is the one the duty read off the
+  task) and asserts the countable things: `integration_actions` shows `[['ok', 1], ['would_have',
+  1]]` — one call per mode, each carrying **its own single line** — the chat double was handed
+  exactly one message, the shadow task's title is **absent** from it, and both rows end
+  `delivered_as = 'digest'`. On the canary the mutation now fails by name with
+  `expected [['ok', 2]] to deeply equal [['ok', 1], ['would_have', 1]]`, which is the defect in the
+  assertion rather than a timeout.
+- **The `:<mode>` suffix of the idempotency key is a different claim, and the honest version of it is
+  now at the line.** The key the posted call reserved is asserted in full
+  (`fake-chat:digest:#agentic:2026-06-02`, read out of the idempotency store and decoded), and the
+  shadow call reserves **none** — because `action-executor.ts` answers a mutating shadow request
+  `would_have` at **step 1, before the idempotency step**. So on this build the suffix cannot be
+  observed through the store at all: what keeps a shadow task's lines out of a real message is the
+  per-mode split plus that guard, and the suffix is insurance for a build where the guard moves or a
+  third mode exists. `integrations.ts`'s comment said the operative thing was *"two calls that shared
+  a key would make the second one replay the first"* — true in general, unreachable here — and now
+  says which half is measured (standing rule 86: a prediction may not be written in a measurement's
+  voice).
+- **Minor 1 — the URL is bounded and redacted, like every other untrusted field.** It was the one
+  that was neither, while the module's own rule said otherwise. `boundUrl` (`render.ts`) **drops**
+  where `boundText` truncates, for three reasons stated at the line: a cut URL is a *different* link
+  rather than a shorter one; `urlSchema` is `z.url()` and accepts `javascript:`, `data:`, `vbscript:`
+  and `file:` (Q49), so only `http:`/`https:` survive; and a value outside printable ASCII
+  (`/^[!-~]+$/`) is refused rather than escaped, because the body is `**title**\ndetail\nurl` and a
+  newline inside the URL would write an extra line of what reads as platform text — `new URL` strips
+  newlines silently, so the parse alone would have said yes. The duty redacts it through the
+  binding's redactor beside the subject and counts the replacements into `redaction_count`. Two
+  cases: a planted credential in a ticket URL's query is **absent** from the stored row and from
+  every message with the placeholder **present** in both (standing rule 42, both sides), and the
+  refusals with the body asserted to lose the line rather than carry a broken link. Both canaried by
+  dropping each half in turn; the restorations are grepped for. A real defect the rule caught on the
+  way: the class-`task_started` message is the *thread root*, so a second `task_started` call replays
+  the thread and posts nothing — the case uses `question`, whose message is a reply.
+- **Minor 2 — the in-flight window is closed with a second bound rather than a grace on `before`.**
+  `claimForDigest` takes `immediateBefore`, and a row whose `plannedDelivery` is `immediate` is
+  claimable only if it is older than it; a row planned `digest` keeps the old bound, because nothing
+  ever tried to deliver it. The digest passes `at` minus `DIGEST_IMMEDIATE_GRACE_MS` (**two
+  minutes**, derived from `DEFAULT_RETRY_POLICY`: three attempts with each backoff capped at 30 s).
+  A blanket grace on `before` was refused because it would also delay the deferred rows the digest
+  exists to carry — and it would have broken the e2e, which enqueues the tick seconds after the row
+  is written. The contract suite has the case against **both** stores (the in-flight row is left, the
+  older failed one and the deferred one are claimed, and the next day claims the in-flight one), and
+  the memory store's bound was mutated back to `input.before` to watch it fail. **Residual, stated at
+  the constant**: this narrows the window, it does not close it — a delivery still in flight after the
+  grace is claimable again, and closing it completely needs a lease column (`delivering_at`), which
+  is a migration and a third stuck state. The duplicate it still admits is one digest line, not a
+  second message.
+- **The nits.** A day that fills `DIGEST_ITEM_LIMIT` now logs that the remainder is carried by the
+  next digest (the `disabled` branch beside it already logged), with a case that fills the limit
+  through a recording logger and asserts the one row left waiting; canaried. The second is
+  **not** fixed here and is under discovered work with its measurement: `GET
+  /api/projects/:id/bindings` publishes `bindings.config` unstripped.
+
+**The container tiers ran, and the machine is the finding.** `verify` **PASS** (exit 0, 5 941
+passed | 14 skipped). `verify:integration` failed twice on Testcontainers with *"the database system
+is in recovery mode"* and *"not yet accepting connections"* — **not** this change: the Docker VM's
+own filesystem is **100 % full** (204.4 G, **119 MB available**), which a one-line reproduction names
+exactly: `docker run postgres:18 postgres -c fsync=off -c max_connections=300` dies in `initdb` with
+`FATAL: could not write to file "base/4/2617": No space left on device`. Nothing on that daemon is
+safely reclaimable by an agent — `docker system df` says 124.7 G of images (the user's, per the
+session note), 15.66 G of *unused* volumes **every one of which is a named volume belonging to
+another project** (`ais_postgres-data`, `cobol-cobol_postgres_data`, …), and the one dangling image
+is in use by a running container. So both tiers were run the documented way instead
+(`TEST_DATABASE_URL`, CLAUDE.md § Commands) against a PostgreSQL 18 container whose **data directory
+is a host bind mount**, which is disk the VM is not out of:
+
+```
+docker run -d --name wp32-pg -p 55432:5432 -e POSTGRES_PASSWORD=platform_test \
+  -e POSTGRES_USER=platform_test -e POSTGRES_DB=platform_test -e PGDATA=/pgdata \
+  -v <host-dir>:/pgdata postgres:18 postgres -c fsync=off -c full_page_writes=off -c max_connections=300
+TEST_DATABASE_URL='postgres://platform_test:platform_test@localhost:55432/platform_test' pnpm run -s verify:integration
+```
+
+`verify:integration` **PASS** (exit 0, 31 files, 357 tests) — including the store suite's new
+in-flight case against real PostgreSQL. `verify:e2e` **FAIL** (exit 1), and the failures are
+**17, all in one file**: `test/e2e/workspace/docker-workspace.e2e.test.ts`, each one a helper
+container exiting 128 with `fatal: could not create work tree dir '/work/repo': No space left on
+device` — the same full VM, because that file is the one tier that needs the daemon for something
+other than PostgreSQL. The other **24** files (113 tests) pass, and the WP's own
+`test/e2e/pipeline/notifications.e2e.test.ts` was also run alone: **3/3**. **The human action** is
+the one the session note already names: prune the 124.7 G of reclaimable images on the Docker VM
+(`docker image prune -a` is the user's call, not an agent's), and leave the named volumes alone.
+
+*Orchestrator, after the round*: the user chose `docker image prune -a --filter until=720h` (124.8 GB reclaimed, the VM at 40 % with 116 GB free); three anonymous dangling volumes created during the killed workspace run were removed (rule 60's shape, baseline 126 again); and **the whole e2e tier passed on this exact tree** in the orchestrator's shell and in the round-2 reviewer's (`PASS: verify:e2e`, exit 0, 25 files, 139 tests), so the FAIL above was the machine and is resolved, not carried.
+
+*One flake seen and named rather than re-run into silence*: a `verify` in the middle of this round
+failed on `apps/server/src/auth/better-auth.test.ts > derives its origin the same way the CSRF check
+does` with *"Test timed out in 5000ms"*, at a load average of **44** (the Docker VM was at 787 % CPU
+with its disk full, and PhpStorm at 169 %). The file passes alone (3/3) and the next whole run is
+green (exit 0, 5 941 passed). It touches nothing this change touches; it is recorded because a 5 s
+timeout on a machine under that load is a **budget** the suite is close to, not a verdict about the
+test.
+
+
 ## Discovered work — session 5 (not in plan)
+- **An organisation-scoped budget has no channel, so `budget.exhausted` for an org cap notifies
+  nobody** (WP-32). A chat binding belongs to a **project** and BD-010's org cap carries no
+  `project_id` on its payload, so `decideNotification` answers `null` and logs why. What it costs: the
+  one budget that stops *every* project's runs is the one nobody is told about. Two candidate
+  answers, neither this row's to pick: an organisation-level chat binding (a new binding scope, which
+  `bindings(project_id)` cannot express), or a fan-out to every bound project's channel (N messages
+  for one event, and each one reads as though that project's own cap was spent). Small, and it wants
+  the row that gives an organisation settings of its own.
+  *Refiner (session 5): **filed as backlog 80**, with a **third** candidate the bullet did not have
+  and two measurements that change the shape. The third: the **account's** channel already exists —
+  `slackConfigSchema.channel` is read at two levels and `integrations.config` is the org-scoped
+  default a project's binding overrides — so the organisation has a channel an operator chose, and
+  what is missing is a loader path that builds an adapter from an integration with **no binding**.
+  The measurements: `notifications.project_id` is `not null` (`0023:45`), so every variant is a
+  migration rather than a handler change; and the unique key is `(project_id, cause_event_id,
+  class)` under PostgreSQL's default `NULLS DISTINCT`, so simply making the column nullable would
+  **remove the idempotency guarantee for exactly the org-scoped rows** and post twice. It is **live,
+  not latent**: `GET/PUT /api/org/budgets` shipped at WP-30.*
+- **`user_identities` has a reader and no writer, so every chat and ticket author is unmapped**
+  (WP-32 looked; the reader is `createPostgresIdentityDirectory`). The consequence is fail-closed —
+  an unmapped author is `ignored: unmapped_identity` and never a decision (BD-022, Q10) — which is
+  why it is a gap rather than a defect, and it is written at the line. What it needs is the half
+  nobody owns: an operator-facing mapping (`POST /api/org/identities` and a screen), because the two
+  automatic routes are refused on purpose (an OAuth sign-in with the provider, which TD-022 does not
+  ship; and an email match the platform performed itself, which would let a *guessed* identity answer
+  questions and approve plans).
+  *Refiner (session 5): **filed as backlog 79** — filed once rather than folded, because the three
+  places that already carry it (WP-29's plan row, WP-31's criterion 5, Q72) each record it as a
+  **consequence of their own feature** and none owns the mapping, which is how a table with no writer
+  reads as three unfinished features. The entry names every reader in one list. One clause of this
+  bullet is widened: the consequence is **not** chat-scoped — the **ticket** path is fully built and
+  live since WP-15c, so product/03 UJ-2 step 4's *"PM answers in Jira (reply comment)"* is dropped as
+  `unmapped_identity` on this build too. Cheapest owner by need: **WP-31**.*
+- **An approval is not notified, because its buttons would be dead** (WP-32). `postApproval` renders
+  Block Kit buttons and nothing in this build opens a Socket Mode connection, so a clicked button
+  reaches no normaliser. The band therefore consumes the six task events technical/02 names and the
+  two budget ones, and `task.approval.requested` is left to whoever wires the inbound half — which is
+  the same work that gives `user_identities` its writer and `resolveIdentity` its caller.
+  *Refiner (session 5): **filed as backlog 78**, and the decision not to post a dead button is
+  endorsed rather than filed against. The entry answers the question the bullet leaves implicit —
+  **yes, a click is WP-15c's door**: `socket.ts:15-26` wraps every envelope into a `WebhookDelivery`
+  signed with the binding's own secret precisely so `inbound.verify` is the single decision point on
+  both transports, and `block_actions` already normalises to `task.approval.decided`
+  (`slack/inbound.ts:238`). So what is missing is the **connection**, not the door — and the sharper
+  half the bullet did not have: the shipped `app-manifest.json` sets `socket_mode_enabled: true` with
+  **no request URL**, so the HTTP door WP-32 made resolvable is the transport the shipped manifest
+  disables, and the guide's *"Nothing arrives at all"* row (`setup-guide.md:110`) does not list the
+  cause that holds on every instance. It is a **row of its own**, not a backlog-sized change, and it
+  is the natural host for 79's inbound half.*
+- **The `notifications` table has no reader outside the digest**, so a human cannot see what the
+  platform told them or, more usefully, what it *failed* to tell them: a row whose immediate delivery
+  threw stays undelivered until a digest carries it, and nothing surfaces the count. It is one
+  projection and one panel on the project page, in the shape `human_actions` got at WP-30.
+  *Refiner (session 5): **filed as backlog 81**, judged **working as designed with the operability
+  missing** rather than a defect, and with a cheaper close than a panel: a `countUndelivered` gauge
+  beside `event_dispatch_pending` in `apps/server/src/metrics.ts`, one query on the partial index
+  `notifications_undelivered_idx` that already exists. Not folded into **52** (a different table with
+  a different reader and a named owner) and **not WP-41's**, for entry **57**'s reason — the row that
+  measures a thing must not be the row that discovers it. The entry states what makes it matter:
+  quiet hours default **off**, so the digest-off project is both the shipped default and the one case
+  a failed notification is never retried in.*
 - **`docs/technical/03-data-model.md`'s `tasks(...)` row is three migrations behind** (WP-28).
   It does not name `review_subject` (migration 0020, WP-24), `autonomy_policies` (0021, WP-30) or
   `estimate_basis`/`estimate_samples` (0022, this row). Rule 8 says docs win and the doc is amended
@@ -14880,3 +15582,29 @@ so it is filed under discovered work rather than edited here.
   two items to strike or mark built are *"review-only mode"* (WP-24, merged at `9a02c3b`) and
   *"ticket readiness linter"* (WP-25). The M2 sentence in `13-implementation-plan.md:57` is the
   ledger's own copy and is the orchestrator's too.*
+
+- **`GET /api/projects/:id/bindings` publishes `bindings.config` unstripped, and a Slack credential
+  is a valid key of it** (found by WP-32's review round 2; the defect is **WP-21's** and is not
+  fixed there). What is measured, in four parts. (1) The projection
+  (`apps/server/src/queries/onboarding-queries.ts`, `listProjectBindings`) selects `bindings.config`
+  and publishes it verbatim; the DTO is `config: jsonObjectSchema` in **both** directions
+  (`projectBindingSummarySchema`, `putProjectBindingsRequestSchema`), so any JSON object goes in and
+  the same one comes back. (2) `slackConfigSchema` **declares** `bot_token`, `app_token` and
+  `signing_secret` as config keys (`z.string().nullish()`) — it has to, because the loader validates
+  `{...binding.config, ...secrets}` with one schema — so a token pasted into a binding's config is
+  not refused at load either: it is merged *under* the secret store's value and otherwise kept. (3)
+  `GET /api/integrations` does the opposite for the account-level document: it strips the provider's
+  declared credential fields before publishing, and publishes **nothing** for a provider this build
+  does not ship. The two read surfaces over the same kind of document disagree. (4) WP-32 made the
+  exposure routine rather than theoretical: `putBindings` now sends each binding's configuration
+  back (note 7), so the whole document round-trips through the browser on **every** "Save bindings",
+  where before it was only read by whoever opened the page. The fix is the one `GET
+  /api/integrations` already has — strip the registration's `secretFields` from every binding
+  config, and decide what a binding of an unshipped provider publishes — plus the question this
+  entry cannot answer alone: **which keys a binding's config may legitimately carry**. Today it is
+  "anything the provider's schema accepts", which for Slack is the whole account configuration
+  including three credentials and `base_url`; a per-provider allow-list of *overridable* keys would
+  make both the read and the write narrow. No credential is written there by any code path the
+  platform ships — the API seals secrets by environment-variable name (WP-21) — so this is an
+  operator-pastes-it hazard rather than a live leak, which is why it is filed rather than fixed in a
+  review round.

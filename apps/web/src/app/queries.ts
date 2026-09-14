@@ -466,10 +466,25 @@ export const useOnboardingCommands = (mint?: MintKey) => {
       // The probe writes `integrations.health`, which the integration list publishes.
       onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
     }),
+    /**
+     * The **whole** binding set, each with its own configuration.
+     *
+     * `config` is `bindings.config` — the project's overlay on the account's settings — and it is
+     * sent per item rather than omitted, because `PUT …/bindings` replaces the set: a caller that
+     * dropped it would erase the notification channel WP-32 stores there every time somebody
+     * pressed "Save bindings" on another screen. Both call sites therefore send back what they
+     * read; the notifications control is the one that changes a value.
+     */
     putBindings: useMutation({
-      mutationFn: (input: { projectId: string; integrationIds: readonly string[] }) =>
+      mutationFn: (input: {
+        projectId: string;
+        items: readonly { integration_id: string; config?: Record<string, unknown> }[];
+      }) =>
         endpoints.putProjectBindings(input.projectId, {
-          items: input.integrationIds.map((id) => ({ integration_id: id })),
+          items: input.items.map((item) => ({
+            integration_id: item.integration_id,
+            ...(item.config === undefined ? {} : { config: item.config }),
+          })),
         }),
       onSuccess: async (_result, input) => {
         await queryClient.invalidateQueries({

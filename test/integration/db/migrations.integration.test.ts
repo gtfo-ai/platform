@@ -43,6 +43,7 @@ const EXPECTED_TABLES = [
   'kb_index_state',
   'kb_links',
   'kb_proposals',
+  'notifications',
   'organizations',
   'platform_migrations',
   'platform_table_policy',
@@ -173,6 +174,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // whatever eventually does will delete rows. Registered rather than defaulted, so the
       // "registry lists every table" invariant above stays true.
       row('integration_idempotency', 'read_write', null),
+      // WP-32 (migration 0023): the notification outbox. `read_write` because a row is updated
+      // twice at most — claimed by a digest, then delivered — and registered rather than defaulted
+      // so the "registry lists every table" invariant above stays true.
+      row('notifications', 'read_write', null),
       row('redaction_log', 'append_only', 'created_at'),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
       row('sessions', 'read_write', null),

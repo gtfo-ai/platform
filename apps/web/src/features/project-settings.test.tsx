@@ -11,6 +11,7 @@
  *    PROGRESS backlog 52 records as missing.
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 
@@ -95,9 +96,37 @@ const AUDIT = {
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const fetchFor = (dial: Record<string, unknown>) =>
-  (async (input: RequestInfo | URL): Promise<Response> => {
+/** The two bindings a project with a chat integration has (WP-32). */
+const CHAT_BINDINGS = [
+  {
+    integration_id: '00000000-0000-4000-8000-0000000000e1',
+    type: 'git',
+    provider: 'gitlab',
+    name: 'GitLab',
+    config: { mint_credentials: false },
+  },
+  {
+    integration_id: '00000000-0000-4000-8000-0000000000e2',
+    type: 'communication',
+    provider: 'slack',
+    name: 'Slack',
+    config: { channel: '#agentic' },
+  },
+];
+
+const fetchFor = (
+  dial: Record<string, unknown>,
+  options: {
+    readonly bindings?: readonly unknown[];
+    readonly onPut?: (url: string, body: unknown) => void;
+  } = {},
+) =>
+  (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
+    if (init?.method === 'PUT' && url.includes('/bindings')) {
+      options.onPut?.(url, JSON.parse(String(init.body)));
+      return json({ items: options.bindings ?? [] });
+    }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.includes('/autonomy')) return json(autonomy(dial));
     if (url.includes('/audit')) return json(AUDIT);
@@ -111,7 +140,7 @@ const fetchFor = (dial: Record<string, unknown>) =>
         next_improvements: [],
       });
     }
-    if (url.includes('/bindings')) return json({ items: [] });
+    if (url.includes('/bindings')) return json({ items: options.bindings ?? [] });
     if (url.includes('/config')) {
       return json({
         config: { version: 1, pipeline: { wip: { max_parallel_tasks: 3 } } },
@@ -223,6 +252,60 @@ describe('the project settings page', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Re-apply preset' })).toBeTruthy();
     });
+  });
+
+  it('offers the notification channel of the project’s chat binding, and saves the whole set', async () => {
+    // WP-32's criterion 11. The gap panel is gone, and what replaces it writes
+    // `bindings.config.channel` — with every *other* binding's configuration sent back untouched,
+    // because `PUT …/bindings` replaces the set and losing a key is how a channel disappears.
+    const puts: { url: string; body: unknown }[] = [];
+    const user = userEvent.setup();
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          { bindings: CHAT_BINDINGS, onPut: (url, body) => puts.push({ url, body }) },
+        ),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Notifications');
+    const channel = await screen.findByLabelText('Channel');
+    await waitFor(() => {
+      expect((channel as HTMLInputElement).value).toBe('#agentic');
+    });
+    await user.clear(channel);
+    await user.type(channel, '#deliveries');
+    await user.click(screen.getByRole('button', { name: 'Save channel' }));
+
+    await waitFor(() => {
+      expect(puts).toHaveLength(1);
+    });
+    expect(puts[0]?.body).toEqual({
+      items: [
+        {
+          integration_id: CHAT_BINDINGS[0]?.integration_id,
+          config: { mint_credentials: false },
+        },
+        {
+          integration_id: CHAT_BINDINGS[1]?.integration_id,
+          config: { channel: '#deliveries' },
+        },
+      ],
+    });
+    // The gap panel is gone with the gap (standing rule 83). The assertion names the *channel's*
+    // sentence rather than the words "not built": the risk-class gap is still on this screen and
+    // still true, so a broader predicate would fail for the wrong reason.
+    expect(document.body.textContent).not.toContain('A channel belongs to a chat integration');
+  });
+
+  it('says so when no chat integration is bound, instead of offering a channel', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    await screen.findByText('Notifications');
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('No chat integration is bound');
+    });
+    expect(screen.queryByLabelText('Channel')).toBeNull();
   });
 
   it('says readiness only suggests, and asks why when the choice is above the suggestion', async () => {

@@ -47,7 +47,12 @@
  * because `packages/prompts` is outside the domain ring's import allowance (biome enforces it) and
  * because a prompt the composition root supplies is a prompt a project can override later.
  */
-import type { ArtifactType, MergeRequestSnapshot, TicketSnapshot } from '@platform/contracts';
+import type {
+  ArtifactType,
+  CommunicationLanguage,
+  MergeRequestSnapshot,
+  TicketSnapshot,
+} from '@platform/contracts';
 import { artifactDataSchemas } from '@platform/contracts';
 import {
   type DataBlock,
@@ -301,6 +306,25 @@ export interface AssemblePromptInput {
    * rejects.
    */
   readonly focus: StagePromptFocus | null;
+  /**
+   * The language the project's humans read — `project.communication_language` (BD-016, WP-32).
+   *
+   * **Required-and-not-optional**, like {@link AssemblePromptInput.focus}, because a caller that
+   * forgot it should have to say `'auto'` rather than silently get it: `'auto'` is a *decision*
+   * (follow the ticket's own language) and the absence of a key is not.
+   *
+   * It is in layers 1–3 rather than in the task block, which is what makes it part of
+   * {@link AssembledPrompt.promptVersion}: a project that changes the language its agents write in
+   * has changed the platform's instructions to the model, and the audit should show a different
+   * prompt version for the runs before and after. The type is a **closed set** — `'auto'` or a
+   * `languageTagSchema` tag — so nothing assembled from a project's or a model's free text can
+   * reach the platform's own voice, which is the rule `STAGE_PROMPT_FOCUS` follows one field up.
+   *
+   * PROGRESS backlog **60**: the key has had a schema, a default and **no reader** since WP-01,
+   * so a team that chose its language in the wizard got whatever language a model guessed. This is
+   * the reader.
+   */
+  readonly language: CommunicationLanguage;
 }
 
 export interface AssembledPrompt {
@@ -452,11 +476,33 @@ const assertPlatformVoice = (what: string, value: string): void => {
  * Putting it in layers 4–6 would have left it outside the digest entirely, which is the property
  * this placement exists for and is asserted in `assembly.test.ts`.
  */
-const systemPromptOf = (role: RolePromptDefinition, focus: StagePromptFocus | null): string => {
+/**
+ * What the platform says about the language, in its own words (WP-32, backlog 60).
+ *
+ * `auto` is the shipped default and keeps the behaviour every run has had until now — follow the
+ * ticket. A tag is checked against the platform-voice rule before it is quoted, which is belt and
+ * braces over a schema that already refuses anything but `xx` or `xx-YY`: this string is the
+ * platform's voice, and rule 40's lesson is that a bound enforced somewhere else is a bound this
+ * file cannot see.
+ */
+const languageInstruction = (language: CommunicationLanguage): string => {
+  if (language === 'auto') {
+    return 'Write everything a human will read — questions, summaries, comments — in the language of the ticket you were given.';
+  }
+  assertPlatformVoice('a communication language', language);
+  return `Write everything a human will read — questions, summaries, comments — in the language with BCP-47 tag \`${language}\`, whatever language the ticket is written in. Code, identifiers, commit messages and file contents stay as they are.`;
+};
+
+const systemPromptOf = (
+  role: RolePromptDefinition,
+  focus: StagePromptFocus | null,
+  language: CommunicationLanguage,
+): string => {
   assertPlatformVoice('a role name', role.role);
   assertPlatformVoice('a role prompt version', role.version);
   const base = `${PLATFORM_PROMPT}\n\n## Your role: ${role.role}\n\n${role.text.trim()}\n`;
-  return focus === null ? base : `${base}\n## This stage\n\n${focus.trim()}\n`;
+  const withFocus = focus === null ? base : `${base}\n## This stage\n\n${focus.trim()}\n`;
+  return `${withFocus}\n## Language\n\n${languageInstruction(language)}\n`;
 };
 
 /**
@@ -747,7 +793,7 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
   const render = (block: DataBlock): string => renderDataBlock(nonce as string, block);
 
   assertPlatformVoice('a stage id', input.task.stage);
-  const systemPrompt = systemPromptOf(input.role, input.focus ?? null);
+  const systemPrompt = systemPromptOf(input.role, input.focus ?? null, input.language ?? 'auto');
   const userPrompt = [
     packHeader(input.pack),
     ...documentBlocks.map(render),

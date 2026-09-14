@@ -123,6 +123,7 @@ const harness = (
           }
         : null,
     taskManagement: null,
+    communication: null,
   };
   const applyOptions: KnowledgeApplyOptions = {
     unitOfWork: eventing,

@@ -47,7 +47,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { OperatingMode } from './operating-mode.js';
+import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
 export const ProjectSettingsScreen = ({
   projectKey,
@@ -146,7 +146,12 @@ export const ProjectSettingsScreen = ({
               // second endpoint (`PUT …/bindings`, WP-21).
               commands.putBindings.mutate({
                 projectId: project.id,
-                integrationIds: selected ?? [],
+                // With the configuration each binding already carries: the notification channel is
+                // a key of it (WP-32), and this button must not be a way to lose it.
+                items: (selected ?? []).map((id) => ({
+                  integration_id: id,
+                  config: bindingConfigOf(bindings.data?.items ?? [], id),
+                })),
               });
             }}
           >

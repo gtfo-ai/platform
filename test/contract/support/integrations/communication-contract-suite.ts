@@ -240,6 +240,37 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
         expect(updated.message_id).toBe(posted.message_id);
       });
 
+      /**
+       * The third obligation this suite carries for the port rather than for a provider (standing
+       * rule 23, WP-32): **a notification with no task still has a channel to reach**.
+       *
+       * `budget.threshold.reached` and `budget.exhausted` are about a budget window, so they carry
+       * no `task_id` — there is no thread to post them in, and the notification band would have had
+       * to invent one. Both halves are asserted here because both are the port's promise: the
+       * message lands outside every thread, and a channel the bot cannot post into is `not_found`
+       * rather than a message into the void (standing rule 42 — one side of this is half a test).
+       */
+      it('posts a message in the channel, outside every thread', async () => {
+        const before = context.providerCalls();
+        const posted = await port.postChannelMessage(context.channel, {
+          markdown: 'Budget for **acme/api** is spent',
+        });
+        expect(posted.channel).toBe(context.channel);
+        expect(posted.thread_id ?? null).toBeNull();
+        expect(
+          context.providerCalls(),
+          'a channel message must reach the provider; there is nothing to answer it from memory',
+        ).toBeGreaterThan(before);
+      });
+
+      it('fails with not_found for a channel message it cannot deliver', async () => {
+        await expectIntegrationError(
+          () =>
+            port.postChannelMessage(context.missingChannel, { markdown: 'nobody will read this' }),
+          'not_found',
+        );
+      });
+
       it('posts a digest to a channel', async () => {
         const digest = await port.postDigest(context.channel, [
           {

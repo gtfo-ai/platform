@@ -19,8 +19,10 @@ describe('Drizzle schema', () => {
     // technical/03 does not name (TD-022, migration 0011, WP-06), plus
     // `integration_idempotency`, the `IdempotencyStore` port's table (migration 0013, WP-15b),
     // plus `kb_health_reports`, which technical/07 § "Librarian pipeline" names and no migration
-    // had created (migration 0018, WP-18b).
-    expect(tables.length).toBe(50);
+    // had created (migration 0018, WP-18b), plus `notifications`, the chat outbox product/18:33's
+    // digest and quiet hours need and technical/03 did not name until WP-32 amended it
+    // (migration 0023).
+    expect(tables.length).toBe(51);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

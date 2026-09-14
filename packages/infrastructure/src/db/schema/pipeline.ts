@@ -23,6 +23,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  date,
   integer,
   jsonb,
   numeric,
@@ -287,6 +288,33 @@ export const humanActions = pgTable('human_actions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * The notification outbox (WP-32, migration 0023).
+ *
+ * `digest_day` is a `date` rather than a timestamp on purpose: it is a *day in the organisation's
+ * zone*, which is a calendar fact the application computes (`localDayOf`) and the database must not
+ * re-derive — `current_date` here would be the server's day, and the two differ for a third of every
+ * day in half the world.
+ */
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  projectId: uuid('project_id').notNull(),
+  taskId: uuid('task_id'),
+  class: text('class').notNull(),
+  causeEventId: uuid('cause_event_id').notNull(),
+  title: text('title').notNull(),
+  detail: text('detail'),
+  url: text('url'),
+  urgent: boolean('urgent').notNull().default(false),
+  plannedDelivery: text('planned_delivery').notNull(),
+  mode: text('mode').notNull().default('normal'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  deliveredAs: text('delivered_as'),
+  digestDay: date('digest_day'),
+  redactionCount: integer('redaction_count').notNull().default(0),
+});
+
 export type Task = typeof tasks.$inferSelect;
 export type TaskStage = typeof taskStages.$inferSelect;
 export type Run = typeof runs.$inferSelect;
@@ -295,3 +323,4 @@ export type Question = typeof questions.$inferSelect;
 export type Approval = typeof approvals.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type HumanAction = typeof humanActions.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;

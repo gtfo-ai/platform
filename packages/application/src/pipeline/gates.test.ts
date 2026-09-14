@@ -68,6 +68,7 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
         ? null
         : { port, ref: port.ref, project: 'acme/api', redactor: exactSecretRedactor([]) },
     taskManagement: null,
+    communication: null,
   };
 };
 

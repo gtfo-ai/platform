@@ -11,20 +11,27 @@
  *
  * ## The durable half is the executor's, and that is deliberate
  *
- * The default implementation is in memory, so a restart forgets. That is a **divergence, written
- * down** (see `provider.ts`), and the platform's durable answer to "did I already do this" is
+ * The default implementation is in memory, so a restart forgets — and on the pipeline's path it
+ * forgets *between calls*, not merely between restarts. That is a **divergence, written down**
+ * (see `provider.ts`), and the platform's durable answer to "did I already do this" is
  * `IntegrationActionExecutor`'s idempotency store. A `ThreadRef` is JSON, so the executor *can*
  * replay one: given an `IdempotencyPlan` keyed by task, a second call after a restart returns the
  * stored ref and issues **zero** HTTP requests, which
  * `test/contract/integrations/slack-executor.contract.test.ts` asserts against a *fresh* adapter —
  * the only version of that assertion the in-memory map cannot fake.
  *
- * **The plan is the caller's, and no production caller writes one** (corrected at WP-15b). This
- * docblock and `provider.ts` both said `post_task_thread` "carries" one; it does not —
- * `provider.ts`'s `send({ action: 'post_task_thread' })` attaches no `idempotency`, and the plan in
- * that contract test is built by the test. So the durable half is *available* and unused, and a
- * restarted process really would open a second thread. Whoever gives the action a plan owns the
- * assertion; `slack/digest.ts` is the only place in this repository that ships one.
+ * **The plan is the caller's, and WP-32 is the caller that finally writes one.** This docblock and
+ * `provider.ts` both said `post_task_thread` "carries" one; it does not — `provider.ts`'s
+ * `send({ action: 'post_task_thread' })` attaches no `idempotency`, and the plan in that contract
+ * test is built by the test. What changed is that there is now a production caller:
+ * `communicationWrites.taskThread` (`@platform/application`'s `pipeline/integrations.ts`) attaches
+ * a plan keyed `<provider>:thread:<taskId>`, which it must — the binding loader builds this adapter
+ * **per call** so the redactor can carry the call's run-scoped credentials (Q55), so the map below
+ * is empty on every notification and only the executor's idempotency store remembers. The sentence
+ * that used to end here — *"`slack/digest.ts` is the only place in this repository that ships
+ * one"* — was made false twice over by that work package, which also moved the digest into the
+ * application ring (standing rules 63 and 83: an exclusivity claim is a statement about every
+ * other file, and closing a gap falsifies the sentence that described it).
  *
  * The interface is exported so WP-15 can supply a database-backed one without touching the
  * adapter: it is the seam, not an implementation detail.

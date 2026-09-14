@@ -395,6 +395,17 @@ export const JOB_QUEUES = {
    * another's. The work is a handful of rows in one transaction.
    */
   discoveryRecord: 'onboarding.discovery',
+  /**
+   * The daily digest tick (cron, WP-32) — product/18:33's *"one Slack summary a day"*.
+   *
+   * TD-004's list is not closed and this is the "maintenance schedule" shape it names. The name is
+   * the **band's** rather than a provider's (`digest.slack`, which WP-10 declared and nothing ever
+   * scheduled): a digest is a behaviour of the communication *type*, so a queue named after Slack
+   * would have to be joined by a second one the day a Teams binding exists.
+   *
+   * Policy `exclusive`: two overlapping ticks would both claim the same day's rows.
+   */
+  notifyDigest: 'notify.digest',
   /** Monthly partition creation and transcript retention (cron, technical/03). */
   partitionMaintenance: 'db.partitions.maintain',
 } as const;

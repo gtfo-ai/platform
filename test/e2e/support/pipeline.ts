@@ -48,11 +48,13 @@ import {
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import {
+  createFakeCommunication,
   createFakeGitProvider,
   createFakeTaskManagement,
   createIntegrationRegistry,
   FAKE_GIT_PROVIDER_ID,
   FAKE_TASK_MANAGEMENT_PROVIDER_ID,
+  fakeCommunicationRegistration,
   fakeGitRegistration,
   fakeTaskManagementRegistration,
 } from '@platform/integrations';
@@ -69,11 +71,15 @@ import { type Instance, startInstance } from './instance.js';
 
 export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001' as Id;
 export const TICKETS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a002' as Id;
+/** The chat account the notification band posts through (WP-32). */
+export const CHAT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a003' as Id;
+export const CHAT_CHANNEL = '#agentic';
 export const GIT_PROJECT = 'acme/api';
 
 /** Obviously fake, and the value the redaction assertions look for. */
 export const GIT_BINDING_TOKEN = 'FAKE-git-binding-token-not-a-real-secret';
 export const TICKET_BINDING_TOKEN = 'FAKE-ticket-binding-token-not-a-real-secret';
+export const CHAT_BINDING_TOKEN = 'FAKE-chat-binding-token-not-a-real-secret';
 
 /** The instance's own `APP_SECRET_KEY`; the seeded `secrets` rows are sealed under it. */
 const APP_SECRET_KEY = 'e2e-test-secret-key-not-a-real-secret-0000';
@@ -153,6 +159,8 @@ export interface PipelineE2E {
   readonly database: MigratedDatabase;
   readonly git: ReturnType<typeof createFakeGitProvider>;
   readonly tickets: ReturnType<typeof createFakeTaskManagement>;
+  /** The chat provider the notification band posts through (WP-32). */
+  readonly chat: ReturnType<typeof createFakeCommunication>;
   readonly projectId: Id;
   readonly userId: Id;
   readonly specs: readonly RunSpec[];
@@ -625,6 +633,22 @@ export const seedIntegrations = async (
     {},
     TICKET_BINDING_TOKEN,
   );
+  /**
+   * The chat account (WP-32).
+   *
+   * `channel` is on the **integration** here, which is the account's default; a project overrides
+   * it in `bindings.config`, and the loader merges the two before it reads the key the provider's
+   * registration declares. Seeding it at the account is what makes the notification e2e exercise
+   * the merge rather than only the overlay.
+   */
+  await bind(
+    CHAT_INTEGRATION_ID,
+    'communication',
+    'fake-communication',
+    'acme fake chat',
+    { channel: CHAT_CHANNEL },
+    CHAT_BINDING_TOKEN,
+  );
 };
 
 export const startPipeline = async (options: StartPipelineOptions): Promise<PipelineE2E> => {
@@ -638,6 +662,13 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   const tickets = createFakeTaskManagement({
     integrationId: TICKETS_INTEGRATION_ID,
     tickets: options.tickets ?? [],
+  });
+  // The chat provider the notification band posts through (WP-32). Only the far side of the HTTP
+  // call is a double: the rows, the decryption, the strict config parse, the channel the loader
+  // reads off the declared key and the redactor composition are all production code.
+  const chat = createFakeCommunication({
+    integrationId: CHAT_INTEGRATION_ID,
+    channels: [CHAT_CHANNEL],
   });
 
   // The merge request the Implementation stage will report. In production the developer agent opens
@@ -775,6 +806,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     createIntegrationRegistry([
       fakeGitRegistration({ port: git, token: GIT_BINDING_TOKEN }),
       fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
+      fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN }),
     ]);
 
   /**
@@ -887,6 +919,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     database: instance.database,
     git,
     tickets,
+    chat,
     projectId,
     userId,
     specs,

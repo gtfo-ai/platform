@@ -292,9 +292,13 @@ describe('the wizard’s step 4', () => {
     expect(sent.at(-1)?.body).toEqual({ autonomy: 'supervised' });
   });
 
-  it('carries all five of the step’s items, and names the two it cannot honestly build', async () => {
+  it('carries all five of the step’s items, and names the one it cannot honestly build', async () => {
     // product/18:50-54. A control that silently did nothing would be worse than an absent one, so
-    // the two gaps are on the screen (standing rule 18: the absent case must not be the quiet one).
+    // the gap is on the screen (standing rule 18: the absent case must not be the quiet one).
+    //
+    // It was **two** until WP-32: the notification channel was named as a gap because nothing could
+    // read one, and the work package that built the notification band replaced that panel with the
+    // control (standing rule 83 — closing a gap falsifies the sentence that described it).
     const { container } = render(
       createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element,
     );
@@ -305,9 +309,9 @@ describe('the wizard’s step 4', () => {
     // product/19 §124's five card fields, on a card whose behaviour is shipped (WP-24).
     expect(container.textContent).toContain('Default: off · Cost: ~$1–3 per merge request');
     expect(container.textContent).toContain('Touches: posts discussion threads on merge requests');
-    // The two gaps, in the words an operator reads.
+    // The gap, in the words an operator reads — and the one that is no longer a gap.
     expect(container.textContent).toContain('proposing a set from the repository structure');
-    expect(container.textContent).toContain('Not built in this release:');
+    expect(container.textContent).not.toContain('A channel belongs to a chat integration');
   });
 
   it('says why the command policy is not editable here', async () => {

@@ -19,7 +19,7 @@
  * permissive one. The check is a plain equality against a value the caller supplies, so a test that
  * seeds one credential and expects another fails at the binding rather than four stages later.
  */
-import type { GitProviderPort, TaskManagementPort } from '@platform/application';
+import type { CommunicationPort, GitProviderPort, TaskManagementPort } from '@platform/application';
 import * as z from 'zod';
 import type { AnyProviderRegistration } from '../registry.js';
 
@@ -61,6 +61,37 @@ export const fakeGitRegistration = (
   gitCredential: { passwordField: 'token', username: 'agentic' },
   create: ({ secrets }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
+    return options.port;
+  },
+});
+
+export const FAKE_COMMUNICATION_PROVIDER_ID = 'fake-communication';
+
+/**
+ * The chat fake, as a registration (WP-32).
+ *
+ * `channel` is in the config schema and declared through `communicationChannels`, exactly as
+ * Slack's is, so the e2e tier exercises the **loader's** channel resolution rather than a shape
+ * only a test has: the registry's boot-time check, the strict config parse and the refusal of a
+ * binding with no channel are all production code on this path.
+ */
+export const fakeCommunicationRegistration = (
+  options: FakeRegistrationOptions<CommunicationPort>,
+): AnyProviderRegistration => ({
+  id: FAKE_COMMUNICATION_PROVIDER_ID,
+  type: 'communication',
+  displayName: 'Fake chat provider (in-memory)',
+  configSchema: z.strictObject({
+    channel: z.string().min(1),
+    digest_channel: z.string().min(1).nullish(),
+    token: z.string().min(1),
+  }),
+  secretFields: ['token'],
+  setupGuidePath: 'packages/integrations/src/communication/fake.ts',
+  agentTooling: null,
+  communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
+  create: ({ secrets }) => {
+    refuseWrongToken(FAKE_COMMUNICATION_PROVIDER_ID, options.token, secrets.token);
     return options.port;
   },
 });

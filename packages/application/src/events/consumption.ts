@@ -27,8 +27,10 @@
  * technical/02's "Core consumers" column is the normative source and the amendment makes it so, with
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
- * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **25**
- * of them — 22 from the pipeline and 3 from the cost ledger (WP-19). A table transcribed from the
+ * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **27**
+ * of them — 22 from the pipeline, 3 from the cost ledger (WP-19) and the 2 budget events the
+ * notification band added (WP-32; its other six types were already handled by the saga). A table
+ * transcribed from the
  * column would therefore stop the outbox
  * worker in every build that exists today, including the one whose e2e walks a ticket to
  * `task.completed` — the acceptance criterion this work package is for.
@@ -65,7 +67,16 @@ export type EventConsumption = 'handled' | 'unconsumed';
  * shape: the absent case must not be the quiet one).
  */
 export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumption>> = {
-  // ── The pipeline (WP-15), registered by `createPipelineRuntime` ──────────────
+  /**
+   * ── The pipeline (WP-15), registered by `createPipelineRuntime` ──────────────
+   *
+   * **A `handled` entry is not a count.** Six of the types below gained a *second* consumer at
+   * WP-32 — the notification band at TD-005 priority 210 (`notify/handlers.ts`): `task.created`,
+   * `task.stage.returned`, `task.question.asked`, `task.escalated`, `task.completed` and
+   * `task.cancelled`, which is exactly technical/02's Slack column. The table answers "must a
+   * sweeper be able to handle this type", so a second handler does not move an entry; the two
+   * budget entries below **did** move, because they had none.
+   */
   'ticket.matched': 'handled',
   'task.created': 'handled',
   'task.queued': 'handled',
@@ -146,12 +157,29 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.
   'mr.updated': 'unconsumed', // WP-41 statistics.
-  // WP-19 *emits* these three from the budgets projection; technical/02's consumers are a
-  // notification (Slack, WP-10) and the UI band (WP-20). What stops a new run is a **read** of
-  // `budget_windows` at stage admission (`cost/guard.ts` says why), not a handler here.
-  'budget.threshold.reached': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
-  'budget.exhausted': 'unconsumed', // Slack (210), WP-10; UI band, WP-20.
-  'budget.reset': 'unconsumed', // WP-20. Nothing emits it in this build either (`cost/window.ts`).
+  // ── The notification band (WP-32), registered by `notifyHandlers` at TD-005 priority 210 ──
+  /**
+   * A budget window crossed a threshold, or is spent — product/18:33's *"budget 100 %"*.
+   *
+   * These two lines used to read `'unconsumed', // Slack (210), WP-10` and WP-10 was **DONE**: a
+   * finished work package cannot own unbuilt work, and the ledger's entry is the shape that error
+   * takes in a table (standing rule 18 — the absent case must not be the quiet one). WP-32 built the
+   * band, so they are `handled`, and by the **same** handler as the six task events below it.
+   *
+   * What stops a new run is still a **read** of `budget_windows` at stage admission
+   * (`cost/guard.ts` says why) and not this handler: telling somebody is not the same as stopping
+   * something, and a notification that failed must never be what lets a run start.
+   *
+   * The **organisation**-scoped budget is the one case this cannot notify: a chat binding belongs
+   * to a project and an org budget's payload carries no `project_id`, so `decideNotification`
+   * returns `null` for it with the reason written at the line. Filed as discovered work.
+   */
+  'budget.threshold.reached': 'handled',
+  'budget.exhausted': 'handled',
+  // Still unconsumed, and deliberately outside the notify band: a window rolling over is not news
+  // (product/18:33's classes are the ones a human acts on), and nothing emits it in this build
+  // either (`cost/window.ts`). The UI band is WP-20's.
+  'budget.reset': 'unconsumed',
   'feedback.received': 'unconsumed', // Feedback intake agent; no work package owns it (WP-24 is review-only mode).
   // Emitted since WP-18b, and unconsumed **by decision** rather than by omission. technical/02's
   // column names "Index rebuild (40), UI" for all three; the index rebuild is the one that has to be

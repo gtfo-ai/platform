@@ -29,6 +29,7 @@ import {
   narrowCommandPolicy,
   type ResolvedCommandPolicy,
 } from '../policies/command-policy.js';
+import { DEFAULT_URGENT_NOTIFICATION_CLASSES } from '../policies/notifications.js';
 import { DEFAULT_MAX_REVIEW_FINDINGS } from '../policies/review-only.js';
 import { DEFAULT_LINT_ISSUE_TYPES, DEFAULT_LINT_LABEL } from '../policies/ticket-lint.js';
 
@@ -127,7 +128,14 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       max_findings: DEFAULT_MAX_REVIEW_FINDINGS,
     },
     maintenance: { enabled: false, schedule: 'weekly', chores: ['deps', 'flaky', 'docs'] },
-    digest: { enabled: true, at: '09:00', quiet_hours: null },
+    // product/18:33's defaults: *"quiet hours off; digest on at 09:00 org time"*, with the third
+    // configurable — the urgent classes — carrying the same document's *"escalation, budget 100%"*.
+    digest: {
+      enabled: true,
+      at: '09:00',
+      quiet_hours: null,
+      urgent: [...DEFAULT_URGENT_NOTIFICATION_CLASSES],
+    },
     shadow_mode: { enabled: false },
   },
 };

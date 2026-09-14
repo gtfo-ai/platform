@@ -439,6 +439,12 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
       return post(thread.channel, thread.thread_id, body, 'message');
     },
 
+    postChannelMessage: async (channel, body) => {
+      core.enter('post_channel_message');
+      requireChannel('post_channel_message', channel);
+      return post(channel, null, body, 'message');
+    },
+
     updateMessage: async (messageRef, body) => {
       core.enter('update_message');
       if (!capabilities.messageUpdate) {

@@ -289,6 +289,7 @@ const integrationsWith = (
         redactor: noSecretsRedactor(),
       }
     : null,
+  communication: null,
 });
 
 /** Just enough `StoredTask` for {@link ensureTicketSnapshot}, which reads three fields. */

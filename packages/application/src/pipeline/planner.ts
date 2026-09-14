@@ -32,11 +32,13 @@
 import type {
   AgentRole,
   ArtifactType,
+  CommunicationLanguage,
   ContextPackRecord,
   Id,
   IsoDate,
   IsoDateTime,
 } from '@platform/contracts';
+import { communicationLanguageSchema } from '@platform/contracts';
 import {
   assemblePrompt,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
@@ -385,6 +387,22 @@ export const commandBaselineFor = (role: AgentRole, stage: string): ResolvedComm
   return extra === undefined ? base : { ...base, allow: [...base.allow, ...extra] };
 };
 
+/**
+ * The language the project's agents write to humans in — `project.communication_language`.
+ *
+ * The **effective** configuration, so a project that never chose gets the platform default
+ * (`auto`, BD-016: follow the ticket). It is parsed rather than cast, because this string reaches
+ * the platform's own voice in layers 1–3 of the prompt and `ConfigValues` is typed from a schema
+ * the *repository* wrote: a value that somehow failed the schema falls back to `auto` rather than
+ * being quoted into an instruction.
+ */
+const languageOf = (settings: ProjectSettings): CommunicationLanguage => {
+  const parsed = communicationLanguageSchema.safeParse(
+    settings.config.project?.communication_language,
+  );
+  return parsed.success ? parsed.data : 'auto';
+};
+
 const limitsFor = (settings: ProjectSettings, stage: string, role: AgentRole): RunLimits => {
   const defaults = stageAgentDefaults(stage);
   const configured = settings.config.stages?.[stage];
@@ -617,6 +635,16 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set
         // so nothing else can reach the platform's own voice (`STAGE_PROMPT_FOCUS`).
         focus: STAGE_PROMPT_FOCUS[stage.id as keyof typeof STAGE_PROMPT_FOCUS] ?? null,
+        /**
+         * The language the project's humans read (WP-32, PROGRESS backlog **60**).
+         *
+         * `project.communication_language` has had a schema and a default since WP-01 and **no
+         * reader anywhere**, so every word an agent wrote to a human was in whatever language the
+         * model guessed — on a Czech team's ticket, English. This is the reader, and it is the
+         * *effective* configuration rather than the repository document, so the platform default
+         * (`auto`) applies to a project that never chose.
+         */
+        language: languageOf(settings),
       });
 
       const spec: RunSpec = {

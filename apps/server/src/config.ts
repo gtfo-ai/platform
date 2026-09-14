@@ -339,10 +339,10 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
  * that nobody has to reassemble it from five docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 4` pipeline workers `+ 4` knowledge workers
- * `+ 1` onboarding worker `+ 2` HTTP `+ 1` maintenance = **17**, against `.env.example`'s
- * `APP_DB_POOL_MAX=18`. The *shape* is **`2N + 15`** since WP-21 registered
- * `onboarding.discovery` beside them, and the changes behind it are
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 5` pipeline workers `+ 4` knowledge workers
+ * `+ 1` onboarding worker `+ 2` HTTP `+ 1` maintenance = **18**, against `.env.example`'s
+ * `APP_DB_POOL_MAX=19`. The *shape* is **`2N + 16`** since WP-32 registered the digest tick
+ * (`notify.digest`) beside them, and the changes behind it are
  * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
  * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
  * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
@@ -350,8 +350,8 @@ export const SERVER_CONFIG_DEFAULTS = {
  * job worker (`pipeline.intake.reconcile`), making it `2N + 10`, and WP-18a added the knowledge
  * index worker: `2N + 11` — 13 at N=1. WP-18b added the Librarian's three
  * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`): `2N + 14` — 16 at N=1. WP-21
- * added `onboarding.discovery`: **`2N + 15`** — **17 at N=1**, and **23 at N=4** where `3N + 8`
- * would have been 20. The shape crossing over at high concurrency is the honest consequence of flat
+ * added `onboarding.discovery`: `2N + 15` — 17 at N=1. WP-32 added the digest tick:
+ * **`2N + 16`** — **18 at N=1**, and **24 at N=4** where `3N + 8` would have been 20. The shape crossing over at high concurrency is the honest consequence of flat
  * workers: they do not scale with dispatch, and they are real.
  */
 export const POOL_RESERVATIONS = {
@@ -366,10 +366,12 @@ export const POOL_RESERVATIONS = {
    *
    * `pipeline/runtime.ts` states the arithmetic: each worker holds one connection during each of
    * its transactions, and the composition root runs one of each at concurrency 1 —
-   * `stage.execute`, `mr.comment.debounce` and, since WP-15d, `pipeline.outbound`. It is counted
-   * here because every `worker` role composes the pipeline.
+   * `stage.execute`, `mr.comment.debounce`, `pipeline.outbound` (WP-15d) and `notify.digest`
+   * (WP-32, the digest tick, `exclusive` so one instance of it runs at a time). It is counted here
+   * because every `worker` role composes the pipeline.
    *
-   * **Four since WP-15c**, and the fourth is composed by `apps/server/src/pipeline.ts` rather than
+   * **Five since WP-32**, whose digest tick is the fifth; the *other* extra one is composed by
+   * `apps/server/src/pipeline.ts` rather than
    * by `createPipelineRuntime`: `pipeline.intake.reconcile`, the pass that re-emits a matched
    * ticket whose intake enqueue was lost (PROGRESS backlog 20). It is a maintenance schedule the
    * process owns, like `registerPartitionMaintenance`, and it is counted here for the same reason
@@ -384,7 +386,7 @@ export const POOL_RESERVATIONS = {
    * started from any of them therefore *replaces* the worker's connection rather than nesting
    * inside it.
    */
-  pipeline: 4,
+  pipeline: 5,
   /**
    * The knowledge workers — **one connection each, four of them** (WP-18a, recounted at WP-18b).
    *
@@ -479,7 +481,7 @@ export class UndersizedPoolError extends Error {
 
   constructor(poolMax: number, required: number, role: string) {
     super(
-      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's four job workers, the knowledge base's four, the onboarding worker, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
+      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's five job workers, the knowledge base's four, the onboarding worker, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
     );
     this.name = 'UndersizedPoolError';
     this.poolMax = poolMax;

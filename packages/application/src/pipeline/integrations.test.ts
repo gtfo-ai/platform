@@ -169,6 +169,10 @@ const integrationsDouble = (): PipelineIntegrations => ({
     ref: { integrationId: PROJECT, provider: 'fake-jira', type: 'task_management' },
     redactor: exactSecretRedactor([]),
   },
+  // The chat binding this file's guards do not exercise: the notify duty's own refusals live in
+  // `notify/duty.test.ts`, and what is asserted here is that `forProject` and every call refuse
+  // inside a transaction whatever the bindings are.
+  communication: null,
 });
 
 /**

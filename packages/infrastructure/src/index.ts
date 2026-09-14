@@ -11,7 +11,9 @@
  * root start the pipeline without a caller supplying an audit sink. WP-16 added the knowledge base's adapters (`knowledge/`): the
  * `kb_*` index and the `code_files`/`code_maps` caches on PostgreSQL, the filesystem vault reader,
  * and the universal-ctags symbol extractor. WP-19 added the cost ledger's `CostStore` and the
- * price-table maintenance job (`cost/`). Later work packages add the rest.
+ * price-table maintenance job (`cost/`). WP-32 added the notification outbox's `NotificationStore`
+ * (`notify/`), which is what lets quiet hours defer a message rather than drop it. Later work
+ * packages add the rest.
  */
 export * as broadcast from './broadcast/index.js';
 export * as cost from './cost/index.js';
@@ -20,6 +22,7 @@ export * as eventing from './events/index.js';
 export * as integrations from './integrations/index.js';
 export * as jobs from './jobs/index.js';
 export * as knowledge from './knowledge/index.js';
+export * as notify from './notify/index.js';
 export * as pipeline from './pipeline/index.js';
 export * as redaction from './redaction/index.js';
 export * as runlet from './runlet/index.js';

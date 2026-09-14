@@ -86,6 +86,7 @@ import {
   cost as costAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
+  notify as notifyAdapters,
   pipeline as pipelineAdapters,
   redaction as redactionAdapters,
   secrets as secretAdapters,
@@ -238,6 +239,15 @@ export interface ComposePipelineOptions {
     readonly modelApiKey: string | null;
     readonly claudeBinary: string | null;
   };
+  /**
+   * The organisation's IANA zone, from `TZ` (Q38) — what `features.digest.at` and quiet hours are
+   * read in (WP-32).
+   *
+   * Passed from `ServerConfig` rather than read here, and **never** defaulted to the host's zone:
+   * a digest that means 09:00 has to say whose 09:00, and `config.ts` already seeds this from `TZ`
+   * with UTC as the documented fallback.
+   */
+  readonly timezone: string;
   readonly logger: Logger;
 }
 
@@ -571,6 +581,11 @@ export const composePipeline = async (
     integrations,
     ids,
     clock: { now: nowIso },
+    // WP-32: the notification outbox, and the zone the digest and quiet hours are read in. Both are
+    // required by `PipelineRuntimeOptions` rather than optional, because a process that composed
+    // the pipeline without them would run the notify band on nothing.
+    notifications: notifyAdapters.createPostgresNotificationStore(),
+    timezone: options.timezone,
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,

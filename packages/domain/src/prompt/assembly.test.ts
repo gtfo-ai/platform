@@ -75,6 +75,9 @@ const inputWith = (
   // Required-and-nullable on the input, so the default here is the explicit "this stage has no
   // narrower instruction" rather than a forgotten key (WP-25 round 2).
   focus: null,
+  // The same shape for the same reason (WP-32): `auto` is a decision — follow the ticket — and a
+  // missing key is not.
+  language: 'auto',
   ...overrides,
 });
 
@@ -131,6 +134,23 @@ describe('the assembled prompt', () => {
     expect(with_.userPrompt).toBe(without.userPrompt);
     // …and the version moves with it, which is the whole reason it is in the system prompt.
     expect(with_.promptVersion).not.toBe(without.promptVersion);
+  });
+
+  it('tells the model which language a human reads, and digests it into the prompt version', () => {
+    // PROGRESS backlog 60: `project.communication_language` had a schema, a default and no reader,
+    // so every word an agent wrote to a human was in whatever language the model guessed. It is in
+    // layers 1–3, which is what makes an edit to it visible in the audit (WP-32).
+    const auto = assemblePrompt(inputWith(BENIGN_TEXT));
+    expect(auto.systemPrompt).toContain('## Language');
+    expect(auto.systemPrompt).toContain('in the language of the ticket you were given');
+
+    const czech = assemblePrompt(inputWith(BENIGN_TEXT, { language: 'cs' }));
+    expect(czech.systemPrompt).toContain('BCP-47 tag `cs`');
+    expect(czech.systemPrompt).toContain('Code, identifiers, commit messages');
+    // Layers 1–3 are what `promptVersion` digests, so the two runs are distinguishable in the audit.
+    expect(czech.promptVersion).not.toBe(auto.promptVersion);
+    // And it is *not* in the user prompt, which is where a value outside the digest would have hidden.
+    expect(czech.userPrompt).not.toContain('BCP-47');
   });
 
   it('names the artifact type and its fields from the one schema', () => {

@@ -61,7 +61,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
-import { OperatingMode } from './operating-mode.js';
+import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
 const LEVEL_TONE: readonly BadgeTone[] = ['danger', 'warning', 'accent', 'success', 'success'];
 
@@ -224,7 +224,15 @@ export const OnboardingScreen = (): ReactElement => {
                 tone="primary"
                 disabled={commands.putBindings.isPending}
                 onClick={() =>
-                  commands.putBindings.mutate({ projectId: project.id, integrationIds: selected })
+                  commands.putBindings.mutate({
+                    projectId: project.id,
+                    // Each binding keeps the configuration it already has — the notification
+                    // channel lives there (WP-32), and re-sending the set without it would erase it.
+                    items: selected.map((id) => ({
+                      integration_id: id,
+                      config: bindingConfigOf(bindings.data?.items ?? [], id),
+                    })),
+                  })
                 }
               >
                 Bind {selected.length} integration{selected.length === 1 ? '' : 's'}

@@ -35,6 +35,17 @@ export const languageTagSchema = z
   .string()
   .regex(/^[a-z]{2}(-[A-Z]{2})?$/, 'expected a language tag such as "en" or "cs"');
 
+/**
+ * `project.communication_language` — the language the platform's agents write to humans in.
+ *
+ * `auto` follows the ticket (BD-016) and is the shipped default. It has a name of its own because
+ * it is read by the **prompt assembler** (WP-32, PROGRESS backlog 60), which puts it in the
+ * platform's own voice in layers 1–3: a closed set is what makes that safe.
+ */
+export const communicationLanguageSchema = z.union([z.literal('auto'), languageTagSchema]);
+
+export type CommunicationLanguage = z.infer<typeof communicationLanguageSchema>;
+
 /** Git object name. */
 export const shaSchema = z.string().regex(/^[0-9a-f]{7,64}$/, 'expected a hexadecimal git sha');
 
@@ -68,6 +79,39 @@ export const timeOfDaySchema = z
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected a 24-hour HH:MM time');
 
 // ── Enumerations ─────────────────────────────────────────────────────────────
+
+/**
+ * What a chat notification is **about** (WP-32) — the unit quiet hours and the digest reason over.
+ *
+ * product/18:33 configures three things: a channel, a quiet window, and *"urgent classes
+ * (escalation, budget 100%) still immediate"*. The third needs a name for each kind of message, and
+ * this is that closed set: one value per catalogue event the notification band consumes
+ * (technical/02 § "Event catalogue", the Slack consumer at priority 210).
+ *
+ * It is **not** the event type. A class is what an operator chooses to be woken for, so it is the
+ * platform's vocabulary rather than the log's — `budget_exhausted` is product/18's "budget 100%"
+ * whatever the event that carries it, and two events that mean one thing to a human would share a
+ * class. The mapping lives beside the handlers (`@platform/application`'s `notify/`), because a new
+ * event that deserves a notification is a pipeline decision and not a configuration change.
+ */
+export const notificationClassSchema = z.enum([
+  /** A ticket was picked up and a task exists (`task.created`). */
+  'task_started',
+  /** An agent is blocked on a human answer (`task.question.asked`). */
+  'question',
+  /** A stage sent the task back to an earlier one (`task.stage.returned`). */
+  'stage_returned',
+  /** The task is parked for a human, with a blocker brief (`task.escalated`). */
+  'escalation',
+  'task_completed',
+  'task_cancelled',
+  /** A budget window crossed its warning threshold (`budget.threshold.reached`). */
+  'budget_threshold',
+  /** A budget window is spent — product/18's "budget 100%" (`budget.exhausted`). */
+  'budget_exhausted',
+]);
+
+export type NotificationClass = z.infer<typeof notificationClassSchema>;
 
 /** Task state machine (technical/02). `returned` carries the target stage in the payload. */
 export const taskStateSchema = z.enum([

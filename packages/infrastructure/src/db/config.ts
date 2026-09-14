@@ -83,17 +83,18 @@ export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export const DATABASE_CONFIG_DEFAULTS = {
   appRole: 'platform_app',
   /**
-   * 17 at WP-18b, from 13 (WP-15b) and 10 before that.
+   * 19 at WP-32, from 17 (WP-18b), 13 (WP-15b) and 10 before that.
    *
    * `apps/server`'s `requiredPoolConnections` refuses to start below its own floor, and the floor
-   * for `ROLE=all` has risen twice since: to **13** when WP-18a registered the `knowledge.index`
-   * worker, and to **16** when WP-18b added the Librarian's three (`knowledge.proposals`,
-   * `knowledge.apply`, `knowledge.hygiene`). A default below the floor does not degrade — it
-   * **refuses to boot**, which is how each of those work packages found this line. 17 is the floor
+   * for `ROLE=all` has risen three times since: to **13** when WP-18a registered the
+   * `knowledge.index` worker, to **16** when WP-18b added the Librarian's three
+   * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`), and to **18** when WP-32 added
+   * the daily digest tick (`notify.digest`). A default below the floor does not degrade — it
+   * **refuses to boot**, which is how each of those work packages found this line. 19 is the floor
    * plus one connection of slack; it is not a capacity plan, and `.env.example` says the same thing
    * with the whole sum written out.
    */
-  poolMax: 17,
+  poolMax: 19,
   connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;

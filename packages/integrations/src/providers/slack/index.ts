@@ -106,6 +106,9 @@ export const createSlackRegistration = (
   secretFields: [...slackSecretFields],
   setupGuidePath: 'packages/integrations/src/providers/slack/setup-guide.md',
   agentTooling: slackAgentTooling,
+  // WP-32: the binding loader reads the channel out of the validated config, and this is what says
+  // which key holds it. `digest_channel` falls back to `channel` in the loader, not here.
+  communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
   create: (input) =>
     createSlackProvider({
       integrationId: input.integrationId,
@@ -145,13 +148,6 @@ export {
 } from './blocks.js';
 export { createSlackClient, type SlackClient } from './client.js';
 export { type SlackConfig, slackConfigSchema, slackSecretFields } from './config.js';
-export {
-  createSlackDigestJob,
-  type DigestOutcome,
-  SLACK_DIGEST_QUEUE,
-  type SlackDigestJob,
-  type SlackDigestOptions,
-} from './digest.js';
 export { codeForSlackError, SLACK_PROVIDER_ID, type SlackFetch } from './http.js';
 export type { SlackInboundDeps } from './inbound.js';
 export { normaliseSlackDelivery } from './inbound.js';

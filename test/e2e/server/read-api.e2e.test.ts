@@ -56,6 +56,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
+  CHAT_BINDING_TOKEN,
   GIT_BINDING_TOKEN,
   GIT_INTEGRATION_ID,
   GIT_PROJECT,
@@ -239,7 +240,10 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
     const integrations = integrationsResponseSchema.parse(
       (await client.json<IntegrationsResponse>('/api/integrations')).body,
     );
+    // Three since WP-32: the harness seeds the chat account the notification band posts through,
+    // and this read publishes every integration an operator configured.
     expect(integrations.items.map((item) => item.provider).sort()).toEqual([
+      'fake-communication',
       'fake-git',
       'fake-task-management',
     ]);
@@ -250,6 +254,9 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
     const body = JSON.stringify(integrations);
     expect(body).not.toContain(GIT_BINDING_TOKEN);
     expect(body).not.toContain(TICKET_BINDING_TOKEN);
+    expect(body, 'the chat binding’s credential is not published either').not.toContain(
+      CHAT_BINDING_TOKEN,
+    );
     expect(git?.config).toEqual({});
     // Direction 2: the row is still described, so this is not a reader that publishes nothing.
     expect(git?.name).toBe('acme fake git');

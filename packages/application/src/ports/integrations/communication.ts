@@ -124,6 +124,25 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
   postMessage(thread: ThreadRef, body: MessageBody): Promise<MessageRef>;
 
   /**
+   * One message in the channel, outside every thread (WP-32).
+   *
+   * Added by the work package that built the notification band, for the notification that has no
+   * task to hang off: a **budget** window is a property of an organisation or a project, so
+   * `budget.threshold.reached` and `budget.exhausted` have no `task_id` at all (technical/02's
+   * payload, `budgets.scope`). The alternative was to open a "task thread" keyed by the budget id,
+   * which would have put a budget into the `task_id` of every audit row the call writes.
+   *
+   * It is a **port** obligation rather than one provider's method, because BD-017's claim is that a
+   * new provider is trustworthy without touching the pipeline and only the shared contract suite
+   * can make that true (standing rule 23).
+   *
+   * @throws {IntegrationError} `not_found` for a channel the bot cannot post into — the same
+   * refusal `postTaskThread` makes, and for the same reason: posting into the void would make a
+   * lost notification look delivered.
+   */
+  postChannelMessage(channel: string, body: MessageBody): Promise<MessageRef>;
+
+  /**
    * Edits a message in place — an answered question becomes "answered by …", an expired approval
    * loses its buttons.
    *
@@ -133,7 +152,15 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
 
   postDigest(channel: string, items: readonly DigestItem[]): Promise<MessageRef>;
 
-  /** Maps a chat user onto a verified identity by email (product/08), or `null` when unknown. */
+  /**
+   * Maps a chat user onto a verified identity by email (product/08), or `null` when unknown.
+   *
+   * **It has no caller in this build** (checked at WP-32, which built the outbound band): a chat
+   * identity is only needed for the *inbound* half — an answer or an approval arriving from a
+   * thread — and nothing starts a Socket Mode connection. Its destination, `user_identities`, is
+   * read by `InboundIdentityDirectory` and written by nothing; that file's docblock carries the
+   * three places a mapping could honestly come from and why guessing one is refused.
+   */
   resolveIdentity(query: {
     readonly providerUserId?: string;
     readonly email?: string;

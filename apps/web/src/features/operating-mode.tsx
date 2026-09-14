@@ -52,6 +52,7 @@ import {
   useOnboardingCommands,
   useProjectAudit,
   useProjectAutonomy,
+  useProjectBindings,
   useProjectBudgets,
   useProjectConfig,
   useSettingsCommands,
@@ -70,6 +71,25 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+
+/**
+ * The configuration a binding already carries, by integration id (WP-32).
+ *
+ * `PUT /api/projects/:id/bindings` replaces the **whole** set, so every caller that re-sends it has
+ * to send each binding's `config` back or erase it — and the notification channel is a key of that
+ * document. It lives here because this is the component both screens already share; the two "Save
+ * bindings" buttons call it for exactly that reason.
+ */
+export const bindingConfigOf = (
+  items: readonly { readonly integration_id: string; readonly config?: unknown }[],
+  integrationId: string,
+): Record<string, unknown> | undefined => {
+  const found = items.find((item) => item.integration_id === integrationId);
+  const config = found?.config;
+  return typeof config === 'object' && config !== null && !Array.isArray(config)
+    ? (config as Record<string, unknown>)
+    : undefined;
+};
 
 /** product/19 §11's four dial positions, in order, with the one sentence each one is. */
 export const AUTONOMY_CHOICES = [
@@ -617,16 +637,34 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
 // ── 5. Notifications ─────────────────────────────────────────────────────────
 
 /**
- * product/18:54 — *"Notifications: channel, quiet hours, digest"*.
+ * product/18:54 — *"Notifications: channel, quiet hours, digest"*. All three, since WP-32.
  *
- * Digest and quiet hours are keys of `features.digest` and are editable. The **channel** is not: it
- * is a property of a `communication` binding, and this build's loader resolves `git` and
- * `task_management` only, so a channel typed here would be a value nothing could ever read (WP-32).
- * That is said on the screen rather than drawn as a disabled input with no explanation.
+ * The **channel** was named as a gap here until the notification band existed, for a reason that
+ * belonged to this release rather than to this screen: *"a channel is a property of a
+ * `communication` binding, and this build resolves `git` and `task_management` only … the channel
+ * would be a field whose value nothing could ever read"*. All three halves of that are now false —
+ * the loader resolves a chat binding, `communicationWrites` calls it, and the channel is the key
+ * the loader reads (standing rule 83).
+ *
+ * **Where the value lives is the decision this control implements.** The channel is written to
+ * `bindings.config.channel` — the project's overlay on the chat *account's* configuration — and not
+ * to `features.digest`: one Slack account serves every project in an organisation, a feature key
+ * would be a second place to change one thing, and the two would disagree the first time a project
+ * moved workspace. `PUT …/bindings` replaces the whole set, so this sends every binding back with
+ * the configuration it already had and this one key changed.
+ *
+ * A project with no chat binding gets a sentence and a link rather than an input: there is nowhere
+ * for a channel to be, and a control that stored one would be storing it against nothing.
  */
 export const Notifications = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const config = useProjectConfig(projectId);
+  const bindings = useProjectBindings(projectId);
   const commands = useOnboardingCommands();
+  const bound = bindings.data?.items ?? [];
+  const chat = bound.find((item) => item.type === 'communication');
+  const chatConfig = chat === undefined ? undefined : bindingConfigOf(bound, chat.integration_id);
+  const storedChannel = typeof chatConfig?.channel === 'string' ? chatConfig.channel : '';
+  const [channel, setChannel] = useState<string | null>(null);
   const digest =
     (
       config.data?.config as
@@ -705,11 +743,48 @@ export const Notifications = ({ projectId }: { readonly projectId: string }): Re
           Save notifications
         </Button>
       </div>
-      <p className="text-xs text-fg-muted">
-        <strong>Not built in this release:</strong> the channel. A channel belongs to a chat
-        integration, and this build resolves git and ticket-board bindings only — nothing sends a
-        notification of any kind yet, so digest and quiet hours are stored and not acted on.
-      </p>
+      {chat === undefined ? (
+        <p className="text-xs text-fg-muted">
+          No chat integration is bound to this project, so nothing is posted anywhere. Bind one from
+          the project settings page and the channel appears here.
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-end gap-2">
+          <Field
+            label="Channel"
+            hint="Where task threads and notifications are posted, for this project."
+            value={channel ?? storedChannel}
+            onChange={(event) => setChannel(event.target.value)}
+          />
+          <Button
+            disabled={commands.putBindings.isPending || (channel ?? storedChannel).trim() === ''}
+            onClick={() => {
+              commands.putBindings.mutate({
+                projectId,
+                items: bound.map((item) => ({
+                  integration_id: item.integration_id,
+                  config:
+                    item.integration_id === chat.integration_id
+                      ? { ...(chatConfig ?? {}), channel: (channel ?? storedChannel).trim() }
+                      : bindingConfigOf(bound, item.integration_id),
+                })),
+              });
+            }}
+          >
+            Save channel
+          </Button>
+          <p className="w-full text-xs text-fg-muted">
+            Posted through <UntrustedText value={chat.provider} />. Urgent classes — an escalation
+            and a budget at 100 % — are sent immediately even inside quiet hours.
+          </p>
+        </div>
+      )}
+      {commands.putBindings.isError ? (
+        <ErrorNotice
+          title="The channel was not saved."
+          detail={String(commands.putBindings.error)}
+        />
+      ) : null}
       {commands.writeConfig.isError ? (
         <ErrorNotice
           title="The notification settings were not saved."

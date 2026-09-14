@@ -57,6 +57,7 @@ export * from './policies/budgets.js';
 export * from './policies/command-policy.js';
 export * from './policies/conflict-overlap.js';
 export * from './policies/iteration-limits.js';
+export * from './policies/notifications.js';
 export * from './policies/path-patterns.js';
 export * from './policies/review-only.js';
 export * from './policies/risk-classes.js';

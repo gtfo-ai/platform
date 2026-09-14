@@ -56,6 +56,13 @@ export * from './knowledge/kb-search.js';
 export * from './knowledge/librarian.js';
 export * from './knowledge/ports.js';
 export * from './knowledge/runtime.js';
+// The notification band, the digest and quiet hours (WP-32)
+export * from './notify/digest.js';
+export * from './notify/handlers.js';
+export * from './notify/options.js';
+export * from './notify/policy.js';
+export * from './notify/ports.js';
+export * from './notify/render.js';
 // Onboarding: the wizard's discovery run and the readiness evaluation (WP-21)
 export * from './onboarding/discovery.js';
 export * from './onboarding/evaluate-readiness.js';
@@ -114,6 +121,7 @@ export * from './testing/memory-cost.js';
 export * from './testing/memory-eventing.js';
 export * from './testing/memory-integrations.js';
 export * from './testing/memory-knowledge.js';
+export * from './testing/memory-notifications.js';
 export * from './testing/memory-pipeline.js';
 export * from './testing/memory-proposals.js';
 export * from './testing/memory-readiness.js';

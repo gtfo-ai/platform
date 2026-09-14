@@ -37,6 +37,13 @@ import type { InjectedSecret } from '../integrations/redaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { IntegrationRef } from '../ports/integrations/common.js';
 import type {
+  CommunicationPort,
+  DigestItem,
+  MessageBody,
+  MessageRef,
+  ThreadRef,
+} from '../ports/integrations/communication.js';
+import type {
   CommitAction,
   CommitRef,
   Discussion,
@@ -110,10 +117,40 @@ export interface TaskManagementBinding {
   readonly redactor: SecretRedactor;
 }
 
+/**
+ * The project's chat binding — the third type the loader resolves (WP-32).
+ *
+ * `channel` and `digestChannel` are **binding** configuration rather than feature configuration:
+ * one Slack account serves every project in an organisation, and which conversation *this*
+ * project's notifications land in is what `bindings.config` exists for (its port docblock:
+ * *"a project overriding … for its own tickets is the reason the column exists"*). Which config
+ * key holds it is the provider's knowledge, so the provider's registration declares it and the
+ * loader reads the declared key — the shape `gitCredential` already has, for the reason BD-017
+ * gives: adding a provider must not touch a consumer.
+ */
+export interface CommunicationBinding {
+  readonly port: CommunicationPort;
+  readonly ref: IntegrationRef;
+  /** Where task threads are opened (product/08: one channel per project). */
+  readonly channel: string;
+  /** Where the digest is posted. Falls back to {@link CommunicationBinding.channel}. */
+  readonly digestChannel: string;
+  /**
+   * The redactor this binding's adapter was built with — both steps of TD-012, in order, and here
+   * for the same reason the other two bindings carry one: the notification band **stores** the
+   * text it sends (`notifications.title`/`detail`, migration 0023), built out of a ticket key, a
+   * stage's return reason and a blocker brief, and the executor redacts the audit row rather than
+   * the value it hands back. The adapter redacts what goes *out*; this is what redacts what stays.
+   */
+  readonly redactor: SecretRedactor;
+}
+
 export interface PipelineIntegrations {
   readonly executor: IntegrationActionExecutor;
   readonly git: GitBinding | null;
   readonly taskManagement: TaskManagementBinding | null;
+  /** `null` for a project with no chat binding; a binding that fails to load throws (rule 20). */
+  readonly communication: CommunicationBinding | null;
 }
 
 /**
@@ -431,8 +468,11 @@ export interface TicketWriteContext extends CallContext {
 }
 
 /**
- * `encode`/`decode` are casts and not a `parse`, matching the one other plan in the repository
- * (`slack/digest.ts`).
+ * `encode`/`decode` are casts and not a `parse`, which every plan in this repository does.
+ *
+ * (The sentence used to name `slack/digest.ts` as *"the one other plan"*; WP-32 moved that
+ * mechanism into `notify/digest.ts` and gave the chat calls below plans of their own, so the
+ * exclusivity claim is gone rather than stale — standing rules 63 and 83.)
  *
  * The stored value is redacted before it is written, so a `parse` would turn the rare case where
  * TD-012's pattern redactor matched something inside a provider's own comment id into a job that
@@ -797,6 +837,176 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
       () => null as unknown as Discussion,
       (result) => ({ discussion_id: result.id }),
       replayable<Discussion>(input.idempotencyKey),
+    );
+  },
+});
+
+/**
+ * The chat calls the notification band makes (WP-32) — each one a mutation, each one replayable.
+ *
+ * Three calls and no reads: a notification is something the platform *says*. Every one of them
+ * answers `null` for a project with no communication binding, which is the same "absent is not
+ * broken" shape the other two write surfaces have — the caller logs a reason and the task carries
+ * on, because a project without a chat integration is a project that reads its tickets.
+ *
+ * **Every call carries an `IdempotencyPlan` whose key the platform owns**, and that is not a
+ * convenience: these calls are made from a `pipeline.outbound` job, a job is at-least-once, and a
+ * retried wake-up that posted a second copy of the same escalation would be the bot product/18
+ * exists to keep welcome. The keys are built from platform identifiers — an event id, a task id, a
+ * channel and a date — never from provider text, because the executor **refuses** a key that would
+ * need redacting (`idempotencyScopeFor`: redaction is many-to-one and a key is an identity).
+ */
+export const communicationWrites = (integrations: PipelineIntegrations) => ({
+  /**
+   * The task's thread (product/08: one channel per project, one thread per task).
+   *
+   * The port promises one thread per task and the Slack adapter keeps that promise **in memory**,
+   * which is worth nothing here: `bindings/loader.ts` builds the adapter *per call* so the
+   * redactor can carry the call's run-scoped credentials (Q55), so every notification would meet a
+   * fresh, empty directory and open a new thread. The durable half is the executor's idempotency
+   * store, keyed by task — which `threads.ts` has described since WP-10 as *available and unused*,
+   * with *"whoever gives the action a plan owns the assertion"*. This is that caller.
+   */
+  taskThread: async (
+    input: { readonly taskId: Id; readonly body: MessageBody },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<ThreadRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'post_task_thread',
+      // The channel and the task, never the body: `integration_actions.payload` wants what was
+      // touched rather than a copy of the message.
+      { channel: chat.channel, task_id: input.taskId },
+      context,
+      async () =>
+        chat.port.postTaskThread({
+          channel: chat.channel,
+          taskId: input.taskId,
+          body: input.body,
+        }),
+      () => ({
+        provider: chat.ref.provider,
+        channel: chat.channel,
+        thread_id: `would-have-${input.taskId}`,
+        url: null,
+      }),
+      (result) => ({ channel: result.channel, thread_id: result.thread_id }),
+      replayable<ThreadRef>(`${chat.ref.provider}:thread:${input.taskId}`),
+    );
+  },
+
+  /** One notification in the task's thread: picked up, question, returned, escalated, finished. */
+  message: async (
+    input: {
+      readonly thread: ThreadRef;
+      readonly body: MessageBody;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MessageRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'post_message',
+      { channel: input.thread.channel, thread_id: input.thread.thread_id },
+      context,
+      async () => chat.port.postMessage(input.thread, input.body),
+      () => ({
+        provider: chat.ref.provider,
+        channel: input.thread.channel,
+        message_id: `would-have-${input.idempotencyKey}`,
+        thread_id: input.thread.thread_id,
+        url: null,
+      }),
+      (result) => ({ channel: result.channel, message_id: result.message_id }),
+      replayable<MessageRef>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * One message in the channel, outside every thread — the notification that has no task.
+   *
+   * A budget window belongs to a project, so `budget.exhausted` has no `task_id` and there is no
+   * thread to reply in. Opening a "task thread" keyed by the budget id was the alternative and it
+   * would have written a budget into the `task_id` of every audit row the call makes.
+   */
+  channelMessage: async (
+    input: { readonly body: MessageBody; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MessageRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'post_channel_message',
+      { channel: chat.channel },
+      context,
+      async () => chat.port.postChannelMessage(chat.channel, input.body),
+      () => ({
+        provider: chat.ref.provider,
+        channel: chat.channel,
+        message_id: `would-have-${input.idempotencyKey}`,
+        thread_id: null,
+        url: null,
+      }),
+      (result) => ({ channel: result.channel, message_id: result.message_id }),
+      replayable<MessageRef>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * The day's digest, in the digest channel — one call per `(channel, day)`.
+   *
+   * The key is the caller's and names the **day in the schedule's own zone**, which is what makes a
+   * retried job replay instead of posting twice and what makes two ticks in one day one message.
+   */
+  digest: async (
+    input: { readonly items: readonly DigestItem[]; readonly day: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MessageRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'post_digest',
+      { channel: chat.digestChannel, item_count: input.items.length, day: input.day },
+      context,
+      async () => chat.port.postDigest(chat.digestChannel, input.items),
+      () => ({
+        provider: chat.ref.provider,
+        channel: chat.digestChannel,
+        message_id: `would-have-digest-${input.day}`,
+        thread_id: null,
+        url: null,
+      }),
+      (result) => ({ channel: result.channel, message_id: result.message_id }),
+      // The mode is part of the key rather than part of the day, and the honest statement of what
+      // that buys is worth more than the obvious one. **What keeps a shadow task's lines out of a
+      // real message is the caller making one call per mode** (`notify/digest.ts`), plus the guard
+      // at step 1 of the executor, which answers a mutating shadow request `would_have` *before*
+      // the idempotency step — measured: `action-executor.ts` returns at the shadow branch, so a
+      // shadow call reads no key and writes none, and on this build the suffix can therefore not be
+      // observed through the store at all. It is here for the case that guard is ever moved or a
+      // third mode appears, where two calls sharing a key would make the second replay the first.
+      replayable<MessageRef>(
+        `${chat.ref.provider}:digest:${chat.digestChannel}:${input.day}` +
+          (context.mode === 'normal' ? '' : `:${context.mode}`),
+      ),
     );
   },
 });

@@ -238,9 +238,9 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Seventeen since WP-21: sixteen (WP-15c's fourth pipeline worker, WP-18a's `knowledge.index`
-    // and WP-18b's three Librarian queues) plus `onboarding.discovery`.
-    expect((thrown as UndersizedPoolError).required).toBe(17);
+    // Eighteen since WP-32: seventeen (WP-15c's fourth pipeline worker, WP-18a's `knowledge.index`,
+    // WP-18b's three Librarian queues and WP-21's `onboarding.discovery`) plus the digest tick.
+    expect((thrown as UndersizedPoolError).required).toBe(18);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
   });
 

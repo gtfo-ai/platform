@@ -37,6 +37,8 @@
  *  - nothing here holds a transaction while it calls. `integrations.forProject` and the executor
  *    both refuse if a later change tries (`events/open-transaction.ts`).
  */
+import { runNotification } from '../notify/duty.js';
+import type { NotifyOptions } from '../notify/options.js';
 import type { JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -48,7 +50,7 @@ import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
-export interface PipelineOutboundOptions extends PipelineSagaOptions {
+export interface PipelineOutboundOptions extends PipelineSagaOptions, NotifyOptions {
   readonly unitOfWork: UnitOfWork;
 }
 
@@ -94,6 +96,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'conflict_warn':
         await runConflictWarning(options, data);
+        return;
+      case 'notify':
+        await runNotification(options, data);
         return;
       default:
         logger.warn(

@@ -106,7 +106,9 @@ export interface PipelineOutboundData {
     | 'ticket_lint_check'
     | 'ticket_lint_post'
     /** WP-26, the rebase gate: tell this task's merge request which peers touch the same files. */
-    | 'conflict_warn';
+    | 'conflict_warn'
+    /** WP-32, the notify band: say one thing in the project's chat channel. */
+    | 'notify';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -144,6 +146,19 @@ export interface PipelineOutboundData {
   /** The three `review_only_*` duties: which merge request, and where it lives. */
   readonly iid?: number;
   readonly mr_url?: string;
+  /**
+   * `notify` (WP-32): what class of thing happened, and the event's own words about it.
+   *
+   * They ride the payload for the reason `blocker_brief` does — no row holds them. A return
+   * reason, a blocker brief and the text of a question live on the event, and the class is the
+   * handler's reading of an event the duty would otherwise have to re-derive from an event store
+   * it does not have. Both are re-validated on fire: the class is **parsed** against
+   * `notificationClassSchema` and the detail is bounded and redacted before it is stored or sent.
+   */
+  readonly notification_class?: string;
+  readonly notification_detail?: string;
+  /** Platform text naming what the notification is about when there is no task — a budget window. */
+  readonly notification_subject?: string;
   readonly [key: string]: unknown;
 }
 

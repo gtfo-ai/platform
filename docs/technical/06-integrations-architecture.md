@@ -201,8 +201,12 @@ packages/integrations/src/
                             # webhook-payloads.ts, inbound.ts, provider.ts, index.ts, setup-guide.md
   providers/slack/          # WP-10: config.ts, http.ts, client.ts, schemas.ts, blocks.ts,
                             # mrkdwn.ts, signature.ts, inbound.ts, threads.ts, socket.ts,
-                            # digest.ts, provider.ts, index.ts, app-manifest.json, manifest.ts,
+                            # provider.ts, index.ts, app-manifest.json, manifest.ts,
                             # setup-guide.md
+                            # (WP-32 removed digest.ts: the digest is a behaviour of the
+                            # communication *type*, so its schedule and its policy live in
+                            # `@platform/application`'s notify/digest.ts — BD-017, since a
+                            # scheduler in this package could only schedule Slack.)
   providers/sentry/ providers/loki/
   registry.ts               # providers register {type, id, configSchema, secretFields, capabilities, agentTooling}
 test/contract/support/integrations/

@@ -48,11 +48,13 @@
  *     durable half is the executor's idempotency store and it is *available*, not wired: a
  *     `ThreadRef` is JSON, so a second call replays the stored ref and issues zero HTTP requests
  *     given an `IdempotencyPlan` — asserted against a *fresh* adapter, which is the only version
- *     of that assertion an in-memory map cannot fake. **The plan belongs to the caller and no
- *     production caller writes one** (corrected at WP-15b: this entry and `threads.ts` both said
- *     the action "carries" one, and `send({ action: 'post_task_thread' })` attaches none — the
- *     plan in that contract test is the test's). `SlackThreadDirectory` is exported so a later WP
- *     can supply a database-backed one.
+ *     of that assertion an in-memory map cannot fake. **The plan belongs to the caller, and since
+ *     WP-32 a production caller writes one**: `communicationWrites.taskThread` keys it
+ *     `<provider>:thread:<taskId>`, which it must, because the binding loader builds this adapter
+ *     per call (Q55) and the directory below is therefore empty on every notification. The entry
+ *     used to end *"no production caller writes one"*, which WP-15b corrected and WP-32 made false
+ *     (standing rule 83). `SlackThreadDirectory` is still exported so a later WP can supply a
+ *     database-backed one — and the durable answer on the pipeline's path is the executor's.
  *  2. **A `ThreadRef`/`MessageRef` carries no permalink.** `chat.postMessage` returns `channel` and
  *     `ts` and no URL; a permalink is a second call (`chat.getPermalink`) per message. The port
  *     allows `null` and `null` is what "unknown" means, so the adapter does not assemble a URL
@@ -469,6 +471,19 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         body,
         blocks: (redacted) => taskThreadBlocks(redacted.markdown),
         action: 'post_message',
+      }),
+
+    /**
+     * A message in the channel, outside every thread (WP-32) — `thread_ts` omitted rather than
+     * null-in-a-thread, which is what `send` already does for the first message of a task thread.
+     */
+    postChannelMessage: async (channel, body) =>
+      send({
+        channel,
+        threadTs: null,
+        body,
+        blocks: (redacted) => taskThreadBlocks(redacted.markdown),
+        action: 'post_channel_message',
       }),
 
     updateMessage: async (messageRef, rawBody) => {

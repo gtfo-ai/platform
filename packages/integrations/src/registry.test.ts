@@ -156,3 +156,80 @@ describe('a git provider’s static credential declaration', () => {
     expect(gitlabProviderRegistration.secretFields).toContain('token');
   });
 });
+
+/**
+ * The channel declaration WP-32 added, and the boot failure it exists to be.
+ *
+ * A `communication` provider that declared nothing would resolve to a binding with **no channel**,
+ * and the symptom would be a notification nobody received — a failure with no error, which is the
+ * kind this file exists to convert into a refusal an operator can read.
+ */
+describe('a communication provider’s channel declaration', () => {
+  const chatRegistration = (
+    communicationChannels: unknown,
+    configShape: Record<string, z.ZodType> = { channel: z.string().min(1) },
+  ): AnyProviderRegistration =>
+    ({
+      ...registration(),
+      id: 'fake-chat-provider',
+      type: 'communication',
+      configSchema: z.strictObject(configShape),
+      secretFields: [],
+      create: () => {
+        throw new Error('not built in this test');
+      },
+      communicationChannels,
+    }) as AnyProviderRegistration;
+
+  it('accepts a declaration whose keys exist in the config schema', () => {
+    const registry = createIntegrationRegistry([
+      chatRegistration(
+        { channel: 'channel', digestChannel: 'digest_channel' },
+        {
+          channel: z.string().min(1),
+          digest_channel: z.string().min(1).nullish(),
+        },
+      ),
+    ]);
+    expect(registry.get('communication', 'fake-chat-provider').communicationChannels).toEqual({
+      channel: 'channel',
+      digestChannel: 'digest_channel',
+    });
+  });
+
+  it('refuses a communication provider that declares no channel at all', () => {
+    expect(() => createIntegrationRegistry([chatRegistration(undefined)])).toThrow(
+      /declares no communicationChannels/,
+    );
+  });
+
+  it('refuses a key that does not exist in the config schema', () => {
+    expect(() =>
+      createIntegrationRegistry([chatRegistration({ channel: 'conversation' })]),
+    ).toThrow(/channel field "conversation" does not exist/);
+    expect(() =>
+      createIntegrationRegistry([
+        chatRegistration({ channel: 'channel', digestChannel: 'nowhere' }),
+      ]),
+    ).toThrow(/channel field "nowhere" does not exist/);
+  });
+
+  it('refuses the declaration on a provider of another type', () => {
+    expect(() =>
+      createIntegrationRegistry([
+        {
+          ...registration(),
+          communicationChannels: { channel: 'channel' },
+        } as AnyProviderRegistration,
+      ]),
+    ).toThrow(/declares communicationChannels but is a "task_management" provider/);
+  });
+
+  it('is what the shipped Slack provider declares', async () => {
+    const { slackProviderRegistration } = await import('./providers/slack/index.js');
+    expect(slackProviderRegistration.communicationChannels).toEqual({
+      channel: 'channel',
+      digestChannel: 'digest_channel',
+    });
+  });
+});

@@ -151,6 +151,27 @@ export const createPostgresInboundAuditLog = (options: {
  *
  * BD-006/Q10: an identity that is not here resolves to `null`, which every normaliser turns into
  * `verified: false` — recorded, never acted on.
+ *
+ * ## `user_identities` has a reader and **no writer**, and that is stated rather than implied
+ *
+ * This query is the only thing in the tree that reads the table, and nothing anywhere inserts into
+ * it (WP-32 looked: `git grep user_identities` finds this file, migration 0003 and the Drizzle
+ * definition). So on a real instance the map is **empty**, every chat and ticket author is
+ * unmapped, and every answer or approval that arrives from a provider is recorded as `ignored:
+ * unmapped_identity` — which is the fail-closed direction and is why this is a gap rather than a
+ * defect: nothing is *acted* on that should not be.
+ *
+ * WP-32 did not write one, and the reason is worth reading before somebody adds an insert here.
+ * A row maps a **provider account** to a **platform user**, and the platform can only learn that
+ * pairing from one of three places: an operator saying so (an admin screen and an endpoint, which
+ * no work package owns), an OAuth sign-in with the provider (TD-022 ships email and password), or
+ * a match by email through `CommunicationPort.resolveIdentity` — which has no caller either,
+ * because this build starts no Socket Mode connection and the notification band is **outbound
+ * only**. Writing rows from an email match without a human confirming it would also be the one
+ * thing BD-022 and Q10 refuse: an identity the platform *guessed* would then be allowed to answer
+ * questions and approve plans.
+ *
+ * Filed as discovered work in `docs/technical/PROGRESS.md`.
  */
 export const createPostgresIdentityDirectory = (options: {
   readonly sql: SqlExecutor;

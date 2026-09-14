@@ -108,6 +108,19 @@
     {
       "method": "POST",
       "path": "/chat.postMessage",
+      "match": { "channel": "C0FAKECHAN1", "text": "Budget for *acme/api* is spent" },
+      "status": 200,
+      "body": { "ok": true, "channel": "C0FAKECHAN1", "ts": "1780000005.000600" },
+      "source": {
+        "url": "https://docs.slack.dev/reference/methods/chat.postMessage",
+        "retrieved": "2026-09-14",
+        "kind": "documented-adapted",
+        "note": "The documented success envelope with this corpus's fake channel id and a ts of its own, for a message posted with no thread_ts at all (postChannelMessage, WP-32). Slack's example response carries the same ok/channel/ts members; only the values are the corpus's."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/chat.postMessage",
       "match": { "channel": "C0FAKEMISS1" },
       "status": 200,
       "body": { "ok": false, "error": "channel_not_found" },

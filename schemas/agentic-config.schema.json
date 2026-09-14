@@ -389,6 +389,22 @@
                   "type": "null"
                 }
               ]
+            },
+            "urgent": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "task_started",
+                  "question",
+                  "stage_returned",
+                  "escalation",
+                  "task_completed",
+                  "task_cancelled",
+                  "budget_threshold",
+                  "budget_exhausted"
+                ]
+              }
             }
           },
           "additionalProperties": false

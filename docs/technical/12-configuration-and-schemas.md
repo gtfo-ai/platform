@@ -83,7 +83,7 @@ features:
   ticket_linter: { enabled: false, issue_types: [Story, Task, Bug], label: agentic }   # WP-25
   review_only: { enabled: false, trigger: label, label: agentic-review, paths: [], severity_floor: major, max_findings: 10 }
   maintenance: { enabled: false, schedule: "weekly", budget_usd: 20, chores: [deps, flaky, docs] }
-  digest: { enabled: true, at: "09:00", quiet_hours: null }
+  digest: { enabled: true, at: "09:00", quiet_hours: null, urgent: [escalation, budget_exhausted] }   # WP-32
   shadow_mode: { enabled: false }   # M3; added in WP-01 from product/18-19
 status_mapping:                  # task state -> ticket status name (provider-specific names)
   refinement: "In Refinement"

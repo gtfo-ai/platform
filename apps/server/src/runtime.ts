@@ -325,6 +325,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             modelApiKey: config.modelApiKey,
             claudeBinary: config.claudeBinary,
           },
+          // The organisation's zone (Q38): the digest tick's cron is read in it, and so is every
+          // quiet-hours comparison. `config.timezone` is `TZ`, defaulted to UTC and never to the
+          // host clock.
+          timezone: config.timezone,
           logger: loggerPort,
         });
         stopCallbacks.unshift({ name: 'pipeline', stop: pipeline.stop });

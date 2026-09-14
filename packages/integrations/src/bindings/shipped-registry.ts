@@ -5,13 +5,25 @@
  * the registry is where "this build knows about GitLab" is written down, and until a loader read
  * the `bindings` table there was nobody to say it to. This is that list.
  *
- * ## Why two and not five
+ * ## Why three and not five
  *
- * The pipeline holds a git provider and a task manager (`PipelineIntegrations`), and the loader
- * builds exactly those two. Registering Slack, Sentry and Loki here as well would be five entries
- * of which three are constructed by nothing — a set the code is parameterised over and the tests
- * are not, which is standing rule 68's shape. They are registered by the composition root that
- * consumes them (the digest job, the bug-task pre-fetch), in the work package that builds it.
+ * The pipeline holds a git provider, a task manager and — since WP-32 — the chat binding the
+ * notification band posts through (`PipelineIntegrations`), and the loader builds exactly those
+ * three. **Slack joined this list when it got a consumer**, which is the rule this paragraph has
+ * always stated rather than an exception to it: it used to read *"Registering Slack, Sentry and
+ * Loki here as well would be five entries of which three are constructed by nothing … They are
+ * registered by the composition root that consumes them (the digest job, the bug-task pre-fetch),
+ * in the work package that builds it"*, and WP-32 is that work package for Slack (standing rule
+ * 83 — closing a gap falsifies the sentence that described it).
+ *
+ * Sentry and Loki are still absent for the original reason: nothing constructs them. The bug
+ * task's observability pre-fetch has no owner, so registering them would be two entries the code
+ * is parameterised over and the tests are not (standing rule 68's shape).
+ *
+ * **Registering Slack has one consequence beyond the notification band**, and it is deliberate:
+ * the webhook ingress shares this registry, so `POST /webhooks/slack/<integrationId>` now resolves
+ * a provider and can verify and normalise a delivery (WP-10 built both halves and WP-15c built the
+ * door). An unmapped author is still `ignored` with a reason and never a decision (BD-022, Q10).
  *
  * ## The duplication this composition carries, stated rather than discovered later
  *
@@ -30,6 +42,7 @@ import type { Clock } from '@platform/domain';
 import { gitlabProviderRegistration } from '../providers/gitlab/index.js';
 import { fixedActionContext } from '../providers/jira-cloud/index.js';
 import { createJiraCloudRegistration } from '../providers/jira-cloud/registration.js';
+import { createSlackRegistration } from '../providers/slack/index.js';
 import { createIntegrationRegistry, type IntegrationRegistry } from '../registry.js';
 
 export interface PipelineProviderRegistryOptions {
@@ -58,4 +71,16 @@ export const createPipelineProviderRegistry = (
       // here was allowed to be.
       actionContext: fixedActionContext('normal'),
     }),
+    /**
+     * Slack (WP-32), built with the **process's** clock and nothing else.
+     *
+     * The adapter's other injectable pieces stay at their defaults on purpose: `fetch` is the
+     * runtime's, the id source is `randomUUID`, and the thread directory is the in-memory one —
+     * which is worth nothing here, because the loader builds an adapter *per call* (Q55). The
+     * durable answer to "does this task already have a thread" is the executor's idempotency store,
+     * and `communicationWrites.taskThread` is the caller that finally gives that action a plan.
+     * The Socket Mode connector is **not** started from here: an outbound registration is not a
+     * consumer of inbound envelopes, and nothing in this build opens that connection.
+     */
+    createSlackRegistration({ clock: options.clock }),
   ]);
