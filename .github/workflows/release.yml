@@ -55,7 +55,10 @@ name: release
 # down, BD-002), and an unset secret is an empty string, which `||` falls back from:
 # https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets
 # ("If a secret has not been set, the return value of an expression referencing the secret … will
-# be an empty string"). **What the fallback costs, stated rather than discovered**: no CI on the
+# be an empty string"). The fallback also needs the repository setting *Allow GitHub Actions to
+# create and approve pull requests*, off by default — measured at this workflow's first run
+# (34966305421): "GitHub Actions is not permitted to create or approve pull requests", nothing
+# opened. **What the fallback costs, stated rather than discovered**: no CI on the
 # release PR at all, so merging it needs a human to close and reopen the PR (a human's event, not
 # the token's), or a merge queue evaluating it on `merge_group`, or an administrator bypassing the
 # required checks — and the `dco` verdict on the release commit is then reachable only through

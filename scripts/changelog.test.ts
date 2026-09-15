@@ -185,6 +185,16 @@ describe('readCommits', () => {
   });
 
   it('accounts for every commit of this repository’s own history', () => {
+    // A shallow clone has one commit and this test would then fail as "expected 1 to be greater
+    // than 100" (ci.yml at 2788e9c), which names nothing; say what is wrong instead. CI's unit job
+    // fetches the full history for this file and scripts/release.test.ts.
+    expect(
+      execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+        cwd: join(import.meta.dirname, '..'),
+        encoding: 'utf8',
+      }).trim(),
+      'this test reads the repository history and needs a full clone (ci.yml unit job: fetch-depth 0)',
+    ).toBe('false');
     const { commits, unparsed, total } = readCommits(null);
     expect(total).toBeGreaterThan(100);
     // Vacuous here today — this history has no unparsed commit — which is why the fixture above

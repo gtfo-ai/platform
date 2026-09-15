@@ -533,6 +533,15 @@ describe('CHANGELOG.md', () => {
   });
 
   it('covers the whole history rather than starting at the release commit', () => {
+    // A shallow clone counts one commit and the assertion below reads "expected 86 to be less than
+    // or equal to 1" (ci.yml at 2788e9c); name the cause instead. CI's unit job fetches full history.
+    expect(
+      execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+      }).trim(),
+      'this test reads the repository history and needs a full clone (ci.yml unit job: fetch-depth 0)',
+    ).toBe('false');
     const entries = [...changelog.matchAll(/^\* /gm)];
     const commits = execFileSync('git', ['rev-list', '--no-merges', '--count', 'HEAD'], {
       cwd: repositoryRoot,

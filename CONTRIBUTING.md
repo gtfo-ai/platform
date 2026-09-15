@@ -123,7 +123,9 @@ token this repository does not ship with:
    requires a commit's `Signed-off-by` e-mail to equal its author's, and the value checked in today
    is `github-actions[bot]`, which is right only for the fallback.
 
-**Without the token nothing breaks silently, it just stops**: the release PR is opened and is
+**Measured on the fallback at the workflow's first run** (`34966305421`, at `2788e9c`): release-please failed with *"GitHub Actions is not permitted to create or approve pull requests"* and opened nothing. The repository setting *Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests* is **off by default**, and the fallback needs it on; the token path does not. Until an administrator does one of the two, the `release` workflow fails on every push to `main` with that line — loudly, and creating nothing.
+
+**With the setting on and without the token, nothing breaks silently, it just stops**: the release PR is opened and is
 correct, but it has no checks, so merging it needs a human to close and reopen it (which does start a
 run — the event is then the human's), or a merge queue to evaluate it on `merge_group`, or an
 administrator to bypass. The `dco` verdict on the release commit is then only visible on the
