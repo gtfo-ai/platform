@@ -40,7 +40,9 @@ import {
   gitReads,
   integrationsForProject,
   noRunScopedSecrets,
+  PLATFORM_TICKET_PROVIDER,
   staticPipelineIntegrations,
+  ticketReads,
   ticketWrites,
 } from './integrations.js';
 
@@ -216,6 +218,38 @@ describe('the refusals that keep a provider call out of a transaction', () => {
     await expect(gitReads(integrations).defaultBranch(context)).rejects.toThrow(
       'the executor was entered',
     );
+  });
+
+  /**
+   * PROGRESS backlog **62**, the **read** half (WP-36).
+   *
+   * Four kinds of task carry `{provider: 'platform', …}` — discovery, review-only, the ticket lint
+   * and a scheduled maintenance chore — and `ensureTicketSnapshot` reads the ticket for every agent
+   * stage of a task that has none. The three *writes* have refused that provider by name since
+   * WP-25; this read did not, so a project with a task-management binding paid one doomed round
+   * trip per stage, each a `failed` row in `integration_actions`. Both directions (rule 42): the
+   * platform-issued reference answers `null` without touching the executor, and a provider's own
+   * key still reaches it.
+   */
+  it('answers null for a reference no provider issued, and still reads a provider’s own', async () => {
+    const integrations = await integrationsForProject(port, PROJECT, noRunScopedSecrets());
+    const context = { projectId: PROJECT, taskId: null };
+    const reads = ticketReads(integrations);
+
+    await expect(
+      reads.ticket(
+        { provider: PLATFORM_TICKET_PROVIDER, key: 'chore!kb-2026-W38', url: '' },
+        context,
+      ),
+    ).resolves.toBeNull();
+    // The executor is the one that throws in this double, so reaching it *is* the assertion that
+    // the guard did not fire — which is what makes the `null` above a refusal rather than a stub.
+    await expect(
+      reads.ticket(
+        { provider: 'fake-jira', key: 'ACME-1', url: 'https://jira.example.test/ACME-1' },
+        context,
+      ),
+    ).rejects.toThrow('the executor was entered');
   });
 
   it('refuses a provider mutation whose bindings were resolved before the transaction opened', async () => {

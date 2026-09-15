@@ -29,7 +29,7 @@
 | **KnowledgeProposal** | project, source (task/run/feedback/bootstrap/human), significance score, diff (paths + patch), provenance, status (`queued | applied | rejected | discarded`), decided_by | BD-018 thresholds. |
 | **Feedback** | author (mapped user), scope, text, rating, source channel, linked proposal | BD-022: unverified authors are recorded, never acted on. |
 | **Event** | id (time-ordered), aggregate type/id, sequence within aggregate, type, payload, actor (system/user/integration), cause (event id), correlation (task id), created_at | The log. |
-| **ScheduledJob** (maintenance) | project, schedule, chore type, budget, last run | product/18. |
+| **ScheduledJob** (maintenance) | project, schedule, chore type, budget, last run | product/18. **Amended at WP-36: not an aggregate and not a table.** Four of the five fields are already stored in the project's own configuration document (`features.maintenance.{schedule, chores, budget_usd}`, which is where product/18's wizard column puts them) and the fifth — *last run* — is derivable from a row the platform already writes: a scheduled chore's task carries the platform-issued key `chore!<type>-<period>` under `unique (project_id, ticket_key, mode)`, so *"has this period's chore been created?"* is a `tasks` lookup and a cron that fires twice creates one task. A `scheduled_jobs` table would be a second copy of a schedule a repository owns and could rewrite. The precedent is TD-004's own *"index rebuilds, maintenance schedules"* family: `registerPartitionMaintenance` and `registerPriceListMaintenance` both run on a cron with no state of their own. |
 
 ## State machines
 
@@ -202,7 +202,7 @@ Custom project stages (product/04) register handlers on `task.stage.completed` f
 - **BudgetProjector**: folds cost entries into budget spent; emits threshold events.
 - **KnowledgeSaga**: retro → proposals → Librarian → apply policy → index rebuild.
 - **ShadowSaga**: like PipelineSaga, plus a comparison step. Nothing is replaced: outbound actions go through the same `IntegrationActionExecutor` as a normal task, and its shadow guard refuses every *mutating* one — the task's `mode` is a required, zod-parsed field on a mutating request, and a shadow task's write is recorded `would_have` without reaching the provider (technical/06 § "Outbound: actions"). Reads are performed normally, because a shadow task needs its context.
-- **MaintenanceScheduler**: creates chore tasks on schedule within budget.
+- **MaintenanceScheduler**: creates chore tasks on schedule within budget. **Built at WP-36** as a daily cron (`maintenance.schedule`, `exclusive`) rather than as an event-driven saga — there is no event to react to — walking the projects and creating one ordinary `chore` task per due chore type per period (`packages/application/src/maintenance/scheduler.ts`). Three of product/18:31's five chore types are **refused by name** on this build (`flaky`, `docs`, `lint`) and the reason per type is `MAINTENANCE_CHORES` in the domain ring; the *"within budget"* half is `features.maintenance.budget_usd`, enforced at every chore run's admission by the stage executor against `cost_entries`, in the mechanism WP-34 built for shadow mode.
 
 ## Invariants (enforced in domain)
 

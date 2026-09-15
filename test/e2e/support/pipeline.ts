@@ -865,9 +865,10 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       // Turn the instance's own timers down rather than sleeping in the assertions.
       APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
-      // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`) — six since
-      // WP-31's `task.ask`, which is why this is one above `instance.ts`'s exact floor.
-      APP_DB_POOL_MAX: '21',
+      // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`) — seven
+      // since WP-36's `maintenance.schedule`, which is why this is one above `instance.ts`'s exact
+      // floor.
+      APP_DB_POOL_MAX: '22',
       // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
       // planted rather than absent precisely so the redaction assertions have something to look for.
       ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),

@@ -378,6 +378,13 @@ export const taskAsks = pgTable('task_asks', {
   mirroredAt: timestamp('mirrored_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   answeredAt: timestamp('answered_at', { withTimezone: true }),
+  /**
+   * When the stranded-work pass re-enqueued this ask's lost wake-up (migration 0032, backlog 105).
+   *
+   * The recovery's own column: it is the mark that gives the row **one** attempt and then an
+   * ending, so a re-enqueue that keeps failing cannot loop once a minute for ever.
+   */
+  recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
 });
 
 export type Task = typeof tasks.$inferSelect;

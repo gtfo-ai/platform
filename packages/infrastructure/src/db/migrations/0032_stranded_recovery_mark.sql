@@ -1,0 +1,35 @@
+-- 0032 — the mark that bounds the lost-wake-up recovery (WP-36 review round 2, PROGRESS backlog 105).
+--
+-- `packages/application/src/recovery/stranded.ts` finds a row whose wake-up was lost and enqueues
+-- the job again. As it shipped it wrote **nothing**, so the two queries could not tell a row it had
+-- already recovered from one it had never seen: a row whose re-enqueued job also fails to move it
+-- was re-enqueued on every pass, for ever, at `APP_INTAKE_RECONCILE_INTERVAL_MS` (60 s by default).
+-- The worked example the table was modelled on does have a bound — `pipeline.intake.reconcile`
+-- stamps its re-emitted `ticket.matched` with a system actor and the next pass reads that mark —
+-- and these two rows had no equivalent.
+--
+-- ## One column per site, and what it is for
+--
+-- `recovery_attempted_at` is **the recovery's own column on somebody else's table**, and it records
+-- one fact: *this pass re-enqueued that row's wake-up, at this instant*. It is what makes the bound
+-- readable by the next pass without a table of its own, and it is nullable because the ordinary
+-- life of every row here is never to be stranded at all.
+--
+-- The pass reads it twice. A row with **no** mark gets its single attempt. A row whose mark is
+-- older than the ending window gets the **ending** its feature already has a writer for —
+-- `markEmpty` for a batch, `recordRefusal(failed)` for an ask — because a batch nobody can clear is
+-- worse than a batch that says it failed: `history_bootstrap_batches_one_live` turns a batch stuck
+-- at `collecting` into a permanent `already_running` for that project.
+--
+-- ## Why a column and not a `recoveries` table
+--
+-- The same answer WP-36 gave the schedule: the fact belongs to the row it is about, it is written
+-- at most twice over that row's life, and a table would need the row's identity, its type and a
+-- cleanup of its own. Two nullable timestamps cost one `alter table` each and no index — neither
+-- query filters on this column alone, and both already narrow by status and age first.
+--
+-- No backfill: `null` is the honest value for every existing row, which is *"this pass has never
+-- attempted it"*, and that is exactly what the pass should believe.
+
+alter table history_bootstrap_batches add column recovery_attempted_at timestamptz;
+alter table task_asks add column recovery_attempted_at timestamptz;

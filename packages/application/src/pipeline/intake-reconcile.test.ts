@@ -24,6 +24,7 @@ import {
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const LOST_EVENT = '00000000-0000-4000-9000-000000000001' as Id;
+const BATCH = '00000000-0000-4000-9000-000000000002' as Id;
 const NOW = '2026-06-01T10:30:00.000Z' as IsoDateTime;
 
 const matchPayload = () => ({
@@ -223,6 +224,65 @@ describe('the timer that keeps the pass coming back', () => {
       harness.enqueued,
       'the failure is the job’s; the schedule is the deployment’s',
     ).toHaveLength(1);
+  });
+
+  /**
+   * The other two sites of the class ride **this** timer (WP-36, PROGRESS backlog 101): one pass,
+   * one interval, one pooled connection. Asserted on the enqueues, because that is what a recovery
+   * *is* — `recovery/stranded.test.ts` holds the table itself.
+   */
+  it('runs the stranded-work table on the same tick, with the same grace period', async () => {
+    const harness = harnessFor();
+    const asked: { olderThan: string }[] = [];
+
+    await intakeReconcileHandler({
+      ...optionsFor(harness),
+      jobs: harness.jobs,
+      intervalMs: 45_000,
+      stranded: {
+        unitOfWork: harness.unitOfWork,
+        store: {
+          strandedBootstraps: async (_tx, query) => {
+            asked.push(query);
+            return [{ batchId: BATCH, projectId: PROJECT, recoveryAttemptedAt: null }];
+          },
+          markBootstrapAttempt: async () => {},
+          endBootstrap: async () => {},
+          strandedAsks: async (_tx, query) => {
+            asked.push(query);
+            return [];
+          },
+          markAskAttempt: async () => {},
+          endAsk: async () => {},
+        },
+      },
+    })({} as JobContext);
+
+    expect(asked.map((query) => query.olderThan)).toEqual([
+      '2026-06-01T10:29:15.000Z',
+      '2026-06-01T10:29:15.000Z',
+    ]);
+    expect(
+      harness.enqueued.filter((request) => request.queue === JOB_QUEUES.historyBootstrap),
+    ).toHaveLength(1);
+    // …and the timer still comes back, which is the property the `finally` exists for.
+    expect(
+      harness.enqueued.filter((request) => request.queue === JOB_QUEUES.intakeReconcile),
+    ).toHaveLength(1);
+  });
+
+  it('runs only the intake half when no stranded table is composed', async () => {
+    // Standing rule 10: without this, a handler that ignored `stranded` entirely would pass the
+    // case above only by accident of the default.
+    const harness = harnessFor();
+    await intakeReconcileHandler({
+      ...optionsFor(harness),
+      jobs: harness.jobs,
+      intervalMs: 45_000,
+    })({} as JobContext);
+    expect(
+      harness.enqueued.filter((request) => request.queue === JOB_QUEUES.historyBootstrap),
+    ).toHaveLength(0);
   });
 });
 

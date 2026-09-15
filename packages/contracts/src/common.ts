@@ -166,9 +166,12 @@ export const runModeSchema = z.enum([
    * discussions, the closed tickets of the window and the commit messages, and proposes knowledge.
    *
    * It is a run **mode** rather than only a template id because `runs.mode` is what a screen and
-   * the statistics read: PROGRESS backlog 57 records four of technical/04's modes falling through
-   * to `normal` with live producers, and a bootstrap run that called itself `normal` would be the
-   * fifth. Appended, for `'ask'`'s reason.
+   * the statistics read: PROGRESS backlog 57 recorded four of technical/04's modes falling through
+   * to `normal` with live producers, and a bootstrap run that called itself `normal` would have
+   * been the fifth. WP-36 **closed** that backlog entry — `RUN_MODE_BY_STAGE` beside
+   * `RUN_MODE_BY_TEMPLATE` in the planner, with migration 0031 backfilling the runs written before
+   * it — so every value in this list now has a writer that names it. Appended, for `'ask'`'s
+   * reason.
    */
   'bootstrap',
 ]);

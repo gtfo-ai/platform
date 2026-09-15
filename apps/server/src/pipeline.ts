@@ -72,6 +72,7 @@ import {
   createWebhookIngress,
   defaultProjectSettings,
   humanTimeHandlers,
+  registerMaintenanceSchedule,
   silentLogger,
   startIntakeReconciliation,
 } from '@platform/application';
@@ -92,8 +93,10 @@ import {
   humanTime as humanTimeAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
+  maintenance as maintenanceAdapters,
   notify as notifyAdapters,
   pipeline as pipelineAdapters,
+  recovery as recoveryAdapters,
   redaction as redactionAdapters,
   secrets as secretAdapters,
   shadow as shadowAdapters,
@@ -187,15 +190,20 @@ export interface PipelineComposition {
    */
   readonly workspaces?: runnerAdapters.RunWorkspaceProvisioner;
   /**
-   * Wraps the `Jobs` the pipeline enqueues through — a **labelled seam**, and the only caller is
-   * the e2e tier (WP-15c).
+   * Wraps the `Jobs` **this whole process** enqueues through — a **labelled seam**, and the only
+   * caller is the e2e tier (WP-15c, widened at WP-36).
    *
-   * `HandlerContext.afterCommit` is at-most-once (TD-004), so a process that dies between the
-   * intake handler's commit and its enqueue leaves a matched ticket with no task row and nothing
-   * that starts it (PROGRESS backlog 20). There is no other way to ask a running instance "what
-   * happens when that wake-up is lost?", and the answer is the whole of this work package's last
-   * acceptance criterion — so the loss is reproduced by dropping the enqueue rather than by
-   * killing a process at a microsecond boundary, which is the same loss and is deterministic.
+   * `HandlerContext.afterCommit` is at-most-once (TD-004), so a process that dies between a
+   * commit and its enqueue leaves a row nothing will ever move: a matched ticket with no task
+   * (PROGRESS backlog 20), a history bootstrap stuck at `collecting` (101), a question `pending`
+   * for ever (84). There is no other way to ask a running instance *"what happens when that
+   * wake-up is lost?"*, so the loss is reproduced by dropping the enqueue rather than by killing a
+   * process at a microsecond boundary — the same loss, deterministically.
+   *
+   * **It is applied by `startRuntime`, not by `composePipeline`**, which is the WP-36 change: until
+   * then it wrapped only the pipeline's own `Jobs`, so a command composed beside the pipeline —
+   * `startHistoryBootstrap`, `startProjectDiscovery` — enqueued through an instance the seam could
+   * not see, and the class's other three sites were unreproducible through it.
    *
    * Nothing in production passes it: `startRuntime()` with no options composes the real `Jobs`.
    */
@@ -591,11 +599,17 @@ export const composePipeline = async (
   const ids = { next: (): Id => randomUUID() as Id };
   const { executor, registry } = stack;
   /**
-   * The labelled seam of {@link PipelineComposition.jobs}, applied once and used everywhere below,
-   * so that a test disarming an enqueue disarms the same object the pipeline really enqueues
-   * through. Absent — every production path — is the identity.
+   * The `Jobs` everything below enqueues through.
+   *
+   * {@link PipelineComposition.jobs}'s seam is **already applied** by `startRuntime`, which wraps
+   * the one instance every composition of that process shares — the pipeline, the command
+   * factories, the two crons and the three worker runtimes. It was applied here until WP-36, and
+   * that made it blind to every enqueue the pipeline does not make (PROGRESS backlog 101's site);
+   * the worker runtimes were still taking the unwrapped instance until round 2 (backlog **106**),
+   * which is why the list is now held by `apps/server/src/pipeline-census.test.ts` rather than by
+   * this sentence.
    */
-  const jobs = composition.jobs === undefined ? options.jobs : composition.jobs(options.jobs);
+  const jobs = options.jobs;
 
   const integrations = createProjectIntegrationsPort({
     pool: options.pool,
@@ -654,8 +668,16 @@ export const composePipeline = async (
       : 'the dependency gate will ask these package registries for a licence and a last release',
   );
 
+  /**
+   * One store instance, because two things read it: the pipeline runtime and the maintenance
+   * schedule below, which creates a chore task through the same repository every other task is
+   * created through (WP-36).
+   */
+  const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+  const maintenanceStore = new maintenanceAdapters.PostgresMaintenanceStore();
+
   const runtime = createPipelineRuntime({
-    store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
+    store,
     settings,
     jobs,
     integrations,
@@ -678,6 +700,13 @@ export const composePipeline = async (
      * cannot read a batch's spend must not pretend it is unspent.
      */
     bootstrap: new bootstrapAdapters.PostgresHistoryBootstrapStore(),
+    /**
+     * WP-36: `features.maintenance.budget_usd`, asked at the admission of a chore **this platform
+     * scheduled** and of nothing else. Optional on the port and supplied here for the reason
+     * `bootstrap` is: a process that cannot read what the month's chores have spent must not
+     * pretend it is unspent.
+     */
+    maintenance: maintenanceStore,
     timezone: options.timezone,
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,
@@ -849,14 +878,56 @@ export const composePipeline = async (
     ids,
     clock: { now: nowIso },
     intervalMs: options.intakeReconcileIntervalMs,
+    /**
+     * The other two sites of the same class (WP-36, PROGRESS backlog **101**): a history bootstrap
+     * left `collecting` with no chunks, and an ask left `pending` with no run. They ride this
+     * timer rather than one of their own — one pass, one interval, one pooled connection — and
+     * `packages/application/src/recovery/stranded.ts` carries the table, including why entry 20's
+     * recovery is the reconciler above rather than a row of it and why entry 36 cannot be a row
+     * yet.
+     */
+    stranded: {
+      store: recoveryAdapters.createPostgresStrandedWorkStore(),
+      unitOfWork: options.eventing.unitOfWork,
+    },
     logger: options.logger,
   });
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'intake reconciliation is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), and neither is a stranded history bootstrap (101) or a pending ask (84)',
     );
   }
+
+  /**
+   * The maintenance schedule (WP-36), composed here beside the reconciler and
+   * `registerPartitionMaintenance` rather than inside `createPipelineRuntime`, because it is a
+   * schedule the **process** owns rather than a step of a ticket's journey.
+   *
+   * It is one more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
+   */
+  const maintenance = await registerMaintenanceSchedule({
+    unitOfWork: options.eventing.unitOfWork,
+    store,
+    maintenance: maintenanceStore,
+    settings,
+    jobs,
+    ids,
+    clock: { now: nowIso },
+    projects: async (limit) => {
+      const { rows } = await options.pool.query<{ id: string }>(
+        'select id from projects order by created_at desc limit $1',
+        [limit],
+      );
+      return rows.map((row) => row.id as Id);
+    },
+    timezone: options.timezone,
+    baseUrl: options.baseUrl,
+    // TD-012 step 2 over the brief: a chore's evidence is repository paths, package names and a
+    // registry's own strings, and the column it lands in is read into every prompt of the task.
+    redactor: redactionAdapters.patternRedactor(),
+    logger: options.logger,
+  });
 
   return {
     runtime,
@@ -867,6 +938,7 @@ export const composePipeline = async (
       if (reconciler !== null) {
         await reconciler.stop();
       }
+      await maintenance.stop();
       await runtime.stop();
     },
   };

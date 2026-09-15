@@ -34,9 +34,10 @@
  * knowing. First, `unique (project_id, ticket_key, mode)` is what makes this command idempotent —
  * a second call finds the row and starts nothing, which is the answer product/06 needs because
  * re-running discovery would spend a second budget for the same question. Second, no
- * task-management adapter is ever asked about this key: the ticket snapshot stays `null`, which
- * `ensureTicketSnapshot` already treats as "the platform has not read this ticket" rather than as
- * an error.
+ * task-management adapter is ever asked about this key — since WP-36 that is a **refusal by
+ * provider value** in `ticketReads.ticket` rather than a hope (PROGRESS backlog 62): the read is
+ * not attempted, and the ticket snapshot stays `null`, which `ensureTicketSnapshot` already treats
+ * as "the platform has not read this ticket" rather than as an error.
  *
  * ## The shape
  *
@@ -47,7 +48,13 @@
  */
 import type { Id, IsoDateTime, PipelineTemplate } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
-import { compilePipeline, createTask, interpret, resolveIterationLimits } from '@platform/domain';
+import {
+  compilePipeline,
+  createTask,
+  DISCOVERY_TEMPLATE_ID,
+  interpret,
+  resolveIterationLimits,
+} from '@platform/domain';
 import { enqueueStage } from '../pipeline/jobs.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
 import {
@@ -62,8 +69,8 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 
-/** The template id `DISCOVERY_TEMPLATE` is registered under in `SHIPPED_TEMPLATES`. */
-export const DISCOVERY_TEMPLATE_ID = 'discovery';
+/** The template id `DISCOVERY_TEMPLATE` is registered under — one spelling, in the domain ring. */
+export { DISCOVERY_TEMPLATE_ID };
 
 /**
  * The ticket reference a discovery task carries.
@@ -212,8 +219,9 @@ export const startProjectDiscovery = async (
       estimateBasis: null,
       estimateSamples: null,
       version: INITIAL_TASK_VERSION,
-      // There is no ticket to read, so there is no snapshot. `null` is exactly what
-      // `ensureTicketSnapshot` reads as "the platform has not read this ticket".
+      // There is no ticket to read, so there is no snapshot, and since WP-36 the read is not even
+      // attempted: `ticketReads.ticket` refuses the `platform` provider by name. `null` is exactly
+      // what `ensureTicketSnapshot` reads as "the platform has not read this ticket".
       ticketSnapshot: null,
       reviewSubject: null,
       historySample: null,

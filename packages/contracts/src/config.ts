@@ -388,6 +388,23 @@ export const BOOTSTRAP_BATCH_SIZE = 20;
 /** product/19 §18's *"budget cap default $20, shown before start"*. */
 export const DEFAULT_BOOTSTRAP_BUDGET_USD = 20;
 
+/**
+ * product/18:31's five chore types, as one list (WP-36).
+ *
+ * A named constant rather than an inline `z.enum`, because three readers need the same set — this
+ * schema, `MAINTENANCE_CHORES` in the domain (which says what each one can establish on this build,
+ * and is held to *this* list by a `satisfies`), and the wizard's card. The order is the document's.
+ */
+export const MAINTENANCE_CHORE_TYPES = ['deps', 'flaky', 'docs', 'lint', 'kb'] as const;
+export const maintenanceChoreSchema = z.enum(MAINTENANCE_CHORE_TYPES);
+export type MaintenanceChoreType = z.infer<typeof maintenanceChoreSchema>;
+
+/** product/18:31's *"Wizard: schedule (default weekly)"* — the grain a chore is created once per. */
+export const maintenanceScheduleSchema = z.enum(['daily', 'weekly', 'monthly']);
+export type MaintenanceSchedule = z.infer<typeof maintenanceScheduleSchema>;
+/** product/18's own default, which the scheduler applies when a project named no schedule. */
+export const DEFAULT_MAINTENANCE_SCHEDULE: MaintenanceSchedule = 'weekly';
+
 export const featuresConfigSchema = z.strictObject({
   /**
    * The ticket readiness linter — product/18 § "Opt-in features", WP-25.
@@ -451,12 +468,42 @@ export const featuresConfigSchema = z.strictObject({
       max_findings: z.int().min(1).max(50).optional(),
     })
     .optional(),
+  /**
+   * The maintenance pipeline — product/18:31, product/04:120, product/19:126, WP-36.
+   *
+   * > *"Scheduled chores within a dedicated budget: dependency bumps, flaky-test hunting, docs
+   * > drift, lint debt, KB hygiene; each produces a normal `chore` task"* · *"Wizard: schedule
+   * > (default weekly), budget, allowed chore types"*.
+   *
+   * Four keys, one per item that column names, and every one is read since WP-36:
+   *
+   *  - `enabled` is BD-028's opt-in, **off by default**. Off is the scheduler skipping the project
+   *    by name rather than a batch of nothing.
+   *  - `schedule` decides the **period** a chore is created once per — the grain, not the hour: the
+   *    tick is a daily cron and `chore!<type>-<period>` is what makes a second fire in the same
+   *    period create no second task (`@platform/domain`'s `choreTicketKey`).
+   *  - `budget_usd` is the *"dedicated budget"*, a **monthly** cap over the chores this scheduler
+   *    created, enforced at every run's admission by the stage executor against `cost_entries` —
+   *    the mechanism WP-34 built for `features.shadow_mode.budget_usd`, with this feature's own
+   *    predicate. Absent is *"no dedicated cap"*, which leaves a chore bounded by the project's
+   *    task and budget caps like any other task.
+   *  - `chores` is *"allowed chore types"*. **All five parse and three refuse by name** at schedule
+   *    time (`MAINTENANCE_CHORES`): this build detects no flaky test (product/04:65), no
+   *    documentation drift (`policies.drift_without_direction` has no reader), and no run of any
+   *    role may execute a project command (PROGRESS backlog 49 / Q69), so `flaky`, `docs` and
+   *    `lint` produce a named refusal rather than a task. They are refused **here rather than at
+   *    the schema** deliberately: a value that has parsed since the key existed must not start
+   *    failing a project's whole `.agentic/config.yml`, which every stage of every task reads.
+   *    An **explicitly empty** list means *"no chore type"*, the fail-closed reading of "the types
+   *    I named" (the same answer `review_only.paths` gives); an absent list means the types this
+   *    build can perform.
+   */
   maintenance: z
     .strictObject({
       enabled: z.boolean().optional(),
-      schedule: z.enum(['daily', 'weekly', 'monthly']).optional(),
+      schedule: maintenanceScheduleSchema.optional(),
       budget_usd: usdSchema.optional(),
-      chores: z.array(z.enum(['deps', 'flaky', 'docs', 'lint', 'kb'])).optional(),
+      chores: z.array(maintenanceChoreSchema).optional(),
     })
     .optional(),
   /**

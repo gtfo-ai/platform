@@ -567,9 +567,22 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
     );
   },
 
+  /**
+   * One ticket, or `null` — **including for a reference no provider issued** (PROGRESS backlog 62).
+   *
+   * The `binding === null` half has always been here; the second half is WP-36's, and it closes the
+   * *read* side of the rule the three writes below have enforced since WP-25. Four kinds of task
+   * carry `{provider: 'platform', …}` — discovery, review-only, the ticket lint and now a scheduled
+   * maintenance chore — and `ensureTicketSnapshot` runs from the `stage.execute` job for every
+   * agent stage of a task that has no snapshot. Without this line, a project that *has* a Jira
+   * binding got one doomed round trip per stage, one `failed` row in `integration_actions`, one
+   * rate-limit token and a `warn` about a ticket that does not exist. It read as working because
+   * the read **fails open** by design (rule 20), which is exactly why nobody noticed: it was
+   * refused *by the provider*, which is not the same as being refused (rule 47).
+   */
   ticket: async (ticket: TicketRefInput, context: CallContext): Promise<Ticket | null> => {
     const binding = integrations.taskManagement;
-    if (binding === null) {
+    if (binding === null || !namesAProviderTicket(ticket)) {
       return null;
     }
     return read(

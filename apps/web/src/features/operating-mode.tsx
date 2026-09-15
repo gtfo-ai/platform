@@ -172,7 +172,8 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     defaultState: 'off',
     cost: 'the budget you set',
     touches: 'opens merge requests',
-    caveat: 'Stored; no scheduler runs a maintenance batch in this build.',
+    caveat:
+      'Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the scheduler says so each time: Flaky tests and docs drift have no detector in this build, and lint debt would need an agent run to execute one of your project’s commands, which none may.',
   },
   {
     key: 'digest',
@@ -722,11 +723,12 @@ export const ProjectBudgets = ({ projectId }: { readonly projectId: string }): R
             : formatUsd(features.maintenance.budget_usd)}
         </p>
         <p className="text-fg-muted">
-          These are per-feature caps in <code>.agentic/config.yml</code>, not budget rows. The
-          shadow cap is enforced: a shadow run is refused when this project’s shadow spend for the
-          calendar month plus what the stage may spend would pass it, and the task pauses exactly as
-          it does for an organisation or project budget. The maintenance cap has no runner in this
-          build and bounds nothing yet.
+          These are per-feature caps in <code>.agentic/config.yml</code>, not budget rows. Both are
+          enforced the same way and over the same window: a run is refused when this project’s spend
+          for the calendar month plus what the stage may spend would pass the cap, and the task
+          pauses exactly as it does for an organisation or project budget. The shadow cap counts
+          shadow tasks; the maintenance cap counts the chores the scheduler created, and once it is
+          spent the scheduler creates no more of them for that month.
         </p>
       </Card>
     </>

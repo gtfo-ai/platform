@@ -251,7 +251,30 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       // with `migrate: false, createSchema: false` so a runtime can never race the migrator.
       await jobsRuntime.start();
       jobsStarted = true;
-      jobs = jobsRuntime.jobs;
+      /**
+       * The labelled seam of {@link PipelineComposition.jobs}, applied **here** rather than inside
+       * `composePipeline`, so that every composition in this process shares the wrapped instance
+       * (WP-36).
+       *
+       * It used to be applied inside `composePipeline`, which made it invisible to everything the
+       * pipeline does not enqueue — including `startHistoryBootstrap`, whose lost `collect` wake-up
+       * is PROGRESS backlog **101** and the one site of that class an operator cannot work around.
+       * A seam that can only reproduce the loss it was first written for is a seam that tests one
+       * site and reads as if it tested the class.
+       *
+       * **Every use below this line is `jobs`, and that is held by a census** rather than by this
+       * sentence (`pipeline-census.test.ts`): round 2 of WP-36 found the three *worker* runtimes —
+       * knowledge, onboarding and the history bootstrap — still taking `jobsRuntime.jobs` while
+       * this docblock claimed they shared the wrapped one (PROGRESS backlog **106**), and two of
+       * the class's sites are enqueued from exactly those. `jobsRuntime` is the lifecycle owner and
+       * is used for `start`/`stop` only.
+       *
+       * Nothing in production passes it: `startRuntime()` with no options composes the real `Jobs`.
+       */
+      jobs =
+        options.pipeline?.jobs === undefined
+          ? jobsRuntime.jobs
+          : options.pipeline.jobs(jobsRuntime.jobs);
       stopCallbacks.unshift({
         name: 'jobs',
         stop: async () => {
@@ -262,7 +285,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
 
       // WP-03 built the daily partition cron and WP-05 the registration; this call is what makes
       // it run. Without it a long-lived instance eventually inserts into a month with no partition.
-      const maintenance = await jobsAdapters.registerPartitionMaintenance(jobsRuntime.jobs, {
+      const maintenance = await jobsAdapters.registerPartitionMaintenance(jobs, {
         db: database.pool,
         partitionMonthsAhead: config.database.partitionMonthsAhead,
         timezone: config.timezone,
@@ -287,7 +310,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
        * names the models the ledger ran and could not cost, which is the only place that signal
        * surfaces (`packages/infrastructure/src/cost/price-list-maintenance.ts`).
        */
-      const priceMaintenance = await costAdapters.registerPriceListMaintenance(jobsRuntime.jobs, {
+      const priceMaintenance = await costAdapters.registerPriceListMaintenance(jobs, {
         db: database.pool,
         timezone: config.timezone,
         onResult: (result) => {
@@ -328,7 +351,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           composition: options.pipeline ?? {},
           pool: database.pool,
           eventing,
-          jobs: jobsRuntime.jobs,
+          // Already wrapped above, which is why `composePipeline` no longer applies the seam.
+          jobs,
           secretKey: config.secretKey,
           liveRuns,
           stageConcurrency: 1,
@@ -385,7 +409,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         const knowledge = await composeKnowledgeIndexing({
           pool: database.pool,
           eventing,
-          jobs: jobsRuntime.jobs,
+          jobs,
           // The pipeline's own loader and the environment a run is given, so a knowledge commit
           // goes through the one executor this process composed and a proposal repeating the model
           // credential is redacted before it reaches a row or a commit (WP-18b).
@@ -418,7 +442,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         const onboarding = await composeOnboardingRecording({
           pool: database.pool,
           eventing,
-          jobs: jobsRuntime.jobs,
+          jobs,
           integrations: pipeline.integrations,
           runEnvironment: agentRunEnvironment({
             providerMode: config.providerMode,
@@ -443,7 +467,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         const historyBootstrap = composeHistoryBootstrap({
           pool: database.pool,
           eventing,
-          jobs: jobsRuntime.jobs,
+          jobs,
           integrations: pipeline.integrations,
           runEnvironment: agentRunEnvironment({
             providerMode: config.providerMode,

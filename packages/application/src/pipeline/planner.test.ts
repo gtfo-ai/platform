@@ -42,11 +42,14 @@ import {
   createStageRunPlanner,
   PLATFORM_TOOLS_BY_ROLE,
   platformToolsFor,
+  RUN_MODE_BY_STAGE,
+  RUN_MODE_BY_TEMPLATE,
   SKILLS_BY_ROLE,
   TOOLS_BY_ROLE,
   taskTextOf,
 } from './planner.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
+import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { StageRunRequest } from './stage-executor.js';
 import { TICKET_LINT_STAGE } from './ticket-lint.js';
 
@@ -600,11 +603,13 @@ describe('the platform skills a stage is planned with', () => {
    * and the fix it asks for is *"a test that walks `SHIPPED_TEMPLATES` and asserts every agent
    * stage's planned mode … so a template added later cannot quietly take `normal`"*.
    *
-   * The walk is over the shipped templates rather than over a list here (standing rule 7). Three
-   * values are still unmapped and the table below **says so by naming them `normal`**, which is the
-   * honest form: `retro` and `librarian` are stages of the ticket templates rather than templates,
-   * and `discovery` is WP-21's — backlog 57 recommends taking those three together, and doing it
-   * here would be this work package deciding another one's column.
+   * The walk is over the shipped templates rather than over a list here (standing rule 7), and it
+   * is now **complete**: WP-36 took backlog 57's last three values, so every agent stage of every
+   * shipped template records what its run was *for*. The two that come from the stage rather than
+   * from the template — `retro` and `librarian` — appear under all three ticket templates below,
+   * which is the property `RUN_MODE_BY_STAGE` exists for, and the one-off templates keep their own
+   * value, which is the precedence rule (`review_only.code_review` is `review_only`, not the
+   * `code_review` stage's anything).
    */
   it('records what each shipped template’s run was for (PROGRESS backlog 57)', async () => {
     const planner = createStageRunPlanner({
@@ -642,9 +647,10 @@ describe('the platform skills a stage is planned with', () => {
       // WP-26's conflict resolution is a stage of a ticket task, so `runs.mode` is the template's
       // (backlog 57's rule): a rebase is part of delivering this ticket, not a mode of its own.
       'feature.conflict_resolution': 'normal',
-      // Backlog 57's `retro` and `librarian`, still unmapped and shared by all three templates.
-      'feature.retrospective': 'normal',
-      'feature.librarian': 'normal',
+      // Backlog 57's `retro` and `librarian`, taken at WP-36: stages shared by all three ticket
+      // templates, so they come from `RUN_MODE_BY_STAGE` rather than from the template.
+      'feature.retrospective': 'retro',
+      'feature.librarian': 'librarian',
       'bug.refinement': 'normal',
       'bug.investigation': 'normal',
       'bug.architecture': 'normal',
@@ -652,16 +658,16 @@ describe('the platform skills a stage is planned with', () => {
       'bug.code_review': 'normal',
       'bug.business_review': 'normal',
       'bug.conflict_resolution': 'normal',
-      'bug.retrospective': 'normal',
-      'bug.librarian': 'normal',
+      'bug.retrospective': 'retro',
+      'bug.librarian': 'librarian',
       'chore.refinement': 'normal',
       'chore.implementation': 'normal',
       'chore.code_review': 'normal',
       'chore.conflict_resolution': 'normal',
-      'chore.retrospective': 'normal',
-      'chore.librarian': 'normal',
-      // Backlog 57's `discovery`, WP-21's to map.
-      'discovery.discovery': 'normal',
+      'chore.retrospective': 'retro',
+      'chore.librarian': 'librarian',
+      // Backlog 57's `discovery`: one more line in the template table, taken at WP-36.
+      'discovery.discovery': 'discovery',
       'review_only.code_review': 'review_only',
       // WP-25's, which this row owed.
       'ticket_lint.ticket_lint': 'linter',
@@ -669,6 +675,50 @@ describe('the platform skills a stage is planned with', () => {
       // through to `normal` — which is backlog 57's own complaint.
       'history_bootstrap.history_mining': 'bootstrap',
     });
+  });
+
+  /**
+   * The precedence rule of {@link RUN_MODE_BY_STAGE}, asserted from **both sides** (standing rule
+   * 42), because no shipped template exercises the collision: a one-off template whose stage id is
+   * also a shared upkeep stage keeps its **template's** mode, and a ticket template with no entry
+   * of its own takes the stage's. Without the first half, a table that let the stage win would pass
+   * every other case in this file.
+   */
+  it('lets the template beat the stage when both name a mode, and the stage decide when it does not', async () => {
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({
+        store: (await indexedFixtureVault()).store,
+        logger: silentLogger,
+      }),
+      clock: { now: () => NOW },
+    });
+    const librarianStage = {
+      id: 'librarian',
+      kind: 'agent',
+      role: 'librarian',
+      produces: 'LibrarianProposals',
+    };
+    const base = requestWith('a ticket about refunds');
+    const planOn = async (template: string) =>
+      (
+        await planner.plan({
+          ...base,
+          stage: librarianStage as never,
+          task: { ...base.task, task: { ...base.task.task, template } },
+        } as StageRunRequest)
+      ).spec.mode;
+
+    // The collision: `review_only` is in the template table, and the stage is in the stage table.
+    expect(RUN_MODE_BY_TEMPLATE[REVIEW_ONLY_TEMPLATE_ID]).toBe('review_only');
+    expect(RUN_MODE_BY_STAGE.librarian).toBe('librarian');
+    expect(await planOn(REVIEW_ONLY_TEMPLATE_ID)).toBe('review_only');
+    // …and the same stage on a template the first table says nothing about.
+    expect(RUN_MODE_BY_TEMPLATE.feature).toBeUndefined();
+    expect(await planOn('feature')).toBe('librarian');
   });
 
   it('takes `ask_human` away from the lint stage and leaves the role’s other tools alone', async () => {

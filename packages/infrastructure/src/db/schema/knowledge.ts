@@ -209,6 +209,15 @@ export const historyBootstrapBatches = pgTable('history_bootstrap_batches', {
   detail: text('detail'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
+  /**
+   * When the stranded-work pass re-enqueued this batch's lost `collect` (migration 0032,
+   * backlog 105).
+   *
+   * The recovery's own column: the mark that gives the row **one** attempt and then the ending
+   * `markEmpty` writes, so a batch whose collection cannot succeed says `empty` with a reason
+   * instead of holding `history_bootstrap_batches_one_live` against the project for ever.
+   */
+  recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
 });
 
 /**

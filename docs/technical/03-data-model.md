@@ -37,9 +37,13 @@
 > so applying it rewrites every `events` partition under ACCESS EXCLUSIVE — trivial pre-deployment, not
 > trivial on a populated table.
 
-> **Stage nullability (clarified at WP-03).** `runs.task_stage_id` and `questions.task_stage_id` are
-> nullable: not every run or question belongs to a pipeline stage (discovery during onboarding,
-> ask-the-task, librarian and maintenance runs do not). The `stage` field on `RunRecord` and
+> **Stage nullability (clarified at WP-03; the examples corrected at WP-36).** `runs.task_stage_id`
+> and `questions.task_stage_id` are nullable: not every run or question belongs to a pipeline stage.
+> The shipped example is **ask-the-task** (WP-31: a run with a task and no stage). Discovery, the
+> librarian and a **maintenance chore** are *not* examples — each of them is a stage of a task, which
+> is how they get the admission guard, the ledger, the transcript and the escalation every other run
+> gets (`DISCOVERY_TEMPLATE`, the ticket templates' merge tail, and WP-36's scheduled `chore` task
+> on the project's own `chore` template). The `stage` field on `RunRecord` and
 > `QuestionRecord` in `packages/contracts` is therefore **nullable** too — it is a stage *slug*
 > resolved by joining `task_stages`, not a stored column. WP-01 typed it non-nullable; WP-04 corrects
 > the contract.

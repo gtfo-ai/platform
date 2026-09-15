@@ -15,13 +15,21 @@ upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023)
 addComment(ref, markdown) -> CommentRef              # questions, linter output
 setLabels(ref, add[], remove[])
 linkMergeRequest(ref, mrUrl)
-createTicket(draft) -> TicketRef                     # scope-creep valve, epic split, maintenance chores
+createTicket(draft) -> TicketRef                     # scope-creep valve, epic split
 resolveIdentity(providerUserId|email) -> UserIdentity
 inbound: InboundNormaliser                           # see below; ticket.matched|comment.added|status.changed
 capabilities() -> {webhooks, epics, links, customFields, adf, createTicket, attachments}
 testConnection() -> HealthProbe                      # read-only probe (product/08 § Health and setup)
 ```
 Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) lives in the provider module.
+
+> **Amendment (WP-36): `createTicket` has two callers, not three.** The line above named a
+> *"maintenance chore"* as a third, and the product documents say otherwise: product/19:126's
+> feature card gives the maintenance pipeline's external touch as **merge requests**, and
+> product/18:31 says a scheduled chore *"produces a normal `chore` task"*. The scheduler creates that
+> task directly, on a platform-issued reference (`chore!<type>-<period>`) that every ticket read and
+> every ticket write refuses by name, so no maintenance chore files a ticket on anybody's board.
+
 
 > **The inbound half, as implemented at WP-07.** Every type port carries one `InboundNormaliser`
 > instead of the loose `webhookVerify` / `normalizeEvent` pair: `verify(delivery) -> bool`,

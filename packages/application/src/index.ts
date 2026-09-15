@@ -77,6 +77,9 @@ export * from './knowledge/kb-search.js';
 export * from './knowledge/librarian.js';
 export * from './knowledge/ports.js';
 export * from './knowledge/runtime.js';
+// The maintenance pipeline — product/18:31's scheduled chores (WP-36)
+export * from './maintenance/ports.js';
+export * from './maintenance/scheduler.js';
 // The notification band, the digest and quiet hours (WP-32)
 export * from './notify/digest.js';
 export * from './notify/handlers.js';
@@ -133,6 +136,8 @@ export * from './ports/secrets.js';
 export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
 export * from './ports/workspace.js';
+// The lost-wake-up recovery — PROGRESS backlog 101's table (WP-36)
+export * from './recovery/stranded.js';
 export * from './scheduling/working-calendar.js';
 export * from './scheduling/zoned-time.js';
 // Scheduling (WP-05)

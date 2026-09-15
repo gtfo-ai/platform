@@ -190,7 +190,7 @@ describe('the agent run’s provider configuration', () => {
 
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
-    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '22' });
+    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '24' });
     // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
     // the pipeline's job workers, HTTP and maintenance. Every term is symbolic on purpose: the
     // count of pipeline workers belongs to `POOL_RESERVATIONS`, and this comment saying "three"
@@ -239,11 +239,11 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Twenty since WP-35: nineteen (eighteen — WP-15c's fourth pipeline worker, WP-18a's
-    // `knowledge.index`, WP-18b's three Librarian queues and WP-21's `onboarding.discovery`, plus
-    // WP-32's digest tick — plus WP-31's `task.ask` worker) plus `bootstrap.history`, the one
-    // worker the history bootstrap adds for both halves of its job.
-    expect((thrown as UndersizedPoolError).required).toBe(20);
+    // Twenty-one since WP-36: twenty (WP-15c's fourth pipeline worker, WP-18a's `knowledge.index`,
+    // WP-18b's three Librarian queues, WP-21's `onboarding.discovery`, WP-32's digest tick,
+    // WP-31's `task.ask` and WP-35's `bootstrap.history`) plus `maintenance.schedule`, the daily
+    // pass that creates product/18:31's chore tasks.
+    expect((thrown as UndersizedPoolError).required).toBe(21);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
     // PROGRESS backlog 22's **site 3**, derived rather than spelled since WP-31 round 2. The
     // message used to say "the pipeline's five job workers" beside a `POOL_RESERVATIONS.pipeline`

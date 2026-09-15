@@ -248,6 +248,13 @@ export interface HarnessOptions {
    * planner, not the harness), and absent it changes nothing.
    */
   readonly whileAskPlans?: () => Promise<void>;
+  /**
+   * What this project's maintenance chores have already spent this month (WP-36).
+   *
+   * The stage executor asks it at the admission of a chore **the scheduler created** and of nothing
+   * else, so it changes nothing for any other task in this harness.
+   */
+  readonly maintenanceSpentUsd?: number;
   readonly git?: Partial<GitProviderPort> | null;
   /**
    * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
@@ -799,6 +806,16 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     store,
     shadow,
     bootstrap,
+    /**
+     * The maintenance budget's spend reader (WP-36) — always composed, for `shadow`'s reason: a
+     * harness that left it out would be a harness in which the executor's maintenance cap can never
+     * fire, and a one-line guard whose only executioner is the e2e is an untested guard on every
+     * working day (WP-35's own canary survey).
+     *
+     * It answers {@link HarnessOptions.maintenanceSpentUsd}, defaulting to **0** — a project whose
+     * chores have cost nothing, which is what a fresh instance is.
+     */
+    maintenance: { maintenanceSpendSince: async () => options.maintenanceSpentUsd ?? 0 },
     settings: staticProjectSettings(() => settings),
     jobs,
     notifications,

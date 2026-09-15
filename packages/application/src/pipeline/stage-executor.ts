@@ -61,7 +61,9 @@ import {
   finishRun,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isRunnableTaskState,
+  maintenanceBudgetUsdOf,
   markRunning,
+  namesAMaintenanceChore,
   openQuestion,
   pauseTask,
   recordArtifact,
@@ -70,6 +72,7 @@ import {
   toQuestionRecord,
 } from '@platform/domain';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import type { MaintenanceSpendReader } from '../maintenance/ports.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
@@ -217,6 +220,19 @@ export interface StageExecutorOptions {
    * one and it takes this port's writer.
    */
   readonly bootstrap?: StageExecutorBootstrapPort;
+  /**
+   * What the stage executor asks about a **maintenance chore**, and about nothing else (WP-36).
+   *
+   * **Absent is "not asked"**, the same bargain the two ports above make:
+   * `features.maintenance.budget_usd` is product/18:31's *"dedicated budget"*, and a build that
+   * cannot read what the month's chores have spent must not pretend it is unspent. Unlike them, the
+   * pairing that makes the absence safe is a **schedule** rather than a command — a process without
+   * this port also composes no `registerMaintenanceSchedule`, so it creates no chore to admit.
+   *
+   * The question is asked only for a task whose reference `namesAMaintenanceChore` recognises, so
+   * an ordinary delivery pays no query for it.
+   */
+  readonly maintenance?: MaintenanceSpendReader;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -520,11 +536,46 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       }
 
       /**
+       * The maintenance pipeline's **dedicated budget** (WP-36, product/18:31), asked only for a
+       * chore this platform scheduled.
+       *
+       * The *mechanism* is the shadow cap's above, deliberately: WP-34 built it, and two features
+       * with two answers to "what stops a feature spending" would be two things to keep true. What
+       * differs is the **predicate**, and it is this feature's own — `namesAMaintenanceChore` reads
+       * the platform-issued reference, because `tasks.template` would charge a `chore` ticket a
+       * *human* filed to the maintenance cap, and `runs.mode` would too: a maintenance chore's runs
+       * are ordinary delivery runs, which is what "an ordinary `chore` task" means.
+       *
+       * Month in UTC, from the same `monthStartUtc` the shadow cap uses, for the same stated
+       * reason; the comparison adds what this run may spend, for {@link taskBudgetExhausted}'s.
+       */
+      if (options.maintenance !== undefined && namesAMaintenanceChore(task.ticket)) {
+        const cap = maintenanceBudgetUsdOf(settings.config);
+        if (cap !== null) {
+          const since = monthStartUtc(options.context(task.id).clock.now());
+          const spent = await options.maintenance.maintenanceSpendSince(
+            scope.tx,
+            task.projectId,
+            since,
+          );
+          if (spent + runBudgetUsd(settings, job.stage) > cap) {
+            return pause(
+              scope,
+              stored,
+              `this project’s maintenance budget for the month is spent: ${spent} of ${cap} USD ` +
+                `since ${since}, and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
+            );
+          }
+        }
+      }
+
+      /**
        * The **history bootstrap's** cap (WP-35), asked only for a task on that template.
        *
-       * Per **batch** rather than per month, which is the difference from the shadow budget above
-       * and is product/19 §18's own shape: a bootstrap is a one-off operation an operator starts
-       * and is shown a figure for before it runs, so the cap belongs to the thing they started.
+       * Per **batch** rather than per month, which is the difference from the two monthly caps
+       * above (shadow mode's and maintenance's) and is product/19 §18's own shape: a bootstrap is a
+       * one-off operation an operator starts and is shown a figure for before it runs, so the cap
+       * belongs to the thing they started.
        * The cap is read from the batch row (copied at creation) and the spend from `cost_entries`,
        * so what stops the batch is the ledger rather than a running total — and the comparison adds
        * what *this* run may spend, for {@link taskBudgetExhausted}'s reason: a budget checked only

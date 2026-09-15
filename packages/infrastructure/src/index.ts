@@ -16,7 +16,9 @@
  * human-time projection's `HumanTimeStore` (`human-time/`), the first and only writer of a table
  * that has had a schema since migration 0007. WP-34 added shadow mode's `ShadowStore`
  * (`shadow/`) — the batch tables of migration 0029, and the first writer of `shadow_reports`, which
- * has had a schema since migration 0008. Later work packages add the rest.
+ * has had a schema since migration 0008. WP-36 added the maintenance scheduler's three reads
+ * (`maintenance/`), which write nothing and need no table: a scheduled chore's own task row is the
+ * record that its period has been served. Later work packages add the rest.
  */
 export * as ask from './ask/index.js';
 export * as bootstrap from './bootstrap/index.js';
@@ -29,8 +31,10 @@ export * as humanTime from './human-time/index.js';
 export * as integrations from './integrations/index.js';
 export * as jobs from './jobs/index.js';
 export * as knowledge from './knowledge/index.js';
+export * as maintenance from './maintenance/index.js';
 export * as notify from './notify/index.js';
 export * as pipeline from './pipeline/index.js';
+export * as recovery from './recovery/index.js';
 export * as redaction from './redaction/index.js';
 export * as runlet from './runlet/index.js';
 export * as runner from './runner/index.js';

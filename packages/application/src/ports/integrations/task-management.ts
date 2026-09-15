@@ -124,7 +124,18 @@ export const transitionResultSchema = z.strictObject({
   to: nonEmptyStringSchema,
 });
 
-/** A ticket the platform creates: scope-creep valve, epic split, maintenance chore (product/08). */
+/**
+ * A ticket the platform creates — product/08:9's *"create follow-up tickets"*.
+ *
+ * **Two callers, not three** (corrected at WP-36, standing rule 83): the scope-creep valve
+ * (product/04's S3 — *"improvements discovered outside the scope are never implemented; the agent
+ * files a separate ticket"*) and the epic split (WP-40). This docblock used to name a *"maintenance
+ * chore"* as a third, and that is **wrong against the product documents**: product/19:126's feature
+ * card says the maintenance pipeline's external touch is **merge requests**, and product/18:31 says
+ * a chore *"produces a normal `chore` task"* — which the scheduler creates directly, on a
+ * platform-issued reference that every ticket read and every ticket write refuses by name. A
+ * maintenance chore files no ticket on anybody's board.
+ */
 export const ticketDraftSchema = z.strictObject({
   project_key: nonEmptyStringSchema,
   issue_type: nonEmptyStringSchema,

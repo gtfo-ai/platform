@@ -53,6 +53,8 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { StrandedRecoveryOptions } from '../recovery/stranded.js';
+import { runStrandedRecovery } from '../recovery/stranded.js';
 
 /** `Actor.component` on a re-emitted `ticket.matched`, and the mark the next pass reads. */
 export const INTAKE_RECONCILER_COMPONENT = 'pipeline.intake.reconcile';
@@ -200,6 +202,19 @@ export interface IntakeReconcileJobOptions
   extends Omit<IntakeReconciliationOptions, 'graceMs' | 'limit'> {
   readonly jobs: Jobs;
   /**
+   * The **other** sites of the lost-wake-up class, run on this same timer (WP-36, backlog 101).
+   *
+   * One pass, one interval, one pooled connection: backlog 101's argument against four separate
+   * passes is that four intervals are four grace periods to get wrong, and this timer already has
+   * the one grace period the class needs. `recovery/stranded.ts` carries the table — the history
+   * bootstrap's lost `collect` (entry 101) and the ask's lost run (entry 84) — and states why entry
+   * 20's recovery is *this* module rather than a row of it, and why entry 36 cannot be a row at
+   * all yet.
+   *
+   * Absent means only entry 20 is recovered, which is what every build before WP-36 did.
+   */
+  readonly stranded?: Omit<StrandedRecoveryOptions, 'graceMs' | 'clock' | 'jobs' | 'limit'>;
+  /**
    * How long until the next pass **and** the grace period a match must be older than.
    *
    * One knob rather than two, and the sentence that makes it one: *a ticket that has had a full
@@ -235,6 +250,30 @@ export const intakeReconcileHandler = (options: IntakeReconcileJobOptions): JobH
           { found: report.found, re_emitted: report.reEmitted },
           'intake reconciliation re-emitted matched tickets that had no task row',
         );
+      }
+      if (options.stranded !== undefined) {
+        const sites = await runStrandedRecovery({
+          ...options.stranded,
+          jobs: options.jobs,
+          clock: options.clock,
+          graceMs: options.intervalMs,
+          ...(options.logger === undefined ? {} : { logger: options.logger }),
+        });
+        for (const site of sites) {
+          if (site.reEnqueued > 0 || site.ended > 0) {
+            logger.info(
+              {
+                site: site.site,
+                found: site.found,
+                re_enqueued: site.reEnqueued,
+                // Each row gets one attempt and then an ending, so the two counts together are
+                // what the pass did — reporting only the first would hide the ending (backlog 105).
+                ended: site.ended,
+              },
+              'the recovery pass acted on work whose wake-up was lost',
+            );
+          }
+        }
       }
     } finally {
       await enqueueIntakeReconcile(options.jobs, {

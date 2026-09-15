@@ -99,11 +99,11 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     APP_SECRET_KEY: 'e2e-test-secret-key-not-a-real-secret-0000',
     LOG_LEVEL: options.logLevel ?? 'silent',
     TZ: 'UTC',
-    // The floor `requiredPoolConnections` computes for `ROLE=all` at concurrency 1 — 20 since
-    // WP-35 added the `bootstrap.history` worker to WP-31's `task.ask`, WP-32's digest tick,
-    // WP-21's `onboarding.discovery`, WP-18b's three and WP-18a's index worker. A value below it is
-    // refused at boot, which is how this line keeps finding out.
-    APP_DB_POOL_MAX: '20',
+    // The floor `requiredPoolConnections` computes for `ROLE=all` at concurrency 1 — 21 since
+    // WP-36 added the `maintenance.schedule` worker to WP-35's `bootstrap.history`, WP-31's
+    // `task.ask`, WP-32's digest tick, WP-21's `onboarding.discovery`, WP-18b's three and WP-18a's
+    // index worker. A value below it is refused at boot, which is how this line keeps finding out.
+    APP_DB_POOL_MAX: '21',
     APP_SSE_PING_INTERVAL_MS: '1000',
     ...(options.withoutBootstrapAdmin === true
       ? {}

@@ -121,8 +121,16 @@ export const REVIEW_ONLY_STAGE = 'code_review';
  *
  * `platform` is not a provider this build registers — the same value `onboarding/discovery.ts`
  * uses, and deliberately so: nothing may resolve it to a task-management adapter and try to
- * transition a ticket that does not exist. It also means `ensureTicketSnapshot` finds no binding
- * for it and leaves `ticket_snapshot` null, which is the honest answer for a task with no ticket.
+ * transition a ticket that does not exist. It also means `ensureTicketSnapshot` leaves
+ * `ticket_snapshot` null, which is the honest answer for a task with no ticket.
+ *
+ * **The refusal is by provider value, not by an absent binding** (corrected at WP-36; PROGRESS
+ * backlog 62, standing rule 83). This sentence used to say the snapshot stayed null because
+ * `ensureTicketSnapshot` *"finds no binding for it"*, which was true only for a project with no
+ * task-management binding at all: for every project that has one, the binding was found and
+ * `readTicket({provider: 'platform', key: 'mr!7'})` was made — one doomed round trip per agent
+ * stage. `ticketReads.ticket` now answers `null` for a reference that names no provider ticket,
+ * beside the three writes that already did.
  */
 export const REVIEW_ONLY_TICKET_PROVIDER = 'platform';
 

@@ -2211,7 +2211,7 @@ the first row that writes platform text to a human *outside* a ticket (digest, q
 otherwise ask this question again from scratch; the prompt line it needs is the same one. Explicitly
 **not** WP-25's: the linter is one consumer of a setting that predates it.
 
-### 57. **`runs.mode` is `normal` for four of technical/04's seven modes, three of which have producers today — a librarian run, a retro run and a discovery run all record themselves as ordinary runs, and the run screen says so** (TODO, small — **one cause, four owners**; `linter` **paid at WP-25**, three left; found by WP-24, session 5)
+### 57. **`runs.mode` is `normal` for four of technical/04's seven modes, three of which have producers today — a librarian run, a retro run and a discovery run all record themselves as ordinary runs, and the run screen says so** (**RESOLVED** at `<sha>`, WP-36 — the last three values, the precedence rule, a 26-row walk and the backfill; `linter` was paid at WP-25 and `bootstrap` at WP-35; kept for its evidence; found by WP-24, session 5)
 **What is wrong.** `runModeFor` (`packages/application/src/pipeline/planner.ts:414-419`) maps two of
 the seven values the `run_mode` enum ships: `shadow` from `tasks.mode` and `review_only` from the
 template. `linter`, `discovery`, `retro` and `librarian` fall through to `normal`, so the column
@@ -2297,6 +2297,36 @@ thing that makes *"what did delivery cost, what did upkeep cost"* a question any
 downstream reader and its row refuses a per-mode breakdown until this is paid, which is this entry's
 own warning made mechanical.
 
+**RESOLVED at `<sha>`, WP-36** (refiner, session 5; read off the working tree, no test run — rule 66).
+All four parts this entry asked for landed in one change:
+- **The second table.** `RUN_MODE_BY_STAGE = {retrospective: 'retro', librarian: 'librarian'}`
+  (`packages/application/src/pipeline/planner.ts:604-607`) beside `RUN_MODE_BY_TEMPLATE`, which gained
+  `discovery` (`:583`) — the one-line half this entry's update predicted.
+- **The precedence rule is stated where it binds, and it is the template.** `planner.ts:595-602`:
+  *"A template that is in `RUN_MODE_BY_TEMPLATE` exists for exactly one purpose and has one agent
+  stage, so its value is a statement about the whole task; this table is about stages the ticket
+  templates share. If the stage won instead, a one-off template that happened to reuse a shared stage
+  id would silently take that stage's mode."* It is the **opposite** call from `status_mapping`'s and
+  says so, with the reason for the difference at both sites — which is the *"decision per mode"* this
+  entry asked to be made rather than inherited.
+- **The walk is 26 rows and asserts the collision from both sides.** The existing 24-row walk over
+  `SHIPPED_TEMPLATES` became 26 with `discovery`'s stage and the bootstrap's, and a case pins the
+  template-wins collision that **no shipped template exercises** — so rule 18's *"the absent case must
+  not be the quiet one"* is covered for a template added later.
+- **The backfill is done rather than deferred**, which is the half this entry warned would otherwise
+  leave every earlier run mislabelled for ever. Migration **0031** mirrors the planner's rule exactly:
+  `mode = 'normal'` is the predicate of both statements (so a shadow run stays `shadow` and nothing is
+  relabelled twice), and the stage statement excludes the four templates that have an entry of their
+  own — `review_only`, `ticket_lint`, `history_bootstrap`, `discovery` — because the template beats the
+  stage. A project-defined template with a `retrospective` stage is relabelled, and the file says so as
+  the rule rather than as an accident. Idempotent by construction: a second run matches nothing.
+
+**What this entry's warning to WP-41 becomes**: the column is now honest for every producer this build
+has, so a per-mode breakdown is no longer measuring the defect. What it still cannot answer is *"what
+did upkeep cost"* by **task** — a maintenance chore's runs are ordinary delivery runs by design
+(WP-36's criterion 2), so the upkeep/delivery split for chores lives in the platform-issued reference,
+not in `runs.mode`. Whoever takes WP-41 should read that sentence before grouping by this column.
+
 ### 59. **Nothing tells the platform that a ticket changed, so three separate promises rest on an event the catalogue does not have — and it is a one-normaliser change, not the two-provider one two documents price it at** (TODO, small — **no work package owns it**; found by WP-25, session 5; the product half is **Q61 (b)**)
 Placed directly above entry 23 because it is that entry's other half: 23 is *the platform never reads
 the ticket*, closed at WP-15f; this is *the platform is never told the ticket was rewritten*, which is
@@ -2373,7 +2403,7 @@ row that measures a defect ships the defect's number. The re-lint setting is WP-
 needs this first; Q61 (b) is the third consumer. Cheapest owner: whoever next touches
 `providers/jira-cloud/webhook.ts`, because the event is four lines there and a contract-suite case.
 
-### 62. **The write half of "a platform-issued reference is not a ticket" is refused by name and the read half is not — so a discovery or review-only task still asks Jira for a ticket no provider issued, and a docblock says it does not** (TODO, small — **no work package owns it**; the write half was closed inside **WP-25**; found by WP-25, session 5)
+### 62. **The write half of "a platform-issued reference is not a ticket" is refused by name and the read half is not — so a discovery or review-only task still asks Jira for a ticket no provider issued, and a docblock says it does not** (**RESOLVED** at `<sha>`, WP-36 — the read half closed beside the three writes, and the four prose sites corrected; the write half was closed inside **WP-25**; kept for its evidence; found by WP-25, session 5)
 
 **What is wrong.** Three kinds of task carry `{provider: 'platform', key: '<something>!<id>'}` because
 `tasks.ticket_*` is not nullable — discovery (WP-21), review-only (WP-24) and the lint task (WP-25).
@@ -2438,6 +2468,24 @@ will be created on a schedule rather than by a delivery, so the doomed `readTick
 every project every week. That row also corrects `task-management.ts:127`'s docblock, which lists
 *"maintenance chore"* among `createTicket`'s callers against product/19:126's own feature card
 (external touch: **merge requests**, not tickets).
+
+**RESOLVED at `<sha>`, WP-36** (refiner, session 5; read off the working tree, no test run — rule 66).
+The guard is the one line this entry asked for and it is *beside* the three writes rather than at a
+call site: `ticketReads.ticket` is now `if (binding === null || !namesAProviderTicket(ticket)) return
+null` (`packages/application/src/pipeline/integrations.ts:584-586`), so all four kinds of
+platform-issued reference — `mr!<iid>`, `lint!<key>`, discovery and now `chore!<type>-<period>` — are
+answered without a provider call, and a fifth cannot forget it. The three prose sites this entry named
+are corrected (`review-only.ts`'s *"finds no binding for it"*, `discovery.ts`'s comment,
+`task-management.ts`'s `createTicket` callers) plus one the entry did not know about: technical/06:18's
+port sketch carried the same claim and is amended.
+**One deviation from "what done looks like", stated rather than silent**: the assertion is at the
+**port**, not the countable effect in `integration_actions` this entry recommended —
+`integrations.test.ts:234-252` asserts both directions with the executor as the tell (the
+platform-issued key resolves `null` *without reaching* the executor, a provider's own key still
+reaches it and the double throws there). That is a stronger guard than a row count for the guard's own
+line and a weaker one for the *system* claim — nothing asserts that a discovery or review-only task in
+a project with a Jira binding produces no `read_ticket` row — so if the call is ever re-introduced
+above this function, no tier fails. Not re-opened for it: the caller census is one function today.
 
 ### 63. **The conflict warning reaches a merge-request thread and an `events` row, and the board both product documents name has no field to render it — the promised surface is the one surface with nothing on it** (TODO, small — **no work package owns it**; found by WP-26, session 5)
 **What is wrong.** product/04 S6b is *"the board warns when two active tasks touch the same files"* and
@@ -3140,6 +3188,27 @@ sends a notification of any kind (WP-32)"* — **WP-32**, whose row already says
 work is filed here because each has a row; what each of those rows gains is one assertion — **the
 caveat line is deleted in the same change** (`FEATURE_CARDS`, `apps/web/src/features/operating-mode.tsx:117-167`),
 so a feature that starts working and leaves the screen saying it does not is a test failure.
+
+**Two of those three shipped and only two of the three caveats were deleted — measured at WP-36**
+(refiner, session 5, from that row's discovered-work bullet, read against the working tree at `<sha>`;
+no test run, rule 66). WP-34 deleted shadow mode's and WP-36 deleted maintenance's. **WP-32's is still
+there**: `apps/web/src/features/operating-mode.tsx:185` reads *"Stored; nothing in this build sends a
+notification of any kind (WP-32)"* while that work package's own notes open with *"The platform sends
+its first chat message"* — one Slack call per digest tick, plus the immediate band. A **second** site
+the note above does not cover, in the neighbouring constant: `FEATURES_WITHOUT_A_SWITCH` carries
+*"Ask the task — not built in this release"* (`:198`), shipped at WP-31. So a maintainer standing in
+the wizard at the moment they decide what to turn on is told that two working features do not work —
+which is standing rule **83** at its own site, and the reason it survived is the one the rule names:
+*the sentence nearest a fix is the one nobody re-reads*, and neither was re-read after its fix.
+**Cost to leave**: no behaviour, all trust — it is the screen product/18 puts in front of a founder.
+**Done** is two string edits plus the assertion that stops the third recurrence, and the shape now
+exists to copy: `apps/web/src/features/operating-mode.test.tsx` compares the maintenance card with the
+**platform's own table** (`MAINTENANCE_CHORES`) rather than pinning its sentence, and asserts *"no
+longer says that nothing runs"* by name; the digest card's equivalent is a comparison against the fact
+that a communication binding can be configured at all, and the ask line is a deletion. **Owner: none**
+— cheapest is whoever next edits that file, and **WP-41 is the wrong home** (it renders statistics and
+never opens this one). It is two lines, and it is filed here rather than as a number of its own
+because this note is where the obligation was already recorded and a second entry would split it.
 
 ### 73. **Risk classes are half a feature in four places: no default set ships, the proposal has no producer, `tasks.risk_classes` has no writer, and one of the three requirements product/19 §14 defines cannot be stored at all** (**RESOLVED** at `78e48fc`, WP-37 — the cause closed: the classes have a producer, a proposal, a writer and a routing consumer; **what remains is at the end of this entry**, and none of it re-opens the cause. Found by WP-30, session 5)
 **What is wrong — one cause.** The platform now has a risk-class **reader** and has never had a
@@ -3975,7 +4044,7 @@ refused the eight, WP-15h built the projections an implementation would read, WP
 whose *whole deliverable* is the platform's own record. Cheapest by need is whoever next wants an ask
 to answer about a transcript; nothing blocks it.
 
-### 84. **A lost ask wake-up leaves a question `pending` for ever, and this is the third site of entries 20 and 36's class — and the cheapest of the three to recover** (TODO, small — **no work package owns it**; found by WP-31, session 5)
+### 84. **A lost ask wake-up leaves a question `pending` for ever, and this is the third site of entries 20 and 36's class — and the cheapest of the three to recover** (**RESOLVED** at `<sha>`, WP-36 — the `task_ask` row of `recovery/stranded.ts`, on the intake reconciliation's timer; the re-enqueue's **bound** is backlog **105**; kept for its evidence; found by WP-31, session 5)
 **What is wrong.** The same at-most-once window, one feature further on: the ask is recorded in a
 transaction and the job that answers it is enqueued **after** the commit, so a process that dies in
 between leaves a `pending` row nothing will ever pick up.
@@ -4033,6 +4102,20 @@ enqueue, and it is the only one of the four a human cannot work around (a unique
 batch into a permanent `already_running`). Entry 101 carries the four-site table and the argument that the
 class earns **one** row rather than four passes; **WP-36** owns it there, and this entry's "cheapest home"
 stays the fallback.*
+
+**RESOLVED at `<sha>`, WP-36** (refiner, session 5; file reads only, rule 66). Built exactly where this
+entry's *"cheapest home"* said — beside the reconciler that already runs — and as a row of backlog 101's
+table rather than a pass of its own: `recovery/stranded.ts`'s `task_ask` row queries `task_asks` for
+`status = 'pending'` older than the grace (the partial index `task_asks_pending_idx` this entry named,
+`0024:115`) and calls `enqueueAsk`, whose `stately` `singletonKey: ask:<id>` is the *"what makes a wrong
+guess harmless"* the table asks each row for. The grace equals the interval, as this entry asked.
+**Two things this entry's "done" asked for that the change does not give, both filed as backlog 105 rather
+than re-opened here**: the re-enqueue is **not bounded to one attempt** — a `pending` ask is re-enqueued
+on every pass, and at the shipped 60-second interval that is a *new paid run per minute* for an ask that
+stays pending for a reason other than a lost wake-up (the "somebody else ended the run first" case is one,
+and `ask-pipeline.test.ts:919` pins it leaving `status = 'pending'`); and `admissionVerdict`
+(`ask/executor.ts:269`) re-admits a `pending` ask **without asking whether a run is already attached**, so
+the query's age bound is the only thing standing between a slow run and a second one.
 
 ### 85. **No route serves an artifact's body, so every artifact on every task screen is a row you cannot open — and the first one a human actually wants to read is the `AskAnswer`** (TODO, small — one cause, two symptoms; **no work package owns it**; found by WP-31, session 5)
 **What is wrong.** `GET /api/tasks/:task_id` publishes each artifact as
@@ -5047,7 +5130,7 @@ the projection is missing; here the human side has no producer at all). **WP-45*
 page, backlog **91**) is the only row that opens the reviewer's prompt and its eval cases, so if the
 run needs prompt text it is the cheapest place to put it.
 
-### 101. **A lost `bootstrap.history` enqueue leaves a batch at `collecting` for ever and a unique index then refuses every later attempt — the fourth site of entries 20/36/84's class, and the first one an operator cannot work around** (TODO, small per site — **the class now earns one row, and it is WP-36's**, whose M3 criterion 10 carries it; found by WP-35, session 5)
+### 101. **A lost `bootstrap.history` enqueue leaves a batch at `collecting` for ever and a unique index then refuses every later attempt — the fourth site of entries 20/36/84's class, and the first one an operator cannot work around** (**RESOLVED for this site** at `<sha>`, WP-36, and the class got the single pass this entry argued for — **entry 36 remains, deferred with its blocker named at the line; two residuals are filed as backlog 105 and 106**; found by WP-35, session 5)
 
 **What is wrong.** The same at-most-once window, a fourth feature on. `startHistoryBootstrap` commits the
 `history_bootstrap_batches` row and enqueues `bootstrap.history` on the **next line**, because
@@ -5132,6 +5215,31 @@ Its M3 row now carries this as criterion **10**. If WP-36 slips, the fallback ho
 84's: beside `pipeline.intake.reconcile` in `apps/server/src/pipeline.ts`, which composes the one that
 already runs — and the site to take first is **this one**, because it is the only one of the four with no
 human workaround.
+
+**The four-site table, walked against the tree at `<sha>`** (refiner, session 5; file reads and greps
+only, rule 66). The pass is `packages/application/src/recovery/stranded.ts` — two rows, a `StrandedWorkStore`
+port with the two queries (`packages/infrastructure/src/recovery/postgres-stranded-store.ts`), run from
+`intakeReconcileHandler` on the **intake reconciliation's own timer** (`pipeline/intake-reconcile.ts:255-268`,
+`APP_INTAKE_RECONCILE_INTERVAL_MS=60000`), with the grace equal to the interval. That is the "or states in
+writing why" branch of criterion 10 and it is the better answer than this entry's own *"ride WP-36's cron"*:
+a daily cron would leave a bricked bootstrap bricked for a day.
+
+| site | entry | verdict at `<sha>` | where |
+|---|---|---|---|
+| history bootstrap, lost `collect` | **101** | **RESOLVED** | `stranded.ts`'s `history_bootstrap` row: batches at `collecting`, `completed_at is null`, `created_at < now - grace`, **no chunk rows** |
+| ask, lost run | **84** | **RESOLVED** | `stranded.ts`'s `task_ask` row: `pending` asks older than the grace, re-enqueued through `enqueueAsk` |
+| intake, a matched ticket | **20** | **RESOLVED**, and elsewhere by design | `pipeline/intake-reconcile.ts` (WP-15c, `38ea686`); `stranded.ts:23-32` states why it is **not** a row of this table — its remedy appends a *new* `ticket.matched` with a once-per-ticket system-actor mark rather than enqueuing a job, and widening the table's contract to hold it would make the contract say nothing |
+| curation, `artifact.created` | **36** | **REMAINS**, deferred with the blocker named | `stranded.ts:34-40`: *"a curation that ran and proposed nothing is spelled identically to a curation that never ran"*, and the curation queue is `standard` with no singleton key, so a blind re-enqueue writes a **second** set of proposals |
+
+**The one measurement this entry asked for is answered, and it points at a residual.** *"Whether
+`JOB_QUEUES.historyBootstrap` is declared `stately`/singleton"* — it is **not**: `ports/jobs.ts:411-425`
+declares it **`standard`**, *"each wake-up carries a different batch or a different artifact, so a
+coalescing policy would silently drop one project's onboarding in favour of another's"*. So at this site
+the bound can only come from the **pass**, and the pass has none — see backlog **105**. What *is* safe is
+what the module claims: a second `collect` for a batch that did run creates no second set of tasks
+(`collectHistory` refuses a batch whose status is not `collecting`, and `(batch_id, chunk_index)` is
+unique). The **fifth** site this walk turned up — the lost `record` wake-up, which bricks a batch in the
+same way through the same index and is *not* a row of the table — is backlog **106**.
 
 ### 102. **`merge_requests_read` is a model's coverage claim that reaches a log line and no reader, so a batch that mined a fifth of its history is spelled exactly like one that mined all of it** (TODO, small — working as designed and filed so the next reader meets the decision rather than the trap; **no work package owns it**, and **WP-41 is the wrong home**; found by WP-35, session 5)
 
@@ -5346,6 +5454,200 @@ stronger one (a required port with an `unavailable` implementation), which is le
 recommends whoever changes the contract should make. Three canaries died and each file was restored to its
 pre-mutation md5; the sentence that this class "had no guard" is now false, and the WP-35 notes carry the
 detail.*
+
+### 105. **The lost-wake-up recovery re-enqueues a stranded row on *every* pass and has no ending, so the one site that was already bricked stays bricked while paying for a retry a minute — the bound the worked example has did not carry into the table built from it** (TODO, small — **no work package owns it**; found by the refiner while marking backlog 101 resolved, session 5)
+
+**What is wrong.** `runStrandedRecovery` (`packages/application/src/recovery/stranded.ts:130-175`) reads the
+two queries, enqueues one job per row found and writes **nothing**: no mark, no attempt counter, no terminal
+state. The queries carry no exclusion for a row a previous pass already re-enqueued
+(`packages/infrastructure/src/recovery/postgres-stranded-store.ts:46-82`: `status = 'collecting' … and not
+exists (chunks)`, and `status = 'pending' and created_at < $1`). So a row whose re-enqueued job *also* fails
+to move it is re-enqueued again on the next pass, for ever, at `APP_INTAKE_RECONCILE_INTERVAL_MS` —
+**60 000 ms** on the shipped defaults (`.env.example:331`).
+
+**This is a deviation from the brief, not an oversight anybody has to judge.** Backlog **101**'s *"what done
+looks like"* asks for it in two sentences: *"Bounded to one attempt per stranded row, by the system actor the
+intake reconciler already stamps"*, and *"the honest ending when the re-enqueue keeps failing is to
+`markEmpty` the batch with a reason — because a batch nobody can clear is worse than a batch that says it
+failed."* WP-36's M3 criterion 10 asks each row of the table for *"(what to look for, how to re-enqueue,
+**what bounds it**)"*. What the module's table actually states per row is *"what makes a **wrong guess**
+harmless"* (`stranded.ts:42-54`) — which is **idempotency**, and idempotency bounds the *effect of one
+duplicate*, not the *number of attempts*.
+
+**The worked example this table was modelled on has the bound.** `pipeline.intake.reconcile` marks its
+re-emitted `ticket.matched` with `INTAKE_RECONCILER_COMPONENT` and the next pass reads that mark, with the
+residual stated at the line (`intake-reconcile.ts:30-38`): *"A ticket whose intake job fails permanently — a
+git binding an operator deleted, say — would otherwise be re-emitted every interval for ever, and an
+append-only event log would grow with it."* The two new rows run in the same handler, one function away, and
+have no equivalent.
+
+**Evidence, per site** (refiner, session 5; file reads and greps, no test run — rule 66).
+- **History bootstrap.** Backlog 101's own *"needs measurement"* is answered and it points here:
+  `JOB_QUEUES.historyBootstrap` is declared **`standard`**, not `stately`/singleton
+  (`packages/application/src/ports/jobs.ts:411-425`), so nothing at the queue collapses repeats and the bound
+  can only come from the pass. A batch whose `collect` fails deterministically — the git binding removed, the
+  provider 401 — has no chunks, so it matches the query on every pass: **one collect attempt per minute, each
+  a provider fan-out, indefinitely**, and the batch stays at `collecting`, which means
+  `history_bootstrap_batches_one_live` (`0030:88-90`) keeps refusing the operator's retry with
+  `already_running` (`batch.ts:205`). The recovery makes the bricked case *noisier* without making it
+  *recoverable*: there is still no `markEmpty` ending and still no route that clears the row
+  (`apps/server/src/routes/bootstrap.ts` registers a `POST` and a `GET`).
+- **Ask.** The query asks only *"`pending` and older than the grace"* and ignores `task_asks.run_id`, which
+  `attachRun` sets (`0024_ask_the_task.sql:70`). An ask run takes minutes; the grace is one minute. So **every
+  ask whose run is still in flight after 60 seconds** is found by this query, logged `warn` as *"a question was
+  left pending with no run to answer it"* (`stranded.ts:165-168`) — a sentence that is false about that row —
+  and re-enqueued. What stops it becoming a second paid run is `enqueueAsk`'s `stately` `singletonKey:
+  ask:<id>` collapsing the repeat while one is queued, plus `admissionVerdict`'s `ask.status !== 'pending'`
+  skip once the first run answers (`ask/executor.ts:269`). **That guard does not hold for an ask that stays
+  `pending` after a run ended**, which is a measured case: *"an ask whose run somebody else ended first …
+  writes nothing at all: no answer, no artifact and no spend"* leaves `status = 'pending'`
+  (`ask-pipeline.test.ts:912-977`). For such a row the next pass starts a **new paid run**, and admission
+  never asks whether a run is already attached — so the loop is bounded only by the task, project and
+  organisation budgets that `askBudgetExhausted` and `budgets.blockingFor` check
+  (`executor.ts:283-308`): at a task budget B and an ask budget A it is **B/A doomed runs**, one a minute.
+
+**What it costs to leave.** Nothing while no row is stranded — this is an ordinary-operation cost only at the
+ask site (the false `warn` per long-running ask per minute, plus one dequeue-and-skip). The rest is a failure
+cost, and it is the wrong shape: the class exists so that a lost wake-up costs one recovery, and a pass with
+no ending converts a *silent* permanent failure into a *loud, paid* permanent failure. The bootstrap site is
+the one entry 101 chose to take first precisely because a human cannot work around it, and after the recovery
+a human still cannot.
+
+**What "done" looks like.** One mark per site, and one ending. The mark can be the cheapest thing that makes
+a second pass see the first: a `recovered_at`/attempt column on the row, or — matching the intake
+reconciler — a system-actor record. The ending is per site and both are already named: `markEmpty(batch,
+reason)` for a bootstrap whose re-enqueue did not take, and `recordRefusal(ask, status: 'failed', reason)`
+for an ask (`ask/store.ts:39-44` already has the vocabulary), so the row says *failed* rather than staying
+*pending* for ever. Two cheap narrowings belong in the same change: exclude `run_id is not null` from the ask
+query, or state at the line why an attached run is still a stranded row; and make the `warn` say what the
+pass actually knows. Asserted the way the class's other sites are — drop the enqueue, let **two** passes run,
+and read the row's own status.
+
+**Needs measurement: none for the mechanism** (all of the above is read off the tree). The *magnitude* at the
+ask site is arithmetic over a project's own caps and is stated as such above rather than measured.
+
+**Depends on / owner.** No dependency; the pass, the two stores and both endings exist. **No work package
+owns it** — WP-36's row is merged with criterion 10 met in every respect except this clause, so this is the
+residual rather than a re-opening. Cheapest home: whoever next touches `recovery/stranded.ts`, and it is the
+same change as backlog **106**'s second half. Trigger that makes it urgent: the first production deployment
+that composes a runner (`stranded.ts`'s ask row only fires where asks run) or the first bootstrap whose
+`collect` fails for a reason a retry cannot fix.
+
+### 106. **A lost `record` wake-up bricks a history bootstrap exactly as backlog 101's lost `collect` does, it is not a row of the recovery table, and the seam WP-36 widened to reproduce that class still cannot reach it — three worker runtimes are composed with the *unwrapped* `Jobs` while the docblock lists one of them as covered** (TODO — one cause, two halves; **no work package owns it**; found by the refiner while walking backlog 101's table, session 5)
+
+**What is wrong — the cause, once.** WP-36 moved `PipelineComposition.jobs` out of `composePipeline` and
+into `startRuntime` so the drop-the-enqueue seam would cover more than the pipeline's own enqueues. It covers
+the pipeline and the **API command** factories. It does **not** cover the three worker runtimes, and two of
+the lost-wake-up class's sites are enqueued from exactly those.
+
+**Evidence** (refiner, session 5; file reads and greps, no test run — rule 66).
+- **The wiring.** `apps/server/src/runtime.ts:266-270` wraps `jobsRuntime.jobs` and hands the wrapped instance
+  to `composePipeline` (`:348`) and to the command factories (`:538` onboarding, `:559` task, `:577` asks,
+  `:592` shadow, `:628` bootstrap, `:640` knowledge). The three runtimes that register **workers and event
+  handlers** are each passed the raw instance: `composeKnowledgeIndexing({… jobs: jobsRuntime.jobs …})`
+  (`:405`), `composeOnboardingRecording` (`:438`) and `composeHistoryBootstrap` (`:463`).
+- **The sentence that is false.** The same docblock reads *"applied **here** rather than inside
+  `composePipeline`, so that every composition in this process shares the wrapped instance"*
+  (`runtime.ts:255-265`), and its twin on the option lists the four it believes it reached — *"the pipeline,
+  the bootstrap commands, the onboarding commands and the knowledge runtime"* — of which **the knowledge
+  runtime is one of the three that gets the raw instance**. Rule **83** at the site of the fix, and the fix's
+  own argument is the reason it matters: *"A seam that can only reproduce the loss it was first written for is
+  a seam that tests one site and reads as if it tested the class."*
+
+**The fifth site, which is what the blindness is hiding.** `record.ts:400-417` registers an `artifact.created`
+handler that enqueues `{kind: 'record', …}` through `context.afterCommit` — at-most-once (TD-004), the same
+window as all four known sites — and it is registered by `composeHistoryBootstrap`, so its `Jobs` is the
+unwrapped one. Losing it strands a **chunk**, and the consequence is backlog 101's, not backlog 36's:
+`markChunkRecorded` never runs, so `completeIfDone` (`record.ts:350`) never runs, and `completeIfDone` and
+`markEmpty` are the only writers of `history_bootstrap_batches.completed_at`
+(`postgres-history-bootstrap-store.ts:264,273`) — so the batch never completes, and
+`history_bootstrap_batches_one_live` refuses every later bootstrap for that project with `already_running`.
+**The recovery pass cannot see it by construction**: its query demands a batch with **no chunk rows**
+(`postgres-stranded-store.ts:50-62`), and this batch has chunks.
+
+**And unlike backlog 36, this site is detectable today.** The chunk row carries its own answer:
+`recorded_at is null` beside a task whose `HistoryFindings` artifact exists, with `proposals`/`refused_proposals`
+constrained to zero until `recorded_at` is set (`0030_history_bootstrap.sql:118-131` states exactly this —
+*"zero proposals from a run that has reported is a finding … zero from a run that has not is silence"*). The
+re-enqueue is idempotent for the same reason the others are: `markChunkRecorded` updates `where id = $1 and
+recorded_at is null` (`postgres-history-bootstrap-store.ts:273-285`) and `completeIfDone` answers `true` only
+on the write that changed the row (`bootstrap/ports.ts:153`). So this is a row of the table, not a deferral.
+
+**What it costs to leave.** (a) A project whose bootstrap lost its last `record` wake-up is bricked in the
+same way and by the same index as backlog 101 — the loss entry 101 called *"the one an operator cannot work
+around"* — at a window nothing recovers and nothing watches. (b) Every future site of this class that is
+enqueued from a worker rather than from a command **cannot be asserted the way the class's criterion
+mandates**: *"Each site asserted by **dropping the enqueue** and reading the recovery back from the row's own
+status"* (WP-36 criterion 10, backlog 101). Backlog **36**'s curation enqueue is in the same position
+(`knowledge/librarian.ts:344`, registered by `composeKnowledgeIndexing`), so when that site's blocker is
+finally solved, its recovery will land with no way to prove it.
+
+**What "done" looks like.** Two halves, one change. **(1) The site**: a third row in `stranded.ts` — *a chunk
+with `recorded_at is null` whose task carries a `HistoryFindings` artifact, older than the grace* → re-enqueue
+`{kind: 'record', …}`; bounded per backlog **105**, which is the same file. **(2) The seam**: hand the wrapped
+`jobs` to the three worker compositions as well — or state at the line why a worker's own enqueues are out of
+its scope — and correct the docblock's list either way, because its current wording is the thing that would
+stop the next reader from checking (rule 83). The assertion for (1) is the class's: drop the `record` enqueue
+in the e2e and read `history_bootstrap_batches.status` back.
+
+**Needs measurement: none.** Every claim above is a file read.
+
+**What would make it urgent.** Latent today for the same reason backlog 36 and 82 are: no production path
+composes a run workspace provisioner, so no `HistoryFindings` artifact is produced outside the e2e. It opens
+on the first deployment that runs a real bootstrap — and product/06 step 3b puts that in front of a founder
+onboarding their first project.
+
+**Depends on / owner.** No dependency. **No work package owns it.** Cheapest home is whoever takes backlog
+**105** (same file, same pass, same commit) — otherwise whoever next edits `apps/server/src/runtime.ts`.
+Related: **101** (the four-site table), **36** (the other worker-enqueued site), **104** (the composition
+census, which reads `createPipelineRuntime`'s call site and is blind to this by design).
+
+### 107. **A maintenance pass's report reaches a log line and nothing else, so the platform re-announces the same three refusals to the same operator every day and there is no surface that says what the scheduler did** (nit-to-small, TODO — **working as designed**, with both alternatives weighed in the change itself; filed so the next reader meets the decision rather than the trap; **no work package owns it**; found by WP-36, session 5)
+
+**What is wrong.** `runMaintenanceSchedule` builds a per-project report — an outcome per chore type and a
+`refused` count (`packages/application/src/maintenance/scheduler.ts:137-171,283-290`) — returns it, logs it,
+and nothing stores or serves it. The visible consequence is the one WP-36's own bullet names: every
+configured chore type this build cannot perform is logged `warn` **once per pass per project**
+(`scheduler.ts:327-339`), and the pass is daily.
+
+**Evidence** (quoted from WP-36's discovered-work bullet, session 5): *"The scheduler logs a `warn` for every
+configured chore type this build cannot perform, on every tick — seven lines a week for a weekly project that
+configured `flaky`. The alternatives are both worse than the noise: refusing the value in the configuration
+schema would make a project's whole `.agentic/config.yml` fail on a value that has parsed since the key
+existed, and suppressing the repeat needs stored state whose only content is which refusal has been logged.
+The honest close is a **read surface** — the pass's own report published somewhere an operator looks — rather
+than a quieter log."*
+
+Two numbers the bullet does not carry, read off the tree (refiner; no test run, rule 66). Three of the five
+chore types are refused (`flaky`, `docs`, `lint` — `packages/domain/src/maintenance/chores.ts`), and
+`PLATFORM_DEFAULT_CONFIG.features.maintenance.chores` keeps technical/12's **`[deps, flaky, docs]`** (WP-36's
+assumption (d), kept deliberately so a stock project *sees* the refusals). So a **stock** project that turns
+maintenance on produces **two** refusal warns per pass at the daily tick — about **730 lines per project per
+year** — before anybody configures `lint`. The refusals are decided before any transaction opens
+(`scheduler.ts:320-326`), so the cost is exactly the log lines.
+
+**Is it a defect? No — it is a stated choice**, and this entry exists to say so once rather than have it
+re-litigated: both alternatives were considered in the change, and the *"sentence on the wizard card"*
+already tells a maintainer which three are refused and why
+(`apps/web/src/features/operating-mode.tsx:175-176`, held to `MAINTENANCE_CHORES` by
+`operating-mode.test.tsx`). An operator who reads one line and removes the type stops it.
+
+**What it costs to leave.** Daily noise in the one channel an operator watches for real failures, and — the
+part that outlives the noise — **no answer to *"what did last night's maintenance pass do?"***: which
+projects were due, which chores it created, which it refused, and whether it stopped on the dedicated budget.
+The pass already computes all four.
+
+**What "done" looks like.** The report published where an operator already looks, **not** a quieter log and
+**not** a new screen. Cheapest carrier: the **daily digest** (`notify.digest`, WP-32) — the same grain as the
+pass, a surface a human already reads, and a project-scoped message, which is what this report is. **WP-41 is
+the wrong home** for backlog 95/102's reason: this is a per-pass operational signal, not an org-wide
+statistic. If the digest is rejected, the fallback is the project settings page beside the maintenance card.
+Whoever takes it may then drop the refusal to `info` on repeat, because the refusal would have a reader.
+
+**Depends on / owner.** Depends on a notification band that exists (WP-32) and on nothing unbuilt. **No work
+package owns it.** Related: backlog **81** (the notifications outbox has no reader outside the digest) and
+**102** (a count that reaches a log line and no reader) — the same shape at two other features, which is
+worth knowing before anybody builds a third one-off reader.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -5567,7 +5869,7 @@ read; a column written as a delta was never protected by it.* So the census
 (`tasks-column-ownership.test.ts`) is the guard for every incremented column, and it caught this one
 immediately.
 
-### 20. **A matched ticket whose intake enqueue is lost is never started again, and nothing says so** (TODO — **WP-15c**, criterion now on its plan row)
+### 20. **A matched ticket whose intake enqueue is lost is never started again, and nothing says so** (**RESOLVED** at `38ea686`, WP-15c — `pipeline.intake.reconcile`, in exactly the shape this entry recommended; **re-confirmed at `<sha>`**, where WP-36 hung the class's other two recoveries on the same timer and stated at the line why this site is not a row of that table; kept for its evidence)
 **What is wrong.** The other half of entry 1's sentence, one layer in. Since WP-15d the intake handler
 **writes nothing**: `pipeline.intake` (`packages/application/src/pipeline/saga.ts:194`, priority 10) checks
 the 1:1 dedup and enqueues a `pipeline.outbound` job with `duty: 'intake_check'` through
@@ -5628,6 +5930,18 @@ exist), entry 17 / WP-15d (the move that opened the window), and WP-19's re-disp
 a **different** mechanism and does **not** cover this — replaying the same event position is skipped by the
 handler-execution record, which is the whole reason the recovery is task-shaped.
 
+**RESOLVED at `38ea686`, WP-15c; re-confirmed against the tree at `<sha>`** (refiner, session 5; file reads
+only, rule 66). `packages/application/src/pipeline/intake-reconcile.ts` is the recovery in the shape this
+entry recommended — matched tickets with no task row, a **new** `ticket.matched` rather than a re-dispatch,
+the inbox untouched, the grace equal to the interval — and it is **bounded to one attempt** by the mark this
+entry's class later asked every site for: `INTAKE_RECONCILER_COMPONENT` on the re-emitted event's actor, read
+by the next pass, with the residual stated at the line (*"recovering a ticket needs one crash in the window,
+a ticket that is not recovered needs two"*). WP-36 did **not** fold this site into `recovery/stranded.ts`'s
+table and says why at `stranded.ts:23-32`: its remedy is an event-log operation, not a job enqueue. It runs
+on the same timer, which is the *"one pass, one interval, one pool reservation"* backlog 101 asked for.
+**This is the worked example the other sites were modelled on, and the bound is the part that did not carry
+over** — backlog **105**.
+
 ### 36. **A lost curation wake-up loses one task's proposals, and nothing recovers it** (TODO, small — entry **20**'s cause at a second site, stated as a residual by WP-18b; **no work package owns the recovery**)
 **What is wrong.** The same mechanism as entry 20, one stage later: the `artifact.created` handler decides
 and enqueues the `knowledge.proposals` job through `context.afterCommit`
@@ -5679,6 +5993,18 @@ callback and assert the proposals still arrive.
 `pipeline.intake.reconcile` is the worked example of the recovery shape (a *new* event, not a re-dispatch,
 because `handler_executions` skips the old position). Cheapest home: whoever next touches
 `packages/application/src/knowledge/hygiene.ts`.
+
+**REMAINS after WP-36 — deferred, and for the first time the deferral is recorded in the source rather than
+only here** (refiner, session 5, at `<sha>`; file reads only, rule 66). WP-36 built the class's single pass
+(`packages/application/src/recovery/stranded.ts`, backlog **101**) and took two of the four sites. This one
+is **not** a row of that table, and `stranded.ts:34-40` states the same blocker this entry states, in this
+entry's own words — *"a curation that ran and proposed nothing is spelled identically to a curation that
+never ran"*, plus the `standard`-queue consequence that a blind re-enqueue writes a second set of proposals.
+So nothing changed about this entry except its cost to take: **the pass now exists**, and closing this site is
+a mark that the curation happened (this entry's first bullet) plus one row in a table whose shape, port,
+query pattern, grace period and log line are built. The "cheapest home" above stands, and gains an
+alternative that is now cheaper: a row in `stranded.ts` once the mark exists. The trigger is unchanged and
+still latent — no production deployment composes a runner, so no `LibrarianProposals` artifact exists to lose.
 
 ### 17. **The pipeline calls providers from inside an open database transaction** (**RESOLVED** at `8ae121c`, WP-15d — kept for its evidence; the residue is entry **19**, the class it exposed is entry **18**)
 **What is wrong.** Three event handlers call an integration provider while the handler's transaction
@@ -6749,6 +7075,33 @@ that nothing says **which of the two is intended** (19 in code, 20 in the file).
 the class is not closed either: `.env.example`'s stale paragraph and `db/config.ts`'s docblock now
 *point* rather than restate, which removes two of the eight sites' ability to go stale but leaves
 the rest.
+
+**WP-36 moved the floor again and is the first move that left every site consistent — recorded because a
+class entry is worth only the instances it carries** (refiner, session 5; read off the **uncommitted working
+tree** at `<sha>`, greps and file reads, no test run — rule 66). `maintenance.schedule` is a **seventh**
+pipeline worker: `POOL_RESERVATIONS.pipeline` is **7**, the `ROLE=all` floor is **21**
+(`2·1 + 1 + 2 + 7 + 4 + 1 + 1 + 2 + 1`), the shape is **`2N + 19`** — 21 at N=1, 27 at N=4 — and
+`.env.example` ships `APP_DB_POOL_MAX=22`. The sites checked, and all of them agree:
+`config.ts:363-378` (site 1 — the sum, the shape **and** the history line; it had gone stale a **third**
+time at WP-35, reading 19 against a floor of 20, and the repaired paragraph now says so about itself),
+`POOL_RESERVATIONS.pipeline`'s docblock (site 2, *"Seven since WP-36"*, naming the two workers composed by
+`apps/server/src/pipeline.ts` rather than by `createPipelineRuntime`), `.env.example:186-221` (site 4 — the
+operator paragraph **points** at the sum instead of carrying its own copy, which is this entry's own remedy,
+and the sum names all seven), `packages/infrastructure/src/db/config.ts:84-107` (site 6 — `poolMax: 21`,
+with the docblock stating the *relationship* rather than the arithmetic: it equals the floor with **no**
+slack and `.env.example` ships one more), and `config.test.ts:191-206,246` (site 7 — symbolic over
+`POOL_RESERVATIONS`, asserting **21**). Two harness values of the same knob moved with them:
+`test/e2e/support/instance.ts:106` (`'21'`) and `test/e2e/support/pipeline.ts:871` (`'22'`).
+**Two things are still owed, and neither is new.** (a) The value half's remainder — *which* of the two
+shipped defaults is intended (21 in code, 22 in the file) — restated verbatim in `db/config.ts`'s own
+docblock. (b) Site **3**, `UndersizedPoolError`'s message: it interpolates the pipeline and knowledge counts
+(derived, since WP-31 round 2) but still **enumerates** the rest in prose — *"pg-boss, the pipeline's N job
+workers, the knowledge base's M, the onboarding worker, the partition-maintenance cron and every HTTP
+request query"* (`config.ts:540`) — and has omitted the **bootstrap** worker since WP-35. The number an
+operator acts on is right; the list is one worker short, in the one site this entry has twice called
+derivable and the only one an operator reads at the moment the program refuses to start.
+**The transferable half held**: this sweep was driven from the **constant** rather than from the diff, which
+is exactly what the previous instance said it would take.
 
 ### 38. **`ROLE` splits the product across containers and no tier has ever started two processes with different roles** (TODO — **no work package owns it**; the general form of a risk WP-18b stated about one command)
 **What is wrong.** `ROLE` is the platform's scaling story — *“splitting the roles across containers is the
@@ -18097,8 +18450,295 @@ before the mutation (`61026bc2…`), which is precisely what rule 62 exists for.
 **revert a canary the way you applied it** — an in-place edit, never a git operation against an
 index that may hold a placeholder.
 
+### WP-36 — the maintenance pipeline
+
+**What shipped**: the reader `features.maintenance` has never had, a scheduler for an aggregate
+technical/02 defines with no table, the *dedicated budget*'s second carrier, backlog **62**'s read
+half, backlog **57**'s last three values, and the lost-wake-up class as one pass over a table of
+sites. Migration **0031** — a **data** migration, no new table.
+
+**1. The schedule has no table, and the decision is written where it binds.** technical/02:32's
+`ScheduledJob` names five fields; four are already in the project's own configuration document
+(`features.maintenance.{schedule, chores, budget_usd}` — where product/18's wizard column puts them)
+and the fifth, *last run*, is derivable from a row the platform already writes: a chore task's key
+**is** its period, `chore!<type>-<period>` under `unique (project_id, ticket_key, mode)`. So *"has
+this period's chore been created?"* is `tasks.findByTicket`, a double fire creates **one** task
+(asserted by counting rows in both the unit and the e2e tier), two replicas racing lose one insert to
+the index, and a `scheduled_jobs` table would be a second copy of a schedule a repository owns and
+could rewrite. technical/02:32 and :205 are **amended** rather than implemented (rule 8). The tick is
+a daily cron at **04:35** in the organisation's zone — after the hygiene (03:15), the partitions
+(03:20) and the price list (04:10), and the order matters: the `kb` chore is briefed from the report
+the 03:15 pass wrote. A weekly or monthly project is served by the same daily tick, because the
+*period key* decides what is due; a process that was down at 04:35 costs nothing.
+
+**2. Two chore types are performed and three are refused by name.** `MAINTENANCE_CHORES`
+(`packages/domain/src/maintenance/chores.ts`) is the table and it is
+`satisfies Record<MaintenanceChoreType, …>`, so a sixth type cannot fall through to *"performed"*.
+`kb` is briefed from WP-18b's `kb_health_reports` — **read, never recomputed**, which is what *"the
+`kb` chore already runs; wire it as one"* asks for — and `deps` from what WP-38's gate recorded in
+`tasks.dependencies`, for packages the registry called deprecated or has not published in a year.
+`flaky` (product/04:65: *"flaky detection is not implemented"*), `docs`
+(`policies.drift_without_direction` has no reader) and `lint` (backlog **49**/Q69: no run of any role
+may execute a project command) are refused, each with a named `warn` line, a named outcome in the
+report, and a sentence on the wizard card. **The refusals are at schedule time rather than in the
+schema**, deliberately: those values have parsed since the key existed and a project's whole
+`.agentic/config.yml` — which every stage of every task reads — must not start failing because a
+chore type was never built. The cost is one `warn` per refused type per pass per enabled project;
+the alternative is state whose only content is which refusal has been logged.
+
+**3. A chore is an ordinary `chore` task, and it is briefed.** One `tasks` row on the project's own
+template, `mode: 'normal'`, entered through `applyDecision` — the interpreter, the gates, the
+iteration limits, the ledger, the escalation and the workpad are the ones every task gets, and there
+is no second pipeline and no new state. **The WIP limit is honoured here, unlike in the shadow batch
+and the bootstrap**, and the difference is the point: a chore *is* delivery work and is dequeued on
+`task.completed`, where a shadow task never reaches it. The brief — the platform's own words about
+what it observed — is stored as `tasks.ticket_snapshot`, **redacted then cut** like every other
+external text, so the run reads what it is for out of its own prompt's `ticket` block and the
+identity lines still say `provider: platform`. Without it a scheduled chore would be *"an agent
+started on an identifier"* (rule 82), which is why the e2e's fake picks its scenario from the prompt.
+
+**4. Backlog 62's read half, and what it was costing.** `ticketReads.ticket` now answers `null` for
+a reference no provider issued, beside the three writes that have refused it since WP-25. Four kinds
+of task carry one, and `ensureTicketSnapshot` runs for every agent stage of a task with no snapshot:
+a project with a Jira binding was paying one doomed round trip per stage, one `failed` row in
+`integration_actions` and a `warn` about a ticket that does not exist. `review-only.ts`'s docblock
+said the snapshot stayed null *"because `ensureTicketSnapshot` finds no binding"*, which was true
+only for a project with **no** task-management binding; it and `discovery.ts`'s comment are
+corrected, and `task-management.ts`'s `createTicket` docblock no longer lists *"maintenance chore"*
+among its callers (product/19:126: the external touch is **merge requests**). technical/06:18's port
+sketch carried the same claim and is amended.
+
+**5. Backlog 57 is closed.** `RUN_MODE_BY_STAGE` beside `RUN_MODE_BY_TEMPLATE`, and the precedence
+rule is stated at the line: **the template wins**, because a template in the first table exists for
+one purpose and has one agent stage, while the second is about stages the *ticket* templates share —
+if the stage won, a one-off template reusing a shared stage id would silently take that stage's mode.
+(It is the opposite call from `status_mapping`'s, and both reasons are written where they bind.) The
+24-row walk is now 26 and complete, and a case asserts the collision from **both** sides, which no
+shipped template exercises. `discovery` is one more line in the template table. **The backfill is
+done rather than deferred**: migration 0031 mirrors the planner's rule exactly — `mode = 'normal'`
+in both statements, the stage half excluded for the four templates that have an entry of their own —
+because `runs.mode` is written once and a screen already renders it.
+
+**6. The dedicated budget reuses WP-34's mechanism and decides its own predicate.** The stage
+executor asks at admission, month in UTC, `spent + runBudgetUsd(stage) > cap`, through an optional
+port whose absence means *"not asked"* — WP-34's shape, with the pairing that makes absence safe
+being a **schedule** rather than a command. The predicate is **not** `tasks.template`, which the plan
+row proposed: a `chore` ticket a *human* filed runs on the same template, and charging their delivery
+to the maintenance cap would stop the batch for work maintenance never did. It is not `runs.mode`
+either, because a maintenance chore's runs are ordinary delivery runs (criterion 2). It is the
+platform-issued reference — `namesAMaintenanceChore`, which only this scheduler writes — and the
+integration test asserts the exclusion in both directions. The **scheduler** stops creating chores at
+the chore that would pass the cap (the countable effect is the tasks that do not exist); the
+**executor** stops a chore already created. Both are needed: a batch created before the month's spend
+reached the cap would otherwise run to the end of the template.
+
+**7. The lost-wake-up class, as one pass over a table (criterion 10, backlog 101).**
+`packages/application/src/recovery/stranded.ts` carries two rows — the history bootstrap's lost
+`collect` (**101**) and the ask's lost run (**84**) — each stating what to look for, how to
+re-enqueue and what makes a wrong guess harmless. It runs on the **intake reconciliation's own
+timer** rather than on this row's cron, and that is the "or states in writing why" branch of the
+criterion: a daily cron is the wrong grain for a recovery (a stranded batch would wait a day), while
+that timer is already a general schedule with the one grace period the class needs — one pass, one
+interval, one pooled connection, which is exactly what entry 101 asks for. Entry **20** stays where
+it is: its remedy is appending a *new* event with a once-per-ticket mark, not a job enqueue, and
+folding it in would widen the table's contract until it said nothing. Entry **36** is deferred and
+named at the line: *a curation that ran and proposed nothing is spelled identically to one that never
+ran*, and its queue is `standard` with no singleton key, so a blind re-enqueue would write a second
+set of proposals.
+
+**8. A seam that could only reproduce the loss it was written for.** `PipelineComposition.jobs` was
+applied inside `composePipeline`, so it wrapped the **pipeline's** `Jobs` and nothing else — and
+`startHistoryBootstrap` enqueues through the instance `startRuntime` holds. The e2e that drops the
+`collect` wake-up therefore dropped nothing, and the first run failed on *"the wake-up the command
+asked for was swallowed"*. It is applied in `startRuntime` now, once, to the instance every
+composition of the process shares; `composePipeline` takes it already wrapped. Measured rather than
+reasoned: the intake-recovery e2e still passes, which is the other half.
+
+**9. Seven canaries, each file restored to its pre-mutation md5** (rules 3, 21, 62, 77, 88; in-place
+with the Edit tool or a script, digests read before and after, and the unmutated run calibrated
+first). Dropping `!namesAProviderTicket` from the ticket read → the new both-directions case in
+`integrations.test.ts`. Making the maintenance cap unreadable → *"pauses the chore when the month's
+maintenance spend has reached the cap"*. Ignoring `findByTicket`'s answer → *"creates one task when
+the pass runs twice in the same period"*. Flipping `lint`'s refusal to `null` → two cases, one per
+ring. Dropping the stage lookup from `runModeFor` → the 26-row walk **and** the precedence case.
+Turning the batch's `break` into a `continue` → *"stops the batch when the dedicated budget is
+spent"*. Dropping the ask re-enqueue → *"re-enqueues a pending ask on its own singleton key"*.
+
+**10. Two figures the tests measured rather than reasoned.** (a) The maintenance cap case was first
+written at `budget_usd: 10` for **both** directions and the positive one paused too — at the
+*implementation* stage, whose own per-run cap is 15 (`DEFAULT_STAGE_RUN_BUDGET_USD`), so the guard
+was right and the fixture was wrong; the positive case is 100 now and the negative 9.80 of 10 against
+`refinement`'s 2. (b) The stranded-work integration fixture put the *in-flight* row one second
+**before** the cutoff, so both cases found two rows where they expected one — the query asks for rows
+*older than* `now - grace`, and a row inside the grace window is the one that still has its job
+coming.
+
+**Assumptions a reviewer may reverse.** (a) The refusals are at schedule time rather than in the
+config schema (point 2). (b) The brief lives in `tasks.ticket_snapshot` rather than in a column of
+its own: the column is *the words of the work item this task is about*, and for a scheduled chore the
+platform is the author — a new column would need a new prompt block for the same content. (c) The
+month is the budget's window, reusing `monthStartUtc`, where product/18 names no window for this
+feature (it does for shadow mode). (d) `PLATFORM_DEFAULT_CONFIG.features.maintenance.chores` keeps
+technical/12's `[deps, flaky, docs]`, two of which are refused — changing a documented default was
+the alternative, and this way a stock project that turns the feature on *sees* the refusals rather
+than being quietly given a different list. (e) The `deps` chore's *unmaintained* threshold is
+**365 days**, stated at the constant.
+
+**Needs measurement (rule 66, not run here).** Criterion 9's question is still open, and **round 2
+narrowed it to its true size**: only **two** of the five chore types are performable on this build
+(`kb` and `deps` — the other three are refused by name), so the largest batch this build can release
+for one period is **two tasks**, not five. The e2e schedules one chore on a project with nothing else
+in flight; what two chores do to a project's WIP limits when other delivery work is already queued is
+what remains unmeasured, and it is one task's difference rather than four. The honest figure this row
+can give is unchanged: a chore costs what its template costs (the e2e's five scripted runs at 0.40
+each). A five-chore batch becomes possible only when `flaky`, `docs` or `lint` gains a performer, and
+the row that builds one owns the measurement.
+
+**Rule 83 — sentences this change falsified, found by grep and corrected.** The feature card's
+caveat (*"Stored; no scheduler runs a maintenance batch in this build"*) and the budgets panel's
+*"The maintenance cap has no runner in this build and bounds nothing yet"*; `createTicket`'s
+docblock and technical/06:18's port sketch; `review-only.ts`'s *"finds no binding for it"* and
+`discovery.ts`'s comment; technical/02:32 and :205; technical/03:42's stage-nullability examples,
+which named the librarian, discovery and maintenance runs as runs with **no stage** — all three are
+stages of a task; the pool arithmetic in four places (`config.ts`'s sum and its per-worker paragraph,
+`.env.example`, `db/config.ts`'s quotation, `config.test.ts`'s count and `test/e2e/support/*`'s two
+floors), which had **already** gone stale at WP-35 by one — the sum read 19 against a floor of 20,
+backlog 22's site 1 for the third time. The floor is **21** now and `.env.example` ships 22.
+
+**For CLAUDE.md's "Where to look", if the orchestrator wants it** (this file is the orchestrator's,
+so the wording is here rather than there): *"**The maintenance pipeline** (WP-36): a daily cron
+(`maintenance.schedule`, `exclusive`) walks the projects and creates one ordinary `chore` task per
+due chore type per period — `packages/application/src/maintenance/scheduler.ts`, and there is **no
+`scheduled_jobs` table**: a chore's platform-issued key `chore!<type>-<period>` under `unique
+(project_id, ticket_key, mode)` is what makes a second fire create nothing, which is technical/02:32
+amended rather than implemented. Two of product/18:31's five chore types are performed — `kb` from
+the report WP-18b's nightly hygiene already writes, `deps` from what WP-38's gate recorded — and
+`flaky`, `docs` and `lint` are **refused by name** with the reason per type in
+`packages/domain/src/maintenance/chores.ts`; `lint`'s is backlog 49. The chore's brief is the
+platform's own words in `tasks.ticket_snapshot`, so the run reads what it is for out of its own
+prompt. The dedicated budget is WP-34's mechanism with this feature's own predicate — the
+platform-issued reference, never `tasks.template`, because a human's `chore` ticket is on the same
+template. `packages/application/src/recovery/stranded.ts` is the lost-wake-up table (backlog 101):
+two of the four sites, on the intake reconciliation's timer, with the other two named at the line."*
+
+**Review round 2:** one major, two minors, two nits. Verdicts: `verify` **PASS** (exit 0),
+`verify:integration` **PASS** (exit 0, 433 tests), `verify:e2e` **PASS** (exit 0, 161 tests /
+34 files).
+
+**1. The major — the pass started a second *paid* run for an ask that had already had one, once a
+minute, for ever** (backlog **105**). Three things were wrong and each is closed separately.
+
+ - **The predicate.** `strandedAsks` asked *"pending and older than the grace"* and ignored
+   `task_asks.run_id`, which `attachRun` fills in the transaction that creates the run. So every ask
+   whose run was still working after 60 s was "stranded" (the `warn` said *"no run to answer it"*
+   about a row that had one), and an ask left `pending` by a run **another writer ended** — the
+   measured case `ask-pipeline.test.ts` pins — was re-enqueued into a new run, with nothing to
+   collapse it: the `stately` singleton key only collapses a wake-up that is still queued, and a run
+   that wrote no answer wrote no `cost_entries` row for any budget to notice. `and a.run_id is null`
+   is the fix, and the reviewer's reproduction is now a test at **three** tiers (below).
+ - **The bound.** The pass wrote nothing, so neither query could tell a row it had already recovered
+   from one it had never seen — idempotency bounds the effect of *one duplicate*, not the number of
+   attempts. Migration **0032** adds `recovery_attempted_at` to `history_bootstrap_batches` and
+   `task_asks`: **one attempt per stranded row**, then the **ending** each feature already has a
+   writer for — `markEmpty(batch, reason)` and `recordRefusal(ask, 'failed', reason)`, called through
+   those features' own stores rather than re-spelled as SQL here. The reason names the attempt that
+   did not take, because it is what the operator reads off the row. Both rows of the table now state
+   *what to look for, how to re-enqueue and **what bounds it***, which is criterion 10's third
+   clause; the history-bootstrap row states its bound at the line with backlog 105's number, and its
+   ending is the one entry 101 asked for — a batch nobody can clear is worse than a batch that says
+   it failed, because `history_bootstrap_batches_one_live` makes a stuck batch a permanent
+   `already_running`.
+ - **The ending's window is not the grace, and that is the decision this change is most exposed on.**
+   `STRANDED_ENDING_AFTER_MS` is **one hour** (`max(graceMs, …)`), derived at the constant: being
+   *early* with an ending kills work that was about to happen, and the longest a re-enqueued job can
+   legitimately take to touch its row is the queue itself — `task.ask` runs at concurrency 1 with a
+   30-minute expiry, so a queued ask can sit behind another ask's whole lease, and `bootstrap.history`
+   retries twice from 60 s with backoff. Being *late* only means a dead row says `pending` for an
+   hour rather than a minute, which is what it already said for ever. The **mark is committed before
+   the enqueue**, deliberately: a crash between them costs the row its one attempt and it reaches its
+   ending, where the reverse order would restore the unbounded loop.
+
+**The reproduction, measured.** `test/e2e/pipeline/ask.e2e.test.ts` now drops the first `task.ask`
+wake-up (site **84**'s missing drop-the-enqueue e2e — the nit), watches the recovery answer the
+question anyway, then puts the row back into the measured state (`pending`, its run kept, the mark
+cleared deliberately so the *predicate* is what is under test) and lets **two** passes run. The
+waiting is on the pass's own effect on another row — a sentinel ask seeded stranded, answered by the
+pass — rather than on a duration. **Before the fix** (canary: `run_id is null` removed) the poisoned
+ask came back `answered` by a **different run id** within two ticks: ask runs 3 → 4, a second paid
+run. **After**, the row is untouched — still `pending`, still its original `run_id`, and its
+`recovery_attempted_at` still null — with three ask runs (the recovered one and the two sentinels),
+three run specs and one `cost_entries` row for the recovered run.
+
+**Residual, stated at the line rather than implied.** An ask that is `pending` **with** a run attached
+is now outside the table in both directions: never re-enqueued, never ended, so it stays `pending`.
+That row is not a lost wake-up — its wake-up arrived and its run died — and answering it needs
+`runs.status`, a different question with no cheap idempotency. **For the refiner: backlog 105 is
+resolved by this change** (mark, ending, the narrowed ask query and the `warn` that now says what the
+pass knows), and what it leaves behind is exactly that residual plus backlog **106**'s first half —
+the chunk-level `record` site, which is a third row of the table and was not built here.
+
+**2. Minor — the wrapped `Jobs`** (backlog **106**, second half). `startRuntime` handed
+`jobsRuntime.jobs` to the knowledge, onboarding and history-bootstrap runtimes while the docblock
+beside the wrap claimed every composition shared the wrapped instance — and two sites of the
+lost-wake-up class are enqueued from those. All three now take `jobs`, and so do the partition and
+price-list crons, so **the raw instance is named exactly twice in the file**: the branch that composes
+the real `Jobs` and the argument the seam wraps. That is held by a census rather than by a sentence
+(`apps/server/src/pipeline-census.test.ts`, the file's own shape), calibrated on the number of
+`jobs,` arguments so a file that stopped matching fails rather than passing vacuously. The two
+docblocks that carried the stale list now point at the census.
+
+**3. Minor — three docblocks detached by insertion** were moved back onto what they describe:
+WP-35's bootstrap-cap block (it had come to introduce WP-36's maintenance check, and its "the
+difference from the shadow budget above" now names both monthly caps), `DISCOVERY_TEMPLATE`'s in
+`templates.ts`, and the onboarding comment in `packages/application/src/index.ts`.
+
+**4. Nits.** (a) `scheduler.ts` said *"stops at the chore that would pass the cap"* and compared
+`spent >= cap`; the sentence now says *"at or past"* and states why this side does **not** add a run
+budget the way the executor does (it is deciding whether to create a task, not to admit a run), with
+the case asserted **at** the value and one past it (`10` and `10.01` of 10) against the 9.99 case
+that was already there. (b) `packages/contracts/src/common.ts` still said backlog 57's modes fall
+through to `normal`; it now says WP-36 closed it. (c) Criterion 9's note is corrected above: two chore
+types are performable, so a batch is at most **two** tasks.
+
+**5. Six canaries, each dead by a named test, each file restored to its pre-mutation md5** (rules 3,
+21, 62, 77, 88 — mutated in place with a script, digests read before and after). Dropping
+`run_id is null` → the integration case *"is found only when it is old, still pending and has no run
+attached"* **and** the new e2e reproduction. Dropping the attempt window from the bootstrap query →
+three integration cases. Ignoring the ask's mark (`if (true)`) → *"does not re-enqueue an ask it has
+already attempted"* and the mixed-pass case. `spent >= cap` → `>` → the cap case at the value.
+Restoring `jobs: jobsRuntime.jobs` in one worker composition → the new census case.
+
 ## Discovered work — session 5 (not in plan)
 
+- **Two feature cards still say a shipped feature does nothing** (WP-36, found while correcting the
+  maintenance card's). `FEATURE_CARDS` in `apps/web/src/features/operating-mode.tsx` carries
+  *"Digest and quiet hours — Stored; nothing in this build sends a notification of any kind
+  (WP-32)"*, and `FEATURES_WITHOUT_A_SWITCH` carries *"Ask the task — not built in this release"*.
+  **Both shipped** (WP-32 and WP-31), so a maintainer reading the wizard is told two working
+  features do not work. Not corrected here for scope, and each is one line plus the assertion the
+  maintenance card just got (`operating-mode.test.tsx` compares the card with the platform's own
+  table, which is the shape either of these could reuse). **No work package owns it**; cheapest is
+  whoever next edits that file. It is standing rule **83** at its own site: the sentence nearest a
+  fix is the one nobody re-reads, and these two were never re-read after the fix.
+  *Refiner (session 5): **folded into backlog 72**'s adjacent note rather than given a number — that note
+  is where the obligation was already recorded (*"the caveat line is deleted in the same change"*, one per
+  feature row), two of its three rows paid it and WP-32's did not; the `FEATURES_WITHOUT_A_SWITCH` line is
+  added there as a second site the note did not cover, with **WP-41 named as the wrong home**.*
+- **A refused chore type is named once per pass per project, which is daily** (WP-36). The scheduler
+  logs a `warn` for every configured chore type this build cannot perform, on every tick — seven
+  lines a week for a weekly project that configured `flaky`. The alternatives are both worse than
+  the noise: refusing the value in the configuration schema would make a project's whole
+  `.agentic/config.yml` fail on a value that has parsed since the key existed, and suppressing the
+  repeat needs stored state whose only content is which refusal has been logged. The honest close is
+  a **read surface** — the pass's own report published somewhere an operator looks — rather than a
+  quieter log. **No work package owns it**; it is cheap to leave because an operator who reads the
+  line and removes the type stops it.
+  *Refiner (session 5): **filed as backlog 107**, and the answer to "defect or stated choice" is **stated
+  choice** — recorded once so it is not re-litigated. Two numbers added: the shipped default `chores`
+  list keeps `[deps, flaky, docs]`, so a **stock** enabled project logs **two** refusals per daily pass
+  (~730 lines/project/year), and the wizard card already names the three refusals. The entry's cause is
+  the missing read surface rather than the log, and the cheapest carrier named is the **daily digest**
+  (`notify.digest`, WP-32) — same grain, a surface an operator already reads; **WP-41 is the wrong home**.*
 - **`StageExecutorOptions.concurrency` is declared and read by nothing** (WP-35 review round 2). The
   field carries a paragraph about the connection pool — *"each concurrent execution holds one
   connection during each of its two transactions, on top of the dispatcher's `2 × concurrency + 1`"*

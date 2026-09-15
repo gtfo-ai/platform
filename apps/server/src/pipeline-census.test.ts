@@ -44,6 +44,7 @@ const read = (path: string): string =>
 const RUNTIME = 'packages/application/src/pipeline/runtime.ts';
 const EXECUTOR = 'packages/application/src/pipeline/stage-executor.ts';
 const COMPOSITION = 'apps/server/src/pipeline.ts';
+const ROOT = 'apps/server/src/runtime.ts';
 
 /**
  * Where each options interface of the runtime lives.
@@ -256,5 +257,45 @@ describe('the stage executor’s own options', () => {
     expect(supplied.has('budgets')).toBe(true);
     expect(supplied.has('shadow')).toBe(true);
     expect(supplied.has('bootstrap')).toBe(true);
+  });
+});
+
+/**
+ * **The `Jobs` every composition of this process enqueues through is the one `startRuntime` wrapped.**
+ *
+ * PROGRESS backlog **106**, and the same shape as the census above: WP-36 moved
+ * {@link PipelineComposition.jobs}'s seam out of `composePipeline` and into `startRuntime` so that
+ * the drop-the-enqueue reproduction of the lost-wake-up class would cover more than the pipeline's
+ * own enqueues — and left the three **worker** runtimes (knowledge, onboarding, history bootstrap)
+ * taking `jobsRuntime.jobs`, while the docblock beside the wrap listed one of them as covered. Two
+ * of that class's sites are enqueued from those runtimes, so the seam read as if it tested the
+ * class and could only reach one site of it.
+ *
+ * The parse is deliberately blunt: **after the wrap, the raw instance is not named again**. It is a
+ * text check like the rest of this file, so it cannot see an alias (`const raw = jobsRuntime.jobs`)
+ * — which is why the calibration below demands that the wrapped identifier be passed several times,
+ * so a file that stopped matching at all fails here rather than passing vacuously.
+ */
+describe('the jobs seam every composition shares', () => {
+  const rootSource = read(ROOT);
+
+  it('names the raw instance only where it is wrapped, and for the lifecycle it owns', () => {
+    const raw = [...rootSource.matchAll(/jobsRuntime\.jobs/g)].length;
+    // Exactly the two inside `options.pipeline?.jobs === undefined ? jobsRuntime.jobs : options.pipeline.jobs(jobsRuntime.jobs)`
+    // — the branch that composes the real instance, and the argument the seam wraps.
+    expect(raw).toBe(2);
+    expect(
+      /\?\s*jobsRuntime\.jobs\s*:\s*options\.pipeline\.jobs\(jobsRuntime\.jobs\)/.test(rootSource),
+    ).toBe(true);
+    // `start`/`stop` are the runtime's own and stay on it: the seam is about enqueues.
+    expect(/jobsRuntime\.(start|stop)\(\)/.test(rootSource)).toBe(true);
+  });
+
+  it('is calibrated: the wrapped instance is what the compositions are actually handed', () => {
+    // Without this, deleting every `jobs` argument from the file would make the case above pass.
+    // Thirteen `jobs,` sites today (counted off the file): the pipeline, the six command factories, the two crons and the three
+    // worker runtimes — counted rather than listed, because the list is what went stale.
+    const passedWrapped = [...rootSource.matchAll(/(?:^|[\s(,{])jobs,/g)].length;
+    expect(passedWrapped).toBeGreaterThan(5);
   });
 });

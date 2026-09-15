@@ -22,7 +22,7 @@
  * are written in **one** transaction by the recorder, so waiting on the batch row bounds all three,
  * and the provider reads all happened before the first run started.
  */
-import type { RunSpec } from '@platform/application';
+import { JOB_QUEUES, type Jobs, type RunSpec } from '@platform/application';
 import { MAX_HISTORY_EVIDENCE_PER_PROPOSAL } from '@platform/contracts';
 import { readDataBlocks } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -137,9 +137,16 @@ const signIn = async (baseUrl: string): Promise<Client> => {
   return client;
 };
 
-const start = async (options: { readonly capUsd?: number } = {}): Promise<PipelineE2E> => {
+const start = async (
+  options: {
+    readonly capUsd?: number;
+    readonly jobs?: (jobs: Jobs) => Jobs;
+    readonly label?: string;
+  } = {},
+): Promise<PipelineE2E> => {
   const pipeline = await startPipeline({
-    label: 'bootstrap',
+    label: options.label ?? 'bootstrap',
+    ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
     tickets: [],
     config: {
       version: 1,
@@ -165,9 +172,42 @@ const start = async (options: { readonly capUsd?: number } = {}): Promise<Pipeli
     },
     scenarios: featureScenarios,
     scenarioFor: (spec) => (spec.stage === 'history_mining' ? scenarioFromPrompt(spec) : undefined),
+    env: {
+      // A one-second recovery interval: the same number is the gap between passes **and** the age a
+      // stranded row must reach, which is the whole point of it being one knob
+      // (`intake-reconcile.ts`). The default 60 s is longer than this suite may wait.
+      APP_INTAKE_RECONCILE_INTERVAL_MS: '1000',
+    },
   });
   return pipeline;
 };
+
+/**
+ * Swallows the **first** `collect` wake-up: exactly what a crash between the command's commit and
+ * its `Jobs.enqueue` would cost (PROGRESS backlog **101**, WP-36's criterion 10).
+ *
+ * The first only, because the recovery's own re-enqueue is the second — a seam that swallowed every
+ * one would be testing that the bootstrap cannot work rather than that the recovery does (the
+ * reasoning `intake-recovery.e2e.test.ts` states for entry 20).
+ */
+const dropFirstCollect = (dropped: string[]) => (jobs: Jobs) => ({
+  ...jobs,
+  enqueue: async <TData extends Record<string, unknown>>(request: {
+    queue: string;
+    data?: TData;
+  }) => {
+    const kind = (request.data as { kind?: string } | undefined)?.kind;
+    if (
+      request.queue === JOB_QUEUES.historyBootstrap &&
+      kind === 'collect' &&
+      dropped.length === 0
+    ) {
+      dropped.push(String((request.data as { batch_id?: string } | undefined)?.batch_id));
+      return { status: 'enqueued' as const, jobId: 'dropped-on-the-floor' };
+    }
+    return jobs.enqueue(request as never);
+  },
+});
 
 /** The history a team merged: four merge requests, one of them argued about. */
 const seedHistory = (pipeline: PipelineE2E): void => {
@@ -460,5 +500,60 @@ describe('a history bootstrap on a project’s merged history', () => {
       [pipeline.projectId],
     );
     expect(batch?.completed_at).toBeNull();
+  }, 180_000);
+
+  /**
+   * **PROGRESS backlog 101**, and the site backlog 101 calls the only one of the four a human
+   * cannot work around: `history_bootstrap_batches_one_live` admits one live batch per project, so
+   * a batch stranded at `collecting` turns every later attempt into a permanent `already_running`
+   * and the operator's only way out is `psql`.
+   *
+   * The reproduction is entry 20's, one feature on: **drop the enqueue** — killing a process at
+   * that microsecond boundary is not a test — and read the recovery back from the **row's own
+   * status** rather than from a return value (rule 79).
+   */
+  it('recovers a batch whose collect wake-up was lost, and the operator sees it finish', async () => {
+    const dropped: string[] = [];
+    const pipeline = await start({ jobs: dropFirstCollect(dropped), label: 'bootstrap-recovery' });
+    harness = pipeline;
+    seedHistory(pipeline);
+    const client = await signIn(pipeline.instance.baseUrl);
+
+    const created = await startBootstrap(client, pipeline.projectId, 'boot-lost');
+    expect(created.status).toBe(202);
+    expect(dropped, 'the wake-up the command asked for was swallowed').toHaveLength(1);
+
+    // The loss, as an operator meets it: a batch that says it is collecting, with no chunk to show
+    // for it — and, until this pass existed, nothing that would ever move it.
+    const strandedRows = await pipeline.query<{ status: string; chunks: string }>(
+      `select b.status,
+              (select count(*)::text from history_bootstrap_chunks c where c.batch_id = b.id) as chunks
+         from history_bootstrap_batches b where b.project_id = $1`,
+      [pipeline.projectId],
+    );
+    expect(strandedRows[0]).toMatchObject({ status: 'collecting', chunks: '0' });
+
+    // …and the recovery pass — the same timer the intake reconciliation runs on — enqueues the
+    // collect job again, which is read back from the batch's own status.
+    await pipeline.waitFor('the stranded batch to be collected after all', async () => {
+      const rows = await pipeline.query<{ status: string }>(
+        'select status from history_bootstrap_batches where project_id = $1',
+        [pipeline.projectId],
+      );
+      return rows[0]?.status !== 'collecting';
+    });
+
+    const [batch] = await pipeline.query<{ status: string }>(
+      'select status from history_bootstrap_batches where project_id = $1',
+      [pipeline.projectId],
+    );
+    expect(batch?.status).toBe('mining');
+    const chunks = await pipeline.query<{ count: string }>(
+      `select count(*)::text as count from history_bootstrap_chunks c
+         join history_bootstrap_batches b on b.id = c.batch_id
+        where b.project_id = $1`,
+      [pipeline.projectId],
+    );
+    expect(Number(chunks[0]?.count)).toBeGreaterThan(0);
   }, 180_000);
 });

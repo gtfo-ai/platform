@@ -47,6 +47,7 @@
 import { type AskRuntimeOptions, composeAsk } from '../ask/runtime.js';
 import type { EventHandler } from '../events/handler.js';
 import { markTransactions } from '../events/open-transaction.js';
+import type { MaintenanceSpendReader } from '../maintenance/ports.js';
 import { startDigestRuntime } from '../notify/digest.js';
 import { notifyHandlers } from '../notify/handlers.js';
 import type { NotifyOptions } from '../notify/options.js';
@@ -132,6 +133,16 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * create a mining task on a build with no bootstrap store — `collectHistory` takes the writer.
    */
   readonly bootstrap?: StageExecutorBootstrapPort;
+  /**
+   * The maintenance scheduler's spend reader (WP-36) — `features.maintenance.budget_usd`'s carrier.
+   *
+   * **Optional** for {@link PipelineRuntimeOptions.bootstrap}'s reason and with the same pairing:
+   * this runtime registers no maintenance handler (the schedule is a cron the composition root
+   * starts, beside `registerPartitionMaintenance`), so its absence promises no consumer for
+   * anything; what it changes is the stage executor's admission, and a build with no scheduler
+   * creates no chore to admit.
+   */
+  readonly maintenance?: MaintenanceSpendReader;
 }
 
 export interface PipelineRuntime {
@@ -166,6 +177,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     shadow: options.shadow,
     // WP-35: the history bootstrap's per-batch cap, asked only for a task on that template.
     ...(options.bootstrap === undefined ? {} : { bootstrap: options.bootstrap }),
+    // WP-36: the maintenance budget, asked only for a chore this platform scheduled.
+    ...(options.maintenance === undefined ? {} : { maintenance: options.maintenance }),
     ...(logger === undefined ? {} : { logger }),
   });
 

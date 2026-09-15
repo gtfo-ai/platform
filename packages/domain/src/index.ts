@@ -50,6 +50,8 @@ export * from './knowledge/query.js';
 export * from './knowledge/retrieval.js';
 export * from './knowledge/sanitise.js';
 export * from './knowledge/tokens.js';
+// The maintenance pipeline's chore catalogue and its brief — product/18:31 (WP-36)
+export * from './maintenance/chores.js';
 export * from './permissions.js';
 // The pipeline interpreter (WP-15)
 export * from './pipeline/interpreter.js';

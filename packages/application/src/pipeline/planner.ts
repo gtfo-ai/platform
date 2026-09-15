@@ -37,6 +37,7 @@ import type {
   Id,
   IsoDate,
   IsoDateTime,
+  Slug,
 } from '@platform/contracts';
 import { communicationLanguageSchema } from '@platform/contracts';
 import {
@@ -45,6 +46,7 @@ import {
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
   DEFAULT_READ_ONLY_ALLOW,
+  DISCOVERY_TEMPLATE_ID,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isPromptExcludedArtifact,
   narrowCommandPolicy,
@@ -566,13 +568,10 @@ const promptDocument = (document: ContextPackDocument) => ({
  * `normal` to a human). `RUN_MODE_BY_TEMPLATE_STAGE_MODES` below is the test's half of the same
  * question.
  *
- * **What this row closed and what it did not.** WP-25 owes `linter` (backlog 57 records the
- * obligation on this row), and `review_only` was WP-24's. `retro`, `librarian` and `discovery` are
- * still unmapped: the first two are **stages** of the ticket templates rather than templates of
- * their own, so mapping them needs a second lookup keyed by stage — a change with its own
- * consequence for every run of every finished task — and `discovery` is WP-21's template. Backlog 57
- * recommends taking those three together, and doing them here would be this work package deciding
- * what another one's column means.
+ * **Backlog 57 is closed at WP-36**, which took the three values the earlier rows left: `review_only`
+ * was WP-24's, `linter` WP-25's, `bootstrap` WP-35's, and `discovery` is one more line here.
+ * `retro` and `librarian` are **stages** rather than templates and are {@link RUN_MODE_BY_STAGE}
+ * below.
  */
 export const RUN_MODE_BY_TEMPLATE: Readonly<Record<string, RunSpec['mode']>> = {
   [REVIEW_ONLY_TEMPLATE_ID]: 'review_only',
@@ -580,6 +579,31 @@ export const RUN_MODE_BY_TEMPLATE: Readonly<Record<string, RunSpec['mode']>> = {
   // WP-35. `runs.mode` is what the run screen and the statistics read, and a mining run that called
   // itself `normal` would be backlog 57's fifth instance in the work package that had the choice.
   [HISTORY_BOOTSTRAP_TEMPLATE_ID]: 'bootstrap',
+  // WP-36, backlog 57's `discovery`: WP-21's template, whose one agent stage is the whole task.
+  [DISCOVERY_TEMPLATE_ID]: 'discovery',
+};
+
+/**
+ * `runs.mode` by **stage** — the two upkeep runs every finished ticket produces (WP-36, backlog 57).
+ *
+ * `retrospective` and `librarian` are stages of all three *ticket* templates rather than templates
+ * of their own, so a template-keyed table cannot reach them: six of the walk's rows recorded
+ * `normal` until this one existed, which made *"what did delivery cost and what did upkeep cost"* —
+ * product/16's own question, and the one a maintenance pipeline makes somebody ask — unanswerable
+ * from the column that exists to answer it.
+ *
+ * **Which key wins when both match: the template.** A template that is in
+ * {@link RUN_MODE_BY_TEMPLATE} exists for exactly one purpose and has one agent stage, so its value
+ * is a statement about the whole task; this table is about stages the *ticket* templates share. If
+ * the stage won instead, a one-off template that happened to reuse a shared stage id would silently
+ * take that stage's mode — the shape of the defect backlog 57 records, one layer in. (It is the
+ * opposite call from `status_mapping`'s, where the stage wins because *there* the stage id is the
+ * more specific statement about a ticket's board column; the two questions are different and the
+ * reasons are written at both.)
+ */
+export const RUN_MODE_BY_STAGE: Readonly<Record<string, RunSpec['mode']>> = {
+  retrospective: 'retro',
+  librarian: 'librarian',
 };
 
 /**
@@ -605,16 +629,21 @@ const checkoutRefOf = (request: StageRunRequest): string | null =>
 /**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
  *
- * `shadow` comes from `tasks.mode`, which is the shadow switch `IntegrationActionExecutor` reads and
- * which deliberately stays two-valued; everything else comes from the **template**, because that is
- * where "this run is the Code review stage alone, on a human merge request" and "this run is a lint
- * of one ticket" are expressed.
+ * Three questions in one order, and the order is the rule. `shadow` comes from `tasks.mode`, which
+ * is the shadow switch `IntegrationActionExecutor` reads and which deliberately stays two-valued;
+ * then the **template**, because that is where "this run is the Code review stage alone, on a human
+ * merge request" and "this run is a lint of one ticket" are expressed; then the **stage**, for the
+ * two upkeep runs every ticket template shares. The template beats the stage for the reason written
+ * at {@link RUN_MODE_BY_STAGE}.
+ *
+ * The column means *what this run was for*, never *what it was allowed to do* — the permissions are
+ * the three least-privilege tables above, and nothing branches on this value.
  */
-const runModeFor = (task: StoredTask): RunSpec['mode'] => {
+const runModeFor = (task: StoredTask, stage: Slug): RunSpec['mode'] => {
   if (task.task.mode === 'shadow') {
     return 'shadow';
   }
-  return RUN_MODE_BY_TEMPLATE[task.task.template] ?? 'normal';
+  return RUN_MODE_BY_TEMPLATE[task.task.template] ?? RUN_MODE_BY_STAGE[stage] ?? 'normal';
 };
 
 export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRunPlanner => {
@@ -754,7 +783,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         projectId: task.task.projectId,
         stage: stage.id,
         role,
-        mode: runModeFor(task),
+        mode: runModeFor(task, stage.id),
         attempt: request.attempt,
         // The human's override for this attempt first (WP-15i), then the project's stage
         // configuration, then the template's default. One attempt only: the override rides the

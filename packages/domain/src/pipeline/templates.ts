@@ -391,6 +391,15 @@ export const CHORE_TEMPLATE: PipelineTemplate = {
 };
 
 /**
+ * The id {@link DISCOVERY_TEMPLATE} is registered under in {@link SHIPPED_TEMPLATES}.
+ *
+ * Named here rather than only in `application/onboarding/discovery.ts` since WP-36, because a
+ * second reader appeared: `RUN_MODE_BY_TEMPLATE` maps it to `runs.mode = 'discovery'`, and a
+ * template id spelled in two rings is a string that drifts (standing rule 41).
+ */
+export const DISCOVERY_TEMPLATE_ID = 'discovery';
+
+/**
  * product/06 § "Step 2 — Technical discovery", as a pipeline template (WP-21).
  *
  * **Discovery is a stage of a one-off task, not a job with a `RunSpec` of its own**, and the
@@ -581,7 +590,7 @@ export const HISTORY_BOOTSTRAP_TEMPLATE: PipelineTemplate = {
 
 export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   ...TICKET_TEMPLATES,
-  discovery: DISCOVERY_TEMPLATE,
+  [DISCOVERY_TEMPLATE_ID]: DISCOVERY_TEMPLATE,
   review_only: REVIEW_ONLY_TEMPLATE,
   ticket_lint: TICKET_LINT_TEMPLATE,
   [HISTORY_BOOTSTRAP_TEMPLATE_ID]: HISTORY_BOOTSTRAP_TEMPLATE,

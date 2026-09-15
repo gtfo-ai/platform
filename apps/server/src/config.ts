@@ -359,10 +359,10 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
  * that nobody has to reassemble it from six docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 6` pipeline workers `+ 4` knowledge workers
- * `+ 1` onboarding worker `+ 2` HTTP `+ 1` maintenance = **19**, against `.env.example`'s
- * `APP_DB_POOL_MAX=20`. The *shape* is **`2N + 17`** since WP-31 registered `task.ask` beside
- * them, and the changes behind it are
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 7` pipeline workers `+ 4` knowledge workers
+ * `+ 1` onboarding worker `+ 1` bootstrap worker `+ 2` HTTP `+ 1` maintenance = **21**, against
+ * `.env.example`'s `APP_DB_POOL_MAX=22`. The *shape* is **`2N + 19`** since WP-36 registered
+ * `maintenance.schedule` beside them, and the changes behind it are
  * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
  * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
  * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
@@ -371,8 +371,11 @@ export const SERVER_CONFIG_DEFAULTS = {
  * index worker: `2N + 11` — 13 at N=1. WP-18b added the Librarian's three
  * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`): `2N + 14` — 16 at N=1. WP-21
  * added `onboarding.discovery`: `2N + 15` — 17 at N=1. WP-32 added the digest tick
- * (`notify.digest`): `2N + 16` — 18 at N=1. WP-31 added `task.ask`:
- * **`2N + 17`** — **19 at N=1**, and **25 at N=4** where `3N + 8` would have been 20. The shape crossing over at high concurrency is the honest consequence of flat
+ * (`notify.digest`): `2N + 16` — 18 at N=1. WP-31 added `task.ask`: `2N + 17` — 19 at N=1. WP-35
+ * added `bootstrap.history`: `2N + 18` — 20 at N=1, **and this paragraph was not updated with it**,
+ * which is why the sum above read 19 while the floor was 20 (backlog 22's site 1, stale a third
+ * time). WP-36 added the maintenance schedule (`maintenance.schedule`):
+ * **`2N + 19`** — **21 at N=1**, and **27 at N=4** where `3N + 8` would have been 20. The shape crossing over at high concurrency is the honest consequence of flat
  * workers: they do not scale with dispatch, and they are real.
  *
  * **This paragraph is PROGRESS backlog 22's site 1, and it has now gone stale twice** — at WP-32
@@ -399,15 +402,14 @@ export const POOL_RESERVATIONS = {
    * (WP-31, one ask-the-task question answered, `stately` per ask). It is counted here because
    * every `worker` role composes the pipeline.
    *
-   * **Six since WP-31**, whose `task.ask` worker is the sixth (five since WP-32, whose digest tick
-   * is the fifth); the *other* extra one is composed by
-   * `apps/server/src/pipeline.ts` rather than
-   * by `createPipelineRuntime`: `pipeline.intake.reconcile`, the pass that re-emits a matched
-   * ticket whose intake enqueue was lost (PROGRESS backlog 20). It is a maintenance schedule the
-   * process owns, like `registerPartitionMaintenance`, and it is counted here for the same reason
-   * the other three are. It is counted **unconditionally**, including when
-   * `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no worker at all: a reservation that shrank with a
-   * setting would be a floor an operator could lower by accident.
+   * **Seven since WP-36**, and **two** of them are composed by `apps/server/src/pipeline.ts`
+   * rather than by `createPipelineRuntime`, because each is a schedule the *process* owns rather
+   * than a step of a ticket's journey (`registerPartitionMaintenance`'s shape):
+   * `pipeline.intake.reconcile`, the pass that re-emits a matched ticket whose intake enqueue was
+   * lost (PROGRESS backlog 20), and `maintenance.schedule`, the daily pass that creates
+   * product/18:31's chore tasks (WP-36). Both are counted **unconditionally**, including when
+   * `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no reconciler at all: a reservation that shrank
+   * with a setting would be a floor an operator could lower by accident.
    *
    * It is a **flat** term and not a per-dispatch one because every one of them makes its provider
    * calls *outside* a transaction of its own: the gate evaluator runs after its load transaction
@@ -416,7 +418,7 @@ export const POOL_RESERVATIONS = {
    * started from any of them therefore *replaces* the worker's connection rather than nesting
    * inside it.
    */
-  pipeline: 6,
+  pipeline: 7,
   /**
    * The knowledge workers — **one connection each, four of them** (WP-18a, recounted at WP-18b).
    *
