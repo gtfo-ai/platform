@@ -66,6 +66,7 @@ import {
   composeSecretRedactors,
   type Discussion,
   type ExternalIdentity,
+  egressHostOf,
   type GitProviderCapabilities,
   type GitProviderInboundEvent,
   type GitProviderPort,
@@ -259,6 +260,14 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     integrationId: options.integrationId,
     provider: GITLAB_PROVIDER_ID,
     type: 'git',
+    /**
+     * The host every call from this binding goes to, off the validated config (WP-51, backlog 48).
+     *
+     * `egressHostOf` rather than a hand-rolled parse: the executor's allow-list compares the value
+     * it finds here against what an operator declared, and two spellings of "the host" would be two
+     * chances to disagree.
+     */
+    host: egressHostOf(config.base_url),
   };
 
   const capabilities: GitProviderCapabilities = {

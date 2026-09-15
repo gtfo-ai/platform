@@ -233,6 +233,12 @@ export const createFakeTaskManagement = (
     integrationId: options.integrationId,
     provider: PROVIDER,
     type: 'task_management',
+    /**
+     * `null`: a fake opens no socket, so there is no host for the egress allow-list to decide about
+     * (`IntegrationRef.host`, WP-51). The `baseUrl` below is the text a fake *renders* into a
+     * ticket or merge-request URL, never an address anything dials.
+     */
+    host: null,
   };
   const core = createFakeCore({ ref, webhookSecret: options.webhookSecret });
   const baseUrl = options.baseUrl ?? 'https://tickets.example.test';

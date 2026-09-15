@@ -10,6 +10,7 @@
  * Secret fields carry no value here. The registry resolves them from the secret store and hands
  * them to `create` in `ProviderCreateInput.secrets`, keyed by these field names (BD-002).
  */
+import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
 /** Roles GitLab accepts for a project access token (protected_branches.md § "Valid access levels",
@@ -29,9 +30,14 @@ export const gitlabConfigSchema = z.strictObject({
    * `https://gitlab.com` or the self-managed instance root. The adapter appends `/api/v4`; a
    * base URL that already carries it is rejected, because `…/api/v4/api/v4/projects` 404s in a way
    * that reads like a missing project.
+   *
+   * `httpUrlSchema` rather than `z.url()` since WP-51: a bare `z.url()` accepted
+   * `javascript:`, `data:`, `vbscript:` and `file:` (Q49), and this value is handed to the
+   * client this binding's credential is built into. The **host** is the other half and is not a
+   * schema's to know: it is checked against `APP_INTEGRATION_HOSTS` when the row is written and
+   * again when the call is made (`createIntegrationEgressPolicy`).
    */
-  base_url: z
-    .url()
+  base_url: httpUrlSchema
     .refine((value) => !/\/api\/v\d+\/?$/.test(value), {
       message: 'give the instance root (https://gitlab.example.test), not the /api/v4 path',
     })

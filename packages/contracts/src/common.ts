@@ -49,7 +49,39 @@ export type CommunicationLanguage = z.infer<typeof communicationLanguageSchema>;
 /** Git object name. */
 export const shaSchema = z.string().regex(/^[0-9a-f]{7,64}$/, 'expected a hexadecimal git sha');
 
+/**
+ * A URL **as a provider or a model reported it** — any scheme, and deliberately so.
+ *
+ * `z.url()` accepts `javascript:`, `data:`, `vbscript:` and `file:` (Q49; measured again at WP-51
+ * against zod 4.5.4: all four parse). That is the right shape for a field whose value came *out* of
+ * a ticket, a merge request or a model, because the platform's answer there is to render it
+ * safely — `apps/web/src/ui/untrusted.tsx`'s `safeHref` is the guard, and narrowing this schema
+ * would move a rendering decision into a DTO that several producers write.
+ *
+ * It is the wrong shape for a URL the platform is about to **call**. Use {@link httpUrlSchema} for
+ * that, and see its docblock for the line between the two.
+ */
 export const urlSchema = z.url();
+
+/**
+ * A URL the platform may **dial** — `http` or `https` only (WP-51, PROGRESS backlog 48).
+ *
+ * The five provider config schemas were bare `z.url()` until WP-51, so a binding could be
+ * configured with `file:///etc/passwd` or `javascript:…` as its `base_url` and the value was handed
+ * straight to the client the binding's credential is built into. Nothing downstream refused it: an
+ * adapter hands the string to `fetch`, and `new URL()` is happy with every scheme there is.
+ *
+ * `z.url({ protocol })` is zod's own check and it is applied to the **parsed** protocol, so
+ * `HTTPS://…` passes and `httpsx://…` does not (measured, zod 4.5.4). It is a `ZodURL` like
+ * `urlSchema`, so `.refine(…).default(…)` still chains off it — which is what the provider schemas
+ * need for their path refinements.
+ *
+ * **This is the scheme half only.** *Which host* a binding may name is instance configuration and
+ * cannot live in a schema: `APP_INTEGRATION_HOSTS` and
+ * `createIntegrationEgressPolicy` (`@platform/application`) are the other half, enforced at the
+ * write and again at the call.
+ */
+export const httpUrlSchema = z.url({ protocol: /^https?$/ });
 
 /** Money in USD. Postgres stores `numeric(12,6)`; the wire carries a JSON number. */
 export const usdSchema = z.number().nonnegative().finite();

@@ -50,6 +50,24 @@ export interface IntegrationRef {
   /** Registered provider id: `jira-cloud`, `gitlab`, `slack`, `sentry`, `loki`. */
   readonly provider: string;
   readonly type: IntegrationType;
+  /**
+   * The host this binding's calls go to, read off its **validated** config — or `null` for an
+   * adapter that opens no socket at all (WP-51, PROGRESS backlog 48).
+   *
+   * It lives on the ref rather than on each `IntegrationActionRequest` because the executor has to
+   * be able to refuse a call *no call site cooperated in*: a field on the request would be a field
+   * a new adapter forgets, and the whole point of the egress check is that a row written before the
+   * allow-list existed cannot slip past. The ref is built once per adapter, out of the config the
+   * provider's own schema just accepted, so there is one place per provider to get it right and
+   * `providers/egress-host.test.ts` reads every one of them off disk.
+   *
+   * **`null` means "makes no network call", not "unchecked".** The fakes in `packages/integrations`
+   * are the only things that say it, and the census above is what stops a real adapter joining
+   * them: the executor treats `null` as "nothing to decide" precisely because there is no URL, and
+   * an adapter that dials a host while reporting `null` would be lying to the one guard that could
+   * have refused it.
+   */
+  readonly host: string | null;
 }
 
 // ── Typed failures ───────────────────────────────────────────────────────────

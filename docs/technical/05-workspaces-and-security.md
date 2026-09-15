@@ -14,6 +14,9 @@
 `user: 1000:1000`, `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `read_only: true`, `tmpfs: /tmp (size from config)`, `mem_limit`, `cpus`, `pids_limit`, `init: true`, `stop_grace_period: 20s`, `runtime: runc|runsc`, no port publishing, no host mounts, no Docker socket. Timeouts: stage wall clock → SDK `interrupt()`/abort → `stop` (SIGTERM) → SIGKILL.
 
 ## Network policy
+
+> **The *platform process* has an egress allow-list too, since WP-51** (PROGRESS backlog 48). This section is about the run container and was, until then, the only egress control in the product: the server process that holds every decrypted credential would call whichever host an `integration.write` caller had typed into a binding's `base_url`. `APP_INTEGRATION_HOSTS` (technical/06 § "Outbound: actions", technical/12) is the other half — operator-declared, exact, empty and therefore closed by default, refused at `POST /api/integrations` and again inside `IntegrationActionExecutor`. The two lists are separate on purpose: this one is rendered per run from what the *stage* needs, that one is instance configuration about what the *platform* may dial.
+
 Workspace has no default route; the sidecar allows: Anthropic API host (or the configured Bedrock/Vertex/proxy host), the git host, package registries for the project's ecosystems (from discovery), read-only observability hosts when the stage may use them; everything else denied and logged (denied hosts shown in the run detail as a hint). Telemetry hosts blocked; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. Phase 2: Envoy sidecar injecting the Anthropic key and git token so neither is present in the container.
 
 ## Credentials and identity

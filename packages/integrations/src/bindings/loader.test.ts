@@ -23,6 +23,7 @@ import type {
   SecretStore,
 } from '@platform/application';
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -78,6 +79,9 @@ const secretsOf = (
 
 const executor = () =>
   createIntegrationActionExecutor({
+    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+    egress: allowAnyIntegrationHost(),
     auditLog: createMemoryAuditLog(),
     redactor: exactSecretRedactor([]),
     timer: createVirtualTimer({ autoAdvance: true }),
@@ -180,6 +184,8 @@ describe('a git binding that loads', () => {
       integrationId: GIT_INTEGRATION,
       provider: 'gitlab',
       type: 'git',
+      // The host the executor's egress allow-list decides on (`IntegrationRef.host`, WP-51).
+      host: 'git.example.test',
     });
     expect(integrations.git?.project).toBe('acme/api');
   });
@@ -284,6 +290,8 @@ describe('a task-management binding that loads', () => {
       integrationId: '00000000-0000-4000-8000-00000000a002',
       provider: 'jira-cloud',
       type: 'task_management',
+      // The host the executor's egress allow-list decides on (`IntegrationRef.host`, WP-51).
+      host: 'acme-example.atlassian.net',
     });
   });
 

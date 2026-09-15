@@ -20,6 +20,7 @@
  * asked for.
  */
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -184,6 +185,9 @@ describe('IntegrationActionExecutor composed with the provider fakes', () => {
 
   const executor = () =>
     createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog,
       // These fakes are given no credential at all, so there is nothing to redact — said out loud
       // rather than by passing a hand-rolled no-op (TD-012).

@@ -36,6 +36,26 @@ describe('loadServerConfig', () => {
     // declares one: the name is caller-chosen, so the empty default is the security property
     // (`queries/onboarding-queries.ts` carries the argument).
     expect(config.integrationSecretEnv).toEqual([]);
+    // …and no host is dialable until an operator declares one, for the same reason one ring out:
+    // the `base_url` is caller-chosen too, so an empty list is the closed one (WP-51, rule 18).
+    expect(config.integrationHosts).toEqual([]);
+  });
+
+  it('reads the provider host allow-list as a list, keeping the wildcard and dropping a non-host', () => {
+    expect(
+      load({ APP_INTEGRATION_HOSTS: ' GitLab.com , acme.atlassian.net ,gitlab.com' })
+        .integrationHosts,
+    ).toEqual(['gitlab.com', 'acme.atlassian.net']);
+    // `*` is a legal entry **here** — it is how an operator declares the list open — and the two
+    // parsers differ on exactly that: an `APP_INTEGRATION_SECRET_ENV` entry of `*` is dropped
+    // (asserted below), because "read any variable" is not a posture the platform offers.
+    expect(load({ APP_INTEGRATION_HOSTS: '*' }).integrationHosts).toEqual(['*']);
+    // A value that is not a host is dropped rather than admitted: admitting `https://gitlab.com/`
+    // as a host name would make the comparison never match, which reads as "the provider is down".
+    expect(
+      load({ APP_INTEGRATION_HOSTS: 'gitlab.com,https://evil.test/,not a host, ' })
+        .integrationHosts,
+    ).toEqual(['gitlab.com']);
   });
 
   it('reads the integration credential allow-list as a list, and drops what cannot be a name', () => {

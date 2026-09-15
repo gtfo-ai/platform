@@ -76,6 +76,8 @@ describe('slackProviderRegistration', () => {
       integrationId: INTEGRATION_ID,
       provider: SLACK_PROVIDER_ID,
       type: 'communication',
+      // The host the executor's egress allow-list decides on (`IntegrationRef.host`, WP-51).
+      host: 'slack.com',
     });
     expect(port.capabilities()).toEqual({
       threads: true,

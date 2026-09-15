@@ -21,6 +21,7 @@
  *  - <https://docs.sentry.io/api/> — the `/api/0/` prefix and the bearer scheme.
  *  - <https://docs.sentry.io/api/events/list-a-projects-issues/> — "limit … max 100".
  */
+import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
 /** Sentry organization and project slugs, as they appear in a `sentry.io/<org>/<project>` URL. */
@@ -33,9 +34,14 @@ export const sentryConfigSchema = z.strictObject({
    * `https://sentry.io`, a regional host, or the root of a self-hosted instance. The adapter
    * appends `/api/0`; a base URL that already carries it is rejected, because
    * `…/api/0/api/0/organizations/…` answers 404 in a way that reads like a missing organization.
+   *
+   * `httpUrlSchema` rather than `z.url()` since WP-51: a bare `z.url()` accepted
+   * `javascript:`, `data:`, `vbscript:` and `file:` (Q49), and this value is handed to the
+   * client this binding's credential is built into. The **host** is the other half and is not a
+   * schema's to know: it is checked against `APP_INTEGRATION_HOSTS` when the row is written and
+   * again when the call is made (`createIntegrationEgressPolicy`).
    */
-  base_url: z
-    .url()
+  base_url: httpUrlSchema
     .refine((value) => !/\/api\/\d+\/?$/.test(value), {
       message: 'give the instance root (https://sentry.io), not the /api/0 path',
     })

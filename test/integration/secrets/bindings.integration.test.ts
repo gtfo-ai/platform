@@ -13,6 +13,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -236,6 +237,9 @@ describe('the shipped provider registrations, loaded from real rows', () => {
     );
 
     const executor = createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog: createMemoryAuditLog(),
       redactor: noSecretsRedactor(),
       timer: createVirtualTimer({ autoAdvance: true }),
@@ -256,6 +260,9 @@ describe('the shipped provider registrations, loaded from real rows', () => {
 
     expect(integrations.git?.ref).toEqual({
       integrationId: expect.any(String),
+      // The host the executor's egress allow-list decides on, read off the row's own config
+      // (`IntegrationRef.host`, WP-51).
+      host: 'gitlab.example.test',
       provider: 'gitlab',
       type: 'git',
     });
@@ -289,6 +296,9 @@ describe('the shipped provider registrations, loaded from real rows', () => {
     ]);
 
     const executor = createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog: createMemoryAuditLog(),
       redactor: noSecretsRedactor(),
       timer: createVirtualTimer({ autoAdvance: true }),

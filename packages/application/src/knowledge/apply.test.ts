@@ -117,7 +117,7 @@ const harness = (
       (options.git ?? true)
         ? {
             port: port as unknown as NonNullable<PipelineIntegrations['git']>['port'],
-            ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git' as const },
+            ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git' as const, host: null },
             project: 'acme/api',
             redactor: exactSecretRedactor([]),
           }

@@ -27,6 +27,7 @@
  *  - <https://grafana.com/docs/loki/latest/query/logcli/getting-started/> — `LOKI_ADDR`,
  *    `LOKI_BEARER_TOKEN`, `LOKI_USERNAME`, `LOKI_PASSWORD`, `LOKI_ORG_ID`.
  */
+import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
 export const lokiAuthModeSchema = z.enum(['none', 'bearer', 'basic']);
@@ -36,9 +37,14 @@ export const lokiConfigSchema = z.strictObject({
    * The Loki root, e.g. `https://loki.example.test:3100`. The adapter appends `/loki/api/v1`; a
    * base URL that already carries it is rejected, because the doubled path answers 404 in a way
    * that reads like an empty result.
+   *
+   * `httpUrlSchema` rather than `z.url()` since WP-51: a bare `z.url()` accepted
+   * `javascript:`, `data:`, `vbscript:` and `file:` (Q49), and this value is handed to the
+   * client this binding's credential is built into. The **host** is the other half and is not a
+   * schema's to know: it is checked against `APP_INTEGRATION_HOSTS` when the row is written and
+   * again when the call is made (`createIntegrationEgressPolicy`).
    */
-  base_url: z
-    .url()
+  base_url: httpUrlSchema
     .refine((value) => !/\/loki\/api\/v\d+\/?$/.test(value), {
       message: 'give the Loki root (https://loki.example.test:3100), not the /loki/api/v1 path',
     })

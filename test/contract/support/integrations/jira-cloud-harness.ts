@@ -9,6 +9,7 @@
  * the executor would still pass a suite that only calls port methods.
  */
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -90,6 +91,9 @@ export const createJiraBinding = (options: JiraBindingOptions = {}): JiraBinding
   const timer = createVirtualTimer({ autoAdvance: true });
   const clock = fixedClock(JIRA_REPLAY_NOW as `${string}T${string}`, 0);
   const executor = createIntegrationActionExecutor({
+    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+    egress: allowAnyIntegrationHost(),
     auditLog: audit,
     // The binding's own token, so the executor's scrub is the real one and not a no-op.
     redactor:

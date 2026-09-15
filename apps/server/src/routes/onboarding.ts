@@ -68,6 +68,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { createIntegrationEgressPolicy } from '@platform/application';
 import {
   apiErrorSchema,
   createIntegrationRequestSchema,
@@ -131,6 +132,16 @@ export interface OnboardingRoutesOptions {
    * `queries/onboarding-queries.ts` carries the full argument and the residual.
    */
   readonly integrationSecretEnv?: readonly string[];
+  /**
+   * `APP_INTEGRATION_HOSTS` — the hosts a binding's config may name (WP-51, PROGRESS backlog 48).
+   *
+   * Empty (the default) refuses every host, which is the fail-closed direction the two other
+   * operator-declared lists on this process take: without it an `integration.write` caller who may
+   * name a credential *field* but never sees its *value* can point a provider at a host they
+   * control and have the probe deliver the token there. `createIntegrationEgressPolicy` carries the
+   * argument; `assertHostIsDeclared` is the refusal.
+   */
+  readonly integrationHosts?: readonly string[];
 }
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -189,6 +200,14 @@ export const registerOnboardingRoutes = async (
     }
     return { userId: actor.userId };
   };
+
+  /**
+   * Built once per registration, from instance configuration — **never from the request** (WP-51).
+   *
+   * That is criterion 1 of the row spelled in code: a list a caller can extend is not a list, so
+   * there is no body field, no query parameter and no per-project override that reaches this.
+   */
+  const egress = createIntegrationEgressPolicy(options.integrationHosts ?? []);
 
   const secretSource = environmentSecretSource(
     options.env ?? process.env,
@@ -268,7 +287,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Create an integration from credentials already in the process environment',
         description:
-          '`secret_refs` maps a provider credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020); the value is read by the server and sealed into `secrets`. No credential crosses this API and none is written to the audit. The name must be one the operator declared in `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`, because the name is caller-chosen and the platform’s own variables must never be readable this way. Idempotent on `(type, name)`.',
+          '`secret_refs` maps a provider credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020); the value is read by the server and sealed into `secrets`. No credential crosses this API and none is written to the audit. The name must be one the operator declared in `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`, because the name is caller-chosen and the platform’s own variables must never be readable this way. Every URL in `config` must name a host the operator declared in `APP_INTEGRATION_HOSTS` and must be `http`/`https` — otherwise 403 `integration_host_not_permitted`, naming the host and the setting, because the host is caller-chosen too and the credential this binding is built with would go there. Idempotent on `(type, name)`.',
         tags: ['org'],
         body: createIntegrationRequestSchema,
         response: {
@@ -320,6 +339,7 @@ export const registerOnboardingRoutes = async (
             secretRefs: (request.body.secret_refs ?? {}) as Readonly<Record<string, string>>,
           },
           provider,
+          egress,
           secretSource,
           secretKey: secretAdapters.deriveSecretKey(options.secretKey),
           newId: () => randomUUID(),

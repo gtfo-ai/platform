@@ -44,6 +44,7 @@
  */
 import { readdirSync } from 'node:fs';
 import {
+  allowAnyIntegrationHost,
   bindingSecretRedactor,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
@@ -99,6 +100,9 @@ const SLACK_SIGNING_SECRET = 'FAKE-PLANTED-slack-signing-secret-0123456789';
 
 const jiraRegistration = createJiraCloudRegistration({
   executor: createIntegrationActionExecutor({
+    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+    egress: allowAnyIntegrationHost(),
     auditLog: createMemoryAuditLog(),
     redactor: noSecretsRedactor(),
     timer: createVirtualTimer({ autoAdvance: true }),
@@ -351,7 +355,12 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
   };
 
   const resolved: ResolvedInboundIntegration = {
-    ref: { integrationId: INTEGRATION, provider: 'under-test', type: 'task_management' },
+    ref: {
+      integrationId: INTEGRATION,
+      provider: 'under-test',
+      type: 'task_management',
+      host: null,
+    },
     inbound,
     bindings: [{ bindingId: INTEGRATION, projectId: PROJECT, inbound }],
     // What `createInboundIntegrationLoader` composes from the account's own resolved credentials.

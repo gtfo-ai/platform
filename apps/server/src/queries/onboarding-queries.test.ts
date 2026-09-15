@@ -17,11 +17,14 @@
  *    configuration and is what they have to fix; the message reaches a log and an HTTP response.
  */
 
+import { createIntegrationEgressPolicy } from '@platform/application';
+import type { JsonObject } from '@platform/contracts';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
 import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
 import {
+  assertHostIsDeclared,
   assertNoCredentialInConfig,
   environmentSecretSource,
   ForbiddenSecretNameError,
@@ -234,5 +237,111 @@ describe('assertNoCredentialInConfig', () => {
         expect((error as HttpError).message).toContain(field);
       }
     }
+  });
+});
+
+/**
+ * **The write-time half of the egress allow-list** (WP-51, PROGRESS backlog 48).
+ *
+ * The call-time half is `IntegrationActionExecutor`'s and is asserted there and on the integration
+ * tier; this is the refusal an operator meets at the moment they configure the binding, with the
+ * host and the setting in it.
+ *
+ * Rule 43 chooses the negatives: `evil.example.com` is refused by every candidate implementation,
+ * so the cases that carry weight are the adjacent ones. Rule 14 chooses the last two: the body
+ * reaches this function as `jsonObjectSchema`, so a value that `tsc` would never allow — a number,
+ * a nested document — is exactly what a JavaScript-shaped request can carry, and the guard is a
+ * runtime walk rather than a type.
+ */
+describe('assertHostIsDeclared', () => {
+  const declared = createIntegrationEgressPolicy(['gitlab.example.com']);
+  const refuse = (config: JsonObject, policy = declared): HttpError | null => {
+    try {
+      assertHostIsDeclared(config, policy);
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpError);
+      return error as HttpError;
+    }
+  };
+
+  it('accepts a config whose URL names a declared host', () => {
+    expect(refuse({ base_url: 'https://gitlab.example.com', project: 'acme/api' })).toBeNull();
+  });
+
+  it.each([
+    ['a hyphen-prefixed neighbour', 'https://evil-gitlab.example.com'],
+    ['a suffixed neighbour', 'https://gitlab.example.com.evil.test'],
+    ['a prefixed neighbour', 'https://xgitlab.example.com'],
+    ['an unrelated host', 'https://evil.example.com'],
+  ])('refuses %s with 403 integration_host_not_permitted', (_name, url) => {
+    const error = refuse({ base_url: url });
+
+    expect(error?.statusCode).toBe(403);
+    expect(error?.code).toBe('integration_host_not_permitted');
+  });
+
+  it('names the host and the setting, so the operator knows what to change', () => {
+    const error = refuse({ base_url: 'https://evil-gitlab.example.com' });
+
+    expect(error?.message).toContain('evil-gitlab.example.com');
+    expect(error?.message).toContain('APP_INTEGRATION_HOSTS');
+  });
+
+  it('refuses every host when nothing is declared, which is the shipped default', () => {
+    // Rule 18: the empty list is the closed one. If this passes, a stock instance admits any host.
+    expect(
+      refuse({ base_url: 'https://gitlab.example.com' }, createIntegrationEgressPolicy([])),
+    ).not.toBeNull();
+  });
+
+  it('accepts everything when an operator declared the list open', () => {
+    expect(
+      refuse({ base_url: 'https://anywhere.example.test' }, createIntegrationEgressPolicy(['*'])),
+    ).toBeNull();
+  });
+
+  it.each([
+    ['javascript', 'javascript:alert(1)'],
+    ['data', 'data:text/html,x'],
+    ['vbscript', 'vbscript:msgbox(1)'],
+    ['file', 'file:///etc/passwd'],
+  ])('refuses the %s scheme even under an open list (Q49)', (_name, url) => {
+    // This route never runs the provider's own schema over `config`, so `httpUrlSchema` is not the
+    // guard here — measured, not assumed (rule 47). Without this check the row would be stored and
+    // the refusal would arrive at the binding loader, screens later.
+    const error = refuse({ base_url: url }, createIntegrationEgressPolicy(['*']));
+
+    expect(error?.statusCode).toBe(403);
+  });
+
+  it('leaves alone every config string that is not a URL', () => {
+    // The five shipped schemas' other string fields, measured: none parses as an absolute URL, so
+    // the sweep costs no false refusal. A guard that fires on legitimate content gets switched off.
+    expect(
+      refuse({
+        project: 'acme/api',
+        organization: 'acme-example',
+        channel: '#agentic',
+        team_id: 'T0FAKETEAM',
+        user_email: 'bot@example.test',
+        pickup_label: 'agentic',
+        tenant_id: 'tenant-1',
+      }),
+    ).toBeNull();
+  });
+
+  it('walks nested objects and arrays, because `config` is an opaque JSON document', () => {
+    expect(refuse({ nested: { base_url: 'https://evil.example.com' } })).not.toBeNull();
+    expect(
+      refuse({ mirrors: ['https://gitlab.example.com', 'https://evil.example.com'] }),
+    ).not.toBeNull();
+    expect(refuse({ mirrors: ['https://gitlab.example.com'] })).toBeNull();
+  });
+
+  it('ignores non-string values rather than throwing on them', () => {
+    // A JavaScript-shaped body carries whatever JSON allows; the guard is about URLs and must not
+    // turn a number into a 500 on the way to the schema that will refuse it properly.
+    expect(refuse({ max_pages: 10, mint_credentials: false, project: null })).toBeNull();
   });
 });

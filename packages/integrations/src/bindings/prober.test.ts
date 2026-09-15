@@ -28,6 +28,7 @@ import type {
   SecretStore,
 } from '@platform/application';
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -122,6 +123,9 @@ let timer: VirtualTimer;
 /** The real executor, with a token bucket small enough for a burst assertion to be cheap. */
 const executorFor = (rateLimits = { capacity: 2, refillPerSecond: 1, maxConcurrent: 2 }) =>
   createIntegrationActionExecutor({
+    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+    egress: allowAnyIntegrationHost(),
     auditLog,
     // The audit row's own redactor is the platform's step 2; the account's step 1 is applied by
     // the prober. Nothing here has a credential of its own to redact, said out loud (TD-012).

@@ -135,6 +135,8 @@ describe('the registration (BD-017)', () => {
       integrationId: '00000000-0000-4000-8000-0000000000a6',
       provider: 'sentry',
       type: 'errors',
+      // The host the executor's egress allow-list decides on (`IntegrationRef.host`, WP-51).
+      host: 'sentry.example.test',
     });
     expect(port.capabilities()).toEqual({
       search: true,

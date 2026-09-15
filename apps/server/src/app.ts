@@ -478,6 +478,10 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       secretKey: config.secretKey,
       onboarding: options.onboarding,
       integrationSecretEnv: config.integrationSecretEnv,
+      // `APP_INTEGRATION_HOSTS` (WP-51): the write-time half of the egress allow-list. The call-time
+      // half is the executor's, and both are needed — this one gives an operator a refusal at the
+      // moment they configure the binding, that one covers a row this route never saw.
+      integrationHosts: config.integrationHosts,
     });
     // WP-34: shadow mode's one command and two reads (product/10:20). The seven database functions
     // are bound here so the route module names none of them (`routes/shadow.ts`'s `ShadowQueries`).

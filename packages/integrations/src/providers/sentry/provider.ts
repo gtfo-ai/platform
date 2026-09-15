@@ -66,6 +66,7 @@ import {
   bindingSecretRedactor,
   composeSecretRedactors,
   type ErrorEvent,
+  egressHostOf,
   errorEventSchema,
   type HealthProbe,
   IntegrationError,
@@ -194,6 +195,14 @@ export const createSentryProvider = (options: SentryProviderOptions): SentryProv
     integrationId: options.integrationId,
     provider: SENTRY_PROVIDER_ID,
     type: 'errors',
+    /**
+     * The host every call from this binding goes to, off the validated config (WP-51, backlog 48).
+     *
+     * `egressHostOf` rather than a hand-rolled parse: the executor's allow-list compares the value
+     * it finds here against what an operator declared, and two spellings of "the host" would be two
+     * chances to disagree.
+     */
+    host: egressHostOf(config.base_url),
   };
   /**
    * What the caller injected, plus this binding's own auth token (divergence 7, standing rule 31).

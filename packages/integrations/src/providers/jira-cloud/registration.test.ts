@@ -4,6 +4,7 @@
  * credential stored and rendered as plain configuration (BD-002).
  */
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -28,6 +29,9 @@ const SECRETS = {
 
 const deps = () => ({
   executor: createIntegrationActionExecutor({
+    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+    egress: allowAnyIntegrationHost(),
     auditLog: createMemoryAuditLog(),
     redactor: noSecretsRedactor(),
     timer: createVirtualTimer({ autoAdvance: true }),
@@ -75,6 +79,8 @@ describe('createJiraCloudRegistration', () => {
       integrationId: INTEGRATION_ID,
       provider: 'jira-cloud',
       type: 'task_management',
+      // The host the executor's egress allow-list decides on (`IntegrationRef.host`, WP-51).
+      host: 'acme-example.atlassian.net',
     });
     expect(port.capabilities()).toEqual({
       webhooks: true,

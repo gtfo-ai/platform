@@ -33,6 +33,11 @@ import {
   type MutatingActionRequest,
   redactErrorInPlace,
 } from './action-executor.js';
+import {
+  allowAnyIntegrationHost,
+  createIntegrationEgressPolicy,
+  IntegrationEgressRefusedError,
+} from './egress.js';
 import { exactSecretRedactor, secretPlaceholder } from './redaction.js';
 
 interface CapturedLog {
@@ -59,6 +64,7 @@ const INTEGRATION: IntegrationRef = {
   integrationId: '00000000-0000-4000-8000-000000000001',
   provider: 'fake-task-management',
   type: 'task_management',
+  host: null,
 };
 
 const OTHER_INTEGRATION: IntegrationRef = {
@@ -105,6 +111,9 @@ describe('IntegrationActionExecutor', () => {
 
   const build = (overrides: Partial<Parameters<typeof createIntegrationActionExecutor>[0]> = {}) =>
     createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog,
       redactor: exactSecretRedactor([{ name: 'jira', value: SECRET }]),
       timer,
@@ -928,6 +937,120 @@ describe('IntegrationActionExecutor', () => {
       gate.resolve();
       await Promise.all([first, second]);
       expect(order).toEqual(['first:start', 'first:end', 'second:start']);
+    });
+  });
+
+  /**
+   * The **call-time** half of WP-51's allow-list (PROGRESS backlog 48).
+   *
+   * The write-time half lives at `POST /api/integrations` and is asserted there; this one is what a
+   * row the write check never saw meets — inserted before the setting existed, narrowed out of the
+   * list afterwards, or written with `psql`. The three negatives are the ones
+   * `renderEgressConfig`'s pattern tests already argue for (standing rule 43): `evil.example.com`
+   * would be refused by any implementation, while an adjacent host separates exact matching from
+   * substring matching, which is the only failure mode a plausible wrong implementation has.
+   *
+   * Mutation check (standing rules 3 and 67): delete `assertEgressAllowed(request)` from `run` and
+   * every case below fails; weaken the comparison to `endsWith` and the two adjacent-host cases
+   * fail while the obvious-negative one still passes.
+   */
+  describe('the egress allow-list (WP-51)', () => {
+    const DECLARED = 'gitlab.example.com';
+    const onGitLab = (host: string | null) => ({
+      ...readTicket(),
+      integration: { ...INTEGRATION, provider: 'gitlab', host },
+    });
+    const withPolicy = (hosts: readonly string[]) =>
+      build({ egress: createIntegrationEgressPolicy(hosts) });
+
+    it('performs a call to the declared host', async () => {
+      const outcome = await withPolicy([DECLARED]).execute(onGitLab(DECLARED));
+
+      expect(outcome.status).toBe('ok');
+      expect(performed).toBe(1);
+    });
+
+    it.each([
+      ['a hyphen-prefixed neighbour', 'evil-gitlab.example.com'],
+      ['a suffixed neighbour', 'gitlab.example.com.evil.test'],
+      ['an unrelated host', 'evil.example.com'],
+    ])('refuses %s, performs nothing and writes no audit row', async (_name, host) => {
+      const executorWithList = withPolicy([DECLARED]);
+
+      await expect(executorWithList.execute(onGitLab(host))).rejects.toThrow(
+        IntegrationEgressRefusedError,
+      );
+      // Nothing provider-facing happened, so there is nothing to audit — the same answer the other
+      // three request guards give (`assertActionName`, `requireMutatingMode`, the refused key).
+      expect(performed).toBe(0);
+      expect(auditLog.entries).toEqual([]);
+    });
+
+    it('names the host and the setting in the refusal, and is not retryable', async () => {
+      const error = await withPolicy([DECLARED])
+        .execute(onGitLab('evil-gitlab.example.com'))
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(IntegrationEgressRefusedError);
+      const refusal = error as IntegrationEgressRefusedError;
+      expect(refusal.host).toBe('evil-gitlab.example.com');
+      expect(refusal.setting).toBe('APP_INTEGRATION_HOSTS');
+      expect(refusal.reason).toBe('host_not_declared');
+      expect(refusal.message).toContain('evil-gitlab.example.com');
+      expect(refusal.message).toContain('APP_INTEGRATION_HOSTS');
+      // `forbidden` is outside `RETRYABLE_CODES`: no later attempt changes an operator's
+      // configuration, so a retry would spend the budget to be refused again.
+      expect(refusal.code).toBe('forbidden');
+      expect(refusal.retryable).toBe(false);
+    });
+
+    it('refuses every host when the list is empty, including one that would otherwise work', async () => {
+      // Rule 18: the empty list is the *closed* one. If this ever passes, the default admits
+      // everything and the allow-list is a scan of zero bytes.
+      await expect(withPolicy([]).execute(onGitLab(DECLARED))).rejects.toThrow(
+        IntegrationEgressRefusedError,
+      );
+      expect(performed).toBe(0);
+    });
+
+    it('performs the call when an operator declared the list open with "*"', async () => {
+      const outcome = await withPolicy(['*']).execute(onGitLab('anything.example.test'));
+
+      expect(outcome.status).toBe('ok');
+      expect(performed).toBe(1);
+    });
+
+    it('performs a call for a binding that names no host, because a fake dials nothing', async () => {
+      const outcome = await withPolicy([]).execute(onGitLab(null));
+
+      expect(outcome.status).toBe('ok');
+      expect(performed).toBe(1);
+    });
+
+    it('refuses a **read**, which is the call that carries the credential in the finding', async () => {
+      // `POST /api/integrations/:id/test` is a read, and it is the one outbound call an HTTP
+      // request can trigger. A guard placed after the shadow branch or scoped to mutations would
+      // pass every other case here and miss the whole exploit.
+      const read = { ...onGitLab('evil-gitlab.example.com'), mutating: false as const };
+
+      await expect(withPolicy([DECLARED]).execute(read)).rejects.toThrow(
+        IntegrationEgressRefusedError,
+      );
+      expect(performed).toBe(0);
+    });
+
+    it('refuses a shadow-mode mutation rather than recording would_have for it', async () => {
+      // Shadow mode is about not *changing* a provider; it is not a licence to talk to a host
+      // nobody declared. The `would_have` row would also say the platform decided to call one.
+      const shadow = {
+        ...addComment({ mode: 'shadow' }),
+        integration: { ...INTEGRATION, provider: 'gitlab', host: 'evil-gitlab.example.com' },
+      };
+
+      await expect(withPolicy([DECLARED]).execute(shadow)).rejects.toThrow(
+        IntegrationEgressRefusedError,
+      );
+      expect(auditLog.entries).toEqual([]);
     });
   });
 });

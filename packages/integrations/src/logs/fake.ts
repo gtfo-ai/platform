@@ -124,6 +124,12 @@ export const createFakeObservabilityLogs = (options: FakeLogsOptions): FakeObser
     integrationId: options.integrationId,
     provider: PROVIDER,
     type: 'logs',
+    /**
+     * `null`: a fake opens no socket, so there is no host for the egress allow-list to decide about
+     * (`IntegrationRef.host`, WP-51). The `baseUrl` below is the text a fake *renders* into a
+     * ticket or merge-request URL, never an address anything dials.
+     */
+    host: null,
   };
   const core = createFakeCore({ ref });
   const capabilities: ObservabilityLogsCapabilities = {

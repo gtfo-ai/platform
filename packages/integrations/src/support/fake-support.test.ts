@@ -24,6 +24,7 @@ const REF = {
   integrationId: '00000000-0000-4000-8000-000000000001',
   provider: 'fake',
   type: 'task_management',
+  host: null,
 } as const;
 
 describe('the fake webhook envelope', () => {

@@ -60,6 +60,7 @@
  *    obligations; this file bounds what the adapters hand over.
  */
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -915,6 +916,9 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     const clock = fixedClock(NOW, 0);
     const registration = createJiraCloudRegistration({
       executor: createIntegrationActionExecutor({
+        // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+        // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+        egress: allowAnyIntegrationHost(),
         auditLog: createMemoryAuditLog(),
         // The executor is disarmed too: nothing below may be discharged by the layer outside the
         // adapter, which is the layer that does not cover a returned value anyway.
@@ -1063,6 +1067,9 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     const clock = fixedClock(NOW, 0);
     const registration = createJiraCloudRegistration({
       executor: createIntegrationActionExecutor({
+        // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+        // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+        egress: allowAnyIntegrationHost(),
         auditLog: createMemoryAuditLog(),
         redactor: noSecretsRedactor(),
         timer: createVirtualTimer({ autoAdvance: true }),

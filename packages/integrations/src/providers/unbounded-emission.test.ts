@@ -29,6 +29,7 @@
  *    the *adapter* does with what it is handed, which is the only half the platform controls.
  */
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -154,6 +155,9 @@ describe('one readTicket, with the provider hostile in every string it controls'
     const clock = fixedClock(NOW, 0);
     const port = createJiraCloudRegistration({
       executor: createIntegrationActionExecutor({
+        // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+        // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+        egress: allowAnyIntegrationHost(),
         auditLog: createMemoryAuditLog(),
         redactor: noSecretsRedactor(),
         timer: createVirtualTimer({ autoAdvance: true }),

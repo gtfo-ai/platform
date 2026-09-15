@@ -201,6 +201,11 @@ describe('the onboarding wizard', () => {
         // `POST /api/integrations` refuses every `secret_refs` name, which is the shipped default
         // and is asserted below before the permitted name is used.
         APP_INTEGRATION_SECRET_ENV: 'WP21_SENTRY_TOKEN',
+        // The second operator-declared list (`APP_INTEGRATION_HOSTS`, WP-51): without it
+        // `POST /api/integrations` refuses every host, which is the shipped default and is
+        // asserted below before the declared one is used. The fake providers the pipeline runs on
+        // publish no host at all, so this list governs the Sentry row and nothing else here.
+        APP_INTEGRATION_HOSTS: 'sentry.example.test',
       },
     });
     harness = pipeline;
@@ -311,6 +316,46 @@ describe('the onboarding wizard', () => {
     expect(
       await pipeline.query(
         "select count(*)::int as count from integrations where name like '%plaintext%'",
+      ),
+    ).toEqual([{ count: 0 }]);
+
+    /**
+     * **A host the operator has not declared is refused**, at the HTTP boundary and from a body
+     * this test writes rather than a typed request (WP-51, PROGRESS backlog 48).
+     *
+     * The adjacent host is the case that matters (standing rule 43): `evil.example.com` would be
+     * refused by a substring check too, while `sentry.example.test.evil.test` and
+     * `evil-sentry.example.test` are refused only by exact matching. Asserted **here**, on a real
+     * instance, because the row this would create is the one whose credential the probe then sends.
+     */
+    for (const host of [
+      'sentry.example.test.evil.test',
+      'evil-sentry.example.test',
+      'evil.example.com',
+    ]) {
+      const refusedHost = await command<{ error: { code: string; message: string } }>(
+        client,
+        '/api/integrations',
+        {
+          type: 'errors',
+          provider: 'sentry',
+          name: `acme sentry ${host}`,
+          config: { organisation: 'acme', base_url: `https://${host}` },
+          secret_refs: { auth_token: 'WP21_SENTRY_TOKEN' },
+        },
+        { idempotencyKey: `wizard-forbidden-host-${host}` },
+      );
+      expect(refusedHost.status, host).toBe(403);
+      expect(refusedHost.body.error.code).toBe('integration_host_not_permitted');
+      // The refusal names the host **and** the setting: an operator who is told "not permitted"
+      // without being told which variable declares it has been told nothing.
+      expect(refusedHost.body.error.message).toContain(host);
+      expect(refusedHost.body.error.message).toContain('APP_INTEGRATION_HOSTS');
+    }
+    // Nothing was stored: the refusal is a countable effect, not a status code (rule 79).
+    expect(
+      await pipeline.query(
+        "select count(*)::int as count from integrations where name like '%evil%'",
       ),
     ).toEqual([{ count: 0 }]);
 

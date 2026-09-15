@@ -17,6 +17,7 @@
  *    exactly that reason.
  */
 import type { Transaction } from '@platform/application';
+import { allowAnyIntegrationHost } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import {
   knowledge as knowledgeAdapters,
@@ -244,6 +245,7 @@ describe('the wizard’s integration writes', () => {
         secretRefs: { token: 'GITLAB_TOKEN' },
       },
       provider: gitlab,
+      egress: allowAnyIntegrationHost(),
       secretSource: source,
       secretKey: key,
       newId: () => crypto.randomUUID(),
@@ -287,6 +289,7 @@ describe('the wizard’s integration writes', () => {
         secretRefs: { token: 'GITLAB_TOKEN' },
       },
       provider: gitlab,
+      egress: allowAnyIntegrationHost(),
       secretSource: source,
       secretKey: key,
       newId: () => crypto.randomUUID(),
@@ -311,6 +314,7 @@ describe('the wizard’s integration writes', () => {
           secretRefs: { not_a_field: 'GITLAB_TOKEN' },
         },
         provider: gitlab,
+        egress: allowAnyIntegrationHost(),
         secretSource: source,
         secretKey: key,
         newId: () => crypto.randomUUID(),
@@ -332,6 +336,7 @@ describe('the wizard’s integration writes', () => {
           secretRefs: { token: 'EMPTY_TOKEN' },
         },
         provider: gitlab,
+        egress: allowAnyIntegrationHost(),
         secretSource: source,
         secretKey: key,
         newId: () => crypto.randomUUID(),

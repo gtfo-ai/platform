@@ -233,6 +233,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         ? composeIntegrationStack({
             pool: database.pool,
             eventing,
+            // `APP_INTEGRATION_HOSTS` (WP-51). The one executor this process composes is the one
+            // that refuses a call to a host nobody declared, so the list arrives here and not at a
+            // route: a route can only guard what it is asked to write.
+            integrationHosts: config.integrationHosts,
             ...(options.pipeline?.registry === undefined
               ? {}
               : { registry: options.pipeline.registry }),

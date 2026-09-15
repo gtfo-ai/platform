@@ -28,6 +28,7 @@ Neutral names, no product prefix for standard variables; `APP_` for product-spec
 | `APP_RUNNER_MAX_PARALLEL` | `4` | org `max_parallel_runs` seed |
 | `APP_WEBHOOK_PUBLIC_URL` | unset | if set, webhooks are advertised in setup guides; else polling |
 | `APP_DISABLE_TELEMETRY` | `true` | no phone-home by default |
+| `APP_INTEGRATION_HOSTS` | unset (**closed**) | comma-separated hosts a provider binding may name (WP-51, PROGRESS backlog 48). **Not settable through the API** — a list a caller can extend is not a list. Enforced twice: `POST /api/integrations` refuses an undeclared host with `403 integration_host_not_permitted` naming the host and this variable, and `IntegrationActionExecutor` refuses the *call*, so a row written before the list existed cannot slip past. Matching is exact and case-insensitive on the host alone: no port, no path, no subdomain wildcard, punycode as written. Unset or empty means **no provider call leaves the process**, which is rule 18's fail-closed answer; a single `*` declares the list open. It checks names, never the addresses they resolve to |
 | `APP_FEATURE_*` | — | feature flags for staged rollout |
 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | `1` | set on runner processes (research/04) |
 | `DISABLE_AUTOUPDATER` | `1` | runner processes `[verify name in research/05]` |

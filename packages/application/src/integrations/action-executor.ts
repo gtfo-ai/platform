@@ -13,6 +13,42 @@
  * TD-005) call this, so shadow mode, the audit and the rate limit cannot be forgotten at a call
  * site.
  *
+ * ## Which calls this is *for* — the audit is per **binding** (WP-51, PROGRESS backlog 97)
+ *
+ * Every duty above is expressed in terms of an `integrations` row: the audit is
+ * `integration_actions.integration_id uuid not null references integrations (id)`, the idempotency
+ * record is scoped the same way, the rate-limit budget is per `integrations.id`, and shadow mode is
+ * a property of the task whose binding it is. So the contract this door offers is precisely:
+ *
+ * > **every outbound call the platform makes _on behalf of a binding_ goes through here.**
+ *
+ * That is narrower than "every outbound call", and until WP-51 nothing said so. `CLAUDE.md`'s
+ * non-negotiable is qualified to match, and technical/06 § "Outbound: actions" carries the same
+ * sentence. The distinction is not cosmetic: the cheap wrong answer for a call with no binding is
+ * to attribute it to whatever binding is at hand, and an audit row that names the wrong credential
+ * is **worse** than no audit row, because it states something false about what was in scope.
+ *
+ * **A platform-owned call — one with no `integrations` row, no credential and no project
+ * configuration — is audited by its own module, under a named checklist**, and shape (a) of backlog
+ * 97 is the recorded decision (the table is not widened; `integration_id` stays `not null`). The
+ * checklist such a module owes, in full:
+ *
+ *  1. **no credential in scope** — nothing the platform holds is sent, so the property the audit
+ *     row polices (a secret reached a host) cannot be violated;
+ *  2. **an operator-declared host**, matched exactly, empty by default — the same shape
+ *     `createIntegrationEgressPolicy` gives a binding, so there is one idea and not two;
+ *  3. **a bounded body** read with a timeout, so a hostile answer costs memory it cannot choose;
+ *  4. **no writes** — the call informs a decision and never performs one, so there is no side
+ *     effect an idempotency record would have to protect;
+ *  5. **`assertOutsideTransaction`**, so WP-15d's shape holds for it as it does here.
+ *
+ * The one such module in this repository is
+ * `packages/infrastructure/src/dependencies/registry-metadata.ts` (WP-38, Q84), whose docblock
+ * states the same five and whose test counts what reached the network. What it does **not** get is
+ * stated there rather than implied: no `integration_actions` row, no idempotency record, no
+ * per-integration rate limiter. A second platform-owned call meets this decision instead of
+ * re-deriving it.
+ *
  * ## What the type system enforces, and what the runtime enforces after it
  *
  * A **mutating** request must supply `mode`, `shadowResult` and `describeResult`. All three are
@@ -140,6 +176,7 @@ import {
   type IntegrationRef,
 } from '../ports/integrations/common.js';
 import { type LogFields, type Logger, silentLogger } from '../ports/logger.js';
+import { type IntegrationEgressPolicy, IntegrationEgressRefusedError } from './egress.js';
 import {
   createRateLimiter,
   DEFAULT_RATE_LIMIT_POLICY,
@@ -280,6 +317,18 @@ export interface IntegrationActionExecutorOptions {
   readonly auditLog: IntegrationAuditLog;
   /** Required, never defaulted: a no-op redactor looks exactly like a working one (TD-012). */
   readonly redactor: SecretRedactor;
+  /**
+   * Which hosts this process may dial for a binding (WP-51, PROGRESS backlog 48).
+   *
+   * **Required, for the reason `redactor` is**: both possible defaults are wrong. "Open" is the
+   * defect the option exists to remove, and "closed" would make a composition root that forgot the
+   * operator's list look identical, at this call site, to one that read it. A deployment that
+   * genuinely means "anywhere" passes `allowAnyIntegrationHost()`, written out in full.
+   *
+   * It is checked against `IntegrationRef.host` — the binding's own configured host — so no call
+   * site supplies, or can forget, the URL being guarded.
+   */
+  readonly egress: IntegrationEgressPolicy;
   readonly timer: IntegrationTimer;
   /** Supplies `occurred_at` for the audit row, in the platform's wire format. */
   readonly clock: Clock;
@@ -724,10 +773,55 @@ export const createIntegrationActionExecutor = (
     };
   };
 
+  /**
+   * The egress guard: the binding's own host against the operator's list (WP-51, backlog 48).
+   *
+   * **Before the shadow branch, deliberately.** A *read* is what carries the credential to the host
+   * in the finding this closes — `POST /api/integrations/:id/test` is a read — so a guard that only
+   * covered mutations would miss the whole exploit, and shadow mode is about not *changing* a
+   * provider, not about making a misconfigured binding safe to talk to.
+   *
+   * **No audit row**, like `assertActionName`, `requireMutatingMode` and `idempotencyScopeFor`:
+   * nothing provider-facing happened, so there is no provider-facing existence to audit (BD-003 is
+   * about actions that were performed or attempted). That leaves the same hole rule 20's second
+   * half named for the refused idempotency key — a refusal with nothing to diagnose it by — so this
+   * writes the one log line that carries the host and the setting. The host is binding
+   * configuration, never a credential: it is the thing an operator has to fix.
+   *
+   * `host === null` is *not* a refusal: it means the adapter opens no socket (the fakes), and
+   * `IntegrationRef.host` carries the argument plus the census that keeps a real provider out of
+   * that branch.
+   */
+  const assertEgressAllowed = <TResult>(request: IntegrationActionRequest<TResult>): void => {
+    const host = request.integration?.host ?? null;
+    if (host === null) {
+      return;
+    }
+    // The ref carries a bare host and the policy decides over a URL, so the host is put back into
+    // the smallest URL that means "this host": the scheme half is already the five config schemas'
+    // (`httpUrlSchema`), and re-deriving it here from a string the ref does not carry would be
+    // inventing evidence.
+    const verdict = options.egress.check(`https://${host}`);
+    if (verdict.allowed) {
+      return;
+    }
+    logger.warn(
+      {
+        ...logFieldsOf(request),
+        host: verdict.host,
+        setting: 'APP_INTEGRATION_HOSTS',
+        reason: verdict.reason,
+      },
+      'refused a provider call to a host this deployment does not permit; nothing was sent',
+    );
+    throw new IntegrationEgressRefusedError(request.integration, request.action, verdict);
+  };
+
   const run = async <TResult>(
     request: IntegrationActionRequest<TResult>,
   ): Promise<IntegrationActionOutcome<TResult>> => {
     assertActionName(request);
+    assertEgressAllowed(request);
     const startedAt = options.timer.now();
 
     // 1 — Shadow mode. A shadow task reads freely and never writes (technical/02: "shadow tasks

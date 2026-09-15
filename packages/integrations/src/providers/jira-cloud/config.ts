@@ -11,13 +11,21 @@
  * `JIRA_USER_EMAIL`, `JIRA_API_TOKEN` (+ `_FILE`), `JIRA_WEBHOOK_SECRET` (+ `_FILE`) — and the
  * setup guide maps them onto these fields.
  */
-import { nonEmptyStringSchema, urlSchema } from '@platform/contracts';
+import { httpUrlSchema, nonEmptyStringSchema } from '@platform/contracts';
 import * as z from 'zod';
 import { DEFAULT_WEBHOOK_MAX_AGE_MS } from './webhook.js';
 
 export const jiraCloudConfigSchema = z.strictObject({
-  /** `https://acme-example.atlassian.net`. */
-  site_url: urlSchema,
+  /**
+   * `https://acme-example.atlassian.net`.
+   *
+   * `httpUrlSchema` rather than the shared `urlSchema` since WP-51: that one is `z.url()`, which
+   * accepts `javascript:`, `data:`, `vbscript:` and `file:` (Q49), and this value is handed to the
+   * client this binding's API token is built into. The **host** is the other half and is not a
+   * schema's to know: it is checked against `APP_INTEGRATION_HOSTS` when the row is written and
+   * again when the call is made (`createIntegrationEgressPolicy`).
+   */
+  site_url: httpUrlSchema,
   /** The Atlassian account the API token belongs to. */
   user_email: z.email(),
   /** Secret. An Atlassian API token, never a password. */

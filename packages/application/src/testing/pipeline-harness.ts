@@ -32,6 +32,7 @@ import { createLateCostRecorder } from '../cost/late.js';
 import { costHandlers } from '../cost/runtime.js';
 import { EventBus } from '../events/event-bus.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
+import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipeline/commands.js';
@@ -760,6 +761,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const bootstrap = createMemoryHistoryBootstrapStore({ now: () => clock.now() });
   const integrations: PipelineIntegrations = {
     executor: createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog: audit,
       redactor: exactSecretRedactor([]),
       // `autoAdvance`, or a rate-limit or backoff sleep inside the executor waits on a clock

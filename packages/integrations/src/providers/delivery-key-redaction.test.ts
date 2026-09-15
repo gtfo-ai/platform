@@ -79,6 +79,7 @@
  */
 import { readdirSync } from 'node:fs';
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -141,6 +142,9 @@ const SLACK_SIGNING_SECRET = 'FAKE-PLANTED-slack-signing-secret-0123456789';
 
 const jiraRegistration = createJiraCloudRegistration({
   executor: createIntegrationActionExecutor({
+    // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+    // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+    egress: allowAnyIntegrationHost(),
     auditLog: createMemoryAuditLog(),
     // Disarmed too: nothing below may be discharged by the ring outside the adapter — and the
     // executor does not cover this value anyway, since `deliveryKey` is not an action.

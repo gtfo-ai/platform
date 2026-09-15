@@ -27,6 +27,7 @@ import type { PipelineStage } from '@platform/domain';
 import { compilePipeline, FEATURE_TEMPLATE, stageOf } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
+import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { GitProviderPort, PipelineStatus } from '../ports/integrations/git-provider.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
@@ -57,6 +58,9 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
   } as unknown as GitProviderPort;
   return {
     executor: createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog: createMemoryAuditLog(),
       redactor: exactSecretRedactor([]),
       // Standing rule: a sleep on a clock nothing drives hangs the suite instead of failing it.

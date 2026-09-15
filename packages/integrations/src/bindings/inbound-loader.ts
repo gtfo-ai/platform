@@ -85,6 +85,17 @@ const secretName = (account: IntegrationAccount, field: string): string =>
 const inboundOf = (port: object): InboundNormaliser | null =>
   'inbound' in port ? ((port as { inbound: InboundNormaliser }).inbound ?? null) : null;
 
+/** The host the built adapter says it dials, or `null` (WP-51; see the ref below). */
+const hostOf = (port: object): string | null => {
+  if (!('ref' in port)) {
+    return null;
+  }
+  const ref = (port as { ref: unknown }).ref;
+  return typeof ref === 'object' && ref !== null && 'host' in ref
+    ? ((ref as { host: string | null }).host ?? null)
+    : null;
+};
+
 export const createInboundIntegrationLoader = (
   options: InboundIntegrationLoaderOptions,
 ): InboundIntegrationLoader => {
@@ -159,11 +170,22 @@ export const createInboundIntegrationLoader = (
         }
       };
 
-      const inbound = inboundOf(build(account.config, 'the account adapter'));
+      const accountPort = build(account.config, 'the account adapter');
+      const inbound = inboundOf(accountPort);
       const ref = {
         integrationId,
         provider: account.provider,
         type: account.type,
+        /**
+         * The adapter's **own** host (`IntegrationRef.host`, WP-51).
+         *
+         * This path makes no outbound call — it normalises a delivery somebody sent us — but the
+         * ref it publishes is the same type the executor's egress allow-list decides on, and a
+         * second derivation of "where is this account" is a second answer waiting to disagree with
+         * the first. Read off the built port rather than re-parsed from `account.config`, because
+         * which key holds the URL is the provider's knowledge and not this loader's.
+         */
+        host: hostOf(accountPort),
       };
       if (inbound === null) {
         // A provider with no inbound half can have no bindings that normalise anything; building

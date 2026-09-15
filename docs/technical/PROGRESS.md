@@ -4989,8 +4989,18 @@ exists) shares the aggregate and none of the work; WP-38 note 5's `settle` fix i
 different site* — a gate settling for a task that had stopped — and is the precedent for the re-entry
 shape, since that one already ends with *"the gate is re-entered when the task resumes"*.
 
-### 97. **`IntegrationActionExecutor` cannot audit a call that has no binding, because `integration_actions.integration_id` is `not null` — so the platform's first outbound call of its own gets no audit row at all, and nothing says which audit it should get instead** (TODO, small — **no work package owns it**; surfaced by WP-38, session 5, whose deviation is decided and reasoned; this entry is the **general** assumption underneath it, which no document states)
+### 97. **`IntegrationActionExecutor` cannot audit a call that has no binding, because `integration_actions.integration_id` is `not null` — so the platform's first outbound call of its own gets no audit row at all, and nothing says which audit it should get instead** (**RESOLVED** by WP-51, session 6 — uncommitted at the time of writing. Kept for its evidence; surfaced by WP-38, session 5, whose deviation is decided and reasoned; this entry is the **general** assumption underneath it, which no document stated)
 > **M4 (architect, session 6): folded into WP-51.**
+>
+> **As decided and written down (WP-51): shape (a).** The table is not widened — `integration_id`
+> stays `not null` — and the sentence the next implementer reads now exists in three places: the
+> executor's own docblock ("which calls this is *for*"), `docs/technical/06` § "Outbound: actions",
+> and `CLAUDE.md`'s non-negotiable, all qualified to *"every outbound call the platform makes **on
+> behalf of a binding**"*. The checklist a platform-owned call is audited by is stated in full at
+> each of the three — no credential in scope, an operator-declared host, a bounded body, no writes,
+> `assertOutsideTransaction` — and `registry-metadata.ts`'s docblock now says it is that checklist's
+> one instance rather than one module's private deviation. (b) and (c) are declined for the reasons
+> this entry priced them at.
 
 **What is wrong.** The non-negotiable in `CLAUDE.md` is *"Every outbound provider call goes through
 `IntegrationActionExecutor` … never directly"*, and the audit table it writes assumes every outbound
@@ -6775,6 +6785,185 @@ gap must be re-owned by number rather than dropped: deleting the sentence leaves
 unauthenticated, which is the worse of the two states. Related: **34** (same latency, same trigger),
 **110** (`local` mode's spend is always an estimate — the other place this mode is half-built),
 **127** (the neighbouring class: a documented knob with no reader), **Q14**.
+
+### 129. **The egress allow-list decides the first request and `fetch` decides the rest: no provider adapter refuses a redirect, and the one client in this repository that does is the one carrying no credential** (TODO, small-to-major — one cause, five files; the exposure's precondition is stated and is **not** reachable by the caller the allow-list was built against; folded into **WP-59**; found by WP-51, measured off the tree by the refiner, session 6)
+
+**What is wrong.** `assertEgressAllowed` is asked **once per action**, on the URL the platform built
+out of `integrations.config`. What the adapter's HTTP client does with a `3xx` is nobody's decision:
+all five clients call `fetch` with no `redirect` option, so the default (`follow`) applies and the
+second request goes to a host no list ever saw, carrying the request's headers.
+
+**Evidence** (refiner, session 6; greps and file reads, nothing run — rule 66).
+- WP-51's own module states it, and states it as discovered work —
+  `packages/application/src/integrations/egress.ts:75-77`: *"**Redirects.** The adapters pass the
+  base URL to `fetch`; a 302 to another host is followed by whatever the adapter's client does. The
+  registry client next door sets `redirect: 'error'`; no provider adapter does, and that is recorded
+  as discovered work rather than fixed here."*
+- **Reproduced off the tree.** A grep for `redirect` over the five adapters returns **no `redirect`
+  key in any request init**: `providers/gitlab/http.ts:280-285`, `providers/sentry/http.ts:216-221`,
+  `providers/loki/http.ts:213-218` and `providers/slack/http.ts:271-276` each build
+  `method`/`headers`/optional `body`/optional `signal` and nothing else, and Jira's client is
+  `ky.create({…})` at `providers/jira-cloud/client.ts:237-246` with `retry: 0`,
+  `throwHttpErrors: false`, a timeout and headers — again no `redirect`.
+- **The credential is on the request.** `providers/gitlab/http.ts:270` sets
+  `'private-token': options.token`; `providers/sentry/http.ts:209` and
+  `providers/slack/http.ts:265` set `authorization: Bearer …`; `providers/loki/http.ts:153` sets
+  `authorization` for both `bearer` and `basic`; `providers/jira-cloud/client.ts:244` sets
+  `authorization` from `basicAuthHeader`.
+- **The precedent is one directory away, and the asymmetry is the finding.**
+  `packages/infrastructure/src/dependencies/registry-metadata.ts:310-312`: *"A redirect is how an
+  allow-listed host hands the request to one that is not, so it is refused rather than followed."* —
+  written into the one client that deliberately carries *"No credential of any kind: the whole reason
+  this path can live outside the audit"* (`:307`). The five clients that hold a **decrypted token**
+  follow.
+- **No test in this repository can see it, and the census says so in its own words** —
+  `packages/integrations/src/providers/egress-host.test.ts:36-40`: *"A client that built a second URL
+  from a provider response — a pagination link, a `Location` header, a redirect — would reach a host
+  this ref never named and the executor would never see it. No test in this repository covers that;
+  the fixtures are replayed, so a real redirect has never been exercised."*
+- **The pagination half of that sentence is already closed, which makes this one cause rather than
+  two**: GitLab paginates on `x-next-page`, a page *number* put back into a URL rebuilt from
+  `options.baseUrl` (`providers/gitlab/http.ts:228`, `:395`), and Jira's is a `nextPageToken`
+  (`providers/jira-cloud/mapping.ts:187`). Neither adapter dials a URL a provider handed it.
+  Redirects are the only live path of the three.
+- **One provider is known to redirect today, on the same host.** `providers/sentry/client.ts:9-11`:
+  *"Paths carry Sentry's **trailing slash**; its API 301-redirects a path without one, and a redirect
+  that `fetch` follows silently would make the replay transport's key not match the request that was
+  actually served."* So refusing redirects is not a hypothetical constraint on Sentry — it is one the
+  path-building already satisfies.
+
+**What is hypothesis rather than reading** (rule 39), and it decides the grade. **Whether the
+credential survives the hop is per-header and has not been measured here.** The WHATWG fetch
+specification deletes `Authorization`, `Cookie` and `Proxy-Authorization` on a **cross-origin**
+redirect and deletes nothing else, so on a spec-conforming runtime GitLab's `private-token` — a
+provider-specific header name — would follow to the new host while the four `authorization` ones
+would not. That is a reading of the specification, **not** a measurement of Node 24's undici; the
+measurement is filed in `docs/TODO.md` (rule 66, nothing run here). Under the weaker reading this is
+still a defect: a request to a host the allow-list would have refused is still performed, its
+response is still parsed as the provider's, and `integration_actions` still records the action as a
+call to the **declared** host.
+
+**The precondition, stated so the grade is not inflated.** The first hop is always a declared host,
+so a cross-host redirect needs that host to emit one — a compromised or multi-tenant provider, a TLS
+interception, or a declared name that later moves. The `integration.write` caller this allow-list was
+built against (backlog **48**) cannot cause one by choosing `base_url`: their host has to be declared
+first. What they *can* influence is the **path**, through config fields like a project slug, which is
+enough to reach a same-host redirect and not enough to leave the host.
+
+**Defect or working as designed?** A **defect**, and an honestly stated one — the module that owns
+the decision names the hole in its own docblock. It is latent on the precondition above, **not** on
+the absence of a producer: every provider call this build makes goes through these five clients
+today.
+
+**What it costs to leave.** The allow-list's whole value is that an operator can reason about where a
+decrypted credential may go, and the answer today is *"the declared hosts, plus wherever any of them
+points"*. Worse than the exposure is the audit, which is the sentence backlog 48 was filed on:
+`integration_actions` records the request the executor **authorised**, so a call that ended somewhere
+else is spelled exactly like one that did not. And the replayed fixtures make every tier green over
+it, which is how it survived five adapters.
+
+**What "done" looks like.**
+1. **`redirect: 'error'` at the five clients**, the registry client's spelling and its comment:
+   refused rather than followed. `manual` is the wrong answer here — it hands the adapter a `3xx` it
+   would then have to interpret, which is five more branches; `error` fails the call loudly, which is
+   what a refused egress should look like.
+2. **One case per client**, calibrated: an injected `fetch` that answers `302` and an assertion that
+   the client **raised** rather than followed. The replay fixtures cannot express a redirect, which
+   is exactly why the case is written against the injected `fetch` rather than the transport.
+3. **A same-host redirect is refused too, and that is a decision to state at the line**: Sentry's
+   trailing-slash 301 is the case that would otherwise be argued about later. Its paths already carry
+   the slash, so the refusal costs nothing there — say so rather than leaving it to be rediscovered.
+4. Rule 83: `egress.ts:75-77` and `egress-host.test.ts:36-40` both describe the hole in the present
+   tense and move in the same change. **Do not delete the second** — it is the census's honest limit
+   and stays true for any host reached some other way.
+5. **Five files or none.** Closing one leaves a property that holds for one provider and reads as
+   holding for all, which is rule 63's shape in its hardest-to-see direction.
+
+**What would make it urgent.** An operator declaring a host they do not control end to end — a hosted
+GitLab, Jira Cloud, Sentry or Slack — is the *ordinary* case, so the precondition is provider
+compromise rather than operator misconfiguration. **WP-53** does not change the shape but multiplies
+the traffic: it is the row that makes runs execute, and every stage that touches a provider goes
+through these clients.
+
+**Depends on / owner. WP-59**, the git-provider row: it is the first M4 row scheduled to open any
+`providers/*/http.ts` and it already owns four entries in those files. **Four of the five files are
+outside its title**, and that is stated rather than hidden — the other four are one option and one
+case each, and *no row is scheduled to open them at all*. If WP-59 declines them they must be
+**re-owned by number** (WP-73's shape, the repairs no row owns) rather than dropped; the split
+outcome is the one thing (5) forbids. **Not `egress.ts`'s to fix**: it is a pure decision with no
+I/O, and the executor never sees the redirect — the response is consumed inside the adapter, below
+the guard, so only the client can refuse. Related: **48** (this is the stated remainder of it, with
+the address residual recorded there), **130** (WP-51's other discovered work), and the undici
+measurement filed in `docs/TODO.md`.
+
+### 130. **The source claims `createIntegration` is the *only* writer of `integrations.config` and nothing holds the claim — the endpoint that would falsify it is specified in technical/08, unbuilt, and would skip two write-time refusals, one of which has no second layer** (TODO, nit-to-small — **working as designed with an unheld claim**; **latent, no producer**: `PATCH /api/integrations/:id` does not exist; rule 63's shape; folded into **WP-68**; found by WP-51, measured off the tree by the refiner, session 6)
+
+**What is wrong.** Two guards run on the create path and nowhere else: `assertHostIsDeclared`
+(WP-51's write-time egress refusal) and `assertNoCredentialInConfig` (the refusal that keeps a
+plaintext token out of the column). Their coverage rests on a sentence —
+`apps/server/src/queries/onboarding-queries.ts:388-390`: *"`createIntegration` is the **only** writer
+of `integrations.config` in this repository (`writeIntegrationHealth` names `health` and nothing
+else; `PATCH /api/integrations/:id` is unbuilt), so one call site is the whole coverage. A second
+writer has to come through here."* Nothing in the repository checks that sentence.
+
+**Evidence** (refiner, session 6; greps and file reads, nothing run — rule 66).
+- The claim is **true today**, measured: the only two statements against the table are
+  `.insert(integrations)` at `apps/server/src/queries/onboarding-queries.ts:573` and
+  `.update(integrations)` at `:798`, and the second is `writeIntegrationHealth`, which sets `health`
+  alone under standing rule 79 with the reason at the line (`:789-790`).
+- The endpoint that would falsify it is **already specified**:
+  `docs/technical/08-api-and-realtime.md:15` lists `PATCH /api/integrations/:id` in the integrations
+  row, and `:115-116` names it among *"What is still unbuilt on those rows"*. So a future implementer
+  has a documented row to build, and one docblock in a different file telling them what it must call.
+- **The client census cannot see it.** `apps/server/src/routes/client-census.test.ts` compares the
+  paths the SPA calls with the routes the server registers; no screen calls a PATCH, so an endpoint
+  added without a caller sits outside its equality in both directions.
+- **The two guards are not equally protected, which is the half worth filing.** The *host* question
+  is asked again at call time — `assertEgressAllowed` over `IntegrationRef.host` inside
+  `IntegrationActionExecutor`, against the host the adapter read out of the stored row — so a row a
+  PATCH wrote is refused before anything is sent. The *credential-in-config* question has **no**
+  call-time twin: nothing re-reads a stored `config` looking for a pasted token. What bounds that
+  half is a read-side strip, `apps/server/src/routes/integrations.ts:25`, which removes the
+  provider's declared credential fields before publishing and publishes nothing at all for a provider
+  this build does not ship.
+
+**Defect or working as designed?** **Working as designed, with an unheld claim.** The exposure is
+bounded by construction today; what is missing is the thing that keeps it bounded when the next
+writer lands. Rule 63 is the rule it meets: *an exclusivity claim is a statement about every other
+file, so it cannot be maintained from inside the file that makes it.*
+
+**What it costs to leave.** One PATCH route, written by somebody reading `08-api-and-realtime.md`
+rather than this docblock, silently removes both write-time refusals. The egress half then degrades
+from a 403 *where the mistake is made* to a call-time refusal with **no audit row** and one `warn`
+line (WP-51's decision 5) — an operator sees a probe fail and is told nothing. The credential half
+degrades to nothing at all, and a token pasted into `config` is stored in plaintext and merged over
+the sealed one by the binding loader.
+
+**What "done" looks like.**
+1. **A census over the writers of `integrations.config`**, in the shape this repository already uses
+   twice — `task-save-sites.test.ts` and `tasks-column-ownership.test.ts`, whose stated value is that
+   *a new whole-row writer is a decision somebody makes rather than a line somebody adds*. The
+   predicate is the **statement site**, not the route: every `insert`/`update` against `integrations`
+   that names `config`, read off disk, against a declared list of one.
+2. **Its own limits are written down**, because it is a syntactic guard over a query builder: a raw
+   `sql` write, a dynamically assembled `set` object, and a write from a script are invisible to it.
+   The pool census's docblock is the precedent for saying so.
+3. The sentence at `:388-390` **points at the census** instead of asserting exclusivity on its own
+   authority, and `assertHostIsDeclared`'s docblock gains the same pointer.
+4. **Explicitly not the answer**: giving the credential half a call-time twin. It is a second answer
+   to a question the write already answers, it would cost a re-read of every stored config, and the
+   census is the cheaper closure — recorded here so the next reader does not re-open it.
+
+**What would make it urgent.** Anybody building `PATCH /api/integrations/:id`. technical/08 has
+specified it since WP-15h, **no M4 row schedules it**, and the wizard rows (WP-62 to WP-64) are where
+an edit screen would most plausibly ask for one.
+
+**Depends on / owner. WP-68**, *"the guards see what they claim to see"* — this is precisely that
+row's subject: a guard whose entire coverage argument is a sentence nothing checks, on a row that
+depends on nothing unbuilt and already carries a census sweep and the shared-helper decision. The
+alternative owner is whoever adds the second writer, and it is named here so the census is not built
+*after* the hole. Related: **48** and **129** (WP-51's other discovered work), rule **63**, rule
+**79**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -9433,8 +9622,51 @@ row before the effect, which trades a double-perform for a key that claims a com
 table, not a defect to be fixed in passing. Nobody owns it; the window is unchanged in kind since
 WP-21 measured it, so no new entry.
 
-### 48. **A binding's host is whatever the caller typed, and the platform process has no outbound allow-list — so the credential the API is designed never to reveal can be sent to a host the caller chose** (TODO — **no work package owns it**; found by WP-21's round-1 reviewer, session 5)
+### 48. **A binding's host is whatever the caller typed, and the platform process has no outbound allow-list — so the credential the API is designed never to reveal can be sent to a host the caller chose** (**RESOLVED** by WP-51, session 6 — uncommitted at the time of writing. Kept for its evidence and its reasoning; found by WP-21's round-1 reviewer, session 5)
 > **M4 (architect, session 6): folded into WP-51.**
+>
+> **As built (WP-51).** `APP_INTEGRATION_HOSTS` is the operator-declared list this entry asks for —
+> instance configuration, never settable through the API, **empty and therefore closed by default**
+> (`*` declares it open, which is rule 18's other permitted answer), matched **exactly** on the host
+> with case and one trailing dot normalised on both sides. Enforced in the **two** places this entry
+> names: `assertHostIsDeclared` at `POST /api/integrations`
+> (`403 integration_host_not_permitted`, naming the host and the variable) and
+> `assertEgressAllowed` inside `IntegrationActionExecutor`, against `IntegrationRef.host` — the host
+> the adapter read out of its own validated config, so a row the write check never saw is refused
+> before anything is sent. The policy itself is
+> `packages/application/src/integrations/egress.ts`. The **scheme** half is closed too: the five
+> config schemas are `httpUrlSchema` rather than bare `z.url()`.
+>
+> The residual this entry's own "what is hypothesis" paragraph asks about is now measured rather
+> than open: `POST /api/integrations/:id/test` really is the exploit path, because the prober built
+> the adapter with the decrypted credential before anything checked the host — which is why the
+> guard is before the shadow branch (a read, not a mutation) and why the prober now takes the
+> adapter's **own** ref instead of building one. What is **not** closed: the list decides over
+> **names**, not the addresses they resolve to, and no provider adapter re-checks a redirect
+> (`createIntegrationEgressPolicy`'s docblock lists both, and the redirect half is Discovered work
+> under WP-51).
+>
+> **Residual — names, not addresses** (refiner, 2026-09-15, session 6; read off the tree, nothing
+> run — rule 66). The redirect half is now its own entry, backlog **129**. The address half stays
+> here, because it is a property of the mechanism this entry asked for rather than a defect in it and
+> because **no work package owns it**. The module states it:
+> `packages/application/src/integrations/egress.ts:72-74` — *"**DNS.** A declared host that resolves
+> to `169.254.169.254` is allowed. This is an allow-list over names, not over addresses, and an SSRF
+> guard over addresses is a different mechanism (it would have to run at connect time, inside the
+> HTTP client, and re-run on every redirect)."* **The run container's sidecar has the same shape**, so
+> this is a property of *both* egress controls in the product and not a narrowing WP-51 chose:
+> `docs/technical/05-workspaces-and-security.md:20` describes that list as hosts, and the page's own
+> residual line already carries *"domain fronting via allowed CDNs"* (`:40`). **The trigger** is an
+> operator declaring a name whose resolution they do not control end to end — a host that later moves,
+> a CNAME to a service that is later taken over, or a rebinding answer — and it needs no producer to
+> be built first: both lists are live on this build. **Nobody owns it**: TD-028 is the launcher's
+> control plane and says nothing about addresses, and WP-53 and WP-72 inherit the sidecar as built.
+> **Not folded into 129**: one is the redirect and one is the address, and although a connect-time
+> address check would subsume both, it is a different mechanism at a different cost. **What done would
+> look like**, if it is ever taken: the check runs inside the HTTP client at connect time (a `lookup`
+> hook or an address-pinning dispatcher), re-runs per redirect, refuses the private and link-local
+> ranges by default — and states what that costs an operator whose GitLab or Loki is genuinely on a
+> private network, which is the ordinary self-hosted case and is why this is stated rather than done.
 
 **What is wrong.** Every provider takes its host from `config` as a free-form URL and nothing
 constrains which host that may be. Five instances, one shape, read off the schemas:
@@ -10300,7 +10532,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
 | WP-58 | **Retrieval: the instrument first, then the query** | TODO | — | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
-| WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | TODO | — | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch |
+| WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | TODO | — | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
 | WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | TODO | — | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
 | WP-61 | **The delivery metrics stop being wrong in two directions** | TODO | — | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
 | WP-43 | **Slack Socket Mode** | TODO | — | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
@@ -10313,7 +10545,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-65 | **The organisation's own channel, the undelivered metric, the maintenance report, and the storage gauge** | TODO | — | Depends on WP-32, WP-30, WP-36, WP-18a. Folds backlog **80** (major), **81**, **107**, and **Q63**'s operator-facing half. Backlog 80 takes answer (c), the account's channel; the migration carries `nulls not distinct` |
 | WP-66 | **The history bootstrap says how much it read** | TODO | — | Depends on WP-35, WP-18b. Folds backlog **102**, **103**. One column, one `set` clause, one line on the panel — deliberately **not** behind the statistics row. **Refiner (session 6): also folds backlog 124's first half** — `docs/technical/03-data-model.md` has no entry for `history_bootstrap_batches` or `history_bootstrap_chunks` at all, so this row's own migration would otherwise add a second undocumented column to a table with no documented home; the page is amended **before** the migration (criterion (8)). The rest of 124 — the other ten tables with no entry, and the check that would stop the drift — stays unowned and must **not** go to WP-73, which would then be editing the same page |
 | WP-67 | **The idempotency record, the gate that asks again, and the requester nobody wrote** | TODO | — | Depends on WP-15i, WP-21, WP-34, WP-38, WP-37. Folds backlog **47** (major), **99**, **96** (major), **92**. **Q91** decides the `ready_for_merge` case; only the human-owned stops are built if the recommendation stands |
-| WP-68 | **The guards see what they claim to see** | TODO | — | Depends on nothing unbuilt. Folds backlog **8** (major — a security gate that fails open), **10**, **30**, **3**, **111**, **9**, **6**. One shared helper, not eleven repairs; the two guards whose own suites assert the hole get those cases rewritten |
+| WP-68 | **The guards see what they claim to see** | TODO | — | Depends on nothing unbuilt. Folds backlog **8** (major — a security gate that fails open), **10**, **30**, **3**, **111**, **9**, **6**. One shared helper, not eleven repairs; the two guards whose own suites assert the hole get those cases rewritten. **Refiner (session 6): also folds backlog 130** (nit-to-small) — `apps/server/src/queries/onboarding-queries.ts:388` claims `createIntegration` is the **only** writer of `integrations.config`, which is true today and held by nothing; the endpoint that would falsify it is specified at technical/08:15 and unbuilt, and it would skip two write-time refusals, one of which (credential-in-config) has no call-time twin. A census in `task-save-sites.test.ts`'s shape, with the spellings it cannot see stated |
 | WP-69 | **The harness cannot script what production would refuse** | TODO | — | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**. The deliverable is the **detector**, not the fix; the vitest-budget contradiction is resolved by reading the resolved config before any number is chosen |
 | WP-70 | **Coverage: where the debt is, and what may be excluded** | TODO | — | Depends on nothing unbuilt. Folds backlog **87**, **115**. Opens with the measurement `docs/TODO.md` already asks for; the answer is a budget that says **where** coverage is owed, never *"write more tests"* |
 | WP-71 | **The CI surface: the linters, SAST, mutation, the changelog and the tag nobody decided** | TODO | — | Depends on WP-42, WP-22, TD-017, TD-015, TD-019. Folds backlog **116**, **117**, **118**; implements **Q89** — stop publishing `latest`. CodeQL is a **setting** an administrator applies, not a file |
@@ -23271,3 +23503,121 @@ interpolate*, and its project was removed by hand in the same session.
   all**, and the recording `Proxy` over `loadServerConfig` never asks for it. So local mode passes a
   credential nothing consumes, and rule 18's shape is in the file that claims otherwise. Not this
   row's: the row names `compose.yml:106` and shape (1), and this is BD-004's plumbing.
+
+#### WP-51 — the platform's own egress: a declared host allow-list, and an audit for a call with no binding
+
+**The shape.** `APP_INTEGRATION_HOSTS` is a third operator-declared list beside
+`APP_INTEGRATION_SECRET_ENV` and `APP_DEPENDENCY_REGISTRY_HOSTS`, parsed by the same
+`hostListFromEnv` (with a `allowWildcard` parameter, because `*` means something here and nothing
+there) and turned into a policy by `packages/application/src/integrations/egress.ts`. Two
+enforcement points, both required rather than optional at their construction site:
+
+| | where | refusal |
+|---|---|---|
+| write | `assertHostIsDeclared` in `queries/onboarding-queries.ts`, called by `createIntegration` | `403 integration_host_not_permitted`, naming the host and the variable |
+| call | `assertEgressAllowed` in `IntegrationActionExecutor.run`, over `IntegrationRef.host` | `IntegrationEgressRefusedError` (code `forbidden`, `reason: 'host_not_declared'`, `setting`), no audit row, one `warn` line |
+
+**Decisions (each with the reason, not just the choice).**
+
+1. **The empty list fails closed; `*` declares it open.** Rule 18, and consistency: the two existing
+   operator-declared lists on this process both mean "nothing" when empty, so a third that meant
+   "everything" would be the one an operator guesses wrong. The cost is real and is stated in the
+   operator guide under upgrading: an instance whose integrations already work must declare their
+   hosts before it restarts, or every provider call is refused. The refusal names the host, so the
+   log line is the instruction.
+2. **The host lives on `IntegrationRef`, not on the request.** The executor must be able to refuse a
+   call *no call site cooperated in* — that is the whole point of the call-time half — and a field
+   on `IntegrationActionRequest` is a field the next adapter forgets. The ref is built once per
+   adapter out of the config the provider's own schema just accepted. `null` means "opens no socket"
+   and is the fakes' answer; `providers/egress-host.test.ts` is the census that keeps a real
+   provider out of that branch, over every directory under `providers/` read off disk.
+3. **The guard runs before the shadow branch and covers reads.** The exploit in backlog 48 is
+   `POST /api/integrations/:id/test` — a **read** — and the prober builds the adapter with the
+   decrypted credential before anything looks at the host. A guard scoped to mutations, or placed
+   after the shadow check, passes every other case and misses the finding.
+4. **The prober takes the adapter's own ref** instead of building one from the account row. It built
+   one by hand, which was harmless while a ref was three identity fields; with `host` on it, the one
+   HTTP-triggered outbound call in the product would have been the one call carrying `host: null`.
+5. **A refusal writes no audit row**, like the executor's three other request guards: nothing
+   provider-facing happened, so there is nothing to audit, and a row would say the platform made a
+   call it did not. The operability gap that leaves (rule 20's second half, the lesson of the
+   refused idempotency key) is answered by one `warn` carrying `integration_id`, `action`, `host`,
+   `reason` and the setting — the host is binding configuration, never a credential.
+6. **The scheme is a new schema, not a change to `urlSchema`.** `httpUrlSchema`
+   (`z.url({ protocol: /^https?$/ })`) is added beside `urlSchema` and used by the five provider
+   configs. Narrowing `urlSchema` itself was rejected for the three reasons Q49 already records —
+   `repo_url` is a git remote, provider-reported URLs would start failing a whole payload, and a
+   schema is not a sink — and it would have falsified a dozen docblocks in `apps/web` that are still
+   true. Q49 now carries the half that is answered and the half that is not.
+7. **The write-time check sweeps every string in `config` that parses as an absolute URL**, rather
+   than reading a declared per-provider field name. Rule 7: a "which key holds the host" table
+   drifts, and a provider with two URL fields would have one checked. Measured against the five
+   shipped schemas: no other string field parses as an absolute URL (`acme/api`, `#agentic`,
+   `T0FAKETEAM`, a slug, an email), so the sweep costs no false refusal today and covers a sixth
+   provider on the day it exists.
+8. **Backlog 97, shape (a), as the row ruled.** The table is not widened. The sentence a future
+   implementer reads now exists in three places — the executor's docblock, technical/06 § "Outbound:
+   actions", and `CLAUDE.md`'s non-negotiable — all three qualified to *"every outbound call the
+   platform makes **on behalf of a binding**"*, with the five-item checklist a platform-owned call is
+   audited by spelled out at each. `registry-metadata.ts` now says it is that checklist's one
+   instance rather than one module's private deviation.
+
+**Measurements taken here** (rule 66, not assumed):
+- zod 4.5.4: bare `z.url()` accepts `javascript:`, `data:`, `vbscript:`, `file:` and `mailto:`;
+  `z.url({ protocol: /^https?$/ })` refuses all of them, accepts `HTTPS://` (the protocol is
+  lower-cased before matching) and still chains `.refine(…).default(…)`, which the provider schemas
+  need.
+- Rule 47, an accidental defence measured rather than assumed: a `file:///` URL in a stored row is
+  refused **before** the executor, by the binding loader's `configSchema.safeParse` — and the
+  call-time scheme branch is **unreachable**, not defence in depth: the executor synthesises
+  `https://<host>` from the adapter's `IntegrationRef.host` and checks that, so no scheme ever
+  reaches `assertEgressAllowed` from the call path (round-1 reviewer; the docblock in `egress.ts`
+  said "at the call" and now says the loader is that layer); the integration test asserts that the
+  refusal it gets is the *loader's* and not this guard's. At `POST /api/integrations` there is no
+  such defence: that command never runs the provider's schema over `config`, so the write-time
+  scheme refusal is load-bearing and is asserted under an **open** list, where only it can fire.
+- Mutation checks (rules 3/67), each reverted:
+  `assertEgressAllowed(request)` deleted → **7** failures in `action-executor.test.ts` ("refuses a
+  hyphen-prefixed neighbour…", "…a suffixed neighbour", "…an unrelated host", "names the host and
+  the setting…", "refuses every host when the list is empty…", "refuses a **read**…", "refuses a
+  shadow-mode mutation…");
+  `assertHostIsDeclared` removed from `createIntegration` **and** its inner refusal short-circuited →
+  **11** failures in `onboarding-queries.test.ts`;
+  `httpUrlSchema` weakened back to `z.url()` → **25** failures in
+  `provider-config-url.contract.test.ts` (five schemes × five providers).
+
+**Sentences this change falsified, and where they were fixed** (rule 83): `apps/server/src/config.ts`
+(`dependencyRegistryHosts`' "this process has no outbound allow-list of any kind"),
+`apps/server/src/queries/onboarding-queries.ts` (the "**Residual**: nothing constrains a provider's
+`base_url` … a separate piece of work" paragraph, and the `secret_refs` docblock's "no host
+allow-list; see the residual below"), `packages/infrastructure/src/dependencies/registry-metadata.ts`
+(its opening citation of backlog 48, plus the new paragraph saying its deviation is now the general
+rule), `.env.example` (the `APP_DEPENDENCY_REGISTRY_HOSTS` block's "this process has no outbound
+allow-list of its own"), `docs/technical/05` § "Network policy" (which described the run container's
+allow-list as the only one), `docs/OPEN-QUESTIONS.md` Q84 (quoting backlog 48 as an open record) and
+Q49 (the half now answered), and PROGRESS backlog **48** and **97**, both marked RESOLVED with what
+was built. **Two were deliberately left**: `13-implementation-plan.md:96` and the WP-38 row both
+quote backlog 48 as the state of the world when they were written — the first is the *rationale for
+M4's ordering* and the second is a merged row's history, and the plan's rows are the orchestrator's.
+
+**Assumptions** (docs were silent; the most consistent reading was taken):
+- a **port** is not part of the decision, so declaring `loki.example.test` admits
+  `https://loki.example.test:3100`. The sidecar's list *does* bound `CONNECT` ports; a second port
+  list here would be a second thing to keep in step for no measured gain, and it is stated at the
+  line rather than implied.
+- no IDNA mapping: a declared Unicode host does **not** match a punycode URL. Refusal is the safe
+  direction and the operator guide says to declare the punycode form.
+
+**Discovered work (not fixed here).**
+- **No provider adapter sets `redirect: 'error'`, and nothing re-checks the host after one.** The
+  allow-list decides the *first* request; a 302 to another host is followed by whatever the client
+  does, and the binding's credential may or may not follow depending on the runtime. The registry
+  client next door already sets `redirect: 'error'` and is the precedent. Cheapest owner: whoever
+  next touches `providers/*/http.ts` — it is one option in five files plus a case each.
+- **The allow-list decides over names, not addresses.** A declared host that resolves to
+  `169.254.169.254` or a private range is allowed. A real SSRF guard would have to run at connect
+  time inside the HTTP client and re-run per redirect; it is a different mechanism and a different
+  row, stated in `egress.ts` rather than implied.
+- **`PATCH /api/integrations/:id` does not exist**, so the write-time check has exactly one caller
+  today. When an edit command lands it must call `assertHostIsDeclared` — there is no census holding
+  it, only `createIntegration`'s own docblock saying it is the only writer of `integrations.config`.

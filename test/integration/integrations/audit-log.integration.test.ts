@@ -21,6 +21,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createVirtualTimer,
   exactSecretRedactor,
@@ -248,6 +249,9 @@ describe('redaction_count, asserted from both sides', () => {
   /** One mutating action through the real executor, with the redactor under test. */
   const performWith = async (redactor: SecretRedactor): Promise<void> => {
     const executor = createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog: auditLog(),
       redactor,
       timer: createVirtualTimer(),
@@ -258,6 +262,7 @@ describe('redaction_count, asserted from both sides', () => {
         integrationId,
         provider: 'fake-task-management',
         type: 'task_management',
+        host: null,
       },
       action: 'add_comment',
       mutating: true,

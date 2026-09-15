@@ -39,6 +39,7 @@ import type {
   InjectedSecret,
   IntegrationAccount,
   IntegrationActionExecutor,
+  IntegrationRef,
   SecretRedactor,
   SecretStore,
 } from '@platform/application';
@@ -83,6 +84,26 @@ const probeOf = (port: object): (() => Promise<HealthProbe>) | null =>
   typeof (port as { testConnection: unknown }).testConnection === 'function'
     ? (port as { testConnection: () => Promise<HealthProbe> }).testConnection.bind(port)
     : null;
+
+/**
+ * The adapter's **own** `IntegrationRef`, asked of the built object (WP-51).
+ *
+ * This used to build a ref by hand from the account row, which was harmless while a ref was three
+ * identity fields — and stopped being harmless when it grew `host`, the value the executor's egress
+ * allow-list decides on. A hand-built ref would have carried `host: null` and the probe, the one
+ * outbound call an HTTP request can trigger, would have been the one call the allow-list could not
+ * see. The adapter reads the host out of the config its own schema just validated; there is no
+ * second place that should be deriving it.
+ */
+const refOf = (port: object): IntegrationRef | null => {
+  if (!('ref' in port)) {
+    return null;
+  }
+  const ref = (port as { ref: unknown }).ref;
+  return typeof ref === 'object' && ref !== null && 'integrationId' in ref
+    ? (ref as IntegrationRef)
+    : null;
+};
 
 export interface IntegrationProbeOutcome {
   readonly ok: boolean;
@@ -176,12 +197,19 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
           `integration "${account.name}" (${account.provider}) built a port with no testConnection`,
         );
       }
-      const outcome = await options.executor.execute<HealthProbe>({
-        integration: {
+      const ref = refOf(port);
+      if (ref === null) {
+        // The same shape as the `probeOf` refusal above and for the same reason (standing rule 22):
+        // every registration builds an `IntegrationPort`, which carries `ref`, and a provider that
+        // does not is a build defect rather than a call the platform should make ref-less.
+        throw new BindingLoadError(
           integrationId,
-          provider: account.provider,
-          type: account.type as IntegrationType,
-        },
+          null,
+          `integration "${account.name}" (${account.provider}) built a port with no ref, so the platform cannot tell which host it would call`,
+        );
+      }
+      const outcome = await options.executor.execute<HealthProbe>({
+        integration: ref,
         action: 'test_connection',
         // The account's own configuration, never its credentials: `secrets` is merged into the
         // adapter's config above and is deliberately not in what the audit row records.

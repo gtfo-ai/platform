@@ -34,12 +34,15 @@
  * what makes the step re-submittable and what lets an operator correct a mistake without a second
  * endpoint. The delete cascades nothing: `bindings` is referenced by nothing.
  */
+import type { IntegrationEgressPolicy } from '@platform/application';
+import { egressHostOf } from '@platform/application';
 import type {
   AutonomyLevel,
   Id,
   IntegrationType,
   IsoDateTime,
   JsonObject,
+  JsonValue,
   MaterialisedAutonomy,
   ProjectBindingSummary,
   ProjectRecord,
@@ -269,21 +272,22 @@ export const findProjectById = async (
  * `secret_refs` reaches this function from an HTTP body written by an `integration.write` caller.
  * Without a constraint that caller can name `APP_SECRET_KEY`, `DATABASE_URL` or
  * `ANTHROPIC_API_KEY` and have the platform seal **its own** secret into a `secrets` row that a
- * provider adapter is then built with — and a provider's `base_url` is caller-chosen too (no host
- * allow-list; see the residual below), so that is two API calls to send the envelope key to a host
- * the caller picked.
+ * provider adapter is then built with — and a provider's `base_url` is caller-chosen too, so that
+ * was two API calls to send the envelope key to a host the caller picked. The second half of that
+ * is closed since WP-51: {@link assertHostIsDeclared}.
  *
  * It is an **allow-list** (`APP_INTEGRATION_SECRET_ENV`), not a deny-list of the platform's own
  * names: a deny-list is a claim about every variable the platform will ever have and is wrong the
  * first time one is added — standing rule 55's lesson, one ring out from paths. Empty means nothing
  * is readable, which is the fail-closed direction and is the default.
  *
- * **Residual, stated rather than implied:** nothing constrains a provider's `base_url`. A caller
- * who *is* allowed to read `GITLAB_TOKEN` can still point the GitLab integration at a host they
- * control and have the probe send that token there. A host allow-list for provider configuration is
- * a separate piece of work, recorded in `PROGRESS.md` under Discovered work; this allow-list closes
- * the half where the credential is the **platform's own**, which is the one no provider
- * configuration should ever be able to reach.
+ * **The other half, closed at WP-51** (PROGRESS backlog 48). This list closes the case where the
+ * credential is the **platform's own**; a caller who *is* allowed to read `GITLAB_TOKEN` could
+ * still point the GitLab integration at a host they control and have the probe send that token
+ * there. {@link assertHostIsDeclared} is the write-time refusal for that, and the executor's own
+ * `egress` option refuses the call for a row this function never saw. What remains is the residual
+ * that survives both: an operator who declares a host is trusting it, and the platform does not
+ * check where that name resolves (`createIntegrationEgressPolicy` lists what it cannot see).
  */
 export interface SecretSource {
   read(name: string): Promise<string>;
@@ -403,6 +407,73 @@ export const assertNoCredentialInConfig = (
 };
 
 /**
+ * Refuses a `config` document that would point this binding at a host nobody declared (WP-51,
+ * PROGRESS backlog 48).
+ *
+ * **The write-time half of the egress allow-list**, and it is half on purpose: `integrations.config`
+ * outlives the list that admitted it, so the executor asks the same question again at call time
+ * (`createIntegrationEgressPolicy`, `IntegrationActionExecutorOptions.egress`). A row written before
+ * an operator narrowed the list, or written with `psql`, reaches the second check and not this one.
+ * What this one buys is the refusal arriving *where the mistake is made*, naming the host and the
+ * setting, instead of six screens later as a failed probe.
+ *
+ * **Every string in the document that parses as an absolute URL is checked**, rather than a declared
+ * per-provider field name. Standing rule 7: a table of "which key holds the host" is a table that
+ * drifts, and the first provider with a second URL field would have one key checked and one not.
+ * Measured against the five shipped schemas, nothing else in a config document parses as an absolute
+ * URL — a `project` is `acme/api`, a `channel` is `#agentic`, a `team_id` is `T…`, an `organization`
+ * is a slug — so the sweep costs no false refusal on the shipped field *values* and covers a sixth
+ * provider the day it exists. Two edges the round-1 reviewer measured, stated rather than implied.
+ * **A false acceptance**: the sweep sees only URLs *present* in the document, and Sentry
+ * (`base_url` defaults to `https://sentry.io`) and Slack default theirs, so a body with no
+ * `base_url` passes this guard with an undeclared *effective* host and is refused only at the
+ * call — no credential leaves, but the operator learns it from the first call rather than from
+ * the `POST`; sweeping the provider-parsed config would close it and is filed with backlog 130's
+ * census. **A false refusal**: `new URL()` is the parser and any colon-bearing string parses —
+ * `'Mon: 9-5'` and `mailto:…` both answer 403 `integration_host_not_permitted` — so a value that
+ * is not a URL is not "left alone" if it carries a colon; the shipped schemas have no such field,
+ * and the direction is the fail-closed one.
+ *
+ * The walk is recursive over objects and arrays because `config` is `jsonObjectSchema` on the wire —
+ * strictly shaped only once the provider's own schema sees it, which this command never runs
+ * (`createIntegration` validates credential *fields*, not the document). Rule 14: this is a runtime
+ * check over a body that reached the process as JSON, not a claim `tsc` makes.
+ *
+ * @throws {HttpError} 403 `integration_host_not_permitted` — the request is well formed and this
+ * deployment does not permit it, which is the reading `secret_name_not_permitted` already has.
+ */
+export const assertHostIsDeclared = (config: JsonObject, egress: IntegrationEgressPolicy): void => {
+  const visit = (value: JsonValue): void => {
+    if (typeof value === 'string') {
+      // Not every string is a URL, and one that is not is not this guard's business: `egressHostOf`
+      // returns `null` for it and the value is left alone.
+      if (egressHostOf(value) === null) {
+        return;
+      }
+      const verdict = egress.check(value);
+      if (!verdict.allowed) {
+        // The verdict's message, never the value: a config document is a place somebody may have
+        // pasted a credential, and this message reaches an HTTP response and a log line.
+        throw new HttpError(403, 'integration_host_not_permitted', verdict.message);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+      return;
+    }
+    if (typeof value === 'object' && value !== null) {
+      for (const item of Object.values(value)) {
+        visit(item);
+      }
+    }
+  };
+  visit(config);
+};
+
+/**
  * Creates an integration with its credentials sealed into `secrets`.
  *
  * The secret ids are generated here rather than by the column default because the id is in the
@@ -420,6 +491,13 @@ export const createIntegration = async (
     readonly orgId: string;
     readonly integration: CreateIntegrationInput;
     readonly provider: ProviderCatalogueEntry;
+    /**
+     * `APP_INTEGRATION_HOSTS`, as a policy — **required, never defaulted** (WP-51).
+     *
+     * The same argument `redactor` carries one ring out: an optional policy is an absent one on the
+     * day a composition root forgets it, and "closed" would look here exactly like a working list.
+     */
+    readonly egress: IntegrationEgressPolicy;
     readonly secretSource: SecretSource;
     readonly secretKey: secretAdapters.SecretKey;
     readonly newId: () => string;
@@ -428,6 +506,7 @@ export const createIntegration = async (
   },
 ): Promise<CreateIntegrationResult> => {
   assertNoCredentialInConfig(input.integration.config, input.provider);
+  assertHostIsDeclared(input.integration.config, input.egress);
 
   const declared = new Set(input.provider.secretFields);
   const unknown = Object.keys(input.integration.secretRefs).filter((field) => !declared.has(field));

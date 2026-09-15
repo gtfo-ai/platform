@@ -15,6 +15,7 @@
  * <https://docs.slack.dev/authentication/verifying-requests-from-slack> (the five-minute replay
  * window), <https://docs.slack.dev/apis/events-api/using-socket-mode> (the app-level token).
  */
+import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
 /**
@@ -34,9 +35,14 @@ export const slackConfigSchema = z.strictObject({
   /**
    * The Web API root. Overridden only by the replay transport and by a proxy; a base URL that
    * already ends in a slash is rejected so `…/api//chat.postMessage` cannot happen.
+   *
+   * `httpUrlSchema` rather than `z.url()` since WP-51: a bare `z.url()` accepted
+   * `javascript:`, `data:`, `vbscript:` and `file:` (Q49), and this value is handed to the
+   * client this binding's credential is built into. The **host** is the other half and is not a
+   * schema's to know: it is checked against `APP_INTEGRATION_HOSTS` when the row is written and
+   * again when the call is made (`createIntegrationEgressPolicy`).
    */
-  base_url: z
-    .url()
+  base_url: httpUrlSchema
     .refine((value) => !value.endsWith('/'), { message: 'must not end with a slash' })
     .default('https://slack.com/api'),
   /**

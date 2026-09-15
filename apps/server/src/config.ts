@@ -56,6 +56,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
   webRoot: 'APP_WEB_ROOT',
   integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
+  integrationHosts: 'APP_INTEGRATION_HOSTS',
   dependencyRegistryHosts: 'APP_DEPENDENCY_REGISTRY_HOSTS',
   modelApiKey: 'ANTHROPIC_API_KEY',
   claudeBinary: 'APP_CLAUDE_BINARY',
@@ -271,14 +272,38 @@ const serverConfigFields = z.strictObject({
   integrationSecretEnv: z.array(z.string().min(1)).readonly(),
 
   /**
+   * The hosts a provider binding may name — `APP_INTEGRATION_HOSTS` (WP-51, PROGRESS backlog 48).
+   *
+   * **Operator-declared, empty by default, exact, and enforced twice.** Until WP-51 a binding's
+   * host was whatever an `integration.write` caller typed into `config.base_url`, and the value was
+   * handed to the client that binding's credential is built into — so an administrator who may name
+   * a host and a credential *field*, and who by design never sees the credential's *value*, could
+   * have the platform deliver it to a host they read. The audit could not tell the difference: a
+   * token sent to an attacker's host is recorded exactly like a successful provider call.
+   *
+   * Empty (the default) means **no provider call leaves this process** and `POST /api/integrations`
+   * refuses every host by name, which is the direction {@link integrationSecretEnv} and
+   * {@link dependencyRegistryHosts} already fail in — three operator-declared lists on this process,
+   * all closed until somebody declares something. `*` as the only entry declares it **open**, which
+   * is rule 18's other permitted answer and is a thing an operator types on purpose.
+   *
+   * A malformed entry is dropped by {@link hostListFromEnv} rather than refused, for the reason
+   * stated there — except `*`, which is a legal entry here and not a host.
+   */
+  integrationHosts: z.array(z.string().min(1)).readonly(),
+
+  /**
    * The package-registry hosts the dependency gate may ask for a licence — `APP_DEPENDENCY_REGISTRY_HOSTS`
    * (WP-38, Q84, PROGRESS backlog 48).
    *
    * **Operator-declared, empty by default, and exact.** product/04:58 wants the dependency question
    * to carry *"license and maintenance status"* and the only honest way to get one is to ask a
-   * registry; backlog 48 records that this process has no outbound allow-list of any kind, so the
-   * answer is the same shape {@link integrationSecretEnv} uses: nothing is called unless an operator
-   * names it, and naming it is a thing they do on purpose. Empty (the default) means every package
+   * registry; when this was written backlog 48 recorded that the process had no outbound allow-list
+   * of any kind, so the answer took the shape {@link integrationSecretEnv} uses: nothing is called
+   * unless an operator names it, and naming it is a thing they do on purpose. WP-51 closed backlog
+   * 48 with {@link integrationHosts}, so there are now **two** egress lists on this process and the
+   * separation is deliberate: this one governs a call with **no binding and no credential**, that
+   * one a call made with an organisation's token. Empty (the default) means every package
    * is reported as *"licence not checked"* on the Checks panel — a stated non-answer rather than a
    * blank — and **no request leaves this process**.
    *
@@ -608,13 +633,27 @@ const nameListFromEnv = (raw: string | undefined): readonly string[] => [
  * make the comparison against the platform's own host silently never match, which reads as *"the
  * registry is down"* rather than as *"you typed a URL"*.
  */
-const hostListFromEnv = (raw: string | undefined): readonly string[] => [
+const hostListFromEnv = (
+  raw: string | undefined,
+  /**
+   * Whether `*` is a legal entry — `APP_INTEGRATION_HOSTS` only (WP-51).
+   *
+   * It is a parameter rather than a blanket allowance because the two lists mean different things
+   * by it: an open provider allow-list is a posture an operator may deliberately choose (rule 18's
+   * "explicitly declared open"), while an open *package-registry* list would be an instruction to
+   * fetch metadata from anywhere, which nothing in the product wants and which
+   * `APP_DEPENDENCY_REGISTRY_HOSTS` has no code path for — it matches two known hosts.
+   */
+  options: { readonly allowWildcard?: boolean } = {},
+): readonly string[] => [
   ...new Set(
     (raw ?? '')
       .split(',')
       .map((entry) => entry.trim().toLowerCase())
-      .filter((entry) =>
-        /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(entry),
+      .filter(
+        (entry) =>
+          (options.allowWildcard === true && entry === '*') ||
+          /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(entry),
       ),
   ),
 ];
@@ -696,6 +735,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
     webRoot: nullableString(env.APP_WEB_ROOT),
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),
+    integrationHosts: hostListFromEnv(env.APP_INTEGRATION_HOSTS, { allowWildcard: true }),
     dependencyRegistryHosts: hostListFromEnv(env.APP_DEPENDENCY_REGISTRY_HOSTS),
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,

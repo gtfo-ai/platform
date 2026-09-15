@@ -285,6 +285,7 @@ const integrationsWith = (
           integrationId: PROJECT,
           provider: 'fake-jira',
           type: 'task_management' as const,
+          host: null,
         },
         redactor: noSecretsRedactor(),
       }

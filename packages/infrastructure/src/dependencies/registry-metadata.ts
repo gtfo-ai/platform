@@ -3,9 +3,12 @@
  *
  * product/04:58 wants a dependency question to carry *"license and maintenance status"* and
  * product/18:43 wants the Checks panel to show it. Nothing in this platform knew a package registry,
- * and **PROGRESS backlog 48** records why adding one is not free: a binding's host is whatever the
- * caller typed and the server process has no outbound allow-list at all. So this client is built
- * around one rule, which is also the answer Q84 gives:
+ * and when this was written **PROGRESS backlog 48** recorded why adding one was not free: a
+ * binding's host was whatever the caller typed and the server process had no outbound allow-list at
+ * all. (That half is closed since **WP-51** — `APP_INTEGRATION_HOSTS`, enforced at the write and at
+ * the call — so the process now has **two** egress lists, deliberately: that one governs a call made
+ * with an organisation's credential, this one a call with no binding and no credential.) So this
+ * client is built around one rule, which is also the answer Q84 gives:
  *
  * > **The platform calls a host an operator declared, or it calls nothing.**
  *
@@ -28,6 +31,14 @@
  * Creating the row properly means a **sixth integration type**, which Q84 priced and rejected for
  * now: *"a whole integration type for one read-only lookup with no credential is BD-017's machinery
  * without BD-017's problem"*.
+ *
+ * **That was one module's deviation and is now the documented general rule** (WP-51, backlog **97**,
+ * answer (a)): the executor's audit is *per binding*, and a call with no binding is audited by its
+ * own module under a named checklist — no credential in scope, an operator-declared host, a bounded
+ * body, no writes, `assertOutsideTransaction`. This module is the checklist's one instance and the
+ * five items below are it, in that order. technical/06 § "Outbound: actions" and the executor's own
+ * docblock say the same thing, so the **second** platform-owned call meets a decision rather than
+ * re-deriving this argument. The table was not widened; `integration_id` stays `not null`.
  *
  * What the executor would have given it is therefore given here, at the call, and each is asserted
  * in `registry-metadata.test.ts`:

@@ -174,7 +174,7 @@ const integrationsDouble = (): PipelineIntegrations => ({
     port: {
       getDefaultBranchHead: async () => ({ branch: 'main', sha: 'a'.repeat(40) }),
     } as unknown as GitProviderPort,
-    ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git' },
+    ref: { integrationId: PROJECT, provider: 'fake-git', type: 'git', host: null },
     project: 'acme/api',
     redactor: exactSecretRedactor([]),
   },
@@ -182,7 +182,7 @@ const integrationsDouble = (): PipelineIntegrations => ({
     port: {
       transition: async () => ({ changed: true, from: 'To Do', to: 'In Progress' }),
     } as unknown as TaskManagementPort,
-    ref: { integrationId: PROJECT, provider: 'fake-jira', type: 'task_management' },
+    ref: { integrationId: PROJECT, provider: 'fake-jira', type: 'task_management', host: null },
     redactor: exactSecretRedactor([]),
   },
   // The chat binding this file's guards do not exercise: the notify duty's own refusals live in

@@ -68,6 +68,7 @@ import {
   createContextPackAssembler,
   createDeadLetterEscalation,
   createIntegrationActionExecutor,
+  createIntegrationEgressPolicy,
   createLateCostRecorder,
   createPipelineRuntime,
   createRunStopReasons,
@@ -339,6 +340,16 @@ export interface ComposeIntegrationStackOptions {
   readonly pool: pg.Pool;
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   readonly registry?: (options: PipelineProviderRegistryOptions) => IntegrationRegistry;
+  /**
+   * `APP_INTEGRATION_HOSTS` — the hosts this process may dial for a binding (WP-51, backlog 48).
+   *
+   * **Required and not optional**, unlike most of this file's knobs: an optional list would be an
+   * absent one on the day a composition root forgot it, and the two possible defaults are "open"
+   * (the defect) and "closed" (indistinguishable, here, from a working policy). Empty is a legal
+   * value and means *no provider call leaves this process*; `['*']` is how an operator declares it
+   * open. `createIntegrationEgressPolicy` carries the whole argument.
+   */
+  readonly integrationHosts: readonly string[];
   readonly logger: Logger;
 }
 
@@ -362,8 +373,26 @@ export const composeIntegrationStack = (
     logger: options.logger,
   });
 
+  const egress = createIntegrationEgressPolicy(options.integrationHosts);
+  options.logger.info(
+    { hosts: egress.declared, open: egress.open },
+    egress.open
+      ? 'APP_INTEGRATION_HOSTS declares "*", so a binding may name any host: every provider call this process makes goes wherever the integration row says'
+      : egress.declared.length === 0
+        ? 'no provider host is declared (APP_INTEGRATION_HOSTS), so no provider call leaves this process and POST /api/integrations refuses every host'
+        : 'a provider binding may name only these hosts; a call to any other is refused before it is made',
+  );
+
   const executor = createIntegrationActionExecutor({
     auditLog,
+    /**
+     * The operator's list, read once per process (WP-51).
+     *
+     * The check is at *call* time and not only at the write, because `integrations.config` outlives
+     * the list that admitted it: a row inserted before this setting existed, narrowed out of it
+     * afterwards, or written with `psql`, would otherwise keep dialling a host nobody declared.
+     */
+    egress,
     /**
      * TD-012 **step 2** — the gitleaks-derived pattern rules — and not `noSecretsRedactor()`.
      *

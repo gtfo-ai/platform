@@ -284,7 +284,7 @@ const resolvedWith = (
   script: NormaliserScript = {},
   bindings: readonly { projectId: Id; script?: NormaliserScript }[] = [{ projectId: PROJECT }],
 ): ResolvedInboundIntegration => ({
-  ref: { integrationId: INTEGRATION, provider: 'fake', type: 'task_management' },
+  ref: { integrationId: INTEGRATION, provider: 'fake', type: 'task_management', host: null },
   inbound: normaliserDouble(script),
   bindings: bindings.map((binding, index) => ({
     bindingId: `00000000-0000-4000-8000-00000000d00${index}` as Id,

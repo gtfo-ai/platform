@@ -263,10 +263,33 @@ seal and store its own master key. A name that is not on the list is refused by 
 `secret_name_not_permitted … Add it to APP_INTEGRATION_SECRET_ENV (declared: none) and restart the
 process`.
 
+**And declare the hosts, or nothing will work.** `APP_INTEGRATION_HOSTS` is the second half of the
+same idea and is **also empty by default**: the admin who names a credential *field* never sees the
+credential's *value*, so without this list they can point a provider at a host they control and have
+the platform deliver the token there — and the audit records that as a successful provider call.
+With the list empty, `POST /api/integrations` refuses every host and **no provider call leaves the
+process**:
+
+```
+integration_host_not_permitted: this deployment does not permit calling "gitlab.example.com".
+Add it to APP_INTEGRATION_HOSTS (declared: none) and restart the process
+```
+
+Matching is exact and case-insensitive, on the **host** only: no port, no path, and no wildcard
+below a name — `gitlab.example.com` does not admit `api.gitlab.example.com`, and a Loki on
+`https://loki.example.test:3100` is declared as `loki.example.test`. Write an internationalised host
+in punycode. A single `*` declares the list open, which is a thing to type on purpose. What the list
+does *not* check is where a declared host resolves: it is an allow-list of names, not of addresses.
+
+**Upgrading an instance that already has integrations**: add this variable before you restart, or
+every provider call — including the pipeline's — is refused until you do. The refusal names the host,
+so the log line tells you what to declare.
+
 ```ini
 # .env
 GITLAB_TOKEN=glpat-…                      # the tool-native name the CLI would use
 APP_INTEGRATION_SECRET_ENV=GITLAB_TOKEN,JIRA_API_TOKEN,JIRA_WEBHOOK_SECRET
+APP_INTEGRATION_HOSTS=gitlab.com,acme-example.atlassian.net
 ```
 
 ```bash

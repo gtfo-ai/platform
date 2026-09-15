@@ -13,6 +13,7 @@
  * is waited out on the executor's injected timer, never on a wall clock.
  */
 import {
+  allowAnyIntegrationHost,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -56,6 +57,9 @@ describe('Loki through IntegrationActionExecutor', () => {
 
   const executor = () =>
     createIntegrationActionExecutor({
+      // Declared open on purpose (WP-51): this file is not about the egress allow-list, and an
+      // omitted policy is not a thing `IntegrationActionExecutorOptions` permits.
+      egress: allowAnyIntegrationHost(),
       auditLog,
       redactor: noSecretsRedactor(),
       timer,
