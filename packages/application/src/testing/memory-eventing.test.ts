@@ -183,7 +183,12 @@ describe('MemoryEventing', () => {
 
     await memory.transaction(async (scope) => {
       await scope.dispatchQueue.claim(1);
-      await scope.dispatchQueue.retryLater(1, 'boom', { baseMs: 100, maxMs: 1000 });
+      await scope.dispatchQueue.failAttempt(1, {
+        error: 'boom',
+        handler: 'core.a',
+        backoff: { baseMs: 100, maxMs: 1000 },
+        maxAttempts: 10,
+      });
     });
     // Position 2 is next on that stream, but it stays behind the deferred head.
     expect((await memory.store.readPendingDispatch({ limit: 10 })).map((e) => e.position)).toEqual([

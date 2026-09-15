@@ -87,6 +87,13 @@ export const eventDispatch = pgTable('event_dispatch', {
   error: text('error'),
   availableAt: timestamp('available_at', { withTimezone: true }).notNull().defaultNow(),
   enqueuedAt: timestamp('enqueued_at', { withTimezone: true }).notNull().defaultNow(),
+  /**
+   * The terminal state of WP-49 (migration 0037): this event spent `APP_DISPATCH_MAX_ATTEMPTS` and
+   * is no longer retried. The sweep, the ordering guard and the backlog count all exclude it.
+   */
+  deadLetteredAt: timestamp('dead_lettered_at', { withTimezone: true }),
+  /** The handler whose failure spent the bound; the task's blocker brief names it. */
+  deadLetterHandler: text('dead_letter_handler'),
 });
 
 /** Webhook dedup and raw audit. Headers and payload are untrusted data (BD-022). */

@@ -19,10 +19,13 @@
  *
  * An `IllegalTransitionError` here means the pipeline asked for a move technical/02's table does
  * not have — a hand-edited template that jumps from `merged_gate` to `done` with no retrospective,
- * say. Letting it throw would fail the handler, and the dispatcher would retry it for ever behind
- * its stream (there is no dead-letter state, WP-04's note). So it is caught and turned into an
- * escalation, which is the same ending every other unrecoverable pipeline state has: the task is
- * parked in `Needs human` with a brief, and its stream keeps moving.
+ * say. Letting it throw would fail the handler, and the dispatcher would retry it behind its stream
+ * for the twenty minutes `DEFAULT_MAX_DISPATCH_ATTEMPTS` allows and then dead-letter the event
+ * (WP-49; before that, for ever — WP-04's note). Either way the ending would be about a *dispatch*
+ * rather than about the template, so it is caught here and turned into an escalation, which is the
+ * same ending every other unrecoverable pipeline state has: the task is parked in `Needs human`
+ * with a brief, and its stream keeps moving. Catching it also keeps the failure off the queue
+ * entirely, which is what makes the brief say what actually went wrong.
  */
 import type { DomainEvent, Id, Slug } from '@platform/contracts';
 import type { CommandContext, CompiledPipeline, PipelineDecision, Task } from '@platform/domain';

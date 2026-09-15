@@ -27,12 +27,19 @@
  * express ~1s repetition at all (5-field cron, 1-minute floor). So each worker arms its own
  * `pollIntervalMs` timer unconditionally and the subscription only shortens the wait. N replicas
  * polling one queue is cheap: the claim uses `FOR UPDATE SKIP LOCKED`, so concurrent sweeps never
- * block, and `drain()` returns as soon as a batch dispatches nothing.
+ * block, and `drain()` returns as soon as a batch makes no progress — dispatches nothing and
+ * dead-letters nothing.
  */
 import { type Broadcast, EVENTS_APPENDED_TOPIC } from '../ports/broadcast.js';
 import type { EventStore } from '../ports/event-store.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
-import type { DispatchStatus, EventBus, StopOptions, StopReport } from './event-bus.js';
+import type {
+  DispatchResult,
+  DispatchStatus,
+  EventBus,
+  StopOptions,
+  StopReport,
+} from './event-bus.js';
 
 /**
  * The canonical name of the sweep: a **log and metric label, not a queue name**.
@@ -64,15 +71,63 @@ export interface OutboxWorkerOptions {
 export const DEFAULT_BATCH_SIZE = 32;
 export const DEFAULT_POLL_INTERVAL_MS = 1_000;
 
+/**
+ * What one pass did. `dispatched`, `failed`, `deferred` and `deadLettered` partition `scanned` —
+ * one of them per queue row this pass read; `chainFailed` counts a different population entirely.
+ *
+ * `chainFailed` is about events this sweep never read: a handler emits an event, the bus dispatches
+ * it inside the parent's call, and until WP-49 the only thing that came back was the parent's
+ * status — so a chained handler that threw was counted as a clean `dispatched` and left no trace
+ * above the log line (PROGRESS backlog 5). It is deliberately **not** folded into `failed`, which
+ * stays the count of queue rows this pass failed to discharge, because a report whose parts no
+ * longer add up to `scanned` is a report a reader has to re-derive.
+ *
+ * The one reader — `#drainGuarded`'s log line — needed no change to *carry* either field: it
+ * spreads the whole report. Its **condition** gained `deadLettered` at round 1, because a pass that
+ * only dead-lettered dispatched nothing and failed nothing and therefore wrote no line at all;
+ * `chainFailed` is not in it and needs no branch, since a chained dispatch exists only because its
+ * parent dispatched. Neither count is the last word either way: the bus logs an `error` naming the
+ * event and the handler for a dead letter and for every chained failure, which is louder than this
+ * `debug` line.
+ */
 export interface SweepReport {
   readonly scanned: number;
   readonly dispatched: number;
   readonly failed: number;
   /** Events another worker held or whose stream had an earlier event still queued. */
   readonly deferred: number;
+  /** Events that spent their attempt bound and left the queue this pass (WP-49). */
+  readonly deadLettered: number;
+  /** Chained dispatches that failed or were dead-lettered, at any depth (backlog 5). */
+  readonly chainFailed: number;
 }
 
-const EMPTY_SWEEP: SweepReport = { scanned: 0, dispatched: 0, failed: 0, deferred: 0 };
+const EMPTY_SWEEP: SweepReport = {
+  scanned: 0,
+  dispatched: 0,
+  failed: 0,
+  deferred: 0,
+  deadLettered: 0,
+  chainFailed: 0,
+};
+
+/**
+ * Failures anywhere below a dispatch, counted depth-first.
+ *
+ * A dead letter counts as a failure here: from the sweep's point of view both are "this event's
+ * handlers did not run", and the dead letter's own signal is the `deadLettered` count of the event
+ * the *queue* gave out plus the dedicated gauge.
+ */
+const countChainFailures = (result: DispatchResult): number => {
+  let failures = 0;
+  for (const chained of result.chainedResults) {
+    if (chained.status === 'failed' || chained.status === 'dead-lettered') {
+      failures += 1;
+    }
+    failures += countChainFailures(chained);
+  }
+  return failures;
+};
 
 export class OutboxWorker {
   readonly #bus: EventBus;
@@ -158,8 +213,13 @@ export class OutboxWorker {
         dispatched: total.dispatched + batch.dispatched,
         failed: total.failed + batch.failed,
         deferred: total.deferred + batch.deferred,
+        deadLettered: total.deadLettered + batch.deadLettered,
+        chainFailed: total.chainFailed + batch.chainFailed,
       };
-      if (batch.dispatched === 0 || this.#bus.stopping) {
+      // A dead letter is progress too (WP-49): the row that was blocking its stream is terminal,
+      // so the next event of that stream can be dispatched by the very next batch rather than
+      // waiting out a poll interval for a queue that has already changed.
+      if ((batch.dispatched === 0 && batch.deadLettered === 0) || this.#bus.stopping) {
         return total;
       }
     }
@@ -175,21 +235,26 @@ export class OutboxWorker {
     let dispatched = 0;
     let failed = 0;
     let deferred = 0;
+    let deadLettered = 0;
+    let chainFailed = 0;
     for (const event of pending) {
       if (this.#bus.stopping) {
         break;
       }
       const result = await this.#bus.dispatch(event);
       const status: DispatchStatus = result.status;
+      chainFailed += countChainFailures(result);
       if (status === 'dispatched' || status === 'completed') {
         dispatched += 1;
       } else if (status === 'failed') {
         failed += 1;
+      } else if (status === 'dead-lettered') {
+        deadLettered += 1;
       } else {
         deferred += 1;
       }
     }
-    return { scanned: pending.length, dispatched, failed, deferred };
+    return { scanned: pending.length, dispatched, failed, deferred, deadLettered, chainFailed };
   }
 
   async #run(): Promise<void> {
@@ -205,7 +270,12 @@ export class OutboxWorker {
   async #drainGuarded(): Promise<void> {
     try {
       const report = await this.drain();
-      if (report.dispatched > 0 || report.failed > 0) {
+      // `deadLettered` joined the condition at WP-49 round 1: a pass whose only outcome was a dead
+      // letter dispatched nothing and failed nothing, so the one line carrying the sweep's own
+      // counts was not written at all. `chainFailed` is deliberately **not** in the condition and
+      // needs no branch of its own — a chained dispatch exists only because its parent dispatched,
+      // so `dispatched > 0` is already true whenever it is non-zero.
+      if (report.dispatched > 0 || report.failed > 0 || report.deadLettered > 0) {
         this.#logger.debug({ sweep: OUTBOX_SWEEP_LABEL, ...report }, 'outbox sweep');
       }
     } catch (error) {

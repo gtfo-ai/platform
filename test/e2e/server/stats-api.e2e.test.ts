@@ -130,6 +130,55 @@ describe('the statistics endpoint, on numbers this instance really produced', ()
       );
       return rows.length === 1;
     });
+    /**
+     * **A second wait, because the cost half reads different rows than the delivery half** (WP-49,
+     * pre-review: this failed once under the full tier at load ~12 with `expected 2.4 to be close
+     * to 2.8`, one run's 0.40 short, and passed 3/3 alone).
+     *
+     * The wait above binds `stats_task_delivery`, which the projector writes on `mr.merged`.
+     * `cost_total` reads `cost_rollup_daily` and `cost_per_delivered_task` reads
+     * `sum(cost_entries.usd)` for the task (`apps/server/src/queries/stats-queries.ts`), and **both**
+     * are written by the cost ledger's handler on `run.finished` — one transaction per run, in a
+     * dispatch of its own that commits whenever it commits. So `done` plus a delivery row implies
+     * neither of them: the task row reaching `done` and the last run's ledger dispatch are two
+     * different transactions, and the endpoint can be read between them.
+     *
+     * The condition is "every run that ended has its ledger row", which is the last row these
+     * assertions read and needs no number of its own; the rollup term binds the *other* table, and
+     * is `>=` rather than `=` so that a future second task in this scenario cannot make the wait
+     * hang on a total that legitimately exceeds this task's.
+     */
+    // The predicate assumes every ended run produces a `cost_entries` row, which holds for this
+    // scenario because every fake run reports a figure. A run that reported nothing and has no
+    // `price_list` row gets **no** ledger row by design (rule 16), so a scenario that grows one
+    // turns this wait into a timeout — fail-loud, and the sentence to read when it does.
+    await pipeline.waitFor(
+      'every ended run’s spend to reach the ledger and its rollup',
+      async () => {
+        const [row] = await pipeline.query<{
+          ended: string;
+          charged: string;
+          entries_usd: string;
+          rollup_usd: string;
+        }>(
+          `select (select count(*) from runs where task_id = $1 and ended_at is not null)::text as ended,
+                (select count(distinct run_id) from cost_entries where task_id = $1)::text as charged,
+                (select coalesce(sum(usd), 0) from cost_entries where task_id = $1)::text as entries_usd,
+                (select coalesce(sum(d.usd), 0) from cost_rollup_daily d
+                   join tasks t on t.project_id = d.project_id
+                  where t.id = $1)::text as rollup_usd`,
+          [waiting.id],
+        );
+        if (row === undefined) {
+          return false;
+        }
+        return (
+          Number(row.ended) > 0 &&
+          row.ended === row.charged &&
+          Number(row.rollup_usd) >= Number(row.entries_usd)
+        );
+      },
+    );
 
     const response = await client.json<StatsBody>('/api/org/stats?range=7d&bucket=day');
     expect(response.status, JSON.stringify(response.body)).toBe(200);

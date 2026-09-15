@@ -30,6 +30,8 @@ export interface Metrics {
   readonly sseFramesSent: Counter<'frame'>;
   /** Events committed but not yet dispatched (TD-005's `event_dispatch` backlog). */
   readonly eventDispatchPending: Gauge<never>;
+  /** Events that spent their dispatch attempt bound and left the queue (WP-49). */
+  readonly eventDispatchDeadLettered: Gauge<never>;
   /** Sets the gauges that have to be sampled rather than incremented. Called on scrape. */
   readonly collect: () => Promise<void>;
 }
@@ -37,6 +39,8 @@ export interface Metrics {
 export interface MetricsOptions {
   /** Sampled on every scrape; absent when this process runs no dispatcher (`ROLE=api`). */
   readonly pendingDispatch?: () => Promise<number>;
+  /** The same, for the dead letters (WP-49). Absent and present together with `pendingDispatch`. */
+  readonly deadLettered?: () => Promise<number>;
   /** Node process metrics (heap, event loop lag, handles). @default true */
   readonly defaultMetrics?: boolean;
 }
@@ -82,15 +86,41 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     registers: options.pendingDispatch === undefined ? [] : [registry],
   });
 
+  /**
+   * The number that tells a poisoned event from a busy queue (WP-49, criterion 4).
+   *
+   * `event_dispatch_pending` cannot: a backlog of one is what a poisoned event and a momentary
+   * burst both look like, and the poisoned one is the only one that never clears. This counts the
+   * rows the dispatcher gave up on, and the two together are the whole queue table —
+   * `countPendingDispatch` excludes exactly what this includes.
+   *
+   * **A sampled gauge rather than a `_total` counter**, deliberately. A counter would reset with
+   * the process, so an event dead-lettered before a restart would be invisible in the one metric
+   * that exists to say *something is poisoned right now*; the queue row is durable and the count of
+   * it is the honest reading. It also falls back to zero when an operator requeues a row by hand,
+   * which is what an operator who did that expects to see.
+   *
+   * Registered only where something samples it, for the reason stated on the gauge above.
+   */
+  const eventDispatchDeadLettered = new Gauge({
+    name: 'event_dispatch_dead_lettered',
+    help: 'Events that spent APP_DISPATCH_MAX_ATTEMPTS and left the dispatch queue (WP-49).',
+    registers: options.deadLettered === undefined ? [] : [registry],
+  });
+
   return {
     registry,
     httpRequestDuration,
     sseConnections,
     sseFramesSent,
     eventDispatchPending,
+    eventDispatchDeadLettered,
     collect: async () => {
       if (options.pendingDispatch !== undefined) {
         eventDispatchPending.set(await options.pendingDispatch());
+      }
+      if (options.deadLettered !== undefined) {
+        eventDispatchDeadLettered.set(await options.deadLettered());
       }
     },
   };

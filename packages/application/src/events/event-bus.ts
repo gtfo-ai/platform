@@ -14,7 +14,8 @@
  *          mark it succeeded
  *       commit                             -- effect and bookkeeping are one write, or neither
  *   all terminal?  delete the queue row and write the $dispatch marker
- *   any failure?   leave it queued with a backoff and record the failure
+ *   any failure?   record it, then either re-queue with a backoff or spend the last attempt:
+ *                  mark the row dead-lettered and tell the dead-letter sink (WP-49)
  * commit
  * then: dispatch whatever the handlers emitted (chaining)
  * ```
@@ -35,6 +36,15 @@
  * a growing `event_dispatch` backlog. That is the intended trade: an audit log whose consumers may
  * see effects out of order is worse than one that stalls loudly.
  *
+ * It is bounded (WP-49). Until then the block was **permanent** for an event whose handler fails
+ * deterministically — nothing compared the row's `attempts` with anything, so the sweep re-offered
+ * it at the backoff ceiling for ever and the stream behind it never moved. After
+ * {@link DEFAULT_MAX_DISPATCH_ATTEMPTS} attempts the event is dead-lettered instead: it leaves the
+ * queue into a terminal state the sweep and the ordering guard both skip, the {@link DeadLetterSink}
+ * is told inside the same transaction (which is how the task ends up in `needs_human` with a brief
+ * naming this event and this handler), and `events` is untouched — the event is still in the log
+ * and still replayable by `events/replay.ts`.
+ *
  * And **two database connections per dispatch in flight** — the dispatcher's transaction stays open
  * while the handler's runs beside it. That is why `maxConcurrentDispatches` exists and is enforced
  * here rather than left to callers: the number is what an adapter checks its pool against
@@ -53,6 +63,7 @@ import {
 import { type Logger, silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { isConcurrencyConflict, MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from './concurrency.js';
+import type { DeadLetterSink } from './dead-letter.js';
 import type { EventHandler, HandlerContext } from './handler.js';
 import { HandlerRegistry } from './handler.js';
 import { withOpenTransaction } from './open-transaction.js';
@@ -69,6 +80,12 @@ export type DispatchStatus =
   | 'blocked'
   /** At least one handler threw; the event stays queued with a backoff. */
   | 'failed'
+  /**
+   * A handler threw for the last time: the event spent its attempt bound, left the queue into a
+   * terminal state and will not be dispatched again (WP-49). Also what a dispatch of an
+   * already-dead-lettered event answers, so a second `dispatch()` call re-runs nothing.
+   */
+  | 'dead-lettered'
   /** The bus is draining and refused new work. */
   | 'stopping';
 
@@ -89,6 +106,16 @@ export interface DispatchResult {
   readonly handlers: readonly HandlerOutcome[];
   /** Events the handlers emitted, in emission order. */
   readonly chained: readonly StoredEvent[];
+  /**
+   * What the dispatches of {@link chained} ended as, in the same order (WP-49, backlog 5).
+   *
+   * Empty when nothing was emitted **and** when the chain was not followed — the depth guard, or a
+   * bus that started draining mid-chain — so it is shorter than `chained` rather than lying about
+   * it. Without this a chained handler's failure was invisible to everything above `dispatch()`:
+   * the parent reported `dispatched`, the sweep counted it as a success, and the only trace was a
+   * log line. `countChainFailures` in `outbox.ts` is what reads it.
+   */
+  readonly chainedResults: readonly DispatchResult[];
   /** How deep in a chain this dispatch was; 0 for an event taken from the queue. */
   readonly depth: number;
 }
@@ -111,6 +138,11 @@ export interface EventBusOptions {
   /** Base of the retry backoff, in milliseconds; doubled per attempt up to `maxRetryDelayMs`. */
   readonly retryDelayMs?: number;
   readonly maxRetryDelayMs?: number;
+  /**
+   * Attempts an event gets before it is dead-lettered instead of retried (WP-49).
+   * @default DEFAULT_MAX_DISPATCH_ATTEMPTS
+   */
+  readonly maxDispatchAttempts?: number;
 }
 
 export const DEFAULT_MAX_CHAIN_DEPTH = 16;
@@ -119,6 +151,59 @@ export const DEFAULT_MAX_CONCURRENT_DISPATCHES = 1;
 export const CONNECTIONS_PER_DISPATCH = 2;
 export const DEFAULT_RETRY_DELAY_MS = 5_000;
 export const DEFAULT_MAX_RETRY_DELAY_MS = 5 * 60_000;
+/**
+ * How many times one event is dispatched before it is dead-lettered (WP-49, backlog 43).
+ *
+ * **The arithmetic, from the two constants above.** The delay before attempt `n + 1` is
+ * `min(DEFAULT_RETRY_DELAY_MS × 2ⁿ⁻¹, DEFAULT_MAX_RETRY_DELAY_MS)`, so the nine waits that ten
+ * attempts contain are 5 s, 10, 20, 40, 80, 160, then the 300 s ceiling three times — **1 215 s,
+ * about 20 minutes** of retrying before the event leaves the queue ({@link dispatchRetryWindowMs}
+ * computes exactly that, and `event-bus.test.ts` pins the number so this sentence cannot drift from
+ * the defaults it quotes).
+ *
+ * **Why twenty minutes.** It has to be longer than every transient fault the platform can ride out
+ * — a database failover, a rolling deploy, a provider's five-minute outage — because a dead letter
+ * parks the task in front of a human, and it has to be short enough that a task poisoned by a
+ * payload no handler can parse stops moving for a fifth of an hour rather than for ever. Ten
+ * attempts is also where the backoff stops growing: from the seventh on, every further attempt buys
+ * the same five minutes, so the number says "three attempts at the ceiling and then stop" rather
+ * than an arbitrary count.
+ *
+ * Configurable as `APP_DISPATCH_MAX_ATTEMPTS` for an operator who would rather have a stuck stream
+ * than an escalated task — `Infinity` is the behaviour every build before WP-49 had.
+ */
+export const DEFAULT_MAX_DISPATCH_ATTEMPTS = 10;
+
+/**
+ * How long a dead letter takes to arrive, from the first failure to the last attempt.
+ *
+ * The sum of the `attempts − 1` backoff delays. It exists so the number quoted on
+ * {@link DEFAULT_MAX_DISPATCH_ATTEMPTS} is produced rather than remembered (standing rule 39): it
+ * is the same formula `DispatchQueue.failAttempt` schedules with, written once here and asserted
+ * against the shipped defaults.
+ */
+export const dispatchRetryWindowMs = (
+  options: {
+    readonly retryDelayMs?: number;
+    readonly maxRetryDelayMs?: number;
+    readonly maxAttempts?: number;
+  } = {},
+): number => {
+  const base = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  const max = options.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+  const attempts = options.maxAttempts ?? DEFAULT_MAX_DISPATCH_ATTEMPTS;
+  if (!Number.isFinite(attempts)) {
+    // A bound that is not a number has no window, and saying so is better than counting to it.
+    return Number.POSITIVE_INFINITY;
+  }
+  let total = 0;
+  for (let attempt = 1; attempt < attempts; attempt += 1) {
+    // `2 ** Math.min(attempt - 1, 10)` is the exponent cap the SQL applies (`least(attempts, 10)`),
+    // which matters only for a base small enough that doubling has not reached `max` by then.
+    total += Math.min(base * 2 ** Math.min(attempt - 1, 10), max);
+  }
+  return total;
+};
 
 export interface StopOptions {
   /** Give up waiting after this long and report what was still in flight. */
@@ -138,6 +223,8 @@ export class EventBus {
   readonly #maxConcurrentDispatches: number;
   readonly #retryDelayMs: number;
   readonly #maxRetryDelayMs: number;
+  readonly #maxDispatchAttempts: number;
+  #deadLetter: DeadLetterSink | undefined;
   readonly #inFlight = new Set<Promise<unknown>>();
   /** Callers waiting for a dispatch slot, in arrival order. */
   readonly #waiting: (() => void)[] = [];
@@ -158,10 +245,34 @@ export class EventBus {
     }
     this.#retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
     this.#maxRetryDelayMs = options.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+    this.#maxDispatchAttempts = options.maxDispatchAttempts ?? DEFAULT_MAX_DISPATCH_ATTEMPTS;
+    if (this.#maxDispatchAttempts < 1) {
+      throw new RangeError(
+        `maxDispatchAttempts must be at least 1, got ${String(options.maxDispatchAttempts)}`,
+      );
+    }
   }
 
   register(handler: EventHandler): this {
     this.registry.register(handler);
+    return this;
+  }
+
+  /**
+   * Registers what happens to a dead-lettered event's task (WP-49).
+   *
+   * Late-bound like {@link register}, and for the same reason: `createEventing` builds the bus
+   * before a composition root has a pipeline to escalate with. **Exactly one** — a second
+   * registration throws rather than replacing the first, because a silently replaced sink is a
+   * task nobody is told about.
+   */
+  onDeadLetter(sink: DeadLetterSink): this {
+    if (this.#deadLetter !== undefined) {
+      throw new Error(
+        'a dead-letter sink is already registered on this bus; one process decides what a poisoned event does to its task, and a second registration would silently replace the first',
+      );
+    }
+    this.#deadLetter = sink;
     return this;
   }
 
@@ -260,13 +371,16 @@ export class EventBus {
       );
       return result;
     }
+    // Kept, not discarded: a chained dispatch's failure was invisible above this line until WP-49
+    // (backlog 5), because only the parent's status ever came back.
+    const chainedResults: DispatchResult[] = [];
     for (const chainedEvent of result.chained) {
       if (this.#stopping) {
         break;
       }
-      await this.#dispatchTracked(chainedEvent, depth + 1);
+      chainedResults.push(await this.#dispatchTracked(chainedEvent, depth + 1));
     }
-    return result;
+    return { ...result, chainedResults };
   }
 
   async #runHandlers(event: StoredEvent, depth: number): Promise<DispatchResult> {
@@ -274,12 +388,21 @@ export class EventBus {
     const { stream_type: streamType, stream_id: streamId, stream_seq: streamSeq } = event.event;
     const handlers = this.registry.handlersFor(event.event.type);
     const done = (status: DispatchStatus, outcomes: HandlerOutcome[], chained: StoredEvent[]) =>
-      ({ position, status, handlers: outcomes, chained, depth }) satisfies DispatchResult;
+      ({
+        position,
+        status,
+        handlers: outcomes,
+        chained,
+        chainedResults: [],
+        depth,
+      }) satisfies DispatchResult;
 
     return this.#uow.transaction(async (scope) => {
       const claim = await scope.dispatchQueue.claim(position);
       if (claim !== 'claimed') {
-        return done(claim === 'busy' ? 'busy' : 'completed', [], []);
+        // A dead-lettered row is reported as itself rather than as `busy`: a caller told `busy`
+        // tries again, and this row must never be dispatched again (WP-49).
+        return done(claim, [], []);
       }
       if (await scope.dispatchQueue.hasEarlierPending(streamType, streamId, streamSeq)) {
         return done('blocked', [], []);
@@ -309,17 +432,59 @@ export class EventBus {
 
       if (failure !== undefined) {
         await scope.handlerExecutions.recordFailure(position, failure.handler, failure.error);
-        await scope.dispatchQueue.retryLater(position, failure.error, this.#backoff);
+        // The bound is checked where the attempt is *recorded* — one statement, in the
+        // dispatcher's transaction, so the count that decides cannot be read before the increment
+        // that changes it, and no handler can be written in a way that escapes it.
+        //
+        // **Here and not in the handler's transaction**, which is the one other place it could go
+        // and where it would never fire: that transaction rolled back with the throw, taking the
+        // mark with it, so the row would come back at `attempts` for ever. The same rollback is
+        // why `recordFailure` above is on this transaction too (TD-005), and it is what makes the
+        // dead letter a *dispatcher* decision rather than something a handler can opt out of.
+        const attempt = await scope.dispatchQueue.failAttempt(position, {
+          error: failure.error,
+          handler: failure.handler.handler,
+          backoff: this.#backoff,
+          maxAttempts: this.#maxDispatchAttempts,
+        });
+        const context = {
+          position,
+          type: event.event.type,
+          handler: failure.handler.handler,
+          attempts: attempt.attempts,
+          error: failure.error,
+        };
+        if (attempt.ending === 'retry') {
+          this.#logger.error(
+            context,
+            'event handler failed; the event stays queued behind its stream',
+          );
+          return done('failed', outcomes, []);
+        }
+        // Marked for the same reason the handler invocation above is, and it was **not** until
+        // WP-49 round 1: measured `transactionIsOpen()` false inside the sink and true inside a
+        // handler, which made `dead-letter.ts`'s "it may not call anything outside the database" a
+        // convention rather than a refusal. The sink runs with this event's queue row locked and
+        // two pooled connections held, which is strictly more than a handler holds.
+        await withOpenTransaction(async () => {
+          await this.#deadLetter?.(scope, {
+            event,
+            handler: failure.handler.handler,
+            attempts: attempt.attempts,
+            error: failure.error,
+          });
+        });
         this.#logger.error(
           {
-            position,
-            type: event.event.type,
-            handler: failure.handler.handler,
-            error: failure.error,
+            ...context,
+            max_attempts: this.#maxDispatchAttempts,
+            // What was *called*, never what it did: a sink that found no task escalates nothing,
+            // and a log line claiming otherwise would be read as an escalation that happened.
+            dead_letter_sink: this.#deadLetter === undefined ? 'absent' : 'called',
           },
-          'event handler failed; the event stays queued behind its stream',
+          'event handler failed for the last time; the event is dead-lettered, its stream moves on, and it stays in the log for a replay (WP-49)',
         );
-        return done('failed', outcomes, []);
+        return done('dead-lettered', outcomes, []);
       }
 
       await scope.dispatchQueue.complete(position);
@@ -346,11 +511,13 @@ export class EventBus {
    * therefore lets the conflict escape, and the bus re-runs it against a clean re-read —
    * {@link MAX_CONCURRENCY_CONFLICT_ATTEMPTS} times.
    *
-   * It is here rather than left to `retryLater` because that path costs the **whole stream** five
-   * seconds and doubles from there ({@link DEFAULT_RETRY_DELAY_MS}), for a loss whose winner has
-   * already committed: the row the retry reads is settled before the first attempt even returns.
-   * Exhausting the bound falls through to the ordinary failure path, which records the failure and
-   * re-queues the event — never a drop.
+   * It is here rather than left to the queue's own retry because that path costs the **whole
+   * stream** five seconds and doubles from there ({@link DEFAULT_RETRY_DELAY_MS}), for a loss whose
+   * winner has already committed: the row the retry reads is settled before the first attempt even
+   * returns. Exhausting the bound falls through to the ordinary failure path, which records the
+   * failure and re-queues the event — and, since WP-49, dead-letters it instead once the event has
+   * spent {@link DEFAULT_MAX_DISPATCH_ATTEMPTS} attempts. Never a drop either way: `events` is
+   * append-only and a dead-lettered event is still replayable.
    *
    * `emitted` and `afterCommit` are rebuilt per attempt, because a rolled-back attempt's events
    * were never appended and its callbacks were never owed.
@@ -531,6 +698,7 @@ const stoppingResult = (event: StoredEvent): DispatchResult => ({
   status: 'stopping',
   handlers: [],
   chained: [],
+  chainedResults: [],
   depth: 0,
 });
 

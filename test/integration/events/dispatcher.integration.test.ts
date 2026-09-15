@@ -9,11 +9,20 @@
  * The handler effect used throughout is a row in a real table (`human_actions`), so "exactly-once
  * effect" is a fact about the database rather than about a counter in the test process.
  */
-import { EventBus, OutboxWorker, streamId, taskQueued } from '@platform/application';
+
+import {
+  DEFAULT_MAX_DISPATCH_ATTEMPTS,
+  EventBus,
+  OutboxWorker,
+  streamId,
+  taskDequeued,
+  taskQueued,
+} from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { eventing } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createMetrics } from '../../../apps/server/src/metrics.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestPool } from '../support/postgres.js';
 
@@ -276,6 +285,167 @@ describe('priority dispatcher (PostgreSQL)', () => {
       [streamId(207)],
     );
     expect(Number(queued.rows[0]?.count)).toBe(0);
+  });
+
+  /**
+   * The bound of WP-49 against the real queue, and the two predicates that make it worth having.
+   *
+   * The unit tier proves the count; this proves the SQL — that a dead-lettered row really does drop
+   * out of the sweep's window and out of `hasEarlierPending`, which is what "the stream moves on"
+   * means, and that `events` still has the event (it is append-only, so the dead letter is a queue
+   * decision and never a loss).
+   */
+  it('dead-letters a permanently failing event and lets its stream move on', async () => {
+    const dispatcher = bus();
+    const attempts = { count: 0 };
+    const seen: number[] = [];
+    const escalations: { position: number; handler: string }[] = [];
+    dispatcher.register({
+      name: 'core.poison',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        attempts.count += 1;
+        throw new Error('deterministic: this payload will never be handled');
+      },
+    });
+    dispatcher.register({
+      name: 'core.after',
+      priority: 20,
+      eventTypes: ['task.dequeued'],
+      handle: async (context) => {
+        seen.push(context.event.position);
+      },
+    });
+    dispatcher.onDeadLetter(async (_scope, record) => {
+      escalations.push({ position: record.event.position, handler: record.handler });
+    });
+
+    const poisoned = await appendOne(209, 1);
+    const [next] = await unitOfWork.transaction(async (scope) =>
+      scope.events.append([
+        taskDequeued({ streamType: 'task', streamId: streamId(209) as Id, streamSeq: 2 }),
+      ]),
+    );
+    if (next === undefined) {
+      throw new Error('append returned nothing');
+    }
+
+    const worker = new OutboxWorker({ bus: dispatcher, store, batchSize: 8 });
+    const deadBefore = await store.countDeadLettered();
+    // Dispatched directly rather than swept, because this file's earlier cases deliberately leave
+    // their own `task.queued` rows queued (`undoes a handler that throws after writing`) and a
+    // sweep would hand those to this test's handler too — measured at 19 attempts instead of 10.
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await dispatcher.dispatch(poisoned);
+    }
+
+    expect(attempts.count).toBe(DEFAULT_MAX_DISPATCH_ATTEMPTS);
+    expect(escalations).toEqual([{ position: poisoned.position, handler: 'core.poison' }]);
+    // The row is terminal rather than gone, and it says which handler spent the bound.
+    const row = await pool.query<{ attempts: number; handler: string | null; dead: string | null }>(
+      'select attempts, dead_letter_handler as handler, dead_lettered_at as dead from event_dispatch where event_position = $1',
+      [poisoned.position],
+    );
+    expect(row.rows[0]).toMatchObject({
+      attempts: DEFAULT_MAX_DISPATCH_ATTEMPTS,
+      handler: 'core.poison',
+    });
+    expect(row.rows[0]?.dead).not.toBeNull();
+    expect(await store.countDeadLettered()).toBe(deadBefore + 1);
+
+    // The whole point, and it is the **sweep** that has to see it: the event behind the dead letter
+    // is offered by `readPendingDispatch`, passes `hasEarlierPending`, and is dispatched.
+    const report = await worker.drain();
+    expect(report.dispatched).toBeGreaterThanOrEqual(1);
+    expect(seen).toEqual([next.position]);
+    const queued = await pool.query<{ count: string }>(
+      'select count(*) as count from event_dispatch where stream_id = $1 and dead_lettered_at is null',
+      [streamId(209)],
+    );
+    expect(Number(queued.rows[0]?.count)).toBe(0);
+    // `events` is append-only: the dead letter is a decision about the queue, not about the log.
+    expect(await store.readAt(poisoned.position)).not.toBeNull();
+  });
+
+  /**
+   * Standing rule 29: a baseline, a move, and then a *second* scrape that must not move again —
+   * because a gauge that counts every sweep would also "move" and prove nothing.
+   */
+  it('publishes the dead letter as a gauge that separates it from the backlog', async () => {
+    const dispatcher = bus();
+    dispatcher.register({
+      name: 'core.poison',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        throw new Error('deterministic');
+      },
+    });
+    const metrics = createMetrics({
+      defaultMetrics: false,
+      pendingDispatch: async () => store.countPendingDispatch(),
+      deadLettered: async () => store.countDeadLettered(),
+    });
+    const reading = async (name: string): Promise<number> => {
+      await metrics.collect();
+      const line = (await metrics.registry.metrics())
+        .split('\n')
+        .find((text) => text.startsWith(`${name} `));
+      return Number(line?.slice(name.length + 1) ?? Number.NaN);
+    };
+
+    const baseline = await reading('event_dispatch_dead_lettered');
+    const event = await appendOne(210, 1);
+    // Queued and failing: the backlog gauge counts it, and it reads exactly like a busy queue.
+    await dispatcher.dispatch(event);
+    expect(await reading('event_dispatch_pending')).toBeGreaterThan(0);
+    expect(await reading('event_dispatch_dead_lettered')).toBe(baseline);
+
+    for (let attempt = 2; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await dispatcher.dispatch(event);
+    }
+
+    expect(await reading('event_dispatch_dead_lettered')).toBe(baseline + 1);
+    // Dispatched again, and again: the row is terminal, so the number does not climb with sweeps.
+    await dispatcher.dispatch(event);
+    await dispatcher.dispatch(event);
+    expect(await reading('event_dispatch_dead_lettered')).toBe(baseline + 1);
+  });
+
+  /**
+   * The canary for the bound itself (standing rules 3 and 67): switch it off and the old behaviour
+   * is back, which is also what `APP_DISPATCH_MAX_ATTEMPTS=0` gives an operator who wants it. It is
+   * here rather than only in the unit tier because `Infinity` has to survive the round trip into
+   * PostgreSQL, where `attempts + 1 >= 'Infinity'::double precision` is the comparison.
+   */
+  it('never dead-letters when the bound is switched off', async () => {
+    const dispatcher = new EventBus({
+      unitOfWork,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      maxDispatchAttempts: Number.POSITIVE_INFINITY,
+    });
+    dispatcher.register({
+      name: 'core.poison',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        throw new Error('deterministic');
+      },
+    });
+
+    const event = await appendOne(211, 1);
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS + 2; attempt += 1) {
+      expect((await dispatcher.dispatch(event)).status).toBe('failed');
+    }
+
+    const row = await pool.query<{ dead: string | null; attempts: number }>(
+      'select dead_lettered_at as dead, attempts from event_dispatch where event_position = $1',
+      [event.position],
+    );
+    expect(row.rows[0]?.dead).toBeNull();
+    expect(row.rows[0]?.attempts).toBe(DEFAULT_MAX_DISPATCH_ATTEMPTS + 2);
   });
 
   it('lets the outbox worker find events nobody dispatched, woken by NOTIFY', async () => {

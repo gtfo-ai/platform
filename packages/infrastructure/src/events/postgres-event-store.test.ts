@@ -261,7 +261,7 @@ describe('PostgresDispatchQueue', () => {
   });
 
   it('does not look twice when it got the lock', async () => {
-    const sql = executor([{ rowCount: 1 }]);
+    const sql = executor([{ rowCount: 1, rows: [{ dead: false }] }]);
     expect(await new PostgresDispatchQueue(sql).claim(7)).toBe('claimed');
     expect(sql.calls).toHaveLength(1);
   });
@@ -273,11 +273,54 @@ describe('PostgresDispatchQueue', () => {
   });
 
   it('backs a retry off from the row it is updating, not from the caller', async () => {
-    const sql = executor([{}]);
-    await new PostgresDispatchQueue(sql).retryLater(7, 'boom', { baseMs: 500, maxMs: 60_000 });
+    const sql = executor([{ rows: [{ attempts: 3, dead: false }] }]);
+    const ending = await new PostgresDispatchQueue(sql).failAttempt(7, {
+      error: 'boom',
+      handler: 'core.a',
+      backoff: { baseMs: 500, maxMs: 60_000 },
+      maxAttempts: 10,
+    });
+    expect(ending).toEqual({ attempts: 3, ending: 'retry' });
     expect(sql.calls[0]?.text).toMatch(/attempts = attempts \+ 1/);
     expect(sql.calls[0]?.text).toMatch(/power\(2, least\(attempts, 10\)\)/);
-    expect(sql.calls[0]?.values).toEqual([7, 'boom', 500, 60_000]);
+    expect(sql.calls[0]?.values).toEqual([7, 'boom', 500, 60_000, 10, 'core.a']);
+  });
+
+  it('decides the ending in the statement that increments, and reports what the row says', async () => {
+    // The bound is compared against `attempts + 1` inside the update, so no second statement can
+    // read a count another attempt has already moved (WP-49).
+    const sql = executor([{ rows: [{ attempts: 10, dead: true }] }]);
+    const ending = await new PostgresDispatchQueue(sql).failAttempt(7, {
+      error: 'boom',
+      handler: 'core.a',
+      backoff: { baseMs: 500, maxMs: 60_000 },
+      maxAttempts: 10,
+    });
+    expect(ending).toEqual({ attempts: 10, ending: 'dead-lettered' });
+    const text = sql.calls[0]?.text ?? '';
+    expect(text).toMatch(/dead_lettered_at = case when attempts \+ 1 >= \$5/);
+    expect(text).toMatch(/dead_letter_handler = case when attempts \+ 1 >= \$5/);
+    expect(text).toMatch(/returning attempts, dead_lettered_at is not null as dead/);
+  });
+
+  it('reports a row another transaction removed as a retry of nothing', async () => {
+    // Unreachable from the dispatcher, which holds the claim — asserted because the alternative
+    // (reading `rows[0]` of an empty result) would dead-letter on a `NaN` comparison.
+    const sql = executor([{ rows: [] }]);
+    expect(
+      await new PostgresDispatchQueue(sql).failAttempt(7, {
+        error: 'boom',
+        handler: 'core.a',
+        backoff: { baseMs: 500, maxMs: 60_000 },
+        maxAttempts: 10,
+      }),
+    ).toEqual({ attempts: 0, ending: 'retry' });
+  });
+
+  it('refuses a dead-lettered row rather than answering `busy` or `completed`', async () => {
+    const sql = executor([{ rowCount: 1, rows: [{ dead: true }] }]);
+    expect(await new PostgresDispatchQueue(sql).claim(7)).toBe('dead-lettered');
+    expect(sql.calls).toHaveLength(1);
   });
 
   it('asks whether an earlier event of the stream is still queued', async () => {

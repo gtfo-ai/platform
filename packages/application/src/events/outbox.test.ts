@@ -69,7 +69,14 @@ describe('OutboxWorker', () => {
   it('returns an empty report when nothing is queued', async () => {
     const { memory, bus } = harness();
     const worker = new OutboxWorker({ bus, store: memory.store });
-    expect(await worker.drain()).toEqual({ scanned: 0, dispatched: 0, failed: 0, deferred: 0 });
+    expect(await worker.drain()).toEqual({
+      scanned: 0,
+      dispatched: 0,
+      failed: 0,
+      deferred: 0,
+      deadLettered: 0,
+      chainFailed: 0,
+    });
   });
 
   it('counts a failing event as failed and leaves it queued', async () => {
@@ -263,5 +270,134 @@ describe('OutboxWorker', () => {
     });
     await append(memory, 1, 1);
     expect(hints).toEqual([EVENTS_APPENDED_TOPIC]);
+  });
+});
+
+/**
+ * What a sweep can see about failures below it (WP-49, PROGRESS backlog 5).
+ *
+ * `sweepOnce` reads one row per stream and dispatches each; a handler that emits an event has that
+ * event dispatched *inside* the parent's call, and until WP-49 the only thing that came back was
+ * the parent's status — so a chained handler that threw was counted as a clean `dispatched`. The
+ * fix is a field rather than a fold into `failed`: the four original counts still partition
+ * `scanned`, and the one existing reader (the `outbox sweep` log line) is unchanged and picks the
+ * new counts up because it spreads the report.
+ */
+describe('a sweep whose work fails below the events it read', () => {
+  const emitting = (): EventHandler => ({
+    name: 'core.emitter',
+    priority: 10,
+    eventTypes: ['task.queued'],
+    handle: async (context) => {
+      if (context.event.event.stream_seq !== 1) {
+        return;
+      }
+      await context.emit([taskQueued({ streamType: 'task', streamId: streamId(1), streamSeq: 2 })]);
+    },
+  });
+
+  const failingOnChained = (): EventHandler => ({
+    name: 'core.chained',
+    priority: 20,
+    eventTypes: ['task.queued'],
+    handle: async (context) => {
+      if (context.event.event.stream_seq === 2) {
+        throw new Error('the chained handler threw');
+      }
+    },
+  });
+
+  it('counts a chained dispatch’s failure instead of reporting a clean pass', async () => {
+    const memory = new MemoryEventing();
+    const bus = new EventBus({ unitOfWork: memory, retryDelayMs: 0, maxRetryDelayMs: 0 });
+    bus.register(emitting());
+    bus.register(failingOnChained());
+    await append(memory, 1, 1);
+
+    // One batch, because `drain()` would sweep again and read the chained event as a row of its
+    // own — which is the same failure counted a second way, from the queue rather than the chain.
+    const report = await new OutboxWorker({ bus, store: memory.store }).sweepOnce();
+
+    // The parent really did dispatch; that is not the lie. The lie was that this was all.
+    expect(report).toMatchObject({ scanned: 1, dispatched: 1, failed: 0, chainFailed: 1 });
+    expect(memory.pending.map((entry) => entry.eventPosition)).toEqual([2]);
+  });
+
+  it('writes its own line for a pass whose only outcome was a dead letter', async () => {
+    // Round 1's nit, and the branch it added: `dispatched > 0 || failed > 0` was false for exactly
+    // this pass, so the one line carrying the sweep's counts was never written for the outcome the
+    // work package exists to make visible.
+    const memory = new MemoryEventing();
+    const bus = new EventBus({
+      unitOfWork: memory,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      // One attempt, so the first failure is the dead letter and the pass dispatches nothing.
+      maxDispatchAttempts: 1,
+    });
+    bus.register({
+      name: 'core.poison',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        throw new Error('deterministic');
+      },
+    });
+    const debugs: Array<{ fields: LogFields; message: string }> = [];
+    const worker = new OutboxWorker({
+      bus,
+      store: memory.store,
+      pollIntervalMs: 5,
+      logger: {
+        debug: (fields, message) => debugs.push({ fields, message }),
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      },
+    });
+    await worker.start();
+    await append(memory, 1, 1);
+
+    await vi.waitFor(() => {
+      expect(debugs.map((entry) => entry.message)).toContain('outbox sweep');
+    });
+    expect(debugs.at(-1)?.fields).toMatchObject({
+      sweep: OUTBOX_SWEEP_LABEL,
+      dispatched: 0,
+      failed: 0,
+      deadLettered: 1,
+    });
+    await worker.stop();
+  });
+
+  it('counts an event that spent its attempt bound apart from one that will be retried', async () => {
+    const memory = new MemoryEventing();
+    const bus = new EventBus({
+      unitOfWork: memory,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      maxDispatchAttempts: 2,
+    });
+    bus.register({
+      name: 'core.poison',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        throw new Error('deterministic');
+      },
+    });
+    await append(memory, 1, 1);
+    // The second event of the same stream: what the dead letter exists to release.
+    await append(memory, 1, 2);
+    const worker = new OutboxWorker({ bus, store: memory.store });
+
+    const first = await worker.drain();
+    expect(first).toMatchObject({ scanned: 1, failed: 1, deadLettered: 0 });
+
+    const second = await worker.drain();
+    // One pass: the dead letter is progress, so the same drain goes on to the freed stream — and
+    // the second event is poisoned by the same handler, so it is failed rather than dispatched.
+    expect(second).toMatchObject({ scanned: 2, deadLettered: 1, failed: 1 });
+    expect(await memory.store.countDeadLettered()).toBe(1);
   });
 });

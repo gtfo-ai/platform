@@ -52,6 +52,7 @@ export * from './cost/window.js';
 export * from './errors.js';
 export * from './events/concurrency.js';
 export * from './events/consumption.js';
+export * from './events/dead-letter.js';
 export * from './events/event-bus.js';
 export * from './events/handler.js';
 export * from './events/open-transaction.js';
@@ -98,6 +99,7 @@ export * from './onboarding/record.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';
+export * from './pipeline/dead-letter.js';
 export * from './pipeline/epic-split.js';
 export * from './pipeline/gates.js';
 export * from './pipeline/intake-reconcile.js';

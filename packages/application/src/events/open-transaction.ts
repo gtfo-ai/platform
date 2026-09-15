@@ -14,8 +14,10 @@
  * ships as 1 and the slot was inside the handler
  * (`test/e2e/pipeline/outbound-shape.e2e.test.ts`).
  *
- * Prose did not prevent it and a review did not catch it, so it is a **runtime** fact now: the two
- * places that hand pipeline code an open scope mark it here, and
+ * Prose did not prevent it and a review did not catch it, so it is a **runtime** fact now: the
+ * **three** places that hand pipeline code an open scope mark it here — `EventBus`'s handler
+ * invocation, the dead-letter sink it calls from the dispatcher's own transaction (WP-49), and the
+ * `UnitOfWork` {@link markTransactions} wraps for the job path — and
  * {@link assertOutsideTransaction} refuses. A guard enforced only by TypeScript is not enforced at
  * a boundary (standing rule 14), and a rule written only in a docblock is the rule that gets
  * broken by the next work package (rule 30).
@@ -25,10 +27,11 @@
  * `AsyncLocalStorage` propagates through `await`, so everything a handler or a job calls while its
  * transaction is open sees the mark, however many layers down. What it **cannot** see:
  *
- *  - a transaction opened by something that does not go through the two marking sites — a
+ *  - a transaction opened by something that does not go through the three marking sites — a
  *    composition root that calls `unitOfWork.transaction` itself, or an adapter that takes its own
- *    `pool.connect()`. The marks are on `EventBus`'s handler invocation and on the `UnitOfWork` the
- *    pipeline runtime is given, which together cover every transaction the pipeline opens;
+ *    `pool.connect()`. The marks are on `EventBus`'s handler invocation, on the dead-letter sink the
+ *    dispatcher calls inside its own transaction, and on the `UnitOfWork` the pipeline runtime is
+ *    given, which together cover every transaction the pipeline opens;
  *  - work deliberately detached from the async context (a callback stored and run later,
  *    `setTimeout`, an unawaited promise that outlives the transaction). Detaching is how a caller
  *    would *lose* the mark, so the failure direction is a call that is refused when it need not be
@@ -85,7 +88,7 @@ export const assertOutsideTransaction = (attempted: string): void => {
  * The same `UnitOfWork`, with every transaction it opens marked.
  *
  * The pipeline runtime wraps the unit of work it is handed, so the job path is under the same rule
- * as the handler path — the stage executor and the two job handlers already call providers outside
+ * as the handler path and the dead-letter sink's — the stage executor and the two job handlers already call providers outside
  * their transactions, and this is what keeps them there. It is a decorator rather than a change to
  * the adapters because there are three `UnitOfWork` implementations (PostgreSQL, the in-memory
  * double, and whatever a test writes) and a rule maintained in three places is a rule that drifts

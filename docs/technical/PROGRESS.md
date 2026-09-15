@@ -6459,6 +6459,123 @@ report and folds 80/81/107, which is where the *abandonment* half would ride if 
 The trigger is the first deployment whose curations can be lost at all. Related: **122**, **36** (the
 entry whose fix created this table, and whose residual is recorded there), **107**.
 
+### 126. **A dead-lettered event is a count and a task brief: nothing lists the rows, no command re-queues one, and both remedies the platform documents are outside the product — a hand-typed `update` and a function with no caller in any running process** (TODO, small — **working as designed**, the operability missing; **latent**, no producer on this build; **no work package owns it**; found by WP-49, confirmed off the tree by the refiner, session 6)
+
+> **M4 (refiner, session 6): no row owns it** — considered against both candidates and folded into
+> neither. **WP-65** is the operations row and its criterion (4) is this exact shape (a **metric, not
+> a screen**) — but the metric half *shipped with WP-49*, and what is left is a **list** and a
+> **command**, over a table WP-65 never opens and through a surface it never touches. **WP-73** is
+> sentences and small repairs; an admin-scoped command with an audit row is neither. The
+> recommendation below is what to build when somebody asks the question.
+
+**What is wrong.** WP-49 gave a poisoned event an ending and told the task it belongs to. What it did
+not give an operator is any way to see *which* events are poisoned, or to serve one again once the
+handler is fixed. The gauge says how many, never which; the re-queue is a statement typed into the
+database, which leaves no `human_actions` row and no event; and the other remedy three documents name
+— replay — has no entry point in any process that runs.
+
+**Evidence** (refiner, session 6; file reads and greps, nothing run — rule 66).
+- WP-49's implementer, quoted: *"Nothing publishes a dead letter to a human except the task's brief.
+  An event with no task is visible only in `event_dispatch` and in the metric, and no screen or API
+  reads either"*, and *"No command re-queues a dead-lettered event. The remedy is an `update` by hand
+  (documented in migration 0037 and in `.env.example`) or a `replayEvents` range; a maintainer-facing
+  'retry this event' has no owner."*
+- **The port is two counts and no list.** `packages/application/src/ports/event-store.ts:114` and
+  `:122` are `countPendingDispatch` and `countDeadLettered`, and the first one's docblock states the
+  scope: *"the two together are the whole of `event_dispatch`"*. There is no read that returns a row,
+  so nothing above the adapter can name a dead letter's position, type, stream or handler — although
+  migration 0037 built the partial index for exactly that read (`event_dispatch_dead_letter_idx`,
+  `0037_dispatch_dead_letter.sql:52-54`, whose comment says it serves *"the metric's count and an
+  operator's 'what is poisoned'"*).
+- **The gauge is the whole signal, deliberately.** `apps/server/src/metrics.ts:106` registers
+  `event_dispatch_dead_lettered` and `apps/server/src/runtime.ts:216` samples it. For an event that
+  names no task the sink writes one log line and returns —
+  `packages/application/src/pipeline/dead-letter.ts:110`, *"an event was dead-lettered and names no
+  task, so nothing was escalated; this one is an operator’s to read (WP-49)"* — which is the right
+  decision (inventing a task would put a maintenance fault in somebody's work queue) and leaves the
+  number as the only thing an operator can read.
+- **Remedy one is a hand-typed statement.** `0037_dispatch_dead_letter.sql:24-25`: *"re-queueable by
+  hand (`update event_dispatch set dead_lettered_at = null, attempts = 0 where event_position =
+  …`)"*, restated in `docs/technical/03-data-model.md:77` and in `.env.example:297-307`.
+- **Remedy two has no caller.** `replayEvents` (`packages/application/src/events/replay.ts`) is named
+  as the answer by technical/02:11 (*"still replayable by `events/replay.ts`"*) and by
+  technical/03:77 (*"a dead-lettered event is still replayable"*). A grep for the identifier over
+  `apps/`, `packages/`, `scripts/` and `test/` answers **two integration tests and nothing else** —
+  `test/integration/cost/ledger-backfill.integration.test.ts:179` and
+  `test/integration/stats/stats-backfill.integration.test.ts:288`. No route, no job, no script, no
+  CLI: the sentences are true of the **log** and of nothing an operator can run. Both are therefore
+  thin rather than false, and the correction belongs with the reader, not with rule 83.
+- **There is nowhere to hang a list today.** A grep for `event_dispatch` over `apps/web/src`,
+  `packages/contracts/src` and `schemas/` answers nothing, and the SPA has no operations screen.
+- **An audit row for a re-queue would be written and read by nobody.** `human_actions(id, task_id,
+  user_id, action, params jsonb, created_at)` (`0004_pipeline.sql:209-219`) has a **nullable**
+  `task_id` and one index, `(task_id, created_at desc)`; the two audit reads that ship are keyed to a
+  project (`params->>'project_id'`) and to a task — backlog **52**'s measurement. A command naming
+  an event position and no task writes a row neither read serves.
+- **The sibling is already carried, unowned.** `docs/TODO.md:42-45`: queue-depth alerting on
+  `event_dispatch_pending` is open, and *"nothing alerts on it, which is an operations concern with
+  no work package"*. There are now two numbers in that state, and `docs/operator-guide.md` mentions
+  neither: a grep for `dead` over it answers nothing, and neither §9 (Day-to-day) nor §10 (Known
+  limits of this build) names the gauge, the `APP_DISPATCH_MAX_ATTEMPTS` bound or the statement above.
+
+**Defect or working as designed?** **Working as designed**, and scoped on purpose. WP-49's six
+criteria ask for the bound, the escalation, the default, the gauge and `SweepReport`; none asks for a
+read or a command, and the plan row says the human-facing half *"is already decided and must not be
+re-opened"* — the task brief. This entry is the next question, not a gap in that row.
+
+**What it costs to leave.** Two populations with different costs. For an event **with** a task the
+cost is small: the brief already names the position and the handler, so the operator knows what to
+fix and the re-queue is one statement — what is lost is the record that somebody ran it. For an
+event with **no** task the cost is the whole answer: the gauge rises, and the first two questions — which
+event, which handler — have no answer short of opening a psql session against the production
+database, which is also the only place the fix can be applied. That is the shape backlog **81** was
+filed for one table earlier, with one difference that matters here: a dead letter means a stream's
+events were abandoned, so the cost of never noticing is not a missed notification but work the
+platform silently stopped doing.
+
+**What "done" looks like.** Three pieces, cheapest first; only the third is an operator's rather than
+the product's.
+1. **A read.** One port method over the index migration 0037 already built — position, event type,
+   stream, `dead_letter_handler`, `error`, `dead_lettered_at`, paged and bounded — served beside the
+   org reads under an admin capability (`apps/server/src/routes/org.ts` uses
+   `requirePermission(guard, 'org.users.manage')` for the identity pair, which is the precedent).
+   `error` is a handler's message and may quote a provider or a URL, so it is redacted or withheld —
+   the reason WP-49 kept it off the task brief (BD-022) does not stop applying because the reader is
+   an admin.
+2. **A command.** A re-queue that clears `dead_lettered_at` and `attempts` in one statement, refuses a
+   row that is not dead-lettered with a typed 409, and leaves **one** `human_actions` row whose
+   `params` names the event position and whose `task_id` is the task the dead letter escalated when
+   there was one — which is what makes the row visible to the task audit read that already ships.
+   Replay is **not** the mechanism: it is a range over `events` for a handler set, so re-serving one
+   event through it means writing a program, and it bypasses the queue row that records the event was
+   never dispatched. If a command is judged too much, the honest alternative is to state in the
+   operator guide that re-queueing is a database operation — not to leave the two sentences implying
+   a tool.
+3. **Alerting**, which is configuration rather than code: the operator guide's §9 gains both gauges
+   with one sentence each on what a rise means, and `docs/TODO.md`'s carried alerting note now names
+   both numbers (amended by this refiner in the same pass).
+
+**Needs measurement: how often an event is actually dead-lettered.** **Zero** times on this build —
+nothing has dispatched a production event (backlog **1**; no agent run has executed, **WP-53**). The
+population is bounded by how often a handler fails deterministically ten times in twenty minutes, and
+nobody has observed one, so *"rare"* is an argument rather than an observation, exactly as in **122**
+and **125**.
+
+**What would make it urgent.** A deterministic producer on a live instance — backlog **43**'s own
+list: a payload no handler can parse, a schema change under a queued event, an integration
+permanently answering 403. The urgent sub-case is a poisoned event on a **non-task** stream, because
+that is the one with no brief anywhere.
+
+**Depends on / owner. No work package owns it.** WP-49 shipped the state and is the row that would
+otherwise own it. **WP-65** folds 80/81/107 and answers all three with notifications, a gauge and the
+maintenance report — its criterion (4) is the shape of piece (1) but over `notifications`, and taking
+this would widen it into `event_dispatch` and into the command surface it never opens. **WP-73** is
+the sweep of sentences and small repairs, and pieces (1) and (2) are neither. **WP-67** owns
+`Idempotency-Key` as a consulted record, which the command in (2) would *use* rather than extend.
+Related: **43** (the entry WP-49 closed; its producer list is this entry's trigger), **81** and
+**107** (the same shape for two other tables, both unowned), **52** (why the audit row needs a task
+id), **1** (no production load, so no producer today).
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -22658,3 +22775,158 @@ either deleted reason found none.
 - **`knowledge_curations` has no reader outside the recovery.** `curated_at` and `proposals` answer
   *"was this task's retrospective curated, and what did it produce?"*, which is the question a
   maintainer reading an empty proposal queue has; nothing publishes it. Same shape as backlog 122.
+#### WP-49 — a poisoned event leaves the queue, and its task is told
+
+**What shipped.** Migration **0037** (`event_dispatch` gains `dead_lettered_at` and
+`dead_letter_handler`, plus a partial index on the first). `DispatchQueue.retryLater` becomes
+**`failAttempt`**, one statement that increments `attempts`, records the error and decides the
+ending — `retry` with the doubling backoff, or `dead-lettered` when the attempt reached
+`APP_DISPATCH_MAX_ATTEMPTS`. Three predicates now skip a dead-lettered row: the sweep's head window
+(`readPendingDispatch`), the ordering guard (`hasEarlierPending`) and `countPendingDispatch` — which
+is what makes *the stream move on*. `claim` answers the new `'dead-lettered'` rather than `busy`, so
+a direct `dispatch()` of one re-runs nothing. `EventBus` grows `maxDispatchAttempts`
+(`DEFAULT_MAX_DISPATCH_ATTEMPTS` = **10**, with `dispatchRetryWindowMs` beside it) and
+`onDeadLetter(sink)`; `packages/application/src/pipeline/dead-letter.ts` is the sink production
+registers, parking the task in `needs_human` with a brief naming the event position and the handler.
+`SweepReport` gains `deadLettered` and `chainFailed`; `EventStore.countDeadLettered` feeds the new
+`event_dispatch_dead_lettered` gauge beside `event_dispatch_pending`.
+
+**Decisions and assumptions.**
+- **The queue row is kept and marked, not deleted.** Deleting it is the other way to unblock the
+  stream and it destroys the work item: `claim` then answers `completed`, which is the spelling for
+  *every handler succeeded*. The row is the only record that this event was never dispatched, it is
+  what the gauge counts, and clearing the two columns is how an operator re-queues one. The plan's
+  row asks for "a terminal state the sweep's predicate excludes", which is what this is.
+- **The escalation runs inside the dispatcher's transaction**, as a sink the composition root
+  registers — not a handler, not a job, not a second sweep with a mark. It is what makes "no second
+  escalation" structural: the row is marked terminal in the transaction that escalated, and every
+  later sweep skips it, so there is no `escalated_at` to maintain and no window in which the event
+  is dead and nobody has been told. The cost is stated at
+  `packages/application/src/events/dead-letter.ts`: a sink that throws rolls the dead letter back
+  with it, and the event is offered again on the next sweep — fail closed (rule 20), bounded in rate
+  by the poll interval rather than in count, which is acceptable only because the failure a sink can
+  raise is a task-version conflict with another writer and that clears when the other writer commits.
+- **The sink is a fourth `tasks.save` ending** (`task-save-sites.test.ts`, now 31 sites): the first
+  site that owns no transaction, so the refusal escapes instead of being retried — catching it there
+  would be the in-handler retry `task-conflict.ts` forbids.
+- **The brief never repeats the handler's error text.** Q59's other escalation gives the reason: an
+  error may quote a provider, a URL or a credential, and nothing on this path holds a redactor
+  (BD-022). The position, the event type and the handler name are the platform's own strings; the
+  message stays on `event_dispatch.error` and in the log, neither of which the API serves. Asserted
+  in both directions.
+- **Which task**: `stream_id` on a task stream, `correlation_id` otherwise (technical/03 defines it
+  as *"the task the event belongs to"*), and a candidate that loads no row escalates nothing. **An
+  event with no task has an ending and it is deliberately quiet**: the dead letter stands, nothing is
+  parked, and the signal is `event_dispatch_dead_lettered` plus the bus's error line. Inventing a
+  task would put a maintenance fault in somebody's work queue.
+- **Ten attempts ≈ 20 minutes**, from the shipped backoff: 5 + 10 + 20 + 40 + 80 + 160 s, then the
+  300 s ceiling three times = **1 215 s**, produced by `dispatchRetryWindowMs()` and pinned by a test
+  (rule 39). Long enough to ride out a failover or a deploy, short enough that a task poisoned by a
+  payload no handler can parse stops for a fifth of an hour rather than for ever. `0` is the
+  operator's "no bound" (the pre-WP-49 behaviour), translated to `Infinity` in `createEventing`, and
+  `.env.example`'s value is held equal to the code default by a test (backlog 22's lesson).
+- **A gauge, not a `_total` counter**, for criterion 4: a counter resets with the process, so an
+  event dead-lettered before a restart would be invisible in the one metric that exists to say
+  *something is poisoned right now*. It is a metric TD-023 does not name; the decision record was
+  left alone because decisions are read-only for an implementer.
+- **The sink's registration is guarded, because an optional collaborator is one production omits**
+  (rule 31, backlog 104's lesson). It cannot be a row of `pipeline-census.test.ts`' own equality —
+  it is a call on the bus rather than a `createPipelineRuntime` key, since `createEventing` builds
+  the bus before `composePipeline` has a store — so it has a small census of its own in that file,
+  calibrated against the handler registrations beside it. Without it a poisoned event still leaves
+  the queue and **no task is ever escalated**, which every other tier would call a pass.
+- **`chainFailed` is a new field rather than a fold into `failed`**, so the original four counts
+  still partition `scanned`. The one existing reader (`#drainGuarded`'s log line) is byte-identical
+  and picks both new counts up because it spreads the report; neither can be the only thing that
+  happened in silence, because the bus logs an `error` naming the event and handler for a dead letter
+  and for every chained failure. `drain()` now also treats a dead letter as progress, so one drain
+  goes on to the stream it just freed.
+
+**Tests.** Criterion 1: `test/integration/events/dispatcher.integration.test.ts` ›
+*"dead-letters a permanently failing event and lets its stream move on"* (the next event of the same
+stream is dispatched and `core.after` sees it), with the unit twin in
+`packages/application/src/events/event-bus.test.ts` › *"lets the next event of the same stream
+through once the poisoned one is dead-lettered"*. Criterion 2:
+`packages/application/src/pipeline/dead-letter.test.ts` (seven cases — the brief's contents, the
+cause link, *"escalates once"*, the already-parked task, the no-task ending, the cross-stream
+correlation). Criterion 3: *"is dead-lettered at the shipped bound, and retried at every attempt
+before it"* (rule 42, both sides, against the **default** so `Infinity` fails it) and *"spends about
+twenty minutes on the shipped defaults before it gives up"*. Criterion 4:
+`apps/server/src/metrics.test.ts` › *"publishes the dead letters beside the backlog, so a poisoned event is not a busy queue"* and the
+integration tier's *"publishes the dead letter as a gauge that separates it from the backlog"*
+(baseline, +1, then unchanged — rule 29). Criterion 5:
+`packages/application/src/events/outbox.test.ts` › *"counts a chained dispatch’s failure instead of
+reporting a clean pass"*. Plus `packages/application/src/events/replay.test.ts` › *"replays it into
+the handler that can finally handle it"*, which is the non-negotiable that a dead-lettered event
+stays replayable, and the integration canary *"never dead-letters when the bound is switched off"*
+(also the proof that `Infinity` survives the round trip into `double precision`).
+
+**Tiers.** `PASS: verify` (6 966 passed, 14 skipped), `PASS: verify:integration`, `PASS: verify:e2e`
+**twice** (166 passed each). The integration tier and both e2e runs were started at a one-minute
+load of **6.4**, **8.6** and **8.0**; the last `verify` started at **20.9**, which was this machine's
+own processes plus the run before it decaying rather than synthetic load, and it passed. The one
+measurement worth keeping: the
+integration case first read **19** attempts where it asserts 10, because this file's earlier cases
+leave their own `task.queued` rows queued and a *sweep* handed those to this test's handler too —
+so the bound is driven by direct dispatches and the sweep is used for the half it actually proves,
+the next event of the stream being offered.
+
+**Round 1 (one major, one minor, one nit — all fixed on the same tree).**
+- **(major) The sink's "it may not call anything outside the database" was a sentence, not a
+  guard.** Measured before touching anything, with a throwaway case driving the real bus:
+  `transactionIsOpen()` was **false** inside the sink and **true** inside a handler — `EventBus`
+  marks only `handler.handle` and holds the *raw* `UnitOfWork` (`markTransactions` is applied by
+  `createPipelineRuntime`, on the job path). The sentence was made **true** rather than downgraded,
+  because the sink holds strictly more than a handler does — this event's queue row, two pooled
+  connections, the dispatch slot — and a future sink that posts a comment about the parked task is
+  exactly WP-15d's defect: the dispatcher now wraps the call in `withOpenTransaction`.
+  `event-bus.test.ts` › *"refuses a provider call from a sink by name, exactly as it does from a
+  handler"* plants an `assertOutsideTransaction` call and is **calibrated** — with the wrapper
+  removed it dies (`promise resolved … instead of rejecting`) and nothing else does. Rule 83:
+  `open-transaction.ts`'s docblock said *"the two places that hand pipeline code an open scope"*
+  twice; it now says three and names this one.
+- **(minor) `APP_DISPATCH_MAX_ATTEMPTS` joins backlog 54's population.** `compose.yml`'s `app`
+  service carries a fixed variable list with no `APP_DISPATCH_*` in it at all, so this knob — like
+  the five beside it — cannot be set on a stock compose instance until **WP-50** lands; an operator
+  gets the shipped 10 or needs a `compose.override.yml`. `compose.yml` is WP-50's file and was not
+  touched, and the comment was **not** added to `.env.example` either: none of the neighbouring
+  `APP_DISPATCH_*` entries carries one, and marking this one alone would read as if it were the only
+  variable affected.
+- **(nit) A pass whose only outcome was a dead letter wrote no sweep line.** `#drainGuarded`'s
+  condition gained `report.deadLettered > 0`; `chainFailed` is deliberately not in it and needs no
+  branch, because a chained dispatch exists only where its parent dispatched. New case
+  `outbox.test.ts` › *"writes its own line for a pass whose only outcome was a dead letter"*,
+  calibrated the same way (it is the only test that dies when the condition is put back).
+
+**Pre-review fix (rule 87, in a file this row does not otherwise touch).** The orchestrator's own
+`verify:e2e` on this tree failed `test/e2e/server/stats-api.e2e.test.ts` › *"counts a delivery folded
+from a real merge, and exports the same numbers as CSV"* once at load ~12 with `expected 2.4 to be
+close to 2.8` — one run's 0.40 short — and it passed 3/3 alone. The wait above the assertions binds
+`stats_task_delivery`, which the projector writes on `mr.merged`; the cost half reads **other rows**
+(`cost_total` ← `cost_rollup_daily`, `cost_per_delivered_task` ← `sum(cost_entries.usd)` for the
+task, both from `apps/server/src/queries/stats-queries.ts`), written by the **cost ledger's handler
+on `run.finished`**, one transaction per run in a dispatch of its own. So the comment cited rule 87
+and then bound the wrong row for half its assertions. A second wait now binds *"every run that ended
+has its ledger row"* — the last row those assertions read, with no number of its own — plus a
+`cost_rollup_daily` term (`>=`, so a second task could never hang it) for the table `cost_total`
+literally reads. Rule 49's sweep over the rest of the file: the second case asserts only
+`stats_event_daily` counters and its own wait binds them; the CSV assertions read the delivery
+projection, already bound.
+
+**The canary did not reproduce it, and that is the honest result.** Delaying the ledger handler (rule
+76) by 1.5 s and then 6 s per invocation left the endpoint reading **7 runs, 7 `cost_entries` rows,
+`2.800000`** at the moment of the old wait's exit — because `APP_DISPATCH_MAX_CONCURRENCY` is **1**,
+so slowing the ledger *serialises* the dispatcher and makes the ordering **safer** rather than
+riskier: `run.finished` is dispatched before the task transitions that lead to `done`. A delay that
+makes a race less likely is not a canary for it, so the fix rests on the orchestrator's measured
+failure plus the read of the two queries, and this paragraph says so rather than dressing a
+non-reproduction up as one (rule 86). Both restored files were checked back to their original md5s.
+
+**Discovered work (bigger than this row).**
+- **Nothing publishes a dead letter to a human except the task's brief.** An event with no task is
+  visible only in `event_dispatch` and in the metric, and no screen or API reads either — the same
+  shape as `docs/TODO.md`'s open note about alerting on `event_dispatch_pending`, now with a second
+  number worth alerting on.
+- **No command re-queues a dead-lettered event.** The remedy is an `update` by hand (documented in
+  migration 0037 and in `.env.example`) or a `replayEvents` range; a maintainer-facing "retry this
+  event" has no owner.

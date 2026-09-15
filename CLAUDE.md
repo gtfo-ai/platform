@@ -6,7 +6,7 @@ Self-hosted, open-source platform that runs Claude Code agents through a real-li
 ## Non-negotiables
 - No secrets in the repo, ever (BD-002). Fixtures use obviously fake values. `.env.example` lists every variable with a safe default.
 - Clean architecture: `packages/domain` has no I/O; `application` depends only on `domain` and ports; adapters live in `infrastructure`/`integrations`; `apps/*` are composition roots.
-- Everything is an event; handlers are idempotent and registered with a priority (TD-005). Never mutate state outside an aggregate's transaction.
+- Everything is an event; handlers are idempotent and registered with a priority (TD-005). Never mutate state outside an aggregate's transaction. A dispatch is **bounded** (WP-49): after `DEFAULT_MAX_DISPATCH_ATTEMPTS` the queue row is marked `dead_lettered_at` — never deleted, `events` stays append-only and replayable — the stream moves on, and the task escalates to `needs_human` once through a `DeadLetterSink` the dispatcher runs inside its own marked transaction (`packages/application/src/events/dead-letter.ts`).
 - All external text (tickets, MR comments, logs, web) is untrusted data (BD-022).
 - Tests are part of every change (technical/10): unit + property tests for domain, contract tests for integration ports, golden fixtures for SDK streams, fake-Claude e2e for pipeline changes.
 - Conventional commits with `Signed-off-by` (DCO). Small MRs.

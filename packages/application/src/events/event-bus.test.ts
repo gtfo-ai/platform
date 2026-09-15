@@ -11,8 +11,14 @@ import { silentLogger } from '../ports/logger.js';
 import { streamId, taskDequeued, taskQueued } from '../testing/fixtures.js';
 import { faultsAt, MemoryEventing, SimulatedCrashError } from '../testing/memory-eventing.js';
 import { MAX_CONCURRENCY_CONFLICT_ATTEMPTS } from './concurrency.js';
-import { EventBus } from './event-bus.js';
+import type { DeadLetterRecord } from './dead-letter.js';
+import { DEFAULT_MAX_DISPATCH_ATTEMPTS, dispatchRetryWindowMs, EventBus } from './event-bus.js';
 import type { EventHandler } from './handler.js';
+import {
+  assertOutsideTransaction,
+  TransactionOpenError,
+  transactionIsOpen,
+} from './open-transaction.js';
 
 const STREAM = { streamType: 'task', streamId: streamId(1), streamSeq: 1 } as const;
 
@@ -601,7 +607,8 @@ describe('afterCommit', () => {
  * The bound is {@link MAX_CONCURRENCY_CONFLICT_ATTEMPTS} and it is asserted from both sides
  * (standing rule 42): a handler that conflicts up to the bound and then succeeds leaves its effect,
  * and one that conflicts every time falls through to the ordinary failure path — which records the
- * failure and re-queues the event rather than dropping it.
+ * failure and re-queues the event rather than dropping it, until the **event's** own bound is spent
+ * and it is dead-lettered (`an event whose handler always fails`, below; WP-49).
  */
 describe('a handler that loses a race with another writer', () => {
   class Conflict extends Error {
@@ -667,5 +674,295 @@ describe('a handler that loses a race with another writer', () => {
 
     expect(attempts).toBe(1);
     expect(result.status).toBe('failed');
+  });
+});
+
+/**
+ * The bound on the *event*, which is the one that decides how long a stream can be held (WP-49,
+ * PROGRESS backlog 43).
+ *
+ * The bound above it is on re-running one handler inside a single dispatch. This one is on how many
+ * dispatches the event gets at all, and before WP-49 there was none: the failure path re-queued
+ * with a doubling backoff and nothing ever compared the count with anything, so a handler that
+ * fails deterministically kept its stream's later events queued for ever.
+ *
+ * Asserted from both sides (standing rule 42) — the attempt before the bound still retries, the
+ * attempt at the bound dead-letters — and against the **shipped default** rather than a number
+ * chosen here, so a default raised to `Infinity` fails this file rather than passing it quietly
+ * (standing rules 3 and 67).
+ */
+describe('an event whose handler always fails', () => {
+  const alwaysFails = (attempts: { count: number }): EventHandler => ({
+    name: 'core.poison',
+    priority: 10,
+    eventTypes: ['task.queued'],
+    handle: async () => {
+      attempts.count += 1;
+      throw new Error('deterministic: this payload will never be handled');
+    },
+  });
+
+  it('is dead-lettered at the shipped bound, and retried at every attempt before it', async () => {
+    const { memory, bus } = harness();
+    const attempts = { count: 0 };
+    bus.register(alwaysFails(attempts));
+    const stored = await appendOne(memory);
+
+    for (let attempt = 1; attempt < DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      const result = await bus.dispatch(stored);
+      expect({ attempt, status: result.status }).toEqual({ attempt, status: 'failed' });
+      expect(memory.pending[0]?.deadLetteredAt).toBeNull();
+    }
+
+    const last = await bus.dispatch(stored);
+    expect(last.status).toBe('dead-lettered');
+    expect(attempts.count).toBe(DEFAULT_MAX_DISPATCH_ATTEMPTS);
+    // Not a drop, and not a deletion: the row is still there, terminal, naming the handler.
+    expect(memory.pending[0]).toMatchObject({
+      eventPosition: stored.position,
+      attempts: DEFAULT_MAX_DISPATCH_ATTEMPTS,
+      deadLetterHandler: 'core.poison',
+    });
+    expect(memory.pending[0]?.deadLetteredAt).not.toBeNull();
+    // And the event itself is untouched in the log, which is what keeps it replayable.
+    expect(await memory.store.readAt(stored.position)).not.toBeNull();
+  });
+
+  it('lets the next event of the same stream through once the poisoned one is dead-lettered', async () => {
+    const { memory, bus } = harness();
+    const attempts = { count: 0 };
+    const handled: number[] = [];
+    bus.register(alwaysFails(attempts));
+    bus.register({
+      name: 'core.later',
+      priority: 20,
+      eventTypes: ['task.dequeued'],
+      handle: async (context) => {
+        handled.push(context.event.position);
+      },
+    });
+    const poisoned = await appendOne(memory);
+    const [next] = await memory.transaction(async (scope) =>
+      scope.events.append([taskDequeued({ ...STREAM, streamSeq: 2 })]),
+    );
+    if (next === undefined) {
+      throw new Error('append returned nothing');
+    }
+
+    // Blocked behind the head, which is the whole cost of ordering per stream.
+    expect((await bus.dispatch(next)).status).toBe('blocked');
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await bus.dispatch(poisoned);
+    }
+
+    expect((await bus.dispatch(next)).status).toBe('dispatched');
+    expect(handled).toEqual([next.position]);
+    // The sweep would not have offered it either way; both guards skip a dead-lettered row.
+    expect(await memory.store.readPendingDispatch({ limit: 10 })).toEqual([]);
+    expect(await memory.store.countPendingDispatch()).toBe(0);
+    expect(await memory.store.countDeadLettered()).toBe(1);
+  });
+
+  it('runs nothing when a dead-lettered event is dispatched again', async () => {
+    const { memory, bus } = harness();
+    const attempts = { count: 0 };
+    bus.register(alwaysFails(attempts));
+    const stored = await appendOne(memory);
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await bus.dispatch(stored);
+    }
+
+    const again = await bus.dispatch(stored);
+
+    expect(again.status).toBe('dead-lettered');
+    expect(again.handlers).toEqual([]);
+    expect(attempts.count).toBe(DEFAULT_MAX_DISPATCH_ATTEMPTS);
+  });
+
+  it('never dead-letters when the bound is switched off, which is what every build before WP-49 did', async () => {
+    const memory = new MemoryEventing();
+    const bus = new EventBus({
+      unitOfWork: memory,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      maxDispatchAttempts: Number.POSITIVE_INFINITY,
+    });
+    const attempts = { count: 0 };
+    bus.register(alwaysFails(attempts));
+    const stored = await appendOne(memory);
+
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS + 5; attempt += 1) {
+      expect((await bus.dispatch(stored)).status).toBe('failed');
+    }
+    expect(memory.pending[0]?.deadLetteredAt).toBeNull();
+  });
+
+  it('refuses a bound below one, because the first attempt is the only one it could name', () => {
+    const memory = new MemoryEventing();
+    expect(() => new EventBus({ unitOfWork: memory, maxDispatchAttempts: 0 })).toThrow(
+      /maxDispatchAttempts/,
+    );
+  });
+
+  it('spends about twenty minutes on the shipped defaults before it gives up', () => {
+    // The number quoted on DEFAULT_MAX_DISPATCH_ATTEMPTS, produced rather than remembered
+    // (standing rule 39): 5 + 10 + 20 + 40 + 80 + 160 s, then the 300 s ceiling three times.
+    expect(Number.isFinite(DEFAULT_MAX_DISPATCH_ATTEMPTS)).toBe(true);
+    expect(dispatchRetryWindowMs()).toBe(1_215_000);
+    expect(dispatchRetryWindowMs() / 60_000).toBeCloseTo(20.25, 5);
+    // The delays themselves, so the sum cannot be right for the wrong reasons.
+    expect([1, 2, 3, 7, 8].map((n) => dispatchRetryWindowMs({ maxAttempts: n }))).toEqual([
+      0, 5_000, 15_000, 315_000, 615_000,
+    ]);
+    // A bound that is not a number has no window, and says so rather than counting to it.
+    expect(dispatchRetryWindowMs({ maxAttempts: Number.POSITIVE_INFINITY })).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+});
+
+/**
+ * What the dispatcher tells the platform about a dead letter (WP-49, criterion 2).
+ *
+ * The sink itself — parking the task in `needs_human` with a brief — is
+ * `pipeline/dead-letter.test.ts`. These pin the contract between the two: called once, inside the
+ * transaction that marked the row, with the event rather than a summary of it.
+ */
+describe('the dead-letter sink', () => {
+  const failing: EventHandler = {
+    name: 'core.poison',
+    priority: 10,
+    eventTypes: ['task.queued'],
+    handle: async () => {
+      throw new Error('deterministic');
+    },
+  };
+
+  const poison = async (bus: EventBus, memory: MemoryEventing): Promise<StoredEvent> => {
+    const stored = await appendOne(memory);
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await bus.dispatch(stored);
+    }
+    return stored;
+  };
+
+  it('is called once, with the event, the handler, the attempts and the error', async () => {
+    const { memory, bus } = harness();
+    const records: DeadLetterRecord[] = [];
+    bus.register(failing);
+    bus.onDeadLetter(async (_scope, record) => {
+      records.push(record);
+    });
+
+    const stored = await poison(bus, memory);
+    // A later sweep cannot produce a second one: the row is terminal and both guards skip it.
+    await bus.dispatch(stored);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      handler: 'core.poison',
+      attempts: DEFAULT_MAX_DISPATCH_ATTEMPTS,
+      error: 'Error: deterministic',
+    });
+    expect(records[0]?.event.position).toBe(stored.position);
+    expect(records[0]?.event.event.type).toBe('task.queued');
+  });
+
+  it('writes on the dispatcher’s own transaction, so the mark and the escalation commit together', async () => {
+    const { memory, bus } = harness();
+    bus.register(failing);
+    bus.onDeadLetter(async (scope, record) => {
+      await scope.events.append([
+        taskDequeued({ streamType: 'task', streamId: streamId(9), streamSeq: 1 }),
+      ]);
+      expect(record.attempts).toBe(DEFAULT_MAX_DISPATCH_ATTEMPTS);
+    });
+
+    await poison(bus, memory);
+
+    expect(memory.log.map((stored) => stored.event.type)).toContain('task.dequeued');
+  });
+
+  it('rolls the dead letter back when the sink throws, and offers the event again', async () => {
+    const { memory, bus } = harness();
+    let attempts = 0;
+    bus.register(failing);
+    bus.onDeadLetter(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('the task moved under us');
+      }
+    });
+
+    const stored = await appendOne(memory);
+    for (let attempt = 1; attempt < DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await bus.dispatch(stored);
+    }
+    // Fail closed (standing rule 20): the attempt that could not escalate writes nothing at all,
+    // rather than dead-lettering a task nobody will be told about.
+    await expect(bus.dispatch(stored)).rejects.toThrow(/the task moved under us/);
+    expect(memory.pending[0]?.deadLetteredAt).toBeNull();
+    expect(memory.pending[0]?.attempts).toBe(DEFAULT_MAX_DISPATCH_ATTEMPTS - 1);
+
+    expect((await bus.dispatch(stored)).status).toBe('dead-lettered');
+    expect(attempts).toBe(2);
+  });
+
+  it('refuses a provider call from a sink by name, exactly as it does from a handler', async () => {
+    // Round 1's finding: the module docblock claimed this path was marked and it was not —
+    // `transactionIsOpen()` measured **false** inside the sink and **true** inside a handler, so a
+    // sink that reached a provider was reviewed for rather than refused. The sink holds strictly
+    // more than a handler does (the event's queue row, two pooled connections), so the mark belongs
+    // here; this is the calibration that a planted call is now refused.
+    const { memory, bus } = harness();
+    bus.register(failing);
+    const marks: boolean[] = [];
+    bus.onDeadLetter(async () => {
+      marks.push(transactionIsOpen());
+      assertOutsideTransaction('git.get_default_branch_head');
+    });
+
+    const stored = await appendOne(memory);
+    for (let attempt = 1; attempt < DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await bus.dispatch(stored);
+    }
+    await expect(bus.dispatch(stored)).rejects.toThrow(TransactionOpenError);
+
+    expect(marks).toEqual([true]);
+    // And the refusal takes the dead letter with it, which is the sink-throws ending above.
+    expect(memory.pending[0]?.deadLetteredAt).toBeNull();
+  });
+
+  it('takes exactly one sink, because a replaced one is a task nobody is told about', () => {
+    const { bus } = harness();
+    bus.onDeadLetter(async () => {});
+    expect(() => bus.onDeadLetter(async () => {})).toThrow(/already registered/);
+  });
+
+  it('dead-letters with no sink at all, and says which it was', async () => {
+    const memory = new MemoryEventing();
+    const lines: { level: string; message: string; fields: Record<string, unknown> }[] = [];
+    const bus = new EventBus({
+      unitOfWork: memory,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      logger: {
+        ...silentLogger,
+        error: (fields: Record<string, unknown>, message: string) => {
+          lines.push({ level: 'error', message, fields });
+        },
+      },
+    });
+    bus.register(failing);
+
+    await poison(bus, memory);
+
+    const line = lines.at(-1);
+    expect(line?.message).toMatch(/dead-lettered/);
+    expect(line?.fields).toMatchObject({
+      handler: 'core.poison',
+      attempts: DEFAULT_MAX_DISPATCH_ATTEMPTS,
+      dead_letter_sink: 'absent',
+    });
   });
 });

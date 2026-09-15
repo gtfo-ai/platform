@@ -42,7 +42,11 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       **Still open, and carried rather than closed:** queue-depth alerting on
       `event_dispatch_pending`. The gauge exists (`apps/server/src/metrics.ts` registers it from
       `countPendingDispatch`); nothing alerts on it, which is an operations concern with no work
-      package.
+      package. **Since WP-49 there are two numbers in that state**: `event_dispatch_dead_lettered`
+      counts the events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue, and it is the
+      whole signal for a poisoned event that names no task — the backlog gauge rises and falls, this
+      one only rises. Nothing lists the rows and no command re-queues one either; the evidence, the
+      recommendation and why no M4 row owns it are PROGRESS backlog **126**. Owner: nobody.
       The interpreter exists now, and the shape of the answer is visible: a `stage.execute` job that fires
       for a stage whose previous run ended `failed` could resume the session (`RunSpec.resumeSessionId`,
       TD-007's mirror) instead of starting a fresh one. WP-15 does neither — a run that ends without a

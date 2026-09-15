@@ -104,6 +104,20 @@ export interface EventStore {
   /** Events whose dispatch is due, earliest-pending-per-stream first, in position order. */
   readPendingDispatch(request: PendingDispatchRequest): Promise<readonly StoredEvent[]>;
 
-  /** How many events are waiting to be dispatched (queue depth, for tests and metrics). */
+  /**
+   * How many events are waiting to be dispatched (queue depth, for tests and metrics).
+   *
+   * A dead-lettered event is **not** waiting: nothing will dispatch it again, so counting it here
+   * would publish a backlog that no amount of draining can clear. It is counted by
+   * {@link countDeadLettered} instead, and the two together are the whole of `event_dispatch`.
+   */
   countPendingDispatch(): Promise<number>;
+
+  /**
+   * How many events spent their attempt bound and left the queue (WP-49).
+   *
+   * The number that tells a poisoned event from a busy queue: the backlog gauge rises under load
+   * and falls again, this one only rises — and only when something is permanently failing.
+   */
+  countDeadLettered(): Promise<number>;
 }

@@ -84,6 +84,10 @@ export const createEventing = (options: EventingOptions): Eventing => {
     maxConcurrentDispatches: config.maxConcurrency,
     retryDelayMs: config.retryDelayMs,
     maxRetryDelayMs: config.maxRetryDelayMs,
+    // `APP_DISPATCH_MAX_ATTEMPTS=0` is the operator's "no bound" (see the schema), and this is the
+    // one place it becomes one: the bus takes a count, and a count of zero would mean the opposite
+    // of what the variable says — the first failure being the last (WP-49).
+    maxDispatchAttempts: config.maxAttempts === 0 ? Number.POSITIVE_INFINITY : config.maxAttempts,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 

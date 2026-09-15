@@ -41,6 +41,28 @@ describe('createMetrics', () => {
     const metrics = createMetrics({ defaultMetrics: false });
     await expect(metrics.collect()).resolves.toBeUndefined();
     expect(await metrics.registry.metrics()).not.toMatch(/event_dispatch_pending \d/);
+    expect(await metrics.registry.metrics()).not.toMatch(/event_dispatch_dead_lettered \d/);
+  });
+
+  it('publishes the dead letters beside the backlog, so a poisoned event is not a busy queue', async () => {
+    // The gauge that answers the question WP-49's row asks: `event_dispatch_pending` reads the
+    // same `1` for a burst and for an event nothing will ever dispatch. These two partition the
+    // table — `countPendingDispatch` excludes exactly what `countDeadLettered` counts.
+    let dead = 0;
+    const metrics = createMetrics({
+      defaultMetrics: false,
+      pendingDispatch: async () => 3,
+      deadLettered: async () => dead,
+    });
+
+    await metrics.collect();
+    expect(await metrics.registry.metrics()).toMatch(/event_dispatch_dead_lettered 0/);
+
+    dead = 1;
+    await metrics.collect();
+    const text = await metrics.registry.metrics();
+    expect(text).toMatch(/event_dispatch_pending 3/);
+    expect(text).toMatch(/event_dispatch_dead_lettered 1/);
   });
 
   it('counts SSE frames by kind', async () => {

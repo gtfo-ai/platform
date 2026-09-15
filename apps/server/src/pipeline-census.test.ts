@@ -413,3 +413,25 @@ describe('the jobs seam every composition shares', () => {
     expect(builders).toEqual([ROOT]);
   });
 });
+
+/**
+ * **The dead-letter sink is registered by this composition root** (WP-49).
+ *
+ * `EventBus.onDeadLetter` is optional, and standing rule 31 says an optional collaborator is one
+ * production omits — which is backlog 104's lesson and the reason this file exists. It cannot be a
+ * row of the census above, because it is not a `createPipelineRuntime` option: the bus is built by
+ * `createEventing` before this function has a `PipelineStore`, so the wiring is a call rather than a
+ * key. Without it a poisoned event still leaves the queue and **no task is ever escalated**, which
+ * every other tier would call a pass.
+ */
+describe('the dead-letter sink (WP-49)', () => {
+  const compositionSource = read(COMPOSITION);
+
+  it('is registered on the bus this process dispatches with, exactly once', () => {
+    expect(compositionSource.match(/\.onDeadLetter\(/g) ?? []).toHaveLength(1);
+    expect(compositionSource).toMatch(/onDeadLetter\(\s*createDeadLetterEscalation\(/);
+    // Calibration (standing rule 44): the same read finds the handler registrations it stands
+    // beside, so a parse that returned nothing fails here instead of passing vacuously.
+    expect((compositionSource.match(/eventing\.bus\.register\(/g) ?? []).length).toBeGreaterThan(2);
+  });
+});

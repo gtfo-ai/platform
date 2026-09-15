@@ -66,6 +66,7 @@ import {
   createAskRunPlanner,
   createBudgetGuard,
   createContextPackAssembler,
+  createDeadLetterEscalation,
   createIntegrationActionExecutor,
   createLateCostRecorder,
   createPipelineRuntime,
@@ -924,6 +925,29 @@ export const composePipeline = async (
   })) {
     options.eventing.bus.register(handler);
   }
+  /**
+   * What a poisoned event does to its task (WP-49), registered here rather than passed to
+   * `createEventing`: the bus is built before this function has a `PipelineStore` to escalate with,
+   * which is the same ordering that makes every handler above a `register` call.
+   *
+   * It is not a handler and not a job. It runs inside the dispatcher's transaction, so the dead
+   * letter and the escalation commit together — `packages/application/src/events/dead-letter.ts`
+   * has the argument — and it borrows no connection of its own, so `POOL_RESERVATIONS` is
+   * unchanged.
+   */
+  options.eventing.bus.onDeadLetter(
+    createDeadLetterEscalation({
+      store,
+      context: (correlationId, causeEventId) => ({
+        ids,
+        actor: { kind: 'system', component: 'dispatcher' },
+        clock: { now: nowIso },
+        correlationId,
+        causeEventId,
+      }),
+      logger: options.logger,
+    }),
+  );
   await runtime.start();
 
   /**

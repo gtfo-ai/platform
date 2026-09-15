@@ -19,7 +19,9 @@
  */
 import {
   type AppendOptions,
+  type DispatchAttemptEnding,
   type DispatchClaim,
+  type DispatchFailure,
   type DispatchQueue,
   EVENTS_APPENDED_TOPIC,
   type EventAppender,
@@ -33,7 +35,6 @@ import {
   type PendingDispatchRequest,
   type ReadRangeRequest,
   type ReadStreamOptions,
-  type RetryBackoff,
   type StoredEvent,
   type TransactionalBroadcast,
 } from '@platform/application';
@@ -146,6 +147,7 @@ export class PostgresEventStore implements EventStore, HandlerExecutionReader {
                 row_number() over (
                   partition by d.stream_type, d.stream_id order by d.stream_seq) as rn
            from event_dispatch d
+          where d.dead_lettered_at is null
        )
        select ${eventColumns('e')}
          from head h
@@ -160,9 +162,20 @@ export class PostgresEventStore implements EventStore, HandlerExecutionReader {
 
   async countPendingDispatch(): Promise<number> {
     const { rows } = await this.#sql.query<{ pending: string | number }>(
-      'select count(*) as pending from event_dispatch',
+      'select count(*) as pending from event_dispatch where dead_lettered_at is null',
     );
     return Number(rows[0]?.pending ?? 0);
+  }
+
+  /**
+   * Events that spent their attempt bound (WP-49). Served by `event_dispatch_dead_letter_idx`,
+   * which is partial, so this counts an index whose size is the answer rather than the queue's.
+   */
+  async countDeadLettered(): Promise<number> {
+    const { rows } = await this.#sql.query<{ dead: string | number }>(
+      'select count(*) as dead from event_dispatch where dead_lettered_at is not null',
+    );
+    return Number(rows[0]?.dead ?? 0);
   }
 
   async read(position: number): Promise<readonly HandlerExecutionRecord[]> {
@@ -278,12 +291,15 @@ export class PostgresDispatchQueue implements DispatchQueue {
   }
 
   async claim(position: number): Promise<DispatchClaim> {
-    const locked = await this.#sql.query(
-      'select 1 from event_dispatch where event_position = $1 for update skip locked',
+    // The dead-letter flag comes back with the lock rather than in a second statement: a row this
+    // transaction may not dispatch is still a row it must hold, or a concurrent requeue could slip
+    // between the two reads (WP-49).
+    const locked = await this.#sql.query<{ dead: boolean }>(
+      'select dead_lettered_at is not null as dead from event_dispatch where event_position = $1 for update skip locked',
       [position],
     );
     if ((locked.rowCount ?? 0) > 0) {
-      return 'claimed';
+      return locked.rows[0]?.dead === true ? 'dead-lettered' : 'claimed';
     }
     // Nothing came back for one of two reasons; only a second, lock-free look tells them apart.
     const present = await this.#sql.query(
@@ -297,19 +313,48 @@ export class PostgresDispatchQueue implements DispatchQueue {
     await this.#sql.query('delete from event_dispatch where event_position = $1', [position]);
   }
 
-  async retryLater(position: number, error: string, backoff: RetryBackoff): Promise<void> {
-    // `attempts` on the right-hand side is the pre-update value, so the first retry waits
-    // `baseMs`, the second twice that, and so on up to `maxMs`.
-    await this.#sql.query(
+  /**
+   * One statement for both endings (WP-49).
+   *
+   * `attempts` on the right-hand side is the pre-update value, so the first retry waits `baseMs`,
+   * the second twice that, and so on up to `maxMs` — and the same pre-update value is what decides
+   * the ending, which is why the decision cannot be a separate `select`: two statements would let a
+   * concurrent attempt land between the count and the comparison.
+   *
+   * The dead-lettering branch leaves `available_at` where it was. Nothing reads it for a terminal
+   * row, and moving it would invent a time at which this event becomes due again.
+   */
+  async failAttempt(position: number, failure: DispatchFailure): Promise<DispatchAttemptEnding> {
+    const { rows } = await this.#sql.query<{ attempts: number; dead: boolean }>(
       `update event_dispatch
           set attempts = attempts + 1,
               error = $2,
-              available_at = now() + (least(
-                $3::double precision * power(2, least(attempts, 10)),
-                $4::double precision) * interval '1 millisecond')
-        where event_position = $1`,
-      [position, error, backoff.baseMs, backoff.maxMs],
+              available_at = case when attempts + 1 >= $5::double precision then available_at
+                                  else now() + (least(
+                                    $3::double precision * power(2, least(attempts, 10)),
+                                    $4::double precision) * interval '1 millisecond') end,
+              dead_lettered_at = case when attempts + 1 >= $5::double precision then now() end,
+              dead_letter_handler = case when attempts + 1 >= $5::double precision then $6 end
+        where event_position = $1
+      returning attempts, dead_lettered_at is not null as dead`,
+      [
+        position,
+        failure.error,
+        failure.backoff.baseMs,
+        failure.backoff.maxMs,
+        // `double precision` rather than `int`, so an operator who set the bound to Infinity gets
+        // the for-ever retry they asked for instead of a numeric overflow.
+        failure.maxAttempts,
+        failure.handler,
+      ],
     );
+    const row = rows[0];
+    if (row === undefined) {
+      // The row is gone: another transaction completed this dispatch. Nothing to retry and nothing
+      // to dead-letter, and the caller's own claim makes this unreachable in the dispatcher.
+      return { attempts: 0, ending: 'retry' };
+    }
+    return { attempts: Number(row.attempts), ending: row.dead ? 'dead-lettered' : 'retry' };
   }
 
   async hasEarlierPending(
@@ -320,7 +365,8 @@ export class PostgresDispatchQueue implements DispatchQueue {
     const { rows } = await this.#sql.query<{ blocked: boolean }>(
       `select exists (
          select 1 from event_dispatch
-          where stream_type = $1 and stream_id = $2 and stream_seq < $3) as blocked`,
+          where stream_type = $1 and stream_id = $2 and stream_seq < $3
+            and dead_lettered_at is null) as blocked`,
       [streamType, streamId, streamSeq],
     );
     return rows[0]?.blocked === true;

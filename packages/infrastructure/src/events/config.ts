@@ -5,6 +5,7 @@
  * variable rather than a serialised `ZodError`. None of these hold a secret, so none take a
  * `_FILE` variant.
  */
+import { DEFAULT_MAX_DISPATCH_ATTEMPTS } from '@platform/application';
 import * as z from 'zod';
 
 export type EnvLike = Readonly<Record<string, string | undefined>>;
@@ -15,6 +16,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   pollIntervalMs: 'APP_DISPATCH_POLL_INTERVAL_MS',
   retryDelayMs: 'APP_DISPATCH_RETRY_DELAY_MS',
   maxRetryDelayMs: 'APP_DISPATCH_MAX_RETRY_DELAY_MS',
+  maxAttempts: 'APP_DISPATCH_MAX_ATTEMPTS',
   drainTimeoutMs: 'APP_DISPATCH_DRAIN_TIMEOUT_MS',
   broadcastChannel: 'APP_BROADCAST_CHANNEL',
 };
@@ -42,6 +44,17 @@ export const dispatchConfigSchema = z
       .int()
       .min(0)
       .max(24 * 3_600_000),
+    /**
+     * Attempts one event gets before it is dead-lettered instead of retried (WP-49).
+     *
+     * `DEFAULT_MAX_DISPATCH_ATTEMPTS` states the shipped number and the arithmetic that chose it,
+     * beside the two delays it is computed from. **`0` means no bound**, which is what every build
+     * before WP-49 did: the event is retried at the backoff ceiling for ever and its stream waits
+     * behind it. It is spelled the same way `APP_INTAKE_RECONCILE_INTERVAL_MS=0` switches the
+     * recovery pass off, and it is here for the same operator — one who would rather have a stuck
+     * stream than a task escalated to a human.
+     */
+    maxAttempts: z.int().min(0).max(1000),
     /** How long a graceful shutdown waits for in-flight dispatches before reporting them. */
     drainTimeoutMs: z.int().min(0).max(600_000),
     /** `NOTIFY` channel; a bare lower-case identifier, because it is interpolated into `LISTEN`. */
@@ -62,6 +75,7 @@ export const DISPATCH_CONFIG_DEFAULTS = {
   pollIntervalMs: 1_000,
   retryDelayMs: 5_000,
   maxRetryDelayMs: 300_000,
+  maxAttempts: DEFAULT_MAX_DISPATCH_ATTEMPTS,
   drainTimeoutMs: 30_000,
   broadcastChannel: 'platform_broadcast',
 } as const satisfies DispatchConfig;
@@ -85,6 +99,7 @@ export const loadDispatchConfig = (env: EnvLike = process.env): DispatchConfig =
       env.APP_DISPATCH_MAX_RETRY_DELAY_MS,
       DISPATCH_CONFIG_DEFAULTS.maxRetryDelayMs,
     ),
+    maxAttempts: numberFromEnv(env.APP_DISPATCH_MAX_ATTEMPTS, DISPATCH_CONFIG_DEFAULTS.maxAttempts),
     drainTimeoutMs: numberFromEnv(
       env.APP_DISPATCH_DRAIN_TIMEOUT_MS,
       DISPATCH_CONFIG_DEFAULTS.drainTimeoutMs,

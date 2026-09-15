@@ -69,6 +69,15 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * longer live), which is why it does not call `escalateTaskAfterConflict`: that would be a second
  * transaction escalating a task about a run this pass can no longer see.
  *
+ * `dead-letter.ts` joined them at **WP-49** with the **fourth** ending, and it is the only site that
+ * owns no transaction of its own: it runs inside the *dispatcher's*, called when an event has spent
+ * its attempt bound, and it parks the task exactly as `task-conflict.ts` does for an exhausted
+ * conflict. A refused write therefore escapes — `EventBus` owns that transaction, so catching it
+ * here would be the in-handler retry `task-conflict.ts` forbids — and it rolls the dead letter back
+ * with it, which means the event is offered again on the next sweep and the escalation is retried
+ * rather than lost. That is the fail-closed direction (standing rule 20) and it is why this site
+ * needs neither `retryOnTaskConflict` nor an escalation of its own.
+ *
  * `commands.ts` joined them at WP-15i, and its ending is the **other** one: a human command owns
  * its transaction and retries through `retryOnTaskConflict` like a job, but when the bound is spent
  * the error reaches the caller as a typed `409` rather than escalating the task — a person can press
@@ -79,6 +88,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
+  ['packages/application/src/pipeline/dead-letter.ts', 1],
   ['packages/application/src/recovery/run-lease.ts', 1],
   ['packages/application/src/pipeline/dependency-gate.ts', 1],
   ['packages/application/src/pipeline/saga.ts', 13],
@@ -148,7 +158,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty, which is the number the change states', () => {
+  it('counts thirty-one, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -167,8 +177,11 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-47**: the run-lease sweep's escalation of a task whose run nothing was
     // driving — a transaction owner outside `pipeline/` for the first time, with the retry every
     // job has and the ending named in this file's docblock.
+    // **Plus one at WP-49**: the dead-letter escalation, the first site that owns **no** transaction
+    // — it writes on the dispatcher's — and therefore the first whose ending is to let the refusal
+    // escape and roll the dead letter back with it, so the next sweep tries again.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(30);
+    expect(total).toBe(31);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

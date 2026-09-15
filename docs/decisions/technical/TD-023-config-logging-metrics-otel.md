@@ -44,3 +44,15 @@ Single `config.ts` parsed with zod 4 at boot (fail fast; `z.stringbool()` for bo
 > `/readyz` as its upstream health check, until a pipeline can be composed. `/healthz` is the
 > liveness probe and is unaffected. It is recorded here rather than in the work package because it
 > is a property of the decision, not of the image.
+
+> **Amendment (WP-49, 2026-09-15): two dispatch gauges the metric list above does not name, both
+> registered only where something samples them.** `event_dispatch_pending` (the outbox backlog, added
+> with the dispatcher and registered by the role that sweeps) and `event_dispatch_dead_lettered`
+> (WP-49: events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue with `dead_lettered_at`
+> set — the count a busy queue and a poisoned event could not be told apart by before). Both are
+> **sampled gauges rather than `_total` counters**, because a counter resets with the process and a
+> dead letter is a row that survives one; the source is the query in `apps/server/src/metrics.ts`,
+> and the reasoning for registering a metric only where it has a source is the WP-15a amendment
+> above. The list in the decision line is otherwise unchanged: `agent_runs_active`,
+> `agent_tokens_total`, `agent_cost_usd_total`, `queue_depth` and `queue_job_age_seconds` are still
+> named there and the metrics module states which of them have a source on this build.

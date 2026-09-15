@@ -208,7 +208,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
 
     const metrics = createMetrics({
       ...(capabilities.worker
-        ? { pendingDispatch: async () => eventing.store.countPendingDispatch() }
+        ? {
+            pendingDispatch: async () => eventing.store.countPendingDispatch(),
+            // WP-49: the half of `event_dispatch` the backlog gauge no longer counts. Same
+            // condition as the backlog, because they answer one question between them and a
+            // process that cannot measure one cannot measure the other.
+            deadLettered: async () => eventing.store.countDeadLettered(),
+          }
         : {}),
     });
 

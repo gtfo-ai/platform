@@ -37,9 +37,9 @@ import {
 } from '../ports/broadcast.js';
 import type {
   DispatchClaim,
+  DispatchFailure,
   DispatchQueue,
   DispatchQueueEntry,
-  RetryBackoff,
 } from '../ports/dispatch-queue.js';
 import type {
   AppendOptions,
@@ -115,6 +115,9 @@ interface QueueRow {
   readonly attempts: number;
   readonly error: string | null;
   readonly availableAtMs: number;
+  /** WP-49: the terminal state migration 0037 adds. `null` for a row that is still retried. */
+  readonly deadLetteredAtMs: number | null;
+  readonly deadLetterHandler: string | null;
 }
 
 /** A staged append: the log row and the queue row the trigger would have written with it. */
@@ -199,7 +202,10 @@ export class MemoryEventing implements UnitOfWork {
       readAt: async (position) => toStoredEvent(this.#events.find((r) => r.position === position)),
       readRange: async (request) => this.#readRange(request),
       readPendingDispatch: async (request) => this.#readPendingDispatch(request),
-      countPendingDispatch: async () => this.#queue.size,
+      countPendingDispatch: async () =>
+        [...this.#queue.values()].filter((row) => row.deadLetteredAtMs === null).length,
+      countDeadLettered: async () =>
+        [...this.#queue.values()].filter((row) => row.deadLetteredAtMs !== null).length,
       read: async (position) =>
         [...this.#executions.values()]
           .filter((row) => row.eventPosition === position)
@@ -221,7 +227,12 @@ export class MemoryEventing implements UnitOfWork {
     };
   }
 
-  /** Every queued event, for assertions. */
+  /**
+   * Every **row** of the queue table, for assertions — including the dead-lettered ones, whose
+   * `deadLetteredAt` is what tells them apart (WP-49). It is deliberately not the same population
+   * as `countPendingDispatch`, which excludes them: a test asserting "the event is still there,
+   * terminal" and a metric answering "how much work is waiting" want opposite things.
+   */
   get pending(): readonly DispatchQueueEntry[] {
     return [...this.#queue.values()]
       .map((row) => ({
@@ -232,6 +243,9 @@ export class MemoryEventing implements UnitOfWork {
         attempts: row.attempts,
         error: row.error,
         availableAt: new Date(row.availableAtMs).toISOString(),
+        deadLetteredAt:
+          row.deadLetteredAtMs === null ? null : new Date(row.deadLetteredAtMs).toISOString(),
+        deadLetterHandler: row.deadLetterHandler,
       }))
       .sort((a, b) => a.eventPosition - b.eventPosition);
   }
@@ -298,6 +312,11 @@ export class MemoryEventing implements UnitOfWork {
     const now = this.#now();
     const heads = new Map<string, QueueRow>();
     for (const row of this.#queue.values()) {
+      // A dead-lettered row is not the head of anything: it left the queue into a terminal state,
+      // which is what lets the stream behind it move on (WP-49).
+      if (row.deadLetteredAtMs !== null) {
+        continue;
+      }
       const key = streamKey(row.streamType, row.streamId);
       const head = heads.get(key);
       if (head === undefined || row.streamSeq < head.streamSeq) {
@@ -440,8 +459,14 @@ export class MemoryEventing implements UnitOfWork {
 
   /** @internal */
   _lockQueueRow(tx: MemoryTransaction, position: number): DispatchClaim {
-    if (!this.#queue.has(position)) {
+    const row = this.#queue.get(position);
+    if (row === undefined) {
       return 'completed';
+    }
+    // Terminal, and told apart from both of the others: `completed` would claim every handler
+    // succeeded and `busy` would invite the caller back (WP-49).
+    if (row.deadLetteredAtMs !== null) {
+      return 'dead-lettered';
     }
     const owner = this.#queueLocks.get(position);
     if (owner !== undefined && owner !== tx) {
@@ -552,6 +577,8 @@ class MemoryTransaction {
         attempts: 0,
         error: null,
         availableAtMs: this.#owner._nowMs(),
+        deadLetteredAtMs: null,
+        deadLetterHandler: null,
       },
     });
     return { position, causeEventPosition, event };
@@ -568,30 +595,46 @@ class MemoryTransaction {
       complete: async (position) => {
         this.queueDeletes.add(position);
       },
-      retryLater: async (position, error, backoff: RetryBackoff) => {
+      failAttempt: async (position, failure: DispatchFailure) => {
         const row = this.queueWrites.get(position) ?? this.#owner._queueRow(position);
         if (row === undefined) {
-          return;
+          // No row is no attempt: the dispatch that would have retried it has nothing to retry.
+          return { attempts: 0, ending: 'retry' as const };
         }
         const attempts = row.attempts + 1;
-        const delay = Math.min(backoff.baseMs * 2 ** Math.min(row.attempts, 10), backoff.maxMs);
+        if (attempts >= failure.maxAttempts) {
+          this.queueWrites.set(position, {
+            ...row,
+            attempts,
+            error: failure.error,
+            deadLetteredAtMs: this.#owner._nowMs(),
+            deadLetterHandler: failure.handler,
+          });
+          return { attempts, ending: 'dead-lettered' as const };
+        }
+        const delay = Math.min(
+          failure.backoff.baseMs * 2 ** Math.min(row.attempts, 10),
+          failure.backoff.maxMs,
+        );
         this.queueWrites.set(position, {
           ...row,
           attempts,
-          error,
+          error: failure.error,
           availableAtMs: this.#owner._nowMs() + delay,
         });
+        return { attempts, ending: 'retry' as const };
       },
       hasEarlierPending: async (streamType, streamId, streamSeq) =>
-        this.#owner
-          ._queueRows()
-          .some(
-            (row) =>
-              row.streamType === streamType &&
-              row.streamId === streamId &&
-              row.streamSeq < streamSeq &&
-              !this.queueDeletes.has(row.eventPosition),
-          ),
+        this.#owner._queueRows().some(
+          (row) =>
+            row.streamType === streamType &&
+            row.streamId === streamId &&
+            row.streamSeq < streamSeq &&
+            // Dead-lettered rows are skipped here as well as by the sweep: the ordering guard is
+            // the *other* place a poisoned event used to hold its stream (WP-49).
+            (this.queueWrites.get(row.eventPosition) ?? row).deadLetteredAtMs === null &&
+            !this.queueDeletes.has(row.eventPosition),
+        ),
     };
   }
 

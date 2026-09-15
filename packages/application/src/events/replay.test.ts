@@ -11,10 +11,11 @@ import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { costHandlers } from '../cost/runtime.js';
+import { streamId, taskQueued } from '../testing/fixtures.js';
 import { createMemoryCostStore } from '../testing/memory-cost.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { testClock, testIds } from '../testing/pipeline-harness.js';
-import { EventBus } from './event-bus.js';
+import { DEFAULT_MAX_DISPATCH_ATTEMPTS, EventBus } from './event-bus.js';
 import type { EventHandler } from './handler.js';
 import { replayEvents, replayTypesOf } from './replay.js';
 
@@ -250,5 +251,69 @@ describe('replayEvents — the backfill the outbox sweep made necessary', () => 
     expect(emitted).toContain('budget.threshold.reached');
     expect(emitted).toContain('budget.exhausted');
     expect(await world.memory.store.countPendingDispatch()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A dead-lettered event is still an event (WP-49).
+ *
+ * The bound takes the event out of the *queue*; `events` is append-only and this pass reads the log,
+ * so the recovery from a dead letter is the one the platform already has. The two facts that make it
+ * work are worth pinning rather than reasoning about: `replayEvents` never touches
+ * `event_dispatch`, and the poisoned handler's `handler_executions` row is `failed` — which is not
+ * one of `TERMINAL_HANDLER_STATUSES`, so the claim succeeds and the handler runs.
+ */
+describe('replayEvents over an event the dispatcher gave up on', () => {
+  const poisoned = async () => {
+    const memory = new MemoryEventing();
+    const bus = new EventBus({ unitOfWork: memory, retryDelayMs: 0, maxRetryDelayMs: 0 });
+    bus.register({
+      name: 'core.poison',
+      priority: 10,
+      eventTypes: ['task.queued'],
+      handle: async () => {
+        throw new Error('deterministic');
+      },
+    });
+    const [stored] = await memory.transaction(async (scope) =>
+      scope.events.append([
+        taskQueued({ streamType: 'task', streamId: streamId(1), streamSeq: 1 }),
+      ]),
+    );
+    if (stored === undefined) {
+      throw new Error('append returned nothing');
+    }
+    for (let attempt = 1; attempt <= DEFAULT_MAX_DISPATCH_ATTEMPTS; attempt += 1) {
+      await bus.dispatch(stored);
+    }
+    return { memory, stored };
+  };
+
+  it('replays it into the handler that can finally handle it', async () => {
+    const { memory, stored } = await poisoned();
+    expect(await memory.store.countDeadLettered()).toBe(1);
+    const seen: number[] = [];
+
+    const report = await replayEvents(
+      { store: memory.store, unitOfWork: memory },
+      {
+        handlers: [
+          {
+            name: 'core.poison',
+            priority: 10,
+            eventTypes: ['task.queued'],
+            handle: async (context) => {
+              seen.push(context.event.position);
+            },
+          },
+        ],
+      },
+    );
+
+    expect(report.applied).toBe(1);
+    expect(seen).toEqual([stored.position]);
+    // The replay is a read of the log, so the queue row it gave up on is exactly as it was.
+    expect(await memory.store.countDeadLettered()).toBe(1);
+    expect(await memory.store.countPendingDispatch()).toBe(0);
   });
 });
