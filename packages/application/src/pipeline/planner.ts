@@ -45,6 +45,7 @@ import {
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
   DEFAULT_READ_ONLY_ALLOW,
+  HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isPromptExcludedArtifact,
   narrowCommandPolicy,
   PLATFORM_DEFAULT_CONFIG,
@@ -106,6 +107,16 @@ export const PLATFORM_TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly Platfor
    * simpler reason that this build refuses it by name and an ask is over in one turn.
    */
   ask: ['get_task_context', 'kb_search'],
+  /**
+   * The history bootstrap's miner (WP-35): `kb_search` and `report_progress`, nothing else.
+   *
+   * `kb_search` is what keeps it from proposing a page the vault already has — the dedupe
+   * technical/07 step 2 asks for, made cheap at the source rather than left to the curator's index
+   * comparison. **No `get_task_context`**: the "task" is a platform-issued bootstrap ticket with no
+   * ticket behind it, so the tool would answer questions about a fiction. No `ask_human`, for
+   * `discovery`'s reason — the run has no watcher and its output is a queue a human reads anyway.
+   */
+  historian: ['report_progress', 'kb_search'],
 };
 
 /**
@@ -188,6 +199,13 @@ export const COMMAND_BASELINE_BY_ROLE: Readonly<Record<AgentRole, 'read_only' | 
      * `Bash` to the row above (standing rule 20's direction, applied to a default).
      */
     ask: 'read_only',
+    /**
+     * The miner has **no shell** (`TOOLS_BY_ROLE.historian` has no `Bash`), so this entry decides
+     * nothing that can happen today — and it is `read_only` for the reason `ask`'s is: the
+     * unreachable entry must be the conservative one, or the table becomes wrong the day somebody
+     * adds `Bash` to the row above.
+     */
+    historian: 'read_only',
   };
 
 /**
@@ -238,6 +256,16 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
    * in `PLATFORM_TOOLS_BY_ROLE.ask`.
    */
   ask: [],
+  /**
+   * **Empty, like the ask's, and for a sharper reason** (WP-35). Everything a mining run reads is
+   * already in its prompt — `tasks.history_sample` is the batch the platform collected, bounded and
+   * redacted at the write — so a `Read` would only let it wander into a checkout whose contents
+   * have nothing to do with merge requests merged six months ago. What it must not do is *widen its
+   * own evidence*: a proposal is accepted only when every citation resolves into the sample
+   * (`curateHistoryFindings`), so a tool that could find a fourth source would produce citations the
+   * platform then refuses.
+   */
+  historian: [],
 };
 
 /**
@@ -310,6 +338,8 @@ export const SKILLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
    * and an ask has no workspace for one to be copied into.
    */
   ask: ['kb'],
+  /** `kb`, because the miner holds `kb_search` and rule 2 of this table says the skill follows the tool. */
+  historian: ['kb'],
 };
 
 /**
@@ -547,6 +577,9 @@ const promptDocument = (document: ContextPackDocument) => ({
 export const RUN_MODE_BY_TEMPLATE: Readonly<Record<string, RunSpec['mode']>> = {
   [REVIEW_ONLY_TEMPLATE_ID]: 'review_only',
   [TICKET_LINT_TEMPLATE_ID]: 'linter',
+  // WP-35. `runs.mode` is what the run screen and the statistics read, and a mining run that called
+  // itself `normal` would be backlog 57's fifth instance in the work package that had the choice.
+  [HISTORY_BOOTSTRAP_TEMPLATE_ID]: 'bootstrap',
 };
 
 /**
@@ -682,6 +715,10 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           // WP-24: the merge request a review-only task reviews, or `null` for every other task.
           // The row is the only source here too — nothing in the run's critical path fetches.
           reviewSubject: task.reviewSubject ?? null,
+          // WP-35: the mined history a bootstrap run reads, or `null` for every other task. Read
+          // off the row for the same reason as the two above — the collection happened in a job,
+          // outside every transaction, before this task existed.
+          historySample: task.historySample ?? null,
           artifacts: latestArtifacts(request.artifacts).map((artifact) => ({
             type: artifact.type,
             version: artifact.version,

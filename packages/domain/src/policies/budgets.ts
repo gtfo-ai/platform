@@ -57,6 +57,44 @@ export const DEFAULT_STAGE_RUN_BUDGET_USD: Readonly<Record<string, number>> = {
    * (`DEFAULT_ITERATION_LIMITS.rebase`).
    */
   conflict_resolution: 5,
+  /**
+   * The history bootstrap's mining run (WP-35). The same two dollars every other Sonnet stage
+   * carries (retrospective, librarian, discovery), and it is **load-bearing arithmetic** rather
+   * than a copied number: product/19 §18's *"budget cap default $20"* is exactly what the
+   * document's default N costs at this ceiling — 200 merge requests in batches of 20 is ten runs,
+   * and ten runs at $2 is $20. {@link estimateHistoryBootstrap} is where the two meet, so a change
+   * here moves the figure the wizard shows before start rather than silently diverging from it.
+   */
+  history_mining: 2,
+};
+
+/**
+ * What a history bootstrap may cost, from N and the batch size — product/06 step 3b's *"Shows an
+ * estimated cost before running"* (WP-35).
+ *
+ * It is an **upper bound and not a prediction**: `batches × runBudgetUsd` is what the batch spends
+ * if every run is stopped by its own cap, which is the only figure the platform can state before a
+ * model has read anything (standing rule 16 — an invented mean would be published on a screen as a
+ * measurement). The screen says "at most".
+ *
+ * `stopsAtCap` is the second half of being honest before the fact: when the estimate exceeds the
+ * cap the batch is **not** refused — it runs and stops when the cap is spent, so some of the
+ * history is mined and the rest is not — and an operator who is told that in advance can raise the
+ * cap or lower N instead of finding out from a paused task.
+ */
+export const estimateHistoryBootstrap = (input: {
+  readonly mergeRequests: number;
+  readonly batchSize: number;
+  readonly capUsd: number;
+  readonly runBudgetUsd: number;
+}): {
+  readonly batches: number;
+  readonly estimatedUsd: number;
+  readonly stopsAtCap: boolean;
+} => {
+  const batches = Math.ceil(Math.max(0, input.mergeRequests) / Math.max(1, input.batchSize));
+  const estimatedUsd = Number((batches * input.runBudgetUsd).toFixed(6));
+  return { batches, estimatedUsd, stopsAtCap: estimatedUsd > input.capUsd };
 };
 
 /**

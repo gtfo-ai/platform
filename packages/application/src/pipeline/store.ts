@@ -25,6 +25,7 @@ import type {
   Actor,
   ArtifactType,
   EstimateBasis,
+  HistorySample,
   Id,
   IsoDateTime,
   JsonObject,
@@ -159,6 +160,17 @@ export interface StoredTask {
    * platform read it, and a later revision is a new review, not an edit of this one.
    */
   readonly reviewSubject: MergeRequestSnapshot | null;
+  /**
+   * The batch of merged history a **history-bootstrap** task's one stage reads (WP-35, migration
+   * 0030).
+   *
+   * `null` for every task that is not one. Written **once, by the `insert` that creates the task**
+   * and never updated, exactly like {@link reviewSubject} and for the same two reasons: the sample
+   * is the input the collection made for *this* run, and a second writer beside the stage executor
+   * is standing rule 79's lost update. It is therefore not in `save`'s column list and
+   * `tasks-column-ownership.test.ts` is what holds that rather than this sentence.
+   */
+  readonly historySample: HistorySample | null;
   /**
    * The row's optimistic-concurrency token, as it was when this snapshot was read (WP-15e,
    * migration 0019).

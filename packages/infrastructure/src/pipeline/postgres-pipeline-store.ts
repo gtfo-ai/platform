@@ -36,6 +36,7 @@ import type {
 import { TaskConcurrentModificationError } from '@platform/application';
 import type {
   EstimateBasis,
+  HistorySample,
   Id,
   IsoDateTime,
   JsonValue,
@@ -99,6 +100,7 @@ interface TaskRow extends Record<string, unknown> {
   ticket_snapshot: TicketSnapshot | null;
   ticket_snapshot_at: Date | null;
   review_subject: MergeRequestSnapshot | null;
+  history_sample: HistorySample | null;
   risk_classes: string[] | null;
   coverage: TaskCoverage | null;
   dependencies: TaskDependencies | null;
@@ -113,7 +115,8 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
-    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.risk_classes, t.coverage,
+    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.history_sample,
+    t.risk_classes, t.coverage,
     t.dependencies, t.required_reviewers,
     t.requested_by_user_id, t.version,
     t.created_at,
@@ -156,6 +159,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   ticketSnapshot: row.ticket_snapshot,
   ticketSnapshotAt: iso(row.ticket_snapshot_at),
   reviewSubject: row.review_subject,
+  historySample: row.history_sample,
   // `text[] not null default '{}'`, so the `?? []` is for a driver that hands back `null` rather
   // than for a row that can hold one (WP-37).
   riskClasses: row.risk_classes ?? [],
@@ -298,10 +302,11 @@ export const createPostgresPipelineStore = (
                             state, current_stage, priority, template_snapshot, branch, mr_ref,
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
                             cost_actual, estimate_usd, estimate_basis, estimate_samples,
-                            ticket_snapshot, ticket_snapshot_at, review_subject, version)
+                            ticket_snapshot, ticket_snapshot_at, review_subject, history_sample,
+                            version)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
                  $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
-                 $25)`,
+                 $25::jsonb, $26)`,
         [
           task.id,
           task.projectId,
@@ -336,6 +341,10 @@ export const createPostgresPipelineStore = (
           // request it reviews already read, so there is no update statement to lose it (migration
           // 0020 has the argument).
           stored.reviewSubject === null ? null : JSON.stringify(stored.reviewSubject),
+          // WP-35: written here and nowhere else, for `review_subject`'s reason — the collection
+          // made this sample for this run, and a second writer beside the stage executor would be
+          // standing rule 79's lost update (migration 0030 has the argument).
+          stored.historySample === null ? null : JSON.stringify(stored.historySample),
           stored.version,
         ],
       );

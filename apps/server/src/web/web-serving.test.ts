@@ -142,6 +142,8 @@ const build = async (
     // WP-34: no pipeline here, so the batch command refuses by name and the gate cannot answer.
     shadow: null,
     shadowGate: null,
+    historyBootstrap: null,
+    historyBootstrapGate: null,
     commands: null,
     // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
     asks: {

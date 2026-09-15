@@ -178,6 +178,29 @@ export const mergedMergeRequestSchema = z.strictObject({
   discussion_count: z.int().nonnegative(),
 });
 
+/**
+ * One commit of the repository's own history — product/19 §18's *"commit messages"* (WP-35).
+ *
+ * Read for the **history bootstrap** and for nothing else on this build: the delivery pipeline
+ * learns what changed from a merge request's diff, and a commit list is the thing a *convention*
+ * shows up in (the message format R10 is about, the size of a typical change, who touches what).
+ *
+ * `message` is the **whole** message, subject and body, because the convention is often in the body
+ * — a trailer, a ticket reference, a `Co-authored-by`. It is provider text like every other string
+ * here (BD-022) and the caller bounds it at its own consumer; the adapter does not truncate, so
+ * that a caller that needs the whole thing can have it and a caller that does not can say so
+ * (`ticket-snapshot.ts`'s "bound at the consumer" answer to Q54).
+ */
+export const repositoryCommitSchema = z.strictObject({
+  sha: shaSchema,
+  /** Subject and body, verbatim. Untrusted (BD-022). */
+  message: z.string(),
+  /** The author's display name as the provider renders it, not an identity the platform mapped. */
+  author: z.string(),
+  committed_at: isoDateTimeSchema,
+  url: urlSchema.nullish(),
+});
+
 /** Longest merge-request description the platform sends; GitLab's own limit is ~1 MB. */
 export const MAX_MERGE_REQUEST_DESCRIPTION_CHARS = 32_768;
 
@@ -279,6 +302,7 @@ export type PipelineStatus = z.infer<typeof pipelineStatusSchema>;
 export type PipelineStatusValue = z.infer<typeof pipelineStatusValueSchema>;
 export type CodeownersRules = z.infer<typeof codeownersRulesSchema>;
 export type MergedMergeRequest = z.infer<typeof mergedMergeRequestSchema>;
+export type RepositoryCommit = z.infer<typeof repositoryCommitSchema>;
 export type MergeRequestDraft = z.infer<typeof mergeRequestDraftSchema>;
 export type MergeRequestUpdate = z.infer<typeof mergeRequestUpdateSchema>;
 export type CommitAction = z.infer<typeof commitActionSchema>;
@@ -573,6 +597,29 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
     since: string,
     limit: number,
   ): Promise<readonly MergedMergeRequest[]>;
+
+  /**
+   * The repository's commits on the default branch since an instant, newest first (WP-35).
+   *
+   * The third read the history bootstrap makes, and the one product/19 §18 names that
+   * `GitProviderPort` had **no method for at all** — the merge requests and their discussions were
+   * already reachable, and *"commit messages"* was not. It is on the port rather than on the GitLab
+   * adapter for BD-017's reason: the bootstrap is pipeline-adjacent application code and may not
+   * know which provider it is talking to.
+   *
+   * `limit` is the caller's, because how much history is worth reading is a property of the batch;
+   * an adapter pages up to it and stops. A repository with no commits in the window answers `[]`,
+   * which is a fact and not a failure — a project that has just been created is the ordinary case.
+   *
+   * It is a **read**, so it happens in every mode. An adapter that cannot list commits at all
+   * throws `unsupported_capability`, the same answer `readCodeowners` gives, and the caller records
+   * the batch as having no commit half rather than failing it (standing rule 20: this is a read the
+   * bootstrap can do without).
+   */
+  listCommits(
+    project: string,
+    options: { readonly since: string; readonly limit: number },
+  ): Promise<readonly RepositoryCommit[]>;
 
   readonly inbound: InboundNormaliser<GitProviderInboundEvent>;
 }

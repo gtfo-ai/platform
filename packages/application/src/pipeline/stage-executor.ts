@@ -59,6 +59,7 @@ import {
   escalateTask,
   failRun,
   finishRun,
+  HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isRunnableTaskState,
   markRunning,
   openQuestion,
@@ -206,6 +207,16 @@ export interface StageExecutorOptions {
    * (standing rule 31's question: what is this guarantee worth when the collaborator is missing).
    */
   readonly shadow?: StageExecutorShadowPort;
+  /**
+   * What the stage executor asks about a **history bootstrap** task, and about nothing else (WP-35).
+   *
+   * **Absent is "not asked"**, which is what a process composed without the bootstrap should do:
+   * `features.history_bootstrap.budget_usd` is product/19 §18's *"budget cap default $20, shown
+   * before start"*, and a build that cannot read a batch's spend must not pretend it is unspent —
+   * but it also cannot start a mining task, because `collectHistory` is the only thing that creates
+   * one and it takes this port's writer.
+   */
+  readonly bootstrap?: StageExecutorBootstrapPort;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -285,6 +296,20 @@ export interface StageExecutorShadowPort {
   shadowSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number>;
   /** Q82 (a): the commit this shadow task's workspace should start from (PROGRESS backlog 71). */
   checkoutBaseFor(tx: Transaction, taskId: Id): Promise<string | null>;
+}
+
+/**
+ * What the stage executor asks about a **history bootstrap** task (WP-35).
+ *
+ * One query, keyed by the task, answering the cap the batch recorded and what its tasks have spent
+ * from `cost_entries`. It is asked **only** for a task on `HISTORY_BOOTSTRAP_TEMPLATE_ID`, so an
+ * ordinary delivery pays nothing for it — the same bargain the shadow port makes with `tasks.mode`.
+ */
+export interface StageExecutorBootstrapPort {
+  capForTask(
+    tx: Transaction,
+    taskId: Id,
+  ): Promise<{ readonly capUsd: number; readonly spentUsd: number } | null>;
 }
 
 /**
@@ -490,6 +515,34 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             stored,
             `this project’s shadow budget for the month is spent: ${spent} of ${shadowCap} USD ` +
               `since ${since}, and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
+          );
+        }
+      }
+
+      /**
+       * The **history bootstrap's** cap (WP-35), asked only for a task on that template.
+       *
+       * Per **batch** rather than per month, which is the difference from the shadow budget above
+       * and is product/19 §18's own shape: a bootstrap is a one-off operation an operator starts
+       * and is shown a figure for before it runs, so the cap belongs to the thing they started.
+       * The cap is read from the batch row (copied at creation) and the spend from `cost_entries`,
+       * so what stops the batch is the ledger rather than a running total — and the comparison adds
+       * what *this* run may spend, for {@link taskBudgetExhausted}'s reason: a budget checked only
+       * against past spend is discovered one run too late.
+       *
+       * The ending is the ordinary one: the task is **paused** with the reason, exactly as an
+       * exhausted task or project budget pauses it. So a bootstrap whose cap is spent leaves some
+       * chunks mined and the rest paused, which is what "stops when it is spent" means, and a human
+       * raising the cap is the way out.
+       */
+      if (task.template === HISTORY_BOOTSTRAP_TEMPLATE_ID && options.bootstrap !== undefined) {
+        const cap = await options.bootstrap.capForTask(scope.tx, task.id);
+        if (cap !== null && cap.spentUsd + runBudgetUsd(settings, job.stage) > cap.capUsd) {
+          return pause(
+            scope,
+            stored,
+            `this history bootstrap’s budget is spent: ${cap.spentUsd} of ${cap.capUsd} USD, ` +
+              `and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
           );
         }
       }

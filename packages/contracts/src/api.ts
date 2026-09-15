@@ -41,7 +41,7 @@ import {
   usdSchema,
   userRoleSchema,
 } from './common.js';
-import { agenticConfigSchema, riskClassSchema } from './config.js';
+import { agenticConfigSchema, MAX_BOOTSTRAP_MERGE_REQUESTS, riskClassSchema } from './config.js';
 import { domainEventSchema, domainEventTypeSchema } from './events.js';
 import {
   approvalRecordSchema,
@@ -504,6 +504,96 @@ export const startShadowBatchResponseSchema = z.strictObject({
   ),
   started: z.int().nonnegative(),
   refused: z.int().nonnegative(),
+});
+
+// ── History bootstrap (product/06 step 3b, product/18:27, product/19 §18, WP-35) ──
+
+/**
+ * What the wizard is shown **before** anything is started — product/06 step 3b's *"Shows an
+ * estimated cost before running"*.
+ *
+ * The arithmetic is the server's and not the screen's: `batches = ceil(N / batch_size)` and
+ * `estimated_usd = batches × the per-run cap`, computed by `estimateHistoryBootstrap` in
+ * `@platform/domain` and published here for a given N. A screen that multiplied two published
+ * numbers itself would be the second spelling of one rule (standing rule 9), and the first
+ * disagreement would be about money.
+ *
+ * `estimated_usd` is an **upper bound** and says so on the screen: it is what the batch may spend
+ * at every run's ceiling, not a prediction of what it will. When it exceeds `cap_usd` the batch
+ * still starts and **stops** at the cap, which is what `stops_at_cap` tells the operator in advance.
+ */
+export const historyBootstrapEstimateSchema = z.strictObject({
+  merge_requests: z.int().positive(),
+  batch_size: z.int().positive(),
+  batches: z.int().nonnegative(),
+  estimated_usd: usdSchema,
+  cap_usd: usdSchema,
+  stops_at_cap: z.boolean(),
+  /** The window both halves of the sample are read over, in days (product/19's six months). */
+  days: z.int().positive(),
+});
+
+export const startHistoryBootstrapRequestSchema = z.strictObject({
+  /**
+   * How many merged merge requests to mine. Absent means the project's configured N, which itself
+   * defaults to `DEFAULT_BOOTSTRAP_MERGE_REQUESTS` (200); above
+   * {@link MAX_BOOTSTRAP_MERGE_REQUESTS} it is refused here rather than silently clamped, because a
+   * caller that asked for 5 000 asked a question this platform will not answer and should be told.
+   */
+  merge_requests: z.int().min(1).max(MAX_BOOTSTRAP_MERGE_REQUESTS).optional(),
+});
+
+/** Why a whole batch could not start. Each value is a named refusal, never a silent no-op. */
+export const historyBootstrapBlockerSchema = z.enum([
+  'feature_disabled',
+  'no_git_binding',
+  'already_running',
+  'merge_requests_out_of_range',
+]);
+
+export const historyBootstrapStatusSchema = z.enum([
+  /** The provider reads are in flight; no task exists yet. */
+  'collecting',
+  /** Every batch has a task; some of them are still running. */
+  'mining',
+  /** Every task of the batch has recorded its findings. */
+  'completed',
+  /** The collection found nothing to mine, or could not run. `detail` says which. */
+  'empty',
+]);
+
+export const historyBootstrapBatchSchema = z.strictObject({
+  id: idSchema,
+  project_id: idSchema,
+  status: historyBootstrapStatusSchema,
+  created_at: isoDateTimeSchema,
+  completed_at: isoDateTimeSchema.nullable(),
+  merge_requests: z.int().nonnegative(),
+  /** Platform text: why a batch is `empty`, or what the collection had to leave out. */
+  detail: z.string().nullable(),
+  cap_usd: usdSchema,
+  estimated_usd: usdSchema,
+  spent_usd: usdSchema,
+  /** One per chunk of ~20 merge requests: the runs this batch is made of. */
+  chunks: z.int().nonnegative(),
+  chunks_recorded: z.int().nonnegative(),
+  /** Proposals written to the queue by this batch, and how many the recorder refused. */
+  proposals: z.int().nonnegative(),
+  refused_proposals: z.int().nonnegative(),
+});
+
+export const historyBootstrapsResponseSchema = z.strictObject({
+  items: z.array(historyBootstrapBatchSchema),
+  can_start: z.boolean(),
+  blocked_reason: z.string().nullable(),
+  /** The estimate for the N in the query, or for the project's configured default. */
+  estimate: historyBootstrapEstimateSchema,
+  max_merge_requests: z.int().positive(),
+});
+
+export const startHistoryBootstrapResponseSchema = z.strictObject({
+  batch_id: idSchema,
+  estimate: historyBootstrapEstimateSchema,
 });
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
@@ -1359,6 +1449,13 @@ export type BudgetsResponse = z.infer<typeof budgetsResponseSchema>;
 export type SetAutonomyRequest = z.infer<typeof setAutonomyRequestSchema>;
 export type AutonomyResponse = z.infer<typeof autonomyResponseSchema>;
 export type AutonomyOverride = z.infer<typeof autonomyOverrideSchema>;
+export type HistoryBootstrapEstimate = z.infer<typeof historyBootstrapEstimateSchema>;
+export type HistoryBootstrapBlocker = z.infer<typeof historyBootstrapBlockerSchema>;
+export type HistoryBootstrapStatus = z.infer<typeof historyBootstrapStatusSchema>;
+export type HistoryBootstrapBatch = z.infer<typeof historyBootstrapBatchSchema>;
+export type HistoryBootstrapsResponse = z.infer<typeof historyBootstrapsResponseSchema>;
+export type StartHistoryBootstrapRequest = z.infer<typeof startHistoryBootstrapRequestSchema>;
+export type StartHistoryBootstrapResponse = z.infer<typeof startHistoryBootstrapResponseSchema>;
 export type PutBudgetsRequest = z.infer<typeof putBudgetsRequestSchema>;
 export type ProjectAuditEntry = z.infer<typeof projectAuditEntrySchema>;
 export type ProjectAuditResponse = z.infer<typeof projectAuditResponseSchema>;

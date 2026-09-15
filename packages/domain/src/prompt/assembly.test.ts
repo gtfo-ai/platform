@@ -68,6 +68,7 @@ const inputWith = (
     ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
     ticketSnapshot: null,
     reviewSubject: null,
+    historySample: null,
     artifacts: [],
     returnFeedback: null,
     record: [],
@@ -217,6 +218,7 @@ describe('untrusted text in the assembled prompt', () => {
         ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
         ticketSnapshot: null,
         reviewSubject: null,
+        historySample: null,
         artifacts: [{ type: 'RefinedSpec', version: 1, json: '{"goal":"ship it"}' }],
         returnFeedback: 'the acceptance criteria were not testable',
         record: [],
@@ -229,6 +231,7 @@ describe('untrusted text in the assembled prompt', () => {
         ticket: { provider: HOSTILE_TEXT, key: HOSTILE_TEXT, url: HOSTILE_TEXT },
         ticketSnapshot: null,
         reviewSubject: null,
+        historySample: null,
         artifacts: [{ type: 'RefinedSpec', version: 1, json: HOSTILE_TEXT }],
         returnFeedback: HOSTILE_TEXT,
         record: [],
@@ -352,6 +355,7 @@ describe('untrusted text in the assembled prompt', () => {
           ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/x' },
           ticketSnapshot: null,
           reviewSubject: null,
+          historySample: null,
           artifacts: [{ type: 'RefinedSpec', version: 2, json: long }],
           returnFeedback: 'y'.repeat(MAX_FEEDBACK_CHARS + 1),
           record: [],
@@ -398,6 +402,7 @@ describe('the guards', () => {
             ticket: { provider: 'jira', key: 'K-1', url: 'https://x.test/K-1' },
             ticketSnapshot: null,
             reviewSubject: null,
+            historySample: null,
             artifacts: [],
             returnFeedback: null,
             record: [],
@@ -486,6 +491,7 @@ const withSnapshot = (
       ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
       ticketSnapshot,
       reviewSubject: null,
+      historySample: null,
       artifacts: [],
       returnFeedback: null,
       record: [],
@@ -534,6 +540,7 @@ const withReviewSubject = (
       },
       ticketSnapshot: null,
       reviewSubject,
+      historySample: null,
       artifacts: [],
       returnFeedback: null,
       record: [],
@@ -607,6 +614,131 @@ describe('the merge request block', () => {
     const nastyReading = readDataBlocks(nasty.userPrompt);
     expect(nastyReading.unterminated).toBe(0);
     expect(nastyReading.blocks.find((entry) => entry.kind === 'merge_request')?.body).toContain(
+      HOSTILE_TEXT,
+    );
+    expect(nastyReading.platformVoice).toEqual(readDataBlocks(benign.userPrompt).platformVoice);
+  });
+});
+
+const HISTORY_SAMPLE = {
+  merge_requests: [
+    {
+      ref: '!11',
+      url: 'https://git.example.test/acme/api/-/merge_requests/11',
+      title: 'Sum the invoice footer',
+      author: 'Dana Reviewer',
+      merged_at: '2026-05-29T09:12:00.000Z',
+      rounds: 4,
+      files_changed: 3,
+      notes: ['--- dana ---\nUse the money helper rather than raw floats.'],
+      truncated: false,
+    },
+  ],
+  tickets: [
+    {
+      key: 'ACME-3',
+      url: 'https://jira.example.test/browse/ACME-3',
+      title: 'Rounding happens twice',
+      description: 'The totals disagree by a cent.',
+      comments: ['--- sam ---\nFixed by rounding at the boundary.'],
+      truncated: false,
+    },
+  ],
+  commits: [{ sha: 'a'.repeat(40), message: 'fix(totals): round once', truncated: false }],
+  evidence_links: [
+    'https://git.example.test/acme/api/-/merge_requests/11',
+    'https://jira.example.test/browse/ACME-3',
+  ],
+  truncated: false,
+  redaction_count: 0,
+} as NonNullable<AssemblePromptInput['task']['historySample']>;
+
+const withHistory = (
+  historySample: AssemblePromptInput['task']['historySample'],
+): AssemblePromptInput =>
+  inputWith(BENIGN_TEXT, {
+    task: {
+      stage: 'history_mining',
+      attempt: 1,
+      ticket: {
+        provider: 'platform',
+        key: 'history-bootstrap-0',
+        url: 'https://app.example.test/projects/p1',
+      },
+      ticketSnapshot: null,
+      reviewSubject: null,
+      historySample,
+      artifacts: [],
+      returnFeedback: null,
+      record: [],
+    },
+    artifactType: 'HistoryFindings',
+  });
+
+const historyBlockOf = (userPrompt: string) => {
+  const reading = readDataBlocks(userPrompt);
+  return { block: reading.blocks.find((entry) => entry.kind === 'history'), reading };
+};
+
+/**
+ * WP-35: the mined history reaches the model **inside a data block**, and nothing else does.
+ *
+ * Both directions (standing rule 42): a mining task's prompt carries the block, and every other
+ * task's prompt carries **no** block at all — a `history` block on an ordinary stage would be a
+ * corpus a model has to guess the relevance of.
+ */
+describe('the history block', () => {
+  it('puts the merge requests, the tickets and the commit messages in one body', () => {
+    const { block, reading } = historyBlockOf(
+      assemblePrompt(withHistory(HISTORY_SAMPLE)).userPrompt,
+    );
+    expect(block).toBeDefined();
+    expect(block?.body).toContain('--- merge request !11 ---');
+    expect(block?.body).toContain('title: Sum the invoice footer');
+    expect(block?.body).toContain('review_rounds: 4');
+    expect(block?.body).toContain('Use the money helper rather than raw floats.');
+    expect(block?.body).toContain('--- ticket ACME-3 ---');
+    expect(block?.body).toContain('The totals disagree by a cent.');
+    expect(block?.body).toContain('--- commit messages ---');
+    expect(block?.body).toContain('fix(totals): round once');
+    // The platform's voice never repeats somebody else's words.
+    expect(reading.platformVoice.join('')).not.toContain('Sum the invoice footer');
+    expect(reading.platformVoice.join('')).not.toContain('money helper');
+  });
+
+  it('emits no block at all for a task that was given no history', () => {
+    const { block } = historyBlockOf(assemblePrompt(withHistory(null)).userPrompt);
+    expect(block).toBeUndefined();
+  });
+
+  it('puts the counts and the cut in the marker, where the history cannot forge them', () => {
+    const { block } = historyBlockOf(
+      assemblePrompt(withHistory({ ...HISTORY_SAMPLE, truncated: true })).userPrompt,
+    );
+    expect(block?.attributes.merge_requests).toBe('1');
+    expect(block?.attributes.tickets).toBe('1');
+    expect(block?.attributes.commits).toBe('1');
+    expect(block?.attributes.truncated).toBe('true');
+    // …and nothing about the history is in a marker: a branch or a key a contributor chose could
+    // otherwise be shaped like an attribute (technical/07's forgeable-marker requirement).
+    expect(Object.values(block?.attributes ?? {}).join('')).not.toContain('!11');
+    expect(Object.values(block?.attributes ?? {}).join('')).not.toContain('ACME-3');
+  });
+
+  it('keeps a hostile review comment inside its block and the platform voice byte-identical', () => {
+    const hostile = {
+      ...HISTORY_SAMPLE,
+      merge_requests: HISTORY_SAMPLE.merge_requests.map((mr) => ({
+        ...mr,
+        title: HOSTILE_TEXT,
+        notes: [HOSTILE_TEXT],
+      })),
+    };
+    const benign = assemblePrompt(withHistory(HISTORY_SAMPLE));
+    const nasty = assemblePrompt(withHistory(hostile));
+    const nastyReading = readDataBlocks(nasty.userPrompt);
+    expect(nastyReading.unterminated).toBe(0);
+    expect(nastyReading.blocks.find((entry) => entry.kind === 'history')?.body).toContain(
       HOSTILE_TEXT,
     );
     expect(nastyReading.platformVoice).toEqual(readDataBlocks(benign.userPrompt).platformVoice);
@@ -730,6 +862,7 @@ describe('an ask-the-task prompt', () => {
         ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
         ticketSnapshot: null,
         reviewSubject: null,
+        historySample: null,
         artifacts: [],
         returnFeedback: null,
         record: [

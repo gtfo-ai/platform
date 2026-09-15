@@ -455,6 +455,24 @@ export const POOL_RESERVATIONS = {
    */
   onboarding: 1,
   /**
+   * The history bootstrap's worker — **one connection** (WP-35).
+   *
+   * One queue, `bootstrap.history`, carrying both halves of the job: the collection, which holds a
+   * connection for the single transaction that creates the batch's tasks, and the recorder, which
+   * holds one for the transaction that writes a run's proposals. They are one worker because they
+   * cannot contend — every recording is caused by a run the collection started — so the term is one
+   * rather than two (`JOB_QUEUES.historyBootstrap` carries the argument).
+   *
+   * Flat rather than per dispatch, for the reason the other four are: every provider read the
+   * collection makes happens **outside** a transaction (`integrationsForProject` and the executor
+   * both refuse to run inside one), so a read replaces the worker's connection rather than nesting
+   * inside it.
+   *
+   * Counted under `worker` and unconditionally, for the reason the other three are: a reservation
+   * that shrank with a setting would be a floor an operator could lower by accident.
+   */
+  bootstrap: 1,
+  /**
    * The audit write a **dispatch** nests inside the handler's transaction — **zero since WP-15d**,
    * and this constant is the receipt.
    *
@@ -492,6 +510,7 @@ export const requiredPoolConnections = (config: ServerConfig): number => {
   const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
   const knowledgeReserve = capabilities.worker ? POOL_RESERVATIONS.knowledge : 0;
   const onboardingReserve = capabilities.worker ? POOL_RESERVATIONS.onboarding : 0;
+  const bootstrapReserve = capabilities.worker ? POOL_RESERVATIONS.bootstrap : 0;
   const httpReserve = capabilities.api ? POOL_RESERVATIONS.http : 0;
   return (
     dispatcher +
@@ -499,6 +518,7 @@ export const requiredPoolConnections = (config: ServerConfig): number => {
     pipelineReserve +
     knowledgeReserve +
     onboardingReserve +
+    bootstrapReserve +
     httpReserve +
     POOL_RESERVATIONS.maintenance
   );

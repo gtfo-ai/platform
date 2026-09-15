@@ -114,6 +114,15 @@ export const gitlabReplayContext = (
     // `merge-requests.json`'s recorded `GET /merge_requests/7` carries `diff_refs.base_sha`, so
     // this harness publishes a merge base and the suite asserts a sha rather than tolerating null.
     mergeBaseIid: MR_IID,
+    // WP-35: `commits.json` records the list at two windows — a wide one carrying two commits of
+    // this corpus's own repository, and one after both of them answering `[]`. The narrow case is
+    // what an adapter that dropped `since` fails.
+    commits: {
+      since: '2000-01-01T00:00:00.000Z',
+      emptySince: '2026-09-20T00:00:00.000Z',
+      sha: '9f1c2d3e4b5a60718293a4b5c6d7e8f9a0b1c2d3',
+      message: 'round once, at the boundary',
+    },
     mergeability: {
       mergeable: MERGEABLE_IID,
       conflicted: CONFLICTED_IID,

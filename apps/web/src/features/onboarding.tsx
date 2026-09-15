@@ -1,7 +1,8 @@
 /**
  * The onboarding wizard — product/06 § "Flow (UI wizard, resumable, each step skippable)" (WP-21).
  *
- * Five steps, one screen, and the whole of product/06's own claim about it: *"'Finish later' leaves
+ * Six steps — product/06's five plus **3b** — on one screen, and the whole of product/06's own
+ * claim about it: *"'Finish later' leaves
  * a checklist on the project page; nothing is reachable only through the wizard."* Every step here
  * is a command that exists on its own endpoint, so an operator who closes the tab at step 3 can
  * finish from the settings screens later — and the wizard is resumable because its state is the
@@ -21,6 +22,11 @@
  *   driven by the Product Manager role; nothing in this build runs an interview, and a form that
  *   collected answers nobody reads would be worse than an honest gap. The step says so and links to
  *   the knowledge screen, where the same pages can be written by hand.
+ * - **Step 3b (history bootstrap)** is `features/history-bootstrap.tsx`, rendered here and on the
+ *   project settings page — the *same component*, for step 4's reason. It is optional and
+ *   budget-capped, it shows the estimate before it starts anything (product/06's own requirement),
+ *   and everything it produces lands in the proposal queue with the merge requests it was observed
+ *   in. It was the one step of product/06 the wizard did not have until WP-35.
  * - **Step 4 (operating mode and features)** is `features/operating-mode.tsx`, rendered here and on
  *   the project settings page — the *same component*, which is how product/18's "settings pages
  *   mirror the wizard one-to-one" stays true without anybody remembering. It carries all five of
@@ -61,6 +67,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
 const LEVEL_TONE: readonly BadgeTone[] = ['danger', 'warning', 'accent', 'success', 'success'];
@@ -70,7 +77,8 @@ const Step = ({
   title,
   children,
 }: {
-  readonly number: number;
+  /** product/06's own label. A string because step **3b** is one of them (WP-35). */
+  readonly number: number | string;
   readonly title: string;
   readonly children: React.ReactNode;
 }): ReactElement => (
@@ -314,6 +322,32 @@ export const OnboardingScreen = (): ReactElement => {
           title="Not built in this release"
           hint="product/06 describes a conversational form driven by the Product Manager role. Nothing in this build runs one, so the wizard says so rather than collecting answers nobody reads. The same pages can be written by hand from the project’s Knowledge screen."
         />
+      </Step>
+
+      {/**
+       * **Step 3b** — product/06's own numbering, and the one step the wizard did not have until
+       * WP-35. It is optional like every other: a project that skips it starts with an empty
+       * knowledge base and fills it from delivered tasks instead.
+       */}
+      <Step number="3b" title="History bootstrap (optional)">
+        {project === null ? (
+          <EmptyState
+            title="Create the project first"
+            hint="Step 1 is what a repository's history belongs to."
+          />
+        ) : (
+          <>
+            <p className="text-xs text-fg-muted">
+              The knowledge base can start at &ldquo;week six&rdquo; rather than empty: the platform
+              reads the last N merged merge requests with their review comments, the closed tickets
+              of the same window and the commit messages, and proposes the conventions, pitfalls and
+              recurring reviewer requests it can cite. This is the <em>same component</em> the
+              project settings page renders (product/18: nothing is reachable only during
+              onboarding).
+            </p>
+            <HistoryBootstrap projectId={project.id} projectKey={project.key} />
+          </>
+        )}
       </Step>
 
       <Step number={4} title="Operating mode and features">

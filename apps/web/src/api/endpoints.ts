@@ -44,6 +44,7 @@ import {
   decideApprovalRequestSchema,
   decideKbProposalRequestSchema,
   effectiveConfigResponseSchema,
+  historyBootstrapsResponseSchema,
   inboxResponseSchema,
   integrationsResponseSchema,
   kbDocResponseSchema,
@@ -72,6 +73,8 @@ import {
   shadowBatchesResponseSchema,
   shadowBatchResponseSchema,
   startDiscoveryResponseSchema,
+  startHistoryBootstrapRequestSchema,
+  startHistoryBootstrapResponseSchema,
   startShadowBatchRequestSchema,
   startShadowBatchResponseSchema,
   steerRunRequestSchema,
@@ -134,6 +137,16 @@ export interface Endpoints {
     body: z.input<typeof startShadowBatchRequestSchema>,
     idempotencyKey: string,
   ) => Promise<z.output<typeof startShadowBatchResponseSchema>>;
+  /** WP-35, product/06 step 3b — the batches, the gate and the estimate for a given N. */
+  readonly historyBootstraps: (
+    projectId: string,
+    mergeRequests: number | null,
+  ) => Promise<z.output<typeof historyBootstrapsResponseSchema>>;
+  readonly startHistoryBootstrap: (
+    projectId: string,
+    body: z.input<typeof startHistoryBootstrapRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof startHistoryBootstrapResponseSchema>>;
   readonly projectTasks: (
     projectId: string,
     query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
@@ -334,6 +347,18 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         method: 'POST',
         schema: startShadowBatchResponseSchema,
         body: startShadowBatchRequestSchema.parse(body),
+        idempotencyKey,
+      }),
+    historyBootstraps: (projectId, mergeRequests) =>
+      client.get(`/api/projects/${seg(projectId)}/history-bootstraps`, {
+        schema: historyBootstrapsResponseSchema,
+        ...(mergeRequests === null ? {} : { query: { merge_requests: String(mergeRequests) } }),
+      }),
+    startHistoryBootstrap: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/history-bootstraps`, {
+        method: 'POST',
+        schema: startHistoryBootstrapResponseSchema,
+        body: startHistoryBootstrapRequestSchema.parse(body),
         idempotencyKey,
       }),
     projectTasks: (projectId, query) =>

@@ -100,6 +100,14 @@ carrying its own date.
   request attributes (`branch`, `commit_message`, `start_branch`, `author_name`, `author_email`,
   `actions[{action, file_path, content}]`) and the commit object the endpoint answers with. Retrieved
   **2026-09-12**, later than the rest of this corpus, which is why this line carries its own date.
+  Also § **"List repository commits"** (retrieved **2026-09-14**, WP-35) — `GET
+  /projects/:id/repository/commits`, its documented attributes (`all`, `author`, `first_parent`,
+  `follow`, `order`, `path`, `ref_name`, `since`, `trailers`, `until`, `with_stats`) and the
+  response attributes of its example commit object (`id`, `short_id`, `title`, `author_name`,
+  `author_email`, `authored_date`, `committer_name`, `committer_email`, `created_at`, `message`,
+  `parent_ids`, `web_url`, `trailers`, `extended_trailers`), plus `committed_date` on the same
+  object. The page publishes **no example of an empty result**, so the second recorded window in
+  `commits.json` is labelled `inferred`.
 - `https://docs.gitlab.com/api/rest/` — the namespaced `/api/v4` paths and the `PRIVATE-TOKEN`
   header; cited by `http.ts` and behind every path in these files.
 - `https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/` — the rate-limit
@@ -135,6 +143,16 @@ carrying its own date.
    `commits.json` is labelled `inferred` and carries the observed message as illustration. What the
    contract asserts is the classification — `400` → `invalid_request` — which holds whatever the
    body says, and the adapter never reads it.
+6. **The merge-request *list* response publishes no `diff_refs`** (re-read 2026-09-14, WP-35,
+   PROGRESS backlog 98). The object is documented on "Retrieve a merge request" **only**, with the
+   note that it is *"empty when the merge request is created, and populates asynchronously"*. Two
+   consequences are recorded rather than left to a reader: `history.json`'s list body carries no
+   such object, because a recorded conversation should be what GitLab sends and a fixture that
+   published one would invite the next adapter to read it off the list and save N requests — and
+   against a real instance every `base_sha` would then be `null`; and `merge-requests.json`'s
+   **create** response is labelled `documented-adapted`, because its `diff_refs.base_sha` **is**
+   populated so the create path has a merge base to map, which is precisely the asynchronous window
+   the page describes.
 - `https://docs.gitlab.com/api/merge_requests/` § "List merge request diffs" (retrieved
   **2026-09-13**) — `GET /projects/:id/merge_requests/:merge_request_iid/diffs`, its `page`,
   `per_page` and `unidiff` attributes, its eleven response attributes (`a_mode`, `b_mode`,

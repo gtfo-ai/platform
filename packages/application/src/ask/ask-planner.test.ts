@@ -60,6 +60,7 @@ const task = (): StoredTask =>
     ticketSnapshot: null,
     ticketSnapshotAt: null,
     reviewSubject: null,
+    historySample: null,
     version: 1,
   }) as unknown as StoredTask;
 

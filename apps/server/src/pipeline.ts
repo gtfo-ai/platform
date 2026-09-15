@@ -86,6 +86,7 @@ import type {
 } from '@platform/infrastructure';
 import {
   ask as askAdapters,
+  bootstrap as bootstrapAdapters,
   cost as costAdapters,
   dependencies as dependencyAdapters,
   humanTime as humanTimeAdapters,
@@ -669,6 +670,14 @@ export const composePipeline = async (
     // a process that composed the pipeline without it would sweep an event it promised a consumer
     // for. A deployment that runs no shadow batch simply never produces one.
     shadow: new shadowAdapters.PostgresShadowStore(),
+    /**
+     * WP-35: the history bootstrap's per-batch cap, asked at admission for a task on that template
+     * and for no other. **Optional** on the port and supplied here, which is the difference from
+     * `shadow`: the bootstrap registers no handler on this runtime, so a process without it
+     * promises no consumer for anything — what absence would cost is the cap, and a process that
+     * cannot read a batch's spend must not pretend it is unspent.
+     */
+    bootstrap: new bootstrapAdapters.PostgresHistoryBootstrapStore(),
     timezone: options.timezone,
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,

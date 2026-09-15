@@ -72,6 +72,11 @@
       "description": "Structured output of the stage that produces a AskAnswer artifact (technical/12)."
     },
     {
+      "file": "artifacts/history-findings.schema.json",
+      "title": "HistoryFindings data",
+      "description": "Structured output of the stage that produces a HistoryFindings artifact (technical/12)."
+    },
+    {
       "file": "agentic-config.schema.json",
       "title": ".agentic/config.yml",
       "description": "Repository configuration; unknown keys are errors (technical/12)."

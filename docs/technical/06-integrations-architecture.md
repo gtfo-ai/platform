@@ -51,11 +51,21 @@ getPipelineStatus(headSha) -> {status, url, jobs[{name, status, logRef}]}
 getJobLog(jobId, {tailBytes}) -> string
 getDefaultBranchHead(project) -> sha
 readCodeowners(project, ref) -> Rules
-listMergedMergeRequests(project, since, limit) -> [{iid, author, mergedAt, diffStats, discussions[]}]   # history bootstrap, shadow comparison
+listMergedMergeRequests(project, since, limit) -> [{ref, author, mergedAt, title, diffStats?, discussionCount}]   # history bootstrap, shadow comparison
+listCommits(project, {since, limit}) -> [{sha, message, author, committedAt, url?}]   # history bootstrap's commit messages (WP-35)
 revokeCredential(credential)                          # when the workspace is destroyed
 inbound: InboundNormaliser -> mr.* | ci.pipeline.finished | default_branch.moved
 capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArtifacts, draftPipelines, discussionResolution, credentialMinting}
 ```
+> **Amended at WP-35 (rule 8: docs win, so the doc moves first).** This line used to read
+> `-> [{iid, author, mergedAt, diffStats, discussions[]}]`, and the `discussions[]` was never true of
+> any implementation: `MergedMergeRequest` carries a **count** and not the comments (built at WP-09,
+> first called at WP-34). The difference is not cosmetic — it is why *"the last N merged MRs **with
+> their review comments**"* (product/19 §18) costs `1 + N` provider reads rather than one, which is
+> the arithmetic `application/src/bootstrap/batch.ts` states and PROGRESS backlog **64** records.
+> `listCommits` is new at WP-35: product/19 §18 names commit messages as a bootstrap input and the
+> port had no read for them at all.
+
 Git operations (clone, branch, commit, rebase, push) are performed by the workspace manager with `git` and a credential helper, never by the agent with a raw token (BD-025).
 
 ### Communication

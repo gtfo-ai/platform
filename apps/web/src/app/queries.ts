@@ -170,6 +170,51 @@ export const useShadowCommands = (mint?: MintKey) => {
   };
 };
 
+/**
+ * `GET /api/projects/:id/history-bootstraps` — the batches, the gate and the estimate (WP-35).
+ *
+ * `mergeRequests` is part of the query key, so moving the number re-asks the server for the
+ * estimate rather than showing the previous one: product/06 step 3b's *"shows an estimated cost
+ * before running"* is a figure about the batch the operator is about to start, and the arithmetic
+ * is the server's (standing rule 9).
+ */
+export const useHistoryBootstraps = (projectId: string | null, mergeRequests: number | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.historyBootstraps(projectId ?? '', mergeRequests),
+    queryFn: () => endpoints.historyBootstraps(projectId ?? '', mergeRequests),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
+/**
+ * `POST /api/projects/:id/history-bootstraps` (WP-35).
+ *
+ * The key is minted per **intent**, like every other command in this file: starting a bootstrap
+ * reads a project's whole merged history and spends a budget, so a double-click must not do it
+ * twice. `app/idempotency.ts` carries the argument.
+ */
+export const useHistoryBootstrapCommands = (mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return {
+    start: useMutation({
+      mutationFn: (input: { projectId: string; merge_requests: number | null }) =>
+        endpoints.startHistoryBootstrap(
+          input.projectId,
+          input.merge_requests === null ? {} : { merge_requests: input.merge_requests },
+          intents.keyFor(['bootstrap.start', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['bootstrap.start', input]);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+      },
+    }),
+  };
+};
+
 /** `GET /api/projects/:id/audit` — who changed this project's settings (product/18:5). */
 export const useProjectAudit = (projectId: string | null) => {
   const { endpoints } = useServices();

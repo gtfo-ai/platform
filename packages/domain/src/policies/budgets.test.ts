@@ -1,3 +1,8 @@
+import {
+  BOOTSTRAP_BATCH_SIZE,
+  DEFAULT_BOOTSTRAP_BUDGET_USD,
+  DEFAULT_BOOTSTRAP_MERGE_REQUESTS,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { type Budget, createBudget } from '../aggregates/budget.js';
 import { PolicyViolationError } from '../errors.js';
@@ -6,6 +11,7 @@ import {
   blockingBudget,
   DEFAULT_STAGE_RUN_BUDGET_USD,
   DEFAULT_TASK_BUDGET_USD,
+  estimateHistoryBootstrap,
   resolveRunCapUsd,
   shouldPauseTaskForBudget,
 } from './budgets.js';
@@ -43,7 +49,52 @@ describe('documented defaults', () => {
       ticket_lint: 0.5,
       // product/04 S6b's "short Implementation run": a third of `implementation`'s cap (WP-26).
       conflict_resolution: 5,
+      // product/19 §18's Sonnet mining run, and the figure product/19's $20 default rests on (WP-35).
+      history_mining: 2,
     });
+  });
+});
+
+describe('estimateHistoryBootstrap', () => {
+  it('derives product/19 §18’s own $20 default from N, the batch size and the per-run cap', () => {
+    // The arithmetic the document's two numbers meet in: 200 merge requests at 20 per run is ten
+    // runs, and a Sonnet stage's cap here is $2. If either constant moves, this fails rather than
+    // the wizard quietly showing a figure that no longer matches the cap it is compared with.
+    const estimate = estimateHistoryBootstrap({
+      mergeRequests: DEFAULT_BOOTSTRAP_MERGE_REQUESTS,
+      batchSize: BOOTSTRAP_BATCH_SIZE,
+      capUsd: DEFAULT_BOOTSTRAP_BUDGET_USD,
+      runBudgetUsd: DEFAULT_STAGE_RUN_BUDGET_USD.history_mining as number,
+    });
+    expect(estimate.batches).toBe(10);
+    expect(estimate.estimatedUsd).toBe(DEFAULT_BOOTSTRAP_BUDGET_USD);
+    // Equal is **not** over: a batch whose estimate is exactly the cap runs to the end.
+    expect(estimate.stopsAtCap).toBe(false);
+  });
+
+  it('rounds a partial batch up, because nineteen merge requests still cost a run', () => {
+    const estimate = estimateHistoryBootstrap({
+      mergeRequests: 21,
+      batchSize: 20,
+      capUsd: 20,
+      runBudgetUsd: 2,
+    });
+    expect(estimate.batches).toBe(2);
+    expect(estimate.estimatedUsd).toBe(4);
+  });
+
+  it('says so in advance when the estimate is above the cap, rather than refusing', () => {
+    // The direction product/19 asks for: the batch still starts and stops when the cap is spent, so
+    // the operator is told before the fact instead of finding out from a paused task.
+    const estimate = estimateHistoryBootstrap({
+      mergeRequests: 1000,
+      batchSize: 20,
+      capUsd: 20,
+      runBudgetUsd: 2,
+    });
+    expect(estimate.batches).toBe(50);
+    expect(estimate.estimatedUsd).toBe(100);
+    expect(estimate.stopsAtCap).toBe(true);
   });
 });
 

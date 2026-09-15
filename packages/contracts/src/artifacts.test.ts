@@ -212,6 +212,39 @@ const DATA: Record<ArtifactType, unknown> = {
     unanswered: ['whether the join would actually have been slow — nothing measured it'],
     confidence: 'medium',
   },
+  HistoryFindings: {
+    proposals: [
+      {
+        finding: 'convention',
+        kind: 'technical',
+        type: 'doc-update',
+        target_path: 'technical/conventions.md',
+        delta: '# Conventions\n\nMoney is never a float: use `Money` from `src/money.ts`.\n',
+        evidence: [
+          {
+            kind: 'merge_request',
+            ref: '!11',
+            url: 'https://git.example.test/acme/api/-/merge_requests/11',
+          },
+          {
+            kind: 'merge_request',
+            ref: '!12',
+            url: 'https://git.example.test/acme/api/-/merge_requests/12',
+          },
+          {
+            kind: 'merge_request',
+            ref: '!13',
+            url: 'https://git.example.test/acme/api/-/merge_requests/13',
+          },
+        ],
+        occurrences: 3,
+        significance: 0.8,
+        reason: 'the same reviewer asked for it in three merge requests',
+      },
+    ],
+    merge_requests_read: 20,
+    summary: 'Reviews in this batch are mostly about money handling and test naming.',
+  },
 };
 
 const ARTIFACT_TYPES = artifactTypeSchema.options;

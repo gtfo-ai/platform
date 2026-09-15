@@ -9,6 +9,7 @@
  * the browser, the proposals queue with its decisions, the budget bars and the effective
  * configuration with the source of every key.
  */
+import type { KnowledgeProposalSource } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
@@ -35,6 +36,28 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { CodeText, JsonView, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+
+/**
+ * Where a proposal came from, in a maintainer's words — `knowledge_proposal_source` (WP-35).
+ *
+ * The **value is why the column exists**: a page mined from merged history cites merge requests
+ * somebody can follow, and a page the Discovery agent drafted is a model's reading of a repository
+ * it had just met. A queue that renders neither tells a reviewer to weigh them alike, which is the
+ * one thing migration 0030 added the `history` value to prevent.
+ *
+ * A `Record` over the enum rather than a lookup with a fallback, so a seventh source added to
+ * `knowledgeProposalSourceSchema` fails the typecheck here instead of rendering as a raw token
+ * (standing rule 68: enumerate what you branch on). The strings are the platform's own text; the
+ * proposal's own fields stay untrusted and go through `UntrustedText` as before.
+ */
+const SOURCE_LABEL: Readonly<Record<KnowledgeProposalSource, string>> = {
+  task: 'from a task',
+  run: 'from a run',
+  feedback: 'from feedback',
+  bootstrap: 'drafted at onboarding',
+  human: 'written by a person',
+  history: 'mined from merged history',
+};
 
 const useProjectId = (projectKey: string): string | null => {
   const { project } = useProjectByKey(projectKey);
@@ -116,7 +139,7 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
           {proposals.isSuccess && proposals.data.items.length === 0 ? (
             <EmptyState
               title="No pending proposals"
-              hint="Retrospective and Feedback propose knowledge changes with their evidence. A maintainer approves, edits or rejects; a rejection is what the Librarian learns from."
+              hint="Retrospective, Feedback and the history bootstrap propose knowledge changes with their evidence, and each card says which. A maintainer approves, edits or rejects; a rejection is what the Librarian learns from."
             />
           ) : null}
           <div className="flex flex-col gap-2">
@@ -125,6 +148,9 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Badge tone="accent">{proposal.type}</Badge>
                   <Badge>{proposal.kind}</Badge>
+                  <Badge tone={proposal.source === 'history' ? 'success' : 'neutral'}>
+                    {SOURCE_LABEL[proposal.source]}
+                  </Badge>
                   <span className="font-mono">
                     <UntrustedText value={proposal.target_path} />
                   </span>

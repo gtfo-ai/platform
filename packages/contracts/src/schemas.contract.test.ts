@@ -44,6 +44,7 @@ describe('published JSON Schemas', () => {
       'artifacts/readiness-report.schema.json',
       'artifacts/discovery-draft.schema.json',
       'artifacts/ask-answer.schema.json',
+      'artifacts/history-findings.schema.json',
       'agentic-config.schema.json',
       'agentic-pipeline.schema.json',
       'transcript-event.schema.json',

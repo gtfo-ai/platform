@@ -117,6 +117,14 @@ runGitProviderContract({
       ],
     });
 
+    // WP-35, divergence 15: `listCommits` answers the fake's own commit list, so a history this
+    // suite can read has to be seeded. One commit inside the window the suite asks for.
+    const seededCommit = port.seedCommit({
+      project: PROJECT,
+      message: 'fix(totals): round once, at the boundary\n\nRefs: ACME-1\n',
+      committedAt: '2026-05-29T09:12:00.000Z',
+    });
+
     return {
       port,
       project: PROJECT,
@@ -139,6 +147,12 @@ runGitProviderContract({
       // Divergence 14: the fake records the target branch's head when a merge request is opened, so
       // the one it opened above has a merge base and the suite may demand a sha.
       mergeBaseIid: existing.ref.iid,
+      commits: {
+        since: '2000-01-01T00:00:00.000Z',
+        emptySince: '2026-09-20T00:00:00.000Z',
+        sha: seededCommit.sha,
+        message: 'round once, at the boundary',
+      },
       mergeability: {
         mergeable: mergeable.ref.iid,
         conflicted: conflicted.ref.iid,

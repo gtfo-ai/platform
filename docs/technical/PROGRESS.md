@@ -595,6 +595,19 @@ Each of these cost at least one review round to learn; all are evidenced in the 
 3. **An invariant asserted in a comment, an error message or `.env.example` is not evidence it holds** — and
    a test that would pass whether or not the behaviour is present is not a test of it. **Mutation-check every
    guard**: reverting it must fail its test, by a named assertion rather than a timeout.
+
+   **Two instances at WP-35 (session 5), and both changed the *code* rather than the comment — which is
+   what a canary survey is for.** (a) `autoApply: false` in `HISTORY_PROPOSAL_THRESHOLDS` is not the guard
+   it reads as: flipping it alone left every test green, because `dispositionFor` queues anything at or
+   above `proposalAbove` and `proposalAbove: 0` makes the flag unreachable — rule **22**'s shape, answered
+   with the sentence rather than a seam. The case *named* for the property was weak in rule **10**'s exact
+   way: it asserted `significance: 1`, which the mutant queues anyway, so it was satisfied by both
+   branches; it now uses the middling values a real project's band would swallow (0.5, 0.35) and dies when
+   the band opens. (b) The per-batch bootstrap cap had **no fast-tier test at all** — disabling it left the
+   unit tier green and only the three-minute e2e died. The transferable half is a second question to ask of
+   a canary that *did* die: **which tier killed it?** A one-line guard whose only executioner is the e2e is
+   an untested guard on every working day, and the repair is a fast-tier case with both directions in it
+   (`collect.test.ts`), not a note that the e2e covers it.
 4. **When a defect keeps returning one layer down, stop fixing the code and audit the instrument.** Ask of
    every fake: is it kinder than the real thing, and can it even *reach* the state my assertion is about? A
    positive assertion fails loudly on a broken harness; a negative one passes silently on the same wreckage.
@@ -4014,6 +4027,12 @@ second site, and `pipeline.intake.reconcile` is the worked example — a *new* w
 re-dispatch, because `handler_executions` skips the old position. Cheapest home is beside the
 reconciler that already runs, `apps/server/src/pipeline.ts`, which composes it today.
 
+*Refiner (session 5): there is now a **fourth** site — backlog **101**, the history bootstrap's lost collect
+enqueue, and it is the only one of the four a human cannot work around (a unique index turns the stranded
+batch into a permanent `already_running`). Entry 101 carries the four-site table and the argument that the
+class earns **one** row rather than four passes; **WP-36** owns it there, and this entry's "cheapest home"
+stays the fallback.*
+
 ### 85. **No route serves an artifact's body, so every artifact on every task screen is a row you cannot open — and the first one a human actually wants to read is the `AskAnswer`** (TODO, small — one cause, two symptoms; **no work package owns it**; found by WP-31, session 5)
 **What is wrong.** `GET /api/tasks/:task_id` publishes each artifact as
 `{id, artifact_type, version, url: null}` — the `null` is a literal in the projection
@@ -4820,7 +4839,7 @@ one is where an unstated convention becomes two inconsistent ones. Related: **Q8
 deviation and its reasoning (and should not be re-litigated here); backlog **48** is the egress-policy
 half and stays open for bindings; WP-38's plan row carries the deviation against its own criterion 4.
 
-### 98. **A GitLab fixture publishes `diff_refs` on the *list* merge-requests response, which the vendor documents on the single merge request only — and the same over-claim at a second site is the one the adapter actually reads** (TODO, small — a **provenance** correction, not a defect in the adapter; **no work package owns it**; found by WP-34, session 5; cheapest owner **WP-35**)
+### 98. **A GitLab fixture publishes `diff_refs` on the *list* merge-requests response, which the vendor documents on the single merge request only — and the same over-claim at a second site is the one the adapter actually reads** (**RESOLVED** at `<sha>`, WP-35 — both sites, each by the line this entry named, taken by the row this entry named as cheapest owner; the change is uncommitted at the time of writing. Kept for its evidence; a **provenance** correction, not a defect in the adapter; found by WP-34, session 5)
 **What is wrong.** One cause at two sites: a recorded body carries a field the cited page does not
 publish *for that endpoint*, under the label `documented`. That is what standing rule 17 exists for —
 a fixture that documents a field the vendor does not publish invites the next adapter to read it.
@@ -4891,6 +4910,18 @@ local check can do.
 bootstrap), whose subject is the first production caller of `listMergedMergeRequests` and which reads
 this very fixture; failing that, whoever next touches the GitLab corpus. Related and distinct: backlog
 **41** is the same class at another provider (a cited page that does not list what the fixture claims).
+
+**Resolved (refiner, session 5) at `<sha>`, WP-35 — both sites, each by the line this entry
+recommended.** Site 1: the `diff_refs` object is deleted from `history.json` interaction 0's body and the
+`source` note now states that the *"List project merge requests"* example publishes none there, with
+`retrieved` renewed to 2026-09-14. Site 2: `merge-requests.json` interaction 0 is relabelled
+**`documented-adapted`** with the note the suite's assertion 8 requires for any label that is not plain
+`documented` — naming the adaptation (`base_sha` populated so the create path has a merge base to map) and
+what production sees instead (`null` for the window the vendor documents). `test/fixtures/http/gitlab/SOURCES.md`
+gains the *"List repository commits"* entry and ambiguity **6**, which states the list/single split this
+entry is about. **No new check was added and none was owed**, exactly as the entry argued: the contract tier
+stays green because nothing asserted the deleted field. The one thing no local check could do was done —
+both vendor pages were re-read on 2026-09-14.
 
 ### 99. **A replayed shadow-batch command performs nothing and leaves two rows saying it did something, because it is the one command surface on this build that does not answer the previous attempt** (TODO, small — WP-34's own assumption (d), reversible in one function swap; **no work package owns it**; found by WP-34, session 5)
 **What is wrong.** `POST /api/projects/:id/shadow-batches` guards its `Idempotency-Key` with
@@ -5014,6 +5045,306 @@ rather than a new stage. Related and distinct: backlog **95** names *"acceptance
 the projection is missing; here the human side has no producer at all). **WP-45** (proposed on the M3
 page, backlog **91**) is the only row that opens the reviewer's prompt and its eval cases, so if the
 run needs prompt text it is the cheapest place to put it.
+
+### 101. **A lost `bootstrap.history` enqueue leaves a batch at `collecting` for ever and a unique index then refuses every later attempt — the fourth site of entries 20/36/84's class, and the first one an operator cannot work around** (TODO, small per site — **the class now earns one row, and it is WP-36's**, whose M3 criterion 10 carries it; found by WP-35, session 5)
+
+**What is wrong.** The same at-most-once window, a fourth feature on. `startHistoryBootstrap` commits the
+`history_bootstrap_batches` row and enqueues `bootstrap.history` on the **next line**, because
+`Jobs.enqueue` does not join the transaction (TD-004). A process that dies in between leaves a batch at
+`collecting` with no chunks, and nothing on this build picks it up.
+
+**Evidence.** Quoted from WP-35's discovered-work bullet:
+
+> *"A process that dies in that window leaves a batch at `collecting` for ever — and because
+> `history_bootstrap_batches_one_live` admits one live batch per project, every later attempt then answers
+> `already_running`, so the wizard shows a bootstrap that never starts and an operator's only way out is to
+> delete the row. It is exactly the shape `startProjectDiscovery` records for its own enqueue (and backlog
+> 20 for a matched ticket), and the remedy is the same: a pass that finds a batch sitting at `collecting`
+> with no chunks and re-enqueues it, bounded to one attempt."*
+
+and stated at the line by the module itself, which is rule **78** honoured rather than a claim to check
+(`packages/application/src/bootstrap/batch.ts:305-315`): *"a process that dies in this window leaves a batch
+sitting at `collecting` for ever … Nothing reconciles it on this build — the wizard shows a bootstrap that
+never starts, and an operator's way out is to delete the row."*
+
+**Three things read off the tree while filing** (refiner, session 5; file reads and greps only, rule 66),
+and the first is what makes this site different from the other three:
+
+- **The index turns a lost wake-up into a permanent refusal.** `create unique index
+  history_bootstrap_batches_one_live on history_bootstrap_batches (project_id) where completed_at is null`
+  (`packages/infrastructure/src/db/migrations/0030_history_bootstrap.sql:88-90`), and the command reads it
+  first and answers `already_running` (`batch.ts:205`, a **409** through `routes/bootstrap.ts`). So the
+  failure is not *"one bootstrap was lost"* — it is *"this project can never start another one"*.
+- **There is no escape on the API.** `apps/server/src/routes/bootstrap.ts` registers exactly two routes, a
+  `POST` and a `GET` (`:124`, `:217`); there is no cancel and no delete. The only two writers of
+  `completed_at` are `markEmpty` and `completeIfDone`
+  (`packages/infrastructure/src/bootstrap/postgres-history-bootstrap-store.ts:264,273`), both reached **from
+  the collect job** — the path that never ran. The remedy is a `psql` session, which is the one remedy a
+  self-hosted operator should never be the first to discover.
+- **A blind re-enqueue is safe here, as it is at entry 84.** The job data is `{kind: 'collect', batch_id,
+  project_id}` and `collectHistory` is the only writer of the chunks, whose `(batch_id, chunk_index)` is
+  unique (`0030:132`) — so a second delivery for a batch that *did* run creates no second set of tasks.
+  **Needs measurement: one** — whether `JOB_QUEUES.historyBootstrap` is declared `stately`/singleton the way
+  `enqueueAsk` is (entry 84's second bullet), which decides whether the bound comes from the queue or from
+  the pass. That is a read of `jobs.ts`, not a test run.
+
+**What it costs to leave.** Per site, one lost feature invocation. **At this site, the project's bootstrap
+is bricked**: product/06 step 3b is a wizard step, so the person who meets it is a founder onboarding a
+project for the first time, and what they see is a step that says it is running and never finishes, with a
+retry button that answers *"already running"*. The four sites together are the real cost: the platform's
+answer to *"a wake-up can be lost"* is currently four paragraphs of prose in four modules and one reconciler
+that covers one of them.
+
+**Does the class earn a row of its own? Yes — and it is one row, not four.** The four sites are:
+
+| site | entry | what is lost | can a human retry? |
+|---|---|---|---|
+| intake, a matched ticket | **20** | one task never starts | a new `ticket.matched` recovers it; `pipeline.intake.reconcile` (WP-15c) is the built example |
+| curation, `artifact.created` | **36** | one task's proposals | no, and *"ran and proposed nothing"* is spelled like *"never ran"* (rule 18) — the only site whose detection is ambiguous |
+| ask, `askTaskCommand` | **84** | one question, pending for ever | yes, ask again — but the asker is watching |
+| history bootstrap | **this entry** | the whole batch | **no** — the index refuses every retry |
+
+One cause, one shape of remedy (*a pass that finds the stranded row and re-enqueues, bounded to one attempt*,
+and in three of the four the re-enqueue is idempotent by an existing unique key or singleton). Four separate
+passes would be four intervals, four pool reservations and four places to get the grace period wrong; the
+argument the WP-35 bullet makes for folding two is the same argument for folding four. What the row owes is
+**one schedule and a table** of *(what to look for, how to re-enqueue, what bounds it)*, plus entry 36's own
+blocker answered — that site needs a way to distinguish *ran* from *never ran* before a pass can be written
+at all, which is why it is the one that cannot simply be added to the table.
+
+**What "done" looks like.** One recovery schedule, in the shape of `pipeline.intake.reconcile`
+(`packages/application/src/pipeline/intake-reconcile.ts:41-45` already carries the grace-period reasoning:
+**the grace equals the interval**, so there is one knob rather than two). One row per site in a table the
+pass walks, each row naming its query, its re-enqueue and its idempotency key. Each site asserted by
+**dropping the enqueue** and reading the recovery back from the row's own status — entry 20's reproduction,
+repeated per site — never from a return value. Bounded to one attempt per stranded row, by the system actor
+the intake reconciler already stamps. For this site specifically, the query is *a batch at `collecting` with
+no `history_bootstrap_chunks` rows, older than the interval*, and the honest ending when the re-enqueue keeps
+failing is to `markEmpty` the batch with a reason — because a batch nobody can clear is worse than a batch
+that says it failed.
+
+**Depends on / owner.** No dependency on unbuilt work; every site's query and every site's enqueue exist
+today. **Owner: WP-36**, and the attribution is not adjacency — criterion 1 of that row builds the platform's
+only general schedule (*"One scheduler, idempotent … whether it lives in pg-boss cron or in a
+`scheduled_jobs` table is decided here"*), and a recovery pass is that machinery's cheapest second customer.
+Its M3 row now carries this as criterion **10**. If WP-36 slips, the fallback home is unchanged and is entry
+84's: beside `pipeline.intake.reconcile` in `apps/server/src/pipeline.ts`, which composes the one that
+already runs — and the site to take first is **this one**, because it is the only one of the four with no
+human workaround.
+
+### 102. **`merge_requests_read` is a model's coverage claim that reaches a log line and no reader, so a batch that mined a fifth of its history is spelled exactly like one that mined all of it** (TODO, small — working as designed and filed so the next reader meets the decision rather than the trap; **no work package owns it**, and **WP-41 is the wrong home**; found by WP-35, session 5)
+
+**What is wrong.** The historian artifact carries `merge_requests_read`, the platform knows
+`merge_requests_given`, the recorder logs both side by side, and **nothing compares them or shows them**. A
+run that stopped after three of twenty merge requests produces a valid artifact, a `recorded` chunk and a
+screen identical to a run that read all twenty.
+
+**Evidence.** Quoted from WP-35's discovered-work bullet:
+
+> *"The recorder logs both — `merge_requests_read` from the artifact and `merge_requests_given` from the
+> chunk row — and does nothing when they disagree, which is the honest first step (the number is the only
+> signal that a run stopped early **with** an artifact). What is missing is a reader: a batch whose runs all
+> report reading three of twenty has mined a fifth of the history and the screen says nothing about it."*
+
+Read off the tree while filing (refiner, session 5; file reads and greps only, rule 66):
+
+- **The claim's whole lifetime is one log line.** `merge_requests_read: z.int().nonnegative()` with the
+  docblock that labels it *"A model's claim about its own coverage … labelled as the model's rather than
+  compared with the platform's count, which the recorder logs beside it"*
+  (`packages/contracts/src/artifacts.ts:592-600`); the log line is
+  `packages/application/src/bootstrap/record.ts:364-379`, whose own comment says *"The model's own claim
+  about its coverage, beside the platform's count of what it was shown."* A grep for the identifier over
+  `apps/` returns **nothing** — no DTO, no projection, no screen.
+- **The platform's half is already durable and the model's half is not.**
+  `history_bootstrap_chunks.merge_requests` is a stored `integer not null` (`0030:113`) beside `tickets`,
+  `commits`, `redaction_count`, `proposals` and `refused_proposals` — so the row already holds five counters
+  of exactly this kind and is missing the sixth. That is what makes the close *"a column and a line"* rather
+  than a projection: `bootstrap-queries.ts` already sums the chunk counters onto the published batch DTO.
+- **It is rule 18's shape, not a defect.** The absent case is the quiet one: a run that under-read is
+  indistinguishable from a run that read everything, and the distinction exists in the data and is thrown
+  away at the edge of the process. Nothing is wrong with the number; what is missing is a consumer.
+
+**What it costs to leave.** A bootstrap's only promise is coverage — product/19:153 is *"last N merged MRs
+(default 200, max 1 000)"* — and the one signal that the promise was not kept is discarded. The cost lands on
+the same operator twice: they cannot tell a thin knowledge base from a thin repository, and if they re-run to
+get more they pay the full $20 cap again to re-read merge requests the platform has no record of having
+missed. It is **latent-ish rather than live**: it needs a run that stops early *with* an artifact, which the
+fake runner never does, so nobody has seen it yet — the trigger is the first real Sonnet bootstrap.
+
+**What "done" looks like.** `history_bootstrap_chunks` gains `merge_requests_read integer` (nullable —
+`null` means *no report yet*, which the table's own `counts_need_a_report` constraint already distinguishes
+for `proposals`); the recorder writes it in the same `markChunkRecorded` call that writes the other counters,
+so there is no second writer (rule 79); `bootstrap-queries.ts` sums it beside `merge_requests` and the batch
+panel shows the **pair**, never the ratio alone — *"read 37 of 200 merge requests"* is a fact, *"19%"* is a
+derived number one screen would then own (rule 9). No alert and no refusal: the claim is the model's and
+stays labelled as the model's. **Needs measurement: none** to build it; what is unknown is how often a real
+run under-reads, which is the first real bootstrap's answer and is the same measurement WP-35's own *"needs
+measurement"* paragraph asks for.
+
+**Depends on / owner.** No dependency. **No work package owns it.** **WP-41 is the wrong home**, and the
+reason is the same one entry 95 gives for its six items: WP-41 is the org-wide statistics deep-dive, and this
+is a per-batch operational signal on a wizard screen a founder uses once per project — filing it there puts a
+one-column fix behind the largest row on the M3 page and guarantees the first real bootstrap runs without it.
+Cheapest owner: whoever next opens `packages/application/src/bootstrap/record.ts`, which is one migration, one
+`set` clause and one line on `apps/web/src/features/history-bootstrap.tsx`. Related: backlog **94** is the
+same class one signal over (a number produced and read by nothing), and entry **31** is the oldest instance.
+
+### 103. **A bootstrap reads a quarter of N in tickets and the newest four comments of each, and the bound is a *chosen* number the byte budget consumes — not, as the bullet and the docblock read, a number the budget derived** (TODO, small — working as designed, with one claim to correct and one coverage figure nobody has measured; **no work package owns it**; found by WP-35, session 5)
+
+**What is wrong.** Two things, and only the second is a defect. The **coverage** is bounded far below what
+product/19 §18 describes, which is stated honestly and is a real product gap. The **justification** is
+circular: `HISTORY_TICKETS_PER_CHUNK` and `MAX_HISTORY_TICKET_COMMENTS` are inputs to the byte-budget sum,
+so the budget cannot be the thing that derived them.
+
+**Evidence.** Quoted from WP-35's discovered-work bullet:
+
+> *"product/19 §18 asks for 'closed tickets of the last 6 months (titles, descriptions, resolution
+> comments)', and this build reads at most `HISTORY_TICKETS_PER_CHUNK` = 5 tickets per run with
+> `MAX_HISTORY_TICKET_COMMENTS` = 4 comments each. The bound is deliberate and derived (the prompt budget,
+> stated at `sample.ts`), and the cost is stated rather than hidden: at N = 200 the platform reads **50** of
+> the window's closed tickets."*
+
+Read off the tree while filing (refiner, session 5; file reads and greps only, rule 66):
+
+- **The derivation runs the other way, and the docblock is precise about which number it derived.**
+  `sample.ts:17-42` derives exactly one thing — *"a merge request in a sample is bounded at **one twelfth of
+  a ticket**, because twenty of them share one prompt"* — anchored on
+  `TICKET_SNAPSHOT_MAX_TEXT_CHARS` = 45 632. The table then **multiplies by** `HISTORY_TICKETS_PER_CHUNK = 5`
+  and `MAX_HISTORY_TICKET_COMMENTS = 4` to reach `HISTORY_SAMPLE_MAX_TEXT_CHARS` = 98 800, and those two
+  constants arrive with a one-line comment and no derivation: *"How many closed tickets and commit messages
+  ride beside one chunk's twenty merge requests"* (`sample.ts:67-69`). `collect.ts:388-395` gives the only
+  argument either has — *"five tickets beside twenty merge requests is what one prompt can hold"* — which is
+  an assertion about the prompt, not a calculation from it. So the bullet's *"deliberate and derived (the
+  prompt budget)"* over-states it: **deliberate yes, derived no.** This is rule 63's concern in its literal
+  form — the number is stated once at a named constant rather than scattered, which is right; what is not
+  earned is the word *derived*. `HISTORY_COMMITS_PER_CHUNK = 20` is the third constant of the same kind and
+  the bullet does not name it.
+- **The coverage figure is not a fixed 50, it is `N/4`.** The tickets are fetched once for the whole batch
+  at `limit: groups.length * HISTORY_TICKETS_PER_CHUNK` (`collect.ts:234`) and sliced per chunk
+  (`:252-256`), so a batch of N merge requests reads `ceil(N/20) × 5` tickets — 50 at N = 200, 250 at the
+  1 000 maximum. The bullet's *"50 of the window's closed tickets"* is right for the default and the
+  denominator is the thing nobody knows: **how many tickets a real project closes in six months is
+  unmeasured**, so *"a fifth"* is an illustration, not a figure.
+- **Which 50 is the provider's choice, not the platform's.** `closedTickets` asks `matchTickets` for a
+  limit and takes what comes back; unlike the comments — which are sorted newest-first before the cut
+  (`sample.ts:190-194`) — the tickets are `slice(0, …)` in arrival order (`sample.ts:261`). Whether that is
+  newest, oldest or the provider's relevance order is undocumented here, so *which* quarter of the history
+  is mined is undefined.
+- **The comment cut is newest-first, which is the wrong end for one of the three things §18 asks for.**
+  §18 wants *"resolution comments"*; keeping the newest four is a good proxy for a resolution and a poor one
+  for a discussion, and the platform's own comments are filtered out first (`sample.ts:186-189`), which is
+  right and worth keeping.
+
+**What it costs to leave.** Three quarters of the closed-ticket half of product/19 §18's promise is not
+mined, silently, with the platform reporting a completed bootstrap; a convention that appears only in the
+tickets the slice missed is not found, and nothing on the screen says a ticket was skipped (the sample's own
+`truncated` flag is set when a *chunk's* slice overflows, not when the batch-level limit cut the fetch). The
+smaller cost is the one that spreads: an unearned *"derived"* in a bullet is how a number gets copied into
+the next module as though somebody had calculated it.
+
+**What "done" looks like.** Two separable pieces, and the first is a comment. **(a)** `sample.ts:67-69` says
+which of its constants are derived and which are chosen, in one sentence — the module already does this well
+for the merge-request bound, so the correction is to stop the reader inferring the same standing for the
+ticket and commit ones. **(b)** If the coverage is to be raised, it is a prompt-budget decision **and** a
+second `readTicket` fan-out, in that order: the ceiling is what one Sonnet run's prompt can hold, and every
+extra ticket is one more provider read on top of the `1 + N` discussion fan-out backlog **64** records (a
+bootstrap at N = 200 is already **253** requests). The honest intermediate is to raise the *fetch* limit and
+keep the per-run slice, so more of the window is covered across chunks without any single prompt growing.
+**Needs measurement, and it is the entry's main gap** (rule 66, nothing run here): how many tickets a real
+project closes in six months, and what twenty real merge requests plus five real tickets actually cost a
+Sonnet run — WP-35's own *"needs measurement"* paragraph asks the second half already, and the first real
+bootstrap answers both at once.
+
+**Depends on / owner.** No dependency; (a) is one sentence and (b) needs the measurement above first. **No
+work package owns it.** No product question is opened for it: nothing is blocked, the shipped behaviour is
+stated rather than hidden, and the decision to raise or keep is affordable once the two numbers exist.
+Cheapest owner: whoever next opens `packages/application/src/bootstrap/sample.ts` — and if the first real
+bootstrap comes before that, whoever reads its cost line. Related: backlog **64** (the discussion fan-out
+that prices every extra read), backlog **22** (the constant restated in prose, which this module avoided by
+producing the figure from a test).
+
+### 104. **An optional port added to `createPipelineRuntime` was not passed at the production composition root, and every tier below the e2e was green — rule 31's shape with nothing that counts the wiring** (**RESOLVED for the pipeline runtime** at `<sha>`, WP-35 round 2 — `apps/server/src/pipeline-census.test.ts` holds `PipelineRuntimeOptions` and `StageExecutorOptions` to the keys the two call sites pass, both directions; **what remains**: the knowledge-index, librarian, onboarding and history-bootstrap runtimes are uncensused, each with one optional `logger` passed today — nothing live, no owner; found by WP-35's e2e, session 5)
+
+**What is wrong.** The instance is closed and the class is not. `PipelineRuntimeOptions.bootstrap` is
+optional; `apps/server/src/pipeline.ts` composes the bootstrap's *writer* (`collectHistory`, through
+`apps/server/src/bootstrap.ts`) and did **not** pass the store to `createPipelineRuntime`, so in production
+the per-batch cap was simply not asked. Nothing below the e2e tier could see it, because the harness wires
+its own composition.
+
+**Evidence.** Quoted from WP-35's notes, § 11:
+
+> *"The cap case failed with the task `done` rather than `paused` until `apps/server/src/pipeline.ts` passed
+> `bootstrap: new PostgresHistoryBootstrapStore()` to `createPipelineRuntime` — the port was optional, the
+> harness wired it, and production did not. That is rule 31's shape (an optional collaborator is one
+> production omits) caught by the only tier that composes the real thing."*
+
+The measurement is calibrated rather than hoped, which is what makes it usable: *"it failed before the wiring
+and passes after"*.
+
+Read off the tree while filing (refiner, session 5; file reads and greps only, rule 66):
+
+- **The optionality is argued for, and the argument is a coupling nothing enforces.**
+  `packages/application/src/pipeline/runtime.ts:123-134` now says the port may be absent because *"nothing
+  can create a mining task on a build with no bootstrap store — `collectHistory` takes the writer."* That is
+  true of the **type** and false of the **deployment**: the two are composed in two different files
+  (`apps/server/src/pipeline.ts:680` and `apps/server/src/bootstrap.ts:216`), and the defect was precisely
+  the state the argument declares impossible — one composed, the other not. The docblock is honest; what it
+  rests on is an invariant that lives in nobody's test.
+- **`createPipelineRuntime` has exactly three optional members** (`runtime.ts:103,113,134`):
+  `stageConcurrency`, `dependencyMetadata` and `bootstrap`. Two of the three carry a written argument for
+  why absence is safe, and `dependencyMetadata`'s is the one that genuinely holds (absence is a *stated*
+  `not_checked` on the panel, WP-38). So the population is small and enumerable, which is what makes a check
+  cheap.
+- **Nothing counts the wiring.** `apps/server/src/pipeline.test.ts` mentions `bootstrap` only inside the
+  *template* census (`:84-92`, *"the shipped seven"*) and asserts nothing about the composed options; there
+  is no `runtime.test.ts` in `apps/server/src`. The tier that caught it, `verify:e2e`, runs in minutes and
+  only because WP-35 happened to write a cap case.
+- **Which rule covers it: rule 31 already states the lesson, and rule 30 is the one that is unpaid.** Rule
+  31's last sentence is exact — *"If a guarantee needs an injected collaborator, the type must **require**
+  it, and the composition root that builds it in production must be the thing the tests drive"* — so **no
+  new rule is owed**. Rule **30** is what this entry is: *"a lesson recorded only in prose does not prevent
+  recurrence — when a defect is mechanically detectable, add the check."* This one is mechanically
+  detectable, the class already has a precedent in this repository (`apps/launcher/src/docker-access.test.ts`
+  is a census over `git ls-files`; `task-save-sites.test.ts` and `pool-errors.test.ts` are the same idea),
+  and the check does not exist.
+
+**What it costs to leave.** Per instance, a guard that is present in every test and absent in production —
+the worst direction, because the suite reports the opposite of the truth. Here it was a budget cap, so the
+cost of the undetected form is money: a bootstrap that should pause at $20 runs its full ten chunks. The
+next instance is the one to worry about, and the window is open **now**: any work package that adds an
+optional port to a runtime and wires it only in the harness ships the same defect, and will find it only if
+it also writes an e2e case that exercises it.
+
+**What "done" looks like.** A census in `apps/server`, in the shape the repository already uses: enumerate
+the optional members of `PipelineRuntimeOptions` (and of the other runtimes composed in
+`apps/server/src/runtime.ts`) and assert, for each, either that the production composition supplies it or
+that it appears in a short list of *deliberately absent* entries with the reason at the line — the same
+both-directions equality `apps/server/src/routes/client-census.test.ts` uses so the list cannot go stale.
+Reading the options off the type rather than off a hand-written list is what makes it rule 7-safe; if that is
+not reachable, the fallback is a unit test that builds the production composition with stub adapters and
+asserts the option object's keys. The **stronger** alternative is to make the port required and let the
+absent deployment supply an explicit `unavailable` implementation that names itself — the pattern
+`unavailableClaudeRunner` already sets in this codebase, and the one WP-31's `ask` block chose for the same
+reason — *"Required rather than optional, like `execution` … a composition that could omit it is a deployment
+where `POST /api/tasks/:id/ask` writes a row nothing ever picks up (standing rule 31)"*
+(`runtime.ts:89-95`). Whoever takes it should decide between the two rather than inherit the optionality.
+**Needs measurement: none.**
+
+**Depends on / owner.** No dependency; the composition and the types exist. **No work package owns it.**
+Cheapest owner: whoever next adds a collaborator to `createPipelineRuntime` — the check is cheaper to write
+than the e2e case that would otherwise have to catch it. Related: rule **31** (the lesson), rule **30** (why
+prose is not enough), the `docker-access` / `task-save-sites` / `pool-errors` censuses for the shape, and
+WP-15g's `unavailableClaudeRunner` for the alternative this entry recommends considering.
+
+*WP-35 review round 2: **the census now exists** — `apps/server/src/pipeline-census.test.ts`, on the unit
+tier, reading the optional members off `PipelineRuntimeOptions` (and the two interfaces it extends) and off
+`StageExecutorOptions`, compared in both directions with the keys the production composition passes, against
+an admitted-omission list of two with the reason at each line, and calibrated by requiring the same parse to
+find every **required** member. It is entry's first option ("read the options off the type"), not the
+stronger one (a required port with an `unavailable` implementation), which is left as the decision this entry
+recommends whoever changes the contract should make. Three canaries died and each file was restored to its
+pre-mutation md5; the sentence that this class "had no guard" is now false, and the WP-35 notes carry the
+detail.*
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -13727,7 +14058,12 @@ bounded because each pass applies at least one.
 
 **What this half does not do, and nobody should read as done.** No `PUT /kb/doc` (a human writing a
 page), no `kb/search` over HTTP, no `kb/health` reader — the rows exist and no screen shows them —
-and no history bootstrap (product/18). `index.md` is not regenerated (technical/07 says why). The
+and no history bootstrap (product/18).
+*Implementer (WP-35, session 5 — standing rule 83): the last clause is now **false** and is left in
+place with this correction under it rather than rewritten, because the sentence is the evidence for
+how long the gap stood. The bootstrap is `packages/application/src/bootstrap/`, it writes
+`kb_proposals` with source `history` through this half's own curator, and its apply path is the one
+WP-18b built — nothing new commits anything.* `index.md` is not regenerated (technical/07 says why). The
 "deprecate candidates (included N times, never cited)" finding is not computed and the pass says so:
 it needs `run_context_pack` rows, which nothing writes (backlog 31). Nothing has run this against a
 real GitLab: `commitFiles` is exercised by the fake, by a recorded fixture in the contract tier and
@@ -17481,7 +17817,350 @@ than the sentence smaller; eight canaries, every file restored to its pre-mutati
   product one, and no work package owns it.
 
 
+### WP-35 — history bootstrap
+
+**What shipped**: the first caller `listMergedMergeRequests` has had for a pipeline read, the port
+method product/19 §18 named and `GitProviderPort` had none for (`listCommits`), a new role, a new
+artifact type, a new `knowledge_proposal_source` value, the wizard's missing step and the settings
+mirror of it. Migration **0030** (`history_bootstrap_batches`, `history_bootstrap_chunks`,
+`tasks.history_sample`, four enum values).
+
+**1. The mining is N one-off tasks, batched, through the one entry point.** `POST
+/api/projects/:id/history-bootstraps` records a batch and enqueues; the `bootstrap.history` job
+reads the provider and creates **one task per chunk of twenty merge requests** on
+`HISTORY_BOOTSTRAP_TEMPLATE`. Everything after that is the machinery every run goes through — the
+admission guard, the cost ledger, the transcript sink, the budget cap, the conflict retry, the
+escalation — which is `onboarding/discovery.ts`'s argument taken a third time (WP-34 took it
+second). **Why N tasks rather than one task with N stages**: a template's stage list is fixed data
+and a batch's size is not, and a template that could express *"as many stages as the collection
+found"* would be a template with a loop in it. The batch size is product/19's **20**, stated at
+`BOOTSTRAP_BATCH_SIZE` rather than left to a reader (rule 63); N defaults to **200** and is refused
+above **1 000** at the value and one past it, in the request schema, the config schema *and* the
+command — because N has two sources and a bound only the wire checks is not a bound on the other
+path (rule 14, asserted in `batch.test.ts` and `routes/bootstrap.test.ts`).
+
+**2. The command makes no provider call at all, and the arithmetic is why.** A shadow batch reads
+one listing and one ticket per key — at most 26 requests inside the HTTP call. A bootstrap at N=200
+reads **1 + 200 + 1 + 1 + 50 = 253**: the merged listing, one `listDiscussions` **per** merge request
+(`MergedMergeRequest` carries a *count*, not the comments, so *"with their review comments"* is a
+fan-out the port cannot avoid — backlog **64**'s shape), the commit list, the closed-ticket match and
+one `readTicket` per ticket kept. Backlog 64's remedy — *ask for the fields you need* — is
+**considered and unavailable**: GitLab publishes a merge request's discussions only on its own
+endpoint. So the command records the intent and a job does the reading, outside every transaction,
+with the executor's rate limiter as the bound. The count is asserted rather than described
+(`collect.test.ts`, and the e2e counts `integration_actions` rows).
+
+**3. Every input is untrusted stored external text.** `tasks.history_sample` is the fifth place the
+platform keeps somebody else's words, after `inbox`, `kb_chunks`, `ticket_snapshot` and
+`review_subject`, and it takes all three of their decisions: **redact then cut** (a cut applied
+first leaves the head of a token an exact-match redactor can never find again — asserted by planting
+a credential *past* a cap), `redaction_count` over the text as it was **read**, and every cap a cut
+with a marker rather than a refusal. **The byte budget is derived, not chosen** (rule 63, Q54): the
+anchor is `TICKET_SNAPSHOT_MAX_TEXT_CHARS` = 45 632, one *ticket*'s worth of prompt, and a merge
+request in a sample is bounded at roughly a **twelfth** of it because twenty share one prompt —
+20 × (512 + 8 × 400) + 5 × (512 + 2 000 + 4 × 400) + 20 × 200 = **98 800 characters**, ≈ 2.2 × one
+ticket snapshot, ≈ 39 500 tokens for ASCII. The figure is **produced by a test from the constants**
+rather than quoted beside them (backlog 22). It reaches the model only inside an `assemblePrompt`
+data block (`kind: 'history'`), whose attributes are platform integers only — every ref, URL, title,
+author and note stays in the body, because a branch name a contributor chose can be shaped like an
+attribute.
+
+**4. "Every proposal cites evidence" is a precondition the platform checks, not an instruction.**
+`curateHistoryFindings` (`packages/domain/src/knowledge/history.ts`) refuses a proposal whose
+citation is **not one of the merge requests or tickets the platform itself put in that run's
+prompt** — the sample's `evidence_links`, which is why the sample carries them and why the recorder
+refuses a task whose row has lost the sample rather than accepting its proposals. Two of product/19
+§18's numeric thresholds are the platform's too: a `convention` below **3** occurrences is refused,
+and a `pitfall` must cite a merge request the platform counted **≥ 3 review threads** on — which
+compares the claim with the *evidence* rather than with itself. A refusal is **recorded** as a
+`discarded` row whose first `evidence` line is the platform's reason, because technical/07 calls the
+discard path *"audit only"* and a run whose citations are all invented is the signal that matters
+most; a silent drop would present it as a run that found nothing.
+
+**5. The queue only, asserted with `auto_apply: true`.** `HISTORY_PROPOSAL_THRESHOLDS` is **forced**,
+not read from `policies.knowledge_apply` — `DISCOVERY_PROPOSAL_THRESHOLDS`' argument, with one more:
+a bootstrap writes a dozen pages at once, and a bulk import that could commit itself is the one
+thing product/06's *"never applied silently"* is about. The e2e turns the project's policy **on** and
+finds every accepted row still `queued`.
+
+**6. A mined page is distinguishable from a Discovery draft.** `knowledge_proposal_source` gains
+**`history`** (migration 0030). `'bootstrap'` is taken by the Discovery recorder and the two are
+different kinds of evidence: a drafted page is a model's reading of a repository it has just met, a
+mined page cites merge requests a maintainer can follow.
+
+**7. Commit messages: built, with the fixture and the contract case (criterion 7's first branch).**
+`GitProviderPort.listCommits(project, {since, limit})` — the fake (divergence **15**: this fake has
+no commit graph, so `listCommits` answers a *list* and a real provider answers what is reachable from
+the default branch), `seedCommit` on the fake's control surface, the GitLab adapter (reading at the
+project's **default branch**, because the endpoint answers what is reachable from `ref_name`, and
+dropping a commit with no `committed_date` rather than stamping it `now()`), two recorded fixtures
+with `source` blocks, and **two** contract-suite cases — the wide window and a narrow one that
+*excludes* the commit, because an adapter that dropped `since` would pass the first (rule 43).
+
+**8. The cap is per batch, shown before start, and enforced from the ledger.**
+`features.history_bootstrap` is the strict-schema key (four keys, all read: `enabled`,
+`merge_requests`, `days`, `budget_usd`), `budget_usd` defaulting to product/19's **$20** — and the
+$20 is **derived rather than copied**: 200 merge requests at 20 a run is ten runs, and a Sonnet
+stage's per-run cap in this repository is $2 (`DEFAULT_STAGE_RUN_BUDGET_USD.history_mining`), so the
+document's cap is exactly what the document's N costs at the ceiling. `estimateHistoryBootstrap`
+(domain) is the one owner of that arithmetic; the read endpoint publishes the estimate **for the N in
+the query**, so the screen never multiplies two published numbers itself (rule 9). Enforcement is
+the stage executor's own check against `cost_entries` joined through the batch's chunks, added to
+what *this* run may spend (`taskBudgetExhausted`'s rule), and the ending is the ordinary one: the
+task is **paused**, so some chunks are mined and the rest wait for a human to raise the cap.
+
+**9. Wizard step 3b and its mirror are one component.** `apps/web/src/features/history-bootstrap.tsx`
+is rendered by the wizard and by the project settings page — `operating-mode.tsx`'s arrangement, and
+the only way product/18:55's mirror stays true is by not having two of it
+(`routes/settings-mirror.test.ts` holds it in both directions). `kb.bootstrap` — a maintainer
+capability that has existed since WP-02 and had **no caller** — is what the command asks for.
+
+**10. Two figures the e2e measured rather than reasoned.** (a) The first version cited **all twenty**
+merge requests in one proposal and the run failed: `historyProposalSchema.evidence` admits ten, and
+the fake runner's divergence 3 refused the scenario — the harness doing exactly what it exists for.
+(b) The cap case was first written at **2.50**, copied from WP-34's shadow-budget case, and **both**
+runs were admitted: a shadow task's second stage may spend 5, where every mining run may spend 2, so
+0.40 + 2 ≤ 2.5. It is 2.20 now, and the figure's derivation is at the case.
+
+**11. A live defect the e2e found, and it was in the production composition.** The cap case failed
+with the task `done` rather than `paused` until `apps/server/src/pipeline.ts` passed
+`bootstrap: new PostgresHistoryBootstrapStore()` to `createPipelineRuntime` — the port was optional,
+the harness wired it, and production did not. That is rule 31's shape (an optional collaborator is
+one production omits) caught by the only tier that composes the real thing. The passing case is
+therefore a calibrated measurement rather than a hope: it failed before the wiring and passes after.
+
+**12. Backlog 98 closed while in the file (the row named this WP the cheapest owner).** Site 1:
+`history.json`'s list body no longer carries `diff_refs` and its note says the page publishes none
+there. Site 2: `merge-requests.json`'s **create** response is relabelled `documented-adapted` with a
+note that its `base_sha` is populated so the create path has one to map, and that production sees
+`null` for the window the vendor documents. `SOURCES.md` gains both the "List repository commits"
+entry (retrieved 2026-09-14) and ambiguity **6**, which states the list/single split. Both pages were
+re-read on 2026-09-14; the contract tier stays green, because nothing asserted the deleted field.
+
+**Assumptions a reviewer may reverse.** (a) *Reversed in round 2:* a **replay** under the same key with the same body now answers the **recorded** batch through `idempotentReplay` (one batch, one `human_actions` row, no second enqueue); the original assumption — a **409 `bootstrap_already_running`** rather than WP-34's "a batch row of refusals" — held only while the batch was live, and a completed batch let the same request start a second $20 one. The reasoning that stood was: a bootstrap is a
+253-request read of the same six months, so *"you already have one in flight"* is the honest answer
+and a row recording that nothing happened costs a row. (b) The closed-ticket half is
+`matchTickets({kind: 'status', status: status_mapping.done})` — the project's **own** definition of
+closed, because the platform has none (`shadow/batch.ts` states it); a project that maps no `done`
+status gets **no ticket half** and the batch says so rather than the platform guessing which column
+is last. (c) The ticket half is bounded at **5 per chunk** (`HISTORY_TICKETS_PER_CHUNK`), so a
+bootstrap reads at most that many `readTicket` per run rather than N: five tickets beside twenty
+merge requests is what one prompt can hold. (d) `runs.mode` gains `'bootstrap'` rather than falling
+through to `normal`, which is backlog **57**'s own complaint answered in the row that had the choice.
+(e) The mining role has **no tools at all** — everything it reads is in its prompt, and a tool that
+could find a fourth source would produce citations the platform then refuses.
+
+**13. Eleven canaries, each file restored to its pre-mutation md5** (rules 3, 21, 62, 77; in-place
+with a diffed revert, `md5 -q` read before and after, and the unmutated run calibrated first).
+Dropping the citation-resolution filter → *"refuses a citation the run was never shown"* and two
+more. Believing the model's pitfall claim instead of the platform's round count → both threshold
+cases. Opening an auto-apply band under the proposals' significance → three cases. Ignoring
+`markChunkRecorded`'s answer → *"writes nothing on a redelivery"*. Widening the N bound → both
+halves of the boundary. Cutting **before** redacting → the planted-credential case. Handing every
+run the whole history instead of its own slice → the two chunk cases. Disabling the per-batch cap at
+admission → the new admission case. Dropping the `since` the caller asked for from the GitLab
+adapter → the narrow-window contract case. Dropping `recorded_at is null` from the adapter's
+`where` → the store contract case, **on the integration tier** (it survives the unit tier, which
+scripts `rowCount`, and that is stated at both).
+
+**Two canaries changed the code rather than the comment.**
+
+(a) **`autoApply: false` is not the guard it reads as.** Flipping it alone left every test green:
+`dispositionFor` queues anything at or above `proposalAbove`, so `proposalAbove: 0` is the operative
+field and the flag is a second layer the first makes unreachable. That is rule **22**'s shape (an
+inner layer an outer one makes untestable), and the answer it asks for is the sentence rather than a
+seam — `HISTORY_PROPOSAL_THRESHOLDS`' docblock now names which field does the work and why both are
+kept. The **case named for the property** was also weak: it asserted `significance: 1`, which the
+mutant queues anyway, so it now uses the middling values a real project's band would swallow (0.5,
+0.35) and dies when the band opens.
+
+(b) **The per-batch cap had no fast-tier test at all.** Disabling it left the unit tier green,
+because nothing there drove a bootstrap task through admission — the e2e was the only cover, and a
+three-minute tier is a poor place for a one-line guard. `collect.test.ts` gains the case, with both
+directions in it (a batch that has spent nothing is admitted; one that has spent 0.40 against a 2.20
+cap is paused), and the canary now dies by name.
+
+**Needs measurement (rule 66, not run here).** What a real repository's twenty merge requests
+actually cost a Sonnet run: every figure here is the *cap* ($2) and the fake runner's scripted 0.40.
+The $20 default is therefore a bound, not an observation, and the first real bootstrap is what turns
+it into one.
+
+**Rule 83 — sentences this change falsified, found by grep and corrected.**
+`apps/web/src/features/onboarding.tsx`'s *"Five steps"* (six, with 3b);
+`packages/application/src/pipeline/planner.test.ts`'s run-mode census and its command-baseline
+census; `apps/server/src/pipeline.test.ts`'s *"the shipped six"*; `.env.example`'s pool arithmetic
+and `db/config.ts`'s `APP_DB_POOL_MAX=20` quotation; `apps/server/src/config.test.ts`'s *"Nineteen
+since WP-31"*; `test/e2e/support/instance.ts`'s floor comment; the three
+`test/integration/db/*.integration.test.ts` censuses; **technical/06:54**, whose git-port line
+claimed `listMergedMergeRequests` answers `discussions[]` — it never did in any build, and the
+difference is exactly why *"with their review comments"* costs `1 + N` reads, so the line is amended
+(rule 8) with the correction stated beside it and `listCommits` added; and **WP-18b's own note**,
+whose *"no history bootstrap (product/18)"* is corrected in place rather than rewritten (WP-28's
+precedent). **Not** falsified and checked:
+`git-provider.ts`'s *"built at WP-09, no caller"* sentence is WP-34's to have corrected and is not in
+the tree; `record.ts:228`'s *"this one came from onboarding, not from a retrospective"* is still true
+of `bootstrap` and now has a sibling value that makes it sharper, so it is left as it stands.
+
+**For CLAUDE.md's "Where to look", if the orchestrator wants it** (this file is the orchestrator's,
+so the wording is here rather than there): *"**History bootstrap** (WP-35): a bootstrap is N one-off
+tasks on `HISTORY_BOOTSTRAP_TEMPLATE`, one per **twenty** merged merge requests
+(`BOOTSTRAP_BATCH_SIZE`, product/19 §18). `packages/application/src/bootstrap/` is the whole of it —
+`batch.ts` records the intent and makes **no provider call** (a bootstrap at N=200 is **253** reads,
+`1 + N` of them the discussion fan-out backlog 64 records), `collect.ts` does the reading from the
+`bootstrap.history` job and writes each run's slice to `tasks.history_sample` on the same `insert`
+that creates the task, and `record.ts` turns the `HistoryFindings` artifact into `kb_proposals` with
+source **`history`** — the queue only, forced, whatever `policies.knowledge_apply` says. The
+guarantee that makes a mined page worth reading is `curateHistoryFindings`
+(`packages/domain/src/knowledge/history.ts`): **a citation must resolve into the sample the platform
+itself showed that run**, and product/19's two numeric thresholds are checked against the platform's
+own counts rather than the model's claims; a refusal is written as a `discarded` row with the reason
+in its `evidence`. The cap (`features.history_bootstrap.budget_usd`, default $20 = 10 runs × the
+Sonnet stage cap) is shown before start by `estimateHistoryBootstrap` and enforced by the stage
+executor against `cost_entries` joined through the batch's chunks. `GitProviderPort.listCommits` is
+the read product/19 §18 named and the port had none for."*
+
+**Review round 2: one major, two minors and a census — all four applied.**
+
+**(a) The major: the value existed for a reader who could not see it.** `knowledge_proposal_source`
+gained `history` so a mined page is distinguishable from a Discovery draft, and the proposal card
+rendered `type`, `kind`, `target_path`, `significance`, `delta`, `evidence` and `status` and **never
+`source`** — so criterion 5's *"rendered on the proposals screen"* was unmet. It is a badge now
+(`apps/web/src/features/project-panels.tsx`), through a `Record<KnowledgeProposalSource, string>` so
+a seventh value fails the typecheck here rather than rendering as a raw token, and it says what the
+value *means* (*"mined from merged history"*, *"drafted at onboarding"*) rather than printing the
+enum. `apps/web/src/features/project-panels.test.tsx` is new and drives **both** directions in one
+queue; the empty-state hint no longer names only Retrospective and Feedback.
+
+**(b) Minor 1: the `Idempotency-Key` refused only a different body.** The same key with the same
+body reached the command, which answered `already_running` — and that is **live-only**, so once a
+batch completed the replay started a second $20 mining of the same six months and wrote a second
+`human_actions` row. The route now uses `idempotentReplay` (WP-15i's mechanism, already used by
+`commands.ts`, `settings.ts` and `asks.ts`) and answers the **recorded** `batch_id` and estimate; the
+audit row therefore carries the whole estimate rather than two of its figures, and a row that
+predates those fields is a **409 naming it** rather than a placeholder (`recordedBranch`'s rule). The
+case at `routes/bootstrap.test.ts` asserted a 202 and nothing countable; it now asserts the replayed
+body **equals** the first answer, one call to the command and one audit row (rule 79). This reverses
+assumption (a) of the original notes — *"a replay is a 409 `already_running`"* — which was true only
+while the batch was live.
+
+**(c) Minor 2: the race answered 500, not 409.** `liveBatch` is read in one transaction and
+`createBatch` inserts in another, so two commands that both read before either inserts left the
+loser with an unmapped `23505` on `history_bootstrap_batches_one_live`. It is translated now, in the
+event store's shape: the adapter raises `LiveHistoryBootstrapError` (declared beside the port, as
+`TaskConcurrentModificationError` is, because the **caller** branches on it) matching the code *and*
+the constraint name, and `startHistoryBootstrap` answers the same `already_running` its read gives.
+Three tiers: the in-memory double enforces the index's rule too (its divergence 2 was a *kindness*
+the moment the command started branching on the refusal), the store contract suite asserts the
+refusal against **both** implementations, and the integration tier drives two concurrent commands
+through a real `PostgresUnitOfWork` with a **barrier in `liveBatch`** — because two `Promise.all`
+calls would usually serialise, and a case that passed because the second read saw the first row
+would be asserting the read path while claiming the write's.
+
+**(d) The census backlog 104 asked for exists**: `apps/server/src/pipeline-census.test.ts`, in
+`client-census.test.ts`' shape. Neither half is a list — the declared half is parsed off
+`PipelineRuntimeOptions` (**and the two interfaces it extends**, with the `extends` clause itself
+compared in both directions so a new base cannot add optional keys unseen) and off
+`StageExecutorOptions`; the passed half is parsed off the two call sites, counting a conditional
+spread (`...(x === null ? {} : { x })`) as passing. The comparison is an equality in both
+directions against an admitted-omission list of **two**, each with its reason at the line:
+`reviewCommentWindowMs` (BD-007's default is the shipped behaviour) and `concurrency` (declared on
+`StageExecutorOptions` and **read by nothing** — the runtime sizes the stage worker from its own
+`stageConcurrency`; filed under discovered work rather than deleted here). The parse is
+**calibrated**: every *required* key must also be found, so a parser that silently returned nothing
+fails instead of passing vacuously. Three canaries, each file restored to its pre-mutation `md5`:
+removing `bootstrap:` from `apps/server/src/pipeline.ts` → two failures including the positively
+named one; removing the `dependencyMetadata` conditional spread → the equality; removing the
+executor's `budgets:` → the executor half. **Backlog 104's "what done looks like" is met on its
+first option** (read the options off the type); its stronger alternative — making the port required
+with an `unavailable` implementation — is **not** taken here, because that is a change to the
+application ring's contract and the census makes the optionality visible at the only place it can
+go wrong.
+
+**(f) The branch-coverage threshold is what made three of these tests exist**, and it is worth
+saying which way round that happened. The change dipped global branch coverage to **79.99 %** against
+the 80 % floor, because the adapter's translation is exercised only where a real `23505` can be
+raised (the integration tier, which the coverage run does not include) and because `replayedStart`
+read eight fields through `previous?.`. Both were answered by writing the missing *tests* rather than
+by lowering anything: `postgres-history-bootstrap-store.test.ts` gains the translation's three
+branches against a scripted client — including the one that matters, **another** `23505` (a
+duplicated batch id) staying the fault it is — and `batch.test.ts` gains the store failure that is
+*not* a conflict propagating. The one code change was `previous ?? {}` in place of eight optional
+chains, which is the same refusal with one branch instead of sixteen. The floor is now **80.06 %**,
+which is thin: the next change that adds a branch pays for it.
+
+**(e) One accident, recorded because the recovery is the lesson.** A canary reverted with `git
+checkout -- apps/server/src/routes/bootstrap.ts` **emptied the file**: the path is staged as an
+*intent-to-add* (`git add -N`), so its index entry is the empty blob `e69de29`, and `checkout`
+restored exactly that. It was rebuilt from context and verified byte-identical by the `md5` taken
+before the mutation (`61026bc2…`), which is precisely what rule 62 exists for. The rule this earns:
+**revert a canary the way you applied it** — an in-place edit, never a git operation against an
+index that may hold a placeholder.
+
 ## Discovered work — session 5 (not in plan)
+
+- **`StageExecutorOptions.concurrency` is declared and read by nothing** (WP-35 review round 2). The
+  field carries a paragraph about the connection pool — *"each concurrent execution holds one
+  connection during each of its two transactions, on top of the dispatcher's `2 × concurrency + 1`"*
+  — and `createStageExecutor` never consults it: the stage worker's concurrency comes from
+  `PipelineRuntimeOptions.stageConcurrency`, which `createPipelineRuntime` passes to `work({…})`
+  directly (`runtime.ts:243`). So a composition root that set it would be configuring nothing, and
+  the pool arithmetic beside it would be a sentence about a field with no reader. Found by the new
+  composition census, which has to admit it as a deliberate omission to stay green — the admission
+  is the honest state, and it is one line in that file today. Cheapest close: delete the member and
+  move its paragraph to `stageConcurrency`, which is a change to the application ring's public
+  options type and therefore a decision for whoever owns that contract rather than for the census
+  that found it. **No work package owns it.**
+- **Nothing recovers a history bootstrap whose collection job was never enqueued** (WP-35). The
+  start command commits the `history_bootstrap_batches` row and enqueues `bootstrap.history` on the
+  next line, because `Jobs.enqueue` does not join the transaction (TD-004). A process that dies in
+  that window leaves a batch at `collecting` for ever — and because
+  `history_bootstrap_batches_one_live` admits one live batch per project, every later attempt then
+  answers `already_running`, so the wizard shows a bootstrap that never starts and an operator's
+  only way out is to delete the row. It is exactly the shape `startProjectDiscovery` records for its
+  own enqueue (and backlog 20 for a matched ticket), and the remedy is the same: a pass that finds a
+  batch sitting at `collecting` with no chunks and re-enqueues it, bounded to one attempt. It is not
+  built here — one more reconciler is a maintenance schedule with its own queue, interval and pool
+  reservation — and the two (discovery's and this one) are worth taking together. **No work package
+  owns it.**
+  *Refiner (session 5): **filed as backlog 101**, as the **fourth** site of entries 20/36/84's class and
+  the only one with no human workaround — the route file registers just a `POST` and a `GET`, and both
+  writers of `completed_at` sit behind the job that never ran, so today's remedy is `psql`. The entry
+  carries the four-site table and answers the class question: it earns **one** row rather than four passes,
+  and the owner is **WP-36**, whose criterion 1 builds the platform's only general schedule — that M3 row
+  now carries it as criterion **10**, with entry 84's "beside `pipeline.intake.reconcile`" as the fallback.*
+- **`merge_requests_read` is a model's claim about its own coverage and nothing compares it with the
+  platform's count** (WP-35). The recorder logs both — `merge_requests_read` from the artifact and
+  `merge_requests_given` from the chunk row — and does nothing when they disagree, which is the
+  honest first step (the number is the only signal that a run stopped early *with* an artifact). What
+  is missing is a reader: a batch whose runs all report reading three of twenty has mined a fifth of
+  the history and the screen says nothing about it. Cheapest close: carry the claim on the chunk row
+  beside the platform's count and show the pair, which is a column and a line on the panel. **No work
+  package owns it.**
+  *Refiner (session 5): **filed as backlog 102**, and the bullet's cheapest close is confirmed off the tree
+  — `history_bootstrap_chunks` already stores five counters of exactly this kind (`0030:113-122`), so it is
+  one nullable column, one `set` clause in `markChunkRecorded` and one line on the panel; a grep for the
+  identifier over `apps/` returns nothing. Two things the entry adds: **WP-41 is the wrong home** (entry
+  95's reason — this is a per-batch operational signal on a wizard screen, not an org-wide statistic), and
+  the panel must show the **pair** rather than a ratio (rule 9). It is latent until a real run stops early
+  with an artifact, which the fake runner never does.*
+- **A bootstrap reads no ticket comments beyond the newest four, and no ticket at all past five per
+  chunk** (WP-35). product/19 §18 asks for *"closed tickets of the last 6 months (titles,
+  descriptions, resolution comments)"*, and this build reads at most `HISTORY_TICKETS_PER_CHUNK` = 5
+  tickets per run with `MAX_HISTORY_TICKET_COMMENTS` = 4 comments each. The bound is deliberate and
+  derived (the prompt budget, stated at `sample.ts`), and the cost is stated rather than hidden: at
+  N = 200 the platform reads **50** of the window's closed tickets, so a convention that only shows
+  up in the other tickets is not mined. Raising it is a prompt-budget decision and a second
+  `readTicket` fan-out, which is why it is filed rather than chosen. **No work package owns it.**
+  *Refiner (session 5): **filed as backlog 103**, with one word withdrawn — the bound is **deliberate but
+  not derived**. `sample.ts:17-42` derives exactly one figure (a merge request is *"one twelfth of a
+  ticket"*, anchored on `TICKET_SNAPSHOT_MAX_TEXT_CHARS`), and the budget then **multiplies by** 5 and 4;
+  the two constants arrive with a label, not a calculation (`sample.ts:67-69`), and `collect.ts:388-395`'s
+  *"what one prompt can hold"* is an assertion about the prompt rather than from it. `HISTORY_COMMITS_PER_CHUNK
+  = 20` is the third of the same kind and the bullet does not name it. Two corrections to the arithmetic: the
+  coverage is **`ceil(N/20) × 5` = N/4**, not a fixed 50 (`collect.ts:234`), and the denominator — how many
+  tickets a real project closes in six months — is **unmeasured**, so *"a fifth"* is an illustration. Which
+  quarter is mined is the provider's order, since tickets are `slice(0, …)` in arrival order where comments
+  are sorted newest-first first. Nothing is blocked, so no open question was opened.*
 - **`test/fixtures/http/gitlab/history.json` claims `diff_refs` on the *list* merge-requests
   response, and GitLab does not publish it there** (WP-34). The interaction is labelled
   `kind: documented` against `https://docs.gitlab.com/api/merge_requests/`, and that page's *"List

@@ -26,8 +26,11 @@ describe('Drizzle schema', () => {
     // (technical/02:24), the opposite direction (migration 0024, WP-31), plus `shadow_batches`
     // and `shadow_batch_tickets` — the set of tickets somebody selected on one day and what each
     // was compared against, which product/19 §13's *"aggregate report per shadow batch"* needs and
-    // which `shadow_reports` (a row per task) cannot express (migration 0029, WP-34).
-    expect(tables.length).toBe(54);
+    // which `shadow_reports` (a row per task) cannot express (migration 0029, WP-34), plus
+    // `history_bootstrap_batches` and `history_bootstrap_chunks` — the history bootstrap's
+    // selection and its per-run chunks, which product/19 §18's *"batches of ~20 MRs per run"*
+    // needs somewhere to live and which no earlier table describes (migration 0030, WP-35).
+    expect(tables.length).toBe(56);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

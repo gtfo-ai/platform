@@ -76,6 +76,7 @@ import { type PipelineSagaOptions, pipelineHandlers } from './saga.js';
 import {
   createStageExecutor,
   type StageExecutor,
+  type StageExecutorBootstrapPort,
   type StageExecutorOptions,
 } from './stage-executor.js';
 import { ticketLintHandlers } from './ticket-lint.js';
@@ -120,6 +121,17 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * keep). A deployment that runs no shadow batch simply never produces the event.
    */
   readonly shadow: ShadowStore;
+  /**
+   * The history bootstrap's store (WP-35) — `history_bootstrap_batches`, `_chunks`.
+   *
+   * **Optional**, unlike {@link PipelineRuntimeOptions.shadow}, and the difference is a real one
+   * rather than an inconsistency: the bootstrap registers **no handler here** (its
+   * `artifact.created` trigger belongs to `createHistoryBootstrapRuntime`), so a runtime composed
+   * without it promises no consumer for anything. What it changes is the stage executor's
+   * admission: absent means the batch cap is **not asked**, which is safe because nothing can
+   * create a mining task on a build with no bootstrap store — `collectHistory` takes the writer.
+   */
+  readonly bootstrap?: StageExecutorBootstrapPort;
 }
 
 export interface PipelineRuntime {
@@ -152,6 +164,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     // the composition root's `execution` block, because the same store is what makes a shadow task
     // exist at all — see `StageExecutorOptions.shadow`.
     shadow: options.shadow,
+    // WP-35: the history bootstrap's per-batch cap, asked only for a task on that template.
+    ...(options.bootstrap === undefined ? {} : { bootstrap: options.bootstrap }),
     ...(logger === undefined ? {} : { logger }),
   });
 

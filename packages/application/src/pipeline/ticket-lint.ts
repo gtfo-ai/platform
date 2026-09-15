@@ -563,6 +563,7 @@ export const runTicketLintCheck = async (
       ticketSnapshot: snapshot,
       ticketSnapshotAt: options.clock.now() as IsoDateTime,
       reviewSubject: null,
+      historySample: null,
       // A lint task posts one comment and opens no merge request (WP-37).
       riskClasses: [],
       coverage: null,

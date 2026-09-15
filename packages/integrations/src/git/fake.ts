@@ -115,6 +115,16 @@
  *     production sees `base_sha: null` for a window this fake never has — which is exactly why the
  *     shadow batch's refusal branch is driven here explicitly (`seedMergedMergeRequest` with
  *     `baseSha: null`) rather than left to arise.
+ * 15. **Different — `listCommits` answers this fake's own commit *list*, which has no branch
+ *     topology behind it.** WP-35 added the method to the port because product/19 §18 mines commit
+ *     messages, and this fake has no commit graph (divergence 9): a commit is a row, `branch` is
+ *     whatever the writer said, and a filter by `project` and instant is the whole of the query. A
+ *     real provider answers the commits **reachable from the default branch**, so a message on a
+ *     side branch that was never merged is absent there and present here. It is **kinder** in that
+ *     one direction, and the consequence is bounded — the bootstrap treats commit messages as one
+ *     of three inputs and every proposal it keeps cites a merge request or a ticket rather than a
+ *     commit — but a later feature that decided something from "this commit is on the default
+ *     branch" would be green here and wrong in production.
  */
 import {
   type CodeownersRules,
@@ -143,6 +153,7 @@ import {
   type NormalisedEvent,
   type PipelineStatus,
   type PipelineStatusValue,
+  type RepositoryCommit,
   type WebhookDelivery,
 } from '@platform/application';
 import type { CiStatus, DiffStats, ExternalIdentity, Id } from '@platform/contracts';
@@ -277,6 +288,8 @@ export interface FakeCommit {
   readonly sha: string;
   readonly message: string;
   readonly author: { readonly name: string | null; readonly email: string | null };
+  /** When it landed. Written from the injected clock for a commit this fake made (WP-35). */
+  readonly committed_at: string;
   readonly files: readonly { readonly path: string; readonly content: string }[];
 }
 
@@ -402,6 +415,23 @@ export interface FakeGitProvider extends GitProviderPort {
   moveDefaultBranch(project: string, newHead: string): void;
   /** Every commit `commitFiles` made, oldest first. */
   readonly commits: readonly FakeCommit[];
+  /**
+   * A commit a **human** made, already in the past — WP-35's history bootstrap.
+   *
+   * `listCommits` only ever answered commits this fake itself wrote through `commitFiles`, which
+   * are the platform's own; a bootstrap mines the team's history and there was no way to give the
+   * fake any. It writes no files and moves no branch head: what the bootstrap reads is the
+   * *message*, and a fake that also replayed a tree would be modelling a commit graph it does not
+   * have (divergence 9).
+   */
+  seedCommit(input: {
+    readonly project?: string;
+    readonly branch?: string;
+    readonly sha?: string;
+    readonly message: string;
+    readonly author?: string;
+    readonly committedAt: string;
+  }): FakeCommit;
   /** The content of a file on a branch, or `null` when the branch does not have it. */
   fileAt(project: string, branch: string, path: string): string | null;
   /** Seeds a file on a branch without a commit — the state a repository was already in. */
@@ -958,6 +988,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         sha,
         message: request.message,
         author: { name: request.author_name ?? null, email: request.author_email ?? null },
+        committed_at: core.clock.now(),
         files: request.actions.map((action) => ({ path: action.path, content: action.content })),
       });
       return {
@@ -1254,6 +1285,24 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         }));
     },
 
+    listCommits: async (project, options): Promise<readonly RepositoryCommit[]> => {
+      core.enter('list_commits');
+      requireProject('list_commits', project);
+      const since = Date.parse(options.since);
+      return commits
+        .filter((commit) => commit.project === project && Date.parse(commit.committed_at) >= since)
+        .slice()
+        .sort((a, b) => Date.parse(b.committed_at) - Date.parse(a.committed_at))
+        .slice(0, options.limit)
+        .map((commit) => ({
+          sha: commit.sha,
+          message: commit.message,
+          author: commit.author.name ?? '',
+          committed_at: commit.committed_at,
+          url: `${baseUrl}/${commit.project}/-/commit/${commit.sha}`,
+        }));
+    },
+
     inbound,
 
     seedProject,
@@ -1356,6 +1405,26 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       project.nextIid += 1;
       mergeRequests.push(mr);
       return toMergeRequest(mr);
+    },
+
+    seedCommit: (input) => {
+      const only = [...projects.keys()][0];
+      const projectPath = input.project ?? only;
+      if (projectPath === undefined) {
+        throw invalidRequest(PROVIDER, 'seed_commit', 'no project is configured');
+      }
+      const project = requireProject('seed_commit', projectPath);
+      const commit: FakeCommit = {
+        project: projectPath,
+        branch: input.branch ?? project.defaultBranch,
+        sha: input.sha ?? nextSha(),
+        message: input.message,
+        author: { name: input.author ?? 'Dana Reviewer', email: null },
+        committed_at: input.committedAt,
+        files: [],
+      };
+      commits.push(commit);
+      return commit;
     },
 
     moveDefaultBranch: (project, newHead) => {

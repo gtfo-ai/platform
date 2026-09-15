@@ -97,13 +97,13 @@ export const DATABASE_CONFIG_DEFAULTS = {
    * WP-31's `task.ask` worker raised the floor onto it, and the sentence claiming the slack was
    * still here after the floor had moved, which is backlog 22's site 6. And **the two shipped
    * defaults for this one knob differ**: this one, which a process with no `.env` gets, and
-   * `.env.example`'s `APP_DB_POOL_MAX=20`, which an operator copies. Both are **held to the
+   * `.env.example`'s `APP_DB_POOL_MAX=21`, which an operator copies. Both are **held to the
    * floor** — `apps/server/src/config.test.ts` reads `APP_DB_POOL_MAX` out of `.env.example` and
    * asserts each value clears `requiredPoolConnections` — so neither can fall under it unnoticed.
    * What is still unstated is which of the two is *intended*, and that is backlog 22's remaining
    * half rather than a thing to guess at here.
    */
-  poolMax: 19,
+  poolMax: 20,
   connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;

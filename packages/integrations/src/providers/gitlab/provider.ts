@@ -84,6 +84,7 @@ import {
   mergeRequestSchema,
   type NormalisedDelivery,
   type PipelineStatus,
+  type RepositoryCommit,
   type SecretRedactor,
   type WebhookDelivery,
 } from '@platform/application';
@@ -915,6 +916,55 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         });
       }
       return results;
+    },
+
+    /**
+     * `GET /projects/:id/repository/commits` — product/19 §18's *"commit messages"* (WP-35).
+     *
+     * Read at the project's **default branch**, which is an obligation rather than a convenience:
+     * the endpoint answers the commits reachable from `ref_name`, and a repository whose HEAD has
+     * moved to another branch would otherwise be mined for a history nobody merged. It costs one
+     * extra request (`client.project`) and the alternative is a silent change of meaning.
+     *
+     * A commit with **no `committed_date`** is dropped rather than stamped with `now()`: the
+     * bootstrap orders and windows by that instant, and an invented one would place an ancient
+     * commit at the top of the sample (standing rule 16 — a missing value is not a default).
+     */
+    listCommits: async (project, options): Promise<readonly RepositoryCommit[]> => {
+      if (!Number.isInteger(options.limit) || options.limit <= 0) {
+        throw invalidRequest('list_commits', 'limit must be a positive integer');
+      }
+      const sinceMs = Date.parse(options.since);
+      if (Number.isNaN(sinceMs)) {
+        throw invalidRequest('list_commits', 'since must be an ISO-8601 instant');
+      }
+      const defaultBranch = (await client.project(project)).default_branch ?? undefined;
+      const listed = await client.listCommits(
+        project,
+        {
+          since: new Date(sinceMs).toISOString(),
+          ...(defaultBranch === undefined ? {} : { ref_name: defaultBranch }),
+        },
+        Math.min(options.limit, 100),
+      );
+      const commits: RepositoryCommit[] = [];
+      for (const commit of listed) {
+        const at = commit.committed_date ?? commit.created_at ?? null;
+        if (at === null) {
+          continue;
+        }
+        commits.push({
+          sha: commit.id,
+          message: commit.message ?? commit.title ?? '',
+          author: commit.author_name ?? '',
+          committed_at: toIsoDateTime(at, 'list_commits'),
+          url: commit.web_url ?? null,
+        });
+        if (commits.length >= options.limit) {
+          break;
+        }
+      }
+      return commits;
     },
 
     inbound,

@@ -19,6 +19,7 @@
  * has had a schema since migration 0008. Later work packages add the rest.
  */
 export * as ask from './ask/index.js';
+export * as bootstrap from './bootstrap/index.js';
 export * as broadcast from './broadcast/index.js';
 export * as cost from './cost/index.js';
 export * as db from './db/index.js';

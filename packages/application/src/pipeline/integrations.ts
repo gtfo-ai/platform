@@ -54,6 +54,7 @@ import type {
   MergeRequest,
   MergeRequestRefInput,
   PipelineStatus,
+  RepositoryCommit,
 } from '../ports/integrations/git-provider.js';
 import {
   commitFilesRequestSchema,
@@ -63,6 +64,8 @@ import type {
   CommentRef,
   TaskManagementPort,
   Ticket,
+  TicketMatch,
+  TicketMatchRule,
   TicketRefInput,
   TransitionResult,
 } from '../ports/integrations/task-management.js';
@@ -377,6 +380,33 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
     );
   },
 
+  /**
+   * The repository's own commit messages since an instant — WP-35, product/19 §18's third input.
+   *
+   * A **read**, so it happens in every mode. `null` for a project with no git binding, like every
+   * other member here; an adapter that does not support the listing throws
+   * `unsupported_capability`, which the bootstrap catches and records as a batch with no commit
+   * half rather than a failed collection (standing rule 20).
+   */
+  commits: async (
+    since: string,
+    limit: number,
+    context: CallContext,
+  ): Promise<readonly RepositoryCommit[] | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'list_commits',
+      { project: git.project, since, limit },
+      context,
+      async () => git.port.listCommits(git.project, { since, limit }),
+    );
+  },
+
   pipelineStatus: async (headSha: string, context: CallContext): Promise<PipelineStatus | null> => {
     const git = integrations.git;
     if (git === null) {
@@ -509,6 +539,34 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
  * failing every stage (standing rule 20).
  */
 export const ticketReads = (integrations: PipelineIntegrations) => ({
+  /**
+   * Tickets a rule matches, since an instant — WP-35's closed-ticket half.
+   *
+   * `matchTickets` is the port method intake already uses to find *new* tickets for a label; this
+   * is the same read asked a different question, which is why it is a member here rather than a
+   * second mechanism. The rule is the caller's, because what "closed" means is the project's own
+   * status mapping and not a platform constant (`shadow/batch.ts` states why the platform has no
+   * definition of its own).
+   */
+  matches: async (
+    rule: TicketMatchRule,
+    options: { readonly since: string; readonly limit: number },
+    context: CallContext,
+  ): Promise<readonly TicketMatch[] | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      binding.ref,
+      'match_tickets',
+      { rule: rule.kind, since: options.since, limit: options.limit },
+      context,
+      async () => binding.port.matchTickets(rule, { since: options.since, limit: options.limit }),
+    );
+  },
+
   ticket: async (ticket: TicketRefInput, context: CallContext): Promise<Ticket | null> => {
     const binding = integrations.taskManagement;
     if (binding === null) {

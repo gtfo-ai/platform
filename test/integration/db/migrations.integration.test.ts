@@ -32,6 +32,11 @@ const EXPECTED_TABLES = [
   'events',
   'handler_executions',
   'human_actions',
+  // WP-35, migration 0030: what an operator asked the history bootstrap for, and one row per
+  // mining run of it. product/19 §18's *"batches of ~20 MRs per Sonnet 5 run"* is a set of runs,
+  // and nothing in this schema described one.
+  'history_bootstrap_batches',
+  'history_bootstrap_chunks',
   'human_time_entries',
   'inbox',
   'integration_actions',
@@ -173,6 +178,10 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('event_dispatch', 'read_write', null),
       row('event_streams', 'read_only', null),
       row('events', 'append_only', 'occurred_at'),
+      // WP-35 (migration 0030): a batch moves through three statuses and a chunk is stamped once by
+      // the recorder, so both are read_write.
+      row('history_bootstrap_batches', 'read_write', null),
+      row('history_bootstrap_chunks', 'read_write', null),
       row('human_actions', 'append_only', null),
       // WP-29 (migration 0025): the human-time projection. `read_write` because a **review** entry
       // is a window that grows — the first comment opens it and every later activity moves its

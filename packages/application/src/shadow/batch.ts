@@ -335,6 +335,7 @@ export const startShadowBatch = async (
         ticketSnapshot: null,
         ticketSnapshotAt: null,
         reviewSubject: null,
+        historySample: null,
         riskClasses: [],
         coverage: null,
         dependencies: null,

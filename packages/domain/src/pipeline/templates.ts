@@ -77,6 +77,17 @@ export const STAGE_AGENT_DEFAULTS: Readonly<Record<string, StageAgentDefaults>> 
    */
   ticket_lint: { model: 'claude-sonnet-5', effort: 'low', maxTurns: 5 },
   /**
+   * The history bootstrap's mining run (WP-35). product/19 §18 names the model in the
+   * specification itself — *"batches of ~20 MRs per **Sonnet 5** run"* — so the model is the
+   * document's rather than this table's choice.
+   *
+   * **Ten turns**, which is fewer than every other agent stage, and the reason is what the run
+   * does: everything it reads is already in its prompt (`tasks.history_sample`), so a turn is a
+   * thought rather than a tool call. Its tool list has no `Bash` and no writes, so a run that spent
+   * forty turns would be spending them re-reading the same text.
+   */
+  history_mining: { model: 'claude-sonnet-5', effort: 'medium', maxTurns: 10 },
+  /**
    * The rebase gate's conflict resolution (WP-26), and the row is where *"short"* is expressed.
    *
    * product/04 S6b asks for *"a short Implementation run"*. The **model** is `implementation`'s,
@@ -530,11 +541,50 @@ export const TICKET_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   chore: CHORE_TEMPLATE,
 };
 
+/**
+ * The history bootstrap's mining run — product/06 step 3b, product/19 §18 (WP-35).
+ *
+ * **One batch of ~20 merge requests is one task on this template**, and there is no second entry
+ * point: `runs.task_id` is `not null`, so a mining run needs a task whatever else is decided, and
+ * reusing the stage path means the admission guard, the cost ledger, the transcript sink, the
+ * budget cap, the conflict retry and the `needs_human` escalation all apply unchanged.
+ * `DISCOVERY_TEMPLATE` carries the long version of that argument and this is the third row to take
+ * it (`REVIEW_ONLY_TEMPLATE` and `TICKET_LINT_TEMPLATE` are the others).
+ *
+ * **Why N tasks rather than one task with N stages.** A template is data and its stage list is
+ * fixed; a batch's size is not — 200 merge requests is ten runs and 40 is two. A template that
+ * could express "as many stages as the collection found" would be a template with a loop in it,
+ * which is the one thing `interpret` does not have. So the *number of runs* is a property of the
+ * collection, expressed as tasks, exactly as a shadow batch is N tasks (`shadow/batch.ts`).
+ *
+ * **Where the input comes from.** Not from a `requires` artifact — no stage of this template
+ * produces one — and not from the repository: the mined history is `tasks.history_sample`, written
+ * by the same `insert` that creates the task (`application/src/bootstrap/collect.ts`), bounded and
+ * redacted at that write, and rendered into the prompt as a data block. The run reads its evidence
+ * out of its own prompt, which is why the fake runner can key a scenario on it (standing rule 82).
+ */
+export const HISTORY_BOOTSTRAP_TEMPLATE_ID = 'history_bootstrap';
+
+export const HISTORY_BOOTSTRAP_TEMPLATE: PipelineTemplate = {
+  stages: [
+    { id: 'intake', kind: 'system' },
+    {
+      id: 'history_mining',
+      kind: 'agent',
+      role: 'historian',
+      produces: 'HistoryFindings',
+      requires: [],
+    },
+    { id: 'done', kind: 'system' },
+  ],
+};
+
 export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   ...TICKET_TEMPLATES,
   discovery: DISCOVERY_TEMPLATE,
   review_only: REVIEW_ONLY_TEMPLATE,
   ticket_lint: TICKET_LINT_TEMPLATE,
+  [HISTORY_BOOTSTRAP_TEMPLATE_ID]: HISTORY_BOOTSTRAP_TEMPLATE,
 };
 
 /**

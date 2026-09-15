@@ -218,6 +218,10 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
           ticket: task.task.ticket,
           ticketSnapshot: task.ticketSnapshot,
           reviewSubject: task.reviewSubject ?? null,
+          // An ask is answered from the platform's own record, and a history sample is the input of
+          // a mining run rather than part of a task's record — `null` here even for a bootstrap
+          // task, so an ask about one explains what the run did rather than re-reading its corpus.
+          historySample: null,
           artifacts: request.artifacts
             .filter((artifact) => !isPromptExcludedArtifact(artifact.type))
             .map((artifact) => ({

@@ -160,6 +160,8 @@ beforeAll(async () => {
     // WP-34: no pipeline here, so the batch command refuses by name and the gate cannot answer.
     shadow: null,
     shadowGate: null,
+    historyBootstrap: null,
+    historyBootstrapGate: null,
     commands: null,
     // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
     asks: {
@@ -315,6 +317,14 @@ describe('the client’s endpoint list against the server’s router', () => {
     ]) {
       expect((await probe(path)).served, path).toBe(true);
     }
+  });
+
+  it('serves the two history-bootstrap endpoints WP-35 added', async () => {
+    // Named positively (standing rule 10): "not in the gap list" is also satisfied by a path the
+    // client sweep failed to find at all. One path carrying both methods — the read publishes the
+    // gate and the estimate the write refuses on, which is what keeps the wizard from offering a
+    // button that answers 409.
+    expect((await probe('/api/projects/{}/history-bootstraps')).served).toBe(true);
   });
 
   it('serves the three shadow-mode endpoints WP-34 added', async () => {

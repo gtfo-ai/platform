@@ -428,8 +428,9 @@ describe('the platform skills a stage is planned with', () => {
       // `ask` joined `discovery` at WP-31: an ask has **no shell at all** (`TOOLS_BY_ROLE.ask` is
       // empty), so the entry decides nothing that can happen — and it is the read-only one rather
       // than the permissive one, because a table whose unreachable entry is permissive becomes
-      // wrong the day somebody adds `Bash` to the row above.
-    ).toEqual(['discovery', 'ask']);
+      // wrong the day somebody adds `Bash` to the row above. `historian` joined them at WP-35 for
+      // exactly that reason: its whole input is its prompt, so it has no shell either.
+    ).toEqual(['discovery', 'ask', 'historian']);
     expect(commandBaselineFor('discovery', 'discovery').allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
     expect(commandBaselineFor('developer', 'implementation').allow).toEqual(
       DEFAULT_COMMAND_POLICY.allow,
@@ -664,6 +665,9 @@ describe('the platform skills a stage is planned with', () => {
       'review_only.code_review': 'review_only',
       // WP-25's, which this row owed.
       'ticket_lint.ticket_lint': 'linter',
+      // WP-35's, mapped in the work package that created the template rather than left to fall
+      // through to `normal` — which is backlog 57's own complaint.
+      'history_bootstrap.history_mining': 'bootstrap',
     });
   });
 

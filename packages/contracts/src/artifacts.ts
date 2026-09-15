@@ -523,6 +523,85 @@ export const askAnswerDataSchema = z.strictObject({
   confidence: z.enum(['high', 'medium', 'low']),
 });
 
+/**
+ * `HistoryFindings` — product/19 §18's **fixed extraction schema** (WP-35).
+ *
+ * > *"Batches of ~20 MRs per Sonnet 5 run with a fixed extraction schema: recurring reviewer
+ * > requests → rules candidates; conventions observed ≥ 3 times → `conventions.md` entries;
+ * > pitfalls (MRs with ≥ 3 review rounds) → lessons; glossary terms; module ownership hints. Every
+ * > proposal cites MR/ticket links as evidence."*
+ *
+ * The document's five findings are {@link historyFindingKindSchema}, and each one carries the two
+ * fields that make it *checkable* rather than merely plausible:
+ *
+ *  - **`evidence` is structured and non-empty.** `.min(1)` is the schema half of product/19's
+ *    *"every proposal cites MR/ticket links as evidence"*, and it is a `min` rather than a prompt
+ *    sentence because an unevidenced proposal is the one shape that must never reach the queue: a
+ *    maintainer reading the queue is reading claims about a repository the platform has just met,
+ *    and a claim with nothing to follow is indistinguishable from an invention. The **resolution**
+ *    of each link — is this a merge request the platform actually put in the prompt? — is the
+ *    recorder's, because a schema cannot know which batch it is validating.
+ *  - **`occurrences` is how many of the batch's items the claim was observed in.** product/19's
+ *    thresholds are counts (*"observed ≥ 3 times"*, *"≥ 3 review rounds"*), so the model states its
+ *    count and the platform applies the threshold. A model applying its own threshold would be the
+ *    only judge of whether it had met it.
+ */
+export const historyFindingKindSchema = z.enum([
+  /** A reviewer asked for the same thing repeatedly — product/19's *"rules candidates"*. */
+  'rule',
+  /** Something the code does consistently — `conventions.md`, at `occurrences >= 3`. */
+  'convention',
+  /** A merge request that took three or more review rounds — a lesson. */
+  'pitfall',
+  /** A word this team uses with a meaning of its own. */
+  'glossary',
+  /** Who reviews what, read off the history rather than off `CODEOWNERS`. */
+  'ownership',
+]);
+
+/** Where a mined claim was observed. `ref` is `!12` or `ACME-3`; `url` is what a maintainer opens. */
+export const historyEvidenceSchema = z.strictObject({
+  kind: z.enum(['merge_request', 'ticket']),
+  ref: nonEmptyStringSchema,
+  url: urlSchema,
+});
+
+/** Longest page one mined proposal may carry; the curator's own byte cap applies on top. */
+export const MAX_HISTORY_PROPOSAL_DELTA_CHARS = 8_000;
+/** How many proposals one mining run may make. Past it they are recorded as refusals, never dropped. */
+export const MAX_HISTORY_PROPOSALS_PER_RUN = 12;
+/** How many links one proposal may cite. A claim resting on forty merge requests is a summary. */
+export const MAX_HISTORY_EVIDENCE_PER_PROPOSAL = 10;
+
+export const historyProposalSchema = z.strictObject({
+  finding: historyFindingKindSchema,
+  kind: knowledgeProposalKindSchema,
+  type: knowledgeProposalTypeSchema,
+  /** Vault-relative, like every other proposal: the platform joins `knowledge_dir` (BD-025). */
+  target_path: pathPatternSchema,
+  /** The page's whole intended content, not a patch — `librarianProposalSchema`'s rule. */
+  delta: z.string().min(1).max(MAX_HISTORY_PROPOSAL_DELTA_CHARS),
+  evidence: z.array(historyEvidenceSchema).min(1).max(MAX_HISTORY_EVIDENCE_PER_PROPOSAL),
+  /** How many of the batch's merge requests or tickets this was observed in. */
+  occurrences: z.int().min(1),
+  significance: unitIntervalSchema,
+  reason: nonEmptyStringSchema,
+});
+
+export const historyFindingsDataSchema = z.strictObject({
+  proposals: z.array(historyProposalSchema).max(MAX_HISTORY_PROPOSALS_PER_RUN),
+  /**
+   * How many of the batch's merge requests the run actually read.
+   *
+   * A model's claim about its own coverage, kept because it is the only signal that a run stopped
+   * early with an artifact — and labelled as the model's rather than compared with the platform's
+   * count, which the recorder logs beside it.
+   */
+  merge_requests_read: z.int().nonnegative(),
+  /** What the batch looked like, in the model's words. Rendered as text, never as markup. */
+  summary: z.string().max(4_000),
+});
+
 /** `artifact_type` → the schema for that type's `data`. */
 export const artifactDataSchemas = {
   RefinedSpec: refinedSpecDataSchema,
@@ -537,6 +616,7 @@ export const artifactDataSchemas = {
   ReadinessReport: readinessReportDataSchema,
   DiscoveryDraft: discoveryDraftDataSchema,
   AskAnswer: askAnswerDataSchema,
+  HistoryFindings: historyFindingsDataSchema,
 } as const;
 
 // ── Envelope ─────────────────────────────────────────────────────────────────
@@ -576,6 +656,7 @@ export const artifactSchema = z.discriminatedUnion('artifact_type', [
   artifactOf('ReadinessReport', readinessReportDataSchema),
   artifactOf('DiscoveryDraft', discoveryDraftDataSchema),
   artifactOf('AskAnswer', askAnswerDataSchema),
+  artifactOf('HistoryFindings', historyFindingsDataSchema),
 ]);
 
 /** A reference to a stored artifact, used in event payloads and API DTOs. */
@@ -607,6 +688,10 @@ export type ShadowReportData = z.infer<typeof shadowReportDataSchema>;
 export type ReadinessReportData = z.infer<typeof readinessReportDataSchema>;
 export type DiscoveryDraftData = z.infer<typeof discoveryDraftDataSchema>;
 export type AskAnswerData = z.infer<typeof askAnswerDataSchema>;
+export type HistoryFindingKind = z.infer<typeof historyFindingKindSchema>;
+export type HistoryEvidence = z.infer<typeof historyEvidenceSchema>;
+export type HistoryProposal = z.infer<typeof historyProposalSchema>;
+export type HistoryFindingsData = z.infer<typeof historyFindingsDataSchema>;
 export type AskAnswerCitation = z.infer<typeof askAnswerCitationSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;

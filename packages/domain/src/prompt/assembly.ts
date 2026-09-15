@@ -50,6 +50,7 @@
 import type {
   ArtifactType,
   CommunicationLanguage,
+  HistorySample,
   MergeRequestSnapshot,
   TicketSnapshot,
 } from '@platform/contracts';
@@ -201,6 +202,21 @@ export interface PromptTask {
    * the marker.
    */
   readonly reviewSubject: MergeRequestSnapshot | null;
+  /**
+   * The batch of merged history a **mining** run is shown, as `tasks.history_sample` holds it
+   * (WP-35, product/19 §18).
+   *
+   * Required and nullable for {@link ticketSnapshot}'s reason: `null` is *this run was given no
+   * history*, which is what every ordinary stage passes, and it is the value a history-bootstrap
+   * run must never see — a miner with an empty prompt would invent conventions instead of reading
+   * them, so `application/src/bootstrap/collect.ts` creates no task for an empty sample and the
+   * e2e's fake runner keys its scenario on the block's presence (standing rule 82).
+   *
+   * Already bounded and redacted before it reaches here: the cut happens at the write, where the
+   * store is the consumer (Q54's answer, the same one the ticket snapshot and the review subject
+   * take), so this module applies no cap of its own and announces `truncated` in the marker.
+   */
+  readonly historySample: HistorySample | null;
   readonly artifacts: readonly PromptArtifact[];
   /** `task.stage.returned.reason` — why this stage is running again. Untrusted. */
   readonly returnFeedback: string | null;
@@ -739,6 +755,61 @@ const mergeRequestBlock = (snapshot: MergeRequestSnapshot): DataBlock => {
   };
 };
 
+/**
+ * The mined history a bootstrap run reads — product/19 §18's inputs, for one batch (WP-35).
+ *
+ * One block rather than one per merge request, for the reason the ticket block keeps its comments:
+ * a data block costs a marker pair and the model reads the batch as one corpus. The per-item
+ * `--- merge request !12 … ---` separators are platform words **inside** a data block, which is
+ * where they belong — a review comment whose body writes the same line misattributes a note and
+ * can do nothing else, and the counts a reader would rely on are in the marker.
+ *
+ * **No attribute derives from the history.** `merge_requests`, `tickets`, `commits` and
+ * `truncated` are the platform's own integers and literals; every ref, URL, title, author, note,
+ * message and key stays in the body, because a branch name or a ticket key is provider text and a
+ * provider that can choose one can choose a string shaped like an attribute (technical/07's
+ * forgeable-marker requirement, and the rule `ticketBlock` and `mergeRequestBlock` already hold).
+ */
+const historyBlock = (sample: HistorySample): DataBlock => {
+  const mergeRequests = sample.merge_requests.map((mr) =>
+    [
+      `--- merge request ${mr.ref} ---`,
+      `url: ${mr.url}`,
+      `title: ${mr.title}`,
+      `author: ${mr.author}`,
+      `merged_at: ${mr.merged_at}`,
+      `review_rounds: ${mr.rounds}`,
+      ...(mr.files_changed === null ? [] : [`files_changed: ${mr.files_changed}`]),
+      ...(mr.notes.length === 0 ? [] : ['review comments:', ...mr.notes]),
+    ].join('\n'),
+  );
+  const tickets = sample.tickets.map((ticket) =>
+    [
+      `--- ticket ${ticket.key} ---`,
+      `url: ${ticket.url}`,
+      `title: ${ticket.title}`,
+      'description:',
+      ticket.description,
+      ...(ticket.comments.length === 0 ? [] : ['comments:', ...ticket.comments]),
+    ].join('\n'),
+  );
+  const commits = sample.commits.map((commit) => `${commit.sha} ${commit.message}`);
+  return {
+    kind: 'history',
+    attributes: {
+      merge_requests: sample.merge_requests.length,
+      tickets: sample.tickets.length,
+      commits: sample.commits.length,
+      ...(sample.truncated ? { truncated: 'true' } : {}),
+    },
+    body: [
+      ...mergeRequests,
+      ...(tickets.length === 0 ? [] : ['', ...tickets]),
+      ...(commits.length === 0 ? [] : ['', '--- commit messages ---', ...commits]),
+    ].join('\n'),
+  };
+};
+
 const artifactBlock = (artifact: PromptArtifact): DataBlock => {
   const capped = cap(artifact.json, MAX_ARTIFACT_CHARS);
   return {
@@ -867,6 +938,8 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     ...(reviewSubjectOf(input.task) === null
       ? []
       : [mergeRequestBlock(reviewSubjectOf(input.task) as MergeRequestSnapshot)]),
+    // `?? null` for the same reason: a caller that lost the field through a cast emits no block.
+    ...(input.task.historySample == null ? [] : [historyBlock(input.task.historySample)]),
     ...input.task.artifacts.map(artifactBlock),
     ...(input.task.returnFeedback === null ? [] : [feedbackBlock(input.task.returnFeedback)]),
     ...input.task.record.map(recordBlock),

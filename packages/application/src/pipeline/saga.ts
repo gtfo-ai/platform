@@ -382,6 +382,7 @@ export const runIntakeCheck = async (
       ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
       // Never a review-only task: this is the ticket path (WP-24's is `review-only.ts`).
       reviewSubject: null,
+      historySample: null,
       // Filled in at the rebase gate from the merge request's own diff (WP-37): a task that has
       // not written code yet has touched nothing to be classed.
       riskClasses: [],

@@ -52,6 +52,10 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
 import { createMemoryAskStore, type MemoryAskStore } from './memory-ask.js';
+import {
+  createMemoryHistoryBootstrapStore,
+  type MemoryHistoryBootstrapStore,
+} from './memory-bootstrap.js';
 import { createMemoryCostStore, type MemoryCostStore } from './memory-cost.js';
 import { MemoryEventing } from './memory-eventing.js';
 import {
@@ -317,6 +321,8 @@ export interface PipelineHarness {
   readonly cost: MemoryCostStore | null;
   /** Shadow mode's batches, tickets and reports (WP-34) — always composed. */
   readonly shadow: MemoryShadowStore;
+  /** The history bootstrap's batches and chunks (WP-35) — always composed, for `shadow`'s reason. */
+  readonly bootstrap: MemoryHistoryBootstrapStore;
   readonly audit: ReturnType<typeof createMemoryAuditLog>;
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** The ask-the-task thread (WP-31) — read back to assert what an ask produced. */
@@ -394,6 +400,16 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
         getMergeRequestDiff: async () => [],
         readCodeowners: async () => null,
         resolveUserId: async () => null,
+        /**
+         * WP-35's two reads, defaulted to *"this project has none"* for the reason above.
+         *
+         * `listCommits` is the port method WP-35 added; an empty list is the honest answer for a
+         * repository this double holds no history for, and it is **stricter** than throwing would
+         * be — a test that wants commit messages has to script them, so a collection that silently
+         * produced none cannot look like one that read them.
+         */
+        listMergedMergeRequests: async () => [],
+        listCommits: async () => [],
         ...overrides,
       } as unknown as GitProviderPort);
 
@@ -546,6 +562,13 @@ const stubTaskManagement = (
           marker_id: commentOptions?.markerId ?? null,
         }),
         transition: async (_ref: unknown, to: string) => ({ changed: true, from: 'To Do', to }),
+        /**
+         * WP-35's closed-ticket read, defaulted to *"this rule matches nothing"*.
+         *
+         * Empty rather than an answer, for `listCommits`' reason: a collection that produced
+         * tickets nobody scripted would make a test about the ticket half green without one.
+         */
+        matchTickets: async () => [],
         ...overrides,
       } as unknown as TaskManagementPort);
 
@@ -692,6 +715,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // WP-34: the shadow batch's store. Composed unconditionally, because `createPipelineRuntime`
   // requires it — `EVENT_CONSUMPTION` declares `shadow.report.created` handled.
   const shadow = createMemoryShadowStore({ now: () => clock.now() });
+  // WP-35: the history bootstrap's store, composed for the same reason — the stage executor asks it
+  // at every admission of a task on the bootstrap template, so a harness without it could not drive
+  // the cap at all.
+  const bootstrap = createMemoryHistoryBootstrapStore({ now: () => clock.now() });
   const integrations: PipelineIntegrations = {
     executor: createIntegrationActionExecutor({
       auditLog: audit,
@@ -771,6 +798,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const runtime = createPipelineRuntime({
     store,
     shadow,
+    bootstrap,
     settings: staticProjectSettings(() => settings),
     jobs,
     notifications,
@@ -989,6 +1017,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     knowledge,
     cost,
     shadow,
+    bootstrap,
     audit,
     idempotency,
     asks,

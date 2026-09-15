@@ -161,6 +161,16 @@ export const runModeSchema = z.enum([
    * compares the database's labels with this list **in order**.
    */
   'ask',
+  /**
+   * The history bootstrap (WP-35): a run that reads one batch of ~20 merged merge requests, their
+   * discussions, the closed tickets of the window and the commit messages, and proposes knowledge.
+   *
+   * It is a run **mode** rather than only a template id because `runs.mode` is what a screen and
+   * the statistics read: PROGRESS backlog 57 records four of technical/04's modes falling through
+   * to `normal` with live producers, and a bootstrap run that called itself `normal` would be the
+   * fifth. Appended, for `'ask'`'s reason.
+   */
+  'bootstrap',
 ]);
 
 /** Run state machine (technical/02) — mirrors `runs.status`. */
@@ -222,6 +232,23 @@ export const knowledgeProposalSourceSchema = z.enum([
   'feedback',
   'bootstrap',
   'human',
+  /**
+   * The history bootstrap (WP-35) — a convention, pitfall or rule **mined from merged merge
+   * requests, closed tickets and commit messages**, as opposed to one the Discovery agent *drafted*
+   * from the repository's files.
+   *
+   * It is a value of its own rather than a second use of `bootstrap`, which has exactly one writer
+   * (`onboarding/record.ts`, whose comment reads *"this one came from onboarding, not from a
+   * retrospective"*). Both arrive during onboarding and a reader of the queue has to be able to
+   * tell them apart, because the evidence is different in kind: a `bootstrap` page is a model's
+   * reading of a repository it has just seen, and a `history` page cites the merge requests and
+   * tickets the claim was observed in — which is the difference between a guess a maintainer must
+   * verify and a citation a maintainer can follow.
+   *
+   * Appended, because `alter type knowledge_proposal_source add value 'history'` appends and
+   * `test/integration/db/enums.integration.test.ts` compares the labels with this list **in order**.
+   */
+  'history',
 ]);
 
 export const knowledgeProposalKindSchema = z.enum(['business', 'technical', 'process']);
@@ -281,6 +308,17 @@ export const agentRoleSchema = z.enum([
    * integration parity test reads the order.
    */
   'ask',
+  /**
+   * The history bootstrap's miner (WP-35) — product/19 §18's *"batches of ~20 MRs per Sonnet 5 run
+   * with a fixed extraction schema"*.
+   *
+   * A role of its own rather than the Librarian's: the Librarian reconciles a **retrospective** on
+   * one delivered task against the vault it is shown, and this one reads somebody else's history —
+   * merge requests nobody on this platform opened — and has no retrospective and no task to
+   * reconcile. Its prompt, its eval cases and its three least-privilege rows are therefore its own
+   * (TD-016, BD-021). Appended for `'ask'`'s reason.
+   */
+  'historian',
 ]);
 
 /** Integration types, one contract suite each (technical/06, technical/10). */
@@ -400,6 +438,20 @@ export const artifactTypeSchema = z.enum([
    * human's question and a model's answer about the audit trail are not inputs to the delivery.
    */
   'AskAnswer',
+  /**
+   * The history bootstrap's fixed extraction schema (WP-35) — product/19 §18's five findings:
+   * *"recurring reviewer requests → rules candidates; conventions observed ≥ 3 times →
+   * `conventions.md` entries; pitfalls (MRs with ≥ 3 review rounds) → lessons; glossary terms;
+   * module ownership hints"*.
+   *
+   * A type of its own rather than `LibrarianProposals`, whose `data` is already proposals **plus a
+   * vault health report plus a retrospective summary** — two of which a mining run has nothing to
+   * say about. What this type adds is the part that makes a mined claim checkable: every proposal
+   * carries `evidence` as **structured links** (a merge request or a ticket the platform itself put
+   * in the prompt) rather than as free-text sentences, which is what lets the recorder refuse a
+   * citation the batch never contained.
+   */
+  'HistoryFindings',
 ]);
 
 /** Pipeline templates the platform ships (BD-005). Projects may define more in `pipeline.yml`. */
@@ -607,6 +659,86 @@ export const mergeRequestSnapshotSchema = z.strictObject({
   redaction_count: z.int().nonnegative(),
 });
 
+// ── The mined history (WP-35) ────────────────────────────────────────────────
+
+/**
+ * One merged merge request of a history batch, with the review comments it collected.
+ *
+ * `title`, `author`, every `note` and every `path` are somebody else's words about somebody else's
+ * repository (BD-022): bounded and redacted at the write, exactly as a ticket snapshot is, and
+ * rendered only inside a data block.
+ *
+ * `rounds` is the platform's own count of **non-system discussion threads**, which is product/19
+ * §18's *"pitfalls (MRs with ≥ 3 review rounds)"* measure. It is carried as a number rather than
+ * left for the model to count, because the threshold is the platform's definition and a model
+ * counting its own evidence is a model marking its own homework.
+ */
+export const historyMergeRequestSchema = z.strictObject({
+  /** `!12` — the provider's own short reference, and the token a proposal cites as evidence. */
+  ref: z.string(),
+  url: urlSchema,
+  title: z.string(),
+  author: z.string(),
+  merged_at: isoDateTimeSchema,
+  /** Non-system discussion threads, as the provider reported them. */
+  rounds: z.int().nonnegative(),
+  /** Files and lines, when the provider published them; `null` when it did not. */
+  files_changed: z.int().nonnegative().nullable(),
+  /** Review comments, oldest first, each `--- author ---` separated in the prompt. */
+  notes: z.array(z.string()),
+  /** True when a note, the title or the note list itself was cut. */
+  truncated: z.boolean(),
+});
+
+/** One closed ticket of a history batch — product/19 §18's *"titles, descriptions, resolution comments"*. */
+export const historyTicketSchema = z.strictObject({
+  key: z.string(),
+  url: urlSchema,
+  title: z.string(),
+  description: z.string(),
+  /** The last comments on the ticket, which is where a resolution is written. */
+  comments: z.array(z.string()),
+  truncated: z.boolean(),
+});
+
+/** One commit message of a history batch. The sha is the provider's; the message is untrusted. */
+export const historyCommitSchema = z.strictObject({
+  sha: z.string(),
+  message: z.string(),
+  truncated: z.boolean(),
+});
+
+/**
+ * `tasks.history_sample` — the batch of history one mining run is shown (WP-35).
+ *
+ * product/19 §18's inputs, for **one** batch of about twenty merge requests: *"last N merged MRs
+ * … with discussions and diff stats; closed tickets of the last 6 months (titles, descriptions,
+ * resolution comments); commit messages"*. It is the fifth place the platform stores somebody
+ * else's words — after `inbox`, `kb_chunks`, `tasks.ticket_snapshot` and `tasks.review_subject` —
+ * and it is stored the same way all four are: **bounded and redacted at the write** (TD-012,
+ * BD-022), read back only into a data block, and dying with the task row it sits on.
+ *
+ * It is a column on the task rather than a table of its own for the reason `review_subject` is
+ * one: it is the *input to this task's one stage*, written by the same `insert` that creates the
+ * task, so it has exactly one writer and no read-modify-write (standing rule 79 does not apply —
+ * there is no second writer to race).
+ *
+ * `evidence_links` is the platform's own list of what this sample contained, and it is what makes
+ * product/19 §18's *"every proposal cites MR/ticket links as evidence"* a **checkable** precondition
+ * rather than an instruction: the recorder refuses a proposal whose citation is not in it, so a
+ * link a model invented cannot reach the queue looking like a link a maintainer can follow.
+ */
+export const historySampleSchema = z.strictObject({
+  merge_requests: z.array(historyMergeRequestSchema),
+  tickets: z.array(historyTicketSchema),
+  commits: z.array(historyCommitSchema),
+  /** Every merge-request and ticket URL in this sample — the set a citation must resolve into. */
+  evidence_links: z.array(z.string()),
+  /** True when anything at all was cut: an item, a note, or a list that hit its window. */
+  truncated: z.boolean(),
+  redaction_count: z.int().nonnegative(),
+});
+
 // ── Usage and cost ───────────────────────────────────────────────────────────
 
 /** Token usage split by cache kind, as stored on `runs` and `cost_entries` (technical/03). */
@@ -675,6 +807,10 @@ export type TicketSnapshotComment = z.infer<typeof ticketSnapshotCommentSchema>;
 export type TicketSnapshot = z.infer<typeof ticketSnapshotSchema>;
 export type MergeRequestFileDiff = z.infer<typeof mergeRequestFileDiffSchema>;
 export type MergeRequestSnapshot = z.infer<typeof mergeRequestSnapshotSchema>;
+export type HistoryMergeRequest = z.infer<typeof historyMergeRequestSchema>;
+export type HistoryTicket = z.infer<typeof historyTicketSchema>;
+export type HistoryCommit = z.infer<typeof historyCommitSchema>;
+export type HistorySample = z.infer<typeof historySampleSchema>;
 export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export type ModelUsage = z.infer<typeof modelUsageSchema>;
 export type RunCost = z.infer<typeof runCostSchema>;

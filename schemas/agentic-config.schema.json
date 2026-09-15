@@ -465,6 +465,28 @@
           },
           "additionalProperties": false
         },
+        "history_bootstrap": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "merge_requests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 730
+            },
+            "budget_usd": {
+              "$ref": "#/$defs/Usd"
+            }
+          },
+          "additionalProperties": false
+        },
         "human_time": {
           "type": "object",
           "properties": {
@@ -523,7 +545,8 @@
         "facilitator",
         "librarian",
         "discovery",
-        "ask"
+        "ask",
+        "historian"
       ]
     },
     "ArtifactType": {
@@ -540,7 +563,8 @@
         "ShadowReport",
         "ReadinessReport",
         "DiscoveryDraft",
-        "AskAnswer"
+        "AskAnswer",
+        "HistoryFindings"
       ]
     },
     "AutonomyLevel": {

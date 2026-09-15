@@ -58,6 +58,8 @@ export const agentRoleEnum = pgEnum('agent_role', [
   // WP-31, migration 0024. Appended, because `alter type … add value` appends and the parity test
   // compares the labels in order.
   'ask',
+  // WP-35, migration 0030: the history bootstrap's miner.
+  'historian',
 ]);
 export const runModeEnum = pgEnum('run_mode', [
   'normal',
@@ -68,6 +70,8 @@ export const runModeEnum = pgEnum('run_mode', [
   'retro',
   'librarian',
   'ask',
+  // WP-35, migration 0030: a history-bootstrap mining run.
+  'bootstrap',
 ]);
 export const runStatusEnum = pgEnum('run_status', [
   'created',
@@ -111,6 +115,8 @@ export const artifactTypeEnum = pgEnum('artifact_type', [
   'ReadinessReport',
   'DiscoveryDraft',
   'AskAnswer',
+  // WP-35, migration 0030: product/19 §18's fixed extraction schema.
+  'HistoryFindings',
 ]);
 export const questionStatusEnum = pgEnum('question_status', [
   'open',
@@ -176,6 +182,9 @@ export const knowledgeProposalSourceEnum = pgEnum('knowledge_proposal_source', [
   'feedback',
   'bootstrap',
   'human',
+  // WP-35, migration 0030: mined from merged history, as opposed to `bootstrap`, which is the
+  // Discovery agent's drafted page. Appended, for the reason `agentRoleEnum` states.
+  'history',
 ]);
 export const knowledgeProposalKindEnum = pgEnum('knowledge_proposal_kind', [
   'business',

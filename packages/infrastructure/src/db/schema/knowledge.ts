@@ -5,6 +5,7 @@
 import type { JsonObject, JsonValue, MergeRequestRef } from '@platform/contracts';
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   date,
   integer,
   jsonb,
@@ -188,6 +189,52 @@ export const shadowBatchTickets = pgTable(
   (table) => [primaryKey({ columns: [table.batchId, table.ticketKey] })],
 );
 
+/**
+ * One history bootstrap — what the operator asked for and where it got to (WP-35, migration 0030).
+ *
+ * `capUsd` and `estimatedUsd` are copied at creation for `shadowBatches.budgetUsd`'s reason: the
+ * figure shown beside a batch's actual spend has to be the one that applied to it. `mergeRequests`,
+ * `batchSize` and `days` travel with them so a reader can re-derive the estimate they were shown.
+ */
+export const historyBootstrapBatches = pgTable('history_bootstrap_batches', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  projectId: uuid('project_id').notNull(),
+  requestedBy: uuid('requested_by'),
+  mergeRequests: integer('merge_requests').notNull(),
+  batchSize: integer('batch_size').notNull(),
+  days: integer('days').notNull(),
+  capUsd: numeric('cap_usd', { precision: 12, scale: 6 }).notNull(),
+  estimatedUsd: numeric('estimated_usd', { precision: 12, scale: 6 }).notNull(),
+  status: text('status').notNull().default('collecting'),
+  detail: text('detail'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+});
+
+/**
+ * One mining run of a batch — product/19 §18's *"~20 MRs per Sonnet 5 run"*, as a task.
+ *
+ * The counts are the platform's record of what the collection put in the sample, kept here rather
+ * than derived from `tasks.history_sample` so the batch screen need not read a megabyte of somebody
+ * else's review comments. `recordedAt` is what makes `proposals = 0` unambiguous: a run that has
+ * reported and found nothing, rather than one that has not reported.
+ */
+export const historyBootstrapChunks = pgTable('history_bootstrap_chunks', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  batchId: uuid('batch_id').notNull(),
+  chunkIndex: integer('chunk_index').notNull(),
+  taskId: uuid('task_id').notNull(),
+  mergeRequests: integer('merge_requests').notNull(),
+  tickets: integer('tickets').notNull(),
+  commits: integer('commits').notNull(),
+  redactionCount: integer('redaction_count').notNull().default(0),
+  truncated: boolean('truncated').notNull().default(false),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }),
+  proposals: integer('proposals').notNull().default(0),
+  refusedProposals: integer('refused_proposals').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type KbDocument = typeof kbDocuments.$inferSelect;
 export type KbChunk = typeof kbChunks.$inferSelect;
 export type KbProposal = typeof kbProposals.$inferSelect;
@@ -198,3 +245,5 @@ export type KbHealthReport = typeof kbHealthReports.$inferSelect;
 export type ShadowReport = typeof shadowReports.$inferSelect;
 export type ShadowBatch = typeof shadowBatches.$inferSelect;
 export type ShadowBatchTicket = typeof shadowBatchTickets.$inferSelect;
+export type HistoryBootstrapBatch = typeof historyBootstrapBatches.$inferSelect;
+export type HistoryBootstrapChunk = typeof historyBootstrapChunks.$inferSelect;

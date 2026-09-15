@@ -249,6 +249,19 @@ export const gitlabCommitSchema = z.object({
   title: z.string().nullish(),
   message: z.string().nullish(),
   web_url: z.string().nullish(),
+  /**
+   * The three fields the **list** endpoint publishes that the create response does not need
+   * (WP-35): `GET /projects/:id/repository/commits` documents `author_name`, `committed_date` and
+   * `created_at` on every commit object (docs.gitlab.com/api/commits, retrieved 2026-09-14).
+   *
+   * `nullish` rather than required because the same schema parses the **create** response, whose
+   * documented example carries them but whose older self-managed versions are not worth a second
+   * schema to find out about. The adapter treats a missing `committed_date` as a commit it cannot
+   * place in time and drops it rather than inventing `now()` (standing rule 16).
+   */
+  author_name: z.string().nullish(),
+  committed_date: z.string().nullish(),
+  created_at: z.string().nullish(),
 });
 
 export const gitlabProjectSchema = z.object({

@@ -63,6 +63,11 @@ import { buildApp } from './app.js';
 import { composeAsks } from './asks.js';
 import { createAuth } from './auth/better-auth.js';
 import { bootstrapAdministrator } from './auth/bootstrap.js';
+import {
+  composeHistoryBootstrap,
+  createHistoryBootstrapCommands,
+  createHistoryBootstrapGate,
+} from './bootstrap.js';
 import { createTaskCommands } from './commands.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
@@ -427,6 +432,32 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         await onboarding.runtime.start();
         stopCallbacks.unshift({ name: 'onboarding', stop: onboarding.runtime.stop });
 
+        /**
+         * The history bootstrap's workers (WP-35): the collection and the recorder, on one queue.
+         *
+         * Beside the discovery recorder and for the same reason — an `artifact.created` handler
+         * that enqueues, and a job that does the I/O. It needs the pipeline's own loader, because
+         * the collection's 253 reads have to go through the one `IntegrationActionExecutor` this
+         * process composed. One more pooled connection: `POOL_RESERVATIONS.bootstrap`.
+         */
+        const historyBootstrap = composeHistoryBootstrap({
+          pool: database.pool,
+          eventing,
+          jobs: jobsRuntime.jobs,
+          integrations: pipeline.integrations,
+          runEnvironment: agentRunEnvironment({
+            providerMode: config.providerMode,
+            modelApiKey: config.modelApiKey,
+          }),
+          baseUrl: config.baseUrl,
+          logger: loggerPort,
+        });
+        for (const handler of historyBootstrap.handlers) {
+          eventing.bus.register(handler);
+        }
+        await historyBootstrap.start();
+        stopCallbacks.unshift({ name: 'history-bootstrap', stop: historyBootstrap.stop });
+
         if (knowledge.missing.length > 0) {
           logger.warn(
             { missing: knowledge.missing },
@@ -564,6 +595,27 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         }
       : null;
 
+    /**
+     * The history bootstrap's API half (WP-35): the start command and the gate the read publishes.
+     *
+     * The **gate** is composed for every API process, including one with no queue: whether a
+     * project may start a bootstrap, and what one would cost, are questions about its settings, its
+     * bindings and its rows. The **command** needs `jobs` for `startDiscovery`'s reason and refuses
+     * by name without one.
+     */
+    const bootstrapCommands = capabilities.api
+      ? createHistoryBootstrapCommands({
+          pool: database.pool,
+          database: database.db,
+          eventing,
+          jobs,
+          logger: loggerPort,
+        })
+      : null;
+    const bootstrapGate = capabilities.api
+      ? createHistoryBootstrapGate({ pool: database.pool, database: database.db, eventing })
+      : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -674,6 +726,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       onboarding: onboardingCommands,
       shadow: shadowCommands,
       shadowGate,
+      historyBootstrap: bootstrapCommands,
+      historyBootstrapGate: bootstrapGate,
       commands: taskCommands,
       asks,
       /**

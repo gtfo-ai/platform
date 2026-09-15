@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HistoryFindings data",
+  "description": "Structured output of the stage that produces a HistoryFindings artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "proposals": {
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_3b8f80f5"
+      }
+    },
+    "merge_requests_read": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 4000
+    }
+  },
+  "required": [
+    "proposals",
+    "merge_requests_read",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "UnitInterval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "Url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "anon_3b8f80f5": {
+      "type": "object",
+      "properties": {
+        "finding": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "convention",
+            "pitfall",
+            "glossary",
+            "ownership"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "business",
+            "technical",
+            "process"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "lesson",
+            "pitfall",
+            "rule",
+            "decision",
+            "skill-draft",
+            "doc-update"
+          ]
+        },
+        "target_path": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "delta": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "evidence": {
+          "minItems": 1,
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_d36cabed"
+          }
+        },
+        "occurrences": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "significance": {
+          "$ref": "#/$defs/UnitInterval"
+        },
+        "reason": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "finding",
+        "kind",
+        "type",
+        "target_path",
+        "delta",
+        "evidence",
+        "occurrences",
+        "significance",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "anon_d36cabed": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "merge_request",
+            "ticket"
+          ]
+        },
+        "ref": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "kind",
+        "ref",
+        "url"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

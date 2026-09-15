@@ -61,9 +61,9 @@
       },
       "source": {
         "url": "https://docs.gitlab.com/api/merge_requests/",
-        "retrieved": "2026-09-10",
-        "kind": "documented",
-        "note": "\"Create a merge request\" example response"
+        "retrieved": "2026-09-14",
+        "kind": "documented-adapted",
+        "note": "\"Create a merge request\" example response, with one adaptation: `diff_refs.base_sha` is **populated**, and GitLab documents that object as \"empty when the merge request is created, and populates asynchronously\" (re-read 2026-09-14). It is populated here so the create path has a merge base to map (`toMergeRequest`); the divergence is the fake's 14 in reverse — production sees `base_sha: null` for a window this fixture never has, which is why the platform refuses a shadow ticket whose base cannot be resolved rather than approximating one (PROGRESS backlog 98)"
       }
     },
     {

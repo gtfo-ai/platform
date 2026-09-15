@@ -9,6 +9,8 @@ import {
   DISCOVERY_TEMPLATE,
   FALLBACK_STAGE_AGENT_DEFAULTS,
   FEATURE_TEMPLATE,
+  HISTORY_BOOTSTRAP_TEMPLATE,
+  HISTORY_BOOTSTRAP_TEMPLATE_ID,
   REVIEW_ONLY_TEMPLATE,
   SHIPPED_TEMPLATES,
   stageAgentDefaults,
@@ -102,7 +104,7 @@ describe('the shipped templates', () => {
     }
   });
 
-  it('ships the three ticket templates plus discovery, review-only and the ticket linter, and nothing else', () => {
+  it('ships the three ticket templates plus discovery, review-only, the linter and the history bootstrap, and nothing else', () => {
     // The two maps are asserted against each other rather than each against a literal: `discovery`
     // is deliberately outside `TICKET_TEMPLATES` (it opens no merge request), and the case below
     // relies on that split being exactly this one.
@@ -114,10 +116,12 @@ describe('the shipped templates', () => {
       'discovery',
       'review_only',
       'ticket_lint',
+      'history_bootstrap',
     ]);
     expect(SHIPPED_TEMPLATES.discovery).toBe(DISCOVERY_TEMPLATE);
     expect(SHIPPED_TEMPLATES.review_only).toBe(REVIEW_ONLY_TEMPLATE);
     expect(SHIPPED_TEMPLATES.ticket_lint).toBe(TICKET_LINT_TEMPLATE);
+    expect(SHIPPED_TEMPLATES[HISTORY_BOOTSTRAP_TEMPLATE_ID]).toBe(HISTORY_BOOTSTRAP_TEMPLATE);
   });
 
   /**
@@ -198,6 +202,34 @@ describe('the shipped templates', () => {
     // The other direction of the merge-tail case (rule 10): discovery reaches no merge request, so
     // "every ticket template ends in the tail" is a claim about three templates and not four.
     expect(DISCOVERY_TEMPLATE.stages.map((stage) => stage.id)).not.toContain('ready_for_merge');
+  });
+
+  it('runs a history bootstrap as one agent stage between two system stages, producing findings', () => {
+    expect(HISTORY_BOOTSTRAP_TEMPLATE.stages.map((stage) => stage.id)).toEqual([
+      'intake',
+      'history_mining',
+      'done',
+    ]);
+    const stage = HISTORY_BOOTSTRAP_TEMPLATE.stages[1];
+    expect(stage?.kind).toBe('agent');
+    expect(stage?.kind === 'agent' ? stage.role : null).toBe('historian');
+    expect(stage?.kind === 'agent' ? stage.produces : null).toBe('HistoryFindings');
+    // Like discovery: it reaches no merge request, so the merge-tail claim stays about three.
+    expect(HISTORY_BOOTSTRAP_TEMPLATE.stages.map((stage) => stage.id)).not.toContain(
+      'ready_for_merge',
+    );
+    // And it requires no prior artifact: the batch it mines is `tasks.history_sample`, written by
+    // the same insert that created the task, not something an earlier stage produced.
+    expect(stage?.kind === 'agent' ? stage.requires : null).toEqual([]);
+  });
+
+  it('gives the mining stage the Sonnet defaults product/19 §18 names, at ten turns', () => {
+    expect(stageAgentDefaults('history_mining')).toEqual({
+      model: 'claude-sonnet-5',
+      effort: 'medium',
+      maxTurns: 10,
+    });
+    expect(stageAgentDefaults('history_mining')).not.toEqual(FALLBACK_STAGE_AGENT_DEFAULTS);
   });
 
   it('sends every ticket template through the same merge tail', () => {

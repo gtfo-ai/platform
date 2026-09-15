@@ -190,7 +190,7 @@ describe('the agent run’s provider configuration', () => {
 
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
-    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '21' });
+    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '22' });
     // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
     // the pipeline's job workers, HTTP and maintenance. Every term is symbolic on purpose: the
     // count of pipeline workers belongs to `POOL_RESERVATIONS`, and this comment saying "three"
@@ -201,6 +201,7 @@ describe('pool sizing', () => {
         POOL_RESERVATIONS.pipeline +
         POOL_RESERVATIONS.knowledge +
         POOL_RESERVATIONS.onboarding +
+        POOL_RESERVATIONS.bootstrap +
         POOL_RESERVATIONS.http +
         POOL_RESERVATIONS.maintenance,
     );
@@ -238,10 +239,11 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Nineteen since WP-31: eighteen (seventeen — WP-15c's fourth pipeline worker, WP-18a's
-    // `knowledge.index`, WP-18b's three Librarian queues and WP-21's `onboarding.discovery` — plus
-    // WP-32's digest tick) plus the `task.ask` worker.
-    expect((thrown as UndersizedPoolError).required).toBe(19);
+    // Twenty since WP-35: nineteen (eighteen — WP-15c's fourth pipeline worker, WP-18a's
+    // `knowledge.index`, WP-18b's three Librarian queues and WP-21's `onboarding.discovery`, plus
+    // WP-32's digest tick — plus WP-31's `task.ask` worker) plus `bootstrap.history`, the one
+    // worker the history bootstrap adds for both halves of its job.
+    expect((thrown as UndersizedPoolError).required).toBe(20);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
     // PROGRESS backlog 22's **site 3**, derived rather than spelled since WP-31 round 2. The
     // message used to say "the pipeline's five job workers" beside a `POOL_RESERVATIONS.pipeline`

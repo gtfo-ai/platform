@@ -12,6 +12,7 @@
 import type {
   EstimateBasis,
   ExternalIdentity,
+  HistorySample,
   JsonObject,
   JsonValue,
   MergeRequestRef,
@@ -80,6 +81,8 @@ export const tasks = pgTable('tasks', {
   ticketSnapshotAt: timestamp('ticket_snapshot_at', { withTimezone: true }),
   /** WP-24, migration 0020: the human merge request a review-only task reviews. */
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
+  /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */
+  historySample: jsonb('history_sample').$type<HistorySample>(),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

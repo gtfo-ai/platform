@@ -89,6 +89,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       ticketSnapshot: null,
       ticketSnapshotAt: null,
       reviewSubject: null,
+      historySample: null,
       riskClasses: [],
       coverage: null,
       dependencies: null,

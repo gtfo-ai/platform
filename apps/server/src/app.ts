@@ -65,6 +65,7 @@ import {
 import type { AskComposition } from './asks.js';
 import type { Auth } from './auth/better-auth.js';
 import { authPlugin } from './auth/plugin.js';
+import type { HistoryBootstrapCommands, HistoryBootstrapGateResult } from './bootstrap.js';
 import type { TaskCommands } from './commands.js';
 import type { ServerConfig } from './config.js';
 import { toApiError } from './errors.js';
@@ -73,6 +74,7 @@ import { type PinoLogger, withLogContext } from './logging.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
 import type { OnboardingCommands } from './onboarding.js';
+import { listHistoryBootstraps } from './queries/bootstrap-queries.js';
 import { listOrgBudgets, writeBudget } from './queries/cost-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
@@ -99,6 +101,7 @@ import {
 } from './queries/shadow-queries.js';
 import { roleCapabilities } from './role.js';
 import { registerAskRoutes } from './routes/asks.js';
+import { registerBootstrapRoutes } from './routes/bootstrap.js';
 import { registerCommandRoutes } from './routes/commands.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
@@ -115,6 +118,23 @@ import type { ShadowCommands } from './shadow.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
 import { type ClientFallback, createClientFallback } from './web/fallback.js';
+
+/**
+ * What the read endpoint publishes when the process cannot compute an estimate.
+ *
+ * Zeroes with `can_start: false` beside them, and the screen renders the blocked reason rather than
+ * the figures. It is **not** an estimate of zero — a process that cannot read a project's settings
+ * has no answer, and the pairing is what says so (`can_start` is false in the same object).
+ */
+const UNAVAILABLE_ESTIMATE = {
+  mergeRequests: 0,
+  batchSize: 0,
+  batches: 0,
+  estimatedUsd: 0,
+  capUsd: 0,
+  stopsAtCap: false,
+  days: 0,
+} as const;
 
 export interface BuildAppOptions {
   readonly config: ServerConfig;
@@ -173,6 +193,22 @@ export interface BuildAppOptions {
    */
   readonly shadowGate:
     | ((projectId: string) => Promise<{ canStart: boolean; blockedReason: string | null }>)
+    | null;
+  /**
+   * The history bootstrap's start command (WP-35), or `null` for a process with no pipeline.
+   *
+   * Nullable like `shadow` and for the same reason; the route answers `503` by name.
+   */
+  readonly historyBootstrap: HistoryBootstrapCommands | null;
+  /**
+   * Whether a project may start a bootstrap, and what one would cost — the read endpoint's half.
+   *
+   * Separate from `historyBootstrap` because the **read** publishes both, and an API process with
+   * no workers can still answer them. `null` when this process cannot read project settings, which
+   * the route turns into a named `can_start: false` rather than a guess.
+   */
+  readonly historyBootstrapGate:
+    | ((projectId: string, mergeRequests: number | null) => Promise<HistoryBootstrapGateResult>)
     | null;
   /**
    * The task and run command surface (WP-15i), or `null` for a process that composed no pipeline.
@@ -445,6 +481,48 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       shadow: options.shadow,
       gate: options.shadowGate,
+    });
+    /**
+     * WP-35: the history bootstrap's one command and one read (product/06 step 3b).
+     *
+     * The gate and the estimate are computed by the composition root's `historyBootstrapGate` and
+     * handed to the projection, so the screen, the read and the command all use one answer — a
+     * projection that re-derived the estimate would be the second spelling of one rule (rule 9).
+     */
+    await registerBootstrapRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectExists: async (projectId) =>
+          (await findProjectById(options.database, projectId)) !== null,
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+        listBootstraps: async (projectId, mergeRequests) => {
+          const gate =
+            options.historyBootstrapGate === null
+              ? {
+                  canStart: false,
+                  blockedReason:
+                    'this process cannot read the project’s settings, so it cannot say whether a history bootstrap may start',
+                  estimate: UNAVAILABLE_ESTIMATE,
+                }
+              : await options.historyBootstrapGate(projectId, mergeRequests);
+          return listHistoryBootstraps(options.database, projectId, {
+            canStart: gate.canStart,
+            blockedReason: gate.blockedReason,
+            estimate: {
+              merge_requests: gate.estimate.mergeRequests,
+              batch_size: gate.estimate.batchSize,
+              batches: gate.estimate.batches,
+              estimated_usd: gate.estimate.estimatedUsd,
+              cap_usd: gate.estimate.capUsd,
+              stops_at_cap: gate.estimate.stopsAtCap,
+              days: gate.estimate.days,
+            },
+          });
+        },
+      },
+      bootstrap: options.historyBootstrap,
     });
     await registerSettingsRoutes(app, {
       // The nine reads and writes the settings surface needs, bound to this process's database

@@ -360,6 +360,34 @@ export const commandPolicySchema = z.strictObject({
 
 // ── features (BD-028) ────────────────────────────────────────────────────────
 
+/**
+ * The history bootstrap's three numbers, from product/19 §18 (WP-35).
+ *
+ * > *"last N merged MRs (default 200, max 1 000) … closed tickets of the last 6 months …
+ * > Batches of ~20 MRs per Sonnet 5 run … Budget cap default $20, shown before start."*
+ *
+ * They live in `contracts` because three rings bound themselves by them — the wire (the request
+ * schema and this feature key), the application (the collector) and the SPA (the wizard's input) —
+ * and a number with three spellings is a number that drifts (standing rule 41).
+ *
+ * **The batch size is 20 and the cap is $20, and the second follows from the first**: 200 merge
+ * requests at 20 per run is ten runs, and a Sonnet stage's per-run cap in this repository is $2
+ * (`DEFAULT_STAGE_RUN_BUDGET_USD`, where `retrospective`, `librarian` and `discovery` all sit), so
+ * the document's $20 is exactly what the default N costs at the ceiling. That is the arithmetic the
+ * wizard shows before start, and it is why the estimate and the cap can be the same number without
+ * either being a guess.
+ */
+export const DEFAULT_BOOTSTRAP_MERGE_REQUESTS = 200;
+export const MAX_BOOTSTRAP_MERGE_REQUESTS = 1_000;
+/** product/19 §18's *"last 6 months"*, in days. Also the window `SHADOW_HISTORY_DAYS` reuses. */
+export const DEFAULT_BOOTSTRAP_DAYS = 183;
+/** Two years. A window nobody can name a use for, bounding a number a repository supplies. */
+export const MAX_BOOTSTRAP_DAYS = 730;
+/** product/19 §18's *"batches of ~20 MRs per Sonnet 5 run"* — the size of one mining run's sample. */
+export const BOOTSTRAP_BATCH_SIZE = 20;
+/** product/19 §18's *"budget cap default $20, shown before start"*. */
+export const DEFAULT_BOOTSTRAP_BUDGET_USD = 20;
+
 export const featuresConfigSchema = z.strictObject({
   /**
    * The ticket readiness linter — product/18 § "Opt-in features", WP-25.
@@ -468,6 +496,38 @@ export const featuresConfigSchema = z.strictObject({
   shadow_mode: z
     .strictObject({
       enabled: z.boolean().optional(),
+      budget_usd: usdSchema.optional(),
+    })
+    .optional(),
+  /**
+   * The history bootstrap — product/18:27, product/19 §18, product/06's wizard step 3b (WP-35).
+   *
+   * > *"During onboarding, mines the last N merged MRs and their review comments plus closed
+   * > tickets for conventions, pitfalls and recurring reviewer requests … Wizard: N (default 200),
+   * > date range, budget cap; results land in the proposal queue"*
+   *
+   * Four keys, one per item that column names, and every one is read:
+   *
+   *  - `enabled` is BD-028's opt-in, **off by default** (product/18's own Default column says *"off
+   *    (offered in wizard)"*). Off refuses the command by name and the read endpoint publishes the
+   *    reason, so the wizard states it instead of offering a button that answers 409.
+   *  - `merge_requests` is product/19 §18's *N*, defaulting to {@link DEFAULT_BOOTSTRAP_MERGE_REQUESTS}
+   *    and refused past {@link MAX_BOOTSTRAP_MERGE_REQUESTS} **here as well as on the request**: a
+   *    caller may name a smaller N per batch, and a repository-supplied 5 000 must be refused at the
+   *    same boundary a request's is (standing rule 14 — a bound only one path checks is a bound the
+   *    other path does not have).
+   *  - `days` is the *"date range"*, defaulting to {@link DEFAULT_BOOTSTRAP_DAYS} — product/19's
+   *    *"closed tickets of the last 6 months"*, applied to the merge requests too so that both
+   *    halves of one sample describe the same window.
+   *  - `budget_usd` is the *"budget cap"*, defaulting to {@link DEFAULT_BOOTSTRAP_BUDGET_USD}. It is
+   *    enforced per **batch** rather than per month (the shadow budget's window), because a
+   *    bootstrap is a one-off operation an operator starts and is shown a figure for before it runs.
+   */
+  history_bootstrap: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+      merge_requests: z.int().min(1).max(MAX_BOOTSTRAP_MERGE_REQUESTS).optional(),
+      days: z.int().min(1).max(MAX_BOOTSTRAP_DAYS).optional(),
       budget_usd: usdSchema.optional(),
     })
     .optional(),

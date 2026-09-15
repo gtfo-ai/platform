@@ -47,6 +47,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
 export const ProjectSettingsScreen = ({
@@ -212,6 +213,15 @@ export const ProjectSettingsScreen = ({
             Open the knowledge base
           </Link>
         </p>
+      </Card>
+
+      {/**
+       * The wizard's step 3b, mirrored (product/18:55, WP-35) — the *same component*, which is how
+       * the mirror stays true without anybody remembering to keep two of them in step.
+       */}
+      <Card className="flex flex-col gap-2">
+        <SectionHeading>History bootstrap</SectionHeading>
+        <HistoryBootstrap projectId={project.id} projectKey={project.key} />
       </Card>
 
       <OperatingMode projectId={project.id} audit />

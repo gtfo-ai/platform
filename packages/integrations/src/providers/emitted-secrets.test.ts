@@ -314,6 +314,22 @@ const gitlabScript = (): Script => ({
       web_url: `${HOST}/acme/api/-/commit/${SHA}`,
     },
   },
+  // WP-35: a commit message is provider text like any other, and a developer who pasted a token
+  // into one is exactly how a credential reaches this response.
+  [`GET /projects/${P}/repository/commits`]: {
+    body: [
+      {
+        id: SHA,
+        short_id: SHA.slice(0, 8),
+        title: `fix(totals) ${GITLAB_TOKEN}`,
+        message: `fix(totals) ${GITLAB_TOKEN}`,
+        author_name: `dana ${GITLAB_TOKEN}`,
+        committed_date: NOW,
+        created_at: NOW,
+        web_url: `${HOST}/acme/api/-/commit/${SHA}`,
+      },
+    ],
+  },
   [`POST /projects/${P}/merge_requests`]: { status: 201, body: gitlabMr() },
   [`PUT /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
   [`GET /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
@@ -456,6 +472,7 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   read_codeowners: 'readCodeowners',
   resolve_user_id: 'resolveUserId',
   list_merged_merge_requests: 'listMergedMergeRequests',
+  list_commits: 'listCommits',
   is_branch_protected: 'isBranchProtected',
   branch_protection: 'branchProtection',
   get_merge_request_diff: 'getMergeRequestDiff',
@@ -558,6 +575,10 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       '2026-01-01T00:00:00.000Z',
       5,
     );
+    emitted.list_commits = await port.listCommits(PROJECT, {
+      since: '2026-01-01T00:00:00.000Z',
+      limit: 5,
+    });
     // `create` is typed as the *type port*, which is the whole of BD-017 — so GitLab's own two
     // extras are reached through the same instance, narrowed back. They emit provider text
     // (`branchProtection.name`, `instanceVersion.version`) and belong in the walk.

@@ -102,6 +102,18 @@ export interface GitLabClient {
     project: string,
     body: CreateCommitBody,
   ): Promise<z.output<typeof gitlabCommitSchema>>;
+  /**
+   * <https://docs.gitlab.com/api/commits/> § "List repository commits" (WP-35).
+   *
+   * `since` and `ref_name` are documented attributes of that endpoint; the platform pages with
+   * `per_page` up to the caller's limit. The endpoint answers the commits reachable from `ref_name`,
+   * which is why the adapter passes the project's default branch rather than nothing.
+   */
+  listCommits(
+    project: string,
+    query: { readonly since: string; readonly ref_name?: string },
+    perPage: number,
+  ): Promise<readonly z.output<typeof gitlabCommitSchema>[]>;
   /** <https://docs.gitlab.com/api/merge_requests/> § "Create a merge request". */
   createMergeRequest(
     project: string,
@@ -269,6 +281,21 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           json: body,
           action: 'commit_files',
         }),
+      ),
+
+    listCommits: async (project, query, perPage) =>
+      parse(
+        z.array(gitlabCommitSchema),
+        await http.paginate(
+          {
+            method: 'GET',
+            path: `/projects/${encodeProjectId(project)}/repository/commits`,
+            query,
+            action: 'list_commits',
+          },
+          Math.min(Math.max(1, perPage), 100),
+        ),
+        'list_commits',
       ),
 
     createMergeRequest: async (project, body) =>

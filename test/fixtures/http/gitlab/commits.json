@@ -44,6 +44,65 @@
         "kind": "inferred",
         "note": "The commits page documents the `create` action and the `400 Bad Request` status in its status table, and does **not** publish this error body. The message text is the one GitLab's repository-files API is widely observed to return for the same mistake; what the contract suite actually asserts is the *classification* (400 -> invalid_request), which holds whatever the body says. Labelled `inferred` rather than `documented` because a reader must be able to tell which half of this file came from the page."
       }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/commits?since=2000-01-01T00%3A00%3A00.000Z&ref_name=main&per_page=20&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": "9f1c2d3e4b5a60718293a4b5c6d7e8f9a0b1c2d3",
+          "short_id": "9f1c2d3e4b5",
+          "title": "fix(totals): round once, at the boundary",
+          "author_name": "Dana Reviewer",
+          "author_email": "dana.reviewer@example.test",
+          "committer_name": "Dana Reviewer",
+          "committer_email": "dana.reviewer@example.test",
+          "created_at": "2026-05-29T09:12:00.000+00:00",
+          "message": "fix(totals): round once, at the boundary\n\nRefs: ACME-1\n",
+          "parent_ids": ["ae1d9fb46aa2b07ee9836d49862ec4e2c46fbbba"],
+          "committed_date": "2026-05-29T09:12:00.000+00:00",
+          "authored_date": "2026-05-29T09:12:00.000+00:00",
+          "trailers": {},
+          "extended_trailers": {},
+          "web_url": "https://gitlab.example.test/acme/api/-/commit/9f1c2d3e4b5a60718293a4b5c6d7e8f9a0b1c2d3"
+        },
+        {
+          "id": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+          "short_id": "1a2b3c4d5e6",
+          "title": "chore(deps): bump the lockfile",
+          "author_name": "Sam Maintainer",
+          "author_email": "sam.maintainer@example.test",
+          "committer_name": "Sam Maintainer",
+          "committer_email": "sam.maintainer@example.test",
+          "created_at": "2026-05-20T11:04:10.000+00:00",
+          "message": "chore(deps): bump the lockfile\n",
+          "parent_ids": ["bb2d9fb46aa2b07ee9836d49862ec4e2c46fbbba"],
+          "committed_date": "2026-05-20T11:04:10.000+00:00",
+          "authored_date": "2026-05-20T11:04:10.000+00:00",
+          "trailers": {},
+          "extended_trailers": {},
+          "web_url": "https://gitlab.example.test/acme/api/-/commit/1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/commits/",
+        "retrieved": "2026-09-14",
+        "kind": "documented",
+        "note": "\"List repository commits\" with its documented `since` and `ref_name` attributes and the response attributes of that page's example commit object (`id`, `short_id`, `title`, `author_name`, `author_email`, `authored_date`, `committer_name`, `committer_email`, `created_at`, `message`, `parent_ids`, `web_url`, `trailers`, `extended_trailers`), plus `committed_date`, which the page lists on the same object. Two commits so the window case below can exclude one of them; the values are this corpus's own repository (acme/api) rather than the page's example project"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/repository/commits?since=2026-09-20T00%3A00%3A00.000Z&ref_name=main&per_page=20&page=1",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/commits/",
+        "retrieved": "2026-09-14",
+        "kind": "inferred",
+        "note": "The empty-list answer for a `since` after every commit in the repository. The page documents `since` and the 200 and publishes no example of an empty result, so the **shape** is inferred — an empty JSON array — while what the contract asserts is that the adapter passes `since` through at all: an adapter that dropped it would answer the two commits above and pass the wide case (standing rule 43 — a negative case must be one a wrong implementation fails)"
+      }
     }
   ]
 }

@@ -53,7 +53,8 @@
         "ShadowReport",
         "ReadinessReport",
         "DiscoveryDraft",
-        "AskAnswer"
+        "AskAnswer",
+        "HistoryFindings"
       ]
     },
     "Id": {

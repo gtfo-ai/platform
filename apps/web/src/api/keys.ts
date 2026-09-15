@@ -29,6 +29,15 @@ export const queryKeys = {
   shadowBatches: (id: string) => ['project', id, 'shadow-batches'] as const,
   shadowBatch: (projectId: string, batchId: string) =>
     ['project', projectId, 'shadow-batches', batchId] as const,
+  /**
+   * WP-35: under the project's prefix like the shadow batches, and keyed by **N** as well.
+   *
+   * The estimate the read answers is for the N in the query, so two different N's are two different
+   * answers rather than one cached one — a screen that re-used the first would show an operator a
+   * figure for a batch they are no longer asking for.
+   */
+  historyBootstraps: (id: string, mergeRequests: number | null) =>
+    ['project', id, 'history-bootstraps', mergeRequests] as const,
   projectTasks: (id: string, filters: Readonly<Record<string, unknown>> = {}) =>
     ['project', id, 'tasks', filters] as const,
   kbTree: (id: string) => ['project', id, 'kb', 'tree'] as const,

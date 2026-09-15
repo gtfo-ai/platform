@@ -409,6 +409,21 @@ export const JOB_QUEUES = {
    */
   discoveryRecord: 'onboarding.discovery',
   /**
+   * The history bootstrap, both halves of it, on **one** queue (WP-35).
+   *
+   * Two wake-ups with different shapes ride it — `collect`, which reads the provider and creates
+   * the batch's tasks, and `record`, which turns one mining run's artifact into proposals — and
+   * they are one queue rather than two because they cannot contend: every `record` is caused by a
+   * run that `collect` started, so the collection has finished before the first one can arrive. One
+   * queue is one worker and therefore **one** pooled connection (`POOL_RESERVATIONS.bootstrap`),
+   * which is the whole of the argument; two queues would cost a second for no throughput.
+   *
+   * Policy `standard` for `knowledgeProposals`' reason: each wake-up carries a different batch or a
+   * different artifact, so a coalescing policy would silently drop one project's onboarding in
+   * favour of another's.
+   */
+  historyBootstrap: 'bootstrap.history',
+  /**
    * The daily digest tick (cron, WP-32) — product/18:33's *"one Slack summary a day"*.
    *
    * TD-004's list is not closed and this is the "maintenance schedule" shape it names. The name is

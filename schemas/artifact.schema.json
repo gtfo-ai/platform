@@ -1624,6 +1624,71 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "HistoryFindings"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "proposals": {
+              "maxItems": 12,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_197d1158"
+              }
+            },
+            "merge_requests_read": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 4000
+            }
+          },
+          "required": [
+            "proposals",
+            "merge_requests_read",
+            "summary"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -1708,7 +1773,8 @@
         "ShadowReport",
         "ReadinessReport",
         "DiscoveryDraft",
-        "AskAnswer"
+        "AskAnswer",
+        "HistoryFindings"
       ]
     },
     "Id": {
@@ -1933,6 +1999,66 @@
       "exclusiveMinimum": 0,
       "maximum": 9007199254740991
     },
+    "anon_197d1158": {
+      "type": "object",
+      "properties": {
+        "finding": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "convention",
+            "pitfall",
+            "glossary",
+            "ownership"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/anon_ac146fff"
+        },
+        "type": {
+          "$ref": "#/$defs/anon_2ab70f90"
+        },
+        "target_path": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "delta": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "evidence": {
+          "minItems": 1,
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_d36cabed"
+          }
+        },
+        "occurrences": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "significance": {
+          "$ref": "#/$defs/UnitInterval"
+        },
+        "reason": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "finding",
+        "kind",
+        "type",
+        "target_path",
+        "delta",
+        "evidence",
+        "occurrences",
+        "significance",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
     "anon_204b72bd": {
       "type": "string",
       "maxLength": 1000
@@ -2024,6 +2150,30 @@
         "technical",
         "process"
       ]
+    },
+    "anon_d36cabed": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "merge_request",
+            "ticket"
+          ]
+        },
+        "ref": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "kind",
+        "ref",
+        "url"
+      ],
+      "additionalProperties": false
     }
   }
 }

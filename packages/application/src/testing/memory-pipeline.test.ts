@@ -50,6 +50,7 @@ const task = (id: string, key = 'ACME-1'): StoredTask => ({
   estimateSamples: null,
   ticketSnapshot: null,
   reviewSubject: null,
+  historySample: null,
   riskClasses: [],
   coverage: null,
   dependencies: null,

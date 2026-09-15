@@ -51,11 +51,6 @@
             "coverage": null,
             "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
           },
-          "diff_refs": {
-            "base_sha": "2222222222222222222222222222222222222222",
-            "head_sha": "4444444444444444444444444444444444444444",
-            "start_sha": "2222222222222222222222222222222222222222"
-          },
           "user": {
             "can_merge": true
           }
@@ -63,9 +58,9 @@
       ],
       "source": {
         "url": "https://docs.gitlab.com/api/merge_requests/",
-        "retrieved": "2026-09-10",
+        "retrieved": "2026-09-14",
         "kind": "documented",
-        "note": "\"List project merge requests\" with the documented state, updated_after, order_by and sort attributes"
+        "note": "\"List project merge requests\" with the documented state, updated_after, order_by and sort attributes. The example response on that page carries **no** `diff_refs`: the object is documented on \"Retrieve a merge request\" only (re-read 2026-09-14), so this body does not publish one and `listMergedMergeRequests` does not read one — WP-34 pays a single-merge-request GET for the merge base instead (PROGRESS backlog 98)"
       }
     },
     {

@@ -2107,7 +2107,8 @@
                 "discovery",
                 "retro",
                 "librarian",
-                "ask"
+                "ask",
+                "bootstrap"
               ]
             },
             "attempt": {
@@ -4509,7 +4510,8 @@
         "facilitator",
         "librarian",
         "discovery",
-        "ask"
+        "ask",
+        "historian"
       ]
     },
     "AnswerChannel": {
@@ -4643,7 +4645,8 @@
         "ShadowReport",
         "ReadinessReport",
         "DiscoveryDraft",
-        "AskAnswer"
+        "AskAnswer",
+        "HistoryFindings"
       ]
     },
     "BudgetScope": {
@@ -5023,7 +5026,8 @@
             "run",
             "feedback",
             "bootstrap",
-            "human"
+            "human",
+            "history"
           ]
         },
         "kind": {

@@ -67,6 +67,20 @@ export interface GitProviderContractContext {
    */
   readonly mergeBaseIid: number | null;
   /**
+   * What `listCommits` must answer for this harness — WP-35.
+   *
+   * `since` is a window the harness's own `sha` is inside and `emptySince` one it is outside, so
+   * the suite can assert the parameter is honoured rather than only that a list came back.
+   * `message` is a substring of that commit's message, because the message is the whole reason the
+   * history bootstrap reads commits at all.
+   */
+  readonly commits: {
+    readonly since: string;
+    readonly emptySince: string;
+    readonly sha: string;
+    readonly message: string;
+  };
+  /**
    * Three merge requests whose mergeability the harness has arranged.
    *
    * The third one is the reason this is in the contract at all: a provider that has not finished
@@ -683,6 +697,40 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         }
         expect(typeof mr.base_sha).toBe('string');
         expect(mr.base_sha ?? '').toMatch(/^[0-9a-f]{7,}$/);
+      });
+
+      /**
+       * WP-35: product/19 §18's third input, and the method `GitProviderPort` had none for.
+       *
+       * **Two cases, because one of them is a tautology on its own.** The wide window asserts that
+       * the harness's own commit is there with its message; an adapter that ignored `since`
+       * entirely would pass it. The narrow window is the discriminating negative (standing rule
+       * 43): a `since` after every commit the harness has must answer without that commit, which
+       * only an adapter that actually sends the parameter can do. Both sides of the boundary are
+       * asserted rather than one (standing rule 42).
+       */
+      it('lists commit messages since an instant', async () => {
+        const commits = await port.listCommits(context.project, {
+          since: context.commits.since,
+          limit: 20,
+        });
+        const found = commits.find((commit) => commit.sha === context.commits.sha);
+        expect(found, `no commit ${context.commits.sha} in the window`).toBeDefined();
+        expect(found?.message).toContain(context.commits.message);
+        for (const commit of commits) {
+          expect(Date.parse(commit.committed_at)).not.toBeNaN();
+          expect(Date.parse(commit.committed_at)).toBeGreaterThanOrEqual(
+            Date.parse(context.commits.since),
+          );
+        }
+      });
+
+      it('answers without a commit older than the window it was asked for', async () => {
+        const commits = await port.listCommits(context.project, {
+          since: context.commits.emptySince,
+          limit: 20,
+        });
+        expect(commits.map((commit) => commit.sha)).not.toContain(context.commits.sha);
       });
 
       it('lists merged merge requests since an instant', async () => {

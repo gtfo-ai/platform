@@ -109,6 +109,45 @@ const AUTONOMY: AutonomyResponse = {
   above_suggested_cap: false,
 };
 
+/**
+ * `GET /api/projects/:id/history-bootstraps` — the gate, the estimate and one finished batch.
+ *
+ * `detail` is the platform's own sentence about a batch that found nothing, and it is rendered
+ * through `ui/untrusted.tsx` like every other string on every other screen.
+ */
+const HISTORY_BOOTSTRAPS = {
+  items: [
+    {
+      id: '00000000-0000-4000-8000-0000000000b9',
+      project_id: PROJECT,
+      status: 'completed',
+      created_at: '2026-09-13T04:00:00.000Z',
+      completed_at: '2026-09-13T05:00:00.000Z',
+      merge_requests: 40,
+      detail: null,
+      cap_usd: 20,
+      estimated_usd: 4,
+      spent_usd: 1.25,
+      chunks: 2,
+      chunks_recorded: 2,
+      proposals: 5,
+      refused_proposals: 1,
+    },
+  ],
+  can_start: true,
+  blocked_reason: null,
+  estimate: {
+    merge_requests: 200,
+    batch_size: 20,
+    batches: 10,
+    estimated_usd: 20,
+    cap_usd: 20,
+    stops_at_cap: false,
+    days: 183,
+  },
+  max_merge_requests: 1000,
+};
+
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -154,6 +193,9 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         },
       });
     }
+    if (url.includes('/api/projects/') && url.includes('/history-bootstraps')) {
+      return json(HISTORY_BOOTSTRAPS);
+    }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
     if (url.endsWith('/api/integrations')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
@@ -176,6 +218,8 @@ describe('the onboarding wizard', () => {
       'Connect',
       'Technical discovery',
       'Business interview',
+      // WP-35: product/06's own step 3b, the one step the wizard did not have.
+      'History bootstrap (optional)',
       'Operating mode and features',
       'Commit',
     ]) {
