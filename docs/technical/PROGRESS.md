@@ -23621,3 +23621,38 @@ M4's ordering* and the second is a merged row's history, and the plan's rows are
 - **`PATCH /api/integrations/:id` does not exist**, so the write-time check has exactly one caller
   today. When an edit command lands it must call `assertHostIsDeclared` — there is no census holding
   it, only `createIntegration`'s own docblock saying it is the only writer of `integrations.config`.
+
+**ci-fix (after `4b71d45`).** The merge's `image` run (**35029892985**) was red on both
+architectures at the step *"a stock instance of the image just built creates an integration"*:
+`FAIL POST /api/integrations creates one from a name declared in .env — status 403,
+{"error":{"code":"integration_host_not_permitted", …}}`. **Cause, not a flake.**
+`scripts/compose-stock-check.mjs` writes its `.env` from `.env.example` plus the values the operator
+guide names, and WP-51 added a *second* empty-means-closed list it never learned — so the row that
+closed backlog **48** reopened backlog **54**'s symptom (a stock instance cannot create an
+integration) one row later. It passed every local tier because the live check runs **only** from
+`image.yml` (rule 71: a check that runs in one place is a check the tree cannot see).
+
+Fixed on the tree, not patched around: the check declares `APP_INTEGRATION_HOSTS` for the host it
+uses (`PROVIDER_HOST`, spelled once so the `.env` line, the created integration's `base_url` and the
+refused one cannot drift), `printenv` proves the variable reached the container (7 of 7), and it
+gains the **negative half** so the policy is proven live in the image: a second
+`POST /api/integrations` for the *adjacent* host `evil-sentry.example.test` must answer 403
+`integration_host_not_permitted` naming the setting. `.env.example`'s default and the policy are
+untouched — empty still means closed. Rule 83 on the guide: §2's "every line of `.env` reaches the
+process" list now names `APP_INTEGRATION_HOSTS` and says both `APP_INTEGRATION_*` lists are empty
+and closed, and §4 now says **literally** what to put in it (the host of each integration, as it
+appears in its `base_url`/`site_url`, with `sentry.io`/`gitlab.com`/`<site>.atlassian.net` as the
+worked cases) rather than only showing an example line.
+
+**Measured locally, the way `image.yml` runs it** (`LC_ALL=C uptime` 9.47, Docker held alone,
+baseline 11 containers / 97 volume lines restored afterwards): `node scripts/build-images.mjs
+platform launcher --tag ci` → `PASS: build-images (3 image(s), tag ci)`; `node
+scripts/compose-stock-check.mjs --tag ci --project-suffix wp51-cifix` → **`PASS:
+compose-stock-check`**, exit **0**, nine `ok` lines including *"an undeclared host is refused 403
+`integration_host_not_permitted`, naming the setting — status 403 … \"evil-sentry.example.test\"
+… Add it to APP_INTEGRATION_HOS…"*.
+
+**The rule this leaves**: a row that touches the integration **write path**, `.env.example`, or the
+operator guide's §2/§4 runs `node scripts/compose-stock-check.mjs` locally before it reports. Two
+rows in a row have now been red for the same reason, and both were green in every tier a developer
+runs.

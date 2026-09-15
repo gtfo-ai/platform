@@ -22,8 +22,12 @@
  * Four properties, each an operator-visible one:
  *
  *   1. one `docker compose up` on a stock `.env` reaches a **created integration** (201), while a
- *      name the operator did not declare is still refused 403 — so the allow-list is applied
- *      rather than switched off;
+ *      credential variable the operator did not declare and a **host** the operator did not
+ *      declare are each still refused 403, by name — so both allow-lists are applied rather than
+ *      switched off. The host half is WP-51's and was added as a ci-fix: that row made
+ *      `APP_INTEGRATION_HOSTS` empty-means-closed, this list did not learn it, and a stock
+ *      instance stopped being able to create an integration at all — backlog 54's symptom,
+ *      reopened one row after it was closed, and visible nowhere but here (rule 71);
  *   2. `printenv` inside the container shows the variables WP-23's dogfood run found missing;
  *   3. `/metrics` **can be authenticated**: 401 without the credential, 200 with it. Neither name
  *      was in the old eighteen-key map, so on a compose instance the endpoint was served
@@ -93,6 +97,15 @@ const ADMIN_PASSWORD = 'wp50-not-a-real-password';
 const METRICS_USER = 'metrics';
 const METRICS_PASSWORD = 'wp50-not-a-real-metrics-password';
 const PROVIDER_TOKEN = 'wp50-not-a-real-sentry-token';
+/**
+ * The host the integration below is configured with, and therefore the one value this instance's
+ * `APP_INTEGRATION_HOSTS` declares (WP-51).
+ *
+ * Spelled once because three things must agree: the `.env` line, the `base_url` of the
+ * integration that must be **created**, and the `evil-` prefix of the one that must be
+ * **refused**. Two of the three drifting apart is how this check would go quietly one-sided.
+ */
+const PROVIDER_HOST = 'sentry.example.test';
 const TIMEOUT_MS = 15 * 60 * 1000;
 
 const failures = [];
@@ -248,6 +261,19 @@ const main = async () => {
       // it. Both were unreachable from `.env` before WP-50, which is the whole finding.
       ['SENTRY_AUTH_TOKEN', PROVIDER_TOKEN],
       ['APP_INTEGRATION_SECRET_ENV', 'SENTRY_AUTH_TOKEN'],
+      /*
+       * §4's **third** line, and the reason this script exists (WP-51 ci-fix).
+       *
+       * `APP_INTEGRATION_HOSTS` is the second operator-declared allow-list and it is empty — and
+       * therefore closed — in `.env.example`, exactly as the credential one is. WP-51 added it and
+       * this list did not learn it, so the row that closed backlog 48 reopened backlog 54's
+       * symptom one row later: a stock instance answered `POST /api/integrations` with
+       * `403 integration_host_not_permitted` and the image build went red on both architectures.
+       * The value is the host the integration below is configured with, which is what §4 tells an
+       * operator to declare — *the host of each integration you create*, not a wildcard, so the
+       * negative case a few lines further down still has something to be refused by.
+       */
+      ['APP_INTEGRATION_HOSTS', PROVIDER_HOST],
       // §7's optional basic auth on /metrics.
       ['APP_METRICS_USERNAME', METRICS_USER],
       ['APP_METRICS_PASSWORD', METRICS_PASSWORD],
@@ -287,12 +313,18 @@ const main = async () => {
       'APP_DB_POOL_MAX',
       'APP_SSE_BUFFER_SIZE',
       'SENTRY_AUTH_TOKEN',
+      // Appended last on purpose: the two index assertions below read the first two values, and
+      // `printenv` answers in argument order.
+      'APP_INTEGRATION_HOSTS',
     ]).catch((error) => ({ stdout: String(error) }));
     const printed = printenv.stdout.trim().split('\n');
     check(
       'the container has the variables `.env` sets',
-      printed.length === 6 && printed[0] === 'SENTRY_AUTH_TOKEN' && printed[1] === METRICS_USER,
-      printed.length === 6 ? `${printed.length} of 6 present` : printenv.stdout.trim(),
+      printed.length === 7 &&
+        printed[0] === 'SENTRY_AUTH_TOKEN' &&
+        printed[1] === METRICS_USER &&
+        printed[6] === PROVIDER_HOST,
+      printed.length === 7 ? `${printed.length} of 7 present` : printenv.stdout.trim(),
     );
 
     // 3. /metrics can be authenticated.
@@ -332,7 +364,7 @@ const main = async () => {
         type: 'errors',
         provider: 'sentry',
         name: 'stock check sentry',
-        config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
+        config: { organisation: 'acme', base_url: `https://${PROVIDER_HOST}` },
         secret_refs: { auth_token: 'SENTRY_AUTH_TOKEN' },
       }),
     });
@@ -351,7 +383,7 @@ const main = async () => {
         type: 'errors',
         provider: 'sentry',
         name: 'stock check forbidden',
-        config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
+        config: { organisation: 'acme', base_url: `https://${PROVIDER_HOST}` },
         secret_refs: { auth_token: 'APP_SECRET_KEY' },
       }),
     });
@@ -359,6 +391,36 @@ const main = async () => {
       'an undeclared variable name is still refused 403, and no secret is in the refusal',
       refused.status === 403 && !JSON.stringify(refused.body).includes(SECRET_KEY),
       `status ${refused.status}, ${JSON.stringify(refused.body).slice(0, 160)}`,
+    );
+
+    /*
+     * The same shape for the **host** allow-list (WP-51), and the host is an *adjacent* one.
+     *
+     * `evil.example.com` would be refused by any implementation and would prove nothing (standing
+     * rule 43); `evil-<declared>` is refused only by exact matching, which is what the policy
+     * claims to do. It is asserted **here**, against the image, because the unit and integration
+     * tiers exercise the policy object and this is the only place that exercises the *instance*:
+     * the list has to reach the process through `.env` before any of it is true, and the failure
+     * that put this line here was exactly that — the policy worked and the variable was empty.
+     */
+    const refusedHost = await client.json('/api/integrations', {
+      method: 'POST',
+      headers: { 'idempotency-key': `wp51-stock-check-host-${port}` },
+      body: JSON.stringify({
+        type: 'errors',
+        provider: 'sentry',
+        name: 'stock check undeclared host',
+        config: { organisation: 'acme', base_url: `https://evil-${PROVIDER_HOST}` },
+        secret_refs: { auth_token: 'SENTRY_AUTH_TOKEN' },
+      }),
+    });
+    const hostBody = JSON.stringify(refusedHost.body);
+    check(
+      'an undeclared host is refused 403 `integration_host_not_permitted`, naming the setting',
+      refusedHost.status === 403 &&
+        hostBody.includes('integration_host_not_permitted') &&
+        hostBody.includes('APP_INTEGRATION_HOSTS'),
+      `status ${refusedHost.status}, ${hostBody.slice(0, 160)}`,
     );
 
     // 4. TD-020's `_FILE` half, which compose used to refuse outright. The file goes on a named

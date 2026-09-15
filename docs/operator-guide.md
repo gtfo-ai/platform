@@ -93,8 +93,11 @@ to use with Docker secrets; the `_FILE` variant wins.
 ### `.env` is the app container's environment
 
 `compose.yml` gives the `app` and `migrate` services `env_file: .env`, so **every line of `.env`
-reaches the process** — the provider credentials, `APP_INTEGRATION_SECRET_ENV`, `APP_TRUST_PROXY`,
-`APP_METRICS_*`, the `APP_SSE_*` and `APP_DB_*` knobs, and every `<NAME>_FILE` variant. Five values
+reaches the process** — the provider credentials, `APP_INTEGRATION_SECRET_ENV`,
+`APP_INTEGRATION_HOSTS`, `APP_TRUST_PROXY`, `APP_METRICS_*`, the `APP_SSE_*` and `APP_DB_*` knobs,
+and every `<NAME>_FILE` variant. The two `APP_INTEGRATION_*` lists are **empty in `.env.example` and
+empty means closed**: leave them and §4's first integration is refused, by name. §4 says what to put
+in each. Five values
 stay on the service because compose computes them or the topology depends on them, and
 `environment:` wins over `env_file:`, so setting any of these five in `.env` does nothing:
 
@@ -275,9 +278,13 @@ integration_host_not_permitted: this deployment does not permit calling "gitlab.
 Add it to APP_INTEGRATION_HOSTS (declared: none) and restart the process
 ```
 
-Matching is exact and case-insensitive, on the **host** only: no port, no path, and no wildcard
-below a name — `gitlab.example.com` does not admit `api.gitlab.example.com`, and a Loki on
-`https://loki.example.test:3100` is declared as `loki.example.test`. Write an internationalised host
+**What to put in it: the host of every integration you create, exactly as it appears in that
+integration's `base_url` (or Jira's `site_url`), with no scheme, no port and no path.** Hosted
+Sentry is `sentry.io`, GitLab.com is `gitlab.com`, a Jira site is `<your-site>.atlassian.net`, and a
+self-managed instance is whatever host you type into the form. Matching is exact and
+case-insensitive, on the **host** only: no wildcard below a name — `gitlab.example.com` does not
+admit `api.gitlab.example.com`, and a Loki on `https://loki.example.test:3100` is declared as
+`loki.example.test`. Write an internationalised host
 in punycode. A single `*` declares the list open, which is a thing to type on purpose. What the list
 does *not* check is where a declared host resolves: it is an allow-list of names, not of addresses.
 
