@@ -204,6 +204,19 @@ export const runTerminalReasonSchema = z.enum([
   'stalled',
   'timed_out',
   'crash',
+  /**
+   * **Appended at WP-47** (migration 0035): no process renewed the run's lease, so the platform
+   * ended the row.
+   *
+   * It is a name of its own rather than `crash` or `cancelled`, because it is the only thing a
+   * missing heartbeat licenses anybody to say. `crash` claims the session died; `cancelled` claims
+   * a human stopped it; both are claims about the *model*, and a sweep knows only that nothing is
+   * renewing the lease — the session may still be running in a process that lost its database
+   * connection. The value is **last** in this list because `alter type … add value` without
+   * `before`/`after` appends, and `test/integration/db/enums.integration.test.ts` compares the two
+   * orders.
+   */
+  'lease_expired',
 ]);
 
 export const questionStatusSchema = z.enum(['open', 'answered', 'expired', 'escalated']);

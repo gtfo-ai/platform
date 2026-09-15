@@ -4340,6 +4340,16 @@ is the wrong owner for entry **57**'s reason: it reports a change's delta per me
 different question from the absolute budget, and the row that measures a thing should not be the row
 that pays for it. Cheapest owner is whoever the gate stops first.
 
+> **Addendum (refiner, 2026-09-15, from WP-47's run — session 6).** A second data point, a session
+> apart: WP-47's `verify` run reported branch coverage at **80.04 %** against the same threshold, so
+> the headroom this entry's heading calls 0.05 is **0.04**. The figure is that implementer's and was
+> **not** re-measured here (rule 66). The threshold has moved line but not value —
+> `vitest.config.ts:181` (`branches: 80`), with `packages/domain/src/**/*.ts` held to 85 at
+> `:185-190`; the citations in the paragraph above are to the pre-WP-42 line numbers. Two
+> measurements inside a tenth of a point confirm the entry rather than change it, and neither says
+> *which* files or which ring carry the uncovered branches, which is still **WP-70**'s opening move
+> and `docs/TODO.md`'s open question.
+
 ### 88. **A bot that is not this platform opens and extends a human review window, so every reviewer-minutes figure over-counts by however many robots comment on a merge request — and the flag that would fix it cannot be written in the table the bullet proposes, nor on the wire** (TODO — **no work package owns it**; found by WP-29, session 5)
 > **M4 (architect, session 6): folded into WP-61.**
 
@@ -6057,6 +6067,224 @@ the ledger's tables and this column's semantics are its subject — or whoever t
 `finish` write plus one migration serves 50, this entry and the projection together. Related: **50**,
 **109**, and WP-19's own *"`tasks.cost_estimated` has no writer — a `local`-mode task calls an estimate an
 actual"* (backlog **18**'s territory), which is this same BD-004 blind spot one table up.
+
+### 120. **An ask's run claims no lease, so the one paid run population outside a stage is covered by the hour-long backstop instead of the six-minute one** (TODO, small — **owner: WP-48**; found by WP-47, session 6)
+
+> **M4 (refiner, session 6): folded into WP-48**, whose plan row and Notes cell carry it and whose
+> criterion (8) may also decline it here by number.
+
+**What is wrong.** WP-47 gave `runs.lease_owner`/`lease_expires_at` a writer in exactly one place, the
+stage executor. An ask's run is inserted by a different composition and claims no lease, so the new
+sweep reaches it only through its **wall-clock backstop** — the bound that exists for rows written
+before the column had a writer at all.
+
+**Evidence** (WP-47's implementer, session 6; confirmed off the tree by the refiner, nothing run —
+rule 66). The implementer's bullet, quoted: *"`packages/application/src/ask/executor.ts` inserts its
+own `runs` row and WP-47 gave the lease a writer only in `stage.execute`, per the architect's ruling.
+Such a run is covered by the **wall-clock backstop** alone — about an hour rather than six minutes.
+Closing it is the same three lines the stage executor got."*
+- The insert is `packages/application/src/ask/executor.ts:415`.
+- `renewLease` has exactly **two** non-test call sites: `packages/application/src/pipeline/stage-executor.ts:764`
+  (the claim, in the same transaction as the row) and `packages/application/src/pipeline/lease.ts:135`
+  (the heartbeat). Neither is reachable from the ask path, and `apps/server/src/pipeline.ts:853` passes
+  `lease: { owner: RUN_LEASE_OWNER }` to the stage executor and to nothing else.
+- The two bounds differ by an order of magnitude: `RUN_LEASE_TTL_MS` is `5 * 60_000`
+  (`packages/application/src/pipeline/lease.ts:60`), renewed at a third of it (`:63`), against
+  `runLimitsDefaults.wallClockMs` = `60 * 60_000` (`packages/application/src/ports/runner.ts:89`); the
+  sweep adds the pass interval as grace on either path (`packages/application/src/recovery/run-lease.ts:38-52`).
+- It is already stated at the line, which is why this entry exists rather than a fix:
+  `packages/application/src/recovery/run-lease.ts:46` — *"(the ask executor's, today: it inserts its own
+  `runs` row and claims no lease; that gap is stated in `PROGRESS.md` rather than half-closed here)"*.
+
+**Is it a defect?** **No — working as designed, with the window the wrong size.** The architect's
+ruling put the lease in `stage.execute` and the backstop was built for exactly this population. What
+is wrong is only that a run type which *could* hold a lease is left on the bound meant for rows that
+cannot.
+
+**What it costs to leave.** About **an hour** of held reservation per dead ask run instead of about six
+minutes, and the size of that reservation is **not** the ask's own budget: the pending term values any
+**live** run at the *admitting* caller's reserve (`packages/infrastructure/src/cost/pending-run-spend.ts:44-46`),
+so a stranded ask row subtracts whatever the next admission is asking for — $0.50 when another ask is
+admitted (`DEFAULT_ASK_BUDGET_USD`, `packages/domain/src/ask/ask.ts:45`), **$15** when an
+`implementation` stage is — from every cap that is not the task cap, for that hour. The ask's own half
+stays `pending` for the same hour and then for ever, which is entry **121**.
+
+**Is it live, and what would make it urgent.** **Latent**, for backlog 109's reason: `startRuntime`
+composes `unavailableClaudeRunner` unless a `RunWorkspaceProvisioner` is present, so no production run
+of any kind has executed. It goes live with **WP-53**.
+
+**What "done" looks like.** The ask composition is given the same `RunLeaseOptions` the stage executor
+gets and the ask's run claims and renews it — the implementer's estimate is *"the same three lines"*.
+Asserted the way the sweep's own criterion (2) is: an ask run whose lease is being renewed is **not**
+swept, and one whose heartbeat stopped is ended at the lease bound rather than at the wall clock. The
+backstop stays; it is what covers every `runs` row written before migration 0035.
+
+**Needs measurement: none.** Every claim above is a file read or arithmetic over shipped defaults.
+
+**Depends on / owner. WP-48**, because it is the M4 row that runs immediately after WP-47 over the
+recovery pass and it already carries the ask half of this cluster (entry **121**) — one change, one
+session, one reviewer. Note honestly that the **files are not that row's usual ones**
+(`packages/application/src/ask/executor.ts` and `apps/server/src/pipeline.ts`, not
+`packages/application/src/recovery/stranded.ts`): if WP-48's implementer declines it, say so **in this
+entry** rather than dropping it, and the alternative owner is **WP-53**, which is when it stops being
+latent. Related: **121**, **109**, **110**.
+
+### 121. **An ask left `pending` by a run the sweep ended stays `pending` for ever — the run half of backlog 84's residual is closed and the ask half is not** (TODO, small — **owner: WP-48**; found by WP-47, session 6)
+
+> **M4 (refiner, session 6): folded into WP-48**, criterion (7) — a fourth row of the same table.
+
+**What is wrong.** The lease sweep ends the **run** and escalates the **task**. Nothing turns that
+ending into an ending for the *ask* the run was answering, so the question a human asked keeps saying
+`pending` after the platform has already decided nobody is working on it.
+
+**Evidence** (WP-47's implementer, session 6; confirmed off the tree by the refiner, nothing run —
+rule 66). The implementer's bullet, quoted: *"The sweep closes the *run* half of the residual
+`stranded.ts` states (backlog 84's neighbour), but nothing turns a `lease_expired` run into
+`recordRefusal(failed)` on its ask, so the thread still says "pending" for ever. It needs a handler on
+`run.failed` scoped to ask runs, or a fourth row of the table."*
+- The module says the same at the line — `packages/application/src/recovery/stranded.ts:86-92`:
+  *"Residual, **closed at WP-47** for one of its two halves … What is still open is the **ask**:
+  nothing turns that ending into a `recordRefusal`, so the ask itself stays `pending`."*
+- The sweep's ending writes the run and the task and nothing else
+  (`packages/application/src/recovery/run-lease.ts:312-331`).
+- The existing recovery row **cannot** see it by construction: `task_ask` keys on a pending ask **with
+  no run attached** (`packages/application/src/recovery/stranded.ts:69-74`, over
+  `task_asks_pending_idx`), and this ask has one.
+- The ending it would need **already exists and is already used**: `AskStore.endAsk` is
+  `recordRefusal(failed)` (`packages/application/src/recovery/stranded.ts:172-173`), called when the
+  `task_ask` row's one recovery attempt is spent (`:329-343`). No migration, no new port method.
+- The state is reachable and is already exercised for a different writer:
+  `packages/application/src/ask/ask-pipeline.test.ts` › "an ask whose run somebody else ended first"
+
+**What it costs to leave.** One question per dead ask run that never resolves, on the surface product/18
+puts in front of a user rather than in front of an operator. The task *is* escalated, so a human is
+told something — but not about the thing they asked, and if `features.ask.mirror_to_ticket` is on, the
+ticket thread the platform wrote into is left mid-conversation. It is the same shape backlog **84** and
+**105** were graded on, one table over: a row in a non-terminal state with no writer left alive.
+
+**Is it live, and what would make it urgent.** **Latent on the same trigger as 120** — no production run
+executes until **WP-53**. Note one producer that is *not* the sweep and needs no lease at all:
+`POST /api/runs/:run_id/cancel` ends an ask's run today (the route takes a run id and an ask's run is an
+ordinary `runs` row), so a human cancelling an ask's run is the cheapest way to reach this state the
+moment runs exist.
+
+**What "done" looks like.** Either a **fourth row of the recovery table** — an ask `pending` whose
+attached run is terminal, ended through `endAsk` with a reason naming the run's terminal reason — or a
+handler on `run.failed` scoped to ask runs. The row is the cheaper of the two and shares the pass, the
+timer and the store the other three rows use; the handler is the answer if the ending must be prompt
+rather than within a pass. Asserted the way that table's rows are asserted: end the run through the
+sweep, then read the **ask's own status** back rather than a return value, plus the negative case — an
+ask whose run is still live is untouched. No `recovery_attempted_at` is needed for the same reason the
+`run_lease` row needs none: this ends a row rather than re-enqueuing one.
+
+**Needs measurement: none.**
+
+**Depends on / owner. WP-48** — same file, same pass, same table, and the row already runs after WP-47.
+Related: **120** (the other half of the ask's exposure), **84**, **105**, **109**.
+
+### 122. **`cost_entries.late` is written on every late charge and read by nothing, so no surface can tell a charge that arrived after the run ended from one that arrived with it** (nit-to-small, TODO — **working as designed**, the label is deliberate and its reader is a product decision; **no work package owns it**; found by WP-47, session 6)
+
+> **M4 (refiner, session 6): no row owns it** — no M4 row opens a cost surface, and the reader is a
+> product decision this entry recommends rather than schedules.
+
+**What is wrong.** WP-47 added a boolean to the ledger to mark a spend recorded after its run was
+already terminal, and stopped there. Nothing publishes it: not the statistics screen, not the budget
+screen, not the task or run DTO.
+
+**Evidence** (refiner, session 6; file reads and greps, no test run — rule 66).
+- The implementer's bullet, quoted: *"No screen and no endpoint distinguishes a late charge from an
+  original one; the label exists so a reconciliation *can*, and publishing it is a product decision."*
+- The column: `packages/infrastructure/src/db/migrations/0035_run_lease_and_estimated_cost.sql:74`
+  (`add column late boolean not null default false;`). The writer:
+  `packages/application/src/cost/late.ts:142` sets `late: true` on every row it produces, stored at
+  `packages/infrastructure/src/cost/postgres-cost-store.ts:334,351`.
+- The reader: a grep for the column over `apps/server/src`, `apps/web/src`, `packages/contracts/src`
+  and `schemas/` answers **nothing** — no DTO field, no query, no schema.
+- The purpose is stated where it was decided (`packages/application/src/cost/late.ts:36-38`): *"An
+  operator reconciling an invoice is asking a different question of a charge the ledger made when the
+  run ended and one it made afterwards, and merging the two would answer both with the first."*
+
+**Defect or working as designed?** **Working as designed**, and the decision is recorded: the
+implementer chose a column over a log line precisely because the label has to survive into a
+reconciliation done months later. This entry exists so the next reader meets the decision rather than
+the trap — an unread column is the shape backlog **102** and **75** both turned out to be.
+
+**What it costs to leave.** Every cost surface sums `cost_entries` with late and original charges mixed
+and none of them is *wrong* — `apps/server/src/queries/stats-queries.ts:302`, the budget screen's reads
+in `apps/server/src/queries/cost-queries.ts`, and the task DTO's `cost_estimated_usd`, which migration
+0035 turned into a projection over `cost_entries where is_estimate`
+(`apps/server/src/queries/pipeline-queries.ts:619`). What no surface can answer is *"which of these
+charges arrived after the run had already been ended by somebody else"*, which is the only question
+the column was added for. Leaving it costs nothing today and costs a hand-written SQL query the first
+time an operator reconciles an invoice.
+
+**Recommendation, so the product decision is not re-derived.** Publish it the way `is_estimate` is
+already published — as a **share with its denominator** beside the estimate ratio at
+`apps/server/src/queries/stats-metrics.ts:382`, not as a per-row flag on a screen — and only when
+somebody asks the question. A per-row badge on the run screen is the alternative and it spends a
+column of a table an operator reads daily on a state that is rare by construction.
+
+**Needs measurement: how often a late charge actually happens** — zero times on this build, because no
+production run has executed (**WP-53**). Until there is a number, *"rare by construction"* is an
+argument rather than an observation.
+
+**Depends on / owner.** No dependency; the column, the writer and the tests exist. **No work package
+owns it.** **WP-41** shipped the statistics deep-dive and is DONE, and **no M4 row opens
+`apps/server/src/queries/cost-queries.ts` or the budget screen** — so the cheapest home is whoever next
+edits either, and the trigger that makes it worth doing is the first deployment whose runs can die
+outside their own process. Related: **50**, **110**, **102** (the same shape: a stored signal with no
+reader).
+
+### 123. **A task-level ending on `lostTheRun` would escalate a task the sweep has already escalated — no producer today, and the guard belongs in the entry before the branch is written** (nit, TODO, **latent with no producer** — **no work package owns it**, deliberately; found by WP-47, session 6)
+
+> **M4 (refiner, session 6): no row owns it, on purpose** — there is no producer, so this is a guard
+> for whoever writes the branch, not work to schedule.
+
+**What is wrong.** **Nothing, today.** Two writers now answer for one dead run — the sweep ends the row
+and escalates the task, and the process that was running it later reaches `lostTheRun` — and the second
+one escalates nothing. The moment somebody gives `lostTheRun` a task-level ending, one dead run produces
+two.
+
+**Evidence** (WP-47's implementer, session 6; the tree read by the refiner, nothing run — rule 66).
+- The implementer's bullet, quoted: *"A run swept while its process is alive produces two escalations.
+  The sweep escalates the task, and the run's own process then reaches `lostTheRun`, which escalates
+  nothing — so this is correct today."*
+- `lostTheRun` records the late cost and returns `{ kind: 'skipped', reason }` on both of its paths
+  (`packages/application/src/pipeline/stage-executor.ts:1185-1212`, the returns at `:1196` and `:1212`).
+  It touches no `tasks` row.
+- The sweep's escalation is already guarded: `canTransitionTask(task.task.state, 'needs_human')`
+  (`packages/application/src/recovery/run-lease.ts:312`), and `needs_human` has **no self-edge** —
+  `needs_human: ['active', 'paused', 'cancelled']`
+  (`packages/domain/src/aggregates/task-state-machine.ts:67`) — so a second escalation of a task that is
+  *still* escalated is refused by the state machine rather than by anybody remembering.
+
+**The trigger, stated precisely, because it is not the obvious one.** The exposure is **not** two
+escalations of an escalated task; that is already impossible. It is a task a **human resumed** between
+the sweep and the dying process's arrival: the task is `active` again, the transition is legal, and a
+new ending would park a task the human had just un-parked — for a run they were already told about. The
+window is the run's remaining wall clock, up to an **hour** (`runLimitsDefaults.wallClockMs`,
+`packages/application/src/ports/runner.ts:89`), which is exactly the span the sweep exists to cover.
+
+**What it costs to leave.** Nothing is known to be wrong (rule 44). What it costs is that the branch will
+be written by somebody who is not thinking about the sweep, and the incident will be a human's resume
+silently undone.
+
+**What "done" looks like — for whoever adds that ending, not as work to schedule now.** The ending is
+conditional on the run's own `terminal_reason`: a run ended by another writer (`lease_expired`,
+`cancelled`) already **has** an ending, so `lostTheRun` records the cost and stops, which is what it does
+today; anything added applies to a run *this* process ended. Plus the same `canTransitionTask` guard the
+sweep makes. Asserted from both sides (rule 42), and **counted rather than read as state**: a swept run
+whose process then finishes leaves exactly **one** `task.escalated` event, and a run lost for any other
+reason still reaches its own ending.
+
+**Needs measurement: none.**
+
+**Depends on / owner. No work package owns it, and one should not be created for it** — there is no
+producer, and a row opened to guard a branch nobody has written is a row that gets closed by deleting it.
+It is filed so the branch meets the guard instead of the incident. The nearest trigger is **WP-53** (the
+first production run that can be lost at all); **WP-49**'s *`needs_human` with a brief, and no new task
+state* is the shape such an ending would take, which is why writing it down before it is cheap. Related:
+**109**, **50**, **Q59**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -9531,8 +9759,8 @@ file, or the first work package that touches upgrade behaviour.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
-| WP-47 | **The run lease sweep, and the spend a run that ends outside its own process still owes** | TODO | — | Depends on WP-19, WP-15e, WP-15i, WP-36. Folds backlog **109**, **50**, **110**, **75**; implements **Q70 (b)**. The lease's owner, what a sweep may conclude from a missing heartbeat, and the `run.failed` ending are ruled **in the row**. One blocker (109) and three majors |
-| WP-48 | **The lost wake-up closed at its two remaining sites, and the seam that hid one** | TODO | — | Depends on WP-36, WP-35, WP-18b, and on **WP-47** (same file). Folds backlog **106** (major), **36**. Both sites asserted by dropping the enqueue and reading the row's own status back |
+| WP-47 | **The run lease sweep, and the spend a run that ends outside its own process still owes** | TODO | — | Depends on WP-19, WP-15e, WP-15i, WP-36. Folds backlog **109**, **50**, **110**, **75**; implements **Q70 (b)**. The lease's owner, what a sweep may conclude from a missing heartbeat, and the `run.failed` ending are ruled **in the row**. One blocker (109) and three majors. **Refiner (session 6), one sentence this change falsified and its notes do not name**: `docs/technical/08-api-and-realtime.md:107` still reads *"its outcome is then discarded, which is also why a cancelled run's spend is not accounted for"*, which the late-cost write makes false on both clauses. `packages/application/src/cost/late.ts:8` is **ambiguous rather than false** — the cancel stores no figure now, but the `run.finished` event it appends still carries `{usd: 0, is_estimate: true}` (`packages/application/src/pipeline/commands.ts:941`), which is what that sentence describes. Q70's own text **is** corrected, as an appended amendment at `docs/OPEN-QUESTIONS.md:77`. Discovered work is backlog **120**–**123** |
+| WP-48 | **The lost wake-up closed at its two remaining sites, and the seam that hid one** | TODO | — | Depends on WP-36, WP-35, WP-18b, and on **WP-47** (same file). Folds backlog **106** (major), **36**. Both sites asserted by dropping the enqueue and reading the row's own status back. **Refiner (session 6): also folds backlog 120 and 121**, WP-47's two ask-shaped leftovers — an ask's run claims no lease (the hour-long backstop rather than the six-minute one) and an ask left `pending` by a swept run is never ended. 121 is a fourth row of the same table; **120's files are `ask/executor.ts` and `apps/server/src/pipeline.ts`, not this row's** — decline it in the entry rather than dropping it |
 | WP-49 | **A poisoned event leaves the queue** | TODO | — | Depends on WP-04, WP-15e. Folds backlog **43** (major), **5**. The human-facing half reuses Q59's answer — `needs_human` with a brief — and adds no task state |
 | WP-50 | **The compose file passes what the server reads** | TODO | — | Depends on WP-22, WP-23. Folds backlog **54** (**blocker**: on a stock instance no integration can be created and no `_FILE` secret can be used). Shape (1) + (2) per the entry's recommendation; the guide currently teaches the workaround |
 | WP-51 | **The platform's own egress: a declared host allow-list, and an audit for a call with no binding** | TODO | — | Depends on WP-15b, WP-21, WP-38. Folds backlog **48** (**blocker**), **97**. Backlog 97 is ruled shape (a) — state the audit's scope rather than widen the table |
@@ -22003,3 +22231,111 @@ confirmation; those are deliberately unowned because there is nothing left to bu
 | Q88 | unowned — answered as built (the Covenant's contact names the maintainers); a real reporting address is a human's to choose |
 | Q89 | **WP-71** — stop publishing `latest`, and state in TD-019 what the four published tags mean |
 | Q90 | unowned — implemented (the workflow takes the administrator token when one exists); creating that token is a human's act, like WP-33's credential |
+
+#### WP-47 — the run lease, and the spend a run that ends outside its own process still owes
+
+**What shipped, in the order the row asks for it.** Migration **0035** (the only one; `run_terminal_reason`
+gains `lease_expired`, `runs.usd_estimated` becomes nullable and loses its default with the 0s
+backfilled to null, `cost_entries` gains `late`, `tasks.cost_estimated` is **dropped**);
+`packages/application/src/pipeline/lease.ts` (the heartbeat) and `recovery/run-lease.ts` (the sweep, a
+third row of `stranded.ts`'s table) with `infrastructure/src/recovery/postgres-expired-run-store.ts`;
+`cost/late.ts` plus `chargeRunSpend` extracted from `cost/ledger.ts` as its second caller;
+`RunRepository` gains `recordCost` and `renewLease` and `finish` takes `RunCost | null`;
+`apps/server/src/pipeline.ts` composes all three. technical/03 is amended for the `tasks`, `runs` and
+`cost_entries` rows in the same change.
+
+**Decisions and assumptions.**
+- **The sweep's mark is the terminal reason, not a column.** The plan row's dependency column says
+  "a migration … for the sweep's mark"; I read that as `lease_expired` needing an `alter type`, and
+  added **no** `runs.recovery_attempted_at`. The other two rows of `stranded.ts`'s table need an
+  attempt mark because they *re-enqueue* and must be bounded; this site **ends** the row, so the
+  state machine is the bound and a terminal run cannot be found by the query twice. Asserted: a
+  second pass is `{found: 0, ended: 0}`.
+- **The ending escalates the task itself.** Backlog 109 says *"so the stage executor's existing
+  escalation applies"* and nothing consumes `run.failed` in the pipeline (`EVENT_CONSUMPTION` has it
+  `handled` by the cost ledger alone), so "the existing escalation" is read as the *shape* —
+  `escalateTask` + `recordStageExited`, exactly as `escalateOnRun` does — performed by the sweep.
+  A run whose task cannot be escalated (`done`, `cancelled`) is **still ended**, because the run is
+  what holds the reservation.
+- **The claim is `select … for update`, not a re-read.** Criterion (2)'s negative case is not
+  expressible with a re-read at READ COMMITTED: a heartbeat committing between a `select` and an
+  `update` leaves `status = any(active)` true and the sweep ends a live run. The lock makes the two
+  orders the only two. Asserted in the integration tier, at the cutoff and one second either side.
+- **`cancelRunCommand` now stores `cost: null` rather than `{usd: 0, is_estimate: true}`.** This was
+  **required** rather than tidy: `recordCost` refuses a row that already carries a figure, and the
+  cancel's zero landed in `runs.usd_estimated`, so the late write would have been refused every
+  time. It was measured — the first version of the executor's new case asserted `$0.40` charged and
+  got `$0`. Q70's own text is corrected in `OPEN-QUESTIONS.md` rather than rewritten.
+- **`cost_entries.late` is a column rather than a log line**, because "labelled as a late report" has
+  to survive into a reconciliation an operator does months later; no reader publishes it yet, and the
+  integration and unit tiers read it back.
+- **`tasks.cost_estimated` is dropped, not kept and written** — backlog 75's own recommendation. The
+  DTO field is a projection over `cost_entries where is_estimate`, bounded to one page's task ids like
+  `conflictsFor`. Asserted at both boundaries: a task with one priced and one reported run publishes
+  **0.06**, not 0.46 and not the 0 the column published for every task the product ever served.
+- **The lease's two numbers**: TTL **5 min** (technical/02's stall timeout, for the related reason
+  that a process whose event loop has not run a timer in five minutes is not driving a run), renewed
+  at a third of it so two consecutive beats may be lost. The sweep adds the pass's own grace, so the
+  practical floor is ~6 minutes; the error is biased late, which costs money rather than work.
+- **The heartbeat never touches the run.** A beat that throws is logged and the next one tried; a beat
+  the row refuses stops the heartbeat. A lost lease does not stop a session — `finish` arbitrates.
+- **Criterion (7)'s figure, pinned**: `DEFAULT_STAGE_RUN_BUDGET_USD.implementation` is **15**, and
+  `test/integration/recovery/run-lease-sweep.integration.test.ts` › "ends the run, escalates the task,
+  and releases the $15 reservation it was holding" asserts `pendingSpend` = **15** before the sweep and
+  **0** after it, reading the number off the shipped default rather than typing it (rule 39).
+
+**What the sweep deliberately does not do.** It never concludes the model stopped, never writes a cost
+(both columns stay null and the ledger writes no row — rule 16), and never cancels anything. A run
+whose process is still alive finishes, finds the row terminal and writes the real figure through
+`recordCost`; a run whose process really died has nobody left to do that, and its spend is genuinely
+unknown. That is the residual, stated at the line in `cost/late.ts`.
+
+**Verdicts (this machine, load checked before each tier).** `PASS: verify` (exit 0) · `PASS:
+verify:integration` (exit 0) · `PASS: verify:e2e` **twice** (exit 0, exit 0) · `PASS: verify:ui` (exit
+0) · `PASS: verify:web-e2e` (exit 0). `verify:ui`/`verify:web-e2e` were run because
+`@platform/contracts` changed (rule 80).
+
+**Sentences corrected because this change falsified them (rule 83).** `cost/pending.ts` — the "residual,
+stated" paragraph (`usd_estimated` has a writer now) and the "sharp edge" paragraph (the reservation is
+no longer held for ever); `infrastructure/src/cost/pending-run-spend.ts` (the valuation);
+`recovery/stranded.ts` (the table is five sites, and the ask residual's run half is closed);
+`pipeline/commands.ts` and `apps/server/src/routes/commands.ts` (a cancel discards the **verdict**, not
+the spend); `apps/server/src/queries/stats-queries.ts` (`tasks.cost_estimated` no longer exists);
+`packages/contracts/src/records.ts` (`cost_estimated_usd` is a projection); `docs/OPEN-QUESTIONS.md`
+Q70; `docs/technical/03-data-model.md` (three rows); `CLAUDE.md` (a new "Where to look" bullet).
+
+**Discovered work.**
+- **The ask executor's runs claim no lease.** `packages/application/src/ask/executor.ts` inserts its own
+  `runs` row and WP-47 gave the lease a writer only in `stage.execute`, per the architect's ruling. Such
+  a run is covered by the **wall-clock backstop** alone — about an hour rather than six minutes. Closing
+  it is the same three lines the stage executor got; it is stated in `run-lease.ts`'s docblock.
+- **An ask left `pending` by a run the sweep ended stays `pending`.** The sweep closes the *run* half of
+  the residual `stranded.ts` states (backlog 84's neighbour), but nothing turns a `lease_expired` run
+  into `recordRefusal(failed)` on its ask, so the thread still says "pending" for ever. It needs a
+  handler on `run.failed` scoped to ask runs, or a fourth row of the table.
+- **`cost_entries.late` has no reader.** No screen and no endpoint distinguishes a late charge from an
+  original one; the label exists so a reconciliation *can*, and publishing it is a product decision.
+- **A run swept while its process is alive produces two escalations.** The sweep escalates the task, and
+  the run's own process then reaches `lostTheRun`, which escalates nothing — so this is correct today.
+  It becomes a question the moment a second writer gives `lostTheRun` a task-level ending.
+
+##### WP-47 — review round 1 (REQUEST_CHANGES): six findings, and the one that was a real hole
+
+Two **major**, two **minor**, two **nits**, all fixed on the same tree. (1) **Criterion (4)'s
+pending-term half had no test**: reverting `pendingRunUsdSql` to `coalesce(usd_reported, 0)` broke
+nothing, because every case that reaches that fragment seeded `usd_reported` or nothing at all —
+`postgres-cost-store.integration.test.ts` now seeds a run with `usd_estimated` and asserts it counts
+(3 → **3.25**), and the paragraph there that called such a run's contribution "nothing" is corrected
+(rule 83). Canaried on a **copy**: the mutant fails that case by name (`expected 3 to be 3.25`), and
+the restored file's md5 matches. (2) technical/08:107 said a cancelled run's spend is not accounted
+for — false on both clauses, rewritten. (3) `stage-executor.ts`'s docblock claimed a `finally` that
+does not exist; the honest options were "state the residual" or "await the drain", and the drain is
+what shipped — `StopHeartbeat` now resolves when the beat in flight has settled, so the connection
+claim the docblock makes is true rather than nearly true, with a case that holds a beat open and
+asserts the stop has not resolved. (4) the citation in `run-lease.test.ts` named a file that does not
+exist (rule 52). (5) `cancel` was read inside the callback it is assigned from — a TDZ
+`ReferenceError` for any scheduler that beats synchronously, now a nullable binding with a case that
+schedules synchronously and asserts it does not throw. (6) `stats-metrics.test.ts` still called the
+dropped column unwritten. The rule 83 sweep also caught `packages/contracts/src/records.ts`
+(`estimate_accuracy` understating on a cancelled run) and `docs/TODO.md`'s verification item (the
+`usd_estimated` writer half is closed; the window measurement is not).

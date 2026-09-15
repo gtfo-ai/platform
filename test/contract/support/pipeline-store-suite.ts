@@ -1047,6 +1047,239 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(loaded?.terminalReason).toBe('cancelled');
       });
 
+      /**
+       * The late cost write and the lease, WP-47 — the two methods a run that ends **outside its
+       * own process** needs.
+       *
+       * The seeding helper is shared because every case here is about a run in a particular state,
+       * and the states are the whole subject: live, terminal-with-no-figure, terminal-with-a-figure.
+       */
+      const liveRun = async (): Promise<Id> => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'refinement' as Slug,
+          attempt: 1,
+          causedByEventId: null,
+        });
+        const runId = nextId();
+        await store.runs.insert(tx, {
+          id: runId,
+          taskId: stored.task.id,
+          projectId,
+          stage: 'refinement' as Slug,
+          role: 'product_manager',
+          mode: 'normal',
+          attempt: 1,
+          model: 'claude-opus-5',
+          effort: 'medium',
+          promptVersion: 'basic@1+product_manager',
+          status: 'running',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: '2026-06-01T09:00:00.000Z',
+          startedAt: '2026-06-01T09:00:01.000Z',
+        });
+        return runId;
+      };
+
+      const MEASURED = {
+        sessionId: 'session-1',
+        numTurns: 4,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: { usd: 1.25, is_estimate: false, price_list_id: null },
+        wallMs: 900,
+      };
+
+      it('stores no cost at all for a run finished without one, rather than a zero', async () => {
+        const runId = await liveRun();
+        // What the lease sweep writes: it ends the row and has no figure, and `{ usd: 0 }` there
+        // would be published as a free run (standing rule 16).
+        expect(
+          await store.runs.finish(tx, {
+            runId,
+            status: 'failed',
+            terminalReason: 'lease_expired',
+            sessionId: null,
+            numTurns: 0,
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_write_5m_tokens: 0,
+              cache_write_1h_tokens: 0,
+              cache_read_tokens: 0,
+            },
+            cost: null,
+            wallMs: 10,
+          }),
+        ).toBe(true);
+
+        expect((await store.runs.load(tx, runId))?.cost).toBeNull();
+      });
+
+      it('keeps the estimate and the reported figure apart, in the two columns they belong to', async () => {
+        const reported = await liveRun();
+        await store.runs.finish(tx, {
+          runId: reported,
+          status: 'completed',
+          terminalReason: 'success',
+          sessionId: null,
+          numTurns: 1,
+          usage: MEASURED.usage,
+          cost: { usd: 2, is_estimate: false, price_list_id: null },
+          wallMs: 10,
+        });
+        const estimated = await liveRun();
+        await store.runs.finish(tx, {
+          runId: estimated,
+          status: 'completed',
+          terminalReason: 'success',
+          sessionId: null,
+          numTurns: 1,
+          usage: MEASURED.usage,
+          // BD-004 `local` mode: the platform priced this, the provider reported nothing.
+          cost: { usd: 3, is_estimate: true, price_list_id: null },
+          wallMs: 10,
+        });
+
+        expect((await store.runs.load(tx, reported))?.cost).toEqual({
+          usd: 2,
+          is_estimate: false,
+          price_list_id: null,
+        });
+        // `usd_estimated` had no writer at all before WP-47, so this round trip is the whole of
+        // what made a `local`-mode run read as free on the wire and commit nothing to any cap.
+        expect((await store.runs.load(tx, estimated))?.cost).toEqual({
+          usd: 3,
+          is_estimate: true,
+          price_list_id: null,
+        });
+      });
+
+      it('records a cost against an already-terminal run, and only the cost', async () => {
+        const runId = await liveRun();
+        await store.runs.finish(tx, {
+          runId,
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          cost: null,
+          wallMs: 10,
+        });
+
+        expect(await store.runs.recordCost(tx, { runId, ...MEASURED })).toBe(true);
+
+        const loaded = await store.runs.load(tx, runId);
+        // The **status** is untouched: the other writer's decision is the one that stands, and this
+        // is a narrow write of the cost, never a whole row (standing rule 79).
+        expect(loaded?.status).toBe('cancelled');
+        expect(loaded?.terminalReason).toBe('cancelled');
+        expect(loaded?.cost).toEqual({ usd: 1.25, is_estimate: false, price_list_id: null });
+      });
+
+      it('refuses a late cost for a live run, and for a row that already carries a figure', async () => {
+        const live = await liveRun();
+        // The live run's cost belongs to its own `finish`; writing it here would be the lost update
+        // the conditional predicate exists to refuse.
+        expect(await store.runs.recordCost(tx, { runId: live, ...MEASURED })).toBe(false);
+
+        const ended = await liveRun();
+        await store.runs.finish(tx, {
+          runId: ended,
+          status: 'completed',
+          terminalReason: 'success',
+          sessionId: null,
+          numTurns: 1,
+          usage: MEASURED.usage,
+          cost: { usd: 9, is_estimate: false, price_list_id: null },
+          wallMs: 10,
+        });
+        expect(await store.runs.recordCost(tx, { runId: ended, ...MEASURED })).toBe(false);
+        // …and the figure that was there is still there: a refusal that half-wrote would be worse
+        // than one that threw.
+        expect((await store.runs.load(tx, ended))?.cost?.usd).toBe(9);
+      });
+
+      it('refuses to record a cost for a run it has never seen', async () => {
+        await expect(store.runs.recordCost(tx, { runId: nextId(), ...MEASURED })).rejects.toThrow();
+      });
+
+      it('claims a lease, lets its owner renew it, and refuses a stranger and a finished run', async () => {
+        const runId = await liveRun();
+
+        expect(
+          await store.runs.renewLease(tx, {
+            runId,
+            owner: 'server-1',
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(true);
+        expect(
+          await store.runs.renewLease(tx, {
+            runId,
+            owner: 'server-1',
+            expiresAt: '2026-06-01T09:10:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(true);
+        // A second process must not take a lease whose holder may still be alive.
+        expect(
+          await store.runs.renewLease(tx, {
+            runId,
+            owner: 'server-2',
+            expiresAt: '2026-06-01T09:10:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(false);
+
+        await store.runs.finish(tx, {
+          runId,
+          status: 'completed',
+          terminalReason: 'success',
+          sessionId: null,
+          numTurns: 1,
+          usage: MEASURED.usage,
+          cost: { usd: 1, is_estimate: false, price_list_id: null },
+          wallMs: 10,
+        });
+        // A heartbeat that arrived late finds the run terminal and writes nothing, which is what
+        // lets the sweep and the run's own process race safely.
+        expect(
+          await store.runs.renewLease(tx, {
+            runId,
+            owner: 'server-1',
+            expiresAt: '2026-06-01T09:15:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(false);
+      });
+
+      it('answers false rather than throwing when a lease is asked for a run that does not exist', async () => {
+        expect(
+          await store.runs.renewLease(tx, {
+            runId: nextId(),
+            owner: 'server-1',
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(false);
+      });
+
       it('refuses to finish a run it has never seen', async () => {
         await expect(
           store.runs.finish(tx, {

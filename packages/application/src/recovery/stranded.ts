@@ -11,14 +11,25 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Four sites, two of them here, and the other two named rather than silently absent
+ * ## Five sites, three of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
  * | history bootstrap | **101** | the whole batch, permanently | **here** — `history_bootstrap` below |
  * | ask-the-task | **84** | one question, pending for ever | **here** — `task_ask` below |
+ * | a run nothing is driving | **109** | the run's row *and its budget reservation*, for ever | **here** — `run_lease`, in `./run-lease.ts` |
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
  * | curation, `artifact.created` | **36** | one task's proposals | **not built**, and the reason is below |
+ *
+ * **The run row is a different shape from the two above it, and that is why its body is its own
+ * module** (WP-47). This table's contract is *"find the row, enqueue the wake-up"*, bounded by an
+ * attempt mark; a run whose process vanished has no wake-up to re-enqueue — there is nothing left
+ * to wake — so the recovery is an **ending** rather than a retry: `run.failed` with the terminal
+ * reason `lease_expired`, and the task escalated. It needs no `recovery_attempted_at` for the same
+ * reason, because a terminal run cannot be found by the query twice. It rides this pass because
+ * backlog 101's argument is about *timers*: one pass, one interval, one grace period, one pooled
+ * connection. `./run-lease.ts` carries the whole of what a missing heartbeat does and does not
+ * license anybody to conclude.
  *
  * **Why entry 20 is not a row of this table.** Its remedy is not a re-enqueue: the wake-up it lost
  * was an `afterCommit` callback of an event *handler*, and re-dispatching that event position is
@@ -72,12 +83,13 @@
  * collapsed anything and the next pass started a **second paid run**, once a minute, with the ask
  * budget never firing because a run that wrote no answer wrote no `cost_entries` row either.
  *
- * *Residual, stated rather than implied*: an ask that is `pending` **with** a run attached is now
- * outside this table in both directions — it is never re-enqueued and never ended, so it stays
- * `pending`. That row is not a lost wake-up: its wake-up arrived and its run died, which is a
- * different question (*"is there a run that will never finish?"*) with a different reader
- * (`runs.status`) and no cheap idempotency. It is named here so the next reader meets the decision
- * rather than the gap.
+ * *Residual, **closed at WP-47** for one of its two halves*: an ask that is `pending` **with** a run
+ * attached is still outside the two rows above — it is never re-enqueued and never ended by them.
+ * The question it was waiting on, *"is there a run that will never finish?"*, now has an owner: the
+ * `run_lease` row below ends that run, so the ask's own `attachRun` link points at a terminal row
+ * rather than an eternal one. What is still open is the **ask**: nothing turns that ending into a
+ * `recordRefusal`, so the ask itself stays `pending`. That is stated here so the next reader meets
+ * the decision rather than the gap, and it is in `PROGRESS.md` under discovered work.
  *
  * ## The grace period is the interval, and that is one knob rather than two
  *
@@ -95,6 +107,8 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { RunLeaseSweepOptions } from './run-lease.js';
+import { sweepExpiredRunLeases } from './run-lease.js';
 
 /** A history bootstrap batch whose `collect` wake-up was lost (backlog 101). */
 export interface StrandedBootstrapBatch {
@@ -168,6 +182,16 @@ export interface StrandedRecoveryOptions {
   readonly graceMs: number;
   /** How many rows **per site** one pass may act on. @default 50 */
   readonly limit?: number;
+  /**
+   * The third site: runs no process is renewing the lease of (backlog **109**, `./run-lease.ts`).
+   *
+   * **Absent is "runs are not swept"**, which is what every build before WP-47 did — a dead run
+   * stayed `running` for ever and held its stage's budget with it. It is optional because this
+   * site needs collaborators the other two do not (the whole `PipelineStore`, the event store and a
+   * command context: it ends an aggregate rather than enqueuing a job), so a composition that has
+   * no pipeline can still recover the two that are only queries.
+   */
+  readonly runs?: Omit<RunLeaseSweepOptions, 'clock' | 'graceMs' | 'limit' | 'logger'>;
   readonly logger?: Logger;
 }
 
@@ -320,7 +344,7 @@ export const runStrandedRecovery = async (
     );
   }
 
-  return [
+  const sites: StrandedSiteReport[] = [
     {
       site: 'history_bootstrap',
       found: found.bootstraps.length,
@@ -329,4 +353,20 @@ export const runStrandedRecovery = async (
     },
     { site: 'task_ask', found: found.asks.length, reEnqueued: asks, ended: asksEnded },
   ];
+
+  if (options.runs !== undefined) {
+    // The third site ends rows rather than re-enqueuing wake-ups, so `reEnqueued` is 0 by
+    // construction and `ended` is the whole of what it did — which is why its own report has a
+    // `skipped` count this shape has nowhere to put, and why that count is in its log line.
+    const runs = await sweepExpiredRunLeases({
+      ...options.runs,
+      clock: options.clock,
+      graceMs: grace,
+      limit,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    });
+    sites.push({ site: 'run_lease', found: runs.found, reEnqueued: 0, ended: runs.ended });
+  }
+
+  return sites;
 };

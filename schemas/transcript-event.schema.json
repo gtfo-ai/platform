@@ -687,7 +687,8 @@
         "cancelled",
         "stalled",
         "timed_out",
-        "crash"
+        "crash",
+        "lease_expired"
       ]
     },
     "Sequence": {

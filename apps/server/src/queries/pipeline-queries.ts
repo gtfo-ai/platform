@@ -63,13 +63,14 @@ import type {
 import { transcriptEventSchema } from '@platform/contracts';
 import { estimateAccuracy, resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 
 const {
   approvals,
   artifacts,
+  costEntries,
   events,
   humanTimeEntries,
   projects,
@@ -133,7 +134,8 @@ interface RunProjectionRow {
   readonly cacheWrite1hTokens: number;
   readonly cacheReadTokens: number;
   readonly usdReported: string | null;
-  readonly usdEstimated: string;
+  /** Nullable since migration 0035 (WP-47): neither column set is "nobody measured this run". */
+  readonly usdEstimated: string | null;
   readonly priceListId: string | null;
   readonly wallMs: number;
   readonly redactionCount: number;
@@ -211,6 +213,13 @@ const toRunRecord = (row: RunProjectionRow, modelUsage: readonly ModelUsage[]): 
       cache_read_tokens: row.cacheReadTokens,
     },
     model_usage: [...modelUsage],
+    // **Both columns may be null since WP-47** (migration 0035), and that is a third answer rather
+    // than a spelling of zero: `usd_reported` is the provider's figure, `usd_estimated` is the
+    // platform's own pricing of a `local`-mode run — written since WP-47, so a whole provider mode
+    // stopped reading as free here — and neither means *nobody measured this run*, which is what
+    // the lease sweep leaves behind. The DTO has no spelling for "unknown" (`RunCost.usd` is a
+    // required number), so it reads 0 with `is_estimate` set, exactly as the per-model list one
+    // level up already does and says.
     cost: {
       usd: usd(row.usdReported ?? row.usdEstimated),
       is_estimate: row.usdReported === null,
@@ -538,9 +547,34 @@ const conflictsFor = async (
   );
 };
 
+/**
+ * What each of these tasks has spent that was **priced rather than reported** (WP-47, backlog 75).
+ *
+ * `conflictsFor`'s shape one table across, and bounded the same way: it is only ever asked about
+ * the tasks of one page, so the `in` list is at most `limit` long and the read uses
+ * `cost_entries_task_idx`. A task with no estimated entry is absent from the map and publishes `0`
+ * — which here is a **measurement** (the ledger has rows for this task and none of them is an
+ * estimate), not the absence the dropped column could not tell apart from one.
+ */
+const estimatedSpendFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, number>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .select({ taskId: costEntries.taskId, usd: sum(costEntries.usd) })
+    .from(costEntries)
+    .where(and(inArray(costEntries.taskId, [...taskIds]), eq(costEntries.isEstimate, true)))
+    .groupBy(costEntries.taskId);
+  return new Map(rows.map((row) => [row.taskId, usd(row.usd)]));
+};
+
 const toTaskRecord = (
   row: typeof tasks.$inferSelect,
   conflict: TaskConflict | null,
+  estimatedUsd: number,
 ): TaskRecord => ({
   id: row.id as Id,
   project_id: row.projectId as Id,
@@ -579,7 +613,14 @@ const toTaskRecord = (
   // that the other task is clear.
   conflict,
   cost_actual_usd: usd(row.costActual),
-  cost_estimated_usd: usd(row.costEstimated),
+  // WP-47, backlog **75**: **not** a column. `tasks.cost_estimated` was `not null default 0` from
+  // migration 0004 and had no writer anywhere in the tree, so every task the product ever served
+  // published `$0.00` of estimated spend — "nobody counted" rendered as "nothing was estimated".
+  // Migration 0035 drops it and this is a projection over `cost_entries where is_estimate`, the
+  // per-row flag the ledger has written since WP-19: one number, one writer, nothing to keep in
+  // step. A task with one priced and one reported run therefore publishes the **priced** amount and
+  // not the sum, which `cost_estimated_usd`'s own definition says and the column never could.
+  cost_estimated_usd: estimatedUsd,
   // The refinement estimate, its provenance, and product/19 §10's accuracy metric — which is
   // **computed from `estimate_usd` and `cost_actual` and from nothing else** (`estimateAccuracy`),
   // so there is no third number to keep in step. `estimate_basis` is null for a task the estimator
@@ -741,7 +782,7 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const [usage, takenOver, humanTime, conflicts] = await Promise.all([
+  const [usage, takenOver, humanTime, conflicts, estimated] = await Promise.all([
     modelUsageFor(
       database,
       runRows.map((row) => row.id),
@@ -751,10 +792,11 @@ export const findTaskDetail = async (
     // belongs to the project that owns the task, and a caller cannot name a different one.
     findHumanTime(database, taskId, task.projectId),
     conflictsFor(database, [taskId]),
+    estimatedSpendFor(database, [taskId]),
   ]);
 
   return {
-    task: toTaskRecord(task, conflicts.get(task.id) ?? null),
+    task: toTaskRecord(task, conflicts.get(task.id) ?? null, estimated.get(task.id) ?? 0),
     taken_over: takenOver,
     human_time: humanTime,
     stages: stageRows.map((row) => ({
@@ -1000,12 +1042,20 @@ export const listProjectTasks = async (
   // One extra read per page for the board's conflict badge (backlog 63), over the ids of the page
   // and never over the project: a warning for a task the caller is not being shown is not a row
   // this answer has anywhere to put.
-  const conflicts = await conflictsFor(
-    database,
-    page.map((row) => row.task.id),
-  );
+  const [conflicts, estimated] = await Promise.all([
+    conflictsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    estimatedSpendFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+  ]);
   return {
-    items: page.map((row) => toTaskRecord(row.task, conflicts.get(row.task.id) ?? null)),
+    items: page.map((row) =>
+      toTaskRecord(row.task, conflicts.get(row.task.id) ?? null, estimated.get(row.task.id) ?? 0),
+    ),
     ...(rows.length > query.limit && last !== undefined
       ? { next: { createdAt: last.cursorAt, id: last.task.id } }
       : {}),

@@ -55,6 +55,15 @@ export interface RunCostContext {
   readonly stage: string;
   /** `runs.model` — the model the platform asked for, and the primary entry's model. */
   readonly model: string;
+  /**
+   * Is this a **late** report — a spend recorded after the run was already terminal (WP-47)?
+   *
+   * Required rather than defaulted, so each of the two callers says which it is (standing rule
+   * 10). `false` is the ledger handler on the run's own `run.finished` / `run.failed`; `true` is
+   * `recordLateRunCost`, which runs when a cancel or the lease sweep ended the row with the zero
+   * only the process that ran it could replace (Q70 (b)).
+   */
+  readonly late: boolean;
 }
 
 /** What the producer said the run cost. `null` fields are absences, never zeros. */
@@ -79,6 +88,8 @@ export interface CostLedgerEntry {
   /** What the ledger counts as spent: reported when there is a report, priced when there is not. */
   readonly usd: number;
   readonly isEstimate: boolean;
+  /** {@link RunCostContext.late}, carried onto the row so `cost_entries.late` can be written. */
+  readonly late: boolean;
   readonly priceListId: string | null;
   /** The provider's own per-model number, when it gave one. */
   readonly usdReported: number | null;
@@ -298,6 +309,7 @@ export const ledgerEntriesForRun = (
     orgId: context.orgId,
     template: context.template,
     stage: context.stage,
+    late: context.late,
   };
   const unpriced: string[] = [];
   const priced = split.map((entry) => {

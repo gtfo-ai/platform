@@ -244,4 +244,60 @@ describe('the stranded-work pass', () => {
       ]);
     });
   });
+
+  /**
+   * The third site (WP-47): a run nothing is renewing the lease of.
+   *
+   * What is asserted here is that the pass **runs it on the same timer and reports it**, which is
+   * backlog 101's whole argument for one pass; what the sweep *does* is
+   * `./run-lease.test.ts`'s subject and is not re-asserted through this seam.
+   */
+  describe('the run-lease site', () => {
+    it('is absent from the report when the composition did not ask for it', async () => {
+      const { report } = await passOver({});
+
+      // Absence is a composition that has not opted in, not a silent skip: a build with no
+      // pipeline store still recovers the two sites that are only queries.
+      expect(report.map((site) => site.site)).toEqual(['history_bootstrap', 'task_ask']);
+    });
+
+    it('rides the same pass, with the same grace, and reports what it ended', async () => {
+      const asked: { graceMs: number; limit: number }[] = [];
+      const report = await runStrandedRecovery({
+        store: {
+          strandedBootstraps: async () => [],
+          markBootstrapAttempt: async () => {},
+          endBootstrap: async () => {},
+          strandedAsks: async () => [],
+          markAskAttempt: async () => {},
+          endAsk: async () => {},
+        },
+        unitOfWork: new MemoryEventing(),
+        jobs: recordingJobs(),
+        clock: { now: () => NOW },
+        graceMs: 60_000,
+        runs: {
+          // The sweep is reached through its own options object, so what this case can see is the
+          // two numbers the pass hands it — which is exactly what "one pass, one interval" means.
+          store: {
+            expiredRuns: async (_tx, query) => {
+              asked.push({ graceMs: 0, limit: query.limit });
+              return [];
+            },
+            claimExpiredRun: async () => false,
+          },
+          pipeline: undefined as never,
+          unitOfWork: new MemoryEventing(),
+          eventStore: { nextStreamSequence: async () => 1 },
+          context: () => undefined as never,
+          wallClockMs: 60 * 60_000,
+        },
+      });
+
+      expect(asked).toEqual([{ graceMs: 0, limit: 50 }]);
+      // `reEnqueued: 0` by construction: this site ends rows rather than waking them, which is why
+      // it needs no attempt mark.
+      expect(report.at(-1)).toEqual({ site: 'run_lease', found: 0, reEnqueued: 0, ended: 0 });
+    });
+  });
 });

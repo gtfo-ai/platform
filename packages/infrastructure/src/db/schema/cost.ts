@@ -64,6 +64,16 @@ export const costEntries = pgTable(
     cacheRead: bigint('cache_read', { mode: 'number' }).notNull().default(0),
     usd: usd('usd').notNull(),
     isEstimate: boolean('is_estimate').notNull().default(false),
+    /**
+     * This row was charged **after** the run was already terminal (migration 0035, WP-47, Q70 (b)).
+     *
+     * A cancelled or lease-expired run is ended by somebody other than the process running it, with
+     * the zero that process is the only one that could have replaced — so its real spend reaches the
+     * ledger later, from `runs.recordCost` plus `recordLateRunCost`. Labelled rather than merged
+     * into the original charge, because an operator reconciling an invoice is asking a different
+     * question about the two.
+     */
+    late: boolean('late').notNull().default(false),
     priceListId: uuid('price_list_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

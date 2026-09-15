@@ -113,6 +113,7 @@ describe('the memory cost store', () => {
         },
         usd: 1,
         isEstimate: false,
+        late: false,
         priceListId: null,
         usdReported: 1,
         usdEstimated: null,

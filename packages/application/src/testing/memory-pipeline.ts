@@ -17,7 +17,7 @@
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  */
-import type { ArtifactType, EstimateBasis, Id, Size, Slug } from '@platform/contracts';
+import type { ArtifactType, EstimateBasis, Id, IsoDateTime, Size, Slug } from '@platform/contracts';
 import {
   taskCoverageSchema,
   taskDependenciesSchema,
@@ -85,6 +85,18 @@ export interface MemoryPipelineStore extends PipelineStore {
       readonly samples: number;
     },
   ): void;
+  /**
+   * Runs the cost ledger has charged — the seam `RunRepository.recordCost`'s third predicate needs.
+   *
+   * In PostgreSQL the predicate is `not exists (select 1 from cost_entries …)`, a table this store
+   * does not have. A fake that simply dropped the check would be **kinder** than production
+   * (standing rule 1): it would accept a second charge of the same run and let a test that ought to
+   * fail pass. So the harness that owns the ledger adds the run id here when it charges it, and
+   * this store refuses exactly what the database refuses.
+   */
+  readonly chargedRuns: Set<Id>;
+  /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
+  leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
 }
 
 export interface MemoryPipelineStoreOptions {
@@ -108,6 +120,9 @@ export const createMemoryPipelineStore = (
   const questions = new Map<Id, Question>();
   const approvals = new Map<Id, StoredApproval>();
   const breakdown = new Map<Id, StoredBreakdownItem>();
+  /** `runs.lease_owner` / `lease_expires_at`, which this store keeps beside the row (WP-47). */
+  const leases = new Map<Id, { owner: string; expiresAt: IsoDateTime }>();
+  const chargedRuns = new Set<Id>();
   let sequence = 0;
 
   /**
@@ -436,6 +451,46 @@ export const createMemoryPipelineStore = (
       });
       return true;
     },
+    /**
+     * The late cost write (WP-47), with the SQL adapter's three predicates spelled out.
+     *
+     * The fake refuses everything the database refuses and nothing more (standing rule 1): a live
+     * run, a row that already carries a figure, and — the one this store cannot see — a run the
+     * ledger has already charged, which it asks the caller about through {@link chargedRuns}. A
+     * fake that answered `true` where PostgreSQL answers `false` would launder a double charge into
+     * a pass.
+     */
+    recordCost: async (_tx, late) => {
+      const run = runs.get(late.runId);
+      if (run === undefined) {
+        throw new PipelineStoreError(`run ${late.runId} does not exist`);
+      }
+      if (isActiveRunStatus(run.status) || run.cost !== null || chargedRuns.has(late.runId)) {
+        return false;
+      }
+      runs.set(late.runId, {
+        ...run,
+        sessionId: run.sessionId ?? late.sessionId,
+        numTurns: Math.max(run.numTurns, late.numTurns),
+        usage: late.usage,
+        cost: late.cost,
+        wallMs: Math.max(run.wallMs, late.wallMs),
+      });
+      return true;
+    },
+    /** Conditional on the run being live and on the lease being unheld or this owner's. */
+    renewLease: async (_tx, lease) => {
+      const run = runs.get(lease.runId);
+      if (run === undefined || !isActiveRunStatus(run.status)) {
+        return false;
+      }
+      const held = leases.get(lease.runId);
+      if (held !== undefined && held.owner !== lease.owner) {
+        return false;
+      }
+      leases.set(lease.runId, { owner: lease.owner, expiresAt: lease.expiresAt });
+      return true;
+    },
     load: async (_tx, runId) => {
       const run = runs.get(runId);
       return run === undefined ? null : clone(run);
@@ -596,6 +651,11 @@ export const createMemoryPipelineStore = (
           estimateSamples: estimate.samples,
         }),
       );
+    },
+    chargedRuns,
+    leaseOf: (runId) => {
+      const held = leases.get(runId);
+      return held === undefined ? null : { ...held };
     },
     snapshot: () => [...tasks.values()].map(clone),
     get stageRows() {

@@ -104,7 +104,11 @@
 > Two limits of that surface are the product's rather than the code's. `POST /api/runs/:id/cancel`
 > ends the run **as a record** and pauses its task; it cannot interrupt the model's session, because
 > reaching a live run from another process is Q52's unbuilt transport — the session ends on its own
-> and its outcome is then discarded, which is also why a cancelled run's spend is not accounted for.
+> and its **verdict** is then discarded. Its **spend is not**, since WP-47: the process that ran the
+> session is the only one that knows what the attempt cost, so it writes the figure onto the
+> already-terminal row through the narrow `runs.recordCost` and charges the ledger from the same
+> transaction (Q70 (b)). What is still lost is a cancel whose process then dies before it finishes —
+> nobody is left to report the number — and that residual is Q52's.
 > And **no HTTP request escalates a task**: a spent iteration loop and an exhausted write-conflict
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >

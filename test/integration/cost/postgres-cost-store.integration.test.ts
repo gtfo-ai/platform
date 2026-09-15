@@ -211,13 +211,15 @@ describe('what a budget window counts before the ledger has written it', () => {
         status: string,
         usdReported: string | null,
         endedAt: string | null,
+        /** The platform's own pricing of the run — `runs.usd_estimated`, WP-47. */
+        usdEstimated: string | null = null,
       ): Promise<string> => {
         const created = await client.query<{ id: string }>(
           `insert into runs (task_id, project_id, role, model, prompt_version, status,
-                             usd_reported, ended_at)
-           values ($1, $2, 'developer', 'claude-sonnet-5', 'v1', $3::run_status, $4, $5)
+                             usd_reported, usd_estimated, ended_at)
+           values ($1, $2, 'developer', 'claude-sonnet-5', 'v1', $3::run_status, $4, $6, $5)
            returning id`,
-          [taskId, projectId, status, usdReported, endedAt],
+          [taskId, projectId, status, usdReported, endedAt, usdEstimated],
         );
         return created.rows[0]?.id as string;
       };
@@ -242,10 +244,25 @@ describe('what a budget window counts before the ledger has written it', () => {
       );
       expect(await store.pendingSpend(tx, project, since, 3)).toBe(3);
 
-      // The residual, asserted rather than described: a run that ended reporting nothing (a local
-      // run the ledger will price, or a failure that carried no cost) commits nothing here.
+      /**
+       * **The platform's own figure counts too** — WP-47, PROGRESS backlog **110**.
+       *
+       * `RunRepository.finish` writes `usd_estimated` when the cost is an estimate, which under
+       * BD-004 `local` mode is **every** run, so the valuation is
+       * `coalesce(usd_reported, usd_estimated, 0)` rather than `coalesce(usd_reported, 0)`. This
+       * case is what holds that: with the older fragment it reads 3 and with this one it reads
+       * 3.25, so reverting the `coalesce` fails here rather than passing silently — which is
+       * exactly what it did before this case existed. The paragraph that used to sit here called
+       * such a run's contribution "nothing" and was true when it was written.
+       */
+      await insertRun('completed', null, new Date().toISOString(), '0.250000');
+      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.25);
+
+      // The one run that genuinely commits nothing: **neither** column set, which is what the lease
+      // sweep leaves behind and means "nobody measured this run" rather than "it was free"
+      // (standing rule 16). The ledger writes no row for it either, so nothing ever replaces it.
       await insertRun('failed', null, new Date().toISOString());
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3);
+      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.25);
 
       // …and a run that ended **before** the window opened is not this window's business.
       await insertRun(
@@ -253,7 +270,7 @@ describe('what a budget window counts before the ledger has written it', () => {
         '9.000000',
         new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
       );
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3);
+      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.25);
     } finally {
       await client.query('rollback');
       await client.end();

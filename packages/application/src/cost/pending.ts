@@ -24,7 +24,8 @@
  * > **A cap is compared against what the scope has spent *and* what it has committed.** A run the
  * > ledger has not recorded is counted at what it may still spend — the stage's per-run cap, the
  * > same figure the admission already adds for the run it is about to start — while it is live,
- * > and at the figure its **own** transaction wrote (`runs.usd_reported`) once it has ended.
+ * > and at the figure its **own** transaction wrote (`runs.usd_reported`, or `runs.usd_estimated`
+ * > when the platform priced it — WP-47) once it has ended.
  *
  * The two halves are what make the term self-clearing rather than a second running total to keep
  * true: a live run's reservation disappears the moment it ends, an ended run's reported figure is
@@ -38,16 +39,24 @@
  * the run's transaction moves cannot lag the run; a cap read from a projection a later handler
  * writes always can.
  *
- * ## The residual, stated
+ * ## The residual, **closed at WP-47**
  *
- * A run that ends **without a figure of its own** — a local-mode run whose cost the platform
- * prices from `price_list`, or a `run.failed` that carried no cost — contributes **nothing** to
- * the pending term between its own commit and its ledger row, because `runs.usd_reported` is
- * `null` for it and a price table is the ledger's to read, not an admission's. The exposure is one
- * such run's spend for the dispatcher's latency, and it fails in the same direction as before this
- * change rather than in a new one. Pricing at admission, or a `runs.usd_estimated` written by
- * `finish`, would close it; both are more than this fix is, and neither is needed for the reported
- * costs every API-mode run carries.
+ * A run that ended **without a figure of its own** — a local-mode run whose cost the platform
+ * prices from `price_list`, or a `run.failed` that carried no cost — used to contribute **nothing**
+ * to the pending term between its own commit and its ledger row, because `runs.usd_reported` is
+ * `null` for it. Under BD-004 `local` mode that is *every* run (`is_estimate: spec.providerMode ===
+ * 'local'`), so one whole provider mode was invisible to every cap for the dispatcher's latency —
+ * the reading PROGRESS backlog **110** added to this paragraph's own understatement.
+ *
+ * It is closed by giving `runs.usd_estimated` its first writer — `RunRepository.finish` puts the
+ * run's own figure there when it is an estimate (migration 0035 made the column nullable, because
+ * `not null default 0` could not tell "nobody priced it" from "it cost zero") — and by reading
+ * `coalesce(usd_reported, usd_estimated, 0)` here. Pricing **at admission** is still refused for the
+ * reason it always was: a price table is the ledger's to read, not an admission's.
+ *
+ * What remains is the honest absence: a run **nobody measured** — the one the lease sweep ends —
+ * has neither column set and counts 0, with no ledger row ever written for it either (standing
+ * rule 16). That is not a gap in the term; it is the term saying that nothing is known.
  *
  * The other direction is stated too: a **live** run is counted at the admitting stage's per-run
  * cap, which is exact when the scope is one kind of work (a bootstrap batch mines with one stage)
@@ -55,17 +64,22 @@
  * already knows rather than a new number to configure, and it is spent only while a run is live,
  * so the approximation has the lifetime of a run and not of a window.
  *
- * **And the sharp edge of that, named rather than implied: a run whose process died is `running`
- * for ever in this build, and it therefore holds its reservation for ever.** Nothing expires a
- * run's lease — `runs.lease_owner`/`lease_expires_at` have no reader or writer — and
- * `recovery/stranded.ts` says in as many words that *"is there a run that will never finish?"* is a
- * different question with no owner yet. The consequence is a cap that reads high by one run's
- * budget until a human ends the row or raises the cap, which is the **fail-closed** direction
- * (standing rule 20: a mutation refuses) and is **visible** — the pause names the committed figure
- * apart from the spent one, which is why {@link capSpendDetail} keeps them apart. The alternative,
- * counting only runs that have ended, trades a stuck cap for silently spending past one, and a
- * platform that spends somebody's money is the worse failure. Filed as backlog **109** (the lease)
- * and **110** (the unreported figure).
+ * **The sharp edge of that was unbounded until WP-47, and now it is not.** A run whose process died
+ * stayed `running` for ever and therefore held its reservation for ever — against *every* future
+ * daily and monthly window, because a live run is always in the window and nothing retires it.
+ * Nothing expired a run's lease: `runs.lease_owner`/`lease_expires_at` had no reader and no writer,
+ * and `recovery/stranded.ts` said in as many words that *"is there a run that will never finish?"*
+ * was a different question with no owner. Both halves exist now — `pipeline/lease.ts` writes the
+ * lease on a heartbeat inside `stage.execute`, and `recovery/run-lease.ts` ends a run nothing is
+ * renewing — so the approximation's lifetime is a run **plus the lease's TTL and one pass
+ * interval**, about six minutes at the shipped numbers, rather than for ever. It was backlog
+ * **109** (the lease) and **110** (the unreported figure).
+ *
+ * The direction of the remaining error is unchanged and deliberate: a cap that reads high refuses a
+ * run (standing rule 20: a mutation fails closed), and it is **visible** — the pause names the
+ * committed figure apart from the spent one, which is why {@link capSpendDetail} keeps them apart.
+ * The alternative, counting only runs that have ended, trades a stuck cap for silently spending past
+ * one, and a platform that spends somebody's money is the worse failure.
  *
  * **A fourth residual has the same shape as the defect this closes, and is narrower.** The cap
  * reads and the `runs` insert happen in one transaction (`stage-executor.ts`), at READ COMMITTED,

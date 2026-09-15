@@ -72,6 +72,7 @@ import {
   toQuestionRecord,
 } from '@platform/domain';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import { type LateCostRecorder, noLateCostRecorder } from '../cost/late.js';
 import { type CapSpend, capIsSpent, capSpendDetail } from '../cost/pending.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
 import type { Logger } from '../ports/logger.js';
@@ -84,6 +85,12 @@ import {
 } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import {
+  leaseExpiryAt,
+  RUN_LEASE_TTL_MS,
+  type RunLeaseOptions,
+  startRunHeartbeat,
+} from './lease.js';
 import type { ProjectSettings } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type { PipelineStore, StoredArtifact, StoredTask } from './store.js';
@@ -234,6 +241,25 @@ export interface StageExecutorOptions {
    * an ordinary delivery pays no query for it.
    */
   readonly maintenance?: MaintenanceSpendReader;
+  /**
+   * The run **lease** this process holds while a stage is in flight (WP-47, `./lease.js`).
+   *
+   * **Absent is "this process claims no lease"**, and the consequence is stated rather than
+   * implied: a run it starts and then dies inside is invisible to the lease half of the sweep and
+   * is caught only by the wall-clock backstop, about an hour later. That is the behaviour of every
+   * build before WP-47, so absence is a composition that has not opted in rather than a regression
+   * — and `apps/server/src/pipeline.ts` opts in.
+   */
+  readonly lease?: RunLeaseOptions;
+  /**
+   * What a run's spend does when **another writer ended the run first** (Q70 (b), `../cost/late.js`).
+   *
+   * **Absent is `noLateCostRecorder`**, which writes nothing — the behaviour of every build before
+   * WP-47, where a cancelled run's tokens reached no `cost_entries` row, no rollup and no budget.
+   * It is a port rather than a `CostStore` because this module must not know what a price list is,
+   * which is the argument {@link StageExecutorOptions.budgets} already makes one field up.
+   */
+  readonly lateCost?: LateCostRecorder;
   readonly logger?: Logger;
   /**
    * How many stages this process runs at once. Stated here because it is a **pool** number: each
@@ -726,6 +752,21 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // run ended from another process computes its wall time from this column (WP-15i).
         startedAt: context.clock.now(),
       });
+      /**
+       * The lease, claimed in the **same transaction as the row** (WP-47).
+       *
+       * Not on the line after, and not from the first heartbeat: a `runs` row that is `running`
+       * with no lease is exactly the row the sweep's wall-clock backstop takes an hour to reach, and
+       * a process that dies between an insert and a claim would leave one every time. The claim
+       * commits with the insert or neither does.
+       */
+      if (options.lease !== undefined) {
+        await store.runs.renewLease(scope.tx, {
+          runId,
+          owner: options.lease.owner,
+          expiresAt: leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
+        });
+      }
       await scope.events.append([...starting.events, ...running.events]);
       return { kind: 'ready', spec, stage: valid.stage, stored, run: running.aggregate };
     });
@@ -797,6 +838,30 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     }
 
     let outcome: RunOutcome;
+    /**
+     * The heartbeat runs for exactly as long as the session does (WP-47).
+     *
+     * It is started **after** the run's own transaction has committed, and it is **awaited to a
+     * stop** on both endings — the outcome path and the start-failure path — before either opens a
+     * transaction of its own. Awaited rather than merely cancelled: a beat is fired and forgotten
+     * so that it can never block the run, so clearing the timer alone would leave at most one
+     * narrow `update` in flight beside transaction 2. That overlap is harmless in itself
+     * (`renewLease` refuses a terminal row) but it is one pooled connection nobody counted, and
+     * `POOL_RESERVATIONS` is arithmetic somebody has to be able to do.
+     */
+    const stopHeartbeat =
+      options.lease === undefined
+        ? async (): Promise<void> => {}
+        : startRunHeartbeat(
+            {
+              unitOfWork,
+              store,
+              clock: { now: () => options.context(job.taskId).clock.now() },
+              lease: options.lease,
+              ...(options.logger === undefined ? {} : { logger: options.logger }),
+            },
+            prepared.run.id,
+          );
     try {
       const handle = runner.start(prepared.spec);
       outcome = await handle.outcome;
@@ -826,6 +891,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       // escalates immediately, which is the fail-closed default: a failure shape nobody has
       // classified tells somebody rather than spinning. `retry-stage` remains the human's answer
       // either way (product/04).
+      await stopHeartbeat();
       stopReasons.forget(prepared.spec.runId);
       const startAttempts = (job.startAttempts ?? 0) + 1;
       const retryable = isRetryableStartFailure(error) && startAttempts < MAX_RUN_START_ATTEMPTS;
@@ -857,6 +923,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         }),
       );
     }
+    await stopHeartbeat();
     const stopReason = stopReasons.reasonFor(prepared.spec.runId);
     stopReasons.forget(prepared.spec.runId);
 
@@ -987,7 +1054,7 @@ const record = async (
     wallMs: outcome.wallMs,
   });
   if (!owned) {
-    return lostTheRun(input);
+    return lostTheRun({ ...input, scope });
   }
   await store.tasks.addSpend(scope.tx, job.taskId, spent);
 
@@ -1099,25 +1166,54 @@ const record = async (
 };
 
 /**
- * Somebody else ended this run while it was in flight, so this process writes nothing (WP-15i).
+ * Somebody else ended this run while it was in flight, so this process writes **only its cost**.
  *
- * `RunRepository.finish` is conditional on the run still being live, and the only other writer is
- * `POST /api/runs/:run_id/cancel`. Losing that race is not a failure: the human's decision is the
- * one that stands, and the transaction is abandoned with no run row rewritten, no stage completed
- * and no second terminal event in the log.
+ * `RunRepository.finish` is conditional on the run still being live, and there are two other
+ * writers: `POST /api/runs/:run_id/cancel` (WP-15i) and the lease sweep (WP-47). Losing that race is
+ * not a failure — the other writer's decision is the one that stands, and this transaction rewrites
+ * no status, completes no stage and appends no second terminal event.
  *
- * **The residual, which is a real cost and is stated rather than implied:** the tokens this run had
- * already spent are *not* recorded, because the cancel wrote the row's terminal status with the
- * spend it knew about — none. So a cancelled attempt understates the project's spend by whatever it
- * burned before the human stopped it. The alternative is letting this process write its cost over a
- * row a human has terminated, which is the lost update WP-15e closed, one table across. Closing it
- * needs a way to record spend against an already-terminal run (a cost correction), which no event
- * in technical/02's catalogue carries; it is in `PROGRESS.md` under discovered work.
+ * **What changed at WP-47 is the money** (Q70 (b), PROGRESS backlog 50). Until then the tokens this
+ * run had already spent were not recorded at all: the cancel wrote the row's terminal status with
+ * the spend *it* knew about — none — the ledger took its `no_spend` branch, and `cost_entries`, the
+ * rollup and every budget window stayed where they were. So cancelling was the one human action
+ * that spent a project's budget without charging it. This process is the only one that knows the
+ * number, so it writes it through the narrow `runs.recordCost` (never a status, never a whole row)
+ * and charges the ledger from the same transaction, labelled `late`.
+ *
+ * The residual is one line down from where it used to be, and it is real: a run whose process
+ * **died** has nobody left to make this call, so its spend is genuinely unknown and the platform
+ * writes no figure and no ledger row rather than a zero (standing rule 16).
  */
-const lostTheRun = (input: { readonly run: Run }): StageExecutionOutcome => ({
-  kind: 'skipped',
-  reason: `run ${input.run.id} was ended by another writer while it was in flight, so its outcome was discarded`,
-});
+const lostTheRun = async (input: {
+  readonly run: Run;
+  readonly outcome?: RunOutcome;
+  readonly options: StageExecutorOptions;
+  readonly scope: TransactionScope;
+}): Promise<StageExecutionOutcome> => {
+  const { run, outcome, options } = input;
+  const reason = `run ${run.id} was ended by another writer while it was in flight, so its outcome was discarded`;
+  if (outcome === undefined) {
+    // `recordUnstarted`'s path: the run never started, so there is no spend to record and nothing
+    // for the ledger to be late about.
+    return { kind: 'skipped', reason };
+  }
+  const recorder = options.lateCost ?? noLateCostRecorder;
+  await recorder.record(
+    input.scope,
+    {
+      runId: run.id,
+      sessionId: outcome.sessionId,
+      numTurns: outcome.numTurns,
+      usage: outcome.usage,
+      modelUsage: outcome.modelUsage,
+      cost: outcome.cost,
+      wallMs: outcome.wallMs,
+    },
+    options.context(run.taskId).clock.now(),
+  );
+  return { kind: 'skipped', reason };
+};
 
 /**
  * The run ended and the task is no longer running at this stage: record the run, stop there.
@@ -1170,7 +1266,7 @@ const recordOntoStoppedTask = async (
     wallMs: outcome.wallMs,
   });
   if (!owned) {
-    return lostTheRun(input);
+    return lostTheRun({ ...input, scope });
   }
   // The spend, and **nothing else**: `withCost.task` is the state the human left the task in, so a
   // `save` here would put back a row nobody changed and bump its version against the human's next
@@ -1233,7 +1329,7 @@ const recordUnsuccessful = async (
     wallMs: outcome.wallMs,
   });
   if (!owned) {
-    return lostTheRun(input);
+    return lostTheRun({ ...input, scope });
   }
   await store.tasks.addSpend(scope.tx, input.job.taskId, spendOf(outcome));
 
@@ -1341,9 +1437,10 @@ const recordUnstarted = async (
     wallMs: 0,
   });
   if (!owned) {
-    // A human cancelled the run between its insert and this failure (WP-15i). Neither ending
-    // applies: there is nothing to retry and nothing to escalate about a run somebody stopped.
-    return lostTheRun({ run });
+    // A human cancelled the run between its insert and this failure (WP-15i), or the lease sweep
+    // ended it (WP-47). Neither ending applies: there is nothing to retry and nothing to escalate
+    // about a run somebody else stopped — and no spend, because it never started.
+    return lostTheRun({ run, options, scope });
   }
   if (input.retryable) {
     // The task is untouched — still `active`, still at this stage, still on this attempt — so the

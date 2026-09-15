@@ -220,8 +220,8 @@ describe('the arithmetic', () => {
   });
 
   it('publishes the estimated share of spend from the ledger rather than from `tasks.cost_estimated`', () => {
-    // PROGRESS backlog 75: the column has no writer, so the share is a projection over
-    // `cost_entries.is_estimate` and there is no fourth stored number.
+    // PROGRESS backlog 75: the column had no writer and WP-47 dropped it (migration 0035), so the
+    // share is a projection over `cost_entries.is_estimate` and there is no fourth stored number.
     const response = fold({
       estimatedSpend: [{ day: '2026-06-02', usd: 10, estimatedUsd: 2.5 }],
     });

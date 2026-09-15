@@ -116,6 +116,17 @@ export interface MemoryCostStoreOptions {
    * harness that runs one task genuinely does not have, so it stays `seedHistory`'s.
    */
   readonly estimates?: Pick<CostStore, 'refinedSize' | 'taskEstimate' | 'saveEstimate'>;
+  /**
+   * Called with every ledger row this store appends — the seam `runs.recordCost`'s third predicate
+   * needs (WP-47).
+   *
+   * In PostgreSQL that predicate is `not exists (select 1 from cost_entries …)` and the two tables
+   * are the same database; here they are two objects, so the harness that composes both joins them
+   * by adding the charged run ids to `MemoryPipelineStore.chargedRuns`. Without it the in-memory
+   * run repository would be **kinder** than production and accept a second charge of one run
+   * (standing rule 1).
+   */
+  readonly onEntries?: (entries: readonly CostLedgerEntry[]) => void;
 }
 
 export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): MemoryCostStore => {
@@ -245,6 +256,7 @@ export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): Mem
 
     appendEntries: async (_tx, rows) => {
       entries.push(...clone([...rows]));
+      options.onEntries?.(rows);
     },
 
     saveModelUsage: async (_tx, rows) => {

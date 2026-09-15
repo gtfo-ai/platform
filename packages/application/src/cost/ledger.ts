@@ -24,7 +24,7 @@
  * nothing and stored nowhere (TD-012, BD-022).
  */
 import type { DomainEvent, Id, IsoDateTime, ModelUsage, TokenUsage } from '@platform/contracts';
-import type { Budget, CommandContext, PriceRates } from '@platform/domain';
+import type { Budget, CommandContext, LedgerReason, PriceRates } from '@platform/domain';
 import {
   isStorableModelId,
   ledgerEntriesForRun,
@@ -32,9 +32,10 @@ import {
   rollupDeltasFor,
   spendTotalUsd,
 } from '@platform/domain';
-import type { EventHandler, HandlerContext } from '../events/handler.js';
+import type { EventHandler } from '../events/handler.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import type { CostStore, StoredBudget } from './ports.js';
 import { budgetWindowStart, resolveBudgetTimezone, rollupDay } from './window.js';
 
@@ -52,7 +53,7 @@ export interface CostLedgerOptions {
 }
 
 /** The fields the two events share, after the store has answered what the payload cannot. */
-interface RunSpendPayload {
+export interface RunSpendPayload {
   readonly runId: Id;
   readonly usage: TokenUsage | null;
   readonly modelUsage: readonly ModelUsage[];
@@ -154,7 +155,7 @@ const usableTimezone = (configured: string | null, logger: Logger): string => {
 /** Folds one run's spend into every applicable budget and emits what that crosses. */
 const chargeBudgets = async (
   options: CostLedgerOptions,
-  context: HandlerContext,
+  charge: ChargeRunInput,
   subject: { readonly projectId: Id; readonly taskId: Id },
   usd: number,
   at: IsoDateTime,
@@ -162,15 +163,15 @@ const chargeBudgets = async (
 ): Promise<number> => {
   const windowStartOf = (window: Parameters<typeof budgetWindowStart>[0]) =>
     budgetWindowStart(window, at, timezone);
-  const budgets = await options.store.budgets.applicable(context.scope.tx, subject, windowStartOf);
+  const budgets = await options.store.budgets.applicable(charge.tx, subject, windowStartOf);
   const emitted: DomainEvent[] = [];
   for (const stored of budgets) {
     const decision = recordSpend(
       toBudget(stored),
       { usd },
-      options.context(subject.taskId, context.event.event.id),
+      options.context(subject.taskId, charge.causeEventId),
     );
-    await options.store.budgets.saveWindow(context.scope.tx, {
+    await options.store.budgets.saveWindow(charge.tx, {
       budgetId: stored.id,
       windowStart: stored.windowStart,
       spentUsd: decision.aggregate.spentUsd,
@@ -179,9 +180,155 @@ const chargeBudgets = async (
     emitted.push(...decision.events);
   }
   if (emitted.length > 0) {
-    await context.emit(emitted);
+    await charge.emit(emitted);
   }
   return budgets.length;
+};
+
+/**
+ * One run's spend, charged — **the ledger's only writing path**, and it has two callers.
+ *
+ * It was the body of {@link costLedgerHandler} until WP-47, and it moved out for the reason Q70 (b)
+ * names: a run ended by somebody other than the process that ran it (a human's cancel, the lease
+ * sweep) reaches its own terminal event carrying **zeros**, because the ender has no way to know
+ * what the session had burned. The handler charges nothing for it — correctly, from what it was
+ * given — and the money is lost. `recordLateRunCost` (`./late.ts`) is the second caller: the
+ * process that *did* run the session writes the figure onto the already-terminal row and charges it
+ * here, from its own transaction rather than from a handler's.
+ *
+ * The two callers differ in exactly three things, all of them parameters: which transaction,
+ * where the emitted budget events go, and whether the rows are labelled `late`. Everything else —
+ * the derivation, the model usage, the rollup, the budgets and the refusals — is one body, because
+ * two spellings of "what a run owes" is how the two answers start disagreeing.
+ */
+export interface ChargeRunInput {
+  readonly tx: Transaction;
+  /** Where events this charge produces go: a handler's `emit`, or a transaction's `events.append`. */
+  emit(events: readonly DomainEvent[]): Promise<unknown>;
+  readonly spend: RunSpendPayload;
+  /** The instant the spend is charged at — the event's `occurred_at`, or the late write's clock. */
+  readonly occurredAt: IsoDateTime;
+  /** `events.cause_event_id` for the budget events, or `null` when no event caused this. */
+  readonly causeEventId: Id | null;
+  /** {@link RunCostContext.late}: was the row already terminal when this charge was decided? */
+  readonly late: boolean;
+}
+
+export interface ChargeRunResult {
+  readonly entries: number;
+  readonly usd: number;
+  readonly budgets: number;
+  /** The derivation's own answer, or `no_run_row` when the run is not in the database. */
+  readonly reason: LedgerReason | 'no_run_row';
+}
+
+export const chargeRunSpend = async (
+  options: CostLedgerOptions,
+  charge: ChargeRunInput,
+): Promise<ChargeRunResult> => {
+  const logger = options.logger ?? silentLogger;
+  const { spend } = charge;
+  const run = await options.store.runContext(charge.tx, spend.runId);
+  if (run === null) {
+    logger.warn(
+      { run_id: spend.runId, late: charge.late },
+      'cost ledger: no run row for this spend, so nothing is charged',
+    );
+    return { entries: 0, usd: 0, budgets: 0, reason: 'no_run_row' };
+  }
+
+  const pricedAt = run.startedAt ?? charge.occurredAt;
+  const models = (
+    spend.modelUsage.length > 0 ? spend.modelUsage.map((entry) => entry.model) : [run.model]
+  ).filter(isStorableModelId);
+  const prices = await options.store.pricesAt(charge.tx, models, pricedAt);
+  const byModel = new Map<string, PriceRates>(prices.map((rate) => [rate.modelId, rate]));
+
+  const derived = ledgerEntriesForRun(
+    {
+      runId: run.runId,
+      taskId: run.taskId,
+      projectId: run.projectId,
+      orgId: run.orgId,
+      template: run.template,
+      // A run outside a pipeline stage still belongs in the ledger; the rollup's `stage` column
+      // is `not null`, so the absence is spelled once, here, rather than as an empty string.
+      stage: run.stage ?? '(none)',
+      model: run.model,
+      late: charge.late,
+    },
+    spend,
+    (model) => byModel.get(model) ?? null,
+  );
+
+  if (derived.modelUsage.length > 0) {
+    await options.store.saveModelUsage(
+      charge.tx,
+      derived.modelUsage.map((entry) => ({ runId: run.runId, ...entry })),
+    );
+  }
+
+  if (derived.unpricedModels.length > 0 || derived.refusedModels.length > 0) {
+    logger.warn(
+      {
+        run_id: run.runId,
+        unpriced_models: derived.unpricedModels,
+        refused_models: derived.refusedModels.length,
+        priced_at: pricedAt,
+      },
+      'cost ledger: a model could not be charged — no price row, or an id too long to key a row on',
+    );
+  }
+
+  if (derived.entries.length === 0) {
+    logger.debug(
+      { run_id: run.runId, reason: derived.reason, late: charge.late },
+      'cost ledger: this run owes no ledger row',
+    );
+    return { entries: 0, usd: 0, budgets: 0, reason: derived.reason };
+  }
+
+  const timezone = usableTimezone(
+    await options.store.organisationTimezone(charge.tx, run.projectId),
+    logger,
+  );
+
+  await options.store.appendEntries(charge.tx, derived.entries);
+  await options.store.applyRollups(
+    charge.tx,
+    rollupDeltasFor(derived.entries, {
+      numTurns: spend.numTurns,
+      wallMs: spend.wallMs,
+      day: rollupDay(charge.occurredAt, timezone),
+    }),
+  );
+
+  const total = spendTotalUsd(derived.entries);
+  const budgets =
+    total > 0
+      ? await chargeBudgets(
+          options,
+          charge,
+          { projectId: run.projectId, taskId: run.taskId },
+          total,
+          charge.occurredAt,
+          timezone,
+        )
+      : 0;
+
+  logger.debug(
+    {
+      run_id: run.runId,
+      entries: derived.entries.length,
+      usd: total,
+      is_estimate: derived.entries.some((entry) => entry.isEstimate),
+      late: charge.late,
+      residual_usd: derived.residualUsd,
+      budgets,
+    },
+    'cost ledger: a run was charged',
+  );
+  return { entries: derived.entries.length, usd: total, budgets, reason: derived.reason };
 };
 
 /**
@@ -196,109 +343,19 @@ export const costLedgerHandler = (options: CostLedgerOptions): EventHandler => (
   priority: COST_LEDGER_PRIORITY,
   eventTypes: ['run.finished', 'run.failed'],
   handle: async (context) => {
-    const logger = options.logger ?? silentLogger;
     const spend = spendOf(context.event.event);
     if (spend === null) {
       return;
     }
-    const run = await options.store.runContext(context.scope.tx, spend.runId);
-    if (run === null) {
-      logger.warn(
-        { run_id: spend.runId, position: context.event.position },
-        'cost ledger: no run row for this event, so nothing is charged',
-      );
-      return;
-    }
-
-    const occurredAt = context.event.event.occurred_at;
-    const pricedAt = run.startedAt ?? occurredAt;
-    const models = (
-      spend.modelUsage.length > 0 ? spend.modelUsage.map((entry) => entry.model) : [run.model]
-    ).filter(isStorableModelId);
-    const prices = await options.store.pricesAt(context.scope.tx, models, pricedAt);
-    const byModel = new Map<string, PriceRates>(prices.map((rate) => [rate.modelId, rate]));
-
-    const derived = ledgerEntriesForRun(
-      {
-        runId: run.runId,
-        taskId: run.taskId,
-        projectId: run.projectId,
-        orgId: run.orgId,
-        template: run.template,
-        // A run outside a pipeline stage still belongs in the ledger; the rollup's `stage` column
-        // is `not null`, so the absence is spelled once, here, rather than as an empty string.
-        stage: run.stage ?? '(none)',
-        model: run.model,
-      },
+    await chargeRunSpend(options, {
+      tx: context.scope.tx,
+      emit: (events) => context.emit(events),
       spend,
-      (model) => byModel.get(model) ?? null,
-    );
-
-    if (derived.modelUsage.length > 0) {
-      await options.store.saveModelUsage(
-        context.scope.tx,
-        derived.modelUsage.map((entry) => ({ runId: run.runId, ...entry })),
-      );
-    }
-
-    if (derived.unpricedModels.length > 0 || derived.refusedModels.length > 0) {
-      logger.warn(
-        {
-          run_id: run.runId,
-          unpriced_models: derived.unpricedModels,
-          refused_models: derived.refusedModels.length,
-          priced_at: pricedAt,
-        },
-        'cost ledger: a model could not be charged — no price row, or an id too long to key a row on',
-      );
-    }
-
-    if (derived.entries.length === 0) {
-      logger.debug(
-        { run_id: run.runId, reason: derived.reason },
-        'cost ledger: this run owes no ledger row',
-      );
-      return;
-    }
-
-    const timezone = usableTimezone(
-      await options.store.organisationTimezone(context.scope.tx, run.projectId),
-      logger,
-    );
-
-    await options.store.appendEntries(context.scope.tx, derived.entries);
-    await options.store.applyRollups(
-      context.scope.tx,
-      rollupDeltasFor(derived.entries, {
-        numTurns: spend.numTurns,
-        wallMs: spend.wallMs,
-        day: rollupDay(occurredAt, timezone),
-      }),
-    );
-
-    const total = spendTotalUsd(derived.entries);
-    const budgets =
-      total > 0
-        ? await chargeBudgets(
-            options,
-            context,
-            { projectId: run.projectId, taskId: run.taskId },
-            total,
-            occurredAt,
-            timezone,
-          )
-        : 0;
-
-    logger.debug(
-      {
-        run_id: run.runId,
-        entries: derived.entries.length,
-        usd: total,
-        is_estimate: derived.entries.some((entry) => entry.isEstimate),
-        residual_usd: derived.residualUsd,
-        budgets,
-      },
-      'cost ledger: a run was charged',
-    );
+      occurredAt: context.event.event.occurred_at,
+      causeEventId: context.event.event.id,
+      // The run's own terminal event: whatever it says is what the ledger knew at the time, which
+      // is the definition of a charge that is **not** late (`./late.ts` is the other caller).
+      late: false,
+    });
   },
 });

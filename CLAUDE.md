@@ -202,6 +202,25 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   completed dispatch deleted) and claims `(position, handler)` in `handler_executions` exactly as the
   dispatcher does, which is what lets a handler registered today be served events swept last month, and
   makes a second pass a no-op.
+- **A run whose process died, and the money it still owes** (WP-47): the lease is written by the
+  process executing the run — `packages/application/src/pipeline/lease.ts` claims
+  `runs.lease_owner`/`lease_expires_at` in the same transaction as the `runs` row and renews them on a
+  heartbeat inside `stage.execute` — and read by
+  `packages/application/src/recovery/run-lease.ts`, a **third row of `recovery/stranded.ts`'s
+  table**. A missing heartbeat licenses exactly one conclusion, *no process is renewing this lease*,
+  never that the model stopped, so the sweep ends the **row**: `run.failed` with the new terminal
+  reason `lease_expired` (migration 0035), the task escalated, and the reservation released with
+  whatever the run reported — which for a run nobody measured is **nothing**, both cost columns null
+  and no ledger row (rule 16), never a zero. The bound is **both**: the lease is primary and
+  `started_at + wallClockMs + grace` is the backstop for rows written before the column had a writer.
+  The money a *cancelled* or swept run burned reaches the ledger from the process that ran it, which
+  is refused `finish` and takes the narrow `runs.recordCost` plus `cost/late.ts` instead (Q70 (b)) —
+  one transaction, rows labelled `cost_entries.late`, and refused outright for a live run, a row that
+  already carries a figure or a run the ledger has charged. `runs.usd_estimated` also got its first
+  writer: it is nullable now, `finish` writes the platform's own figure there, and the pending term is
+  `coalesce(usd_reported, usd_estimated, 0)` — before this, every BD-004 `local`-mode run committed
+  **0** to every cap and read as free on the wire. `tasks.cost_estimated` is **dropped**: the DTO field
+  is a projection over `cost_entries where is_estimate`.
 - **Review-only mode** (WP-24): `packages/application/src/pipeline/review-only.ts` (three handlers, three `pipeline.outbound` duties), its template is `REVIEW_ONLY_TEMPLATE` in `packages/domain/src/pipeline/templates.ts`, and the merge request it reviews is `tasks.review_subject` (migration 0020) — the provider's diff, bounded and redacted — never a checkout; enabled per project by `features.review_only` in `.agentic/config.yml`, off by default, and its findings reach the MR only from the outbound job.
 - **The rebase gate and conflict warnings** (WP-26, BD-030): the gate is `packages/application/src/pipeline/gates.ts` (the read) plus `rebase.ts` (the metric) and `conflict-warning.ts` (one handler, one `pipeline.outbound` duty); its failure enters `CONFLICT_RESOLUTION_STAGE`, an agent stage declared behind `ci_gate` and reachable only from `rebase_gate.fail_to`, so the gate's failure is a **return** that spends the `rebase` loop and the resolution's fall-through re-runs CI through the provider's pipeline. The default branch moving re-enters the same gate and spends `rebase_rechecks` instead, because the loop is a property of the edge (`RETURN_LOOPS_BY_EDGE`), not of the stage — a default-branch move once spent `human_rounds`. The verb the resolution may run is **TD-027**'s stage-scoped, add-only command default (`COMMAND_ALLOW_BY_STAGE` in the planner, applied before a project's narrowing): four exact `git merge` spellings at `conflict_resolution` and nothing at any other stage — never a line added to the shipped maximum, which round 1 measured as promoting `git merge --no-verify` from `ask` to `allow`.
 - **The dependency policy and the Checks panel** (WP-38): `packages/domain/src/policies/dependencies.ts` is the detector — a file table per ecosystem and a reader of a patch's **added lines**, written to under-report rather than guess — and `packages/application/src/pipeline/dependency-gate.ts` is the gate: a handler on the Developer stage's own completion, a `pipeline.outbound` duty, and three endings with three countable effects (nothing, one `questions` row, one `task.stage.returned` spending the `dependency_policy` loop). The licence and the last release come from `packages/infrastructure/src/dependencies/registry-metadata.ts`, which calls **nobody** unless an operator declares a host in `APP_DEPENDENCY_REGISTRY_HOSTS` — **the one outbound call the pipeline makes outside `IntegrationActionExecutor`**, because `integration_actions.integration_id` is a `NOT NULL` foreign key and a registry has no binding row; its docblock carries that decision, and what the executor would have given it (rate limits, an audit row) is recorded as lost in the ledger, not implied. The Checks panel is `apps/web/src/features/task-detail.tsx`, held to product/10:38's eleven items **in a test** — `apps/web/src/features/checks-panel.test.tsx`, both directions — so the six it does not answer are named on the screen rather than drawn as empty ticks.

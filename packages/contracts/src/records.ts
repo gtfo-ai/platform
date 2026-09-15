@@ -484,6 +484,18 @@ export const taskRecordSchema = z.strictObject({
    */
   conflict: taskConflictSchema.nullable(),
   cost_actual_usd: usdSchema,
+  /**
+   * The part of what the task has already spent that was **priced** rather than reported — a
+   * **projection** over `cost_entries where is_estimate`, not a column (WP-47, PROGRESS backlog
+   * **75**).
+   *
+   * It was `tasks.cost_estimated` from migration 0004 until WP-47, a `not null default 0` column
+   * with no writer anywhere in the tree, so every task the product has ever served reported
+   * `$0.00` of estimated spend — standing rule 16 one layer out: *"nobody counted"* published as
+   * *"nothing was estimated"*. Migration 0035 drops the column and the read sums the ledger's own
+   * rows, because `cost_entries.is_estimate` has carried the per-row flag since WP-19 and a fourth
+   * running total is a fourth thing to keep in step.
+   */
   cost_estimated_usd: usdSchema,
   /**
    * `tasks.estimate_usd` — the cost predicted **at refinement**, before the spend (WP-19, WP-28).
@@ -503,9 +515,13 @@ export const taskRecordSchema = z.strictObject({
    *
    * Computed from those two fields and from **nothing else** (`estimateAccuracy`), so 1 is perfect
    * and 2 is twice the estimate. `null` when either side is missing or the estimate was zero — a
-   * task with no estimate has no accuracy, and `Infinity` is not a data point. **It understates on
-   * a task a human intervened in**: a cancelled run's spend reaches no `cost_entries` row and so no
-   * `cost_actual` (PROGRESS backlog 50), which is stated here rather than corrected by this field.
+   * task with no estimate has no accuracy, and `Infinity` is not a data point.
+   *
+   * **It used to understate on a task a human intervened in** — a cancelled run's spend reached no
+   * `cost_entries` row and so no `cost_actual` (PROGRESS backlog 50) — and WP-47 closed that: the
+   * process that ran the session records what the attempt cost against the terminated row. What is
+   * still understated is the narrower case Q52 owns: a cancelled run whose process then **dies**
+   * has nobody left to report the number, so nothing measures it and nothing invents one.
    */
   estimate_accuracy: z.number().nonnegative().nullable(),
   requested_by_user_id: idSchema.nullish(),

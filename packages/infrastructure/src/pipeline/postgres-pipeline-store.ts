@@ -45,6 +45,7 @@ import type {
   MergeRequestRef,
   MergeRequestSnapshot,
   PipelineTemplate,
+  RunCost,
   Slug,
   TaskCoverage,
   TaskDependencies,
@@ -732,8 +733,8 @@ export const createPostgresPipelineStore = (
             set status = $2, terminal_reason = $3, session_id = $4, num_turns = $5,
                 input_tokens = $6, output_tokens = $7, cache_write_5m_tokens = $8,
                 cache_write_1h_tokens = $9, cache_read_tokens = $10, usd_reported = $11,
-                wall_ms = $12, ended_at = now()
-          where id = $1 and status = any($13::run_status[])`,
+                usd_estimated = $12, wall_ms = $13, ended_at = now()
+          where id = $1 and status = any($14::run_status[])`,
         [
           outcome.runId,
           outcome.status,
@@ -745,7 +746,8 @@ export const createPostgresPipelineStore = (
           outcome.usage.cache_write_5m_tokens,
           outcome.usage.cache_write_1h_tokens,
           outcome.usage.cache_read_tokens,
-          outcome.cost.is_estimate ? null : outcome.cost.usd,
+          reportedUsd(outcome.cost),
+          estimatedUsd(outcome.cost),
           outcome.wallMs,
           [...ACTIVE_RUN_STATUSES],
         ],
@@ -763,6 +765,76 @@ export const createPostgresPipelineStore = (
         throw new PipelineRowMissingError(`run ${outcome.runId} does not exist`);
       }
       return false;
+    },
+    /**
+     * The late cost write of Q70 (b) — the port's docblock carries the reasoning.
+     *
+     * Three predicates, and each one is a different wrong write refused. `status <> all(active)`:
+     * a live run's cost belongs to its own `finish`. `usd_reported is null and usd_estimated is
+     * null`: a row that already carries a figure has one from a writer that knew it, and the last
+     * write must not be the winner. `not exists (cost_entries)`: the ledger has already charged
+     * this run, so charging it again from here would double it — which is what makes a repeat of
+     * the caller's whole transaction a no-op rather than a second charge (the `cost_entries_run_idx`
+     * lookup is the same one `UNLEDGERED_RUN_SQL` makes at admission).
+     *
+     * `wall_ms` and `num_turns` are `greatest(…)` rather than assignments: the process that ended
+     * the row computed a wall time from `started_at` and it is not this caller's to shorten.
+     */
+    recordCost: async (tx, late) => {
+      const result = await sqlOf(tx).query(
+        `update runs
+            set session_id = coalesce(session_id, $2), num_turns = greatest(num_turns, $3),
+                input_tokens = $4, output_tokens = $5, cache_write_5m_tokens = $6,
+                cache_write_1h_tokens = $7, cache_read_tokens = $8,
+                usd_reported = $9, usd_estimated = $10, wall_ms = greatest(wall_ms, $11)
+          where id = $1
+            and not (status = any($12::run_status[]))
+            and usd_reported is null and usd_estimated is null
+            and not exists (select 1 from cost_entries c where c.run_id = runs.id)`,
+        [
+          late.runId,
+          late.sessionId,
+          late.numTurns,
+          late.usage.input_tokens,
+          late.usage.output_tokens,
+          late.usage.cache_write_5m_tokens,
+          late.usage.cache_write_1h_tokens,
+          late.usage.cache_read_tokens,
+          reportedUsd(late.cost),
+          estimatedUsd(late.cost),
+          late.wallMs,
+          [...ACTIVE_RUN_STATUSES],
+        ],
+      );
+      if (result.rowCount !== 0) {
+        return true;
+      }
+      const { rows } = await sqlOf(tx).query<{ id: string }>('select id from runs where id = $1', [
+        late.runId,
+      ]);
+      if (rows.length === 0) {
+        throw new PipelineRowMissingError(`run ${late.runId} does not exist`);
+      }
+      return false;
+    },
+    /**
+     * Claims the lease, or renews one this process already holds — the port's docblock has the rest.
+     *
+     * `lease_owner is null or lease_owner = $2` is what makes the claim and the renewal one
+     * statement: the row is inserted with no owner, so the first beat claims it and every later
+     * beat matches its own name. A process that finds another owner writes nothing and is told so,
+     * rather than stealing a lease whose holder may be alive.
+     */
+    renewLease: async (tx, lease) => {
+      const result = await sqlOf(tx).query(
+        `update runs
+            set lease_owner = $2, lease_expires_at = $3::timestamptz
+          where id = $1
+            and status = any($4::run_status[])
+            and (lease_owner is null or lease_owner = $2)`,
+        [lease.runId, lease.owner, lease.expiresAt, [...ACTIVE_RUN_STATUSES]],
+      );
+      return result.rowCount !== 0;
     },
     load: async (tx, runId) => {
       const { rows } = await sqlOf(tx).query<RunRow>(
@@ -1168,11 +1240,30 @@ interface RunRow extends Record<string, unknown> {
   session_id: string | null;
   num_turns: number;
   usd_reported: string | null;
-  usd_estimated: string;
+  /** Nullable since migration 0035 (WP-47): `null` is "no figure was reported for this run". */
+  usd_estimated: string | null;
   wall_ms: string | number;
   created_at: Date;
   started_at: Date | null;
 }
+
+/** `is_estimate: false` fills `usd_reported`; `true` fills `usd_estimated`; `null` fills neither. */
+const reportedUsd = (cost: RunCost | null): number | null =>
+  cost === null || cost.is_estimate ? null : cost.usd;
+
+const estimatedUsd = (cost: RunCost | null): number | null =>
+  cost === null || !cost.is_estimate ? null : cost.usd;
+
+/** The pair read back: reported first, then the estimate, then the honest absence. */
+const costOf = (row: RunRow): RunCost | null => {
+  if (row.usd_reported !== null) {
+    return { usd: usd(row.usd_reported), is_estimate: false, price_list_id: null };
+  }
+  if (row.usd_estimated !== null) {
+    return { usd: usd(row.usd_estimated), is_estimate: true, price_list_id: null };
+  }
+  return null;
+};
 
 const toStoredRun = (row: RunRow): StoredRun => ({
   id: row.id,
@@ -1190,10 +1281,11 @@ const toStoredRun = (row: RunRow): StoredRun => ({
   sessionId: row.session_id,
   numTurns: row.num_turns,
   usage: null,
-  cost:
-    row.usd_reported === null
-      ? { usd: usd(row.usd_estimated), is_estimate: true, price_list_id: null }
-      : { usd: usd(row.usd_reported), is_estimate: false, price_list_id: null },
+  // Three answers, not two (WP-47, migration 0035). A reported figure is the truth (BD-011); an
+  // estimate is the platform's own pricing of a `local`-mode run; **both columns null** is "nobody
+  // measured this run", which `usd: 0` spelled as a free one — and which is exactly the state the
+  // lease sweep leaves behind, because a missing heartbeat says nothing about what was spent.
+  cost: costOf(row),
   wallMs: Number(row.wall_ms),
   createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
   startedAt:

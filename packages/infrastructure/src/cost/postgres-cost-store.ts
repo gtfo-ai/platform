@@ -331,8 +331,8 @@ export const createPostgresCostStore = (): CostStore => ({
       await sql.query(
         `insert into cost_entries
            (run_id, task_id, project_id, stage, model, input_tokens, output_tokens,
-            cache_write_5m, cache_write_1h, cache_read, usd, is_estimate, price_list_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            cache_write_5m, cache_write_1h, cache_read, usd, is_estimate, late, price_list_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          on conflict on constraint cost_entries_run_model_unique do nothing`,
         [
           entry.runId,
@@ -347,6 +347,8 @@ export const createPostgresCostStore = (): CostStore => ({
           entry.usage.cache_read_tokens,
           entry.usd,
           entry.isEstimate,
+          // Migration 0035: was this charged after the row was already terminal (WP-47, Q70 (b))?
+          entry.late,
           entry.priceListId,
         ],
       );

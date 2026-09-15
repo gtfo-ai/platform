@@ -602,8 +602,73 @@ export interface RunRepository {
       readonly sessionId: string | null;
       readonly numTurns: number;
       readonly usage: TokenUsage;
+      /**
+       * What the run cost, or `null` when **nobody measured it**.
+       *
+       * `null` since WP-47, for the lease sweep: it ends a run whose process vanished and has no
+       * figure of its own to write, and `{ usd: 0 }` there would publish "this run was free" — the
+       * exact reading standing rule 16 exists to refuse. Both cost columns are left unset, so the
+       * pending term values the ended row at 0 (nothing committed) rather than at a measurement.
+       *
+       * The two are written apart: `is_estimate: false` fills `usd_reported`, `true` fills
+       * `usd_estimated` (WP-47, migration 0035), and the other one is `null`.
+       */
+      readonly cost: RunCost | null;
+      readonly wallMs: number;
+    },
+  ): Promise<boolean>;
+  /**
+   * The run's **cost**, written after the row is already terminal — Q70 (b), PROGRESS backlog 50.
+   *
+   * The narrow write of WP-15d's shape, one table across, and it exists because ending a run and
+   * knowing what it cost are two different processes' facts. `POST /api/runs/:run_id/cancel` and
+   * the lease sweep both end a row with no figure — neither can know one — while the process that
+   * is *running* the session knows exactly, and is refused `finish` because it lost the race the
+   * conditional predicate arbitrates. Without this the money is simply lost: the ledger's handler
+   * has already seen a `run.finished` carrying zeros and taken its `no_spend` branch.
+   *
+   * **Never a whole-row save** (standing rule 79): it writes the usage, the cost, the turns, the
+   * wall time and the session id, and nothing about the run's *status* — the terminal status the
+   * other writer chose is the one that stands.
+   *
+   * Refuses, by answering `false`, in the three cases where writing would be wrong rather than
+   * late: the run is still live (its own `finish` is the writer), a cost has already been recorded
+   * on the row, or the ledger has already charged this run. The last is what makes a repeat of the
+   * caller's transaction a no-op rather than a second charge.
+   *
+   * @throws when the run does not exist at all, exactly as {@link RunRepository.finish} does.
+   */
+  recordCost(
+    tx: Transaction,
+    late: {
+      readonly runId: Id;
+      readonly sessionId: string | null;
+      readonly numTurns: number;
+      readonly usage: TokenUsage;
       readonly cost: RunCost;
       readonly wallMs: number;
+    },
+  ): Promise<boolean>;
+  /**
+   * Claims or renews the run's lease — `runs.lease_owner` / `lease_expires_at` (TD-003, WP-47).
+   *
+   * Both columns have existed since migration 0004 and had **no reader and no writer** until WP-47.
+   * The owner is the process executing the run: it claims the lease in the transaction that creates
+   * the row and renews it on a heartbeat while the session is live, so *"nothing is renewing this
+   * lease"* becomes a question a query can ask. It is the only thing a missing heartbeat licenses
+   * anybody to conclude — never that the model stopped, never that the work was wasted.
+   *
+   * Conditional on the run still being live **and** on the lease being this process's (or unheld),
+   * and answers whether it wrote. A `false` is not an error: the run has ended, or another process
+   * took the lease over, and a heartbeat that kept writing either would be renewing a claim it does
+   * not hold. The caller stops beating and lets its own `finish` arbitrate.
+   */
+  renewLease(
+    tx: Transaction,
+    lease: {
+      readonly runId: Id;
+      readonly owner: string;
+      readonly expiresAt: IsoDateTime;
     },
   ): Promise<boolean>;
   load(tx: Transaction, runId: Id): Promise<StoredRun | null>;

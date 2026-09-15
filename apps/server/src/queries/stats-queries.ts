@@ -281,8 +281,11 @@ const costByDay = async (
  * PROGRESS backlog **75**'s projection, and the only one this work package adds to the cost side.
  *
  * That entry recommends *"`sum(usd) where is_estimate` over `cost_entries`, no fourth stored
- * number"*, and this is it: `tasks.cost_estimated` is **not read** — it is `not null default 0`
- * with no writer, so reading it would publish `$0.00` of estimated spend as a measurement.
+ * number"*, and this is it. `tasks.cost_estimated` is not read here and **no longer exists**:
+ * WP-47 took the entry's recommendation one table across and dropped the column (migration 0035),
+ * because a `not null default 0` with no writer published `$0.00` of estimated spend as a
+ * measurement. The task DTO's `cost_estimated_usd` is now the same projection this one is, scoped
+ * to a task rather than to a day.
  */
 const estimatedSpend = async (
   database: Database,

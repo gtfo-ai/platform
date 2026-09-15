@@ -58,6 +58,17 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * `PipelineJobOptions` this duty has no `StageExecutor` for. The gate's **other** write is narrow
  * (`saveDependencies`) and is not in this census by design: it is a column `save` does not name.
  *
+ * `recovery/run-lease.ts` joined them at **WP-47**, and it is the first site outside
+ * `pipeline/` — which is a fact about where a transaction owner may live, not a loosening. The
+ * lease sweep ends a run no process is renewing and escalates its task, in a transaction it owns,
+ * so it retries through `retryOnTaskConflict` like a job. Its ending when the bound is spent is the
+ * **third** shape and is stated at the function: the error escapes to the recovery pass's caller —
+ * the `pipeline.intake.reconcile` job — and what is lost is the *escalation*, never the run row,
+ * because the attempt that committed had already made the run terminal and released its
+ * reservation. Re-parking a task on the next pass is impossible by construction (the run is no
+ * longer live), which is why it does not call `escalateTaskAfterConflict`: that would be a second
+ * transaction escalating a task about a run this pass can no longer see.
+ *
  * `commands.ts` joined them at WP-15i, and its ending is the **other** one: a human command owns
  * its transaction and retries through `retryOnTaskConflict` like a job, but when the bound is spent
  * the error reaches the caller as a typed `409` rather than escalating the task — a person can press
@@ -68,6 +79,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
+  ['packages/application/src/recovery/run-lease.ts', 1],
   ['packages/application/src/pipeline/dependency-gate.ts', 1],
   ['packages/application/src/pipeline/saga.ts', 13],
   ['packages/application/src/pipeline/stage-executor.ts', 5],
@@ -136,7 +148,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts twenty-nine, which is the number the change states', () => {
+  it('counts thirty, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -152,8 +164,11 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-38**: the dependency gate's `ask` ending, which parks the task on the
     // existing question gate from a `pipeline.outbound` job and therefore owns its own transaction,
     // its own retry and its own escalation.
+    // **Plus one at WP-47**: the run-lease sweep's escalation of a task whose run nothing was
+    // driving — a transaction owner outside `pipeline/` for the first time, with the retry every
+    // job has and the ending named in this file's docblock.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(29);
+    expect(total).toBe(30);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

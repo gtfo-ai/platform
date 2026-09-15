@@ -11,8 +11,19 @@
  * The rule the two fragments implement, and the measurement that earned it, are stated once in
  * `packages/application/src/cost/pending.ts`. In short: a live run counts the reservation the
  * admitting stage was going to spend anyway, an ended run counts the figure its **own**
- * transaction wrote (`runs.usd_reported`, set by `RunRepository.finish` beside `run.finished`),
- * and a run the ledger has already charged counts nothing here because `cost_entries` has it.
+ * transaction wrote (`usd_reported` *or* `usd_estimated`, both set by `RunRepository.finish`
+ * beside `run.finished`), and a run the ledger has already charged counts nothing here because
+ * `cost_entries` has it.
+ *
+ * **`usd_estimated` joined that `coalesce` at WP-47** (backlog 110), and it closed a hole one whole
+ * provider mode wide: `finish` writes `usd_reported` only when the cost is **not** an estimate, and
+ * `is_estimate` is `spec.providerMode === 'local'` — so under BD-004 `local` mode *every* run
+ * committed **0** to every cap between its own commit and its ledger row. The column that would
+ * have carried it, `runs.usd_estimated`, was `not null default 0` with no writer anywhere in the
+ * tree. Both halves are fixed: migration 0035 makes it nullable (a 0 there read as a free run) and
+ * `finish` writes it. The order is BD-011's: the provider's figure first, the platform's own
+ * pricing second, and `0` only for a run **nobody measured** — which is a real state the lease
+ * sweep produces and which no ledger row is ever written for.
  *
  * **Why `not exists` and not a join**: a run has one ledger row per model, so a join would
  * multiply the reservation by the number of models, and `cost_entries` is partitioned by
@@ -32,7 +43,7 @@ export const ACTIVE_RUN_STATUSES_PARAM: readonly string[] = [...ACTIVE_RUN_STATU
  */
 export const pendingRunUsdSql = (statuses: string, reserve: string): string =>
   `case when r.status = any(${statuses}::run_status[]) then ${reserve}::numeric
-        else coalesce(r.usd_reported, 0) end`;
+        else coalesce(r.usd_reported, r.usd_estimated, 0) end`;
 
 /**
  * The `where` term that keeps a run the ledger has already charged out of the pending set.

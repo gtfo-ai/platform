@@ -924,7 +924,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Stop this attempt',
         description:
-          'Ends the run as a **record** — the row becomes `cancelled`, `run.finished` is appended and the task is paused so the pipeline does not act on an attempt nobody will finish. It does **not** interrupt the model’s session: reaching a live run from another process is the transport Q52 leaves unbuilt, so the session ends on its own and its outcome is then discarded. A run that has already ended answers 409.',
+          'Ends the run as a **record** — the row becomes `cancelled`, `run.finished` is appended and the task is paused so the pipeline does not act on an attempt nobody will finish. It does **not** interrupt the model’s session: reaching a live run from another process is the transport Q52 leaves unbuilt, so the session ends on its own and its **verdict** is then discarded — but not its spend: since WP-47 the process that ran it records what the attempt cost against the terminated row and charges the ledger for it (Q70 (b)). A run that has already ended answers 409.',
         tags: ['runs'],
         params: runParamsSchema,
         body: cancelRunRequestSchema,

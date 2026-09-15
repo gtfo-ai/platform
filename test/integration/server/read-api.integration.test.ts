@@ -58,6 +58,8 @@ let runId: string;
 let unlinkedRunId: string;
 /** A run with one ordinary entry and one whose payload is claimed to live in `blobs`. */
 let blobRunId: string;
+/** A BD-004 `local`-mode run: priced by the platform, never reported by a provider (WP-47). */
+let localRunId: string;
 
 const AT = '2026-09-12T10:00:00.000Z';
 
@@ -104,9 +106,9 @@ beforeAll(async () => {
   projectId = project.id;
   const task = await one<{ id: string }>(
     `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
-                        current_stage, cost_actual, cost_estimated, risk_classes)
+                        current_stage, cost_actual, risk_classes)
      values ($1, 'fake-jira', 'ACME-1', 'https://jira.example.test/browse/ACME-1', 'feature',
-             'active', 'refinement', 1.25, 2.5, '{payments}') returning id`,
+             'active', 'refinement', 1.25, '{payments}') returning id`,
     [projectId],
   );
   taskId = task.id;
@@ -135,6 +137,34 @@ beforeAll(async () => {
     [taskId, projectId],
   );
   unlinkedRunId = unlinked.id;
+
+  /**
+   * A BD-004 `local`-mode run: the platform priced it, the provider reported nothing (WP-47).
+   *
+   * Its whole point is `usd_estimated`, which had **no writer anywhere in the tree** before WP-47
+   * and was `not null default 0` — so every run of one whole provider mode read as `$0.00` on
+   * `GET /api/runs/:id` and committed nothing to any cap until its ledger row landed.
+   */
+  const localRun = await one<{ id: string }>(
+    `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                       provider_mode, status, terminal_reason, started_at, ended_at, num_turns,
+                       input_tokens, output_tokens, usd_estimated, wall_ms)
+     values ($1, $2, $3, 'developer', 'claude-opus-5', 'medium', 'feature@1+developer',
+             'local', 'completed', 'success', now(), now(), 2, 1000, 500, 0.06, 500) returning id`,
+    [taskId, stage.id, projectId],
+  );
+  localRunId = localRun.id;
+  /**
+   * The ledger's own rows for the two runs, which is what `cost_estimated_usd` is a projection over
+   * since WP-47 (backlog 75): one **priced** (`is_estimate`) and one **reported**, so the boundary
+   * the criterion names is a real pair of rows rather than a construction.
+   */
+  await pool.query(
+    `insert into cost_entries (run_id, task_id, project_id, stage, model, usd, is_estimate)
+     values ($1, $2, $3, 'refinement', 'claude-opus-5', 0.4, false),
+            ($4, $2, $3, 'refinement', 'claude-opus-5', 0.06, true)`,
+    [runId, taskId, projectId, localRunId],
+  );
 
   const sink = runner.createPostgresTranscriptSink({ sql: pool });
   for (const event of [
@@ -187,6 +217,17 @@ describe('the run projection', () => {
     // `numeric` arrives as a string; the DTO publishes a number, and `is_estimate` is read off
     // whether the provider reported a figure at all (BD-011).
     expect(run?.cost).toEqual({ usd: 0.4, is_estimate: false, price_list_id: null });
+    /**
+     * **The `local`-mode run reads its own figure** — WP-47, backlog 110, criterion 4.
+     *
+     * Before this work package `runs.usd_estimated` had no writer and was `not null default 0`, so
+     * this answered `{ usd: 0, is_estimate: true }`: a zero, on the operator-facing screen, for
+     * every run in the one provider mode BD-004 offers to somebody without an API key. And the
+     * number is the one the ledger charged the same run (0.06 in `cost_entries`), which is the
+     * comparison the criterion asks for — the wire and the books agree.
+     */
+    const local = await findRun(drizzled, localRunId);
+    expect(local?.cost).toEqual({ usd: 0.06, is_estimate: true, price_list_id: null });
     expect(run?.model_usage).toEqual([
       {
         model: 'claude-opus-5',
@@ -325,6 +366,15 @@ describe('the task projection', () => {
       url: 'https://jira.example.test/browse/ACME-1',
     });
     expect(detail?.task.cost_actual_usd).toBe(1.25);
+    /**
+     * **The priced part of the spend, not the sum** — WP-47, backlog 75, criterion 6.
+     *
+     * The task has two ledger rows, one reported (0.4) and one estimated (0.06), so the boundary is
+     * asserted in both directions at once: this is 0.06 and **not** 0.46, and it is **not** the 0
+     * that `tasks.cost_estimated` published for every task the product ever served. The column is
+     * gone (migration 0035) and the number is a projection over `cost_entries where is_estimate`.
+     */
+    expect(detail?.task.cost_estimated_usd).toBe(0.06);
     expect(detail?.task.risk_classes).toEqual(['payments']);
     // `task_stages.state` is free-form text; the DTO publishes a fixed vocabulary, so the mapping
     // is asserted rather than assumed.
@@ -339,9 +389,9 @@ describe('the task projection', () => {
       },
     ]);
     expect([...(detail?.runs ?? [])].map((run) => run.id).sort()).toEqual(
-      [runId, blobRunId].sort(),
+      [runId, blobRunId, localRunId].sort(),
     );
-    expect(detail?.runs).toHaveLength(2);
+    expect(detail?.runs).toHaveLength(3);
     expect(detail?.runs.every((run) => run.stage === 'refinement')).toBe(true);
     // WP-27: no take-over on this task, and the field says so rather than being absent — the
     // projection reads the event log and this task's log has no `task.taken_over`.

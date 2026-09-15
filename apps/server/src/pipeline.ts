@@ -46,6 +46,7 @@
  * composition root calls this before it starts the worker, and `runtime.ts` says so where it does.
  */
 import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import type {
   ClaudeRunner,
   IntegrationActionExecutor,
@@ -66,6 +67,7 @@ import {
   createBudgetGuard,
   createContextPackAssembler,
   createIntegrationActionExecutor,
+  createLateCostRecorder,
   createPipelineRuntime,
   createRunStopReasons,
   createStageRunPlanner,
@@ -73,6 +75,7 @@ import {
   defaultProjectSettings,
   humanTimeHandlers,
   registerMaintenanceSchedule,
+  runLimitsDefaults,
   silentLogger,
   startIntakeReconciliation,
   statsHandlers,
@@ -114,6 +117,19 @@ import { PLATFORM_SKILLS, ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
 import { agentRunEnvironment, composeAgentRunner } from './agent.js';
 import { composePlatformTools } from './platform-tools.js';
+
+/**
+ * Who this process is, for the run lease it holds while a stage executes (WP-47, `lease.ts`).
+ *
+ * Unique among **live** processes rather than stable across restarts, which is what the lease needs
+ * and the opposite of what a stable id would give: a restarted process must not inherit the lease
+ * its predecessor held, or the run that predecessor was driving would never be swept. Hostname for
+ * the operator reading the column, a random suffix so two containers on one host cannot collide.
+ */
+export const RUN_LEASE_OWNER = `${hostname()}:${randomUUID().slice(0, 8)}`;
+
+/** `Actor.component` on everything the run-lease sweep writes; it appears in the run's own log. */
+export const RUN_LEASE_SWEEP_COMPONENT = 'pipeline.run-lease.sweep';
 
 /** Thrown by {@link unavailableClaudeRunner}: this build has no transport to the launcher (Q52). */
 export class RunnerUnavailableError extends Error {
@@ -825,6 +841,34 @@ export const composePipeline = async (
       // BD-010's org and project budgets, read from the projection the ledger writes. A deployment
       // with no `budgets` rows is unaffected: `applicable` matches nothing and nothing blocks.
       budgets: createBudgetGuard({ store: costStore }),
+      /**
+       * The run lease this process holds while a stage is in flight (WP-47, backlog **109**).
+       *
+       * {@link RUN_LEASE_OWNER} is built once per process; the executor claims the lease in the
+       * transaction that creates the `runs` row and renews it on a heartbeat, so the sweep below can
+       * tell a run nothing is driving from one that is working. Without it a process that dies
+       * mid-run leaves a row `running` for ever, holding its stage's per-run budget against every
+       * future window of its project and its organisation.
+       */
+      lease: { owner: RUN_LEASE_OWNER },
+      /**
+       * What a run's spend does when a human's cancel or the sweep ended the row first (Q70 (b),
+       * backlog **50**). Until WP-47 it did nothing at all: the ender wrote zeros, the ledger took
+       * its `no_spend` branch, and cancelling was the one human action that spent a project's
+       * budget without charging it.
+       */
+      lateCost: createLateCostRecorder({
+        store: costStore,
+        runs: store.runs,
+        context: (correlationId, causeEventId) => ({
+          ids,
+          actor: { kind: 'system', component: 'cost-ledger' },
+          clock: { now: nowIso },
+          correlationId,
+          causeEventId,
+        }),
+        logger: options.logger,
+      }),
       context: (correlationId) => ({
         ids,
         actor: { kind: 'system', component: 'pipeline' },
@@ -916,13 +960,36 @@ export const composePipeline = async (
     stranded: {
       store: recoveryAdapters.createPostgresStrandedWorkStore(),
       unitOfWork: options.eventing.unitOfWork,
+      /**
+       * The third site (WP-47, backlog **109**): a run no process is renewing the lease of.
+       *
+       * It ends the row rather than re-enqueuing a wake-up — there is nothing left to wake — so it
+       * needs the pipeline store, the event log and a system actor, which is why it is a block of
+       * its own rather than two more methods on the stranded store.
+       * `packages/application/src/recovery/run-lease.ts` carries what a missing heartbeat does and
+       * does not license anybody to conclude.
+       */
+      runs: {
+        store: recoveryAdapters.createPostgresExpiredRunStore(),
+        pipeline: store,
+        unitOfWork: options.eventing.unitOfWork,
+        eventStore: options.eventing.store,
+        wallClockMs: runLimitsDefaults.wallClockMs,
+        context: (correlationId) => ({
+          ids,
+          actor: { kind: 'system', component: RUN_LEASE_SWEEP_COMPONENT },
+          clock: { now: nowIso },
+          correlationId,
+          causeEventId: null,
+        }),
+      },
     },
     logger: options.logger,
   });
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), and neither is a stranded history bootstrap (101) or a pending ask (84)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, and a run whose process died stays "running" for ever, holding its stage budget against every future window (109)',
     );
   }
 

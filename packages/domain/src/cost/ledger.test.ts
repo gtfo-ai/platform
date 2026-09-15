@@ -21,6 +21,7 @@ const CONTEXT: RunCostContext = {
   template: 'feature',
   stage: 'implementation',
   model: 'claude-opus-5',
+  late: false,
 };
 
 const rates = (modelId: string): PriceRates => ({

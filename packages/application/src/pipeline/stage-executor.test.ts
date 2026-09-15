@@ -5,7 +5,7 @@
  * the ones a template never reaches by itself: a run that overspends, a run whose cost the platform
  * could not read, a run that produced no artifact, and a job that arrives after the task has moved.
  */
-import type { DomainEvent } from '@platform/contracts';
+import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { RunStartError } from '../ports/runner.js';
@@ -488,11 +488,13 @@ describe('a task a human stopped while its stage was running', () => {
       tx: Parameters<PipelineHarness['store']['tasks']['save']>[0],
       runId: string,
     ) => Promise<void>,
+    options: { readonly cost?: boolean } = {},
   ): PipelineHarness => {
     const harness = harnessWith({
       runs: {
         refinement: { status: 'completed', terminalReason: 'success', costUsd: 0.4 },
       },
+      ...(options.cost === true ? { cost: true } : {}),
     });
     const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
     const real = repository.insert.bind(harness.store.runs);
@@ -572,5 +574,84 @@ describe('a task a human stopped while its stage was running', () => {
       harness.store.runs.load(scope.tx, cancelled as unknown as string),
     );
     expect(run?.status).toBe('cancelled');
+  });
+
+  /**
+   * **The money a cancelled run burned reaches the ledger** — WP-47, Q70 (b), backlog 50.
+   *
+   * The assertion is the one standing rule 79 asks for and the one WP-19's own invariant cannot
+   * make: a sum over the ledger compared with **what the runner reported**, which is a number from
+   * outside the ledger. `sum(cost_entries) = sum(cost_rollup_daily)` is true and blind here — both
+   * sides are written from one derivation, so a run that contributes nothing to one contributes
+   * nothing to the other and the equality holds while the money is lost.
+   *
+   * Before this work package all four of these were zero: the cancel wrote `{ usd: 0 }`, the
+   * ledger took its `no_spend` branch, and no entry, no rollup delta and no budget window moved.
+   */
+  it('charges a cancelled run’s spend to the ledger, the rollup and the budget', async () => {
+    const harness = harnessThatStopsMidRun(
+      async (instance, tx, runId) => {
+        await instance.store.runs.finish(tx, {
+          runId,
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          // What `cancelRunCommand` stores since WP-47: **no figure**, because the request has no way
+          // to reach the session and no way to know what it had spent. The `{ usd: 0 }` it used to
+          // write was the one thing that stopped the process that *does* know from writing it.
+          cost: null,
+          wallMs: 0,
+        });
+      },
+      { cost: true },
+    );
+    const ledger = harness.cost;
+    if (ledger === null) {
+      throw new Error('the harness was asked for the ledger and composed none');
+    }
+    // A cap the charge can move: without a `budgets` row the third assertion below would be
+    // vacuously true, which is exactly the shape of the defect (nothing moved, and nothing said so).
+    ledger.seedBudget({
+      id: '00000000-0000-4000-8000-0000000000c9' as Id,
+      scope: 'project',
+      scopeId: PROJECT,
+      projectId: PROJECT,
+      window: 'day',
+      limitUsd: 100,
+    });
+    await harness.publish([ticketMatched()]);
+    const reported = 0.4;
+    const charged = ledger.entries.reduce((sum, entry) => sum + entry.usd, 0);
+    expect(charged).toBeCloseTo(reported, 6);
+    expect(ledger.rollups.reduce((sum, delta) => sum + delta.usd, 0)).toBeCloseTo(reported, 6);
+    // The third table, and the one backlog 50 called a governance statement rather than an
+    // accounting one: a run cancelled at 90 % of a daily cap used to leave the cap untouched.
+    expect(ledger.windows.reduce((sum, window) => sum + window.spentUsd, 0)).toBeCloseTo(
+      reported,
+      6,
+    );
+    // Labelled, not merged: this charge was made after the row was already terminal.
+    expect(ledger.entries.every((entry) => entry.late)).toBe(true);
+  });
+
+  it('claims a lease on the run it starts, so a sweep can tell it apart from one nobody is driving', async () => {
+    let started: string | null = null;
+    const harness = harnessThatStopsMidRun(async (_instance, _tx, runId) => {
+      started = runId;
+    });
+    await harness.publish([ticketMatched()]);
+
+    expect(started).not.toBeNull();
+    // Claimed in the **same transaction as the insert**: a `running` row with no lease is exactly
+    // the row the sweep's wall-clock backstop takes an hour to reach.
+    expect(harness.store.leaseOf(started as unknown as Id)?.owner).toBe('harness');
   });
 });

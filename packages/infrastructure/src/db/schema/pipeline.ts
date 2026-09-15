@@ -96,7 +96,9 @@ export const tasks = pgTable('tasks', {
     .notNull()
     .default({}),
   costActual: numeric('cost_actual', { precision: 12, scale: 6 }).notNull().default('0'),
-  costEstimated: numeric('cost_estimated', { precision: 12, scale: 6 }).notNull().default('0'),
+  // `cost_estimated` was dropped by migration 0035 (WP-47, backlog 75): a `not null default 0`
+  // column with no writer, published as the task's estimated spend. `cost_estimated_usd` is now a
+  // projection over `cost_entries where is_estimate` (`apps/server/src/queries/pipeline-queries.ts`).
   estimateUsd: numeric('estimate_usd', { precision: 12, scale: 6 }),
   /**
    * What {@link tasks.estimateUsd} rests on, and how many finished tasks it was averaged over
@@ -206,7 +208,14 @@ export const runs = pgTable('runs', {
   cacheWrite1hTokens: bigint('cache_write_1h_tokens', { mode: 'number' }).notNull().default(0),
   cacheReadTokens: bigint('cache_read_tokens', { mode: 'number' }).notNull().default(0),
   usdReported: numeric('usd_reported', { precision: 12, scale: 6 }),
-  usdEstimated: numeric('usd_estimated', { precision: 12, scale: 6 }).notNull().default('0'),
+  /**
+   * Nullable and without a default since migration 0035 (WP-47), and **written** since the same
+   * work package: `RunRepository.finish` puts the run's own figure here when it is an estimate and
+   * in {@link runs.usdReported} when it is not. `null` is *"no figure was reported for this run"*,
+   * which `not null default 0` spelled as a free run — the pair is now exactly the one
+   * `run_model_usage` has carried since migration 0017.
+   */
+  usdEstimated: numeric('usd_estimated', { precision: 12, scale: 6 }),
   priceListId: uuid('price_list_id'),
   wallMs: bigint('wall_ms', { mode: 'number' }).notNull().default(0),
   redactionCount: integer('redaction_count').notNull().default(0),

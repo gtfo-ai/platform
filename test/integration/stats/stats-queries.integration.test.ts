@@ -225,7 +225,7 @@ describe('the statistics reads (PostgreSQL)', () => {
       { stage: 'code_review', entries: 2, returns: 1, rate: null },
     ]);
     // PROGRESS backlog 75's projection: the share is read off `cost_entries.is_estimate` and
-    // `tasks.cost_estimated` — which has no writer — is never read.
+    // `tasks.cost_estimated` no longer exists (dropped by migration 0035, WP-47).
     expect(sources.estimatedSpend).toEqual([{ day: dayOf(at(-30)), usd: 2.5, estimatedUsd: 2.5 }]);
   });
 

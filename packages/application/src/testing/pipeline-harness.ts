@@ -28,6 +28,7 @@ import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
 import { readDataBlocks, SHIPPED_TEMPLATES } from '@platform/domain';
 import { type AskRunPlanner, createAskRunPlanner } from '../ask/planner.js';
 import { createBudgetGuard } from '../cost/guard.js';
+import { createLateCostRecorder } from '../cost/late.js';
 import { costHandlers } from '../cost/runtime.js';
 import { EventBus } from '../events/event-bus.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
@@ -670,6 +671,17 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     options.cost === true
       ? createMemoryCostStore({
           /**
+           * The join between the two stores that are one database in production (WP-47): a run the
+           * ledger has charged must be refused a second, late charge, and `runs.recordCost`'s
+           * PostgreSQL predicate reads `cost_entries` for exactly that. Without this the fake would
+           * be kinder than the adapter.
+           */
+          onEntries: (rows) => {
+            for (const row of rows) {
+              store.chargedRuns.add(row.runId);
+            }
+          },
+          /**
            * The estimate's three reads and its one write, over this harness's **own** rows.
            *
            * `refinedSize` parses the `RefinedSpec` the scripted refinement really produced, and
@@ -895,6 +907,32 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       }),
       stopReasons,
       ...(cost === null ? {} : { budgets: createBudgetGuard({ store: cost }) }),
+      /**
+       * The lease, so a harness case can assert the executor claimed one (WP-47). The schedule is a
+       * no-op: nothing here waits minutes, and what a heartbeat *decides* is
+       * `pipeline/lease.test.ts`'s subject rather than this harness's.
+       */
+      lease: { owner: 'harness', schedule: () => () => {} },
+      /**
+       * A cancelled run's spend, charged from the process that measured it (WP-47, Q70 (b)).
+       * Composed only with the ledger, for the same reason `budgets` is: without a `CostStore`
+       * there is nothing to charge.
+       */
+      ...(cost === null
+        ? {}
+        : {
+            lateCost: createLateCostRecorder({
+              store: cost,
+              runs: store.runs,
+              context: (correlationId, causeEventId) => ({
+                ids,
+                actor: { kind: 'system', component: 'cost-ledger' },
+                clock: { now: () => clock.now() },
+                correlationId,
+                causeEventId,
+              }),
+            }),
+          }),
       context: (correlationId) => ({
         ids,
         actor: { kind: 'system', component: 'pipeline' },

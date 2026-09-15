@@ -373,7 +373,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     unit: 'usd',
     aggregation: 'ratio',
     caveats: [
-      'Understates a task a human cancelled mid-run: a cancelled run’s spend reaches no ledger row (PROGRESS backlog 50).',
+      'Understates a task whose cancelled run’s process then died before reporting: the run that still runs records its spend against the terminated row (WP-47), but a dead process has nobody left to report the figure, so nothing measures it and nothing invents one (Q52).',
     ],
   },
   estimated_spend_share: {

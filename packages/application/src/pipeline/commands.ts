@@ -857,7 +857,12 @@ const toRunAggregate = (stored: StoredRun, sequence: number): Run => {
  * started the run; reaching it from an HTTP request in another process is Q52's out-of-process
  * transport, which is deliberately unbuilt. So a cancelled run may keep spending for as long as its
  * session takes to end, and when it does end its own process finds the row terminal and discards its
- * outcome (`stage-executor.ts`'s `lostTheRun`, which also states what that costs).
+ * **verdict** (`stage-executor.ts`'s `lostTheRun`).
+ *
+ * **Its spend is no longer discarded with it** (WP-47, Q70 (b)): that process is the only one that
+ * knows what the attempt cost, so it writes the figure through the narrow `runs.recordCost` and
+ * charges the ledger from the same transaction. Which is why the cost this command stores is `null`
+ * rather than a zero — see the call below.
  *
  * ## The arbiter is the row, and that is what makes this safe beside a running stage
  *
@@ -905,9 +910,18 @@ export const cancelRunCommand = async (
           sessionId: run.sessionId,
           numTurns: run.numTurns,
           usage: run.usage ?? NO_USAGE,
-          // Nothing measured this attempt's spend: the session is still the other process's, and
-          // what it had burned when the human pressed cancel is not a number anybody here has.
-          cost: run.cost ?? { usd: 0, is_estimate: true, price_list_id: null },
+          /**
+           * **`null`, not a zero** — WP-47, Q70 (b).
+           *
+           * Nothing here measured this attempt's spend: the session is still the other process's,
+           * and what it had burned when the human pressed cancel is not a number anybody in this
+           * request has. Until WP-47 that was written as `{ usd: 0, is_estimate: true }`, which put
+           * a `0` in `runs.usd_estimated` — a measurement, as far as every later reader is
+           * concerned, and the one thing that would stop the process that *does* know the number
+           * from writing it: `runs.recordCost` refuses a row that already carries a figure. So the
+           * honest absence is what is stored, and the money arrives when that process finishes.
+           */
+          cost: run.cost,
           wallMs: wallMsSince(run.startedAt, context.clock.now()),
         });
         if (!won) {
