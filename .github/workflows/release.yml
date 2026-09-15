@@ -1,0 +1,262 @@
+name: release
+
+# technical/11 § Workflows: "`release.yml` | `push: main` | release-please release PR; on merge:
+# tag → `image.yml`". TD-019 decides the mechanism — release-please v5 keeps a release PR up to
+# date, a **human** merges it, and merging it is what creates the `vX.Y.Z` tag.
+#
+# Nothing in this file has ever run. There is no way to run GitHub Actions from a checkout, so
+# every claim below was read out of a pinned source rather than observed (standing rule 71), and
+# each one names where. `scripts/release.test.ts` asserts the parts that are properties of *this
+# file* — the trigger, the pins, the permissions, the token and its fallback, and the conditional
+# steps — the way `scripts/verify.test.ts` holds `verify` to `ci.yml`; it also **executes the shell
+# of the last step** against a stub `gh`, on both paths, which is the only executable part here.
+#
+# ## The four decisions worth reading before changing this
+#
+# **How the tag reaches `image.yml` depends on which token created it, and both paths are built.**
+# "Events triggered by the `GITHUB_TOKEN` will not create a new workflow run, with the following
+# exceptions: `workflow_dispatch` and `repository_dispatch` events always create workflow runs",
+# and the same page's remedy is to "use a GitHub App installation access token or a personal access
+# token instead of `GITHUB_TOKEN` to trigger events that require a token"
+# (https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+# That remedy is release-please's own documented reason for recommending a token
+# (release-please-action § "Workflows that trigger other workflows"). So there are two paths and
+# the last step takes whichever one this repository is on:
+#
+#   * **With `RELEASE_PLEASE_TOKEN` set** — the path `CONTRIBUTING.md` instructs — the tag is
+#     created by a PAT or App identity, so `image.yml`'s `push: tags: ['v*']` **does** start a run
+#     by itself. Dispatching as well would start a *second* run on the same ref: `image.yml`'s
+#     `concurrency: image-${{ github.ref }}` cancels in progress only for `pull_request`, so the second would
+#     queue behind the first, build five images on two architectures again, republish identical
+#     tags, and be waited for under the same `timeout-minutes: 120` — a healthy release going red
+#     on a timeout. This workflow therefore **dispatches nothing** on that path and watches the run
+#     the tag push started.
+#   * **On the `GITHUB_TOKEN` fallback** the tag starts nothing, so the step dispatches `image.yml`
+#     on the tag ref — the documented exception above — and watches that.
+#
+# The branch is `secrets.RELEASE_PLEASE_TOKEN != ''`, equivalent to the `||` fallback that decides
+# which token the release step uses (an unset secret is the empty string in both), and
+# `scripts/release.test.ts` pins both spellings so the two halves cannot drift apart.
+#
+# `image.yml` already declares `workflow_dispatch`, and `ref` for a dispatch "can be a branch or
+# tag name" (REST: create a workflow dispatch event), where `GITHUB_REF_TYPE` is `tag` and
+# `GITHUB_REF_NAME` the tag — which is exactly what `image.yml`'s existing tag path reads on
+# *either* route to publish `X.Y.Z`, `X.Y`, `X`, `sha-<7>` **and `latest`**, the last of which that
+# file publishes on a tag and which no decision record authorises (**Q89**). No copy of the tag
+# scheme is made here.
+#
+# **The release PR gets no CI run unless an administrator provides a token.** The rule quoted just
+# above applies to the pull request as much as to the tag: a PR opened with `GITHUB_TOKEN` starts
+# no workflow run, so `ci.yml`'s `pull_request` jobs — `dco` among them — never report on it, and
+# with the required checks `CONTRIBUTING.md` § Branch protection tells an administrator to apply,
+# that PR is unmergeable. The token below is therefore `secrets.RELEASE_PLEASE_TOKEN` when the
+# repository has one (a fine-grained PAT or a GitHub App installation token, created by an
+# administrator — `CONTRIBUTING.md` § Releasing has the steps, and only the *name* is ever written
+# down, BD-002), and an unset secret is an empty string, which `||` falls back from:
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets
+# ("If a secret has not been set, the return value of an expression referencing the secret … will
+# be an empty string"). **What the fallback costs, stated rather than discovered**: no CI on the
+# release PR at all, so merging it needs a human to close and reopen the PR (a human's event, not
+# the token's), or a merge queue evaluating it on `merge_group`, or an administrator bypassing the
+# required checks — and the `dco` verdict on the release commit is then reachable only through
+# `merge_group` or the `push: main` run *after* the merge, which is after the tag exists. **Q90**
+# records the decision; `docs/TODO.md`'s first-release row is what a merger reads.
+#
+# **`signoff` must name the identity whose commits the token makes.** `ci.yml`'s `dco` job requires
+# every commit's `Signed-off-by` e-mail to equal its author's, so `release-please-config.json`
+# carries `signoff`, written for the fallback: `github-actions[bot]`, the identity commits made
+# through the API with `GITHUB_TOKEN` are attributed to. That identity is *predicted, not measured*
+# (standing rule 86): if the first release PR's `dco` job disagrees with it, that config line is the
+# one to change, and the job's error names both halves. An administrator who adds
+# `RELEASE_PLEASE_TOKEN` **changes that line in the same commit** — a PAT's commits are authored by
+# its user and an App's by `<app>[bot]` — or the `dco` job the token exists to make run is the job
+# that fails.
+#
+# **The upgrade facts are appended to the release body, not written into it.** release-please
+# generates the notes from the commits; whether the release needs a migration is a property of
+# `packages/infrastructure/src/db/migrations/` and of the previous tag, and whether the prompts
+# have been measured against a model is a property of `.github/workflows/`. Both are derived by
+# `scripts/changelog.mjs --upgrade-note` (standing rule 7: a hand-written "no migration needed"
+# line is wrong the first time somebody forgets), and appended here.
+
+# `push: main` and nothing else, which is the whole trigger technical/11 gives this workflow. A
+# `workflow_dispatch` here would be a second way to reach a release path that has never run once.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Two pushes to `main` in quick succession must not groom the same release PR at once, and a
+# cancelled release run could leave a tag without an image: this queue waits rather than cancels.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release pr
+    runs-on: ubuntu-latest
+    permissions:
+      # The release PR, its branch, the tag and the GitHub release.
+      contents: write
+      pull-requests: write
+      # release-please labels its pull request through the issues API.
+      issues: write
+      # `gh workflow run image.yml` — the dispatch — and the `gh run list`/`gh run watch` that
+      # find and follow the image build. The reads (runs, jobs) come with the write.
+      #
+      # **`checks: read` is deliberately not here.** `gh run watch` does one read that needs it —
+      # a job's annotations, `GET /repos/{owner}/{repo}/check-runs/{id}/annotations` — and it
+      # **tolerates being refused**: `pkg/cmd/run/watch/watch.go` (cli/cli, trunk, read 2026-09-15)
+      # answers that one error by name, `if err != shared.ErrMissingAnnotationsPermissions { …
+      # return }`, sets a flag and prints that the token lacks `checks:read` instead of failing.
+      # So the cost of leaving it out is annotations missing from this job's log, not a 403; and
+      # gh's manual note about `checks:read` is about *fine-grained PATs*, which `GITHUB_TOKEN` is
+      # not. `--exit-status` still reports the watched run's conclusion, which is this step's
+      # whole purpose.
+      actions: write
+    steps:
+      # Full history and tags: the upgrade note compares the migrations on disk with those the
+      # previous release tag carried, and there is no previous tag to find in a shallow clone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # **Which `image.yml` runs existed at this commit before the release**, recorded *before*
+      # release-please creates anything — which is the only moment at which the answer is knowable.
+      # The last step identifies the build it must watch as "a run at this commit that was not
+      # here before"; taking the newest run at this commit *afterwards* would hand it an older
+      # `workflow_dispatch` run (a manual start or a re-run at this commit) or, on the token path,
+      # the `push: main` build of this very commit, and `gh run watch` would then report a finished
+      # run's verdict — green, without the release's images having been built at all.
+      #
+      # Unconditional: `release_created` is not known yet, and this is one API read on a push that
+      # only grooms the release PR.
+      - id: image-runs-before
+        name: which image.yml runs already exist for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `@tsv` rather than a `select(…)`: the filtering is done below in shell, where
+          # `scripts/release.test.ts` can execute it against a stub `gh` (standing rule 3).
+          listing=$(gh run list --workflow image.yml --limit 100 \
+            --json databaseId,headSha --jq '.[] | [.databaseId, .headSha] | @tsv')
+          before=$(printf '%s\n' "$listing" | awk -v sha="$GITHUB_SHA" '$2 == sha { printf "%s ", $1 }')
+          echo "runs=${before}" >> "$GITHUB_OUTPUT"
+          echo "image.yml runs already at ${GITHUB_SHA}: ${before:-none}"
+
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # The administrator's token when there is one, `GITHUB_TOKEN` otherwise — see the header
+          # for what each costs. Only the *name* of the secret appears in this repository (BD-002).
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # `release_created` and `tag_name` are the root component's outputs (the action sets them
+      # unprefixed for the `.` path; v5.0.0 `src/index.ts` § outputReleases). Both are empty when
+      # this push only groomed the release PR, which is every push but the merge of that PR.
+      - if: ${{ steps.release.outputs.release_created == 'true' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: state the upgrade facts on the release
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json body --jq .body > "${RUNNER_TEMP}/body.md"
+          node scripts/changelog.mjs --upgrade-note >> "${RUNNER_TEMP}/body.md"
+          gh release edit "$TAG" --notes-file "${RUNNER_TEMP}/body.md"
+
+      # The images for the tag, through `image.yml`'s own tag path — **dispatched only when the tag
+      # cannot have started a run by itself** (see the header: that is a property of the token that
+      # created it), and **watched to its verdict either way**. `gh workflow run` returns as soon
+      # as the dispatch is accepted (REST answers `204 No Content`), so a step that only dispatched
+      # would be green whether or not a single image was built. The watch makes this job's verdict
+      # the image build's. It is the last step because a failure here leaves a release whose images
+      # are missing, which is visible; a failure before it would leave a release without the
+      # upgrade note, which is not.
+      #
+      # `GH_TOKEN` is `GITHUB_TOKEN` and not `RELEASE_PLEASE_TOKEN`: the job's own permissions above
+      # are what these commands need, and a release-scoped credential is not one of them.
+      - name: build and publish the images for the tag
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        timeout-minutes: 120
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+          # `true` exactly when the release step used an administrator's token, in which case the
+          # tag push has already started the build. Comparing a secret to the empty string reveals
+          # nothing about it (BD-002).
+          TAG_STARTED_A_RUN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
+          RUNS_BEFORE: ${{ steps.image-runs-before.outputs.runs }}
+        run: |
+          set -euo pipefail
+
+          # The newest `image.yml` run at this commit that was **not** already there before the
+          # release, optionally restricted to a ref. Every run created since that baseline is
+          # newer than every run in it, so "newest new run" and "newest run, required to be new"
+          # are the same answer — and the case this exists for, an older run at this commit with
+          # the new one still queueing, yields nothing rather than yielding the old one.
+          newest_new_run() {
+            local event="$1" ref="$2" listing id sha branch
+            listing=$(gh run list --workflow image.yml --event "$event" --limit 50 \
+              --json databaseId,headSha,headBranch \
+              --jq '.[] | [.databaseId, .headSha, .headBranch] | @tsv')
+            while IFS="$(printf '\t')" read -r id sha branch; do
+              [ -n "$id" ] || continue
+              [ "$sha" = "$GITHUB_SHA" ] || continue
+              if [ -n "$ref" ] && [ "$branch" != "$ref" ]; then continue; fi
+              case " ${RUNS_BEFORE:-} " in *" ${id} "*) continue ;; esac
+              printf '%s\n' "$id"
+              return 0
+            done <<< "$listing"
+            return 0
+          }
+
+          if [ "$TAG_STARTED_A_RUN" = 'true' ]; then
+            # An administrator's token created the tag, so `image.yml`'s `push: tags` trigger has
+            # already started the build; starting a second one would rebuild and republish the
+            # same five images behind the first. A tag push reports the tag as `head_branch`,
+            # which is what separates it from the `push: main` build of the same commit — that is
+            # `gh run list`'s own output shape, *predicted and not measured* here (standing rule
+            # 86). If it were wrong this step fails after 150 s with the message below, which is a
+            # release that says so rather than one that watched somebody else's run.
+            event=push
+            ref="$TAG"
+            started='the tag push was expected to start it (RELEASE_PLEASE_TOKEN is set)'
+            echo "not dispatching: ${TAG} was pushed with an administrator's token, which starts image.yml by itself"
+          else
+            # The `GITHUB_TOKEN` fallback: the tag started nothing, and `workflow_dispatch` is the
+            # documented exception. `--ref` on a dispatch takes a tag name.
+            event=workflow_dispatch
+            ref=''
+            started='the dispatch was accepted (REST answers 204), so the run may still be queueing'
+            gh workflow run image.yml --ref "$TAG"
+          fi
+
+          # A run takes a few seconds to appear; 30 × 5 s is the bound.
+          run_id=''
+          for _ in $(seq 1 30); do
+            run_id=$(newest_new_run "$event" "$ref")
+            if [ -n "$run_id" ]; then break; fi
+            sleep 5
+          done
+          if [ -z "$run_id" ]; then
+            echo "no new image.yml ${event} run for ${TAG} (${GITHUB_SHA}) appeared within 150 s" >&2
+            echo "what is known here: the release exists, and ${started}; whether its images were" >&2
+            echo "built is not answerable from this step. Check" >&2
+            echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/image.yml and, if" >&2
+            echo "there is no run for ${TAG}, start one on that tag by hand." >&2
+            exit 1
+          fi
+          echo "watching ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          gh run watch "$run_id" --exit-status

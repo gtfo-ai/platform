@@ -393,9 +393,26 @@ which a healthy re-run says out loud:
 ```
 
 **Rolling back the image without rolling back the database is the one thing that is not supported.**
-The older build sees migrations it does not know and `/readyz` answers `migrations: down` on purpose:
-serving traffic against a schema the code has never seen is how a rollback corrupts data. Restore the
-dump, or roll forward.
+The older build **refuses to start**: it sees migrations it does not know, writes one line to stderr
+naming them, and exits — so there is no `/readyz` to read here, because the container is not up.
+`docker compose ps` shows `app` as `Exited (1)` and `docker compose logs app` ends with the line
+below — one line, wrapped here, naming whichever migrations the newer build had added:
+
+```
+this build does not know 1 migration(s) the database has applied: 0035_the_newer_build_added_this.
+The database is newer than the code (TD-019): roll forward to the build that applied them, or
+restore the pre-upgrade dump — migrations are forward-only and serving traffic against a schema this
+build has never seen is how a rollback corrupts data (docs/operator-guide.md § 5).
+```
+
+That refusal is deliberate, and it is the whole recovery procedure. Two ways out, and only two:
+
+- **Roll the image forward** to the build that applied the migrations it names — set `PLATFORM_TAG`
+  back to that version and `docker compose up -d`. Nothing is lost; the rollback simply did not
+  happen.
+- **Restore the dump you took before the upgrade** (§ 6 has the `pg_restore` line), which takes the
+  database back to a schema the older image knows. Everything written since that dump is gone, which
+  is why the dump is taken *before* the upgrade and not after the trouble starts.
 
 ## 6. Backup
 

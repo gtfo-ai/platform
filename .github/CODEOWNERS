@@ -1,0 +1,34 @@
+# Review routing for this repository (TD-019's hygiene list).
+#
+# GitHub needs a **user or a team** here; an organisation name alone is not a valid owner. This
+# organisation has no teams — `gh api orgs/gtfo-ai/teams` answered `[]` on 2026-09-15 — and three
+# members, so the owner below is the maintainer who has written the tree. When a team exists, the
+# whole file becomes one line naming it.
+#
+# Every pattern matches at any depth unless it starts with `/`, and the **last** matching pattern
+# wins — the opposite of `.gitignore`'s first-match rule and of the anchoring convention this
+# repository follows for ignore files. The order below is therefore general first, specific last.
+#
+# This is *not* the reviewer routing the pipeline reads. That one is the **target project's**
+# `CODEOWNERS`, parsed by `packages/integrations/src/git/codeowners.ts` for WP-37's risk classes.
+
+* @JanMikes
+
+# The three things that decide what the product is, and what it may do. A change here is a
+# decision, not an edit: `docs/decisions/**` is the record, `docs/technical/**` the spec the code
+# is held to, and the workflows are what gates every push.
+/docs/decisions/ @JanMikes
+/docs/technical/ @JanMikes
+/.github/ @JanMikes
+
+# Release engineering: the version, the changelog, the release workflow and the third-party
+# accounting a published image carries (TD-019, BD-002).
+/release-please-config.json @JanMikes
+/.release-please-manifest.json @JanMikes
+/CHANGELOG.md @JanMikes
+/THIRD_PARTY_NOTICES.md @JanMikes
+/LICENSE @JanMikes
+/NOTICE @JanMikes
+
+# The schema is forward-only and an applied file is never edited (TD-011).
+/packages/infrastructure/src/db/migrations/ @JanMikes

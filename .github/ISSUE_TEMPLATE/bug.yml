@@ -1,0 +1,61 @@
+name: Bug report
+description: Something the platform did that it should not have done
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Never paste a real credential, token, ticket body or customer data** — not in a log
+        excerpt, not in a screenshot (BD-002). The platform redacts secrets it knows about at the
+        write (TD-012), but a paste into this form goes nowhere near that code. If the report only
+        makes sense with a secret in it, report it privately instead: SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        `curl -fsS localhost:8080/api/version` — it answers the image's version, its commit and
+        when it was built. A checkout says `0.0.0-dev`; say so and give the commit.
+      placeholder: '0.1.0 (sha 1234567), or "checkout at 1234567"'
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where it happened
+      options:
+        - Pipeline (a task, a run, a stage)
+        - Integrations (Jira, GitLab, GitHub, Slack, Sentry)
+        - Knowledge base and search
+        - Web app
+        - API, webhooks or the event stream
+        - Install, upgrade, migrations, Docker
+        - Costs, budgets or statistics
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+      description: >-
+        The sequence that produced it, ending with the thing that was wrong. If the platform wrote
+        a row you can point at — a run id, a task key, an `integration_actions` entry — name it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: >-
+        `docker compose logs app --since 10m` around the failure. Logs are structured JSON
+        (`LOG_FORMAT=pretty` for a readable local run); the `err` and `msg` fields are the two that
+        matter. Redact anything the redactor did not.
+      render: text
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: There is no credential, token, customer name or ticket content in this report.
+          required: true

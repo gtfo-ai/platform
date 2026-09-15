@@ -1,0 +1,70 @@
+name: Integration request
+description: A provider the platform should be able to talk to
+labels: [integration]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        A provider is an **adapter behind a typed port** (BD-017): adding one never touches the
+        pipeline or the UI. What each needs is the same four things — the port implementation, a
+        fake that is stricter than the real adapter and never kinder, the shared contract suite run
+        against both, and a setup guide — plus recorded HTTP fixtures that each carry where they
+        came from (`test/fixtures/http/<provider>/SOURCES.md`). This form asks the questions that
+        decide whether that is a day or a month.
+  - type: dropdown
+    id: port
+    attributes:
+      label: Which port would it implement?
+      description: >-
+        The ports are `packages/application/src/ports/integrations/`. A provider may implement more
+        than one.
+      multiple: true
+      options:
+        - Task management (tickets)
+        - Git provider (repositories, merge requests, CI)
+        - Communication (chat)
+        - Observability — errors
+        - Observability — logs
+        - None of these; it is a new port
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: The provider
+      placeholder: 'Linear, Bitbucket Cloud, Azure DevOps, Discord, Datadog, …'
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: Its API, and what authenticates against it
+      description: >-
+        Link the reference documentation. Which auth does a self-hoster configure — a personal
+        token, an OAuth app, an installation? A credential never crosses this platform's API: an
+        operator names an environment variable and the server seals what it reads (TD-020), so a
+        provider whose auth cannot be reduced to a value in a variable needs a design first.
+    validations:
+      required: true
+  - type: textarea
+    id: inbound
+    attributes:
+      label: How does it notify a listener?
+      description: >-
+        Webhooks with a signature over the body, polling, a socket? The platform verifies a
+        delivery before it stores anything about it, so the signing scheme matters — name it and
+        link it if you know it.
+  - type: dropdown
+    id: access
+    attributes:
+      label: Could you test it against a real instance?
+      description: >-
+        Fixtures in this repository record where each came from, including whether it was recorded
+        or composed. Access to a real instance is the difference between the first kind and the
+        second.
+      options:
+        - 'Yes, I have an instance and could record fixtures'
+        - 'Yes, I have an instance but cannot record'
+        - 'No'
+    validations:
+      required: true

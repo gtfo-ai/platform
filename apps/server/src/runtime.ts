@@ -188,6 +188,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
   const stopCallbacks: { name: string; stop: () => Promise<void> }[] = [];
 
   try {
+    /**
+     * TD-019: refuse to start against a database newer than this build (WP-42).
+     *
+     * First thing inside the `try`, so the `catch` below closes the pool, and before anything
+     * else touches the schema — a query written against a column a later migration changed is
+     * exactly what this refusal exists to prevent, and it must not happen once before the refusal
+     * is raised. `/readyz`'s `migrations: down` is the *other* half and is not a substitute: it
+     * reports after the process is up and serving.
+     */
+    await dbAdapters.assertSchemaIsKnown(database.pool);
+
     const eventing = eventingAdapters.createEventing({
       pool: database.pool,
       connectionString: config.database.url,

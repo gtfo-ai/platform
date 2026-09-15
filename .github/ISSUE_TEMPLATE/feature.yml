@@ -1,0 +1,44 @@
+name: Feature request
+description: Something the platform should do and does not
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        This project is specified in `docs/` before it is built: `docs/product/` is what and why,
+        `docs/decisions/` are the records, `docs/technical/` is how. A request that lands as a
+        change to those documents is a request that can be built — so if you already know which
+        page is wrong or missing, say which.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What were you trying to do, and what happened instead of it? A request stated as a problem
+        survives a design that solves it differently; one stated as a solution does not.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Related documents, decisions or open questions
+      description: >-
+        `docs/product/*`, a `BD-*`/`TD-*` record, a `Q<n>` in `docs/OPEN-QUESTIONS.md`, or nothing
+        if you have not looked — that is a fine answer too.
+      placeholder: 'product/04 § pipeline, BD-007, Q28'
+  - type: dropdown
+    id: workaround
+    attributes:
+      label: Is there a workaround today?
+      options:
+        - 'No'
+        - 'Yes, but it does not scale'
+        - 'Yes, and it is fine — this is a convenience'
+    validations:
+      required: true

@@ -4,12 +4,15 @@
  * slow round trip. The SQL those decisions emit is proven against PostgreSQL 18 in the
  * `integration` tier.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { checksumOf } from './migrations.js';
+import { checksumOf, loadMigrations } from './migrations.js';
 import {
+  assertSchemaIsKnown,
+  DatabaseSchemaAheadError,
   DEFAULT_APP_ROLE,
   findUnknownMigrations,
   MIGRATION_LOCK_KEY,
@@ -383,5 +386,64 @@ describe('findUnknownMigrations', () => {
     await expect(
       findUnknownMigrations(catalogue(true, ['0001_first', '0099_from_the_future']), known),
     ).resolves.toEqual(['0099_from_the_future']);
+  });
+
+  /**
+   * The refusal, asserted from both sides (standing rule 42): a guard that threw on everything
+   * would satisfy the first case alone, and one that threw on nothing the second alone.
+   */
+  describe('assertSchemaIsKnown', () => {
+    it('lets a database at or behind this build through, and an empty one', async () => {
+      await expect(
+        assertSchemaIsKnown(catalogue(true, ['0001_first']), known),
+      ).resolves.toBeUndefined();
+      await expect(assertSchemaIsKnown(catalogue(false, []), known)).resolves.toBeUndefined();
+    });
+
+    it('refuses a database ahead of this build and names every migration it does not know', async () => {
+      const ahead = catalogue(true, ['0001_first', '0098_alpha', '0099_omega']);
+      await expect(assertSchemaIsKnown(ahead, known)).rejects.toThrow(DatabaseSchemaAheadError);
+
+      const error = await assertSchemaIsKnown(ahead, known).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(DatabaseSchemaAheadError);
+      const refusal = error as DatabaseSchemaAheadError;
+      expect(refusal.unknownMigrations).toEqual(['0098_alpha', '0099_omega']);
+      // Both names in the message, not just the count: the operator's next action is to find the
+      // build that applied them, and a count does not say which.
+      expect(refusal.message).toContain('0098_alpha');
+      expect(refusal.message).toContain('0099_omega');
+    });
+
+    /**
+     * The refusal an operator is *shown*, held to the refusal the process *writes* (rule 83).
+     *
+     * `docs/operator-guide.md` § 5 quotes this message as the whole observable of a rollback —
+     * there is no `/readyz` line to read, because the container is not up — and `apps/server/src/
+     * main.ts` writes `error.message` to stderr verbatim, so the quote either is that message or
+     * is fiction. It was fiction once: it named `0035_…_this.sql`, and no `platform_migrations`
+     * row ever holds an extension (`migrations.ts` § loadMigrations stores the file name without
+     * it), so the quoted line could not occur. The shape below is evidenced by the migrations on
+     * disk rather than asserted by hand, which is what stops it from being a regex that agrees
+     * with the mistake.
+     */
+    it('is quoted in the operator guide as the line the process actually writes', () => {
+      const guide = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), '../../../../docs/operator-guide.md'),
+        'utf8',
+      );
+      const quoted = /```\n(this build does not know[^`]+?)\n```/.exec(guide)?.[1];
+      expect(quoted).toBeDefined();
+      // The guide wraps the one line it quotes; the message is the unwrapped paragraph.
+      const line = (quoted ?? '').split('\n').join(' ');
+
+      const shape = /^\d{4}_[a-z\d_]+$/;
+      const onDisk = loadMigrations().map((migration) => migration.name);
+      expect(onDisk.length).toBeGreaterThan(10);
+      for (const name of onDisk) expect(name).toMatch(shape);
+
+      const quotedName = /applied: (\S+)\. The database/.exec(line)?.[1] ?? '';
+      expect(quotedName).toMatch(shape);
+      expect(line).toBe(new DatabaseSchemaAheadError([quotedName]).message);
+    });
   });
 });

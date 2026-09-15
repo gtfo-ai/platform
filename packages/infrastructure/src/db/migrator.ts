@@ -68,12 +68,22 @@ export interface MigrateReport {
   readonly durationMs: number;
 }
 
-/** The subset of a `pg.Client` the migrator uses; a test seam, not a public abstraction. */
-export interface MigrationClient {
+/**
+ * Anything that can answer a query — a `pg.Client`, a pooled client, or a `pg.Pool` itself.
+ *
+ * Narrower than `MigrationClient` on purpose: the schema guard below is asked by a process that
+ * has a **pool** and no reason to own a dedicated connection, and requiring `end()` there would
+ * have made a start-up check borrow the migrator's lifecycle.
+ */
+export interface MigrationReader {
   query<R extends Record<string, unknown> = Record<string, unknown>>(
     queryText: string,
     values?: readonly unknown[],
   ): Promise<{ rows: R[] }>;
+}
+
+/** The subset of a `pg.Client` the migrator uses; a test seam, not a public abstraction. */
+export interface MigrationClient extends MigrationReader {
   on(event: 'notice', listener: (notice: { message?: string }) => void): unknown;
   end(): Promise<void>;
 }
@@ -159,7 +169,7 @@ const applyMigration = async (client: MigrationClient, migration: Migration): Pr
  * start when the DB schema is newer than the code" rule of TD-019. Safe to call from any process.
  */
 export const findUnknownMigrations = async (
-  client: MigrationClient,
+  client: MigrationReader,
   known: readonly Migration[] = loadMigrations(),
 ): Promise<string[]> => {
   const exists = await client.query<{ present: boolean }>(
@@ -171,6 +181,53 @@ export const findUnknownMigrations = async (
   const { rows } = await client.query<{ name: string }>('select name from platform_migrations');
   const knownNames = new Set(known.map((migration) => migration.name));
   return rows.map((row) => row.name).filter((name) => !knownNames.has(name));
+};
+
+/**
+ * Raised by {@link assertSchemaIsKnown} when the database is ahead of the build.
+ *
+ * It carries the names as data as well as in the message, because the process that catches it
+ * writes a line an operator reads (`apps/server/src/main.ts`) and a log field is not a sentence.
+ */
+export class DatabaseSchemaAheadError extends Error {
+  override readonly name = 'DatabaseSchemaAheadError';
+  readonly unknownMigrations: readonly string[];
+
+  constructor(unknownMigrations: readonly string[]) {
+    super(
+      'this build does not know ' +
+        `${unknownMigrations.length} migration(s) the database has applied: ` +
+        `${unknownMigrations.join(', ')}. The database is newer than the code (TD-019): roll ` +
+        'forward to the build that applied them, or restore the pre-upgrade dump — migrations are ' +
+        'forward-only and serving traffic against a schema this build has never seen is how a ' +
+        'rollback corrupts data (docs/operator-guide.md § 5).',
+    );
+    this.unknownMigrations = [...unknownMigrations];
+  }
+}
+
+/**
+ * TD-019's *"the app refuses to start when the DB schema is newer than the code"*, as a call.
+ *
+ * `findUnknownMigrations` had no caller from WP-03 until WP-42 — the rule existed as a function and
+ * as a `/readyz` check (`apps/server/src/readiness.ts` reports `migrations: down`), and a readiness
+ * probe is not a refusal: the process still served `/api`, still answered `/webhooks/*` and still
+ * ran its workers against a schema it did not know. This is the refusal, and the first release is
+ * what makes it reachable, because nothing had ever been upgraded before there was a version to
+ * roll back from.
+ *
+ * A database with **no** `platform_migrations` table at all is not ahead of anything: it is empty,
+ * or `migrate` has not run yet, and that case belongs to `/readyz` (`migrations: down`, pending)
+ * rather than here. `findUnknownMigrations` answers `[]` for it deliberately.
+ */
+export const assertSchemaIsKnown = async (
+  client: MigrationReader,
+  known: readonly Migration[] = loadMigrations(),
+): Promise<void> => {
+  const unknown = await findUnknownMigrations(client, known);
+  if (unknown.length > 0) {
+    throw new DatabaseSchemaAheadError(unknown);
+  }
 };
 
 /**

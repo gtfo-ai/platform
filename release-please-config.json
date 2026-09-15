@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/v17.6.0/schemas/config.json",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "initial-version": "0.1.0",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "signoff": "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+  "packages": {
+    ".": {
+      "package-name": "platform",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "apps/launcher/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "apps/runlet/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "apps/server/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "apps/web/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/application/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/contracts/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/domain/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/infrastructure/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/integrations/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/prompts/package.json", "jsonpath": "$.version" }
+      ]
+    }
+  }
+}

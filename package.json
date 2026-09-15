@@ -34,6 +34,7 @@
     "db:migrate": "node --import ./scripts/ts-source-resolver.mjs apps/server/src/migrate.ts",
     "schemas": "node scripts/schemas.mjs",
     "schemas:check": "node scripts/schemas.mjs --check",
+    "changelog": "node scripts/changelog.mjs",
     "notices": "node scripts/notices.mjs",
     "notices:check": "node scripts/notices.mjs --check",
     "eval": "node scripts/eval.mjs",

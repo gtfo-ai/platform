@@ -1,0 +1,21 @@
+# The chooser GitHub shows above the three forms (technical/11 § Repository layout).
+#
+# `blank_issues_enabled: false` because every form below asks for the one thing a report is useless
+# without — which build, which provider, which log line — and a blank issue reliably arrives
+# without it.
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability (do not open an issue)
+    url: https://github.com/gtfo-ai/platform/security/advisories/new
+    about: >-
+      Report privately through GitHub's vulnerability reporting. Never include a real credential,
+      a token or customer data in a report (SECURITY.md, BD-002).
+  - name: How something is meant to work
+    url: https://github.com/gtfo-ai/platform/tree/main/docs
+    about: >-
+      The docs are the specification: product/ is what and why, decisions/ are the records,
+      technical/ is how. If the code and the docs disagree, the docs win and the disagreement is
+      a bug worth filing.
+  - name: Running an instance
+    url: https://github.com/gtfo-ai/platform/blob/main/docs/operator-guide.md
+    about: Install, upgrade, backup, integrations and the security posture, with every command run.

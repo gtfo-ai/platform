@@ -8878,6 +8878,203 @@ entry is about a file deliberately taken *out* of that number.
 **Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next adds a module
 to `apps/server/src/queries/` or edits `vitest.config.ts`'s exclude list.
 
+### 116. **`codeql.yml` and `mutation.yml` are named by three documents, exist nowhere, and were never allocated to a work package — the two rows of technical/11's table that were neither absorbed into `ci.yml` nor claimed by WP-33** (TODO — one cause, two halves whose costs differ by an order of magnitude; **no work package owns it**; found by WP-42, session 5)
+**What is wrong.** Two of technical/11's eleven workflow rows have no owner. `.github/workflows/`
+holds four files — `base-image.yml`, `ci.yml`, `image.yml` and `release.yml` (WP-42's) — and a
+`git grep` for `codeql`, `stryker` or `mutation.yml` over every tracked file outside `docs/` returns
+**nothing**. Six of the eleven rows were absorbed into `ci.yml` as jobs and two (`evals.yml`,
+`nightly-llm.yml`) are WP-33's, blocked on a model credential; these two are the remainder, and no
+row of `13-implementation-plan.md` claims them.
+**The evidence, quoted.** WP-42's notes: *"`codeql.yml` and `mutation.yml` have no owner
+(technical/11 lists both; neither exists and no work package claims them). CodeQL is default-setup
+and costs a settings toggle; Stryker on the domain ring is a real work package. WP-42 files them
+rather than absorbing them."* The documents that name them:
+`docs/technical/11-ci-cd-docker-release.md:22,29` (both rows now read *"not built, and no work
+package owns it (WP-42 finding)"*); **TD-017** — *"CodeQL default setup"*; **TD-015** — *"Stryker
+weekly on the domain"*; and `docs/technical/10-testing-strategy.md:17`, the only place the
+configuration exists: *"| **Mutation** | `packages/core/src/domain/**` | StrykerJS 10 + vitest
+runner, `break: 70` | weekly |"*, with `docs/research/09-testing-ci-docker-release.md:13` adding
+*"@stryker-mutator/core + vitest-runner | 10.0.0 | Apache-2.0 | weekly, scoped to `domain/**`;
+incremental-mode bug #6004 open"*. Neither tool is a dependency: no `@stryker-mutator/*` in any
+manifest and no `stryker.conf.*` in the tree.
+**The two halves are not one piece of work; what they share is only the allocation.**
+**CodeQL is a repository *setting*, not a file** — TD-017 says "default setup", which is enabled in
+the repository's security settings, writes no workflow, and cannot be applied or read from a
+checkout. That is the same class as the ruleset `CONTRIBUTING.md:58-62` documents for a human
+(*"A ruleset lives in the repository's settings and cannot be read from a checkout, so this is the
+list an administrator applies"*), and it wants the same treatment. **Mutation testing is a work
+package**, and technical/10's scope — `packages/core/src/domain/**` — **is a path that does not
+exist**: the workspace packages are `packages/{application,contracts,domain,infrastructure,integrations,prompts}`,
+so the row cannot be implemented as written and correcting it is part of "done" (rule 83). Size it
+against what already exists: this repository mutation-checks **by hand**, per work package, and five
+standing rules are about how to do it (21, 22, 62, 77, 88). A weekly Stryker run is the automated
+regression form of that practice, not a replacement for it.
+**What it costs to leave.** For CodeQL: this build has **no SAST at all**, and it is not the only
+gap in TD-017's security row — there is no `.github/dependabot.yml` and no trufflehog anywhere
+(`git grep` over the tree), so `ci.yml`'s `secret scan` job (gitleaks, full history) is the whole of
+it. A class of defect two decision records say is covered is covered by nothing. For Stryker: the
+hand practice proves a *new* guard at the moment it is written and never again, so a later change
+that makes an existing assertion vacuous is invisible — which is exactly what standing rule 22
+describes, one work package at a time. Neither is urgent; the cost of leaving them **unfiled** is
+that a reader of technical/11 believes both run.
+**What "done" looks like.** Each row says one of: (a) it exists, with the file *or the setting*
+named; or (b) it is refused, with the reason, in the shape the absorbed rows already use. For
+mutation, a plan row with a scope that exists (`packages/domain/src/**`), TD-015's `break: 70`, a
+schedule that is not a PR gate, and what one pass costs. **Needs measurement**: the wall-clock cost
+of a full Stryker pass over `packages/domain` on a hosted runner — nobody has run one, and the
+answer is what decides whether "weekly" is the right schedule. The refiner ran nothing (rule 66).
+**Depends on / owner.** None. **No work package owns it**; WP-42's plan row (criterion 8) says it
+files them rather than absorbing them, and this entry is that filing. CodeQL additionally depends on
+a human with repository-admin rights, like the ruleset. The mutation half inherits the toolchain
+question already parked at `docs/TODO.md:149` (*"TypeScript 7 (Go compiler) toolchain compatibility
+(Vitest, Biome, Stryker) — WP-00"*). Adjacent and *not* the same finding: backlog **117** (the three
+workflow linters, which are steps of an existing job rather than workflows of their own).
+
+### 117. **No workflow linter runs anywhere — actionlint, hadolint and zizmor are specified by TD-017, research/09 and technical/11, and the SHA pinning a plan row assumed they enforced is held by a regex in a test instead** (TODO, small — **no work package owns it**; found by WP-42, session 5)
+**What is wrong.** Three static checks over the CI surface are specified and none exists. WP-42's
+measurement, quoted: *"`ci.yml`'s lint job runs **no actionlint, no hadolint and no zizmor** — the
+plan row's criterion 9 assumed they enforce SHA pinning and nothing in the repository runs any of
+the three (grep over every YAML, JSON and `.mjs`). The pin check is `scripts/release.test.ts`
+instead, over every `uses:` in every tracked workflow."* Confirmed off the tree by the refiner:
+`git grep -l 'actionlint\|zizmor\|hadolint' -- . ':!docs'` returns **nothing**; every hit in the
+repository is in `docs/` — `research/09:31` (the three named in the tooling list),
+`technical/11:15,30` (as built: *"actionlint, hadolint and zizmor are not among them"*), and two
+historical lines where the orchestrator ran actionlint **by hand** (`PROGRESS.md:9166` —
+*"`actionlint` (Docker) on `.github/workflows/ci.yml` — 0 errors"* — and `:9217`).
+**Why it is a finding rather than a nit: a plan row asserted them as present.** WP-42's criterion 9
+reads *"**(9) Every `uses:` stays pinned to a SHA** … which the lint job's actionlint and zizmor
+steps already enforce"* (`13-implementation-plan.md:88`). What enforces it is
+`scripts/release.test.ts:136-153` — every `^\s*(?:-\s+)?uses: (\S+)` in every tracked
+`.github/workflows/*.yml` asserted against `/@[0-9a-f]{40}$/`, with `expect(uses.length)
+.toBeGreaterThan(10)` so a regex that stopped matching cannot pass vacuously. That is a good check
+and it answers **one** of the three tools' questions. The others are unanswered: zizmor's are
+template injection (`${{ … }}` interpolated into a `run:` block), over-broad `permissions:` and
+cache/artifact poisoning; actionlint's are workflow syntax, unknown `runs-on` labels, `if:`
+expressions and **shellcheck over every `run:` block** — and these workflows carry a lot of shell
+(`image.yml:163-186`'s tag computation and `imagetools create`, `release.yml:95-99`'s `gh release`
+steps). hadolint has five Dockerfiles to read (`docker/{app,base,egress,launcher,runtime}.Dockerfile`),
+which is the dependency that made it deferrable before WP-22 and does not any more.
+**What it costs to leave.** A workflow defect is found by *running* the workflow, and two of the
+four cannot be run from a checkout: `release.yml` has **never run** (WP-42's own rule-71 note) and
+`image.yml`'s tag path only fires on a `v*` tag, of which there are **zero** (`git tag -l` is
+empty). A syntax or expression error in either is currently discovered by the first real release.
+Against that, nothing is known to be wrong today (rule 44): actionlint was run by hand over `ci.yml`
+twice at 0 errors, and that is the whole of the evidence — no one has run any of the three over
+`image.yml`, `base-image.yml` or `release.yml`.
+**What "done" looks like.** One step per tool in the `lint` job, pinned like every other `uses:`,
+with two decisions stated rather than defaulted: whether zizmor's findings fail the job or are
+advisory (it has opinions about `persist-credentials` and token scope that this repository has made
+deliberately), and which hadolint rules are waived for Dockerfiles that already pin by digest. Then
+`technical/11:15,30` is corrected in the same change (rule 83), and
+`scripts/release.test.ts`'s pin check **stays**: it is the cheaper of the two and it still holds on
+the day a tool is skipped or removed. **Needs measurement**: the finding count of a first run over
+the four existing workflows is unknown, and a job that lands red and gets switched off is worse than
+no job (rule 30's lesson about guards that fire on legitimate content).
+**Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next edits
+`.github/workflows/`. Adjacent and *not* the same finding: backlog **116** (`codeql.yml` and
+`mutation.yml`, the other two unowned rows of the same table).
+
+### 118. **`pnpm changelog` models exactly one moment — the first release — and it is wrong on both sides of it: the preview it writes must be deleted by hand in the release PR, and running it again once a tag exists overwrites release-please's released entries under a heading taken from `initial-version`** (TODO, small — one cause, two symptoms, the first with a **named date**; **no work package owns it**; found by WP-42, the second symptom by the refiner off the tree, session 5)
+**What is wrong.** `scripts/changelog.mjs` renders **the whole file** — its own docblock at `:351`
+is *"The whole pre-release CHANGELOG.md."* — and writes it with `writeFileSync(output, rendered,
+'utf8')` over `join(repositoryRoot, 'CHANGELOG.md')` (`:440-441`), with one heading
+`## ${version} (unreleased)` (`:371`) whose `version` is `configuredVersion()`, i.e. `initial-version`
+from `release-please-config.json` (`:391-400`), today `0.1.0`. That is correct for the state this
+repository is in and for no state after it.
+**Symptom 1 — the preview survives the first release unless a human deletes it. The mechanism,
+exactly.** release-please's changelog updater inserts the released section **before the first
+heading matching `\n###? v?[0-9[]`** and, when there is none, demotes every heading in the file and
+puts its own on top (v17.6.0 `src/updaters/changelog.ts`, read by WP-42 from the pinned source, not
+run). `CHANGELOG.md:15` is `## 0.1.0 (unreleased)`, which matches — so the release PR shows
+release-please's own `## 0.1.0 (<date>)` directly above the preview and **both** land in the released
+file. Two documents state the intention and neither is enforced: the generated header
+(`CHANGELOG.md:8-12`) — *"that PR is where this preview should be deleted"* — and
+`CONTRIBUTING.md:101-104` — *"the release PR is where that preview is replaced by the real entry"*,
+where **"replaced" is the word and insertion is the mechanism**; nothing replaces anything. Left
+undeleted, the released changelog carries the same **86** entries twice (55 `feat`, 31 `fix`, out of
+212 commits in range, 0 unparsed — measured at `1070c51`), the second set under a heading calling a
+released version unreleased. **Deleting it loses nothing**: the preview's three prose sections
+(*Before you upgrade*, *What has not been measured*, *What this release does not claim*) are
+generated into the **GitHub release body**, not the file, by `release.yml:97-99` (`gh release view
+… > body.md`; `node scripts/changelog.mjs --upgrade-note >> body.md`; `gh release edit --notes-file`).
+**Symptom 2 — the same script is destructive after the first tag, and nobody has written this one
+down.** Once `v0.1.0` exists, `pnpm changelog` takes `previousTag = v0.1.0`, renders that range and
+**overwrites** the file, deleting release-please's `0.1.0` section — under the heading
+`## 0.1.0 (unreleased)` *again*, because release-please moves `.release-please-manifest.json`
+(`{".": "0.0.0"}` today) and **not** the config's `initial-version`, which is what
+`configuredVersion()` reads. So the next person to type `pnpm changelog` out of habit silently
+reverts the changelog and re-uses a released version number. Nothing refuses it: there is **no
+`changelog:check`** (`package.json:37` has `changelog` alone, beside `schemas`/`schemas:check` and
+`notices`/`notices:check` — the same generated-artifact shape *with* a check), and `CHANGELOG.md` is
+Markdown, which `verify` reads none of (standing rule 30's lesson: a whole merge conflict sat in
+`CLAUDE.md` on `main` for an hour for exactly that reason).
+**What it costs to leave.** Symptom 1 costs a duplicated first changelog, read by everyone who opens
+the repository, with a one-pull-request window to catch it. Symptom 2 costs a lost changelog and a
+wrong version heading, and is **latent until the first tag exists** — `git tag -l` is empty, so
+`previousReleaseTag()` is `null` today and the script is doing the only thing it can. Trigger for
+both: the merge of the first release PR.
+**What "done" looks like, and whether a test can hold it — yes, and more cheaply than WP-42's note
+assumed.** That note proposed *"a `changelog:check` that fails when a released version heading sits
+above the preview … it needs `fetch-depth: 0` in CI's lint job"*. Separate the two shapes.
+**(a) The check that closes symptom 1 is pure parsing and needs no history**: `CHANGELOG.md` must
+not carry an `(unreleased)` heading *below* a released version heading, and must not carry two
+headings for the same version. That reads one tracked file and belongs in `scripts/release.test.ts`,
+which already reads tracked files, rather than in a new `verify` target.
+**(b) The regenerate-and-compare shape — `notices:check`'s — does need `fetch-depth: 0`**, and CI's
+lint job is shallow: `.github/workflows/ci.yml:25` is `actions/checkout@3d3c42e…` with no `with:`
+block, hence depth 1, while `release.yml` asks for depth 0 precisely because *"`git describe` cannot
+find the previous release tag in a shallow clone, and the note would then claim every migration is
+new on every release"* (`scripts/release.test.ts:126-129`). It is also the weaker check: the
+script's docblock states that *"a byte-for-byte match with what it will emit is not claimed here"*
+(`:23-25`), so comparing the file to the generator asserts the generator against itself.
+**(c) Symptom 2 closes with a refusal rather than a check**: `pnpm changelog` exits non-zero when
+`previousReleaseTag()` is non-null and `configuredVersion()` is not ahead of it — the shape
+`pnpm eval` already uses, where refusing to run beats reporting a green nothing. And
+`CONTRIBUTING.md`'s *"replaced"* becomes *"deleted"* (rule 83).
+**Depends on / owner.** None. **No work package owns it**; WP-42 built the mechanism and states
+symptom 1 as a residual at the file's own header. The deadline for symptom 1 is the **first release
+PR**, which is why it also has a row in `docs/TODO.md`.
+
+### 119. **Two modules answer "does this database carry a migration this build does not know?" independently — one refuses to start, one reports `down` — and they agree today by sharing a loader rather than by construction** (nit-to-small, TODO — **working as designed**, filed so the next reader meets the decision rather than the trap; **no work package owns it**; found by WP-42, read off the tree by the refiner, session 5)
+**What is wrong.** WP-42's note, quoted: *"`migrationStatus` (`apps/server/src/readiness.ts`)
+re-derives in TypeScript what `findUnknownMigrations` asks in SQL. Two answers to one question; they
+agree today."* Read off the tree the duplication is narrower and more exact than that sentence: both
+compare `loadMigrations()`'s names against the rows of `platform_migrations`, but they **read the
+table with two different queries** and **reach two different verdicts**.
+`packages/infrastructure/src/db/migrator.ts:171-184` — `findUnknownMigrations` guards with
+`select to_regclass('public.platform_migrations') is not null as present` and returns `[]` when the
+table is absent, then reads `select name from platform_migrations` and takes a `Set` difference;
+`assertSchemaIsKnown` (`:223-230`) throws `DatabaseSchemaAheadError`, and its only production caller
+is `apps/server/src/runtime.ts:200` (WP-42's).
+`apps/server/src/readiness.ts:67-82` — `migrationStatus(known, applied)` is given
+`dbAdapters.loadMigrations().map(m => m.name)` and `appliedMigrations(database)`
+(`apps/server/src/queries/identity-queries.ts:306-311`: `select name from platform_migrations order
+by name`, **no** `to_regclass` guard — a missing table throws and is caught into `database: 'down'`),
+and computes **both** `unknown` and `pending`, returning `'down'` for either.
+**Why it is not a defect today.** The asymmetry is deliberate and `readiness.ts:9-14` argues it: a
+database *newer* than the code is a rollback in progress and the process refuses to start; a
+database *older* is a deployment where `migrate` has not finished — also not ready, but recoverable
+without redeploying, so `/readyz` reports it and start-up does not refuse. The two share the *known*
+half (one `loadMigrations`), which is why they cannot currently disagree about what the build ships.
+**What it costs to leave.** One question, two readers of `platform_migrations`, and no test that
+compares them. The trigger is any change to what "applied" means — a column that marks a row
+superseded, a naming or ordering rule, or the `to_regclass` case reaching the `/readyz` side — after
+which the start-up guard and the probe can disagree about the same database, silently in both
+directions: a process that starts and reports `down`, or one that refuses to start while the probe
+says nothing. **Nothing is known to be wrong** (rule 44); this is a claim about maintenance, not
+about behaviour.
+**What "done" looks like** (cheapest first): one sentence at `migrationStatus` naming
+`findUnknownMigrations` as the other reader and why the verdicts differ, so the next editor of
+either meets the pair; **or** `migrationStatus` takes its `applied` list from the same query the
+migrator uses, leaving one SQL statement; **or** the comparison moves into `packages/infrastructure`
+and both call it, readiness keeping only the `pending → down` policy. **Needs measurement: none** —
+both files were read, nothing was run (rule 66). Decided and *not* a third instance: the `migrate`
+process deliberately does **not** call `assertSchemaIsKnown` (WP-42's reasoning — the same image
+supplies both processes, so the app's refusal catches every rollback compose can produce, and a
+second site would double the surface without adding a case).
+**Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next edits either
+file, or the first work package that touches upgrade behaviour.
+
 ### 7. Carried, not yet scheduled
 - **Nit (WP-21, session 5): a credential sealed by `POST /api/integrations` has never been opened by
   the binding loader in any tier.** The two halves are each exercised and never joined, and the reason

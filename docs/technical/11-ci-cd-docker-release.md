@@ -14,18 +14,28 @@ THIRD_PARTY_NOTICES.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
 ## Workflows
 | Workflow | Trigger | Jobs |
 |---|---|---|
-| `ci.yml` | `pull_request`, `push: main`, `merge_group` | lint (Biome + actionlint + hadolint + zizmor), typecheck, unit+contract (coverage upload), ui, build |
-| `integration.yml` | same | Testcontainers Postgres suite; provider replay suites; fake-Claude e2e via `docker compose` |
-| `evals.yml` | `pull_request` paths `prompts/**`, `packages/claude-sdk/**` (same-repo PRs only), `workflow_dispatch` | promptfoo with cache restore, artifact upload, PR comment; budget `EVAL_MAX_USD`; environment `llm-ci` |
-| `nightly-llm.yml` | `schedule 03:00 UTC`, `workflow_dispatch` | real-LLM smoke; cost summary; opens/updates a failure issue |
-| `image.yml` | `push: main`, tags `v*`, `pull_request` (build only) | native amd64 + arm64 runners, manifest merge; tags `X.Y.Z`, `X.Y`, `X`, `sha-<7>`, `edge`; registry cache on main, gha cache on PRs; provenance + SBOM attestations (SLSA Build L2); size check ≤ 1 GB |
+| `ci.yml` | `pull_request`, `push: main`, `merge_group` | **as built**: lint, typecheck, bundle budget, unit + contract (coverage upload), ui, web e2e (playwright), integration, e2e-fake-claude, secret scan, commitlint, dco — eleven jobs, and the four `verify:*` groups are one command each (`scripts/verify-targets.ts`, held to this workflow by `scripts/verify.test.ts`). **actionlint, hadolint and zizmor are not among them**: nothing in this repository runs any of the three (WP-42 measured it; the pin check TD-019 wants is `scripts/release.test.ts` instead, over every `uses:` in every workflow) |
+| ~~`integration.yml`~~ | — | **absorbed**: the `integration` and `e2e-fake-claude` jobs of `ci.yml`. The e2e tier runs whole `apps/server` instances against the Testcontainers database rather than `docker compose` (the reasoning is in `vitest.config.ts`) |
+| `evals.yml` | as designed | **not built — WP-33**, blocked on a model credential (`pnpm eval` says so and exits 1). A release cut without it ships prompts no tier has measured against a model, which `scripts/changelog.mjs` states in the release notes *because* this file is absent |
+| `nightly-llm.yml` | as designed | **not built — WP-33**, same blocker, same sentence in the release notes |
+| `image.yml` | `push: main`, tags `v*`, `pull_request` (build only), `workflow_dispatch` | native amd64 + arm64 runners, manifest merge; tags `X.Y.Z`, `X.Y`, `X`, `sha-<7>`, `edge` **and `latest` on a tag** (as built — TD-019 says “never `latest` in docs” and the docs name versions, but the registry tag is published; WP-42 files the divergence rather than changing WP-22's file); provenance attestation, **no SBOM** (WP-22 amendment); size check per image. A release reaches it by **`push: tags`** when the tag was created with an administrator's token and by **`workflow_dispatch`** when it was created with `GITHUB_TOKEN` — see `release.yml` below |
 | `base-image.yml` | weekly, `workflow_dispatch`, paths `docker/base.Dockerfile` | rebuild base with pinned CLIs |
-| `codeql.yml` | default setup | JS/TS security-extended |
-| `secrets-scan.yml` | PR/push; weekly | gitleaks (full history); trufflehog verified-only |
-| `release.yml` | `push: main` | release-please release PR; on merge: tag → `image.yml` |
-| `mutation.yml` | weekly | Stryker on domain |
+| `codeql.yml` | default setup | **not built, and no work package owns it** (WP-42 finding) |
+| ~~`secrets-scan.yml`~~ | — | **absorbed**: the `secret scan` job of `ci.yml`, gitleaks over the full history. trufflehog is not run |
+| `release.yml` | `push: main` | **built at WP-42**: release-please v5 grooms a release PR; a human merges it, which creates `vX.Y.Z`. How the tag reaches `image.yml` depends on the token that created it: with `RELEASE_PLEASE_TOKEN` set the tag push starts `image.yml` by itself and the release **watches that run**; on the `GITHUB_TOKEN` fallback the tag starts nothing — `workflow_dispatch` is the documented exception — so the release dispatches `image.yml` on the tag ref and watches that. Either way the image build's verdict is the release job's. The workflow also appends the upgrade note (migration required or not, derived from the migration files) to the release body. **Never run** — see the amendment below |
+| `mutation.yml` | weekly | **not built, and no work package owns it** (WP-42 finding). Mutation testing has been done by hand, per work package |
 | `dco.yml` | `pull_request`, `push: main`, `merge_group` | DCO check. Implemented as the `dco` and `commitlint` jobs of `ci.yml`: both walk the commit range of the event (`before..after` on a push, `base..head` otherwise) and fail when the range cannot be determined, so a direct push to `main` is gated exactly like a pull request |
-All `uses:` pinned to SHAs; Renovate keeps them current. Required checks and merge queue configured as a ruleset on `main`.
+All `uses:` pinned to SHAs — enforced since WP-42 by `scripts/release.test.ts`, over every
+`uses:` in every workflow git tracks, because the lint job that was supposed to enforce it runs no
+actionlint and no zizmor. Renovate keeps them current. Required checks and merge queue are
+configured as a ruleset on `main`; the list of checks an administrator applies is in
+`CONTRIBUTING.md` § Branch protection and is held to `ci.yml`'s job names in both directions by the
+same test.
+
+**Four of the eleven rows above are still absent**: `evals.yml` and `nightly-llm.yml` are WP-33's
+and blocked on a human credential; `codeql.yml` and `mutation.yml` have **no owner at all** and are
+filed as discovered work rather than quietly dropped. Six of the others were absorbed into `ci.yml`
+as jobs, which is why this table now says which.
 
 ## Images
 - **`platform-base`** (`docker/base.Dockerfile`): `node:24-trixie-slim` pinned by digest; `git jq bash ripgrep ca-certificates openssh-client curl`; pinned CLIs with `TARGETARCH` switches: `glab`, `gh`, `acli`, `jira`, `logcli`, `sentry-cli`, `@sentry/mcp-server`; user `agentic` (uid 1000); `THIRD_PARTY_NOTICES.md` copied in. Rebuilt weekly.
@@ -153,3 +163,90 @@ check. **Not** done, and not claimable: an SBOM attestation. BuildKit can produc
 (`--sbom=true`), but only when the image is *pushed by buildx*, and these images are pushed by
 `docker push` after a plain build so that one script builds everywhere. That is a stated gap, not a
 silent one.
+
+## Amendment (WP-42, 2026-09-15) — the release mechanism, as built
+
+The workflow table above is corrected in place. What follows is the part of the **Release** section
+that turned out to be a plan rather than a description, and one thing it never said.
+
+**One product version, moved by configuration.** TD-019 does not say whether a monorepo releases one
+version or one per package, and that choice fell to this work package. It is **one**: every one of
+the eleven manifests is `private: true` and nothing is published to a registry, so a per-package
+version would be a number with no consumer and eleven chances to disagree. release-please runs in
+manifest mode with a **single component at the root** (`release-please-config.json`), and the ten
+workspace manifests are `extra-files` of it — so a release moves all eleven in one commit.
+`scripts/release.test.ts` reads the manifest set from **git** and fails when one is not covered, and
+when the eleven version strings are not the same string.
+
+**They are still `0.0.0`, and that is the bootstrap rather than an omission.** release-please's
+manifest reader skips an entry whose value is exactly `0.0.0` (`src/manifest.ts` at v17.6.0), so the
+first release PR takes its version from `initial-version` — which is `0.1.0`. Without that key the
+first release would be **`1.0.0`**: `initialReleaseVersion()` in `src/strategies/base.ts` returns
+`1.0.0` when no previous release is found, and the node strategy does not override it. Moving the
+eleven files by hand now would have made the release PR propose `0.2.0` and left `0.1.0` untagged.
+
+**How the tag reaches `image.yml` is a property of the token that created it, and both paths are
+built.** An event triggered by `GITHUB_TOKEN` starts no workflow run — `workflow_dispatch` and
+`repository_dispatch` are the documented exceptions — and the same page's remedy, a PAT or a GitHub
+App installation token, is release-please's own documented reason for recommending one. So with
+`RELEASE_PLEASE_TOKEN` set the tag is an ordinary push and `image.yml`'s `push: tags: ['v*']` starts
+the build **by itself**; `release.yml` dispatches nothing on that path and watches the run the tag
+started. On the `GITHUB_TOKEN` fallback it dispatches `image.yml` on the tag ref and watches that.
+The branch is `secrets.RELEASE_PLEASE_TOKEN != ''`, the same expression that chooses the token, so
+the two cannot disagree. Dispatching on **both** paths — which the first version of this work
+package did — would start a second run on the same ref, and `image.yml`'s
+`concurrency: image-<ref>` cancels in progress only for `pull_request`: the second run queues behind the first,
+rebuilds five images on two architectures, republishes identical tags, and is waited for under the
+same `timeout-minutes: 120`, so a healthy release can go red on that cap. Either way
+`GITHUB_REF_TYPE` is `tag` and the existing tag path publishes `X.Y.Z`, `X.Y`, `X`, `sha-<7>` — and
+`latest`, which is the divergence Q89 files. No copy of the tag scheme was made. The run is
+**watched to its verdict** (`gh run watch --exit-status`): `gh workflow run` returns as soon as the
+dispatch is accepted, so a step that only dispatched would report success for a release whose images
+never built. **Which** run is watched is decided against a baseline taken *before* release-please
+runs — the `image.yml` runs that already existed at this commit — because afterwards an older
+`workflow_dispatch` run, or the `push: main` build of the commit being released, is indistinguishable
+from the release's own and watching it reports a finished run's verdict. That shell is the one
+executable part of the workflow and `scripts/release.test.ts` runs it against a stub `gh` on both
+paths, including "an older run exists and the new one is late".
+
+**The same rule applies to the release pull request, and that half needs a credential.** A pull
+request opened with `GITHUB_TOKEN` starts no workflow run either, so none of `ci.yml`'s eleven jobs —
+`dco` among them — reports on the release PR, which the required checks then make unmergeable.
+`release.yml` takes `secrets.RELEASE_PLEASE_TOKEN` (a fine-grained PAT or a GitHub App installation
+token, created by an administrator; the name only, never a value — BD-002) and falls back to
+`GITHUB_TOKEN` **with the consequence stated in its own header**: no checks on the PR, a
+close-and-reopen re-trigger, and a `dco` verdict reachable only through `merge_group` or the
+`push: main` run after the merge. Recorded as **Q90**, with the administrator's two steps in
+`CONTRIBUTING.md` § *What an administrator sets up once*.
+
+**"Release notes state whether a migration is required" is derived, not written.** `pnpm changelog`
+(`scripts/changelog.mjs`) reads `packages/infrastructure/src/db/migrations/` and the previous release
+tag; the same script states whether the prompts have been measured against a model by asking whether
+`evals.yml` and `nightly-llm.yml` exist, so that sentence retires itself when WP-33 lands. Both
+answers are appended to the release body by `release.yml`. `CHANGELOG.md` is generated by the same
+command and its current section is a **preview**: release-please writes the released one when the
+PR is merged, inserting it above the preview's heading (its updater's documented insertion rule),
+and the release PR is where the preview is deleted.
+
+**TD-019's "the app refuses to start when the DB schema is newer than the code" now has a caller.**
+`findUnknownMigrations` existed from WP-03 and nothing called it; `startRuntime` now asks
+`assertSchemaIsKnown` before it composes anything, and a database carrying a migration this build
+does not know is a named refusal rather than a `/readyz` line on a process that is already serving.
+Both directions are asserted against a real PostgreSQL in
+`test/integration/db/schema-guard.integration.test.ts`.
+
+**None of `release.yml` has ever run**, and it cannot be run from a checkout. Every claim in its
+header was read out of a pinned source — the action at `45996ed`, release-please 17.6.0, GitHub's
+own documentation — and `scripts/release.test.ts` asserts only what is a property of the files. The
+one prediction that is load-bearing and unmeasured is the identity release-please's commits carry,
+which the `signoff` key has to match or the `dco` job fails the release commit — on the pull request
+when an administrator's token opened it, and otherwise not until the `push: main` run after the
+merge, which is too late to stop the tag (standing rule 86: it is labelled a prediction where it
+lives, and the key changes with the token, Q90).
+
+**The hygiene list is complete.** `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1),
+`.github/CODEOWNERS` and `.github/ISSUE_TEMPLATE/` (bug, feature, integration request, and the
+chooser) were the three TD-019 named and this repository did not have. The layout block at the top
+of this document still lists `dependabot.yml (security only)`, which does not exist and is not
+planned: `renovate.json` is what keeps the pins current.
+
