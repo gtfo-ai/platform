@@ -53,6 +53,12 @@ import {
   startRun,
 } from '@platform/domain';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import {
+  leaseExpiryAt,
+  RUN_LEASE_TTL_MS,
+  type RunLeaseOptions,
+  startRunHeartbeat,
+} from '../pipeline/lease.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
@@ -122,6 +128,21 @@ export interface AskExecutorOptions {
    * when the write rolls back.
    */
   readonly jobs: Jobs;
+  /**
+   * The run **lease** this process holds while an ask is in flight (WP-48, PROGRESS backlog 120).
+   *
+   * An ask's run is an ordinary `runs` row started by a different composition from the stage
+   * executor's, and until this option it claimed no lease — so the only thing that could ever end
+   * it was the sweep's **wall-clock backstop**, about an hour rather than about six minutes. For
+   * that hour the row held a reservation valued at the *admitting* caller's reserve, which is up to
+   * $15 when the next admission is an implementation stage rather than another question.
+   *
+   * **Absent is "this process claims no lease"**, which is what every build before WP-48 did: the
+   * run is still swept, by the backstop, which is also what covers every `runs` row written before
+   * migration 0035. The composition root passes the **same** `RunLeaseOptions` the stage executor
+   * gets, so one process has one owner string (`createPipelineRuntime`).
+   */
+  readonly lease?: RunLeaseOptions;
   readonly logger?: Logger;
 }
 
@@ -433,6 +454,18 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         createdAt: context.clock.now(),
         startedAt: context.clock.now(),
       });
+      /**
+       * The lease, claimed in the **same transaction as the row** — the stage executor's rule and
+       * its reason, one composition across (WP-48): a `runs` row that is `running` with no lease is
+       * exactly the row the sweep's wall-clock backstop takes an hour to reach.
+       */
+      if (options.lease !== undefined) {
+        await options.store.runs.renewLease(scope.tx, {
+          runId,
+          owner: options.lease.owner,
+          expiresAt: leaseExpiryAt(context.clock.now(), options.lease.ttlMs ?? RUN_LEASE_TTL_MS),
+        });
+      }
       await options.asks.attachRun(scope.tx, ask.id, runId);
       await scope.events.append([...starting.events, ...running.events]);
       return { kind: 'started' as const, run: running.aggregate };
@@ -629,10 +662,32 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       }
 
       let outcome: RunOutcome;
+      /**
+       * The heartbeat runs for exactly as long as the session does (WP-48).
+       *
+       * Started **after** the run's own transaction has committed and **awaited to a stop** before
+       * either ending opens one of its own — the stage executor's shape and its reason: a beat is
+       * fired and forgotten so it can never block the run, so clearing the timer alone would leave
+       * at most one narrow `update` borrowing a connection beside the ending's transaction.
+       */
+      const stopHeartbeat =
+        options.lease === undefined
+          ? async (): Promise<void> => {}
+          : startRunHeartbeat(
+              {
+                unitOfWork: options.unitOfWork,
+                store: options.store,
+                clock: { now: () => options.context(admitted.ask.taskId).clock.now() },
+                lease: options.lease,
+                ...(options.logger === undefined ? {} : { logger: options.logger }),
+              },
+              runId,
+            );
       try {
         const handle = options.runner.start(plan.spec);
         outcome = await handle.outcome;
       } catch (error) {
+        await stopHeartbeat();
         options.stopReasons.forget(runId);
         // The **class name**, never the message: it is written to `events.payload` and to the ask
         // row, and neither passes a redactor at the point it is read (the stage executor's rule).
@@ -669,6 +724,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           return { kind: 'failed' as const, askId: admitted.ask.id, reason };
         });
       }
+      await stopHeartbeat();
       const stopReason = options.stopReasons.reasonFor(runId);
       options.stopReasons.forget(runId);
 

@@ -20,7 +20,13 @@
  * process that lost its database connection is still running and still spending. Never that the
  * work was wasted.
  *
- * So the sweep ends the **row** and nothing else: `run.failed` with the named terminal reason
+ * So the sweep ends the **row** and nothing else — with one consequence it now has for the
+ * question a run was answering: `./stranded.ts`'s `task_ask_run` row (PROGRESS backlog **121**,
+ * WP-48) reads a `pending` ask whose attached run is terminal and refuses it, so the thread says
+ * what happened instead of `pending` for ever. That is a *separate* row of the same pass rather
+ * than a write from here, because a cancelled run reaches the same state with no lease involved.
+ *
+ * The ending itself is `run.failed` with the named terminal reason
  * `lease_expired` (migration 0035), which is neither `crash` (a claim about the session) nor
  * `cancelled` (a claim about a human). The task is escalated to `needs_human` with a brief, which
  * is the stage executor's own ending for a run that produced no result — no new task state, no
@@ -43,18 +49,20 @@
  * 2. **The wall clock** (backstop). `lease_expires_at is null and started_at < now - (wallClockMs
  *    + grace)`. It is for rows written **before this column had a writer** — every `runs` row in
  *    every database that existed before WP-47 — and for runs started by a composition that passes
- *    no `lease` (the ask executor's, today: it inserts its own `runs` row and claims no lease; that
- *    gap is stated in `PROGRESS.md` rather than half-closed here). A living run is guaranteed to
- *    stop at the wall-clock ceiling by the in-process watchdog, so a row past it plus a grace is
- *    either dead or a runner defect, and both want this ending.
+ *    no `lease`. **Both compositions that start a run pass one since WP-48** (PROGRESS backlog
+ *    120): the stage executor and the ask executor, from the same `RunLeaseOptions` and therefore
+ *    with the same owner string, so an ask's run is reached at the lease bound (about six minutes)
+ *    rather than at this one (about an hour). A living run is guaranteed to stop at the wall-clock
+ *    ceiling by the in-process watchdog, so a row past it plus a grace is either dead or a runner
+ *    defect, and both want this ending.
  *
  * The wall clock cannot be the primary signal: its default is an **hour**, so a process that dies a
  * minute into a run would hold the reservation for the rest of it.
  *
- * ## Why there is no attempt mark, unlike the other two rows of the table
+ * ## Why there is no attempt mark, unlike the re-enqueuing rows of the table
  *
- * `./stranded.ts`'s other sites *re-enqueue* a wake-up and therefore need `recovery_attempted_at`
- * to bound how many times they may (backlog 105). This site does not re-enqueue anything: one pass
+ * `./stranded.ts`'s four re-enqueuing sites wake a job again and therefore need
+ * `recovery_attempted_at` to bound how many times they may (backlog 105). This site does not re-enqueue anything: one pass
  * ends the row, the row is terminal, and the query cannot see it again. The bound is the state
  * machine's, which is stronger than a column.
  *

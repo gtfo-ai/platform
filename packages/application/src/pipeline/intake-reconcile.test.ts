@@ -254,14 +254,30 @@ describe('the timer that keeps the pass coming back', () => {
           },
           markAskAttempt: async () => {},
           endAsk: async () => {},
+          strandedHistoryRecords: async (_tx, query) => {
+            asked.push(query);
+            return [];
+          },
+          markHistoryRecordAttempt: async () => {},
+          endHistoryRecord: async () => {},
+          strandedCurations: async (_tx, query) => {
+            asked.push(query);
+            return [];
+          },
+          markCurationAttempt: async () => {},
+          endCuration: async () => {},
+          asksWithEndedRun: async (_tx, query) => {
+            asked.push(query);
+            return [];
+          },
         },
       },
     })({} as JobContext);
 
-    expect(asked.map((query) => query.olderThan)).toEqual([
-      '2026-06-01T10:29:15.000Z',
-      '2026-06-01T10:29:15.000Z',
-    ]);
+    // One grace for every site of the table (five since WP-48), and it is the pass interval.
+    expect(asked.map((query) => query.olderThan)).toEqual(
+      Array.from({ length: 5 }, () => '2026-06-01T10:29:15.000Z'),
+    );
     expect(
       harness.enqueued.filter((request) => request.queue === JOB_QUEUES.historyBootstrap),
     ).toHaveLength(1);

@@ -78,6 +78,9 @@ const chunkRow = (overrides: Record<string, unknown> = {}) => ({
   redaction_count: 2,
   truncated: true,
   recorded_at: null,
+  // Migration 0036 (WP-48): the recovery's ending for a chunk whose `record` wake-up was lost.
+  abandoned_at: null,
+  detail: null,
   proposals: 0,
   refused_proposals: 0,
   ...overrides,
@@ -137,9 +140,29 @@ describe('PostgresHistoryBootstrapStore — reading a batch', () => {
       redactionCount: 2,
       truncated: true,
       recordedAt: '2026-09-14T12:00:00.000Z',
+      abandonedAt: null,
+      detail: null,
       proposals: 3,
       refusedProposals: 0,
     });
+  });
+
+  it('maps the ending the recovery writes, which is not a report', async () => {
+    // WP-48: a chunk the platform stopped waiting for carries `abandoned_at` and the reason, and
+    // **not** `recorded_at` — a stamped row would publish `proposals = 0` as a finding (rule 18).
+    const chunk = await store.chunkOfTask(
+      scripted([
+        chunkRow({
+          abandoned_at: new Date('2026-09-14T13:00:00.000Z'),
+          detail: 'its findings never reached the queue',
+        }),
+      ]),
+      TASK as never,
+    );
+    expect(chunk?.abandonedAt).toBe('2026-09-14T13:00:00.000Z');
+    expect(chunk?.detail).toBe('its findings never reached the queue');
+    expect(chunk?.recordedAt).toBeNull();
+    expect(chunk?.proposals).toBe(0);
   });
 });
 

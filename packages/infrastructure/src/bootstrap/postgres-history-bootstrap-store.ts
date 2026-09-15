@@ -83,7 +83,7 @@ const BATCH_COLUMNS = `id, project_id, requested_by, merge_requests, batch_size,
     cap_usd, estimated_usd, status, detail, created_at, completed_at`;
 
 const CHUNK_COLUMNS = `id, batch_id, chunk_index, task_id, merge_requests, tickets, commits,
-    redaction_count, truncated, recorded_at, proposals, refused_proposals`;
+    redaction_count, truncated, recorded_at, abandoned_at, detail, proposals, refused_proposals`;
 
 interface BatchRow extends Record<string, unknown> {
   readonly id: string;
@@ -111,6 +111,8 @@ interface ChunkRow extends Record<string, unknown> {
   readonly redaction_count: number;
   readonly truncated: boolean;
   readonly recorded_at: Date | null;
+  readonly abandoned_at: Date | null;
+  readonly detail: string | null;
   readonly proposals: number;
   readonly refused_proposals: number;
 }
@@ -155,6 +157,8 @@ const toChunk = (row: ChunkRow): HistoryBootstrapChunkRow => ({
   redactionCount: row.redaction_count,
   truncated: row.truncated,
   recordedAt: row.recorded_at === null ? null : instant(row.recorded_at),
+  abandonedAt: row.abandoned_at === null ? null : instant(row.abandoned_at),
+  detail: row.detail,
   proposals: row.proposals,
   refusedProposals: row.refused_proposals,
 });
@@ -292,8 +296,29 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
     const { rowCount } = await sqlOf(tx).query(
       `update history_bootstrap_chunks
           set recorded_at = $2, proposals = $3, refused_proposals = $4
-        where id = $1 and recorded_at is null`,
+        where id = $1 and recorded_at is null and abandoned_at is null`,
       [chunkId, outcome.at, outcome.proposals, outcome.refusedProposals],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  /**
+   * `abandoned_at is null` as well as `recorded_at is null` (migration 0036, WP-48).
+   *
+   * Both halves of `history_bootstrap_chunks_one_ending` are in the predicate rather than left to
+   * the constraint, so a second sweep — or a `record` job that arrives after the ending — is a
+   * `false` the caller branches on rather than a `23514` nobody maps.
+   */
+  async abandonChunk(
+    tx: Transaction,
+    chunkId: Id,
+    ending: { readonly at: IsoDateTime; readonly detail: string },
+  ): Promise<boolean> {
+    const { rowCount } = await sqlOf(tx).query(
+      `update history_bootstrap_chunks
+          set abandoned_at = $2, detail = $3
+        where id = $1 and recorded_at is null and abandoned_at is null`,
+      [chunkId, ending.at, ending.detail],
     );
     return (rowCount ?? 0) > 0;
   }
@@ -323,7 +348,7 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
           and exists (select 1 from history_bootstrap_chunks where batch_id = $1)
           and not exists (
             select 1 from history_bootstrap_chunks
-             where batch_id = $1 and recorded_at is null
+             where batch_id = $1 and recorded_at is null and abandoned_at is null
           )`,
       [batchId, at],
     );

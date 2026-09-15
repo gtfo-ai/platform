@@ -14,13 +14,15 @@
  * shape is the one CLAUDE.md prescribes and `stage-executor.ts` already uses: **no transaction
  * while reading, one transaction to write**.
  *
- * The residual is stated rather than implied. `HandlerContext.afterCommit` is at-most-once
- * (TD-004), so a process that dies between the handler's commit and its enqueue loses the wake-up,
- * and this project's proposals are never recorded. That is a **notification-shaped** loss, which is
- * the direction standing rule 20 says to fail in: nothing is corrupted, the artifact is still on the
- * task, and the next retrospective proposes again. What is *not* recovered automatically is this
- * one batch — the nightly pass recovers an **approved** proposal that was never applied, which is
- * the loss that costs a human's decision, and deliberately not this one.
+ * **The lost wake-up this residual used to state is recovered since WP-48** (PROGRESS backlog 36).
+ * `HandlerContext.afterCommit` is at-most-once (TD-004), so a process that dies between the
+ * handler's commit and its enqueue still loses the wake-up — but `recovery/stranded.ts` now finds
+ * the artifact nothing curated and enqueues it again, once, and gives up with a reason if that does
+ * not take. Two things made that possible and both are here: `KnowledgeProposalStore.markCurated`
+ * writes `knowledge_curations` **in the transaction that writes the proposals**, so a curation that
+ * proposed nothing is distinguishable from one that never ran (standing rule 18) and a second
+ * delivery writes one set of rows rather than two; and {@link enqueueCuration} is the only enqueue
+ * site, so the queue's `stately` policy has an artifact-shaped key to collapse on.
  *
  * ## Redaction happens once, before the curation (TD-012)
  *
@@ -236,6 +238,20 @@ export const recordLibrarianProposals = async (
   });
 
   if (curated.length === 0) {
+    /**
+     * **The mark is written even here, and that is the whole of backlog 36's blocker** (WP-48).
+     *
+     * A curation that ran and proposed nothing writes no `kb_proposals` row, so without this the
+     * recovery pass could not tell it from one whose wake-up was lost and would re-run the curation
+     * of every quiet task for ever (standing rule 18). `proposals: 0` on the row is the finding.
+     */
+    await options.unitOfWork.transaction(async (scope) => {
+      await options.proposals.markCurated(scope.tx, {
+        artifactId: data.artifact_id as Id,
+        at: options.clock.now(),
+        proposals: 0,
+      });
+    });
     return { ...EMPTY_REPORT, reason: 'the Librarian proposed nothing' };
   }
 
@@ -251,7 +267,22 @@ export const recordLibrarianProposals = async (
   );
 
   const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  await options.unitOfWork.transaction(async (scope) => {
+  const claimed = await options.unitOfWork.transaction(async (scope) => {
+    /**
+     * The claim that makes the whole transaction idempotent (WP-48) — `record.ts`'s
+     * `markChunkRecorded` one feature across. `curated_at is null` is in the predicate, so a second
+     * delivery of this wake-up — which the recovery pass deliberately creates — writes no second
+     * set of proposals and appends no second event.
+     */
+    if (
+      !(await options.proposals.markCurated(scope.tx, {
+        artifactId: data.artifact_id as Id,
+        at: createdAt,
+        proposals: rows.length,
+      }))
+    ) {
+      return false;
+    }
     await options.proposals.insert(scope.tx, rows);
     await scope.events.append(
       rows.map((row, index) =>
@@ -287,7 +318,12 @@ export const recordLibrarianProposals = async (
         }),
       ),
     );
+    return true;
   });
+
+  if (!claimed) {
+    return { ...EMPTY_REPORT, reason: 'another delivery curated this artifact first' };
+  }
 
   const autoApplied = rows.filter((row) => row.status === 'auto_applied').length;
   if (autoApplied > 0) {
@@ -361,10 +397,7 @@ export const librarianTriggerHandlers = (options: {
         artifact_id: event.payload.artifact.id,
       };
       context.afterCommit(async () => {
-        await options.jobs.enqueue<KnowledgeProposalsData>({
-          queue: JOB_QUEUES.knowledgeProposals,
-          data,
-        });
+        await enqueueCuration(options.jobs, data);
         (options.logger ?? silentLogger).debug(
           { project_id: data.project_id, task_id: data.task_id },
           'librarian curation requested',
@@ -377,11 +410,38 @@ export const librarianTriggerHandlers = (options: {
 export const declareLibrarianQueues = async (jobs: Jobs): Promise<void> => {
   await jobs.defineQueue({
     name: JOB_QUEUES.knowledgeProposals,
-    // `standard`: every wake-up carries a different artifact (see `JOB_QUEUES.knowledgeProposals`).
-    policy: 'standard',
+    // `stately` per **artifact** since WP-48 — see {@link enqueueCuration} for why the key is what
+    // makes that safe, and `JOB_QUEUES.knowledgeProposals` for what it used to be.
+    policy: 'stately',
     retryLimit: 2,
     retryDelaySeconds: 30,
     retryBackoff: true,
+  });
+};
+
+/**
+ * The **only** way a curation is asked for — the handler's, the research handler's and the
+ * recovery pass's (WP-48, PROGRESS backlog 36).
+ *
+ * The queue was `standard` with no key, on the reasoning that *"each wake-up carries a different
+ * artifact, so a coalescing policy would silently drop one task's proposals in favour of another's"*
+ * — which is true of a key that is the **queue** and false of a key that is the **artifact**. With
+ * `artifact:<id>` two tasks' curations never contend, and a second wake-up for the *same* artifact
+ * — which this pass deliberately creates — collapses instead of running the curation twice.
+ *
+ * It is belt and braces rather than the guarantee: the durable one is
+ * `KnowledgeProposalStore.markCurated`, which claims the artifact inside the write transaction, so
+ * a redelivery after the first job **completed** (when the queue's key is free again) still writes
+ * no second set of proposals. The key saves the work; the claim is what makes the result right.
+ *
+ * Every enqueue goes through here because a job put on a `stately` queue with **no** key takes the
+ * queue-wide key, which is exactly the collapse the old comment warned about.
+ */
+export const enqueueCuration = async (jobs: Jobs, data: KnowledgeProposalsData): Promise<void> => {
+  await jobs.enqueue<KnowledgeProposalsData>({
+    queue: JOB_QUEUES.knowledgeProposals,
+    data,
+    singletonKey: `artifact:${data.artifact_id}`,
   });
 };
 

@@ -11,8 +11,9 @@
  * | 2 | **`decide` compares the status in JavaScript** where the adapter does it in the `where` clause of one statement. | *Different* | The adapter's version is atomic against a concurrent decider and this one is not, so a **lost-update** race cannot be reproduced here. The contract suite asserts the observable both share — a second decision on a decided row answers `false` — and the atomicity is the adapter's to keep. |
  * | 3 | **Ordering is insertion order reversed**, not `(created_at, id) desc`. | *Different* | For a batch written in id order — which is what `recordLibrarianProposals` does — the two agree, and the contract suite pages through a same-timestamp batch to hold them to it. A test that inserted out of id order would see the two disagree, so no test may assert an ordering from this double and claim it of PostgreSQL. |
  * | 4 | **`readHealthInputs` answers what it was seeded with.** It holds no index of its own, so a test decides what the pass sees. | *Different* | The real one reads `kb_documents` and `kb_links`. A test that asserted "the pass found the expired page the indexer wrote" would be asserting this seam rather than the query, which is why the postgres half of the contract suite seeds rows and asks the adapter. |
+ * | 5 | **`markCurated` holds the claim in a map** rather than in `knowledge_curations`, and it does not model the recovery's own columns (`recovery_attempted_at`, `abandoned_at`). | *Different* | The observable both share — the first call answers `true` and every later one `false`, so a redelivered wake-up writes no second set of proposals — is what the contract suite asserts. The recovery's columns are written by `StrandedWorkStore`, whose queries are the integration tier's. |
  */
-import type { Id } from '@platform/contracts';
+import type { Id, IsoDateTime } from '@platform/contracts';
 import type {
   KbHealthInputs,
   KbHealthReportWrite,
@@ -26,6 +27,8 @@ import type { Transaction } from '../ports/transaction.js';
 export interface MemoryProposalStore extends KnowledgeProposalStore {
   /** Everything written, oldest first — what a test asserts on. */
   readonly rows: readonly StoredKnowledgeProposal[];
+  /** Which artifacts have been curated, and what each curation produced (WP-48). */
+  curationOf(artifactId: Id): { readonly proposals: number } | null;
   readonly reports: readonly KbHealthReportWrite[];
   /** What {@link KnowledgeProposalStore.readHealthInputs} will answer for this project. */
   seedHealthInputs(projectId: Id, inputs: KbHealthInputs): void;
@@ -36,6 +39,8 @@ const EMPTY_INPUTS: KbHealthInputs = { commitSha: null, documents: [], danglingL
 export const memoryProposalStore = (): MemoryProposalStore => {
   const rows: StoredKnowledgeProposal[] = [];
   const reports: KbHealthReportWrite[] = [];
+  /** `knowledge_curations`, as much of it as this double needs: the claim and what it produced. */
+  const curations = new Map<Id, { curatedAt: IsoDateTime; proposals: number }>();
   const health = new Map<Id, KbHealthInputs>();
 
   const replace = (index: number, next: StoredKnowledgeProposal): void => {
@@ -45,12 +50,25 @@ export const memoryProposalStore = (): MemoryProposalStore => {
   return {
     rows,
     reports,
+    curationOf: (artifactId) => {
+      const row = curations.get(artifactId);
+      return row === undefined ? null : { proposals: row.proposals };
+    },
     seedHealthInputs: (projectId, inputs) => {
       health.set(projectId, inputs);
     },
 
     insert: async (_tx: Transaction, proposals) => {
       rows.push(...proposals);
+    },
+
+    markCurated: async (_tx: Transaction, input) => {
+      const existing = curations.get(input.artifactId);
+      if (existing?.curatedAt != null) {
+        return false;
+      }
+      curations.set(input.artifactId, { curatedAt: input.at, proposals: input.proposals });
+      return true;
     },
 
     load: async (projectId, id) =>

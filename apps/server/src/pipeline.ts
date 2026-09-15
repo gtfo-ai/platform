@@ -950,12 +950,13 @@ export const composePipeline = async (
     clock: { now: nowIso },
     intervalMs: options.intakeReconcileIntervalMs,
     /**
-     * The other two sites of the same class (WP-36, PROGRESS backlog **101**): a history bootstrap
-     * left `collecting` with no chunks, and an ask left `pending` with no run. They ride this
-     * timer rather than one of their own — one pass, one interval, one pooled connection — and
+     * The other sites of the same class (WP-36 and WP-48, PROGRESS backlog **101**): a history
+     * bootstrap left `collecting` with no chunks or with a mining run whose findings were never
+     * recorded (**106**), an artifact nothing curated (**36**), an ask left `pending` with no run
+     * (**84**) and one whose run is already over (**121**). They ride this timer rather than one of
+     * their own — one pass, one interval, one pooled connection — and
      * `packages/application/src/recovery/stranded.ts` carries the table, including why entry 20's
-     * recovery is the reconciler above rather than a row of it and why entry 36 cannot be a row
-     * yet.
+     * recovery is the reconciler above rather than a row of it.
      */
     stranded: {
       store: recoveryAdapters.createPostgresStrandedWorkStore(),

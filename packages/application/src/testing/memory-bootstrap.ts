@@ -29,9 +29,9 @@
  *    batch's unledgered runs and answers `0` unless a test says otherwise — where the adapter
  *    finds them. A test that wants the cap's pending term seeds it; the adapter's own derivation
  *    is held by the integration tier.
- * 5. **`markChunkRecorded` and `completeIfDone` answer `true` only on the transition**, which is
- *    the same predicate the adapter puts in its `where`, so the recorder's idempotency is exercised
- *    here as well as there.
+ * 5. **`markChunkRecorded`, `abandonChunk` and `completeIfDone` answer `true` only on the
+ *    transition**, which is the same predicate the adapter puts in its `where`, so the recorder's
+ *    idempotency — and the recovery's ending (WP-48) — is exercised here as well as there.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type {
@@ -130,12 +130,19 @@ export const createMemoryHistoryBootstrapStore = (
     chunkOfTask: async (_tx, taskId) => chunks.find((row) => row.taskId === taskId) ?? null,
 
     addChunk: async (_tx, chunk) => {
-      chunks.push({ ...chunk, recordedAt: null, proposals: 0, refusedProposals: 0 });
+      chunks.push({
+        ...chunk,
+        recordedAt: null,
+        abandonedAt: null,
+        detail: null,
+        proposals: 0,
+        refusedProposals: 0,
+      });
     },
 
     markChunkRecorded: async (_tx, chunkId, outcome) => {
       const chunk = chunks.find((row) => row.id === chunkId);
-      if (chunk === undefined || chunk.recordedAt !== null) {
+      if (chunk === undefined || chunk.recordedAt !== null || chunk.abandonedAt !== null) {
         return false;
       }
       replaceChunk({
@@ -144,6 +151,15 @@ export const createMemoryHistoryBootstrapStore = (
         proposals: outcome.proposals,
         refusedProposals: outcome.refusedProposals,
       });
+      return true;
+    },
+
+    abandonChunk: async (_tx, chunkId, ending) => {
+      const chunk = chunks.find((row) => row.id === chunkId);
+      if (chunk === undefined || chunk.recordedAt !== null || chunk.abandonedAt !== null) {
+        return false;
+      }
+      replaceChunk({ ...chunk, abandonedAt: ending.at, detail: ending.detail });
       return true;
     },
 
@@ -167,7 +183,12 @@ export const createMemoryHistoryBootstrapStore = (
         return false;
       }
       const own = chunks.filter((row) => row.batchId === batchId);
-      if (own.length === 0 || own.some((row) => row.recordedAt === null)) {
+      // An abandoned chunk counts as reported (WP-48): the recovery gave up on its findings, and a
+      // batch nobody can complete is the permanent `already_running` backlog 101 is about.
+      if (
+        own.length === 0 ||
+        own.some((row) => row.recordedAt === null && row.abandonedAt === null)
+      ) {
         return false;
       }
       replace({ ...batch, status: 'completed', completedAt: at });

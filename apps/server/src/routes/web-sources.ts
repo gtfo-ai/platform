@@ -21,13 +21,20 @@ export const repositoryRoot = fileURLToPath(new URL('../../../..', import.meta.u
 /** The SPA's sources, relative to the repository root. */
 export const WEB_SOURCES = 'apps/web/src';
 
-export const webSourceFiles = (): string[] => {
+/**
+ * Every source file git knows about under `directory` — tracked **and** untracked-but-not-ignored.
+ *
+ * Rule 85, and the reason it is a parameter since WP-48: the jobs-seam census reads
+ * `apps/server/src` the same way this one reads `apps/web/src`, and a second copy of the two `git`
+ * invocations is a second place for the untracked half to be forgotten.
+ */
+export const sourceFilesUnder = (directory: string): string[] => {
   const git = (args: readonly string[]): string[] =>
     execFileSync('git', [...args], { cwd: repositoryRoot, encoding: 'utf8' })
       .split('\n')
       .filter((line) => line.length > 0);
-  const tracked = git(['ls-files', '--', WEB_SOURCES]);
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', WEB_SOURCES]);
+  const tracked = git(['ls-files', '--', directory]);
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', directory]);
   return [...new Set([...tracked, ...untracked])].filter(
     (path) =>
       (path.endsWith('.ts') || path.endsWith('.tsx')) &&
@@ -35,6 +42,8 @@ export const webSourceFiles = (): string[] => {
       !path.endsWith('.test.tsx'),
   );
 };
+
+export const webSourceFiles = (): string[] => sourceFilesUnder(WEB_SOURCES);
 
 /** Strips block comments and comment-only lines, so prose about a thing is not a use of it. */
 export const withoutComments = (source: string): string =>

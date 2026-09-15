@@ -196,6 +196,30 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     expect(ask?.runId).not.toBeNull();
   });
 
+  it('claims this process’s run lease, so the sweep reaches it at the lease bound (backlog 120)', async () => {
+    /**
+     * WP-48. An ask's run is inserted by a different composition from the stage executor's, and
+     * until this it claimed **no** lease — so the only thing that could ever end one whose process
+     * died was the sweep's wall-clock backstop, about an hour rather than about six minutes, with
+     * the reservation it holds valued at whatever the *next* admission asks for (up to $15).
+     *
+     * The owner is the harness's one owner string, which is the point of taking it from
+     * `execution.lease` rather than adding a second option: one process, one lease identity.
+     */
+    const harness = harnessWith();
+    await seedTask(harness);
+    const before = { ...harness.heartbeats };
+    await askThroughHttp(harness);
+
+    const [ask] = harness.asks.all();
+    expect(ask?.runId).not.toBeNull();
+    expect(harness.store.leaseOf(ask?.runId as Id)?.owner).toBe('harness');
+    // …and it **renews** it for the length of the run and stops when the run ends: a lease claimed
+    // once and never beaten lapses five minutes in, which would have the sweep ending live runs.
+    expect(harness.heartbeats.started).toBeGreaterThan(before.started);
+    expect(harness.heartbeats.stopped).toBe(harness.heartbeats.started);
+  });
+
   it('is given read-only platform tools and no repository tools at all (Q72 (b))', async () => {
     const harness = harnessWith();
     await seedTask(harness);

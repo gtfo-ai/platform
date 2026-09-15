@@ -14,6 +14,11 @@ const PROJECT = '00000000-0000-4000-8000-0000000000f1' as Id;
 const OTHER_PROJECT = '00000000-0000-4000-8000-0000000000f2' as Id;
 const USER = '00000000-0000-4000-8000-0000000000f3' as Id;
 
+/** The double has no foreign key, so an artifact id only has to be distinct (WP-48). */
+let artifacts = 0;
+const nextArtifactId = (): Id =>
+  `00000000-0000-4000-8000-${String(++artifacts).padStart(12, '0')}` as Id;
+
 runKnowledgeProposalsContract({
   name: 'in-memory',
   create: async () => {
@@ -27,6 +32,7 @@ runKnowledgeProposalsContract({
       seedHealth: async (projectId, inputs) => {
         store.seedHealthInputs(projectId, inputs);
       },
+      seedArtifact: async () => nextArtifactId(),
       readHealthReports: async (projectId) =>
         store.reports
           .filter((report) => report.projectId === projectId)

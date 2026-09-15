@@ -314,7 +314,9 @@ describe('ask-the-task, through a composed instance', () => {
    *    found by the first version of the query, which asked only *"pending and old"* — and was
    *    re-enqueued into a **second paid run**, once a minute, with no `cost_entries` row from the
    *    dead run to make any budget notice. `run_id is null` is the fix; this case is its
-   *    reproduction.
+   *    reproduction. **Since WP-48 such an ask is *ended* rather than merely left alone** (backlog
+   *    121): a fifth row of the pass refuses a `pending` ask whose run is terminal, which is the
+   *    half the `run_id is null` fix deliberately left open.
    *
    * The waiting is on the pass's **own effect on another row** rather than on a duration: a
    * sentinel ask is seeded stranded, and its answer is the proof that a pass ran. Two sentinels,
@@ -383,6 +385,13 @@ describe('ask-the-task, through a composed instance', () => {
      * Now the second direction. The row is put back into the measured state — `pending`, with the
      * run it already had — and its recovery mark is **cleared deliberately**, so what is under test
      * is the query's `run_id is null` rather than the bound that would also have hidden it.
+     *
+     * **What this row's ending is changed at WP-48** (PROGRESS backlog 121). Until then two passes
+     * left it untouched and `pending` for ever, which was the honest state of the build: the
+     * re-enqueuing query could not see it and nothing else looked. The pass now has a row that
+     * *does* — `task_ask_run`, a `pending` ask whose attached run is terminal — so the question is
+     * **refused** instead, quoting the run's own ending. The measurement this case was written for
+     * is unchanged and is asserted below: no second paid run, and no second ledger row.
      */
     await pipeline.query(
       `update task_asks
@@ -411,14 +420,21 @@ describe('ask-the-task, through a composed instance', () => {
     const second = await seedSentinel();
     await pipeline.waitFor('a second recovery pass', async () => answered(second));
 
-    // Two passes have run over a `pending` ask older than the grace, and it is untouched: no new
-    // run, no second answer, and not even the mark — the query never returned it.
+    // Two passes have run over a `pending` ask whose run is already over. The re-enqueuing row
+    // never returned it — `recovery_attempted_at` is still null, which is what says so — and the
+    // row that ends it did: `failed`, with the run's own status in the reason rather than a
+    // question that says `pending` for ever (WP-48, backlog 121).
     const [poisoned] = await pipeline.query<{
       status: string;
       run_id: string | null;
+      refusal_reason: string | null;
       recovery_attempted_at: Date | null;
-    }>('select status, run_id, recovery_attempted_at from task_asks where id = $1', [askId]);
-    expect(poisoned).toMatchObject({ status: 'pending', run_id: runId });
+    }>(
+      'select status, run_id, refusal_reason, recovery_attempted_at from task_asks where id = $1',
+      [askId],
+    );
+    expect(poisoned).toMatchObject({ status: 'failed', run_id: runId });
+    expect(poisoned?.refusal_reason).toContain('completed');
     expect(poisoned?.recovery_attempted_at).toBeNull();
 
     // The counts, which is what "a second paid run" would move: three ask runs on this task — the

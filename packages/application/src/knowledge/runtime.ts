@@ -7,10 +7,13 @@
  * lives in this ring while every adapter it needs arrives as a port.
  *
  * The three workers are separate queues rather than one with a `duty` switch, because their
- * policies genuinely differ and the policy is the interesting part: curation is `standard` (each
- * wake-up is a different artifact), the apply is `stately` per project (BD-012 serialises knowledge
- * commits per repository), and the hygiene pass is `stately` for the whole deployment behind a
- * cron. A single queue would have to take the weakest of the three.
+ * policies genuinely differ and the policy is the interesting part: curation is `stately` **per
+ * artifact** (`singletonKey: artifact:<id>`, since WP-48 — the mark in `knowledge_curations` is the
+ * idempotency key and `enqueueCuration` in `./librarian.ts` is the only enqueue, so a recovery's
+ * second wake-up collapses onto the first rather than writing a second set of proposals), the
+ * apply is `stately` per project (BD-012 serialises knowledge commits per repository), and the
+ * hygiene pass is `stately` for the whole deployment behind a cron. A single queue would have to
+ * take the weakest of the three.
  */
 import type { EventHandler } from '../events/handler.js';
 import type { JobWorker } from '../ports/jobs.js';

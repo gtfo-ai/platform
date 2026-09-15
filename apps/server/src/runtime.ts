@@ -277,9 +277,12 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
        * **Every use below this line is `jobs`, and that is held by a census** rather than by this
        * sentence (`pipeline-census.test.ts`): round 2 of WP-36 found the three *worker* runtimes —
        * knowledge, onboarding and the history bootstrap — still taking `jobsRuntime.jobs` while
-       * this docblock claimed they shared the wrapped one (PROGRESS backlog **106**), and two of
-       * the class's sites are enqueued from exactly those. `jobsRuntime` is the lifecycle owner and
-       * is used for `start`/`stop` only.
+       * this docblock claimed they shared the wrapped one (PROGRESS backlog **106**, closed at
+       * WP-48), and two of the class's sites are enqueued from exactly those. Since WP-48 the
+       * census **enumerates** the call sites off disk instead of counting them, so a fourth runtime
+       * composed below this line — or in a file of its own with a queue client of its own — is a
+       * decision somebody writes down rather than a line somebody adds. `jobsRuntime` is the
+       * lifecycle owner and is used for `start`/`stop` only.
        *
        * Nothing in production passes it: `startRuntime()` with no options composes the real `Jobs`.
        */

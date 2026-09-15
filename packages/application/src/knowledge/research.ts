@@ -43,10 +43,13 @@ import { curateProposals } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import { renderResearchReport, researchPagePath } from '../pipeline/epic-split.js';
 import type { Jobs } from '../ports/jobs.js';
-import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { KnowledgeProposalsData, LibrarianJobOptions } from './librarian.js';
+import {
+  enqueueCuration,
+  type KnowledgeProposalsData,
+  type LibrarianJobOptions,
+} from './librarian.js';
 import type { StoredKnowledgeProposal } from './ports.js';
 
 /** Every page a spike drafts is queued, and none of them is ever committed without a decision. */
@@ -186,7 +189,19 @@ export const recordResearchPage = async (
   };
 
   const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  await options.unitOfWork.transaction(async (scope) => {
+  const claimed = await options.unitOfWork.transaction(async (scope) => {
+    // The same claim the Librarian's curation makes (WP-48): one `knowledge_curations` row per
+    // artifact, written in the transaction that writes the proposal, so a redelivered wake-up —
+    // including the one the lost-wake-up recovery enqueues — writes no second page.
+    if (
+      !(await options.proposals.markCurated(scope.tx, {
+        artifactId: data.artifact_id as Id,
+        at: createdAt,
+        proposals: 1,
+      }))
+    ) {
+      return false;
+    }
     await options.proposals.insert(scope.tx, [row]);
     await scope.events.append([
       knowledgeProposalCreatedEvent.parse({
@@ -220,7 +235,12 @@ export const recordResearchPage = async (
         },
       }),
     ]);
+    return true;
   });
+
+  if (!claimed) {
+    return { ...EMPTY, path: row.targetPath, reason: 'another delivery queued this page first' };
+  }
 
   return {
     status: 'recorded',
@@ -265,9 +285,18 @@ export const RESEARCH_ARTIFACT_HANDLER = 'knowledge.research.artifact';
  * borrow). `artifact.created` is already a consumed event, so this adds a handler to an event the
  * deployment already dispatches rather than changing what `EVENT_CONSUMPTION` declares.
  *
- * The residual is the one `librarian.ts` states: `afterCommit` is at-most-once, so a process that
- * dies between the commit and the enqueue loses this page. It is notification-shaped loss — the
- * artifact is still on the task, the report is still on the ticket, and nothing is corrupted.
+ * **This wake-up is recovered since WP-48** (PROGRESS backlog 36, whose row covers both curations).
+ * `afterCommit` is at-most-once, so a process that dies between the commit and the enqueue still
+ * loses it — and `recovery/stranded.ts` then finds the `ResearchReport` artifact with no
+ * `knowledge_curations` row and enqueues this job again, once. The page is written by the same
+ * claim the Librarian's curation makes (`markCurated`, keyed on the artifact), so the recovery's
+ * deliberate second delivery produces **one** page rather than two.
+ *
+ * What remains a loss is the bounded ending, not the window: a curation whose single re-enqueue
+ * also fails to run is **abandoned** an hour later with the reason on its row, and this task's page
+ * is then never written. That is notification-shaped (standing rule 20) — the artifact is still on
+ * the task, the report is still on the ticket, nothing is corrupted, and the next spike proposes
+ * again — which is why the bound is one attempt rather than a retry a minute.
  */
 export const researchTriggerHandlers = (options: {
   readonly jobs: Jobs;
@@ -288,10 +317,9 @@ export const researchTriggerHandlers = (options: {
         artifact_type: 'ResearchReport',
       };
       context.afterCommit(async () => {
-        await options.jobs.enqueue<KnowledgeProposalsData>({
-          queue: JOB_QUEUES.knowledgeProposals,
-          data,
-        });
+        // Through the shared helper, because the queue is `stately` since WP-48 and a job enqueued
+        // without the artifact key would take the queue-wide one.
+        await enqueueCuration(options.jobs, data);
         (options.logger ?? silentLogger).debug(
           { project_id: data.project_id, task_id: data.task_id },
           'research page queueing requested',

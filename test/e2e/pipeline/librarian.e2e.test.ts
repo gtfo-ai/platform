@@ -28,6 +28,7 @@
  * 4. **The UI's endpoints**, over HTTP, signed in: the queue, the tree, one document, and a decision
  *    that turns into a second commit.
  */
+import { JOB_QUEUES, type Jobs } from '@platform/application';
 import type { KbProposalsResponse, KbTreeResponse } from '@platform/contracts';
 import { kbProposalsResponseSchema, kbTreeResponseSchema } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -89,14 +90,46 @@ const signIn = async (baseUrl: string): Promise<Client> => {
 const AUTO_APPLIED_PATH = '.agentic/knowledge/lessons/L-2026-09-12-totals.md';
 const QUEUED_PATH = '.agentic/knowledge/lessons/L-2026-09-12-rounding.md';
 
+/**
+ * Swallows the **first** `knowledge.proposals` wake-up: exactly what a crash between the Librarian
+ * handler's commit and its `Jobs.enqueue` would cost (PROGRESS backlog **36**, WP-48).
+ *
+ * The first only, because the recovery pass's own re-enqueue is the second — a seam that swallowed
+ * every one would be testing that curation cannot work rather than that the recovery does (the
+ * reasoning `intake-recovery.e2e.test.ts` states for entry 20).
+ */
+const dropFirstCuration = (dropped: string[]) => (jobs: Jobs) => ({
+  ...jobs,
+  enqueue: async <TData extends Record<string, unknown>>(request: {
+    queue: string;
+    data?: TData;
+  }) => {
+    if (request.queue === JOB_QUEUES.knowledgeProposals && dropped.length === 0) {
+      dropped.push(String((request.data as { artifact_id?: string } | undefined)?.artifact_id));
+      return { status: 'enqueued' as const, jobId: 'dropped-on-the-floor' };
+    }
+    return jobs.enqueue(request as never);
+  },
+});
+
 /** A feature ticket, merged, with `auto_apply` on — BD-018's band then commits without a human. */
-const startMerged = async (label: string): Promise<PipelineE2E> => {
+const startMerged = async (
+  label: string,
+  options: { readonly jobs?: (jobs: Jobs) => Jobs; readonly waitForProposals?: boolean } = {},
+): Promise<PipelineE2E> => {
   const pipeline = await startPipeline({
     scenarios: featureScenarios,
     label,
     tickets: TICKETS,
     agent: 'real-over-fake-cli',
     config: { policies: { knowledge_apply: { auto_apply: true } } },
+    ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
+    env: {
+      // A one-second recovery interval: the same number is the gap between passes **and** the age a
+      // stranded row must reach (`intake-reconcile.ts`'s one knob). The default 60 s is longer than
+      // this suite may wait, and it changes nothing for the cases that lose no wake-up.
+      APP_INTAKE_RECONCILE_INTERVAL_MS: '1000',
+    },
   });
   harness = pipeline;
   await pipeline.publish([ticketMatched(pipeline)]);
@@ -112,6 +145,9 @@ const startMerged = async (label: string): Promise<PipelineE2E> => {
    * most of the time and left the first case reading `auto_applied` and the second one committing
    * two pages in one batch.
    */
+  if (options.waitForProposals === false) {
+    return pipeline;
+  }
   await pipeline.waitFor(
     'the four proposals to be curated and the auto-applied one committed',
     async () => {
@@ -300,5 +336,67 @@ describe('the librarian stage, over a merged ticket', () => {
     // A discarded proposal is past deciding: the queue is for `queued` rows (BD-018's "audit only").
     expect(rejected.status).toBe(409);
     expect(pipeline.git.commits.length).toBe(before + 1);
+  }, 300_000);
+
+  /**
+   * **PROGRESS backlog 36**, the site the recovery table could not take until WP-48 gave the
+   * curation a mark: a lost `knowledge.proposals` wake-up loses one task's proposals silently —
+   * the artifact is still on the task, and *"curated and proposed nothing"* is spelled exactly like
+   * *"never curated"* without `knowledge_curations`.
+   *
+   * The reproduction is the class's: **drop the enqueue** — killing a process at that microsecond
+   * boundary is not a test — and read the recovery back from the **rows** rather than a return
+   * value (rule 79). What makes this tier the one that can prove it is WP-36's seam reaching the
+   * *knowledge* runtime, which is the other half of backlog 106.
+   */
+  it('recovers a curation whose wake-up was lost, and writes one set of proposals', async () => {
+    const dropped: string[] = [];
+    const pipeline = await startMerged('librarian-recovery', {
+      jobs: dropFirstCuration(dropped),
+      waitForProposals: false,
+    });
+
+    /**
+     * **Wait for the drop, do not assume `settle('done')` implies it** (standing rule 87).
+     *
+     * `startMerged` waits on the task reaching `done`, and the `librarian` stage's
+     * `artifact.created` handler enqueues through `afterCommit` — *after* the dispatcher's
+     * transaction commits, which is a different moment from the task's own transition. Asserting
+     * the seam's counter straight after the settle rests on that ordering rather than on the thing
+     * being asserted; waiting on the counter asks the question directly.
+     */
+    await pipeline.waitFor(
+      'the curation wake-up to be swallowed',
+      async () => dropped.length === 1,
+    );
+    expect(dropped, 'the wake-up the handler asked for was swallowed').toHaveLength(1);
+
+    // The loss, as it stands before the pass: the artifact is on the task and nothing curated it.
+    const artifact = (await pipeline.artifactData('LibrarianProposals')) as {
+      proposals: unknown[];
+    };
+    expect(artifact.proposals).toHaveLength(4);
+
+    // …and the recovery pass — the same timer the intake reconciliation runs on — enqueues the
+    // curation again, which is read back from the rows the curation writes.
+    await pipeline.waitFor('the stranded curation to run after all', async () => {
+      const rows = await pipeline.proposals();
+      return rows.length >= 4;
+    });
+
+    const rows = await pipeline.proposals();
+    // **One** set, not two: the recovery's re-enqueue is deliberate, so the claim inside the
+    // curation's own transaction (`knowledge_curations`, migration 0036) is what stops a second
+    // delivery writing a second queue for a maintainer to read (criterion 3).
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map((row) => row.target_path)).size).toBe(4);
+
+    // The mark itself, which is what the next pass reads: one row, curated, with what it produced.
+    const curations = await pipeline.query<{ curated_at: Date | null; proposals: number }>(
+      'select curated_at, proposals from knowledge_curations',
+    );
+    expect(curations).toHaveLength(1);
+    expect(curations[0]?.curated_at).not.toBeNull();
+    expect(curations[0]?.proposals).toBe(4);
   }, 300_000);
 });

@@ -20,7 +20,7 @@
  * typed in, and the assertion is `15` before the sweep and `0` after it.
  */
 import type { ExpiredRunQuery, Transaction } from '@platform/application';
-import { sweepExpiredRunLeases } from '@platform/application';
+import { runStrandedRecovery, sweepExpiredRunLeases } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
   DEFAULT_STAGE_RUN_BUDGET_USD,
@@ -30,6 +30,7 @@ import {
 import {
   cost as costAdapters,
   eventing,
+  jobs as jobsAdapters,
   pipeline as pipelineAdapters,
   recovery as recoveryAdapters,
 } from '@platform/infrastructure';
@@ -288,5 +289,132 @@ describe('the sweep', () => {
     expect(events.rows[0]?.payload.usage).toBeNull();
     expect(events.rows[0]?.payload.cost).toBeNull();
     expect(events.rows[0]?.payload.terminal_reason).toBe('lease_expired');
+  });
+});
+
+/**
+ * **The ask half of the same ending — PROGRESS backlog 121, WP-48.**
+ *
+ * The sweep ends the *run* and escalates the *task*; nothing turned that into an ending for the
+ * **question** the run was answering, so the thread said `pending` for ever. The row that does is
+ * `task_ask_run`, and the only tier that can show the two together is this one: the whole pass is
+ * driven over real rows, the run is ended **through the sweep**, and the ask's own status is read
+ * back from the table rather than from a return value (rule 79).
+ *
+ * It takes **two** passes, and that is a property rather than an accident: one pass reads all five
+ * queries in a single transaction before any site acts, so the ask's run is still live when
+ * `asksWithEndedRun` runs. The next pass sees it. The grace is the same one knob — an ask whose run
+ * ended a moment ago is a row in flight, because the executor writes the answer and the run's
+ * ending in one transaction.
+ */
+describe('a question whose run the sweep ended', () => {
+  const strandedStore = recoveryAdapters.createPostgresStrandedWorkStore();
+  let userId: string;
+
+  const iso = (offsetMs: number): IsoDateTime =>
+    new Date(Date.now() + offsetMs).toISOString() as IsoDateTime;
+
+  /** The whole pass — every site — at a caller-chosen instant, with a queue nothing reads. */
+  const pass = async (now: IsoDateTime) =>
+    runStrandedRecovery({
+      store: strandedStore,
+      unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
+      jobs: jobsAdapters.createInMemoryJobs().jobs,
+      clock: { now: () => now },
+      graceMs: GRACE_MS,
+      runs: {
+        store,
+        pipeline,
+        unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
+        eventStore: new eventing.PostgresEventStore(pool),
+        context: (correlationId) => ({
+          ids: { next: () => crypto.randomUUID() as Id },
+          actor: { kind: 'system', component: 'pipeline.run-lease.sweep' },
+          clock: { now: () => now },
+          correlationId,
+          causeEventId: null,
+        }),
+        wallClockMs: WALL_CLOCK_MS,
+      },
+    });
+
+  const seedAsk = async (runId: string, question: string): Promise<string> => {
+    const row = await pool.query<{ id: string }>(
+      `insert into task_asks (task_id, project_id, source, asked_by_user_id, question, status,
+                              created_at, run_id)
+       values ($1, $2, 'ui', $3, $4, 'pending', now() - interval '10 minutes', $5)
+       returning id`,
+      [taskId, projectId, userId, question, runId],
+    );
+    return row.rows[0]?.id as string;
+  };
+
+  const statusOf = async (askId: string) =>
+    (
+      await pool.query<{ status: string; refusal_reason: string | null }>(
+        'select status, refusal_reason from task_asks where id = $1',
+        [askId],
+      )
+    ).rows[0];
+
+  beforeAll(async () => {
+    const user = await pool.query<{ id: string }>(
+      "insert into users (email, name) values ('asker@example.test', 'Asker') returning id",
+    );
+    userId = user.rows[0]?.id as string;
+  });
+
+  beforeEach(async () => {
+    await pool.query('delete from task_asks');
+  });
+
+  it('ends the question the pass after it ends the run, and leaves a live one alone', async () => {
+    // The run nothing is renewing, and the question it was answering.
+    const deadRunId = await seedRun({
+      leaseExpiresAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      startedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+    });
+    const stranded = await seedAsk(deadRunId, 'why is the total wrong?');
+    // The negative case (rule 42): a question whose run is still being renewed. Ending it would
+    // throw away a run the project is paying for, at the moment it is about to answer.
+    const liveRunId = await seedRun({
+      leaseExpiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const live = await seedAsk(liveRunId, 'and what about the footer?');
+
+    // Pass 1 ends the **run** — its five reads happened before any site acted, so the ask's run was
+    // still live when `asksWithEndedRun` ran.
+    const first = await pass(iso(0));
+    expect(first.find((site) => site.site === 'run_lease')).toMatchObject({ found: 1, ended: 1 });
+    expect(first.find((site) => site.site === 'task_ask_run')).toMatchObject({
+      found: 0,
+      ended: 0,
+    });
+    expect((await statusOf(stranded))?.status).toBe('pending');
+
+    // Pass 2, a grace later, ends the **question**.
+    const second = await pass(iso(5 * 60_000));
+    expect(second.find((site) => site.site === 'task_ask_run')).toMatchObject({
+      found: 1,
+      ended: 1,
+    });
+    const ended = await statusOf(stranded);
+    // `failed` rather than `refused`: the platform did try, and the reason quotes the run's own
+    // ending — both strings are platform enum values, so the thread carries nothing untrusted.
+    expect(ended?.status).toBe('failed');
+    expect(ended?.refusal_reason).toContain('lease_expired');
+
+    // …and the live one is untouched by either pass.
+    expect((await statusOf(live))?.status).toBe('pending');
+
+    // A third pass is a no-op: `recordRefusal` moved the ask off `pending`, which is the bound this
+    // row has instead of the attempt mark the re-enqueuing rows carry.
+    const third = await pass(iso(10 * 60_000));
+    expect(third.find((site) => site.site === 'task_ask_run')).toMatchObject({
+      found: 0,
+      ended: 0,
+    });
+    expect((await statusOf(stranded))?.status).toBe('failed');
   });
 });

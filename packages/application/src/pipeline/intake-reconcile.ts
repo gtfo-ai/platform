@@ -202,14 +202,15 @@ export interface IntakeReconcileJobOptions
   extends Omit<IntakeReconciliationOptions, 'graceMs' | 'limit'> {
   readonly jobs: Jobs;
   /**
-   * The **other** sites of the lost-wake-up class, run on this same timer (WP-36, backlog 101).
+   * The **other** sites of the lost-wake-up class, run on this same timer (WP-36, backlog 101;
+   * completed at WP-48).
    *
    * One pass, one interval, one pooled connection: backlog 101's argument against four separate
    * passes is that four intervals are four grace periods to get wrong, and this timer already has
    * the one grace period the class needs. `recovery/stranded.ts` carries the table — the history
-   * bootstrap's lost `collect` (entry 101) and the ask's lost run (entry 84) — and states why entry
-   * 20's recovery is *this* module rather than a row of it, and why entry 36 cannot be a row at
-   * all yet.
+   * bootstrap's lost `collect` (entry 101) and its lost `record` (106), the lost curation (36), the
+   * ask's lost run (84), the ask whose run is already over (121) and the run nothing is driving
+   * (109) — and states why entry 20's recovery is *this* module rather than a row of it.
    *
    * Absent means only entry 20 is recovered, which is what every build before WP-36 did.
    */

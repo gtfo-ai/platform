@@ -226,6 +226,25 @@ describe('recording a mining run’s findings', () => {
     expect(await eventing.store.readStream('project', PROJECT)).toHaveLength(eventsAfterFirst);
   });
 
+  it('records nothing once the recovery has stopped waiting for this chunk', async () => {
+    /**
+     * WP-48, PROGRESS backlog 106: the recovery pass gave up on this run's findings and completed
+     * the batch without them, so a `record` job that arrives afterwards must not write proposals
+     * against a batch that already says it finished. Both writers refuse it — the guard here and
+     * `markChunkRecorded`'s own predicate — and this asserts the one that says which happened.
+     */
+    const { bootstrap, proposals, record, eventing } = await setup();
+    await eventing.transaction(async (scope) => {
+      await bootstrap.abandonChunk(scope.tx, CHUNK, { at: AT, detail: 'the wake-up was lost' });
+    });
+
+    const report = await record();
+    expect(report.status).toBe('skipped');
+    expect(report.reason).toContain('stopped waiting');
+    expect(proposals.rows).toEqual([]);
+    expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
+  });
+
   it('records nothing when the task no longer carries the sample its citations rest on', async () => {
     // Without the platform's own record of what the run was shown there is nothing to resolve a
     // citation against, and accepting the proposals anyway would publish exactly the unevidenced

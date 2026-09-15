@@ -35,8 +35,10 @@ describe('Drizzle schema', () => {
     // one (Q85, migration 0033, WP-40), plus `stats_task_delivery` and `stats_event_daily` — the
     // two facts the statistics endpoint needs whose only record was an event: when a task's merge
     // request merged (no table holds a merge time) and the daily counters of the four metric
-    // events nothing read (migration 0034, WP-41).
-    expect(tables.length).toBe(59);
+    // events nothing read (migration 0034, WP-41), plus `knowledge_curations` — that a curation of
+    // one artifact happened, which no table recorded and without which the lost-wake-up recovery
+    // cannot tell a curation that proposed nothing from one that never ran (migration 0036, WP-48).
+    expect(tables.length).toBe(60);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

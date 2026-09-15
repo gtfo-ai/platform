@@ -209,6 +209,34 @@ const dropFirstCollect = (dropped: string[]) => (jobs: Jobs) => ({
   },
 });
 
+/**
+ * Swallows the **first** `record` wake-up: what a crash between the `artifact.created` handler's
+ * commit and its `Jobs.enqueue` would cost (PROGRESS backlog **106**, WP-48).
+ *
+ * The loss is worse than one run's findings. `completeIfDone` is one of only two writers of
+ * `history_bootstrap_batches.completed_at`, so a chunk that never reports leaves the batch live for
+ * ever — and `history_bootstrap_batches_one_live` then refuses every later bootstrap of that
+ * project with `already_running`, which is backlog 101's brick reached from a different wake-up.
+ */
+const dropFirstRecord = (dropped: string[]) => (jobs: Jobs) => ({
+  ...jobs,
+  enqueue: async <TData extends Record<string, unknown>>(request: {
+    queue: string;
+    data?: TData;
+  }) => {
+    const kind = (request.data as { kind?: string } | undefined)?.kind;
+    if (
+      request.queue === JOB_QUEUES.historyBootstrap &&
+      kind === 'record' &&
+      dropped.length === 0
+    ) {
+      dropped.push(String((request.data as { task_id?: string } | undefined)?.task_id));
+      return { status: 'enqueued' as const, jobId: 'dropped-on-the-floor' };
+    }
+    return jobs.enqueue(request as never);
+  },
+});
+
 /** The history a team merged: four merge requests, one of them argued about. */
 const seedHistory = (pipeline: PipelineE2E): void => {
   for (let index = 1; index <= MERGED; index += 1) {
@@ -602,5 +630,67 @@ describe('a history bootstrap on a project’s merged history', () => {
       [pipeline.projectId],
     );
     expect(Number(chunks[0]?.count)).toBeGreaterThan(0);
+  }, 180_000);
+
+  /**
+   * **PROGRESS backlog 106**: the *second* lost wake-up of this feature, and the one WP-36's seam
+   * could not reach until it covered the worker runtimes.
+   *
+   * Same reproduction as the case above, one wake-up later — **drop the enqueue** and read the
+   * recovery back from the **batch's own status** (rule 79), which is the row an operator meets:
+   * without the recovery it stays live for ever and every later bootstrap answers
+   * `already_running`.
+   */
+  it('recovers a mining run whose record wake-up was lost, and the batch completes', async () => {
+    const dropped: string[] = [];
+    const pipeline = await start({ jobs: dropFirstRecord(dropped), label: 'record-recovery' });
+    harness = pipeline;
+    seedHistory(pipeline);
+    const client = await signIn(pipeline.instance.baseUrl);
+
+    const created = await startBootstrap(client, pipeline.projectId, 'boot-record-lost');
+    expect(created.status, JSON.stringify(created.body)).toBe(202);
+    const batchId = created.body.batch_id;
+
+    // The batch finishing is the last row the platform writes here, and it implies both chunks
+    // reported — `completeIfDone` runs in the recorder's own transaction (rule 87).
+    await pipeline.waitFor('the batch to finish despite the lost wake-up', async () => {
+      const rows = await pipeline.query<{ completed_at: Date | null }>(
+        'select completed_at from history_bootstrap_batches where id = $1',
+        [batchId],
+      );
+      return rows[0]?.completed_at != null;
+    });
+
+    expect(dropped, 'one run’s findings were swallowed on the way to the queue').toHaveLength(1);
+
+    const [batch] = await pipeline.query<{ status: string }>(
+      'select status from history_bootstrap_batches where id = $1',
+      [batchId],
+    );
+    // `completed`, not `empty`: the recovery re-enqueued the record job and the findings really
+    // were recorded, rather than the chunk being abandoned — which is the *other* ending, and the
+    // one a run that never reports gets an hour later.
+    expect(batch?.status).toBe('completed');
+
+    const chunks = await pipeline.query<{
+      recorded_at: Date | null;
+      abandoned_at: Date | null;
+      proposals: number;
+    }>(
+      'select recorded_at, abandoned_at, proposals from history_bootstrap_chunks where batch_id = $1 order by chunk_index',
+      [batchId],
+    );
+    expect(chunks).toHaveLength(2);
+    expect(chunks.every((chunk) => chunk.recorded_at != null)).toBe(true);
+    expect(chunks.every((chunk) => chunk.abandoned_at === null)).toBe(true);
+
+    // One set of proposals, not two: the recovery's re-enqueue is deliberate and
+    // `markChunkRecorded`'s claim is what keeps a redelivery from writing a second set.
+    const proposals = await pipeline.query<{ count: string }>(
+      'select count(*)::text as count from kb_proposals where project_id = $1',
+      [pipeline.projectId],
+    );
+    expect(Number(proposals[0]?.count)).toBe(6);
   }, 180_000);
 });

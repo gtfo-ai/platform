@@ -384,9 +384,14 @@ export const JOB_QUEUES = {
   /**
    * One Librarian artifact's proposals, curated and written to `kb_proposals` (WP-18b).
    *
-   * Policy `standard`, not `stately`: each wake-up carries a **different** artifact, so a
-   * coalescing policy would silently drop one task's proposals in favour of another's. The work is
-   * short and there is nothing to serialise — two projects' batches are independent rows.
+   * **`stately` per `artifact:<id>` since WP-48**, where it was `standard` with no key. The old
+   * reasoning — *"each wake-up carries a different artifact, so a coalescing policy would silently
+   * drop one task's proposals in favour of another's"* — is true of a key that is the queue and
+   * false of a key that is the artifact: with `artifact:<id>` two tasks' curations never contend,
+   * and a second wake-up for the **same** artifact (which the lost-wake-up recovery deliberately
+   * creates, PROGRESS backlog 36) collapses rather than curating it twice. `enqueueCuration` is the
+   * only enqueue site for exactly that reason — a job put on a `stately` queue with no key takes
+   * the queue-wide key, which *would* be the collapse the old comment warned about.
    */
   knowledgeProposals: 'knowledge.proposals',
   /**
@@ -403,9 +408,11 @@ export const JOB_QUEUES = {
   /**
    * One discovery run's findings: the readiness evaluation and the drafted pages (WP-21).
    *
-   * Policy `standard` for the reason `knowledgeProposals` is: each wake-up carries a **different**
-   * artifact, so a coalescing policy would silently drop one project's onboarding in favour of
-   * another's. The work is a handful of rows in one transaction.
+   * Policy `standard` and **no singleton key**: one wake-up per discovery run, caused by an
+   * artifact that is written once, so there is nothing for a key to collapse and nothing to
+   * serialise — two projects' onboardings are independent rows. The work is a handful of rows in
+   * one transaction. (`knowledgeProposals` took a key at WP-48 because a *recovery* deliberately
+   * re-enqueues it; this queue has no recovery row, and a job it does not lose needs no key.)
    */
   discoveryRecord: 'onboarding.discovery',
   /**
@@ -418,9 +425,13 @@ export const JOB_QUEUES = {
    * queue is one worker and therefore **one** pooled connection (`POOL_RESERVATIONS.bootstrap`),
    * which is the whole of the argument; two queues would cost a second for no throughput.
    *
-   * Policy `standard` for `knowledgeProposals`' reason: each wake-up carries a different batch or a
-   * different artifact, so a coalescing policy would silently drop one project's onboarding in
-   * favour of another's.
+   * Policy `standard` and **no singleton key**, which is a decision rather than a default: two of
+   * this queue's wake-ups can be in flight at once — a `record` for one chunk while another chunk's
+   * run is still going — and they are different work, so a key that is the queue would drop one of
+   * them. The recovery pass re-enqueues both kinds (PROGRESS backlog 101 and 106) and needs no key
+   * to do it safely: `collectHistory` refuses a batch that is not `collecting` and
+   * `markChunkRecorded` claims `recorded_at is null`, so a second delivery of either writes
+   * nothing. The **claim in the row** is the idempotency; a queue key would only save the work.
    */
   historyBootstrap: 'bootstrap.history',
   /**

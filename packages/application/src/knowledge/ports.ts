@@ -359,6 +359,28 @@ export interface KbHealthReportWrite {
  */
 export interface KnowledgeProposalStore {
   insert(tx: Transaction, proposals: readonly StoredKnowledgeProposal[]): Promise<void>;
+  /**
+   * Claims one artifact's curation, and answers whether this call is the one that did it.
+   *
+   * **The mark that made backlog 36 closable** (WP-48, migration 0036). A curation writes
+   * `kb_proposals` rows and nothing else, and a model with nothing repeatable to say writes none —
+   * so *"it ran and proposed nothing"* and *"it never ran"* are one query result, and a recovery
+   * sweep without this row would re-run the curation of every quiet task for ever (standing
+   * rule 18). `knowledge_curations.artifact_id` is the key, so the same row is also the site's
+   * **idempotency key**: `curated_at is null` is in the predicate, which is what makes a second
+   * delivery of the same wake-up write no second set of proposals.
+   *
+   * Called inside the transaction that writes the rows, exactly as `markChunkRecorded` is.
+   */
+  markCurated(
+    tx: Transaction,
+    input: {
+      readonly artifactId: Id;
+      readonly at: IsoDateTime;
+      /** What the curation produced; zero is a finding, which is the point of the row. */
+      readonly proposals: number;
+    },
+  ): Promise<boolean>;
   load(projectId: Id, id: Id): Promise<StoredKnowledgeProposal | null>;
   /**
    * Proposals this project has decided to apply and has not applied yet.

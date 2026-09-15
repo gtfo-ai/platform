@@ -15,6 +15,7 @@ import type { Id } from '@platform/contracts';
 import type { BudgetGuard } from '../cost/guard.js';
 import type { EventHandler } from '../events/handler.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
+import type { RunLeaseOptions } from '../pipeline/lease.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore } from '../pipeline/store.js';
@@ -43,6 +44,17 @@ export interface AskRuntimeOptions {
 }
 
 export interface AskCompositionOptions extends AskRuntimeOptions {
+  /**
+   * The process's run lease, taken from `StageExecutorOptions.lease` by `createPipelineRuntime`
+   * rather than passed separately (WP-48, PROGRESS backlog 120).
+   *
+   * On **this** interface and not on {@link AskRuntimeOptions}, deliberately: a second optional key
+   * on the composition root's own block is a second thing production can omit (standing rule 31),
+   * and an ask's run must be held by the same owner string as a stage's — one process, one lease
+   * identity. Absent is "this process claims no lease", which leaves an ask's run to the sweep's
+   * wall-clock backstop, as every build before WP-48 did.
+   */
+  readonly lease?: RunLeaseOptions;
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
   readonly settings: ProjectSettingsPort;
@@ -74,6 +86,7 @@ export const composeAsk = (options: AskCompositionOptions): AskComposition => {
     context: options.context,
     redactor: options.redactor,
     askedByLabel: options.askedByLabel,
+    ...(options.lease === undefined ? {} : { lease: options.lease }),
     ...(options.budgets === undefined ? {} : { budgets: options.budgets }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });

@@ -36,7 +36,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repositoryRoot, withoutComments } from './routes/web-sources.js';
+import { repositoryRoot, sourceFilesUnder, withoutComments } from './routes/web-sources.js';
 
 const read = (path: string): string =>
   withoutComments(readFileSync(join(repositoryRoot, path), 'utf8'));
@@ -271,11 +271,91 @@ describe('the stage executor’s own options', () => {
  * of that class's sites are enqueued from those runtimes, so the seam read as if it tested the
  * class and could only reach one site of it.
  *
- * The parse is deliberately blunt: **after the wrap, the raw instance is not named again**. It is a
- * text check like the rest of this file, so it cannot see an alias (`const raw = jobsRuntime.jobs`)
- * — which is why the calibration below demands that the wrapped identifier be passed several times,
- * so a file that stopped matching at all fails here rather than passing vacuously.
+ * ## Why this is a census and not a count (WP-48)
+ *
+ * The first version asserted that the raw instance is named exactly twice and that *some* number of
+ * call sites take the wrapped one. That catches the spelling it was written for and nothing else: a
+ * **fourth** worker runtime added below the wrap is a line somebody adds, and a count of `jobs,`
+ * sites greater than five stays true whatever it is handed. So the call sites are now **read off
+ * disk** and compared with {@link WRAPPED_JOBS_CALL_SITES} in **both** directions — a new
+ * composition fails until somebody writes down why it takes a queue, and one that loses its `jobs`
+ * argument fails too.
+ *
+ * The **file set** is read the way `client-census.test.ts` reads the SPA's: `git ls-files` plus the
+ * untracked-but-not-ignored half (standing rule 85), so a composition root somebody has written and
+ * not yet committed is censused rather than skipped.
+ *
+ * ## What it cannot see, stated rather than implied
+ *
+ * It is a **text** parse: an alias (`const raw = jobsRuntime.jobs`) and a `jobs` argument handed
+ * over through a spread of a variable are both invisible. That is why the raw instance's own
+ * spelling is pinned separately below, and why the calibration demands the parse actually find the
+ * call sites rather than passing on an empty set (standing rule 44).
  */
+
+/**
+ * Every composition `startRuntime` hands a `Jobs`, and why each must be the **wrapped** one.
+ *
+ * Not a filter and not a suppression list: the assertion is an equality, so a call site that leaves
+ * this table fails exactly as loudly as one that joins it.
+ */
+const WRAPPED_JOBS_CALL_SITES: Readonly<Record<string, string>> = {
+  registerPartitionMaintenance:
+    'the daily partition cron. It enqueues nothing a test drops, but it takes the process’s one queue and a second instance here would be a second pg-boss client.',
+  registerPriceListMaintenance: 'the price-list cron, for registerPartitionMaintenance’s reason.',
+  composePipeline:
+    'the pipeline: every stage job, every outbound duty and the recovery pass’s own re-enqueues.',
+  composeKnowledgeIndexing:
+    'the knowledge runtime, which registers the Librarian’s `artifact.created` handler — PROGRESS backlog 36’s lost curation wake-up is enqueued from here.',
+  composeOnboardingRecording:
+    'the discovery recorder’s `artifact.created` handler and its job (WP-21).',
+  composeHistoryBootstrap:
+    'the bootstrap’s two workers and the `record` handler — PROGRESS backlog 106’s lost wake-up is enqueued from here.',
+  createOnboardingCommands:
+    'the wizard’s writes; a discovery start refuses by name without a queue.',
+  createTaskCommands: 'the task and run command surface (WP-15i).',
+  composeAsks: 'ask-the-task’s API half (WP-31).',
+  createShadowCommands: 'the shadow batch command (WP-34).',
+  createHistoryBootstrapCommands: 'the bootstrap start command (WP-35).',
+  createKnowledgeCommands: 'the proposal decision, which asks for a commit (WP-18b).',
+};
+
+/** The segments of the object literal at `open`, or `null` when the call takes no literal. */
+const objectArgument = (source: string, open: number): string[] | null => {
+  const brace = source.indexOf('{', open);
+  if (brace < 0) return null;
+  // Only when the literal is the argument itself: anything but whitespace between them means the
+  // call passes something else first (and the positional form is read separately below).
+  if (source.slice(open + 1, brace).trim().length > 0) return null;
+  return topLevel(braceBody(source, brace));
+};
+
+/** Every call in `source` that passes a `jobs` argument, as callee → the expression it passes. */
+const jobsCallSites = (source: string): { callee: string; value: string }[] => {
+  const sites: { callee: string; value: string }[] = [];
+  for (const match of source.matchAll(/(\w+)\(/g)) {
+    const callee = match[1] as string;
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const positional = /^\(\s*(\w+(?:\.\w+)*)\s*,/.exec(source.slice(open));
+    if (positional !== null && (positional[1] as string).endsWith('jobs')) {
+      sites.push({ callee, value: positional[1] as string });
+      continue;
+    }
+    const segments = objectArgument(source, open);
+    if (segments === null) continue;
+    for (const segment of segments) {
+      const trimmed = segment.trim();
+      const named = /^jobs\s*:\s*(.+)$/s.exec(trimmed);
+      if (named !== null) {
+        sites.push({ callee, value: (named[1] as string).trim() });
+      } else if (trimmed === 'jobs') {
+        sites.push({ callee, value: 'jobs' });
+      }
+    }
+  }
+  return sites;
+};
+
 describe('the jobs seam every composition shares', () => {
   const rootSource = read(ROOT);
 
@@ -291,11 +371,45 @@ describe('the jobs seam every composition shares', () => {
     expect(/jobsRuntime\.(start|stop)\(\)/.test(rootSource)).toBe(true);
   });
 
-  it('is calibrated: the wrapped instance is what the compositions are actually handed', () => {
-    // Without this, deleting every `jobs` argument from the file would make the case above pass.
-    // Thirteen `jobs,` sites today (counted off the file): the pipeline, the six command factories, the two crons and the three
-    // worker runtimes — counted rather than listed, because the list is what went stale.
-    const passedWrapped = [...rootSource.matchAll(/(?:^|[\s(,{])jobs,/g)].length;
-    expect(passedWrapped).toBeGreaterThan(5);
+  it('hands the wrapped instance to every composition that takes one, and to no other', () => {
+    const sites = jobsCallSites(rootSource);
+    // Both directions: an unlisted composition fails, and a listed one that stopped taking a queue
+    // fails too — the second is what keeps this table from outliving the code it describes.
+    expect([...new Set(sites.map((site) => site.callee))].toSorted()).toEqual(
+      Object.keys(WRAPPED_JOBS_CALL_SITES).toSorted(),
+    );
+    // …and each is handed the **wrapped** binding rather than the raw instance, which is the
+    // defect itself: three of these took `jobsRuntime.jobs` for four work packages.
+    expect(sites.filter((site) => site.value !== 'jobs')).toEqual([]);
+  });
+
+  it('is calibrated: the parse finds the call sites, and would see the defect it was written for', () => {
+    // Without this, a parser that returned nothing would make the equality above a comparison of
+    // two empty sets the moment somebody emptied the table too (standing rule 44).
+    expect(jobsCallSites(rootSource).length).toBeGreaterThanOrEqual(
+      Object.keys(WRAPPED_JOBS_CALL_SITES).length,
+    );
+    // The defect, spelled as it was: the same parse over a source that passes the raw instance
+    // reports it, so the assertion above is a check rather than a tautology.
+    expect(
+      jobsCallSites('const x = composeKnowledgeIndexing({ pool, jobs: jobsRuntime.jobs });'),
+    ).toEqual([{ callee: 'composeKnowledgeIndexing', value: 'jobsRuntime.jobs' }]);
+  });
+
+  it('builds the process’s only queue client in the one file that wraps it', () => {
+    /**
+     * The half a census of one file cannot see: a *fourth runtime* composed in a **new file** with
+     * a queue client of its own would enqueue through something this seam never touched, and every
+     * tier would stay green. Read off disk (tracked and untracked, rule 85), so a composition root
+     * somebody has written and not committed is censused rather than skipped.
+     */
+    const builders = sourceFilesUnder('apps/server/src')
+      .filter((path) =>
+        withoutComments(readFileSync(join(repositoryRoot, path), 'utf8')).includes(
+          'createPgBossJobs(',
+        ),
+      )
+      .toSorted();
+    expect(builders).toEqual([ROOT]);
   });
 });

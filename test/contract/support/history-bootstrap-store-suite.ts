@@ -12,6 +12,8 @@
  *    named refusal when two commands race past the read (WP-35 review round 2);
  *  - `markChunkRecorded` answers `false` for a chunk that already reported, which is what makes the
  *    recorder idempotent — the job is at-least-once and `kb_proposals` rows are not;
+ *  - `abandonChunk` is the recovery's ending and is exclusive with `markChunkRecorded` in both
+ *    directions (WP-48), and a batch whose last chunk was abandoned still completes;
  *  - `completeIfDone` answers `true` exactly once, on the transition, so a batch is completed once
  *    however many recorders race for the last chunk.
  *
@@ -240,6 +242,72 @@ export const runHistoryBootstrapStoreContract = (options: {
       const chunks = await run(context, (tx) => context.store.chunks(tx, batchId));
       expect(chunks.map((chunk) => chunk.proposals)).toEqual([1, 1]);
       expect(chunks.every((chunk) => chunk.recordedAt !== null)).toBe(true);
+    });
+
+    it('abandons a chunk exactly once, and refuses to stamp one that already reported', async () => {
+      // WP-48, PROGRESS backlog 106 and 105: the ending the recovery gives a chunk whose
+      // re-enqueued `record` did not take. Both directions (standing rule 42) — a recorded chunk
+      // cannot be abandoned, and an abandoned one cannot be recorded, because
+      // `history_bootstrap_chunks_one_ending` says a chunk has one ending and the adapter answers
+      // `false` rather than raising it.
+      const context = await start();
+      const { chunkIds } = await seed(context);
+      const ending = { at: AT, detail: 'no findings ever arrived' };
+
+      expect(await run(context, (tx) => context.store.abandonChunk(tx, chunkIds[0], ending))).toBe(
+        true,
+      );
+      expect(await run(context, (tx) => context.store.abandonChunk(tx, chunkIds[0], ending))).toBe(
+        false,
+      );
+      expect(
+        await run(context, (tx) =>
+          context.store.markChunkRecorded(tx, chunkIds[0], {
+            at: AT,
+            proposals: 2,
+            refusedProposals: 0,
+          }),
+        ),
+      ).toBe(false);
+
+      await run(context, (tx) =>
+        context.store.markChunkRecorded(tx, chunkIds[1], {
+          at: AT,
+          proposals: 1,
+          refusedProposals: 0,
+        }),
+      );
+      expect(await run(context, (tx) => context.store.abandonChunk(tx, chunkIds[1], ending))).toBe(
+        false,
+      );
+    });
+
+    it('completes a batch whose last chunk was abandoned rather than recorded', async () => {
+      // The whole point of the ending (WP-48): a chunk nobody will ever hear from must not hold
+      // `history_bootstrap_batches_one_live` against the project for ever. The counters stay at
+      // zero and `recorded_at` stays null, so the batch screen still shows `chunks_recorded` short
+      // of `chunks` — the loss is closed, not hidden.
+      const context = await start();
+      const { batchId, chunkIds } = await seed(context);
+      await run(context, (tx) =>
+        context.store.markChunkRecorded(tx, chunkIds[0], {
+          at: AT,
+          proposals: 2,
+          refusedProposals: 0,
+        }),
+      );
+      expect(await run(context, (tx) => context.store.completeIfDone(tx, batchId, AT))).toBe(false);
+
+      await run(context, (tx) =>
+        context.store.abandonChunk(tx, chunkIds[1], { at: AT, detail: 'the wake-up was lost' }),
+      );
+      expect(await run(context, (tx) => context.store.completeIfDone(tx, batchId, AT))).toBe(true);
+
+      const chunks = await run(context, (tx) => context.store.chunks(tx, batchId));
+      expect(chunks.map((chunk) => chunk.recordedAt === null)).toEqual([false, true]);
+      expect(chunks.map((chunk) => chunk.abandonedAt === null)).toEqual([true, false]);
+      expect(chunks.map((chunk) => chunk.detail)).toEqual([null, 'the wake-up was lost']);
+      expect(chunks.map((chunk) => chunk.proposals)).toEqual([2, 0]);
     });
 
     it('never completes a batch that has no chunk at all', async () => {

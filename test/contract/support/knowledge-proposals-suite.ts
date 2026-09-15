@@ -67,6 +67,14 @@ export interface KnowledgeProposalsHarness {
     readHealthReports(
       projectId: Id,
     ): Promise<readonly { readonly documents: number; readonly findings: number }[]>;
+    /**
+     * An artifact id `markCurated` may claim — a **real row** where the store has a foreign key.
+     *
+     * On the harness for `userId`'s reason: `knowledge_curations.artifact_id` references `artifacts`
+     * (migration 0036), so a literal id would pass against the double and violate the constraint
+     * against PostgreSQL, leaving the kinder store as the one the whole unit tier runs on.
+     */
+    seedArtifact(): Promise<Id>;
     cleanup(): Promise<void>;
   }>;
 }
@@ -121,6 +129,23 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
       expect(loaded).toEqual(row);
       // …and a proposal is scoped to its project, not merely filtered by one.
       expect(await store.load(context.otherProjectId, id(1))).toBeNull();
+    });
+
+    it('claims one artifact’s curation exactly once, and each artifact separately', async () => {
+      /**
+       * WP-48, PROGRESS backlog **36**: the mark that a curation happened, which is also the
+       * curation's idempotency key. The first call claims and the second answers `false`, so a
+       * redelivered `knowledge.proposals` wake-up writes **no second set of proposals** — and the
+       * claim is per artifact, because two tasks' curations are independent work.
+       */
+      const artifactId = await context.seedArtifact();
+      expect(await store.markCurated(context.tx, { artifactId, at: AT, proposals: 0 })).toBe(true);
+      expect(await store.markCurated(context.tx, { artifactId, at: AT, proposals: 3 })).toBe(false);
+
+      const other = await context.seedArtifact();
+      expect(await store.markCurated(context.tx, { artifactId: other, at: AT, proposals: 1 })).toBe(
+        true,
+      );
     });
 
     it('selects exactly the proposals `isAwaitingApply` selects', async () => {

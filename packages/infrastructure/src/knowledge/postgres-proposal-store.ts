@@ -144,6 +144,33 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
     }
   }
 
+  /**
+   * The curation's own row (migration 0036, WP-48), which is the mark **and** the idempotency key.
+   *
+   * One statement: the insert claims an artifact nobody has curated, and the `on conflict … do
+   * update … where curated_at is null` claims one a recovery pass has already written a row for
+   * (its attempt, or its ending). A row that is already curated updates nothing and the `rowCount`
+   * says so, which is what the caller branches on.
+   *
+   * A **late** curation is admitted after an ending: `abandoned_at` is deliberately *not* in the
+   * predicate, so the row ends up carrying both instants — the platform gave up at one and the work
+   * arrived at the other — rather than throwing away proposals a run was paid for.
+   */
+  async markCurated(
+    tx: Transaction,
+    input: { readonly artifactId: Id; readonly at: IsoDateTime; readonly proposals: number },
+  ): Promise<boolean> {
+    const { rowCount } = await sqlOf(tx).query(
+      `insert into knowledge_curations (artifact_id, curated_at, proposals)
+            values ($1, $2, $3)
+       on conflict (artifact_id) do update
+          set curated_at = excluded.curated_at, proposals = excluded.proposals
+        where knowledge_curations.curated_at is null`,
+      [input.artifactId, input.at, input.proposals],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
   async load(projectId: Id, id: Id): Promise<StoredKnowledgeProposal | null> {
     const { rows } = await this.#sql.query<ProposalRow>(
       `select ${PROPOSAL_COLUMNS} from kb_proposals where project_id = $1 and id = $2`,

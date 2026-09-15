@@ -159,6 +159,10 @@ describe('the artifact trigger', () => {
     const enqueued = jobs.take(JOB_QUEUES.knowledgeProposals);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]?.data).toEqual(job);
+    // The key the queue's `stately` policy applies (WP-48): per **artifact**, so two tasks'
+    // curations never contend and a redelivered wake-up for this one collapses. A job enqueued
+    // without it would take the queue-wide key and collapse every project's curation onto one.
+    expect(enqueued[0]?.singletonKey).toBe(`artifact:${ARTIFACT}`);
   });
 
   it('ignores every other artifact type', async () => {
@@ -283,5 +287,46 @@ describe('recording a librarian artifact', () => {
     expect(report.status).toBe('skipped');
     expect(report.reason).toContain('LibrarianProposals');
     expect(proposals.rows).toEqual([]);
+    // …and it writes no mark either: the artifact is still uncurated, so the recovery pass may
+    // wake it once and then end it, rather than this build silently calling a parse failure a
+    // curation (WP-48).
+    expect(proposals.curationOf(ARTIFACT)).toBeNull();
+  });
+
+  /**
+   * The mark and the claim WP-48 added — PROGRESS backlog **36**.
+   *
+   * Two properties, and the pair is what made the recovery buildable: the curation is **recorded**
+   * even when it proposed nothing (standing rule 18 — otherwise a sweep re-runs the curation of
+   * every quiet task for ever), and a second delivery of the same wake-up writes **one** set of
+   * proposals rather than two, which is what makes the sweep's deliberate re-enqueue safe.
+   */
+  describe('the curation mark', () => {
+    it('records that the curation ran even when the Librarian proposed nothing', async () => {
+      const { options, proposals } = harness({ data: artifactData([]) });
+      const report = await recordLibrarianProposals(options, job);
+
+      expect(report.status).toBe('skipped');
+      expect(report.reason).toBe('the Librarian proposed nothing');
+      expect(proposals.rows).toEqual([]);
+      // Zero proposals **from a curation that ran** — the finding, rather than the silence a
+      // missing row would be.
+      expect(proposals.curationOf(ARTIFACT)).toEqual({ proposals: 0 });
+    });
+
+    it('writes one set of proposals for two deliveries of the same wake-up', async () => {
+      const { options, proposals, eventing } = harness();
+      const first = await recordLibrarianProposals(options, job);
+      const second = await recordLibrarianProposals(options, job);
+
+      expect(first.status).toBe('recorded');
+      expect(second.status).toBe('skipped');
+      expect(second.reason).toBe('another delivery curated this artifact first');
+      expect(proposals.rows).toHaveLength(1);
+      expect(proposals.curationOf(ARTIFACT)).toEqual({ proposals: 1 });
+      // …and no second event either: the claim is inside the transaction that appends it.
+      const stream = await eventing.store.readStream('project', PROJECT);
+      expect(stream).toHaveLength(1);
+    });
   });
 });

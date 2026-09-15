@@ -166,14 +166,94 @@ const seedAsk = async (input: {
 };
 
 /** A run to attach: enough columns to satisfy `runs`' own `not null`s and nothing more. */
-const seedRun = async (): Promise<string> => {
+const seedRun = async (input: { readonly endedAt?: string } = {}): Promise<string> => {
   const row = await pool.query<{ id: string }>(
-    `insert into runs (task_id, project_id, role, model, prompt_version)
-     values ($1, $2, 'ask', 'claude-sonnet-4-5', 'ask@1')
+    `insert into runs (task_id, project_id, role, model, prompt_version, status, terminal_reason,
+                       ended_at)
+     values ($1, $2, 'ask', 'claude-sonnet-4-5', 'ask@1',
+             $3::run_status, $4::run_terminal_reason, $5)
      returning id`,
-    [taskId, projectId],
+    [
+      taskId,
+      projectId,
+      input.endedAt === undefined ? 'running' : 'failed',
+      input.endedAt === undefined ? null : 'lease_expired',
+      input.endedAt ?? null,
+    ],
   );
   return row.rows[0]?.id as string;
+};
+
+/** A task of its own, so a chunk or an artifact hangs off one this suite is not sharing. */
+const seedTask = async (key: string, owner: string = projectId): Promise<string> => {
+  const row = await pool.query<{ id: string }>(
+    `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode)
+     values ($1, 'jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', 'normal')
+     returning id`,
+    [owner, key],
+  );
+  return row.rows[0]?.id as string;
+};
+
+const seedArtifact = async (input: {
+  readonly taskId: string;
+  readonly type: string;
+  readonly createdAt: string;
+}): Promise<string> => {
+  const row = await pool.query<{ id: string }>(
+    `insert into artifacts (task_id, type, data, schema_version, created_at)
+     values ($1, $2::artifact_type, '{}'::jsonb, '1', $3)
+     returning id`,
+    [input.taskId, input.type, input.createdAt],
+  );
+  return row.rows[0]?.id as string;
+};
+
+/** A mining chunk of its own batch, with the `HistoryFindings` artifact its run stored. */
+const seedMiningRun = async (input: {
+  readonly key: string;
+  readonly artifactCreatedAt: string;
+  readonly recorded?: boolean;
+  readonly attemptedAt?: string;
+  readonly withArtifact?: boolean;
+}): Promise<{
+  batchId: string;
+  chunkId: string;
+  taskId: string;
+  projectId: string;
+  artifactId: string | null;
+}> => {
+  const batch = await seedBatch({
+    status: 'mining',
+    createdAt: LONG_AGO,
+    withChunk: false,
+    key: input.key,
+  });
+  // In the **batch's** project, so the payload the pass builds names one project throughout.
+  const chunkTaskId = await seedTask(`${input.key.toUpperCase()}-1`, batch.projectId);
+  const chunk = await pool.query<{ id: string }>(
+    `insert into history_bootstrap_chunks
+       (batch_id, chunk_index, task_id, merge_requests, tickets, commits, redaction_count,
+        truncated, recorded_at, recovery_attempted_at)
+     values ($1, 0, $2, 20, 0, 0, 0, false, $3, $4)
+     returning id`,
+    [batch.id, chunkTaskId, input.recorded === true ? LONG_AGO : null, input.attemptedAt ?? null],
+  );
+  const artifactId =
+    input.withArtifact === false
+      ? null
+      : await seedArtifact({
+          taskId: chunkTaskId,
+          type: 'HistoryFindings',
+          createdAt: input.artifactCreatedAt,
+        });
+  return {
+    batchId: batch.id,
+    chunkId: chunk.rows[0]?.id as string,
+    taskId: chunkTaskId,
+    projectId: batch.projectId,
+    artifactId,
+  };
 };
 
 describe('a history bootstrap whose collect job was lost', () => {
@@ -346,6 +426,301 @@ describe('an ask whose run job was lost', () => {
 
     await withTx(async (tx) => {
       expect((await store.strandedAsks(tx, query)).map((row2) => row2.askId)).not.toContain(
+        ask as Id,
+      );
+    });
+  });
+});
+
+/**
+ * **PROGRESS backlog 106** — the second lost wake-up of the same feature: a mining run that
+ * *reported* and whose findings never became proposals. The chunk is the stuck row and the
+ * `HistoryFindings` artifact is the platform's own evidence that the run finished, which is what
+ * separates this from a run that is simply still going.
+ */
+describe('a mining run whose record job was lost', () => {
+  it('is found only when the chunk has no report and its artifact is old enough', async () => {
+    const stranded = await seedMiningRun({ key: 'rec-lost', artifactCreatedAt: LONG_AGO });
+    // Reported: the recorder ran, so there is nothing to recover.
+    await seedMiningRun({ key: 'rec-done', artifactCreatedAt: LONG_AGO, recorded: true });
+    // In flight: the artifact landed a moment ago and its own job is still coming.
+    await seedMiningRun({ key: 'rec-inflight', artifactCreatedAt: IN_FLIGHT });
+    // Still running: no artifact at all, which is the ordinary state of a mining run and must not
+    // be read as a loss — the wake-up cannot have been lost before it existed.
+    await seedMiningRun({ key: 'rec-running', artifactCreatedAt: LONG_AGO, withArtifact: false });
+    // The bound (backlog 105): a chunk this pass re-enqueued a moment ago is invisible.
+    await seedMiningRun({
+      key: 'rec-attempted',
+      artifactCreatedAt: LONG_AGO,
+      attemptedAt: ATTEMPTED_RECENTLY,
+    });
+
+    await withTx(async (tx) => {
+      const found = await store.strandedHistoryRecords(tx, query);
+      expect(found.map((row) => row.chunkId)).toEqual([stranded.chunkId as Id]);
+      expect(found[0]).toMatchObject({
+        batchId: stranded.batchId as Id,
+        projectId: stranded.projectId as Id,
+        taskId: stranded.taskId as Id,
+        // The artifact the run stored, which is what the re-enqueued job's payload names — a
+        // guess here would be a job the handler answers `skipped` to, which reads like success.
+        artifactId: stranded.artifactId as Id,
+        recoveryAttemptedAt: null,
+      });
+    });
+  });
+
+  it('comes back with its mark, so the next pass ends it instead of enqueuing again', async () => {
+    const run = await seedMiningRun({ key: 'rec-marked', artifactCreatedAt: LONG_AGO });
+    const at = '2026-09-15T08:45:00.000Z' as IsoDateTime;
+
+    await withTx(async (tx) => {
+      await store.markHistoryRecordAttempt(tx, { chunkId: run.chunkId as Id, at });
+      const found = await store.strandedHistoryRecords(tx, query);
+      expect(found.find((row) => row.chunkId === (run.chunkId as Id))?.recoveryAttemptedAt).toBe(
+        at,
+      );
+    });
+  });
+
+  it('ends the chunk and completes its batch, which is what un-bricks the project', async () => {
+    const run = await seedMiningRun({
+      key: 'rec-ended',
+      artifactCreatedAt: LONG_AGO,
+      attemptedAt: ATTEMPTED_LONG_AGO,
+    });
+
+    await withTx(async (tx) => {
+      expect((await store.strandedHistoryRecords(tx, query)).map((row) => row.chunkId)).toContain(
+        run.chunkId as Id,
+      );
+      await store.endHistoryRecord(tx, {
+        chunkId: run.chunkId as Id,
+        batchId: run.batchId as Id,
+        reason: 'its findings never reached the queue',
+        at: OLDER_THAN,
+      });
+    });
+
+    const [chunk] = (
+      await pool.query<{
+        abandoned_at: Date | null;
+        detail: string | null;
+        recorded_at: Date | null;
+        proposals: number;
+      }>(
+        'select abandoned_at, detail, recorded_at, proposals from history_bootstrap_chunks where id = $1',
+        [run.chunkId],
+      )
+    ).rows;
+    // Abandoned, **not** recorded: a stamped `recorded_at` would publish `proposals = 0` as a
+    // finding rather than as the silence it is (standing rule 18, migration 0036).
+    expect(chunk?.abandoned_at).not.toBeNull();
+    expect(chunk?.detail).toBe('its findings never reached the queue');
+    expect(chunk?.recorded_at).toBeNull();
+    expect(chunk?.proposals).toBe(0);
+
+    const [batch] = (
+      await pool.query<{ status: string; completed_at: Date | null }>(
+        'select status, completed_at from history_bootstrap_batches where id = $1',
+        [run.batchId],
+      )
+    ).rows;
+    // The whole point of the ending: `history_bootstrap_batches_one_live` is `unique (project_id)
+    // where completed_at is null`, so a batch that never completes is a permanent
+    // `already_running` for that project — which is backlog 101's brick, one wake-up later.
+    expect(batch?.status).toBe('completed');
+    expect(batch?.completed_at).not.toBeNull();
+
+    await withTx(async (tx) => {
+      expect(
+        (await store.strandedHistoryRecords(tx, query)).map((row) => row.chunkId),
+      ).not.toContain(run.chunkId as Id);
+    });
+  });
+});
+
+/**
+ * **PROGRESS backlog 36** — the site that needed a mark before it could be a row at all: a curation
+ * that ran and proposed nothing writes no `kb_proposals` row, so `knowledge_curations`
+ * (migration 0036) is what tells it from one whose wake-up was lost.
+ */
+describe('an artifact whose curation was lost', () => {
+  const curationArtifact = async (input: {
+    readonly key: string;
+    readonly type?: string;
+    readonly createdAt?: string;
+    readonly curatedAt?: string;
+    readonly attemptedAt?: string;
+    readonly abandonedAt?: string;
+  }): Promise<string> => {
+    const owner = await seedTask(input.key);
+    const artifactId = await seedArtifact({
+      taskId: owner,
+      type: input.type ?? 'LibrarianProposals',
+      createdAt: input.createdAt ?? LONG_AGO,
+    });
+    if (
+      input.curatedAt !== undefined ||
+      input.attemptedAt !== undefined ||
+      input.abandonedAt !== undefined
+    ) {
+      await pool.query(
+        `insert into knowledge_curations
+           (artifact_id, curated_at, proposals, recovery_attempted_at, abandoned_at, detail)
+         values ($1, $2, 0, $3, $4, $5)`,
+        [
+          artifactId,
+          input.curatedAt ?? null,
+          input.attemptedAt ?? null,
+          input.abandonedAt ?? null,
+          input.abandonedAt === undefined ? null : 'given up on',
+        ],
+      );
+    }
+    return artifactId;
+  };
+
+  it('is found only when nothing has curated it and it is old enough', async () => {
+    const stranded = await curationArtifact({ key: 'CUR-1' });
+    // The research page rides the same queue and the same mark, so it is the same site.
+    const research = await curationArtifact({ key: 'CUR-2', type: 'ResearchReport' });
+    // Curated **with nothing to propose**: the case that made this query impossible before the
+    // mark existed, and the one a `kb_proposals`-shaped query would re-run for ever.
+    await curationArtifact({ key: 'CUR-3', curatedAt: LONG_AGO });
+    // In flight, and an artifact of a type nothing curates.
+    await curationArtifact({ key: 'CUR-4', createdAt: IN_FLIGHT });
+    await curationArtifact({ key: 'CUR-5', type: 'ImplementationPlan' });
+    // The bound, and the ending: neither is offered again.
+    await curationArtifact({ key: 'CUR-6', attemptedAt: ATTEMPTED_RECENTLY });
+    await curationArtifact({ key: 'CUR-7', abandonedAt: ATTEMPTED_LONG_AGO });
+
+    await withTx(async (tx) => {
+      const found = await store.strandedCurations(tx, query);
+      expect(found.map((row) => row.artifactId).toSorted()).toEqual(
+        [stranded as Id, research as Id].toSorted(),
+      );
+      // The type is what the job dispatches on: a `ResearchReport` curated as a Librarian artifact
+      // would be refused by the schema parse and reported as a skip.
+      expect(found.find((row) => row.artifactId === (research as Id))?.artifactType).toBe(
+        'ResearchReport',
+      );
+      expect(found.every((row) => row.projectId === (projectId as Id))).toBe(true);
+    });
+  });
+
+  it('marks its attempt on a row that did not exist, and reads it back', async () => {
+    const artifactId = await curationArtifact({ key: 'CUR-8' });
+    const at = '2026-09-15T08:45:00.000Z' as IsoDateTime;
+
+    await withTx(async (tx) => {
+      // The mark is an insert here and an update at the other sites: the curation's row does not
+      // exist until something writes one, which is exactly what makes its absence readable.
+      await store.markCurationAttempt(tx, { artifactId: artifactId as Id, at });
+      const found = await store.strandedCurations(tx, query);
+      expect(found.find((row) => row.artifactId === (artifactId as Id))?.recoveryAttemptedAt).toBe(
+        at,
+      );
+    });
+  });
+
+  it('ends a curation whose attempt did not take, and leaves a curation that arrived alone', async () => {
+    const lost = await curationArtifact({ key: 'CUR-9', attemptedAt: ATTEMPTED_LONG_AGO });
+    const arrived = await curationArtifact({
+      key: 'CUR-10',
+      attemptedAt: ATTEMPTED_LONG_AGO,
+      curatedAt: OLDER_THAN,
+    });
+
+    await withTx(async (tx) => {
+      await store.endCuration(tx, {
+        artifactId: lost as Id,
+        reason: 'its curation never ran',
+        at: OLDER_THAN,
+      });
+      // Both directions (standing rule 42): a curation that landed between the pass's read and
+      // this write keeps its row, because `curated_at is null` is in the predicate — labelling it
+      // "given up on" would be the platform contradicting a curation that happened.
+      await store.endCuration(tx, {
+        artifactId: arrived as Id,
+        reason: 'its curation never ran',
+        at: OLDER_THAN,
+      });
+    });
+
+    const rows = (
+      await pool.query<{ artifact_id: string; abandoned_at: Date | null; detail: string | null }>(
+        'select artifact_id, abandoned_at, detail from knowledge_curations where artifact_id = any($1)',
+        [[lost, arrived]],
+      )
+    ).rows;
+    expect(rows.find((row) => row.artifact_id === lost)?.detail).toBe('its curation never ran');
+    expect(rows.find((row) => row.artifact_id === arrived)?.abandoned_at).toBeNull();
+
+    await withTx(async (tx) => {
+      expect((await store.strandedCurations(tx, query)).map((row) => row.artifactId)).not.toContain(
+        lost as Id,
+      );
+    });
+  });
+});
+
+/**
+ * **PROGRESS backlog 121** — not a lost wake-up: a question still `pending` whose run is already
+ * over. `strandedAsks` cannot see it by construction (that query is *"pending with no run"*), and
+ * nothing else ever moved it.
+ */
+describe('an ask whose run ended without answering it', () => {
+  it('is found only when the run is terminal and ended before the grace', async () => {
+    const stranded = await seedAsk({
+      status: 'pending',
+      createdAt: LONG_AGO,
+      runId: await seedRun({ endedAt: LONG_AGO }),
+    });
+    // A run that is still going: the ask is being answered right now, and ending it here would
+    // throw away a run the project is paying for.
+    await seedAsk({ status: 'pending', createdAt: LONG_AGO, runId: await seedRun() });
+    // A run that ended a moment ago: the executor writes the answer and the run's ending in **one**
+    // transaction, so this is a row in flight rather than a stranded one.
+    await seedAsk({
+      status: 'pending',
+      createdAt: LONG_AGO,
+      runId: await seedRun({ endedAt: IN_FLIGHT }),
+    });
+    // An ask that was answered: its run is terminal too, and it is not a question nobody answered.
+    await seedAsk({
+      status: 'answered',
+      createdAt: LONG_AGO,
+      runId: await seedRun({ endedAt: LONG_AGO }),
+    });
+    // …and one with no run at all, which is the **other** row of the table (backlog 84).
+    await seedAsk({ status: 'pending', createdAt: LONG_AGO });
+
+    await withTx(async (tx) => {
+      const found = await store.asksWithEndedRun(tx, query);
+      expect(found.map((row) => row.askId)).toEqual([stranded as Id]);
+      // The run's own ending, which the refusal quotes: both are platform enum values.
+      expect(found[0]).toMatchObject({
+        taskId,
+        projectId,
+        runStatus: 'failed',
+        runTerminalReason: 'lease_expired',
+      });
+    });
+  });
+
+  it('stops being found once the ending has been written', async () => {
+    const ask = await seedAsk({
+      status: 'pending',
+      createdAt: LONG_AGO,
+      runId: await seedRun({ endedAt: LONG_AGO }),
+    });
+
+    await withTx(async (tx) => {
+      await store.endAsk(tx, { askId: ask as Id, reason: 'the run ended without an answer' });
+      // The bound is the ask's own state machine rather than a column, which is why this row needs
+      // no `recovery_attempted_at`: `recordRefusal` moves it off `pending`.
+      expect((await store.asksWithEndedRun(tx, query)).map((row) => row.askId)).not.toContain(
         ask as Id,
       );
     });

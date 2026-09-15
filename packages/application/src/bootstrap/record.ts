@@ -30,11 +30,14 @@
  *
  * `librarian.ts`'s shape and for its reason: everything this needs is I/O, and a handler runs inside
  * the dispatcher's transaction where every read is a nested pool borrow (PROGRESS backlog 19). The
- * `artifact.created` handler enqueues and nothing else. The residual is the one that module states:
- * `afterCommit` is at-most-once, so a process that dies between the commit and the enqueue loses
- * this wake-up — the artifact is still on the task, the chunk stays unrecorded, and the batch never
- * completes. That is notification-shaped loss and it is **visible**, which is the difference that
- * matters: `chunks_recorded < chunks` on the batch screen says which run never reported.
+ * `artifact.created` handler enqueues and nothing else. `afterCommit` is at-most-once, so a process
+ * that dies between the commit and the enqueue loses this wake-up — and that loss is **not**
+ * notification-shaped, which is what WP-48 closed (PROGRESS backlog 106): the chunk stays
+ * unrecorded, `completeIfDone` never runs, and `history_bootstrap_batches_one_live` then refuses
+ * every later bootstrap of the project with `already_running`. `recovery/stranded.ts` finds the
+ * chunk whose task carries a `HistoryFindings` artifact and enqueues this job again, once; if that
+ * does not take, the chunk is **abandoned** with a reason and the batch completes without it, so
+ * `chunks_recorded < chunks` on the batch screen says which run never reported.
  */
 import type { HistoryFindingsData, Id, IsoDateTime, JsonValue } from '@platform/contracts';
 import {
@@ -161,6 +164,13 @@ export const recordHistoryFindings = async (
   }
   if (chunk.recordedAt !== null) {
     return { ...EMPTY, reason: 'this chunk has already been recorded' };
+  }
+  if (chunk.abandonedAt !== null) {
+    // The recovery pass gave up on this run's findings and completed the batch without them
+    // (WP-48, PROGRESS backlog 106). Curating them now would write proposals against a batch that
+    // already says it finished, so the job stops here and says which of the two happened. It is
+    // the same answer `markChunkRecorded` would give, one read earlier.
+    return { ...EMPTY, reason: 'the platform stopped waiting for this chunk’s findings' };
   }
 
   const project = await options.project(projectId);

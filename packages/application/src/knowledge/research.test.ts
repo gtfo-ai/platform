@@ -230,6 +230,9 @@ describe('researchTriggerHandlers', () => {
       artifact_id: ARTIFACT,
       artifact_type: 'ResearchReport',
     });
+    // The artifact key the `stately` queue applies (WP-48), shared with the Librarian's curation:
+    // without it this job would take the queue-wide key and collapse against somebody else's.
+    expect(enqueued[0]?.singletonKey).toBe(`artifact:${ARTIFACT}`);
   });
 
   it('asks for nothing when another artifact lands (both directions, standing rule 42)', async () => {

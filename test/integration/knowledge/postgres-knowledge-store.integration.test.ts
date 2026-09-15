@@ -40,6 +40,8 @@ let projectId: string;
 let otherProjectId: string;
 /** A real `users` row: `kb_proposals.decided_by` has a foreign key to it. */
 let userId: string;
+/** Distinct ticket keys for the artifacts the proposal suite claims curations on (WP-48). */
+let seededArtifacts = 0;
 
 const termsOf = (text: string): readonly string[] => extractQueryTerms(text);
 
@@ -151,6 +153,25 @@ runKnowledgeProposalsContract({
             [ids.get(link.fromPath), link.toPath],
           );
         }
+      },
+      /**
+       * A real `tasks` row and a real `artifacts` row, inside the suite's own transaction:
+       * `knowledge_curations.artifact_id` has a foreign key and the claim would otherwise be
+       * asserted against a constraint nobody checked (WP-48).
+       */
+      seedArtifact: async () => {
+        const task = await client.query<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode)
+           values ($1, 'jira', $2, 'https://jira.example.test/browse/' || $2, 'feature', 'normal')
+           returning id`,
+          [projectId, `KB-${++seededArtifacts}`],
+        );
+        const artifact = await client.query<{ id: string }>(
+          `insert into artifacts (task_id, type, data, schema_version)
+           values ($1, 'LibrarianProposals', '{}'::jsonb, '1') returning id`,
+          [task.rows[0]?.id],
+        );
+        return artifact.rows[0]?.id as Id;
       },
       readHealthReports: async (project) => {
         const { rows } = await client.query<{ documents: number; findings: unknown }>(

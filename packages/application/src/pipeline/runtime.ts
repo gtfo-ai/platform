@@ -206,6 +206,11 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ids: options.ids,
     clock: options.clock,
     context: options.execution.context,
+    // WP-48 (backlog 120): the **same** lease the stage executor was given, so an ask's run is held
+    // by this process's one owner string and is swept at the lease bound rather than an hour later
+    // by the wall-clock backstop. Taken from `execution` rather than added to `AskRuntimeOptions`,
+    // so a composition root cannot pass one and forget the other.
+    ...(options.execution.lease === undefined ? {} : { lease: options.execution.lease }),
     ...(logger === undefined ? {} : { logger }),
   });
   // The outbound queue's duties include the notification band's, which needs the store and the

@@ -5678,8 +5678,20 @@ same change as backlog **106**'s second half. Trigger that makes it urgent: the 
 that composes a runner (`stranded.ts`'s ask row only fires where asks run) or the first bootstrap whose
 `collect` fails for a reason a retry cannot fix.
 
-### 106. **A lost `record` wake-up bricks a history bootstrap exactly as backlog 101's lost `collect` does, it is not a row of the recovery table, and the seam WP-36 widened to reproduce that class still cannot reach it — three worker runtimes are composed with the *unwrapped* `Jobs` while the docblock lists one of them as covered** (TODO — one cause, two halves; **no work package owns it**; found by the refiner while walking backlog 101's table, session 5)
+### 106. **A lost `record` wake-up bricks a history bootstrap exactly as backlog 101's lost `collect` does, it is not a row of the recovery table, and the seam WP-36 widened to reproduce that class still cannot reach it — three worker runtimes are composed with the *unwrapped* `Jobs` while the docblock lists one of them as covered** (**RESOLVED** at WP-48 — kept for its evidence; found by the refiner while walking backlog 101's table, session 5)
 > **M4 (architect, session 6): folded into WP-48.**
+>
+> **Closed at WP-48, both halves and not in the proportion this entry expected.** The **seam** half was
+> already closed at `344b5b0` (WP-36 round 2 handed the three worker runtimes the wrapped instance and
+> wrote `pipeline-census.test.ts`), so what WP-48 owed there was criterion 5's stronger census — the
+> call sites **enumerated** off disk against a table of twelve with a reason each, plus an off-disk
+> check that `createPgBossJobs` is called in exactly one file — and rule 83's sweep over the sentences
+> that described this as open. The **site** half is a new row of `stranded.ts`: a chunk with
+> `recorded_at is null` whose task carries a `HistoryFindings` artifact older than the grace, bounded
+> by `history_bootstrap_chunks.recovery_attempted_at` (migration 0036) and ending in `abandonChunk`
+> plus `completeIfDone`, which is what releases `history_bootstrap_batches_one_live`. Proven in the
+> e2e tier by dropping the `record` enqueue and reading `history_bootstrap_batches.status` back;
+> canaried by emptying the row's query, which fails that case in 90 s.
 
 
 **What is wrong — the cause, once.** WP-36 moved `PipelineComposition.jobs` out of `composePipeline` and
@@ -6068,7 +6080,16 @@ the ledger's tables and this column's semantics are its subject — or whoever t
 **109**, and WP-19's own *"`tasks.cost_estimated` has no writer — a `local`-mode task calls an estimate an
 actual"* (backlog **18**'s territory), which is this same BD-004 blind spot one table up.
 
-### 120. **An ask's run claims no lease, so the one paid run population outside a stage is covered by the hour-long backstop instead of the six-minute one** (TODO, small — **owner: WP-48**; found by WP-47, session 6)
+### 120. **An ask's run claims no lease, so the one paid run population outside a stage is covered by the hour-long backstop instead of the six-minute one** (**RESOLVED** at WP-48 — **closed, not declined**; kept for its evidence; found by WP-47, session 6)
+> **Closed at WP-48.** The ask executor claims the lease in the same transaction as its `runs` insert
+> and renews it for the length of the session, stopping the heartbeat before either ending opens a
+> transaction — the stage executor's own shape. The `RunLeaseOptions` reaches `composeAsk` from
+> `StageExecutorOptions.lease` through `createPipelineRuntime` rather than as a new
+> `AskRuntimeOptions` key, so one process has **one** owner string and `apps/server/src/pipeline.ts`
+> needed no change at all (this entry's "the same three lines" landed in a different file than it
+> predicted). Asserted through the composed pipeline: an ask's run carries the harness's lease owner,
+> and the heartbeat is started and stopped exactly once per run. The wall-clock backstop stays, for
+> the rows written before migration 0035.
 
 > **M4 (refiner, session 6): folded into WP-48**, whose plan row and Notes cell carry it and whose
 > criterion (8) may also decline it here by number.
@@ -6129,7 +6150,16 @@ session, one reviewer. Note honestly that the **files are not that row's usual o
 entry** rather than dropping it, and the alternative owner is **WP-53**, which is when it stops being
 latent. Related: **121**, **109**, **110**.
 
-### 121. **An ask left `pending` by a run the sweep ended stays `pending` for ever — the run half of backlog 84's residual is closed and the ask half is not** (TODO, small — **owner: WP-48**; found by WP-47, session 6)
+### 121. **An ask left `pending` by a run the sweep ended stays `pending` for ever — the run half of backlog 84's residual is closed and the ask half is not** (**RESOLVED** at WP-48 — kept for its evidence; found by WP-47, session 6)
+> **Closed at WP-48** as the row this entry recommended rather than the handler: `task_ask_run` in
+> `stranded.ts`, a `pending` ask whose attached run has `ended_at`, ended through the same `endAsk`
+> (`recordRefusal(failed)`) the table's ask row uses, with the refusal quoting the run's own status
+> and terminal reason — both platform enum values, so nothing untrusted reaches the thread. No
+> migration, no port method beyond the query, and no attempt mark: `recordRefusal` moves the ask off
+> `pending`, so the query cannot find it twice. The grace is the **run's** `ended_at` rather than the
+> ask's age, because the executor writes the answer and the run's ending in one transaction. Both
+> directions asserted in the integration tier: a live run's ask, an ask whose run ended a moment ago
+> and an answered ask are all untouched.
 
 > **M4 (refiner, session 6): folded into WP-48**, criterion (7) — a fourth row of the same table.
 
@@ -6285,6 +6315,149 @@ It is filed so the branch meets the guard instead of the incident. The nearest t
 first production run that can be lost at all); **WP-49**'s *`needs_human` with a brief, and no new task
 state* is the shape such an ending would take, which is why writing it down before it is cheap. Related:
 **109**, **50**, **Q59**.
+
+### 124. **`docs/technical/03-data-model.md` has no entry for `history_bootstrap_batches` or `history_bootstrap_chunks`, so migration 0036's three new chunk columns have no documented home — and the page is missing twelve of the schema's sixty tables, because nothing holds it to the migrations** (TODO, small — one cause, twelve instances, one of them **live** under WP-66; the pair is folded into **WP-66**, the cause is **unowned**; found by WP-48, measured off the tree by the refiner, session 6)
+
+> **M4 (refiner, session 6): the pair is folded into WP-66** — the one row that opens both tables and
+> adds a column to the undocumented one. The **cause** (nothing compares the page to the schema) and
+> the other ten tables are **unowned**, with the recommendation below; deliberately **not** WP-73's,
+> because WP-73 and WP-66 would then both be editing this page.
+
+**What is wrong.** technical/03 is authoritative for the schema — CLAUDE.md: *"If code and docs
+disagree, the docs win; change the docs first"* — and WP-35's two tables were never added to it. WP-48
+then added three columns to one of them and had no paragraph to amend. This is a **documentation**
+defect, not a code one: the tables, their constraints and their Drizzle definitions are all correct.
+
+**Evidence** (refiner, session 6; file reads and greps, nothing run — rule 66).
+- WP-48's implementer, quoted: *"technical/03 does not describe `history_bootstrap_batches` or
+  `history_bootstrap_chunks` at all. WP-35 (migration 0030) added both tables and never added them to
+  the data-model page — every other table of that vintage is there (`shadow_batches` is their
+  neighbour) — so migration 0036's three new chunk columns have no documented home and are described
+  only in the migration and the Drizzle definition."*
+- The tables: `packages/infrastructure/src/db/migrations/0030_history_bootstrap.sql:50` and `:108`; the
+  recovery column migration 0032 added to the batch (`0032_stranded_recovery_mark.sql:34`); the three
+  WP-48 added to the chunk, `0036_curation_mark_and_chunk_ending.sql:59-62` (`recovery_attempted_at`,
+  `abandoned_at`, `detail`). The Drizzle definitions are
+  `packages/infrastructure/src/db/schema/knowledge.ts:199` and `:231`.
+- The page: `history_bootstrap_chunks` appears in `docs/technical/03-data-model.md` **not at all**, and
+  `history_bootstrap_batches` **once**, inside another table's paragraph — the `knowledge_curations`
+  entry WP-48 did write (`:177`), which says its recovery column is *"the shape migration 0032 gave
+  `history_bootstrap_batches` and `task_asks`"*. Their documented neighbour `shadow_batches` is at
+  `:183`.
+- **The scope, measured.** Of the sixty tables the schema census lists in
+  `test/integration/db/migrations.integration.test.ts:14-95`, **twelve have no column entry** on the
+  page — `accounts`, `event_dispatch`, `event_streams`, `history_bootstrap_batches`,
+  `history_bootstrap_chunks`, `platform_migrations`, `platform_table_policy`, `stats_event_daily`,
+  `stats_task_delivery`, `task_asks`, `ticket_breakdown_items`, `verifications` — and **nine** of those
+  are not named on the page at all. They span migrations 0001 to 0034: the bootstrap migration's two
+  (0001), the dispatcher's two (0005, 0010), better-auth's two (0011), `task_asks` (0024, WP-31), the
+  history pair
+  (0030, WP-35), `ticket_breakdown_items` (0033, WP-40) and the two statistics projections (0034,
+  WP-41). So the pair is an instance and the cause is that the page is hand-maintained.
+- **Nothing holds the page to the schema.** The census that knows the table list is an integration test
+  over a live database, and a grep for `03-data-model` across the repository's TypeScript answers four
+  docblocks and no check — `packages/contracts/src/common.ts:5`, `packages/contracts/src/records.ts:4`,
+  `packages/contracts/src/transcript.ts:5`, `packages/application/src/maintenance/scheduler.ts:11`.
+
+**Defect or working as designed?** A **defect in the documentation**, and the one class where this
+repository's own rule says the doc is the thing that is wrong.
+
+**What it costs to leave.** WP-66 adds a nullable counter to `history_bootstrap_chunks` and will meet a
+table with no paragraph: it either documents the table (unbudgeted) or adds the second undocumented
+column to it, which is how the pair became twelve. An operator sizing an installation reads
+§ "Storage sizing" and § "Retention and backups" and cannot see two tables that store mined
+merge-request and ticket text with a `redaction_count` of their own — nor the two statistics
+projections. And the drift is **silent**: every tier is green, because the only census is over the
+database.
+
+**What "done" looks like.**
+- **For the pair (WP-66).** Both tables get an entry in § "Knowledge and code" beside `shadow_batches`,
+  with the columns as migrations 0030, 0032, 0036 **and WP-66's own** leave them, and with the two
+  facts the migrations argue for rather than a column list alone: `history_bootstrap_batches_one_live`
+  (a batch's ending is one fact with two columns) and `history_bootstrap_chunks_counts_need_a_report`
+  (rule 18 — a count of what a run proposed is a claim about a run that reported). Written **before**
+  the migration in the same change, because docs win.
+- **For the cause (unowned).** One **static** check rather than a second hand-maintained list: compare
+  the table names the migrations create against the entries on the page, with a **declared** exemption
+  list for the tables a library owns (`accounts`, `verifications`, `pgboss.*`) and the migrator's own,
+  so a new table fails `verify:static` until somebody writes its paragraph. The check is the cheap
+  half; the ten paragraphs it would then demand are the work, and that is what makes the cause a row
+  rather than a nit.
+
+**Needs measurement: none.** The comparison above is a grep over the page and the census, reproducible
+without a database.
+
+**Depends on / owner.** The pair: **WP-66**, which already opens both tables, depends on nothing else
+new, and carries it as criterion **(8)** of its plan row. The cause and the other ten tables: **no work
+package owns it** — **WP-73** is the sweep row for repairs nobody owns, but its plan row declares that
+it shares **no** file with a group 1–7 row and WP-66 will be editing this page, so splitting one page
+between two rows is the one thing to avoid. Related: **119** (two readers of the migration list that
+agree by convention rather than by construction), **125**.
+
+### 125. **`knowledge_curations` is read by the recovery pass and by nothing else, so the distinction it was created to make — a curation that ran and proposed nothing against one that never ran — is invisible on every surface a human uses** (nit-to-small, TODO — **working as designed**, the mark is the recovery's and publishing it is a product decision; **no work package owns it**; found by WP-48, confirmed off the tree by the refiner, session 6)
+
+> **M4 (refiner, session 6): no row owns it** — the same answer backlog **122** got for the same shape.
+> **WP-57**'s health report and **WP-65**'s maintenance report are the two nearest homes and neither
+> folds it; the recommendation below is what to build when somebody asks the question.
+
+**What is wrong.** Nothing is broken today. WP-48 created a table whose whole purpose is to make two
+silences distinguishable (rule 18), used it to bound the lost-wake-up recovery, and stopped there: no
+DTO field, no query, no schema, no screen.
+
+**Evidence** (refiner, session 6; file reads and greps, nothing run — rule 66).
+- WP-48's implementer, quoted: *"`knowledge_curations` has no reader outside the recovery. `curated_at`
+  and `proposals` answer "was this task's retrospective curated, and what did it produce?", which is
+  the question a maintainer reading an empty proposal queue has; nothing publishes it. Same shape as
+  backlog 122."*
+- The table: `packages/infrastructure/src/db/migrations/0036_curation_mark_and_chunk_ending.sql:71`,
+  documented at `docs/technical/03-data-model.md:177` — unlike entry **124**'s pair, the page is
+  current here.
+- The writers: `markCurated` at `packages/infrastructure/src/knowledge/postgres-proposal-store.ts:164`,
+  and the recovery's own two — the attempt at
+  `packages/infrastructure/src/recovery/postgres-stranded-store.ts:303` and the ending at `:316`.
+- The one reader: the recovery's left join,
+  `packages/infrastructure/src/recovery/postgres-stranded-store.ts:277`
+  (`left join knowledge_curations c on c.artifact_id = a.id`).
+- A grep for the table name and for its Drizzle identifier over `apps/server/src`, `apps/web/src`,
+  `packages/contracts/src` and `schemas/` answers **nothing**.
+- The **ending** is a log line and a stored `detail` that no human interface shows:
+  `packages/application/src/recovery/stranded.ts:610` warns *"an artifact’s curation never ran after one
+  recovery attempt, so this task’s knowledge proposals are recorded as lost rather than retried for
+  ever"*, and no notification is raised.
+
+**Defect or working as designed?** **Working as designed**, and the decision is recorded where it was
+made: the mark exists so the recovery can tell a curation that ran from one that did not, and it is
+*"belt and braces rather than the guarantee"* — the durable claim is `markCurated` inside the write
+transaction (`packages/application/src/knowledge/librarian.ts:432-435`). Publishing it is a second,
+product-shaped question that WP-48 was right not to answer in passing.
+
+**What it costs to leave.** An empty proposal list has three causes and every surface answers all three
+the same way: `GET /api/projects/:project_id/kb/proposals` (`apps/server/src/routes/kb.ts:263`) returns
+an empty page whether the curation ran and proposed nothing, has not run yet, or was **abandoned** with
+a reason the platform already wrote down. The abandonment is the expensive one: the task's retrospective
+is gone, the platform paid for the run that produced the artifact, and the only person told is whoever
+reads the server log. Leaving it costs nothing until the first abandoned curation, and then costs a
+hand-written SQL query to answer *"which tasks lost their proposals?"*.
+
+**Recommendation, so the product decision is not re-derived.** Answer it where the question is asked
+rather than on a new screen: the KB proposals read for a project reports, beside its (possibly empty)
+page, how many of that project's curated artifacts are **curated**, **never curated** and **abandoned**
+— three counts out of this one table, the rule-18 shape WP-57's criterion (5) already demands of the KB
+health read. The abandoned ones additionally belong in **WP-65**'s maintenance report, which exists
+precisely because a nightly pass that reports to a log line reports to nobody (backlog **107**). A
+per-artifact badge on the task screen is the alternative and it spends a row of a screen a maintainer
+reads daily on a state that is rare by construction.
+
+**Needs measurement: how often a curation is actually abandoned** — **zero** times on this build, because
+no production run has executed (**WP-53**). Until there is a number, *"rare by construction"* is an
+argument rather than an observation, exactly as it is in **122**.
+
+**Depends on / owner. No work package owns it.** WP-48 shipped the table and is the row that would
+otherwise own it; **WP-57** opens the KB health read and folds backlog 31/37/112, none of which is this
+table, so folding this in would widen that row rather than fit it; **WP-65** owns the maintenance
+report and folds 80/81/107, which is where the *abandonment* half would ride if either is done first.
+The trigger is the first deployment whose curations can be lost at all. Related: **122**, **36** (the
+entry whose fix created this table, and whose residual is recorded there), **107**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -6881,8 +7054,47 @@ on the same timer, which is the *"one pass, one interval, one pool reservation"*
 **This is the worked example the other sites were modelled on, and the bound is the part that did not carry
 over** — backlog **105**.
 
-### 36. **A lost curation wake-up loses one task's proposals, and nothing recovers it** (TODO, small — entry **20**'s cause at a second site, stated as a residual by WP-18b; **no work package owns the recovery**)
+### 36. **A lost curation wake-up loses one task's proposals, and nothing recovers it** (**RESOLVED** at WP-48 — kept for its evidence; entry **20**'s cause at a second site, stated as a residual by WP-18b)
 > **M4 (architect, session 6): folded into WP-48.**
+>
+> **Closed at WP-48, and this entry's two conditions are what the change is made of.** The **mark** is
+> `knowledge_curations` (migration 0036), one row per curated artifact carrying `curated_at` and what
+> the curation produced — so *"ran and proposed nothing"* is a row with `proposals = 0` rather than
+> the same silence as *"never ran"*. The **idempotency key on `artifact_id`** is that row twice over:
+> `KnowledgeProposalStore.markCurated` claims it inside the transaction that writes the proposals, and
+> the queue moved from `standard` to `stately` per `artifact:<id>` with `enqueueCuration` as its only
+> enqueue site. The recovery is then a row of `stranded.ts` rather than the nightly hygiene pass this
+> entry proposed — the pass, the grace, the bound and the log line already existed there — and the
+> research curation (`ResearchReport`, WP-40) is covered by the same row, because it shares the queue
+> and the window. Proven in the e2e tier by dropping the `knowledge.proposals` enqueue and reading the
+> `kb_proposals` rows back (four, not eight); canaried by emptying the row's query, 96 s to fail.
+>
+> **Residual (refiner, 2026-09-15): the new queue policy is safe by convention, not by the type, and a
+> fourth enqueue site is what makes that bite.** `knowledge.proposals` is now `stately`, so a job put
+> on it with **no** singleton key takes the *queue-wide* key and collapses two different artifacts'
+> curations — the collapse the pre-WP-48 comment warned about. What prevents it is that every enqueue
+> goes through `enqueueCuration` (`packages/application/src/knowledge/librarian.ts:440`, the key at
+> `:444`), which is a **convention**: `singletonKey` is optional on the port's request
+> (`packages/application/src/ports/jobs.ts:113`, `readonly singletonKey?: string;`), so a direct
+> `jobs.enqueue` naming `JOB_QUEUES.knowledgeProposals` compiles, while the queue's own docblock states
+> the convention as though it were enforced — *"`enqueueCuration` is the only enqueue site for exactly
+> that reason"* (`packages/application/src/ports/jobs.ts:392-394`). Today it holds: three sites, each
+> asserted by its own unit case — `packages/application/src/knowledge/librarian.test.ts:165` in "asks
+> for a curation when a LibrarianProposals artifact is stored",
+> `packages/application/src/knowledge/research.test.ts:235` in "asks for a page when a ResearchReport
+> lands, naming the artifact type", and `packages/application/src/recovery/stranded.test.ts:411` in
+> "re-enqueues the curation on the artifact’s own singleton key". A **fourth** site fails none of them;
+> it is simply uncovered. **Not a defect and graded a nit**, for two reasons: there is no fourth caller
+> today (one would arrive with a third curated artifact type or a manual *re-curate* command), and the
+> blast radius is bounded by this entry's own fix — a collapsed wake-up leaves an artifact with no
+> `knowledge_curations` row, which is exactly what the recovery pass finds and re-enqueues, carrying
+> the artifact key so the retry is not collapsed in turn. **What would make it structural**, cheapest
+> first: the off-disk census WP-48 already wrote for the seam (tracked *and* untracked, rule 85),
+> asserting that `JOB_QUEUES.knowledgeProposals` is named outside the tests in exactly one file, the
+> way `createPgBossJobs` is held to one call site; the stronger answer is a typed per-queue enqueue,
+> which costs a signature for every keyed queue and is not worth it for one. **No work package owns
+> it** and none should be created: it is filed here so the fourth caller meets the reason rather than
+> the incident.
 
 **What is wrong.** The same mechanism as entry 20, one stage later: the `artifact.created` handler decides
 and enqueues the `knowledge.proposals` job through `context.afterCommit`
@@ -9782,7 +9994,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | TODO | — | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
 | WP-64 | **Readiness stops being frozen at discovery, and the wizard's step 3 exists** | TODO | — | Depends on WP-21, WP-18a/b, WP-17; Q68 is answered. Folds backlog **46** (major), **45** (major). The completeness must move **as a number**: *"the pages were drafted"* and *"the score moved"* are different claims |
 | WP-65 | **The organisation's own channel, the undelivered metric, the maintenance report, and the storage gauge** | TODO | — | Depends on WP-32, WP-30, WP-36, WP-18a. Folds backlog **80** (major), **81**, **107**, and **Q63**'s operator-facing half. Backlog 80 takes answer (c), the account's channel; the migration carries `nulls not distinct` |
-| WP-66 | **The history bootstrap says how much it read** | TODO | — | Depends on WP-35, WP-18b. Folds backlog **102**, **103**. One column, one `set` clause, one line on the panel — deliberately **not** behind the statistics row |
+| WP-66 | **The history bootstrap says how much it read** | TODO | — | Depends on WP-35, WP-18b. Folds backlog **102**, **103**. One column, one `set` clause, one line on the panel — deliberately **not** behind the statistics row. **Refiner (session 6): also folds backlog 124's first half** — `docs/technical/03-data-model.md` has no entry for `history_bootstrap_batches` or `history_bootstrap_chunks` at all, so this row's own migration would otherwise add a second undocumented column to a table with no documented home; the page is amended **before** the migration (criterion (8)). The rest of 124 — the other ten tables with no entry, and the check that would stop the drift — stays unowned and must **not** go to WP-73, which would then be editing the same page |
 | WP-67 | **The idempotency record, the gate that asks again, and the requester nobody wrote** | TODO | — | Depends on WP-15i, WP-21, WP-34, WP-38, WP-37. Folds backlog **47** (major), **99**, **96** (major), **92**. **Q91** decides the `ready_for_merge` case; only the human-owned stops are built if the recommendation stands |
 | WP-68 | **The guards see what they claim to see** | TODO | — | Depends on nothing unbuilt. Folds backlog **8** (major — a security gate that fails open), **10**, **30**, **3**, **111**, **9**, **6**. One shared helper, not eleven repairs; the two guards whose own suites assert the hole get those cases rewritten |
 | WP-69 | **The harness cannot script what production would refuse** | TODO | — | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**. The deliverable is the **detector**, not the fix; the vitest-budget contradiction is resolved by reading the resolved config before any number is chosen |
@@ -22339,3 +22551,110 @@ schedules synchronously and asserts it does not throw. (6) `stats-metrics.test.t
 dropped column unwritten. The rule 83 sweep also caught `packages/contracts/src/records.ts`
 (`estimate_accuracy` understating on a cancelled run) and `docs/TODO.md`'s verification item (the
 `usd_estimated` writer half is closed; the window measurement is not).
+
+#### WP-48 — the last two sites of the lost-wake-up class, the seam's census, and the ask half of the lease sweep
+
+**What shipped.** Migration **0036** (`history_bootstrap_chunks` gains `recovery_attempted_at`,
+`abandoned_at`, `detail` plus two check constraints; the new table `knowledge_curations`; a partial
+index on `artifacts (created_at) where type in ('LibrarianProposals','ResearchReport')`).
+`recovery/stranded.ts` grows from two rows to **five** — `history_record` (backlog 106),
+`knowledge_curation` (36) and `task_ask_run` (121) beside the two it had, with the `run_lease` sweep
+still riding the same pass — and the four re-enqueuing rows now share one `runAttemptOrEndSite`
+helper rather than four copies of the same loop. `KnowledgeProposalStore.markCurated` is the
+curation's claim; `HistoryBootstrapStore.abandonChunk` is the chunk's ending and `completeIfDone`
+counts an abandoned chunk as reported. `enqueueCuration` is the single enqueue site for
+`knowledge.proposals`, whose queue moves from `standard` to **`stately` per `artifact:<id>`**. The ask
+executor claims and renews the process's run lease (backlog 120), taking it from
+`StageExecutorOptions.lease` through `createPipelineRuntime` so one process has one owner string.
+
+**Decisions and assumptions.**
+- **Backlog 120 is closed, not declined.** The `lease` reaches `composeAsk` from `execution.lease`
+  rather than as a new `AskRuntimeOptions` key: a second optional key on a composition root's block
+  is a second thing production can omit (rule 31), and an ask's run must be held by the *same* owner
+  string as a stage's. `apps/server/src/pipeline.ts` is therefore unchanged, which is why the
+  entry's "the same three lines" estimate landed in a different file than it predicted.
+- **The chunk's ending is a new column, not a `recorded_at` stamp.**
+  `history_bootstrap_chunks_counts_need_a_report` exists so that `proposals = 0` means *"this run
+  reported nothing"*; stamping a run that never reported would publish silence as a finding (rule
+  18). So `abandoned_at`/`detail`, with `history_bootstrap_chunks_one_ending` keeping the pair
+  exclusive and `completeIfDone` counting it — which is what releases
+  `history_bootstrap_batches_one_live` and un-bricks the project.
+- **The curation's mark is keyed on the artifact and is therefore also its idempotency key.** One
+  mechanism, two jobs: `markCurated` claims inside the write transaction (`curated_at is null`), and
+  the queue key collapses a wake-up still in flight. The queue change is safe *because* the key is
+  the artifact — the old docblock's argument against `stately` was about a key that is the queue.
+- **The research curation (`ResearchReport`, WP-40) is covered too.** It shares the queue, writes
+  `kb_proposals` and has the identical window; excluding it would have left a known second instance
+  of the same class silently uncovered.
+- **A late curation is admitted after its ending.** `endCuration`'s predicate is `curated_at is
+  null`, and the claim's is not "and not abandoned": the row then carries both instants rather than
+  the platform throwing away proposals a run was paid for. Stated at both sites.
+- **The parse failure path writes no mark.** An artifact this build's schema refuses is left
+  uncurated on purpose, so the recovery wakes it once and then ends it with a reason — rather than
+  this build recording a parse failure as a curation.
+- **`task_ask_run` needs no attempt mark**, for the `run_lease` row's reason: `recordRefusal` moves
+  the ask off `pending`, so the query cannot find it twice. Its grace is the run's `ended_at`, which
+  is the only terminal writer's stamp — the executor writes the answer and the run's ending in one
+  transaction, so an ask `pending` a microsecond after its run ended is in flight, not stranded.
+- **The census became an enumeration** (criterion 5). The old one counted `jobsRuntime.jobs` (2) and
+  `jobs,` sites (> 5); it is now a both-directions equality between the call sites parsed out of
+  `runtime.ts` and a table of twelve with a reason each, plus an off-disk census (tracked and
+  untracked, rule 85) that `createPgBossJobs` is called in exactly one file — the half that catches
+  a fourth runtime composed in a *new* file with a queue client of its own.
+- **The seam half of backlog 106 was already closed at `344b5b0`** (WP-36 round 2): the three worker
+  runtimes take the wrapped instance and `pipeline-census.test.ts` already held it. What this row
+  owed there was criterion 5's stronger census and rule 83's sweep, both done; the entry's "two
+  halves" is therefore one half of work and one half of verification.
+
+**Criterion (7) is the integration tier's**, because it needs the sweep and the ask together:
+`run-lease-sweep.integration.test.ts` drives the **whole pass** over real rows — pass 1 ends the run,
+pass 2 ends the question, pass 3 is a no-op — with a second ask whose run is still being renewed
+untouched throughout. It takes two passes by construction and that is stated at the line: one pass
+reads all five queries in a single transaction before any site acts, so the ask's run is still live
+when `asksWithEndedRun` runs.
+
+**One shipped expectation changed, and it is the row's own subject** (rule 83).
+`test/e2e/pipeline/ask.e2e.test.ts`'s recovery case poisons an answered ask back to `pending` with
+its run attached and asserted *"two passes leave it untouched"* — true of the build that had no row
+for it and false now: the ask is **refused**, quoting the run's ending. The measurement that case was
+written for (no second paid run, one ledger row) is unchanged and still asserted; the prose that said
+"untouched" is corrected rather than deleted.
+
+**Verification.** Canary survey, each mutated on a copy and restored to its pre-mutation md5 (rules
+3/67/77): the ask lease claim, the ask heartbeat, the curation claim, the curation mark on an empty
+curation, the record job's abandoned guard, the record site's payload, the curation singleton key,
+the `task_ask_run` ending, `endHistoryRecord`'s `completeIfDone` (integration), `completeIfDone`'s
+abandoned-chunk predicate (integration), the `task_ask_run` query's grace (integration), a worker
+runtime handed the raw instance, and a new composition nobody wrote down — **thirteen killed, none
+survived**. The two e2e proofs are the class's own reproduction and both were canaried by emptying
+the row's query in the adapter: the record case failed in 90 s and the curation case in 96 s.
+
+**Open questions filed: none.**
+
+##### WP-48 — review round 1 (REQUEST_CHANGES): four findings, all rule 83's shape but one
+
+One **major**, one **minor**, two **nits**, fixed on the same tree. (1) `research.ts`'s handler
+docblock still said a lost wake-up *"loses this page"* — falsified by this change's own
+`strandedCurations`, which admits `ResearchReport`, and contradicted by `librarian.ts` one file
+across; rewritten as recovered, with the loss that **does** remain named (a curation abandoned after
+its single attempt, which is the bound rather than the window). (2) `JOB_QUEUES.discoveryRecord` and
+`historyBootstrap` justified `standard` *"for `knowledgeProposals`' reason"*, a reason this change
+reversed fifteen lines above; both choices are still right and are now stated in their own terms —
+`discoveryRecord` has one wake-up per run and no recovery row, `historyBootstrap` has two kinds in
+flight at once and gets its idempotency from `collectHistory`'s status check and
+`markChunkRecorded`'s claim rather than from a key. (3) `onboarding/record.ts` pointed at the same
+rewritten paragraph; its claim (a `DiscoveryDraft` is not a row of the table) is true and now says
+so itself. (4) `librarian.e2e.test.ts` asserted the drop counter straight after `settle('done')`,
+which rests on `afterCommit` ordering rather than on the thing asserted — now a `waitFor` on
+`dropped.length === 1` with the assertion kept (rule 87). The sweep for other sentences pointing at
+either deleted reason found none.
+
+**Discovered work (bigger than this row).**
+- **technical/03 does not describe `history_bootstrap_batches` or `history_bootstrap_chunks` at all.**
+  WP-35 (migration 0030) added both tables and never added them to the data-model page — every other
+  table of that vintage is there (`shadow_batches` is their neighbour) — so migration 0036's three new
+  chunk columns have no documented home and are described only in the migration and the Drizzle
+  definition. Found while documenting `knowledge_curations`, which *does* have one now.
+- **`knowledge_curations` has no reader outside the recovery.** `curated_at` and `proposals` answer
+  *"was this task's retrospective curated, and what did it produce?"*, which is the question a
+  maintainer reading an empty proposal queue has; nothing publishes it. Same shape as backlog 122.

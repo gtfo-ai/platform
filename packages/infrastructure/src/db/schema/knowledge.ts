@@ -242,6 +242,45 @@ export const historyBootstrapChunks = pgTable('history_bootstrap_chunks', {
   proposals: integer('proposals').notNull().default(0),
   refusedProposals: integer('refused_proposals').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /**
+   * When the stranded-work pass re-enqueued this chunk's lost `record` (migration 0036,
+   * backlog 106).
+   */
+  recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
+  /**
+   * When the platform stopped waiting for this run's findings, with `detail` saying why.
+   *
+   * The ending backlog 105 requires, and a column of its own rather than a `recordedAt` stamp:
+   * `history_bootstrap_chunks_counts_need_a_report` makes a stamped row mean *"this run reported"*,
+   * so stamping one that never did would publish `proposals = 0` as a finding (standing rule 18).
+   * `completeIfDone` counts an abandoned chunk as reported, so the batch completes and the
+   * project's one-live-batch index stops refusing every later bootstrap.
+   */
+  abandonedAt: timestamp('abandoned_at', { withTimezone: true }),
+  detail: text('detail'),
+});
+
+/**
+ * That a curation of one artifact **happened** — migration 0036, PROGRESS backlog **36**.
+ *
+ * The mark the lost-wake-up recovery could not do without: `recordLibrarianProposals` writes
+ * `kb_proposals` rows and nothing else, and a model with nothing repeatable to say writes none — so
+ * *"it ran and proposed nothing"* and *"it never ran"* are the same query result without this row
+ * (standing rule 18). Keyed on the artifact, so the same row is also the curation's **idempotency
+ * key**: the claim is `curated_at is null`, which is what makes a redelivered wake-up write no
+ * second set of proposals.
+ *
+ * `recoveryAttemptedAt` is the recovery's own column (the shape migration 0032 gave the other two
+ * sites) and `abandonedAt`/`detail` is its ending.
+ */
+export const knowledgeCurations = pgTable('knowledge_curations', {
+  artifactId: uuid('artifact_id').primaryKey(),
+  curatedAt: timestamp('curated_at', { withTimezone: true }),
+  proposals: integer('proposals').notNull().default(0),
+  recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
+  abandonedAt: timestamp('abandoned_at', { withTimezone: true }),
+  detail: text('detail'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type KbDocument = typeof kbDocuments.$inferSelect;
@@ -256,3 +295,4 @@ export type ShadowBatch = typeof shadowBatches.$inferSelect;
 export type ShadowBatchTicket = typeof shadowBatchTickets.$inferSelect;
 export type HistoryBootstrapBatch = typeof historyBootstrapBatches.$inferSelect;
 export type HistoryBootstrapChunk = typeof historyBootstrapChunks.$inferSelect;
+export type KnowledgeCuration = typeof knowledgeCurations.$inferSelect;

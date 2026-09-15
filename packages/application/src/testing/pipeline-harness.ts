@@ -344,6 +344,15 @@ export interface PipelineHarness {
   readonly idempotency: ReturnType<typeof createMemoryIdempotencyStore>;
   /** The ask-the-task thread (WP-31) — read back to assert what an ask produced. */
   readonly asks: MemoryAskStore;
+  /**
+   * How many run heartbeats the compositions started and stopped (WP-47, WP-48).
+   *
+   * The counters the harness's `schedule` keeps, so a case can assert that a composition which
+   * claims a lease also **renews** it and stops when the run ends — which is the half a lease
+   * column alone cannot show. Shared by the stage executor and the ask executor, so a case reads
+   * the delta across the call it is about.
+   */
+  readonly heartbeats: { readonly started: number; readonly stopped: number };
   /** Every spec the runner was started with, in order. */
   readonly specs: readonly RunSpec[];
   /**
@@ -655,6 +664,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
    * it sees exactly what a real instance sees: every ticket-side ask refused `unverified_identity`.
    */
   const asks: MemoryAskStore = options.asks ?? createMemoryAskStore();
+  /** What the lease `schedule` below counts; exposed on the harness (WP-48). */
+  const heartbeats = { started: 0, stopped: 0 };
   const askIdentities = new Map<string, Map<string, Id>>(
     Object.entries(options.askIdentities ?? {}).map(([provider, map]) => [
       provider,
@@ -908,11 +919,20 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       stopReasons,
       ...(cost === null ? {} : { budgets: createBudgetGuard({ store: cost }) }),
       /**
-       * The lease, so a harness case can assert the executor claimed one (WP-47). The schedule is a
-       * no-op: nothing here waits minutes, and what a heartbeat *decides* is
-       * `pipeline/lease.test.ts`'s subject rather than this harness's.
+       * The lease, so a harness case can assert the executor claimed one (WP-47) and that it
+       * started a heartbeat for the length of the run (WP-48). The schedule never beats: nothing
+       * here waits minutes, and what a beat *decides* is `pipeline/lease.test.ts`'s subject rather
+       * than this harness's — what it counts is that the heartbeat was started and stopped.
        */
-      lease: { owner: 'harness', schedule: () => () => {} },
+      lease: {
+        owner: 'harness',
+        schedule: () => {
+          heartbeats.started += 1;
+          return () => {
+            heartbeats.stopped += 1;
+          };
+        },
+      },
       /**
        * A cancelled run's spend, charged from the process that measured it (WP-47, Q70 (b)).
        * Composed only with the ledger, for the same reason `budgets` is: without a `CostStore`
@@ -1101,6 +1121,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     audit,
     idempotency,
     asks,
+    heartbeats,
     specs,
     script: (stage, run) => {
       scripts.set(stage, run);

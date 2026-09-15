@@ -34,9 +34,11 @@
  * dispatcher's transaction where every read is a nested pool borrow (PROGRESS backlog 19). The
  * `artifact.created` handler enqueues and nothing else.
  *
- * The residual is the one `librarian.ts` states: `HandlerContext.afterCommit` is at-most-once, so a
- * process that dies between the handler's commit and its enqueue loses this wake-up and the project
- * keeps its previous readiness evaluation (or none). That is notification-shaped loss, which is the
+ * The residual is this module's own, and it is **not** recovered by `recovery/stranded.ts` — that
+ * table's curation row keys on the two artifact types the `knowledge.proposals` queue curates, and
+ * a `DiscoveryDraft` is neither. `HandlerContext.afterCommit` is at-most-once, so a process that
+ * dies between the handler's commit and its enqueue loses this wake-up and the project keeps its
+ * previous readiness evaluation (or none). That is notification-shaped loss, which is the
  * direction standing rule 20 says to fail in — the artifact is still on the task and the wizard can
  * ask for the evaluation again. It is **not** silently invisible: `GET …/readiness` still answers
  * 409 with the row count, which is the operator-facing difference between "no producer" and "this

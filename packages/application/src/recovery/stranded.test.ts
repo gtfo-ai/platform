@@ -20,13 +20,23 @@ import type { EnqueueRequest, JobData } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
-import type { StrandedAsk, StrandedBootstrapBatch, StrandedQuery } from './stranded.js';
+import type {
+  StrandedAsk,
+  StrandedAskWithEndedRun,
+  StrandedBootstrapBatch,
+  StrandedCuration,
+  StrandedHistoryRecord,
+  StrandedQuery,
+} from './stranded.js';
 import { runStrandedRecovery, STRANDED_ENDING_AFTER_MS } from './stranded.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 const BATCH = '00000000-0000-4000-8000-0000000000b1' as Id;
 const ASK = '00000000-0000-4000-8000-0000000000c1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000d1' as Id;
+const CHUNK = '00000000-0000-4000-8000-0000000000e1' as Id;
+const ARTIFACT = '00000000-0000-4000-8000-0000000000e2' as Id;
+const RUN = '00000000-0000-4000-8000-0000000000e3' as Id;
 const NOW = '2026-09-15T10:00:00.000Z' as IsoDateTime;
 /** When a previous pass spent this row's one attempt. */
 const LAST_PASS = '2026-09-15T08:00:00.000Z' as IsoDateTime;
@@ -59,10 +69,42 @@ const strandedAsk = (recoveryAttemptedAt: IsoDateTime | null): StrandedAsk => ({
   recoveryAttemptedAt,
 });
 
+const strandedRecord = (recoveryAttemptedAt: IsoDateTime | null): StrandedHistoryRecord => ({
+  chunkId: CHUNK,
+  batchId: BATCH,
+  projectId: PROJECT,
+  taskId: TASK,
+  artifactId: ARTIFACT,
+  recoveryAttemptedAt,
+});
+
+const strandedCuration = (recoveryAttemptedAt: IsoDateTime | null): StrandedCuration => ({
+  artifactId: ARTIFACT,
+  projectId: PROJECT,
+  taskId: TASK,
+  artifactType: 'LibrarianProposals',
+  recoveryAttemptedAt,
+});
+
+const askWithEndedRun = (
+  overrides: Partial<StrandedAskWithEndedRun> = {},
+): StrandedAskWithEndedRun => ({
+  askId: ASK,
+  taskId: TASK,
+  projectId: PROJECT,
+  runId: RUN,
+  runStatus: 'failed',
+  runTerminalReason: 'lease_expired',
+  ...overrides,
+});
+
 const passOver = async (
   rows: {
     readonly bootstraps?: readonly StrandedBootstrapBatch[];
     readonly asks?: readonly StrandedAsk[];
+    readonly records?: readonly StrandedHistoryRecord[];
+    readonly curations?: readonly StrandedCuration[];
+    readonly endedRunAsks?: readonly StrandedAskWithEndedRun[];
   },
   graceMs = 60_000,
 ) => {
@@ -105,6 +147,52 @@ const passOver = async (
       endAsk: async (_tx, ending) => {
         recorded.calls.push('endAsk');
         recorded.written.push({ call: 'endAsk', id: ending.askId, reason: ending.reason });
+      },
+      strandedHistoryRecords: async (_tx, query) => {
+        recorded.asked.push(query);
+        return rows.records ?? [];
+      },
+      markHistoryRecordAttempt: async (_tx, mark) => {
+        recorded.calls.push('markHistoryRecordAttempt');
+        recorded.written.push({
+          call: 'markHistoryRecordAttempt',
+          id: mark.chunkId,
+          at: mark.at,
+        });
+      },
+      endHistoryRecord: async (_tx, ending) => {
+        recorded.calls.push('endHistoryRecord');
+        recorded.written.push({
+          call: 'endHistoryRecord',
+          id: ending.chunkId,
+          reason: ending.reason,
+          at: ending.at,
+        });
+      },
+      strandedCurations: async (_tx, query) => {
+        recorded.asked.push(query);
+        return rows.curations ?? [];
+      },
+      markCurationAttempt: async (_tx, mark) => {
+        recorded.calls.push('markCurationAttempt');
+        recorded.written.push({
+          call: 'markCurationAttempt',
+          id: mark.artifactId,
+          at: mark.at,
+        });
+      },
+      endCuration: async (_tx, ending) => {
+        recorded.calls.push('endCuration');
+        recorded.written.push({
+          call: 'endCuration',
+          id: ending.artifactId,
+          reason: ending.reason,
+          at: ending.at,
+        });
+      },
+      asksWithEndedRun: async (_tx, query) => {
+        recorded.asked.push(query);
+        return rows.endedRunAsks ?? [];
       },
     },
     unitOfWork: new MemoryEventing(),
@@ -164,14 +252,19 @@ describe('the stranded-work pass', () => {
     expect(report).toEqual([
       { site: 'history_bootstrap', found: 0, reEnqueued: 0, ended: 0 },
       { site: 'task_ask', found: 0, reEnqueued: 0, ended: 0 },
+      { site: 'history_record', found: 0, reEnqueued: 0, ended: 0 },
+      { site: 'knowledge_curation', found: 0, reEnqueued: 0, ended: 0 },
+      { site: 'task_ask_run', found: 0, reEnqueued: 0, ended: 0 },
     ]);
   });
 
-  it('asks both sites for rows older than the grace, which is the pass interval', async () => {
+  it('asks every site for rows older than the grace, which is the pass interval', async () => {
     const { recorded } = await passOver({}, 90_000);
     // One knob rather than two (`intake-reconcile.ts`'s sentence): the age a row must reach is the
     // interval between passes, so a row younger than that still has its own job in flight.
-    expect(recorded.asked).toHaveLength(2);
+    // Five queries, one per site: a site that stopped asking would be a recovery that silently
+    // covers less than the table says it does.
+    expect(recorded.asked).toHaveLength(5);
     for (const query of recorded.asked) {
       expect(Date.parse(NOW) - Date.parse(query.olderThan)).toBe(90_000);
       // …and the **ending** window is deliberately not that number: being early there ends work
@@ -241,7 +334,137 @@ describe('the stranded-work pass', () => {
       expect(report).toEqual([
         { site: 'history_bootstrap', found: 1, reEnqueued: 1, ended: 0 },
         { site: 'task_ask', found: 1, reEnqueued: 0, ended: 1 },
+        { site: 'history_record', found: 0, reEnqueued: 0, ended: 0 },
+        { site: 'knowledge_curation', found: 0, reEnqueued: 0, ended: 0 },
+        { site: 'task_ask_run', found: 0, reEnqueued: 0, ended: 0 },
       ]);
+    });
+  });
+
+  /**
+   * The two sites WP-48 added, and the row that ends an ask rather than waking one.
+   *
+   * Asserted the way the first two are: on the **enqueue** each makes — the queue, the payload and
+   * the key — and on the **bound**, because a pass that found the row and enqueued nothing is
+   * spelled identically to one that found nothing. The end-to-end half (drop the enqueue, read the
+   * row's own status back) is the e2e's.
+   */
+  describe('the record site (backlog 106): a mining run that reported and was never recorded', () => {
+    it('re-enqueues the record job with the artifact the run stored', async () => {
+      const { jobs, report, recorded } = await passOver({ records: [strandedRecord(null)] });
+
+      const enqueued = jobs.enqueued.filter((job) => job.queue === JOB_QUEUES.historyBootstrap);
+      expect(enqueued).toHaveLength(1);
+      // The payload `record.ts`'s handler builds. A different shape is a job the handler answers
+      // `skipped` to, which reads exactly like a recovery that worked.
+      expect(enqueued[0]?.data).toEqual({
+        kind: 'record',
+        project_id: PROJECT,
+        task_id: TASK,
+        artifact_id: ARTIFACT,
+      });
+      expect(report.find((site) => site.site === 'history_record')).toEqual({
+        site: 'history_record',
+        found: 1,
+        reEnqueued: 1,
+        ended: 0,
+      });
+      expect(recorded.calls).toEqual([
+        'markHistoryRecordAttempt',
+        `enqueue:${JOB_QUEUES.historyBootstrap}`,
+      ]);
+      expect(recorded.written).toEqual([{ call: 'markHistoryRecordAttempt', id: CHUNK, at: NOW }]);
+    });
+
+    it('closes the chunk — and with it the batch — when its one attempt did not take', async () => {
+      const { jobs, report, recorded } = await passOver({ records: [strandedRecord(LAST_PASS)] });
+
+      // The defect this closes is backlog 101's, one wake-up later: the batch never completes, and
+      // `history_bootstrap_batches_one_live` then refuses every later bootstrap of the project.
+      expect(jobs.enqueued).toEqual([]);
+      expect(recorded.written).toHaveLength(1);
+      expect(recorded.written[0]).toMatchObject({ call: 'endHistoryRecord', id: CHUNK, at: NOW });
+      expect(recorded.written[0]?.reason).toContain(LAST_PASS);
+      expect(report.find((site) => site.site === 'history_record')).toEqual({
+        site: 'history_record',
+        found: 1,
+        reEnqueued: 0,
+        ended: 1,
+      });
+    });
+  });
+
+  describe('the curation site (backlog 36): an artifact that was stored and never curated', () => {
+    it('re-enqueues the curation on the artifact’s own singleton key', async () => {
+      const { jobs, report, recorded } = await passOver({ curations: [strandedCuration(null)] });
+
+      const enqueued = jobs.enqueued.filter((job) => job.queue === JOB_QUEUES.knowledgeProposals);
+      expect(enqueued).toHaveLength(1);
+      expect(enqueued[0]?.data).toEqual({
+        project_id: PROJECT,
+        task_id: TASK,
+        artifact_id: ARTIFACT,
+        artifact_type: 'LibrarianProposals',
+      });
+      // What makes a re-enqueue safe at all here: `stately` per artifact collapses a wake-up that
+      // is still queued, and `markCurated` refuses a second set of proposals once one has run.
+      expect(enqueued[0]?.singletonKey).toBe(`artifact:${ARTIFACT}`);
+      expect(report.find((site) => site.site === 'knowledge_curation')?.reEnqueued).toBe(1);
+      expect(recorded.calls).toEqual([
+        'markCurationAttempt',
+        `enqueue:${JOB_QUEUES.knowledgeProposals}`,
+      ]);
+      expect(recorded.written).toEqual([{ call: 'markCurationAttempt', id: ARTIFACT, at: NOW }]);
+    });
+
+    it('gives up on a curation it has already attempted, rather than curating for ever', async () => {
+      const { jobs, report, recorded } = await passOver({
+        curations: [strandedCuration(LAST_PASS)],
+      });
+
+      expect(jobs.enqueued).toEqual([]);
+      expect(recorded.written[0]).toMatchObject({ call: 'endCuration', id: ARTIFACT, at: NOW });
+      expect(recorded.written[0]?.reason).toContain(LAST_PASS);
+      expect(report.find((site) => site.site === 'knowledge_curation')).toEqual({
+        site: 'knowledge_curation',
+        found: 1,
+        reEnqueued: 0,
+        ended: 1,
+      });
+    });
+  });
+
+  describe('the ask whose run is over (backlog 121)', () => {
+    it('ends the question, quoting the run’s own ending, and wakes nothing', async () => {
+      const { jobs, report, recorded } = await passOver({ endedRunAsks: [askWithEndedRun()] });
+
+      // Nothing to wake: the run it was waiting for is terminal, and a re-enqueue would be a new
+      // paid run for a question whose asker was told nothing.
+      expect(jobs.enqueued).toEqual([]);
+      expect(recorded.calls).toEqual(['endAsk']);
+      expect(recorded.written[0]).toMatchObject({ call: 'endAsk', id: ASK });
+      // The thread says what happened rather than "failed": the run's status and its terminal
+      // reason are platform enum values, so quoting them carries no untrusted text.
+      expect(recorded.written[0]?.reason).toContain('failed');
+      expect(recorded.written[0]?.reason).toContain('lease_expired');
+      expect(report.find((site) => site.site === 'task_ask_run')).toEqual({
+        site: 'task_ask_run',
+        found: 1,
+        reEnqueued: 0,
+        ended: 1,
+      });
+    });
+
+    it('says only what the row says when the run ended with no terminal reason', async () => {
+      const { recorded } = await passOver({
+        endedRunAsks: [askWithEndedRun({ runStatus: 'cancelled', runTerminalReason: null })],
+      });
+
+      const reason = recorded.written[0]?.reason ?? '';
+      expect(reason).toContain('cancelled');
+      // No empty parentheses, and no invented reason: `null` is a run that ended without one.
+      expect(reason).not.toContain('()');
+      expect(reason).not.toContain('null');
     });
   });
 
@@ -258,7 +481,13 @@ describe('the stranded-work pass', () => {
 
       // Absence is a composition that has not opted in, not a silent skip: a build with no
       // pipeline store still recovers the two sites that are only queries.
-      expect(report.map((site) => site.site)).toEqual(['history_bootstrap', 'task_ask']);
+      expect(report.map((site) => site.site)).toEqual([
+        'history_bootstrap',
+        'task_ask',
+        'history_record',
+        'knowledge_curation',
+        'task_ask_run',
+      ]);
     });
 
     it('rides the same pass, with the same grace, and reports what it ended', async () => {
@@ -271,6 +500,13 @@ describe('the stranded-work pass', () => {
           strandedAsks: async () => [],
           markAskAttempt: async () => {},
           endAsk: async () => {},
+          strandedHistoryRecords: async () => [],
+          markHistoryRecordAttempt: async () => {},
+          endHistoryRecord: async () => {},
+          strandedCurations: async () => [],
+          markCurationAttempt: async () => {},
+          endCuration: async () => {},
+          asksWithEndedRun: async () => [],
         },
         unitOfWork: new MemoryEventing(),
         jobs: recordingJobs(),

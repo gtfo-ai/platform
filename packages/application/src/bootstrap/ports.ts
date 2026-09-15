@@ -80,6 +80,19 @@ export interface HistoryBootstrapChunkRow {
    * repeatable is a finding; a run that has not reported is silence (standing rule 18).
    */
   readonly recordedAt: IsoDateTime | null;
+  /**
+   * When the platform stopped waiting for this run's findings, and why (migration 0036, WP-48).
+   *
+   * The ending of the recovery's one attempt at a lost `record` wake-up (PROGRESS backlog 106,
+   * bounded per 105). A column of its own rather than a `recordedAt` stamp, because a stamped row
+   * means *"this run reported"* — `history_bootstrap_chunks_counts_need_a_report` exists to make
+   * `proposals: 0` unambiguous, and stamping a run that never reported would publish silence as a
+   * finding. {@link HistoryBootstrapStore.completeIfDone} counts an abandoned chunk as reported, so
+   * the batch can finish and the project's one-live-batch index stops refusing every later attempt.
+   */
+  readonly abandonedAt: IsoDateTime | null;
+  /** Platform text: why it was abandoned. `null` exactly when {@link abandonedAt} is. */
+  readonly detail: string | null;
   readonly proposals: number;
   readonly refusedProposals: number;
 }
@@ -149,10 +162,27 @@ export interface HistoryBootstrapStore {
   ): Promise<boolean>;
 
   /**
+   * Stops waiting for one run's findings, and answers whether this call is the one that did it.
+   *
+   * The ending the lost-wake-up recovery gives a chunk whose re-enqueued `record` did not take
+   * (WP-48, PROGRESS backlog 106 and 105). `recorded_at is null and abandoned_at is null` is in the
+   * predicate, so a `record` job that arrives late still wins the row and a second sweep writes
+   * nothing. The caller follows it with {@link completeIfDone}, which now counts an abandoned chunk
+   * as reported — that is what releases `history_bootstrap_batches_one_live`.
+   */
+  abandonChunk(
+    tx: Transaction,
+    chunkId: Id,
+    ending: { readonly at: IsoDateTime; readonly detail: string },
+  ): Promise<boolean>;
+
+  /**
    * Moves the batch to `mining` once its chunks exist, or to `completed`/`empty`.
    *
    * `completeIfDone` answers `true` only on the write that changed the row (`completed_at is null`
-   * is in the predicate), so the recorder performs nothing twice.
+   * is in the predicate), so the recorder performs nothing twice. Since WP-48 a chunk the recovery
+   * **abandoned** counts as reported for this question: the alternative is a batch nobody can
+   * complete, which is the permanent `already_running` backlog 101 is about.
    */
   markMining(tx: Transaction, batchId: Id): Promise<void>;
   markEmpty(tx: Transaction, batchId: Id, detail: string, at: IsoDateTime): Promise<void>;
