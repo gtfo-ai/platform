@@ -9,7 +9,30 @@
 > with its evidence, each paid for with a review round. Then continue the loop in
 > `14-orchestration-protocol.md`, which has a fourth role and a step 4b.
 
-**Session 5 so far.** `main` is at **the session's closing docs commit — the one that carries this sentence, `git rev-parse --short HEAD`** (its `ci` and `image` **PENDING — read to `completed` first thing in session 6** and fill the ids in here; its `release` run is **expected red** until an administrator acts, see below; `910bb83` WP-42's ci-fix: `ci` `34967961699` and `image` `34967961718` success, `release` `34967961715` failure on the known setting line; `2788e9c` WP-42: `image` `34966305347` success, `ci` `34966305441` **failure** — the unit job's shallow clone gave two history-reading tests one commit (*expected 1 to be greater than 100*), fixed at `910bb83` with `fetch-depth: 0` on that job and a named refusal in both tests — and `release` `34966305421` **failure**, the workflow's first run ever: *GitHub Actions is not permitted to create or approve pull requests*, the repository setting the `GITHUB_TOKEN` fallback needs and the token path does not; nothing was opened, tagged or released, and **the `release` workflow fails on every push to `main` until the user, as administrator, turns on *Allow GitHub Actions to create and approve pull requests* or adds `RELEASE_PLEASE_TOKEN`** (CONTRIBUTING § *What an administrator sets up once*, `docs/TODO.md`'s first-release rows); `1070c51` docs: `ci` `34958282972` and `image` `34958283072` success; `ecb867c` WP-41's ci-fix: `ci` `34953472827` and `image` `34953472852` success; `f541f33` WP-41: `ci` `34951950254` success and `image` `34951950272` **failure on both architectures** — the app container never answered `/healthz`, because three constructor parameter properties in `apps/server/src/queries/stats-{metrics,queries}.ts` are syntax Node's strip-only mode refuses (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`) and every local tier transpiles through vitest; fixed at `ecb867c` with `erasableSyntaxOnly` on, backlog 42 closed; `ef3ae0c` docs: `ci` `34941452660` and `image` `34941452635` success; `520cf19` docs: `ci` `34941289977` and `image` `34941289911` success; `85af479` WP-40: `ci` `34940200818` success and `image` `34940200686` **success after one `--failed` rerun** — the arm64 build's *serve the SPA from the image just built* step died with Node's exit 13 (`Detected unsettled top-level await` at `scripts/web-compose-check.mjs:290`, fifteen seconds after `compose up -d`, the event loop empty with `main()` still pending) while amd64 passed the same step on the same image and the rerun passed on arm64; the script is untouched since WP-15j, so this is read as the runner's and recorded; a second instance is a defect of the script's own wait — a promise with no handle behind it — and gets a bounded timeout around `waitForHealth`, not another rerun; `2943a69` docs: `ci` `34923542520` and `image` `34923542513` success; `344b5b0` WP-36: `ci` `34923487715` and `image` `34923487757` success; `a40309f` docs: `ci` `34914209663` and `image` `34914209583` success; `7a6041f` WP-35: `ci` `34914154372` and `image` `34914154474` success; `56f05e9` docs: `ci` `34897770062` and `image` `34897770099` success; `621b57f` WP-34: `ci` `34897676274` and `image` `34897676446` success; `b50b26c` docs: `ci` `34881775532` and `image` `34881775599` success; `0960c44` WP-38: `ci` `34881692753` and `image` `34881692696` success; `8bc5546` docs: `ci` `34864687446` and `image` `34864687416` success; `958f1d1` WP-39: `ci` `34864613794` and `image` `34864613681` success; `5775f66` docs: `ci` `34857815914` success, `image` `34857815894` **failed once** — the arm64 runtime build got a `504` from an upstream host while fetching a pinned binary, on a docs-only commit whose code twin had built green minutes earlier; rerun with `--failed` to `completed success`, all seven jobs — the third upstream transient of the session, each read twice; `78e48fc` WP-37: `ci` `34857739776` and `image` `34857739753` success; `321a9ef` docs: `ci` `34843721651` and `image` `34843721688` success; `6bfa24e` WP-29: `ci` `34843604039` and `image` `34843604055` success; `7c25024` docs: `ci` `34833113463` and `image` `34833113274` success; `a29de19` WP-31: `ci` `34833046951` and `image` `34833047014` success; `87b4654` docs: `ci` `34817873025` and `image` `34817873021` success; `675f03a` WP-32: `ci` `34817804208` and `image` `34817804136` success; `403afe0` docs: `ci` `34806100090` and `image` `34806100115` success; `62c02a1` WP-28: `ci` `34806057343` and `image` `34806057285` success; `57eb701` docs: `ci` `34801112998` and `image` `34801112960` success; `c7ebc42` WP-30: `ci` `34801073357` and `image` `34801073297` success; `a2b442e` docs: `ci` `34793866543` and `image` `34793866726` success; `37b8d6b` WP-27: `ci` `34793835806` and `image` `34793835789` success; `b6f942c` docs: `ci` `34785657426` and `image` `34785657519` success; `52a81e2` WP-26: `ci` `34785626680` and `image` `34785626710` success; `9e05f88` docs: `ci` `34777136629` and `image` `34777136633` success; `9ca1063` WP-25: `ci` `34777106034` and `image` `34777106051` success; `cdf0512` docs: `ci` `34769478608` and `image` `34769478690` success; `9a02c3b` WP-24: `ci` `34769428330` and `image` `34769428324` success; `cc38456` docs: `ci` `34763587201` success, `image` `34763587173` **failed once** — the amd64 build's `pnpm install` got `ECONNRESET` from registry.npmjs.org while corepack fetched pnpm, on a docs-only commit whose tree had built green at `dac39a7` minutes earlier — and was rerun with `--failed` to `completed success`, all five manifest lists published; the second registry-side transient of the session (the GHCR `unknown blob` at `5121d73` was the first), both on docs-only commits, both read twice; `dac39a7` WP-23: `ci` `34763551806`, `image` `34763551762` and `base-image` `34763551778` success; `f35f85c` docs: `ci` `34761060357` and `image` `34761060351` success; `4e85ad1` WP-15j: `ci` `34761002063` and `image` `34761002066` success — the `image` run was the first to execute `scripts/web-compose-check.mjs` on a cloud runner, on both architectures, and passed; `785941f` docs: `ci` `34747686550` and `image` `34747686556` success; `8abccbf` WP-15i: `ci` `34747578240` and `image` `34747578213` success; `9b0b7b0` docs: `ci` `34742679056` and `image` `34742679006` success; `23c5d37` WP-21: `ci` `34742367222` and `image` `34742367313`
+> **Session 6 — 2026-09-15.** Same reading order as session 5's note below, then the **M4 tables** (the
+> plan's § "Milestone M4 — a real installation" and this file's own, at the end of the M3 table) and the
+> **"Architect ruling (M4, session 6)"** at the end of this file, which carries the disposition of every
+> open backlog entry and of Q63–Q90. Then continue the loop in `14-orchestration-protocol.md`.
+
+**Session 6 so far.** `main` is at **the docs commit that carries this sentence** (its `ci` and `image`
+**PENDING — read to `completed` before the next row**; its `release` run is **expected red** on the
+administrator setting, see below). Session 5's closing docs commit `2731125` resolved as `ci`
+`34968739816` and `image` `34968739736` success, `release` `34968739685` failure on the known line
+(*GitHub Actions is not permitted to create or approve pull requests*; nothing opened, tagged or
+released) — the expected one, recorded rather than diagnosed. `main` at `2731125` verified green
+(`PASS: verify`, exit 0) in the orchestrator's shell before any agent started (rule 90). **The
+architect pass is done**: thirty-one M4 rows (WP-47…WP-73 plus the four proposed rows WP-43–46, in
+the table's own order), ninety-four open entries read, ninety-one scheduled and three stated unowned
+(2, 23, 63), four blockers (48→WP-51, 49→WP-54, 54→WP-50, 109→WP-47) and twenty-seven majors all owned;
+**TD-028** (the launcher control plane) written and indexed; **Q91–Q95** filed. The session runs in the
+same CLI process as session 5 (started 2026-09-12, cleared today), so the `Claude-Session` trailer is
+unchanged. **Next: WP-47**, then the table's order. Two things to know before the first `gh run list`:
+the `release` workflow fails on **every** push to `main` with the setting line above until the
+administrator acts — record each occurrence as expected, and treat any *other* `release` failure as a
+defect; a `release` log also prints release-please's commit-parser complaint *unexpected token ' ' at
+1:6* for merge commits, which is a warning it skips past and not a defect.
+
+**Session 5 so far.** `main` was at **`2731125`, the session's closing docs commit** (`ci` `34968739816` and `image` `34968739736` success, `release` `34968739685` failure on the known setting line — read in session 6; `910bb83` WP-42's ci-fix: `ci` `34967961699` and `image` `34967961718` success, `release` `34967961715` failure on the known setting line; `2788e9c` WP-42: `image` `34966305347` success, `ci` `34966305441` **failure** — the unit job's shallow clone gave two history-reading tests one commit (*expected 1 to be greater than 100*), fixed at `910bb83` with `fetch-depth: 0` on that job and a named refusal in both tests — and `release` `34966305421` **failure**, the workflow's first run ever: *GitHub Actions is not permitted to create or approve pull requests*, the repository setting the `GITHUB_TOKEN` fallback needs and the token path does not; nothing was opened, tagged or released, and **the `release` workflow fails on every push to `main` until the user, as administrator, turns on *Allow GitHub Actions to create and approve pull requests* or adds `RELEASE_PLEASE_TOKEN`** (CONTRIBUTING § *What an administrator sets up once*, `docs/TODO.md`'s first-release rows); `1070c51` docs: `ci` `34958282972` and `image` `34958283072` success; `ecb867c` WP-41's ci-fix: `ci` `34953472827` and `image` `34953472852` success; `f541f33` WP-41: `ci` `34951950254` success and `image` `34951950272` **failure on both architectures** — the app container never answered `/healthz`, because three constructor parameter properties in `apps/server/src/queries/stats-{metrics,queries}.ts` are syntax Node's strip-only mode refuses (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`) and every local tier transpiles through vitest; fixed at `ecb867c` with `erasableSyntaxOnly` on, backlog 42 closed; `ef3ae0c` docs: `ci` `34941452660` and `image` `34941452635` success; `520cf19` docs: `ci` `34941289977` and `image` `34941289911` success; `85af479` WP-40: `ci` `34940200818` success and `image` `34940200686` **success after one `--failed` rerun** — the arm64 build's *serve the SPA from the image just built* step died with Node's exit 13 (`Detected unsettled top-level await` at `scripts/web-compose-check.mjs:290`, fifteen seconds after `compose up -d`, the event loop empty with `main()` still pending) while amd64 passed the same step on the same image and the rerun passed on arm64; the script is untouched since WP-15j, so this is read as the runner's and recorded; a second instance is a defect of the script's own wait — a promise with no handle behind it — and gets a bounded timeout around `waitForHealth`, not another rerun; `2943a69` docs: `ci` `34923542520` and `image` `34923542513` success; `344b5b0` WP-36: `ci` `34923487715` and `image` `34923487757` success; `a40309f` docs: `ci` `34914209663` and `image` `34914209583` success; `7a6041f` WP-35: `ci` `34914154372` and `image` `34914154474` success; `56f05e9` docs: `ci` `34897770062` and `image` `34897770099` success; `621b57f` WP-34: `ci` `34897676274` and `image` `34897676446` success; `b50b26c` docs: `ci` `34881775532` and `image` `34881775599` success; `0960c44` WP-38: `ci` `34881692753` and `image` `34881692696` success; `8bc5546` docs: `ci` `34864687446` and `image` `34864687416` success; `958f1d1` WP-39: `ci` `34864613794` and `image` `34864613681` success; `5775f66` docs: `ci` `34857815914` success, `image` `34857815894` **failed once** — the arm64 runtime build got a `504` from an upstream host while fetching a pinned binary, on a docs-only commit whose code twin had built green minutes earlier; rerun with `--failed` to `completed success`, all seven jobs — the third upstream transient of the session, each read twice; `78e48fc` WP-37: `ci` `34857739776` and `image` `34857739753` success; `321a9ef` docs: `ci` `34843721651` and `image` `34843721688` success; `6bfa24e` WP-29: `ci` `34843604039` and `image` `34843604055` success; `7c25024` docs: `ci` `34833113463` and `image` `34833113274` success; `a29de19` WP-31: `ci` `34833046951` and `image` `34833047014` success; `87b4654` docs: `ci` `34817873025` and `image` `34817873021` success; `675f03a` WP-32: `ci` `34817804208` and `image` `34817804136` success; `403afe0` docs: `ci` `34806100090` and `image` `34806100115` success; `62c02a1` WP-28: `ci` `34806057343` and `image` `34806057285` success; `57eb701` docs: `ci` `34801112998` and `image` `34801112960` success; `c7ebc42` WP-30: `ci` `34801073357` and `image` `34801073297` success; `a2b442e` docs: `ci` `34793866543` and `image` `34793866726` success; `37b8d6b` WP-27: `ci` `34793835806` and `image` `34793835789` success; `b6f942c` docs: `ci` `34785657426` and `image` `34785657519` success; `52a81e2` WP-26: `ci` `34785626680` and `image` `34785626710` success; `9e05f88` docs: `ci` `34777136629` and `image` `34777136633` success; `9ca1063` WP-25: `ci` `34777106034` and `image` `34777106051` success; `cdf0512` docs: `ci` `34769478608` and `image` `34769478690` success; `9a02c3b` WP-24: `ci` `34769428330` and `image` `34769428324` success; `cc38456` docs: `ci` `34763587201` success, `image` `34763587173` **failed once** — the amd64 build's `pnpm install` got `ECONNRESET` from registry.npmjs.org while corepack fetched pnpm, on a docs-only commit whose tree had built green at `dac39a7` minutes earlier — and was rerun with `--failed` to `completed success`, all five manifest lists published; the second registry-side transient of the session (the GHCR `unknown blob` at `5121d73` was the first), both on docs-only commits, both read twice; `dac39a7` WP-23: `ci` `34763551806`, `image` `34763551762` and `base-image` `34763551778` success; `f35f85c` docs: `ci` `34761060357` and `image` `34761060351` success; `4e85ad1` WP-15j: `ci` `34761002063` and `image` `34761002066` success — the `image` run was the first to execute `scripts/web-compose-check.mjs` on a cloud runner, on both architectures, and passed; `785941f` docs: `ci` `34747686550` and `image` `34747686556` success; `8abccbf` WP-15i: `ci` `34747578240` and `image` `34747578213` success; `9b0b7b0` docs: `ci` `34742679056` and `image` `34742679006` success; `23c5d37` WP-21: `ci` `34742367222` and `image` `34742367313`
 success; `c33529f` docs: `ci` `34734303378` and `image` `34734303354` success; `e4eaf8a` WP-15e: `ci`
 `34734001501` and `image` `34734001547`
 success; `5121d73` docs: `ci` `34730928549` success; `image` `34730928533`
@@ -1165,6 +1188,8 @@ nothing to bound yet. Whoever supplies the credential wires it in the same chang
 > it. A later number above an earlier one is the ordering working, not a mistake.
 
 ### 8. **`gitleaks` pre-commit is a no-op in a linked worktree, and it fails open** (TODO)
+> **M4 (architect, session 6): folded into WP-68.**
+
 **What is wrong.** The pre-commit secret scan reports success by scanning nothing when the repository
 it is run in is a linked worktree.
 
@@ -1199,6 +1224,8 @@ worktree this session is **unverified** by the pre-commit half, not that it was 
 touches the hook, and before the next session that runs agents in worktrees.
 
 ### 54. **`compose.yml` writes the `app` service's environment out by hand, so twenty of the thirty-six variables the server reads never reach the process — and on a stock instance no integration can be created and no `_FILE` secret can be used** (TODO — **no work package owns it**; found by WP-23's dogfood run, session 5)
+> **M4 (architect, session 6): folded into WP-50.**
+
 **What is wrong.** The `app` service passes an explicit `environment:` map (`compose.yml:101-125`).
 Everything else an operator puts in `.env` interpolates `${…}` **inside the compose file** and stops
 there: `.env` is compose's environment, not the container's. The list is hand-maintained and nothing
@@ -1331,6 +1358,8 @@ ci-fix notes. First green run: **`34580312845`**, all eleven jobs. Left behind b
   (`event-bus.ts:486` → `recordFailure:309`).
 
 ### 35. **A run's `structuredOutput` is stored in `artifacts.data` unredacted, and TD-012's write list names artifacts** (TODO — **measured at WP-18b**, session 5; filed as a bullet twice since WP-12/WP-15 and never given a number; **no work package owns it**)
+> **M4 (architect, session 6): folded into WP-52.**
+
 **What is wrong.** TD-012 is redaction *at the write*, and the writes are enumerated rather than implied:
 `docs/decisions/technical/TD-012-secret-redaction-at-write.md:8` names `run_messages`,
 `integration_actions`, `events.payload`, `config_audit`, **artifacts** and KB commits, and requires
@@ -1429,6 +1458,8 @@ same commit — the same redactor, the same decision, one migration. Entry **18*
 writes) touches the same `saga.ts` read-back and should not be conflated with it.
 
 ### 0b. **No sweep reclaims an orphaned control *directory*** — what is left of "a per-run control volume" after WP-22 (TODO; the capability half is **CLOSED**, the volume half is **REFUSED**, the sweep is open)
+> **M4 (architect, session 6): folded into WP-53.**
+
 **Read the status before the history.** This entry was written as *"a per-run control volume — the fix the
 ci-fix routed around"*, and WP-22, which it named as owner, answered it in three parts (refiner, session 5;
 the full measurement is under "WP-22 — images and compose"). Kept in one place rather than split, because
@@ -1537,6 +1568,8 @@ harness's own making holds an idle client, and that fails today. Re-running the 
 touches `test/integration/support/postgres.ts`, and **before WP-22** leans on this tier for its images.
 
 ### 1. What WP-15a left behind — **production still does not start the pipeline** (TODO)
+> **M4 (architect, session 6): folded into WP-73.**
+
 The sentence a reader needs, in the reviewer's words: **"The pipeline is composed and production does not
 start it."** Three separate things, none of them WP-15a's to fix:
 
@@ -1676,6 +1709,8 @@ that row. The fallback rule is an engineering decision, not a product one; it ne
 > `/` against the built product image.
 
 ### 37. **The KB health report is written nightly, ~~read by nobody~~ (read by `GET /api/projects/:id/kb/health` since WP-15h part 2 — an endpoint no screen calls yet), and cannot contain two of the findings its own documents promise** (the reader half **RESOLVED** at WP-15h part 2; the invalid-documents half TODO — **no work package owns it**; found by WP-18b and WP-18a, session 5)
+> **M4 (architect, session 6): folded into WP-57.**
+
 **What is wrong.** Two halves, both about the same report, and they have **different causes** — which is why
 they are one entry with the causes named rather than two:
 - **No reader.** `kb_health_reports` (migration **0018**) gains a row per project per night from the hygiene
@@ -1729,6 +1764,8 @@ decision first and is recorded on **Q66**, whose last paragraph asks whether an 
 should expire.
 
 ### 49. **No run of any role can execute a project command — "the project's declared commands" is the one clause of product/19 §3's Implementation allow-list that nothing ships** (TODO — **no work package owns it**; found by WP-21's review round 2, session 5; the product half is **Q69**)
+> **M4 (architect, session 6): folded into WP-54.**
+
 Placed here because it is entry **23** one ring further out: 23 was the platform never reading the
 ticket, this is the platform never running the project — both are capabilities every role's prompt
 assumes, and neither was any work package's.
@@ -1833,6 +1870,8 @@ decides which *SDK tool* a role holds and argues that widening is bounded becaus
 governs the shell — this entry is what that policy actually grants.
 
 ### 50. **A cancelled run's spend reaches no `cost_entries` row, no rollup and no budget window — and the invariant WP-19 is measured by stays true while it is lost** (TODO — **no work package owns it**; found by WP-15i, session 5; the product half is **Q70** (b))
+> **M4 (architect, session 6): folded into WP-47.**
+
 Placed beside **49** because it is the same shape one table across: a path every tier passes, and a
 number no acceptance criterion sums.
 
@@ -1924,6 +1963,8 @@ question is untouched, and taking 109 with this entry is cheaper than taking eit
 want the same thing — a run that ends outside its own process still reaching `chargeBudgets`.*
 
 ### 51. **`rework` resets the task and leaves the merge request open on the provider — and the port it would need has no way to close one** (TODO, latent — **no work package owns it**; found by WP-15i, session 5)
+> **M4 (architect, session 6): folded into WP-59.**
+
 **What is wrong.** product/04:86 makes human rejection a reset with two halves, and only the first is
 built. The second half reads:
 
@@ -2350,6 +2391,8 @@ did upkeep cost"* by **task** — a maintenance chore's runs are ordinary delive
 not in `runs.mode`. Whoever takes WP-41 should read that sentence before grouping by this column.
 
 ### 59. **Nothing tells the platform that a ticket changed, so three separate promises rest on an event the catalogue does not have — and it is a one-normaliser change, not the two-provider one two documents price it at** (TODO, small — **no work package owns it**; found by WP-25, session 5; the product half is **Q61 (b)**)
+> **M4 (architect, session 6): folded into WP-60.**
+
 Placed directly above entry 23 because it is that entry's other half: 23 is *the platform never reads
 the ticket*, closed at WP-15f; this is *the platform is never told the ticket was rewritten*, which is
 what makes the snapshot 23 produced go stale in silence.
@@ -2510,6 +2553,8 @@ a project with a Jira binding produces no `read_ticket` row — so if the call i
 above this function, no tier fails. Not re-opened for it: the caller census is one function today.
 
 ### 63. **The conflict warning reaches a merge-request thread and an `events` row, and the board both product documents name has no field to render it — the promised surface is the one surface with nothing on it** (TODO, small — **no work package owns it**; found by WP-26, session 5)
+> **M4 (architect, session 6): deliberately unowned — met at WP-41: `taskRecordSchema.conflict` is published and `apps/web/src/features/board.tsx:117-129` renders the badge; the heading is stale, and the pair’s asymmetry is entry **65**, folded into WP-59.**
+
 **What is wrong.** product/04 S6b is *"the board warns when two active tasks touch the same files"* and
 product/18 is *"surfaced on the board ('touches the same files as PROJ-98')"*. What WP-26 ships is a
 thread on the task's **own** merge request plus `task.conflict.warned`. Nothing in `apps/web` reads
@@ -2556,6 +2601,8 @@ this entry is still its brief; what changed is only that the M3 default now has 
 none.
 
 ### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again, WP-39 a third duty that re-reads the pipeline status the CI gate reads, and WP-38 a fourth diff read at a trigger of its own, so a task's diff is now downloaded four times**)
+> **M4 (architect, session 6): folded into WP-59.**
+
 **What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
 calls `getMergeRequestDiff` once for the task and once per peer and keeps `new_path`/`old_path`; the
 port's `FileDiff` carries `diff` as well, so every patch is fetched and discarded. One gate entry is
@@ -2687,6 +2734,8 @@ live merge requests, where the `K²` reads land on the provider's rate limit tha
 calls share.
 
 ### 65. **A conflict warning is posted on the merge request of whichever task entered the rebase gate second, and the other task of the pair is never told** (TODO, small — stated as a design property by WP-26 and filed because the promise is about the pair; **no work package owns it**; found by WP-26, session 5)
+> **M4 (architect, session 6): folded into WP-59.**
+
 **What is wrong.** The trigger is `task.stage.entered` filtered to the rebase gate, so a task learns
 about an overlap only when **its own** gate runs. A task whose gate ran before the peer had a merge
 request is told nothing, and it is asleep at `ready_for_merge`, woken only by `mr.review.comment`,
@@ -2719,6 +2768,8 @@ provider write per pair and BD-003's audit row with it.
 is whoever takes 63, in the same change, because the board is where the asymmetry becomes visible.
 
 ### 66. **A conflict resolution re-runs the whole review tail, and two of them can spend over half a task's default budget and two of its three code-review rounds** (TODO, small — priced and deliberate; filed for the bound nobody stated; found by WP-26, session 5)
+> **M4 (architect, session 6): folded into WP-73.**
+
 **What is wrong.** Nothing in the pipeline: `conflict_resolution` falls through to `ci_gate`, which is
 product/04 S6b's *"re-run CI"*, and the tail after it is `code_review` → `business_review` →
 `rebase_gate` (`packages/domain/src/pipeline/templates.ts:163-191`). The price is stated at the line —
@@ -2754,6 +2805,8 @@ spends the same budget as one after a human's finding.
 product/04 S6b.
 
 ### 67. **A return's reason is written on the row of the stage the task *leaves* and read from the row of the stage it *enters*, so a re-run stage is served its own last complaint instead of the finding it is being asked to fix** (TODO — **no work package owns it**; found by WP-27, session 5)
+> **M4 (architect, session 6): folded into WP-55.**
+
 **What is wrong.** `applyDecision`'s `return` branch writes the reason on the **leaving** stage's row —
 `recordStageExited(tx, {taskId, stage: decision.from, attempt, outcome: 'returned', returnReason:
 decision.reason})` (`packages/application/src/pipeline/transitions.ts:202-208`) — and the stage
@@ -2819,6 +2872,8 @@ the stage with a note 'continued by human: `<summary>`'"* stays unmet until this
 measurement needed before starting; it is live today on every return.
 
 ### 68. **The take-over export writes a tarball nothing serves and no transcript at all, so two documents' *"downloadable from the UI"* has no endpoint — and `compose.yml` already mounts the export volume into a process with no code that reads it** (TODO — **no work package owns it**; found by WP-27, session 5)
+> **M4 (architect, session 6): folded into WP-44.**
+
 **What is wrong.** One cause with three symptoms: the export's **production** half shipped (WP-14's
 `WorkspaceProvider.export`, WP-27's take-over) and its **delivery** half — how a human gets the bytes
 — has never been anybody's row. technical/05:11 is *"branch pushed + transcript JSONL copied to
@@ -2904,6 +2959,8 @@ for the directory, and the take-over/hand-back control that gives both a caller.
 row owns it. Nothing is scheduled by this note.
 
 ### 69. **`tasks` records that a task is paused and not *why*, so a workpad render while a human holds the task drops the take-over block — and the timeout that would trigger it is product/19 § 19's one unbuilt clause** (TODO, small, latent — **no work package owns either half**; found by WP-27, session 5)
+> **M4 (architect, session 6): folded into WP-56.**
+
 **What is wrong.** The workpad's take-over block (branch, `claude --resume` line, how to hand back) is
 carried on the `pipeline.outbound` job payload rather than re-derived from state: the handler copies
 `taken_over_branch`/`taken_over_session` onto the job **only** when the event it woke on is
@@ -2953,6 +3010,8 @@ the render is whoever next edits `packages/application/src/pipeline/workpad.ts`;
 piece of product/19 § 19 that WP-27 did not claim, and naming it here is the only record it has.
 
 ### 70. **Nothing in the SPA calls take-over or hand-back, so two shipped commands are reachable only by hand — and the client-driven census is blind to them by construction** (TODO, small — **no work package owns it**; found by WP-27, session 5)
+> **M4 (architect, session 6): folded into WP-44.**
+
 **What is wrong.** `POST /api/tasks/:task_id/take-over` and `/hand-back` are served, permissioned and
 audited, and no screen calls them. The reason the SPA gave for declining them is **no longer true**
 and the files say so: WP-27 published `takeOverResponseSchema` and `taskDetailResponseSchema.taken_over`
@@ -3002,6 +3061,8 @@ settings page's command sets and a take-over button belongs to neither screen. S
 row of its own, and the two hand-written cases in `client-census.test.ts` stay until it lands.*
 
 ### 71. **A run's workspace has no way to say which branch to check out, so technical/05 §2's *"checkout of the task branch for re-entries"* has no carrier — and product/19 § 19's hand-back re-provision is unimplementable as written** (TODO, latent — **no work package owns it**; found while judging WP-27's hand-back, session 5. **Half built at WP-34**, session 5: `RunSpec.checkoutRef` exists and the planner fills it; one mapping at the provisioner remains, measured at the end of this entry)
+> **M4 (architect, session 6): folded into WP-53.**
+
 **What is wrong.** `RunWorkspaceProvisioner.provision(spec: RunSpec)`
 (`packages/infrastructure/src/runner/workspace-runner.ts:104-106`) is the whole interface through
 which a run gets a workspace, and `runSpecSchema` (`packages/application/src/ports/runner.ts:145`)
@@ -3074,6 +3135,8 @@ predicted, because a shadow batch that silently started from the default branch 
 similarity figure that measures drift, which is the one number the feature exists for.
 
 ### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (TODO for **(a)** and **(b)** — **no work package owns either**; **(c) RESOLVED** at `621b57f`, WP-34, session 5 — `picksUpNewTickets` and `shadowMode` both read, and `autonomy-readers.test.ts`'s split assertion moved with them to **eight** read / **seven** unread; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
+> **M4 (architect, session 6): folded into WP-62.**
+
 **What is wrong.** WP-30 materialised the dial and gave five policies a reader; the enumeration it
 left behind says the rest out loud. The discovered-work bullet, quoted: *"six are read by the
 plan-approval gate and the read endpoint, `budgetApprovalThresholdUsd` is **WP-28's** (its row names
@@ -3359,6 +3422,8 @@ request's reviewers are set by **id**.
   every task — backlog 92**, with backlog **79** as the other half of the same step.
 
 ### 74. **BD-006's one-working-day question timeout is unbuilt end to end — no deadline is written, no timer is armed, and the escalation that exists has no producer** (TODO — **no work package owns it**; found by the refiner while attributing WP-30's `questionTimeout` policy, session 5)
+> **M4 (architect, session 6): folded into WP-56.**
+
 **What is wrong.** A blocking question parks a task for ever. Every piece of the timeout exists
 except the one that starts it, and each piece is production code that looks finished.
 
@@ -3472,6 +3537,8 @@ and is a deviation from TD-004's two names that has to be argued in the change. 
 shipping four workers without noticing the floor is not.
 
 ### 75. **`tasks.cost_estimated` is published on the task DTO and nothing has ever written it, so every task the product has served reports `$0.00` of estimated spend** (TODO, small, latent — **no work package owns it**; recorded as a discovered-work bullet **twice**, at WP-19 and again at WP-28, and never given a number; found by WP-28, session 5)
+> **M4 (architect, session 6): folded into WP-47.**
+
 **What is wrong.** A `not null default 0` column with no writer is published as a task's estimated
 spend. It is standing rule **16**'s shape one layer out: the absent case and the measured-zero case
 are spelled the same, so *"nobody counted"* is served as *"nothing was estimated"*.
@@ -3536,6 +3603,8 @@ WP-41 must not be the row that discovers it. The entry still has **no owner** fo
 itself; the cheapest adjacency is unchanged.
 
 ### 76. **Neither approval gate passes a deadline, so `approvals.deadline_at` is null on every row, `expireApproval` has no producer and `expireTaskApproval` has no caller at all — and unlike the question timeout, no document says an approval expires** (TODO, latent — **no work package owns it**; the third instance of the class entries **69** and **74** record; found by WP-28, session 5)
+> **M4 (architect, session 6): folded into WP-56.**
+
 **What is wrong.** The whole expiry mechanism is written — column, predicate, aggregate command,
 application command, event value, saga escalation — and the one piece that would start it is missing
 at both call sites. Unlike entry **74**, it cannot simply be built: nothing in the product documents
@@ -3607,6 +3676,8 @@ neither, this is one small row carrying **69**, **74** and **76** — three dead
 and each one filed separately only because each is missing a different half.
 
 ### 77. **The pipeline harness accepts a scripted artifact the production runner would refuse, so every hand-written artifact fixture in the unit tier is unvalidated — one has been wrong since WP-15 and two copies of it are still in the tree** (TODO, small — **no work package owns it**; the detector is a few lines; found by WP-28, session 5, and swept by the refiner)
+> **M4 (architect, session 6): folded into WP-69.**
+
 **What is wrong.** One cause: `ScriptedRun.structuredOutput` is `unknown` and is cast into the run
 outcome, so the harness is **kinder than the real adapter** (standing rule **1**) about the one thing
 a stage exists to produce. Production parses the same value against `artifactDataSchemas` and refuses
@@ -3667,6 +3738,8 @@ is a test-infrastructure change of a few lines and belongs to the next row that 
 **1**, so a future reader meets it at the rule as well as here.
 
 ### 78. **Nothing opens the Socket Mode connection the shipped Slack app manifest selects, so every inbound chat decision — a button click, a thread answer — reaches no door; the transport the composition *can* serve is the one the manifest disables** (TODO — **no work package owns it**; found by WP-32, session 5)
+> **M4 (architect, session 6): folded into WP-43.**
+
 **What is wrong.** The platform now speaks into a chat channel and cannot hear the answer. Slack has
 two inbound transports and this build ships both halves of neither: the one the shipped manifest
 selects (Socket Mode) is started by no composition root, and the one a composition root can serve
@@ -3846,6 +3919,8 @@ it is what a reader should not assume is closed with it:
   existing `forProvider` and touches no line of that file.
 
 ### 80. **An organisation-scoped budget notifies nobody, and `notifications.project_id` is `not null`, so the one cap that stops every project cannot even be recorded** (TODO, small — **no work package owns it**; found by WP-32, session 5)
+> **M4 (architect, session 6): folded into WP-65.**
+
 **What is wrong.** The budget with the widest blast radius is the only one with no channel. It is
 decided and logged rather than crashing, which is the right direction; what it costs is that the stop
 nobody hears about is the loudest one.
@@ -3911,6 +3986,8 @@ Entry **81** is its neighbour rather than its duplicate: this one is a notificat
 recorded, that one is recorded notifications nobody reads.
 
 ### 81. **The `notifications` outbox has no reader outside the digest, so a notification whose delivery failed is invisible — and on the shipped defaults nothing ever retries it** (TODO, small — working as designed, with the observability missing; **no work package owns it**; found by WP-32, session 5)
+> **M4 (architect, session 6): folded into WP-65.**
+
 **What is wrong.** `delivered_at` is the only column that says a human was told, and nothing ever
 reads it to ask *who was not told*. The notify band's own failure mode is silent.
 
@@ -3952,6 +4029,8 @@ queue-depth alerting on `event_dispatch_pending`, which `docs/TODO.md` already r
 work package, so one row could take both.
 
 ### 82. **An ask run is provisioned a container and a checkout it holds no tool to open, and two docblocks in the planner say it is not** (TODO, small, **latent** — no production path composes a provisioner today; **no work package owns it**; found by WP-31, session 5)
+> **M4 (architect, session 6): folded into WP-53.**
+
 **What is wrong.** `createWorkspaceClaudeRunner` provisions a workspace for **every** `RunSpec`, with
 no predicate of any kind — `workspace = await options.provisioner.provision(spec)`
 (`packages/infrastructure/src/runner/workspace-runner.ts:192`) — while `TOOLS_BY_ROLE.ask` is `[]`
@@ -4012,6 +4091,8 @@ launcher deployment behind **Q52**'s transport — because that is the commit on
 real and the docblocks become false.
 
 ### 83. **`get_task_context` refuses for all ten roles that hold it, and its `include` vocabulary has no value for the two things an ask is about** (TODO — **no work package owns it**; the refusal has been recorded since WP-17 as *another entry's evidence* and never given a number; measured again by WP-31, session 5)
+> **M4 (architect, session 6): folded into WP-54.**
+
 **What is wrong.** The platform tool whose whole job is *"read the platform's own record of this
 task"* refuses by name in the production surface — `getTaskContext: async () => refuse(…)`
 (`apps/server/src/platform-tools.ts:118`) — while ten of the eleven roles in
@@ -4140,6 +4221,8 @@ and `ask-pipeline.test.ts:919` pins it leaving `status = 'pending'`); and `admis
 the query's age bound is the only thing standing between a slow run and a second one.
 
 ### 85. **No route serves an artifact's body, so every artifact on every task screen is a row you cannot open — and the first one a human actually wants to read is the `AskAnswer`** (TODO, small — one cause, two symptoms; **no work package owns it**; found by WP-31, session 5)
+> **M4 (architect, session 6): folded into WP-52.**
+
 **What is wrong.** `GET /api/tasks/:task_id` publishes each artifact as
 `{id, artifact_type, version, url: null}` — the `null` is a literal in the projection
 (`apps/server/src/queries/pipeline-queries.ts:629-634`) — and no route anywhere serves an artifact's
@@ -4192,6 +4275,8 @@ its write-side redaction here). WP-15h owns the projections and shipped this `nu
 started to look odd. Cheapest owner: whoever takes **35**, which has to touch the same rows anyway.
 
 ### 86. **An `audit` or `knowledge` citation names a row the product can serve and a screen cannot address, so two of an ask's four citation kinds are plain text** (nit, TODO — **no work package owns it**; found by WP-31, session 5)
+> **M4 (architect, session 6): folded into WP-52.**
+
 **What is wrong.** An `AskAnswerCitation` deliberately carries **no URL** — it names a row, and the
 application builds the link (`apps/web/src/features/ask-thread.tsx:12-16`, Q49's reasoning). Of the
 four kinds, `run` links; `artifact` is backlog **85**; and `audit` and `knowledge` fall through to the
@@ -4216,6 +4301,8 @@ is lost.
 `apps/web/src/features/ask-thread.tsx` or the knowledge screen; the two halves are independent.
 
 ### 87. **The global branch-coverage threshold has 0.05 points of headroom, so the next work package pays a debt it did not create — and the cheap way out removes an instrument that has already found four defects** (TODO, small — **no work package owns it**; reported by WP-31's implementer, session 5; the figure is **not re-measured here**, rule 66)
+> **M4 (architect, session 6): folded into WP-70.**
+
 **What is wrong.** `verify:tests` enforces `branches: 80` over
 `packages/*/src/**`, `apps/server/src/**`, `apps/launcher/src/**` and `apps/runlet/src/**`
 (`vitest.config.ts:168-172`, with `packages/domain/src/**` held to 85 at `:174-179`), and WP-31's run
@@ -4254,6 +4341,8 @@ different question from the absolute budget, and the row that measures a thing s
 that pays for it. Cheapest owner is whoever the gate stops first.
 
 ### 88. **A bot that is not this platform opens and extends a human review window, so every reviewer-minutes figure over-counts by however many robots comment on a merge request — and the flag that would fix it cannot be written in the table the bullet proposes, nor on the wire** (TODO — **no work package owns it**; found by WP-29, session 5)
+> **M4 (architect, session 6): folded into WP-61.**
+
 **What is wrong.** The human-time projector tells its **own** merge-request comments from a person's
 by the HTML marker every comment this platform posts carries, and by nothing else. A CI bot, a
 dependency updater or a release bot carries no such marker, so its comment is *"the first human MR
@@ -4313,6 +4402,8 @@ next opens the identity surface (`apps/server/src/routes/org.ts`, WP-31's) is th
 a bot flag is an identity fact and the command, the list and the DTO are all in that file.
 
 ### 89. **The eight-hour day cap is applied per entry and product/19 §16 never says per what, so one person can be credited more than a day in a day — decided rather than defective, and the decision is safe only until something sums across tasks** (nit, TODO — the read half is **WP-41**'s; found by WP-29, session 5)
+> **M4 (architect, session 6): folded into WP-61.**
+
 **What is wrong — nothing, on this build.** This is a reading of an ambiguous sentence, not a defect,
 and it is filed so that the row which *publishes* a cross-task total does not rediscover it as one.
 product/19:145 says the review window is *"capped at 8 h per calendar day and excluding gaps > 2 h"*
@@ -4348,6 +4439,8 @@ read-side cap possible *now*, where it was not before, is `human_time_entries.ex
 no owner and is one line; whoever answers **Q73** is touching the same paragraph.
 
 ### 90. **`mr.approved` is in product/08's git-provider contract and absent from technical/02's catalogue, so approving is the one review act the platform cannot see — and the minutes shipped at WP-29 under-count by exactly the reviewers who never comment** (TODO, small — **no work package owns the emission**; **WP-41** is the consumer; found by WP-29, session 5; the ticket-side twin is entry **59**)
+> **M4 (architect, session 6): folded into WP-60.**
+
 **What is wrong.** Two product-and-technical documents disagree, and the code follows the narrower one.
 product/08:10 lists the git provider's emitted events as *"`mr.opened`, `mr.updated`,
 `mr.review.comment`, `mr.approved`, `mr.merged`, `mr.closed`, `ci.pipeline.finished`"*;
@@ -4404,6 +4497,8 @@ metric ships incomplete with a footnote. Cheapest owner: whoever next opens `git
 row does today.
 
 ### 91. **No review checklist exists anywhere in the product, so product/19 §14's two checklist classes ship as a refusal and a half-proposal — `public_api` is not offered at all, and `payments` is offered with one of its two documented requirements and nothing on the screen saying the other was dropped** (TODO — **no work package owns it**; the row it wants is **WP-45**, named on the M3 page; **blocked on Q83**; found by WP-37, session 5)
+> **M4 (architect, session 6): folded into WP-45.**
+
 **What is wrong — one cause, two symptoms.** `checklist:<name>` cannot be written in a configuration
 file *and* there is nothing for it to select: the only review checklist in the product is prose
 inside the reviewer's own prompt. Two of product/19 §14's six classes are defined by it — *"payments
@@ -4477,6 +4572,8 @@ thing in this entry; nearest owner for it is whoever next opens `risk-classes.ts
 screen.
 
 ### 92. **`tasks.requested_by_user_id` has no writer at any of the four sites that create a task, so product/19:138's third reviewer step resolves to nobody on every task — and at three of the four the requester is in hand and dropped** (TODO, small — **no work package owns it**; found by WP-37, session 5; the other half of the same step is backlog **79**)
+> **M4 (architect, session 6): folded into WP-67.**
+
 **What is wrong.** The reviewer precedence's fallback reads a column nothing writes. WP-37 implemented
 the step rather than omitting it — *"routing that cannot express its own last step is the state
 `readCodeowners` sat in for five milestones"* — and says so by name in the log, so nothing is assigned
@@ -4631,6 +4728,8 @@ one line would split this entry's evidence in two, which is the thing this backl
 warns about.
 
 ### 94. **`ci.pipeline.finished.coverage_pct` now has no reader anywhere, the one shipped adapter writes `null` there on every delivery, and the fake writes a number** (nit, TODO, latent — **no work package owns it**; working as designed after WP-39 and filed so the next reader meets the decision rather than the trap; found by WP-39, session 5)
+> **M4 (architect, session 6): folded into WP-61.**
+
 **What is wrong.** Nothing today, and that is the entry. The payload field is published by the event
 catalogue, filled `null` by the only adapter this build ships, filled with a **number** by the fake,
 and read by no production code at all. The next feature that reaches for it would be green in every
@@ -4682,6 +4781,8 @@ read) rather than from the delivery — a statistics row built on the payload fi
 for every GitLab project.
 
 ### 95. **Six of product/10:38's eleven Checks items are named absent on the merge-readiness screen, and they are not one piece of work: two have no stored verdict to project because no gate's stage row is ever closed, two are blocked on an artifact body no route serves, one needs a narrow column and one has no producer at all** (TODO — **no work package owns it**; found by WP-38, session 5; the cheapest owner **differs per item** and **WP-41 is the wrong home for all six**)
+> **M4 (architect, session 6): folded into **WP-46**, with its gate-row half (items 1 and 2) in **WP-55**.**
+
 **What is wrong.** The Checks panel answers five of product/10:38's eleven items and names the other
 six absent. That is the honest ending WP-38's criterion 5 permits, and the census is held in a test in
 both directions so it cannot go stale. What is *not* established is the sentence the discovered-work
@@ -4791,6 +4892,8 @@ number, beside WP-43, WP-44 and WP-45 named on the M3 page — with this entry a
 tamper check explicitly **not** in it.
 
 ### 96. **The dependency gate decides once and never asks again, so a task that is not `active` when the job fires records the decision and asks nobody — and the `block` ending has the same shape, where the cost is a blocked package merging** (TODO — **no work package owns it**; found by WP-38, session 5, which measured the `ask` half in the e2e tier; **live for the human-owned stops, and the `ready_for_merge` case needs a product decision**)
+> **M4 (architect, session 6): folded into WP-67.**
+
 **What is wrong.** One cause: the gate is a **one-shot** `pipeline.outbound` duty with no re-entry.
 Both of its acting endings re-validate the task's state when the job fires (TD-004, correctly), both
 give up when the state is wrong (correctly, and the log says so), and **nothing ever re-attempts**. The
@@ -4877,6 +4980,8 @@ different site* — a gate settling for a task that had stopped — and is the p
 shape, since that one already ends with *"the gate is re-entered when the task resumes"*.
 
 ### 97. **`IntegrationActionExecutor` cannot audit a call that has no binding, because `integration_actions.integration_id` is `not null` — so the platform's first outbound call of its own gets no audit row at all, and nothing says which audit it should get instead** (TODO, small — **no work package owns it**; surfaced by WP-38, session 5, whose deviation is decided and reasoned; this entry is the **general** assumption underneath it, which no document states)
+> **M4 (architect, session 6): folded into WP-51.**
+
 **What is wrong.** The non-negotiable in `CLAUDE.md` is *"Every outbound provider call goes through
 `IntegrationActionExecutor` … never directly"*, and the audit table it writes assumes every outbound
 call belongs to a **binding**. That assumption held while every outbound call was a provider call. It
@@ -5030,6 +5135,8 @@ stays green because nothing asserted the deleted field. The one thing no local c
 both vendor pages were re-read on 2026-09-14.
 
 ### 99. **A replayed shadow-batch command performs nothing and leaves two rows saying it did something, because it is the one command surface on this build that does not answer the previous attempt** (TODO, small — WP-34's own assumption (d), reversible in one function swap; **no work package owns it**; found by WP-34, session 5)
+> **M4 (architect, session 6): folded into WP-67.**
+
 **What is wrong.** `POST /api/projects/:id/shadow-batches` guards its `Idempotency-Key` with
 `assertIdempotentRequest` (refuse a different body) where every other command on this build uses
 `idempotentReplay` (refuse a different body **and** answer the first attempt). The effect the row's
@@ -5087,6 +5194,8 @@ measurement: none.**
 `Idempotency-Key` gap WP-15i closed) is the ancestor of the mechanism, not of this entry.
 
 ### 100. **Two of product/19 §13's shadow-report items have no producer, and both want the same missing thing — a Reviewer pass over the *human* merge request; one is refused by name and the other is a field that is `null` on every report** (TODO — **no work package owns it**; found by WP-34, session 5)
+> **M4 (architect, session 6): folded into WP-45.**
+
 **What is wrong.** One cause, two symptoms. The shadow report compares what the agent built against
 what the human merged, and nothing on this build ever *reads* the human's merge request for meaning —
 only for its diff. So the two items that are judgements about the human's work are absent: one as a
@@ -5264,6 +5373,8 @@ unique). The **fifth** site this walk turned up — the lost `record` wake-up, w
 same way through the same index and is *not* a row of the table — is backlog **106**.
 
 ### 102. **`merge_requests_read` is a model's coverage claim that reaches a log line and no reader, so a batch that mined a fifth of its history is spelled exactly like one that mined all of it** (TODO, small — working as designed and filed so the next reader meets the decision rather than the trap; **no work package owns it**, and **WP-41 is the wrong home**; found by WP-35, session 5)
+> **M4 (architect, session 6): folded into WP-66.**
+
 
 **What is wrong.** The historian artifact carries `merge_requests_read`, the platform knows
 `merge_requests_given`, the recorder logs both side by side, and **nothing compares them or shows them**. A
@@ -5321,6 +5432,8 @@ Cheapest owner: whoever next opens `packages/application/src/bootstrap/record.ts
 same class one signal over (a number produced and read by nothing), and entry **31** is the oldest instance.
 
 ### 103. **A bootstrap reads a quarter of N in tickets and the newest four comments of each, and the bound is a *chosen* number the byte budget consumes — not, as the bullet and the docblock read, a number the budget derived** (TODO, small — working as designed, with one claim to correct and one coverage figure nobody has measured; **no work package owns it**; found by WP-35, session 5)
+> **M4 (architect, session 6): folded into WP-66.**
+
 
 **What is wrong.** Two things, and only the second is a defect. The **coverage** is bounded far below what
 product/19 §18 describes, which is stated honestly and is a real product gap. The **justification** is
@@ -5556,6 +5669,8 @@ that composes a runner (`stranded.ts`'s ask row only fires where asks run) or th
 `collect` fails for a reason a retry cannot fix.
 
 ### 106. **A lost `record` wake-up bricks a history bootstrap exactly as backlog 101's lost `collect` does, it is not a row of the recovery table, and the seam WP-36 widened to reproduce that class still cannot reach it — three worker runtimes are composed with the *unwrapped* `Jobs` while the docblock lists one of them as covered** (TODO — one cause, two halves; **no work package owns it**; found by the refiner while walking backlog 101's table, session 5)
+> **M4 (architect, session 6): folded into WP-48.**
+
 
 **What is wrong — the cause, once.** WP-36 moved `PipelineComposition.jobs` out of `composePipeline` and
 into `startRuntime` so the drop-the-enqueue seam would cover more than the pipeline's own enqueues. It covers
@@ -5625,6 +5740,8 @@ Related: **101** (the four-site table), **36** (the other worker-enqueued site),
 census, which reads `createPipelineRuntime`'s call site and is blind to this by design).
 
 ### 107. **A maintenance pass's report reaches a log line and nothing else, so the platform re-announces the same three refusals to the same operator every day and there is no surface that says what the scheduler did** (nit-to-small, TODO — **working as designed**, with both alternatives weighed in the change itself; filed so the next reader meets the decision rather than the trap; **no work package owns it**; found by WP-36, session 5)
+> **M4 (architect, session 6): folded into WP-65.**
+
 
 **What is wrong.** `runMaintenanceSchedule` builds a per-project report — an outcome per chore type and a
 `refused` count (`packages/application/src/maintenance/scheduler.ts:137-171,283-290`) — returns it, logs it,
@@ -5672,6 +5789,8 @@ package owns it.** Related: backlog **81** (the notifications outbox has no read
 worth knowing before anybody builds a third one-off reader.
 
 ### 108. **WP-40 shipped no `apps/web` change at all, so the epic split is unreachable from the product at both ends — no screen can turn the feature on and no screen can accept its output** (TODO — one cause, two symptoms; **no work package owns it**; found by WP-40, session 5)
+> **M4 (architect, session 6): folded into WP-44.**
+
 
 **What is wrong.** One cause: the row built a complete server feature and touched no screen. Two symptoms,
 and each is a different kind of unreachable. **(a) The acceptance queue has no panel**: `GET
@@ -5764,6 +5883,8 @@ with no notice — is **not** filed either: it is in WP-40's own reversible-assu
 round in progress is where it is decided.
 
 ### 109. **A run whose process died stays `running` for ever — and since WP-40's cap fix it holds a budget reservation for ever with it, in every future window, releasable only by the one command that loses the spend** (TODO — the stuck row is old, **the cost is new at WP-40**; **no work package owns it**; found by the cap-race fix on WP-40's tree, session 5)
+> **M4 (architect, session 6): folded into WP-47.**
+
 
 **What is wrong.** Nothing in this build ever ends a run whose process vanished, and nothing detects one.
 Until WP-40 that cost a row in a wrong state. Since WP-40's pre-review fix, admission counts a **live**
@@ -5858,6 +5979,8 @@ becomes real. Related: **50** (the exit door, and the other half of the same fix
 site), **110** (the other half of the pending term's blindness), **49**.
 
 ### 110. **A run that ends without a provider figure commits nothing to any cap until its ledger row lands — and in `local` provider mode that is every run, because `runs.usd_estimated` has never had a writer** (TODO, small — one cause, two symptoms; a **stated residual** of WP-40's cap fix, widened by one reading, plus one plain defect; **no work package owns it**; found by the refiner on WP-40's tree, session 5)
+> **M4 (architect, session 6): folded into WP-47.**
+
 
 **What is wrong.** WP-40's fix closed the cap race for a run that reports its own cost: `RunRepository.finish`
 writes `runs.usd_reported` in the run's **own** transaction and admission counts it until the ledger's rows
@@ -5936,6 +6059,8 @@ the ledger's tables and this column's semantics are its subject — or whoever t
 actual"* (backlog **18**'s territory), which is this same BD-004 blind spot one table up.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
+> **M4 (architect, session 6): folded into WP-68.**
+
 
 **What is wrong.** One sentence in the docblock of the guard that exists to stop prose from claiming
 something about a test that does not exist: *"Markdown is in that list because `CLAUDE.md`, `PROGRESS.md`
@@ -5982,6 +6107,8 @@ changes.
 `scripts/citations.ts` or `scripts/citations.test.ts`.
 
 ### 112. **The citation half of product/16's knowledge-usage metric already exists on two artifact types and has no reader, while the half WP-41 calls present has never held a row — the absence is stated the wrong way round, and closing it is a join plus backlog 31, not a runner change** (TODO, small — **no work package owns it**; **WP-41 is the wrong home**, the metric ships correctly absent; found by WP-41, refined off the tree, session 5)
+> **M4 (architect, session 6): folded into WP-57.**
+
 
 **What is wrong.** `STATS_CATALOGUE.kb_usage` is published `absent` with the reason *"Nothing records
 which context-pack items a run cited. `run_context_pack` stores what was *included* (tier, path,
@@ -6062,6 +6189,8 @@ owner; this is knowledge-side work. Cheapest home: whoever takes backlog 31, sin
 one migration and one query apart.
 
 ### 113. **The one git provider this build ships publishes no diff stats and the fake fills them on all three surfaces, so the field is measured in every tier and `null` on every instance — the fake's fifteen-item divergence register does not name it, and the follow-up that two documents say was *“recorded as discovered work”* never was** (TODO, small — one cause, three consequences, one of them **live** in WP-35's history bootstrap; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
+> **M4 (architect, session 6): folded into WP-59.**
+
 
 **What is wrong.** `MergeRequest.diff_stats` / `MergedMergeRequest.diff_stats` (`diffStatsSchema` =
 `{files_changed, insertions, deletions}`, `packages/contracts/src/records.ts:180-184`) is `null` on
@@ -6158,6 +6287,8 @@ Related: backlog **98** (a GitLab fixture's `diff_refs` provenance over-claim), 
 adapter and a different field.
 
 ### 114. **Nothing links a bug ticket to the merge request it escaped from, so product/16's defect-escape rate has no source — and the platform already ships the resolver that could supply one, built for shadow mode and pointed the other way** (TODO, small — **no work package owns it**; the product half is **Q87**; found by WP-41, refined off the tree, session 5)
+> **M4 (architect, session 6): folded into WP-61.**
+
 
 **What is wrong.** `STATS_CATALOGUE.defect_escape` is published `absent`: *"Nothing links a later bug
 ticket to the merge request that caused it. The platform sees bug tickets it is given and merge
@@ -6228,6 +6359,8 @@ bug against a merge request. WP-41 is the wrong home for the same reason as back
 statistics row published the absence correctly and cannot manufacture the signal.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
+> **M4 (architect, session 6): deliberately unowned — met by WP-15f (merged); its only live remainder is entry 12’s zero-width query half, which WP-58 folds.**
+
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
 entry 1's sentence one layer further in: *the loop starts now, and what it starts on is a ticket
 identifier.* One cause; three symptoms; the two that are inside this repository's control are below.
@@ -6521,6 +6654,8 @@ on the same timer, which is the *"one pass, one interval, one pool reservation"*
 over** — backlog **105**.
 
 ### 36. **A lost curation wake-up loses one task's proposals, and nothing recovers it** (TODO, small — entry **20**'s cause at a second site, stated as a residual by WP-18b; **no work package owns the recovery**)
+> **M4 (architect, session 6): folded into WP-48.**
+
 **What is wrong.** The same mechanism as entry 20, one stage later: the `artifact.created` handler decides
 and enqueues the `knowledge.proposals` job through `context.afterCommit`
 (`packages/application/src/knowledge/librarian.ts:344`), and `afterCommit` is **at-most-once** (TD-004). A
@@ -6699,6 +6834,8 @@ neither was its to fix. Related: entry 1 (nothing produces the load yet), entry 
 of this entry, 110 and 120, whose *ordering* was that flake), entry 11 (the same "built, not owned" shape one layer up).
 
 ### 19. **`ProjectSettingsPort.forProject` borrows a pool connection *inside* the handler's transaction** (TODO, small — the **residue** of entry 17, not a reopening of it)
+> **M4 (architect, session 6): folded into WP-73.**
+
 **What is wrong.** The settings port reads `projects.config` on a connection it takes from the pool itself
 (`apps/server/src/pipeline.ts:183`, `createProjectSettingsPort` → `pool.query('select config from projects
 where id = $1')`) rather than on the caller's transaction, and three pipeline handlers call it while their
@@ -6772,6 +6909,8 @@ Detail and measurement are in the WP-16 notes and in "Discovered work"; this ent
 is readable next to entry 1 rather than only under the work package that found it.
 
 ### 61. **Two shipped stages sit outside `BUILTIN_STAGE_IDS`, so a readiness lint — a business pass — retrieves with technical weights, and the constant that decides it is doing two jobs** (TODO, small — **no work package owns it**; `discovery` has been in this position since WP-21; found by WP-25, session 5)
+> **M4 (architect, session 6): folded into WP-58.**
+
 Placed in the retrieval family, above entry 15, because it is a *pack quality* finding and not a
 configuration one: nothing is broken, the wrong half of the knowledge base is simply ranked higher.
 
@@ -6823,6 +6962,8 @@ omission is load-bearing and would become false in the same change (rule 83).
 retrieval — entry **15**'s owner, immediately below, is working in the same file.
 
 ### 15. **Retrieval has no defence against a junk query, and the remedy is a product decision (Q58)**
+> **M4 (architect, session 6): folded into WP-58.**
+
 **What is wrong.** Nothing between a degenerate query and the context pack rejects it. WP-16 round 1
 measured a single stopword query filling **87 %** of the budget with padding; the implementer fixed
 the *cause* found underneath it — `websearch_to_tsquery` joins bare words with **AND**, so the
@@ -6887,6 +7028,8 @@ not absent.
 > text reaches it, and none will until entry 23 closes.
 
 ### 12. **Untrusted context-pack text reaches the prompt with no delimiter, marker or count** (WP-17)
+> **M4 (architect, session 6): folded into WP-58.**
+
 **What is wrong.** technical/04 § "Prompt assembly" delimits the *task* block — step 5 is
 `<ticket>` … `</ticket>`, "all marked as data" — and says nothing of the kind about step 4, the
 context pack, which is rendered "tier 0 inline" and as a "Relevant knowledge" block. Nothing between
@@ -6953,6 +7096,8 @@ shown.
 > otherwise whoever next touches `sanitise.ts`.
 
 ### 13. **`context_budget_tokens` has no ceiling** (WP-17, one line)
+> **M4 (architect, session 6): folded into WP-58.**
+
 `packages/contracts/src/common.ts:46` is `tokenCountSchema = z.int().nonnegative()`, and
 `config.ts:47` types `context_budget_tokens` with it — so a project may configure a budget of any
 size, and the pack that fills it is spent per stage run. A nit today (the shipped default is 12 000
@@ -6960,6 +7105,8 @@ and nothing else sets it), and the cheapest fix is a `.max()` at the boundary ra
 the assembler. Found by WP-16's review.
 
 ### 31. **`run_context_pack` has never been written, and it could not hold the record if it were** (TODO — **no work package owns the writer**; found by the first reader, WP-15h)
+> **M4 (architect, session 6): folded into WP-57.**
+
 Placed here because the two entries below it argue their cost from this table's contents.
 
 **What is wrong.** technical/03 lists `run_context_pack` as the per-run record of the knowledge a
@@ -7032,6 +7179,8 @@ so `/prompt` refuses the same way — is **not** an entry here: storing the asse
 retention decision about untrusted text and is **Q64**.
 
 ### 14. **The token estimator can under-estimate, and its properties do not constrain it** (TODO)
+> **M4 (architect, session 6): folded into WP-58.**
+
 **What is wrong.** `estimateTokens` (`packages/domain/src/knowledge/tokens.ts`) is `ceil(chars / 4)`,
 every budget in the platform is denominated in it, and `run_context_pack.tokens` stores it. Under-
 estimating is the direction that overflows a real model's context window; over-estimating only wastes
@@ -7061,6 +7210,8 @@ The honest interim is a docblock line stating the measured worst case, which the
 first (it is the first consumer), otherwise whoever raises the budget past a Latin-script corpus.
 
 ### 16. **The fixture vault cannot falsify precision — its padding is chosen against the test queries** (rule 5)
+> **M4 (architect, session 6): folded into WP-58.**
+
 **What is wrong.** The corpus every retrieval test measures on cannot produce a false positive for
 those tests, because its noise was selected against their query list. This is a standing weakness of
 the **instrument**, not a defect in the code: the code does what it says, and the check that creates
@@ -7150,6 +7301,8 @@ reproduced deliberately rather than waited for.
 > core handler's own transaction, so no sibling has this shape.
 
 ### 2. The slack/census follow-up branch — **three review rounds, merging** (branch exists)
+> **M4 (architect, session 6): deliberately unowned — a session-4 branch status note; `fix/slack-redaction-and-census` merged and there is nothing left to build.**
+
 `fix/slack-redaction-and-census`, worktree `.claude/worktrees/slack-fix`, head `20b1e97` with `main` merged
 in at `415a3fb`. Round 1 found a **fourth** instance of the stored-secret class in `action-executor.ts`
 itself; the fix found it **wider** than the finding (the idempotency *key* leaked too); round 2 APPROVEd and
@@ -7158,6 +7311,8 @@ raised the collision that round 3 reversed the key half for (rule 70); round 3 f
 worktree the same minute (rule 66).
 
 ### 25. **A hand-written wall-clock deadline inside the fully parallel contract tier — the second instance of one class, and this one blocked a push** (TODO — **no work package owns it**)
+> **M4 (architect, session 6): folded into WP-69.**
+
 **What is wrong.** The runlet conformance suite waits on a structural event with a hand-written 30 s
 deadline — `packages/infrastructure/src/runlet/conformance.contract.test.ts:69`
 (`waitForFile(file, timeoutMs = 30_000)`) and `:83` (`waitFor(what, ready, timeoutMs = 30_000)`) — while
@@ -7282,6 +7437,8 @@ their budgets. Whoever next touches `packages/infrastructure/src/runlet/` takes 
 the measurement named above.
 
 ### 3. Citation guard — the oracle shares a shape with the parser it audits (rule 65)
+> **M4 (architect, session 6): folded into WP-68.**
+
 `scripts/citations.ts`: `CITATION_SITE` requires the backticked file token and `›` on the same **physical**
 line, exactly as the parser does, so a citation wrapped *between* those two is read by neither and the
 recall check reports **nothing at all** — measured: suite 12 passed, sites 18, failures `[]`. Fix by making
@@ -7302,6 +7459,8 @@ the one this very paragraph caused by abbreviating the cited name with an ellips
 refuses: an abbreviated test name is not a test name.
 
 ### 4. WP-15 round 2's minors (one-line each, from the approving review)
+> **M4 (architect, session 6): folded into WP-69.**
+
 - `packages/application/src/pipeline/gates.test.ts:214-223` — the test **named** for the Q55 cut asserts the
   absence of the log *ref* (`'log:test:unit'`), not the log *body* (`'FAIL src/totals.test.ts'`, present in
   the fixture). An implementation that closed Q55 by appending log text would pass it unchanged. The pin
@@ -7311,12 +7470,16 @@ refuses: an abbreviated test name is not a test name.
   production (GitLab reports such a pipeline `success`); one line.
 
 ### 5. `SweepReport` cannot see a chained dispatch's failure (discovered work, WP-15)
+> **M4 (architect, session 6): folded into WP-49.**
+
 A failure that does not surface is rule 10's shape at the infrastructure level. The reviewer confirmed it
 undermines nothing today — `sweep.failed` is read in one place outside `outbox.ts`, and `outbox.ts:208`
 uses it only for logging — so it is an observability gap, not a live defect. Fix it before anything starts
 *trusting* `SweepReport`.
 
 ### 10. **`nul:check` cannot see a NUL in an untracked file** (TODO — **second instance at session 5**, closed for one census and still open here; **four guards share the hole**, counted under “Scope” —
+> **M4 (architect, session 6): folded into WP-68.**
+
 where the **mirror hole** is now a second column: a census that *dies* on a path that vanished between
 the listing and the read, **eleven censuses, six of them unguarded**, WP-21, session 5)
 **What is wrong.** The guard's scope is `git ls-files` (CLAUDE.md says so), so a **new** source file
@@ -7442,6 +7605,8 @@ not intend and cannot see in its own output — twice in one work package, in tw
 was meant. The check existed; its *scope* was the hole.
 
 ### 22. **The pool floor is one computed constant and seven hand-written restatements of it — two of them stale on `main` at `38ea686`** (TODO, small — the class behind three repairs in one day)
+> **M4 (architect, session 6): folded into WP-73.**
+
 **What is wrong.** `requiredPoolConnections` computes the floor from `POOL_RESERVATIONS`
 (`apps/server/src/config.ts:236-305`) and **seven** other places state the same arithmetic by hand,
 in three media — a runtime string, six comments, and one *second default value* for the same knob in
@@ -7682,6 +7847,8 @@ derivable and the only one an operator reads at the moment the program refuses t
 is exactly what the previous instance said it would take.
 
 ### 38. **`ROLE` splits the product across containers and no tier has ever started two processes with different roles** (TODO — **no work package owns it**; the general form of a risk WP-18b stated about one command)
+> **M4 (architect, session 6): folded into WP-72.**
+
 **What is wrong.** `ROLE` is the platform's scaling story — *“splitting the roles across containers is the
 first step of technical/01's scaling path and changes nothing but this variable”*
 (`apps/server/src/role.ts:1-7`) — and that sentence is asserted by nothing. Every process this repository
@@ -7751,6 +7918,8 @@ belong on the list of crossings a two-process tier would assert. The transport h
 this is also recorded.
 
 ### 32. **`task_stages.state` has two vocabularies and neither is declared, so a *returned* stage is published as `completed`** (TODO, small — the deferral it was waiting for expired when WP-15 merged)
+> **M4 (architect, session 6): folded into WP-55.**
+
 
 **What is wrong.** The column is `text` with a note deferring its vocabulary to a work package that is
 now DONE, the interpreter writes one pair of words, the published DTO declares a different set of six,
@@ -7912,6 +8081,8 @@ tier 3 is its criterion rather than this one's; tiers 1 and 2 here still do not 
 > open is filed below as entries **39**, **40** and **41**, and the product decision it took is **Q67**.
 
 ### 39. **product/13's least-privilege table and the shipped `TOOLS_BY_ROLE` disagree about the investigator's shell, and the skill table follows the document while the tool table ships** (TODO, small — **no work package owns it**; found by WP-14a, session 5)
+> **M4 (architect, session 6): folded into WP-54.**
+
 
 **What is wrong.** What the investigator may do is written down twice and the two do not agree.
 product/13's least-privilege table gives the role a shell and observability; the table that ships gives
@@ -7977,6 +8148,8 @@ and recorded the mismatch deliberately rather than resolving it in a row that wa
 the next row that touches `packages/application/src/pipeline/planner.ts`.
 
 ### 40. **A platform skill is provisioned by role and never by binding, and the provider skills tell the run about credentials no run has** (TODO, small — one symptom, two causes, and the second is the bigger one; **no work package owns either**; found by WP-14a, session 5)
+> **M4 (architect, session 6): folded into WP-54.**
+
 
 **What is wrong.** A project with no Loki binding still gets `loki-logs` in its investigator runs, and a
 project with every binding still gets skills whose opening sentences promise a credential the run's
@@ -8052,6 +8225,8 @@ that next touches the workspace spec, and entry **41**, which is the same questi
 `cli: null`.
 
 ### 41. **`sentry-cli` 3.7.0 has the issue commands its own documentation page does not list, and that page is a cited source of the Sentry fixture corpus** (TODO, small — a **provenance** correction, not a defect in the adapter; found by WP-14a, session 5)
+> **M4 (architect, session 6): folded into WP-73.**
+
 
 **What is wrong.** `SENTRY_AGENT_TOOLING.cli` is `null` and the reason recorded for it is a
 documentation read: the vendor's CLI page lists no issue commands. The binary the platform ships has
@@ -8220,6 +8395,8 @@ binaries and reading — no test run, no container, rule 66).**
   biome rule afterwards only if somebody wants the error where the author is typing.
 
 ### 43. **A handler that keeps failing is retried for ever, and exhausting WP-15e's conflict bound is a second way in** (TODO — **no work package owns it**; recorded as a WP-04 note since session 1 and never given an entry; restated by WP-15e, session 5)
+> **M4 (architect, session 6): folded into WP-49.**
+
 
 **What is wrong.** WP-15e bounded the *conflict* retry at three attempts. What happens after the third
 is the bus's ordinary failure path, and **that** path has no bound: the failure is recorded, the event
@@ -8287,6 +8464,8 @@ it. Related: entry **1** (no production load, so no producer today), and WP-15c'
 fix, which closed this shape for the **inbound** path only.
 
 ### 44. **The wizard's step 5 commits the drafted knowledge pages and never the configuration, and nothing can fill the `repo` layer the API publishes** (TODO — **no work package owns it**; found by WP-21, session 5)
+> **M4 (architect, session 6): folded into WP-63.**
+
 **What is wrong.** product/06 § "Step 5" asks for one merge request carrying two artefacts:
 *"One MR to the repository adding `.agentic/` with the accepted content (or a direct commit if the
 project allows), plus a one-line pointer in `CLAUDE.md` to the KB index (proposed)"*. WP-21's step 5
@@ -8330,6 +8509,8 @@ half depends on nothing that does not exist. **Not WP-30's**: that row's *"setti
 BD-028's UI mirror of wizard step 4, not a commit to the repository.
 
 ### 45. **The business interview is the one wizard step of five that no work package owns, and without it repository readiness cannot reach level 3** (TODO — **no work package owns it**; found by WP-21, session 5)
+> **M4 (architect, session 6): folded into WP-64.**
+
 **What is wrong.** product/06 § "Step 3" is a conversational form driven by the Product Manager role
 whose *"Answers become `business/*.md` pages plus glossary entries"*. Nothing in this build runs one.
 WP-21's plan row is titled *"Onboarding wizard steps 1–5 incl. discovery agent and readiness
@@ -8374,6 +8555,8 @@ invented paths inherits the problem. Product Manager role prompt and evals exist
 (`packages/prompts/roles/product_manager/`). Nothing else.
 
 ### 46. **Readiness is evaluated once, at discovery, and product/17 asks for a re-check after every merged task** (TODO — **no work package owns it**; found by WP-21, session 5)
+> **M4 (architect, session 6): folded into WP-64.**
+
 **What is wrong.** product/17:11: criteria are *"detected automatically by the Discovery agent at
 onboarding and re-checked after every merged task (cheap: mostly file and CI-event inspection)"*. Only
 the first half is built. The second producer is anticipated everywhere and written nowhere:
@@ -8412,6 +8595,8 @@ product/18, a different subject from BD-026 repository readiness. WP-21 built th
 the API; this is a producer and a trigger.
 
 ### 47. **`Idempotency-Key` is required, validated and audited, and never consulted — so "same key, different body" is refused in exactly one case, and WP-15i's eleven commands cannot reuse the answer** (TODO — **WP-15i** meets it first; found by WP-21, session 5)
+> **M4 (architect, session 6): folded into WP-67.**
+
 **What is wrong.** technical/08:7 asks for *"idempotent where a client may retry (`Idempotency-Key`
 header on POSTs that create)"* and asks for nothing more, so this is a **documentation gap before it
 is a defect**: the document names a header and never says what it buys. WP-21 required the header on
@@ -8492,6 +8677,8 @@ table, not a defect to be fixed in passing. Nobody owns it; the window is unchan
 WP-21 measured it, so no new entry.
 
 ### 48. **A binding's host is whatever the caller typed, and the platform process has no outbound allow-list — so the credential the API is designed never to reveal can be sent to a host the caller chose** (TODO — **no work package owns it**; found by WP-21's round-1 reviewer, session 5)
+> **M4 (architect, session 6): folded into WP-51.**
+
 **What is wrong.** Every provider takes its host from `config` as a free-form URL and nothing
 constrains which host that may be. Five instances, one shape, read off the schemas:
 `base_url` at `packages/integrations/src/providers/sentry/config.ts:37`,
@@ -8677,6 +8864,8 @@ covered" claim should name the run id, as the evidence above does.
 is owned by nobody and needs no image.
 
 ### 34. **The SDK computes the CLI's path on the platform side and the shim executes it in the container, so the first real agent run in the real image execs a path that is not there** (TODO — latent, **no work package owns it**; found by WP-22)
+> **M4 (architect, session 6): folded into WP-53.**
+
 **What is wrong.** `Options.pathToClaudeCodeExecutable` is `null` outside `local` mode, so the SDK resolves
 its **own bundled** binary and passes that path as the spawn command; the run container's binary is
 `/usr/local/bin/claude`. The two are different paths on two different filesystems, and nothing compares them.
@@ -8710,6 +8899,8 @@ images, so it cannot be a `verify` target; it belongs beside WP-14's docker work
 `scripts/runlet-launcher-check.mjs`, whichever the taker is already running.
 
 ### 30. **A leaked `pg.Client` still ends the process on a forced drop, and nothing refuses a leak** (TODO — the half of backlog **28** that a census cannot cover)
+> **M4 (architect, session 6): folded into WP-68.**
+
 **What is wrong.** Backlog 28 closed the **pool** half: every pool comes from one of two factories, both
 attach an `error` listener, and a census refuses a third construction site. A bare `pg.Client` sits outside
 that guarantee, and where it is safe it is safe for a *different* reason — `Client.end()` resolves on the
@@ -8774,6 +8965,8 @@ integration/e2e harness, the same gap entry **28** records. Cheapest for whoever
 `test/integration/support/postgres.ts`, and before **WP-22** leans on this tier for its images.
 
 ### 21. **A module-graph cycle that only bites at a particular import order** (nit, TODO)
+> **M4 (architect, session 6): folded into WP-69.**
+
 **What is wrong.** A static `import pg from 'pg'` placed **before** the harness import in an e2e file makes
 `createEventing` throw **`EventBus is not a constructor`** — `packages/infrastructure/src/events/index.ts:82`
 is the `new EventBus({` that fails. Reordering the imports, or `await import('pg')`, makes it go away.
@@ -8803,6 +8996,8 @@ in a file that no longer exists, and no test pins it.
 any WP that touches `packages/infrastructure/src/events/` or `test/e2e/support/`.
 
 ### 6. Two nits from WP-14's final round
+> **M4 (architect, session 6): folded into WP-68.**
+
 - A citation line ending in `,` continues, so ordinary quoted prose on the next line becomes an invented
   cited name. It fails **loudly**, and the grammar section states the constraint, so it is acceptable —
   noted for the day a writer hits it.
@@ -8811,6 +9006,8 @@ any WP that touches `packages/infrastructure/src/events/` or `test/e2e/support/`
   `d1e7b69` class in miniature: **the orchestrator's own merges are the least reviewed changes here.**
 
 ### 9. **`commitlint` cannot run in a worktree that has no `pnpm install`** (nit)
+> **M4 (architect, session 6): folded into WP-68.**
+
 `sh: ./node_modules/.bin/commitlint: No such file or directory`, `exit status 127`, commit rejected
 (same measurement as entry 8). It **fails closed**, so it is a nit and not a gate defect — but a
 fresh worktree cannot commit at all until `pnpm install` has run in it, and the orchestration
@@ -8818,6 +9015,8 @@ protocol tells every future session to use worktrees. One line in `CONTRIBUTING.
 resolves the binary from the repository root rather than from `$PWD`.
 
 ### 56. **The CSRF refusal borrows the role-capability error, so a cross-site 403 is one ungrammatical sentence** (nit, TODO — **no work package owns it**; found by WP-23's dogfood run, session 5)
+> **M4 (architect, session 6): folded into WP-73.**
+
 Measured on a request with no `Origin` (WP-23): `role cross-site request: Origin (absent) is not a
 trusted origin may not perform POST /api/integrations`. The cause is a parameter reused rather than a
 message composed — `ForbiddenError(action, role)` renders `role ${role} may not perform ${action}`
@@ -8836,6 +9035,8 @@ and already differs from production — it omits the `role … may not perform �
 the browser tier has never seen the sentence this entry is about.
 
 ### 115. **A query module is excluded from unit coverage for the first time, and the one branch that is not wiring is asserted only in the tier that collects none** (nit-to-small, TODO — **working as designed**, one precedent to bound before it is inherited by citation; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
+> **M4 (architect, session 6): folded into WP-70.**
+
 `vitest.config.ts:167-177` adds `apps/server/src/queries/stats-queries.ts` to the coverage
 `exclude` list with a written justification in the established shape — *"eight SQL statements and
 their row mappers, and nothing a unit test could reach without a database … the exclusion stays a
@@ -8881,6 +9082,8 @@ entry is about a file deliberately taken *out* of that number.
 to `apps/server/src/queries/` or edits `vitest.config.ts`'s exclude list.
 
 ### 116. **`codeql.yml` and `mutation.yml` are named by three documents, exist nowhere, and were never allocated to a work package — the two rows of technical/11's table that were neither absorbed into `ci.yml` nor claimed by WP-33** (TODO — one cause, two halves whose costs differ by an order of magnitude; **no work package owns it**; found by WP-42, session 5)
+> **M4 (architect, session 6): folded into WP-71.**
+
 **What is wrong.** Two of technical/11's eleven workflow rows have no owner. `.github/workflows/`
 holds four files — `base-image.yml`, `ci.yml`, `image.yml` and `release.yml` (WP-42's) — and a
 `git grep` for `codeql`, `stryker` or `mutation.yml` over every tracked file outside `docs/` returns
@@ -8933,6 +9136,8 @@ question already parked at `docs/TODO.md:149` (*"TypeScript 7 (Go compiler) tool
 workflow linters, which are steps of an existing job rather than workflows of their own).
 
 ### 117. **No workflow linter runs anywhere — actionlint, hadolint and zizmor are specified by TD-017, research/09 and technical/11, and the SHA pinning a plan row assumed they enforced is held by a regex in a test instead** (TODO, small — **no work package owns it**; found by WP-42, session 5)
+> **M4 (architect, session 6): folded into WP-71.**
+
 **What is wrong.** Three static checks over the CI surface are specified and none exists. WP-42's
 measurement, quoted: *"`ci.yml`'s lint job runs **no actionlint, no hadolint and no zizmor** — the
 plan row's criterion 9 assumed they enforce SHA pinning and nothing in the repository runs any of
@@ -8977,6 +9182,8 @@ no job (rule 30's lesson about guards that fire on legitimate content).
 `mutation.yml`, the other two unowned rows of the same table).
 
 ### 118. **`pnpm changelog` models exactly one moment — the first release — and it is wrong on both sides of it: the preview it writes must be deleted by hand in the release PR, and running it again once a tag exists overwrites release-please's released entries under a heading taken from `initial-version`** (TODO, small — one cause, two symptoms, the first with a **named date**; **no work package owns it**; found by WP-42, the second symptom by the refiner off the tree, session 5)
+> **M4 (architect, session 6): folded into WP-71.**
+
 **What is wrong.** `scripts/changelog.mjs` renders **the whole file** — its own docblock at `:351`
 is *"The whole pre-release CHANGELOG.md."* — and writes it with `writeFileSync(output, rendered,
 'utf8')` over `join(repositoryRoot, 'CHANGELOG.md')` (`:440-441`), with one heading
@@ -9038,6 +9245,8 @@ symptom 1 as a residual at the file's own header. The deadline for symptom 1 is 
 PR**, which is why it also has a row in `docs/TODO.md`.
 
 ### 119. **Two modules answer "does this database carry a migration this build does not know?" independently — one refuses to start, one reports `down` — and they agree today by sharing a loader rather than by construction** (nit-to-small, TODO — **working as designed**, filed so the next reader meets the decision rather than the trap; **no work package owns it**; found by WP-42, read off the tree by the refiner, session 5)
+> **M4 (architect, session 6): folded into WP-73.**
+
 **What is wrong.** WP-42's note, quoted: *"`migrationStatus` (`apps/server/src/readiness.ts`)
 re-derives in TypeScript what `findUnknownMigrations` asks in SQL. Two answers to one question; they
 agree today."* Read off the tree the duplication is narrower and more exact than that sentence: both
@@ -9078,6 +9287,8 @@ second site would double the surface without adding a case).
 file, or the first work package that touches upgrade behaviour.
 
 ### 7. Carried, not yet scheduled
+> **M4 (architect, session 6): folded into WP-73.**
+
 - **Nit (WP-21, session 5): a credential sealed by `POST /api/integrations` has never been opened by
   the binding loader in any tier.** The two halves are each exercised and never joined, and the reason
   is by design rather than an oversight: `SHIPPED_PROVIDERS` deliberately excludes the fakes — it is
@@ -9303,6 +9514,54 @@ file, or the first work package that touches upgrade behaviour.
 | WP-40 | **The spike template and the epic-split variant** — the template declared and refused since WP-15 ships, and the acceptance surface the variant needs exists | DONE | `85af479` | Depends on WP-15, WP-17, WP-08, WP-15i, WP-19, WP-15f. **Two review rounds**: round 1 REQUEST_CHANGES — four sentences claimed the breakdown queue's model fields and the decision `reason` were stored redacted while `itemFor` copied the artifact verbatim and the route had no redactor, and the boundary schema labelled a human's `reason` "Platform text" (BD-022); `DEFAULT_TEMPLATE_BY_ISSUE_TYPE` gained `spike: 'spike'` unconditionally, outside product/18:39's opt-in; `breakdown.decide`'s `select` beside the CTE read the statement's snapshot while the fake returned updated rows; round 2 APPROVE with a minor and a nit the orchestrator fixed before the merge (a fourth cap-race residual of the defect's own shape — two admitters in one instant at READ COMMITTED — named in `packages/application/src/cost/pending.ts`; a third copy of backlog 108's key count corrected) — `redactBreakdownChild` (redact-then-cut over every model string, counts summed) at the queue write and `decideBreakdown` over the human's `reason`, both through a **required** redactor, with migration 0033 gaining `redaction_count` while still unshipped; the residual stated as measured (step 1 is the binding's, applied at the call; `artifacts.data` is backlog 35) with two planted credentials so neither layer hides the other; the spike template opt-in through **`features.spike.enabled`**, default `false`, gating the answer so a project's own mapping meets the same switch, `features.epic_split` independent; `returning *` through one shared column list with `BreakdownRepository` in the contract suite; four canaries dead by name. **The orchestrator's full `verify:e2e` then failed once** on WP-35's *stops the batch when its budget cap is spent* under load — the mining task finished instead of pausing — and passed twice alone. **Measured as the platform's defect, not the test's** (a ledger handler delayed eight seconds on a canary admitted two mining runs against a cap allowing one, deterministically): every cap on the mechanism — WP-19's org and project guard, WP-34's shadow cap, WP-36's maintenance cap, WP-35's bootstrap cap — read `cost_entries` at admission while the ledger row is written by a handler after the run, so each could overrun by one run per concurrent admission. Fixed on this tree: admission counts spend **and commitment** — a run with no ledger row counts at its stage cap while live and at `runs.usd_reported` once ended (`packages/application/src/cost/pending.ts`, `packages/infrastructure/src/cost/pending-run-spend.ts`), wired into all four caps and asserted both ways under the delayed handler; a ledger-in-transaction alternative rejected because it would delete WP-19's handler idempotency and backfill. Residuals refined: a run whose process died holds its reservation for ever, in every future window, until a lease sweep exists — backlog **109** (`runs.lease_owner` has no reader or writer, and `recovery/stranded.ts` excludes the row by construction); an ended run with no reported figure commits nothing until ledgered, which in `local` provider mode is every run because nothing writes `runs.usd_estimated` — backlog **110**; `scripts/citations.ts`'s docblock calls dormant a Markdown-citation half that 56 lines already exercise — backlog **111**, a nit. This is rule **89**. **The template as shipped**: `intake → refinement → architecture → human_review → done`, no merge tail — two template values (`SPIKE_TEMPLATE`, `EPIC_SPLIT_TEMPLATE`) because a stage's `produces` is data: the architect produces a `ResearchReport`, the product manager a `TicketBreakdown` (both artifact types with caps, regenerated schemas); the refusal docblock corrected; an epic routes to the variant only under `features.epic_split` (off by default, both ways asserted). **Nothing is created until a human accepts** (Q85's recommendation as built): a queue of its own, `ticket_breakdown_items` (migration **0033**), one row per child; `POST /api/tasks/:id/breakdown/decide` under `task.approve_plan`, maintainer, `Idempotency-Key` required, one `human_actions` row, named positively in its own test. **Accepting creates real tickets**: one `createTicket` per accepted child from the `breakdown_create` duty keyed on the child's row — a replay creates each once, a rejection none, a shadow task none, a binding without the capability refuses by name (the fake provider recorded two tickets and not the third, with the audit rows unchanged across a replayed key). Every word bound for the tracker bounded and redacted at the write; `ROLE_PROMPT_VERSIONS` `architect` and `product_manager` 1 → 2 with four eval cases in TD-016's format. The fake runner's `scenarioFromPrompt` reads the `ticket` data block and refuses a run whose prompt lacks the epic's words (rule 82). Eight canaries dead by name, one of which survived first because the test asserted a stage an illegal transition also keeps — the test was the fix. Left behind (refined): the breakdown acceptance has no SPA screen and `FEATURE_CARDS` covers five of the nine shipped `features.*` keys (`features.spike` is the ninth, round 2) with nothing comparing the lists — backlog **108**, WP-44's; a TypeScript parameter property stopped `apps/server` and `apps/runlet` booting under type stripping and was caught only by the runlet conformance test's real shim — folded into backlog 42 with the census (seven sites, all unit-test files) and the answer (`erasableSyntaxOnly` in the pinned compiler closes it, a lint rule covers one of four constructs); Q85 answered as built; the eval corpus is 58 cases, not 36 (blocker brief 1); the cap fix's residuals are backlog **109–111**. |
 | WP-41 | **The statistics deep-dive** — the reader of seven signals nothing consumed, and the row three backlog entries said must not be the one that discovers them | DONE | `f541f33` | Depends on WP-19, WP-29, WP-26, WP-24, WP-25, WP-34, WP-28. **One review round**, APPROVE with three minors and a nit the orchestrator fixed before the merge (the `kb_usage` reason inverted, below; the human-minutes read cap grouped by `(day, kind, identity)` while its caveat said per person per day — the caveat now says per kind and states the combined over-count; a docblock naming a test file that does not exist, rule 86; `queue_wait_minutes`' owner naming WP-20, which shipped without the projection, and the same stale clause in `consumption.ts`). The reviewer's canary: `metricOf`'s absent branch → `value: 0` killed two cases by name. **As built**: `GET /api/org/stats?range=…` and `GET /api/org/stats.csv` (`orgStatsResponseSchema` in contracts, schemas regenerated, the client census updated both ways) — two paths because one route cannot honestly publish two schemas (Q45 answered as built: the DTO is a list of metrics, the CSV is **long**, and an absent metric produces no row rather than an empty cell). **Every metric carries its `definition`**, and one this build cannot compute carries `absent {reason, owner}` with `value: null` and **no buckets** — nine of them named on the screen with their owners: clean-first-MR by author (Q48/backlog 79), LOC changed, `kb_usage`, defect escape, lint-within-48h, shadow similarity, queue wait, readiness attribution, total cost of delivery (Q73: minutes and dollars are two fields and are never summed; the rate setting is not built). A projector at TD-005 priority **240** folds the delivery events into the rollups of migration **0034**; the replay equality is asserted over two projects with a second pass a no-op; the e2e drives real events and nothing seeds a rollup. The three wrong inputs paid: no metric groups by `runs.mode` (backlog 57, paid at WP-36); `estimated_spend_share` is `sum(usd) where is_estimate` over `cost_entries` with no fourth stored number (backlog **75**); the conflict badge reaches the board with 64's and 65's residuals in its tooltip (backlog **63**). Four event types flipped to `handled` — `task.review.observed`, `task.lint.posted`, `task.rebase.checked`, `task.conflict.warned`, whose only record was the event — and the table's per-work-package breakdown replaced by the count `consumption.test.ts` produces (rule 86); `mr.updated` stays `unconsumed` naming backlog 90's shape rather than a work package that will not flip it (rule 18). Human time is capped per `(identity, day)` **across tasks** (backlog 89), and the caveats name 88 and 90 on the screen. Four canaries dead by name (`outcome='returned'` → `state=`; the day cap removed, 720 against 600; the delivery-template filter removed; `loc_changed.absent` removed), each reverted in place and md5-verified — one revert broke a docblock and the digest caught it (rule 88's instance). `apps/server/src/queries/stats-queries.ts` is excluded from unit coverage with its one guard asserted on a database. Left behind (refined): the `kb_usage` absence reason as first written was **inverted** — its numerator exists (`kb_citations` on the RefinedSpec and ResearchReport artifacts, joined by `artifacts.produced_by_run_id`, with no production reader) and its denominator does not (`run_context_pack` has never held a row) — corrected on screen before the merge and filed as backlog **112**, owned by backlog 31; GitLab writes `diff_stats: null` on three surfaces while the fake fills all three and its fifteen-item divergence register names none of them, so the LOC metric and `bootstrap/sample.ts`'s `files_changed` are `null` on every real binding — backlog **113**, and the follow-up two docblocks said was recorded never was; nothing links a bug to a merge request though WP-34's resolver already ships and both endpoints are stored — backlog **114** with **Q87** (publish the defect rate with its coverage, absent below a floor; never adjacency); the unit-coverage exclusion of `apps/server/src/queries/stats-queries.ts` is a first among twelve query modules — backlog **115**, a nit filed to bound the precedent. **The image workflow then failed on both architectures** (`34951950272`): the app never answered `/healthz`, because three constructor parameter properties in `apps/server/src/queries/stats-metrics.ts` and `stats-queries.ts` are syntax Node's strip-only mode refuses at import (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not supported in strip-only mode`, reproduced on a four-line fixture) while every local tier transpiles through vitest — backlog 42's class, its third instance and the first to reach `main`. Fixed at `ecb867c`: the twelve sites in the repository rewritten as explicit fields and `erasableSyntaxOnly` turned on, so `verify:types` refuses the construct before an image exists; backlog **42** resolved. |
 | WP-42 | **Release 0.1.0 — the mechanism, proven on a dry run and never cut** | DONE | `2788e9c` | Depends on every M3 row; the release itself needs WP-33. **Two review rounds**: round 1 REQUEST_CHANGES — two majors, both claims the change made about itself: `release.yml`'s header said the release PR *"has to pass this repository's own commit gates"* while the rule the header itself cites (a `GITHUB_TOKEN` event starts no workflow run) means `ci.yml`'s `pull_request` jobs, `dco` included, never report on that PR, so with the required checks CONTRIBUTING tells an administrator to apply it is unmergeable until a close-and-reopen, a merge queue or a bypass; and `docs/operator-guide.md` § 5 still said an older build answers `migrations: down` on `/readyz` for a schema it does not know, which the schema guard now refuses at start (rule 83, and the generated release note points operators at that section); two minors (a permissions test named *and no more* that did not bound the set; the dispatch of `image.yml` returning green whether or not the image built) and two nits (`latest` missing from the header's tag list; `unparsed === 0` pinned over live history so one `git revert` would fail `verify`). Round 2 REQUEST_CHANGES — one major the fix round had created: with `RELEASE_PLEASE_TOKEN` set, the tag is made by a PAT or App identity and `image.yml`'s `push: tags` **does** start a run, so the dispatch the header justified by "`GITHUB_TOKEN` starts no run" started a second build of five images by two architectures on the same ref, queued behind the first by `image.yml`'s concurrency group, with `gh run watch` waiting for both under the job's 120-minute cap; two minors (the newest-first run lookup could watch an older `workflow_dispatch` run on the same sha and report its verdict as the release's; the operator guide quoted the refusal with a `.sql` suffix `platform_migrations.name` does not carry) and two nits (`checks: read` unnecessary under `actions: write`; a "no images" claim asserted where the run may only be late). Round 3 APPROVE with three nits the orchestrator fixed before the merge (the header's *same expression* is two equivalent spellings pinned by the test; `image.yml`'s `cancel-in-progress` is an expression false for this event, not a literal; CONTRIBUTING's tag list names `latest` with Q89's pointer, Q89's evidence sentence kept true). Five canaries by name in the last round, including the branch inverted and the run baseline dropped. A release run whose `GITHUB_SHA` is not the tagged commit times out at 150 s rather than watching a wrong run — loud and bounded, stated here. **As built**: release-please v5 pinned to a commit SHA in `.github/workflows/release.yml`, triggered by a push to `main` and nothing else — a release is a human's merge of the PR it opens, never a run's verdict. **One product version**: one root component with the ten workspace manifests as `extra-files`, all eleven held at `0.0.0` with `initial-version: 0.1.0`, because release-please skips exactly `0.0.0` (`manifest.ts`) and without the setting the first release would be **1.0.0** (`strategies/base.ts`) — measured in the pinned source, not assumed. `pnpm changelog` (`scripts/changelog.mjs`) renders the history with release-please's own section table: 212 commits, 86 shown, 0 unparsed. The migration verdict in the notes is derived from the migration files against the previous tag, and `assertSchemaIsKnown` (`packages/infrastructure/src/db/migrator.ts`), called by `startRuntime`, refuses to serve a schema this build does not know — both directions in `test/integration/db/schema-guard.integration.test.ts` — `/readyz`'s `migrations: down` is not a substitute, because it reports after the process is already serving `/api` and `/webhooks/*`; not added to the `migrate` service, because the same image supplies both processes so the app's refusal catches every rollback compose can produce. **The measurement that shaped the workflow**: a tag made with `GITHUB_TOKEN` starts no workflow run, so `release.yml` dispatches `image.yml` on the tag ref into its existing tag path, recorded as the documented exception rather than hidden in a second token. Hygiene: `.github/CODEOWNERS`, four issue templates, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md` naming the required checks — held equal to `ci.yml`'s jobs by `scripts/release.test.ts`, which also holds every `uses:` in every workflow to a commit SHA (TD-019). technical/11's workflow table corrected and amended as built; the eight MVP criteria quoted with their status (Q88 filed by the implementer). Nine canaries dead by name (the guard call removed; an unpinned action; `actions: write`; a version out of step; a missing `extra-files` entry; a dropped required check; a forced migration verdict; a forced eval verdict; a mis-quoted criterion), every revert md5-identical. **No release is cut**: the first release PR waits on WP-33's credential and is a human's to merge. `signoff` in `release-please-config.json` is a **prediction, labelled as one** (rule 86): `ci.yml`'s `dco` job requires the sign-off e-mail to equal the author's and the release PR's author is the action, so the bot identity is written there and the first release PR's `dco` verdict is what tests it. The migration verdict reads 34 files, all new against no tag; the model-measurement sentence retires itself when `evals.yml` and `nightly-llm.yml` exist. Nothing in `release.yml` has ever run and cannot from a checkout (rule 71); `scripts/release.test.ts` asserts only what is a property of the files and its docblock lists what it cannot check. Left behind (refined): `codeql.yml` and `mutation.yml` have no owner, and technical/10:17's Stryker scope names a path that does not exist — backlog **116**; the plan row's criterion 9 assumed actionlint, hadolint or zizmor enforce SHA pinning and none of the three runs anywhere, the pin check being `scripts/release.test.ts` over every `uses:` — backlog **117**; the CHANGELOG's `## 0.1.0 (unreleased)` preview is deleted by hand in the first release PR or the released file carries its 86 entries twice, and `pnpm changelog` run after a tag exists overwrites release-please's section — backlog **118**, with the one-file test that holds the first symptom; `migrationStatus` and `findUnknownMigrations` are two readers of `platform_migrations` with different verdicts, working as designed — backlog **119**; `image.yml` publishes `latest` on a tag while TD-019 says never `latest` in docs — **Q89**, recommendation to stop publishing it; the three things a human must do on the first release PR are a row in `docs/TODO.md`; Q88 (the MVP criteria's evidence) filed by the implementer. **After the merge, two of its three CI runs failed** (`2788e9c`): `ci`'s unit job checks out a shallow clone, so the two tests that read this repository's history saw one commit — fixed at `910bb83` (full history on that job, as three jobs already had; both tests refuse a shallow clone by name); and the `release` workflow's first run ever failed at the repository setting *Allow GitHub Actions to create and approve pull requests*, off by default and needed by the `GITHUB_TOKEN` fallback only — measured, recorded in CONTRIBUTING, the header and the TODO; nothing opened, tagged or released, and the workflow stays red on every push until an administrator acts. Rule 71's residual made concrete: the mechanism's first real run found one setting no checkout could show. |
+
+## Milestone M4 — a real installation
+
+> **Written by an architect in session 6.** The rows, their acceptance criteria, the ordering
+> argument and what M4 deliberately leaves out are `docs/technical/13-implementation-plan.md`
+> § "Milestone M4 — a real installation"; the disposition of **every** open backlog entry and of
+> **Q63–Q90** is § "Architect ruling (M4, session 6)" at the end of this file, and each open entry
+> carries a one-line owner note under its own heading. **Recommended order is the table's own
+> order**: money and state that cannot be recovered (WP-47…WP-52) → the run that makes them live
+> (WP-53…WP-56, with **TD-028** deciding the launcher transport) → the record (WP-57, WP-58) →
+> providers (WP-59…WP-61, WP-43) → screens (WP-44, WP-46, WP-45) → onboarding and the dial
+> (WP-62…WP-64) → operations (WP-65…WP-67) → the instruments (WP-68…WP-73). **Nothing in M4 waits
+> on WP-33**, which stays M2's blocked row. Read the backlog entry a row folds before planning it;
+> the row carries the shape, the decision and the criteria, never the evidence.
+
+| WP | Title | Status | Commit | Notes |
+|---|---|---|---|---|
+| WP-47 | **The run lease sweep, and the spend a run that ends outside its own process still owes** | TODO | — | Depends on WP-19, WP-15e, WP-15i, WP-36. Folds backlog **109**, **50**, **110**, **75**; implements **Q70 (b)**. The lease's owner, what a sweep may conclude from a missing heartbeat, and the `run.failed` ending are ruled **in the row**. One blocker (109) and three majors |
+| WP-48 | **The lost wake-up closed at its two remaining sites, and the seam that hid one** | TODO | — | Depends on WP-36, WP-35, WP-18b, and on **WP-47** (same file). Folds backlog **106** (major), **36**. Both sites asserted by dropping the enqueue and reading the row's own status back |
+| WP-49 | **A poisoned event leaves the queue** | TODO | — | Depends on WP-04, WP-15e. Folds backlog **43** (major), **5**. The human-facing half reuses Q59's answer — `needs_human` with a brief — and adds no task state |
+| WP-50 | **The compose file passes what the server reads** | TODO | — | Depends on WP-22, WP-23. Folds backlog **54** (**blocker**: on a stock instance no integration can be created and no `_FILE` secret can be used). Shape (1) + (2) per the entry's recommendation; the guide currently teaches the workaround |
+| WP-51 | **The platform's own egress: a declared host allow-list, and an audit for a call with no binding** | TODO | — | Depends on WP-15b, WP-21, WP-38. Folds backlog **48** (**blocker**), **97**. Backlog 97 is ruled shape (a) — state the audit's scope rather than widen the table |
+| WP-52 | **Redaction at the artifact write, the two prompt columns, and the route that may then serve a body** | TODO | — | Depends on WP-15g, WP-15h, WP-19; run **before** WP-57. Folds backlog **35** (major, measured), **85**, **86**; implements **Q64**. Backlog 35 is ruled answer (b), the per-field policy |
+| WP-53 | **The launcher control plane and the first production `RunWorkspaceProvisioner`** | TODO | — | Depends on **TD-028** (written in session 6), WP-14, WP-13, WP-15g, WP-22. Folds backlog **34** (major), **71** (major), **82**, **0b**; implements **Q52**. **Not blocked on WP-33** — verified against the real images with the scripted CLI. This is the row that makes eleven latent findings testable |
+| WP-54 | **What a run may do: the project's declared commands, the role tables, and `get_task_context`** | TODO | — | Depends on WP-53 (same files), WP-17, WP-21, WP-14a, TD-027. Folds backlog **49** (**blocker**), **39**, **40**, **83**; implements **Q69** answer (ii). An e2e must run a fixture repository's test command — a fake that runs nothing is how this survived every row |
+| WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | TODO | — | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
+| WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
+| WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
+| WP-58 | **Retrieval: the instrument first, then the query** | TODO | — | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
+| WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | TODO | — | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch |
+| WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | TODO | — | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
+| WP-61 | **The delivery metrics stop being wrong in two directions** | TODO | — | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
+| WP-43 | **Slack Socket Mode** | TODO | — | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
+| WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | TODO | — | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
+| WP-46 | **The merge-readiness Checks panel** | TODO | — | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent |
+| WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | TODO | — | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
+| WP-62 | **The dial's remaining policies get readers** | TODO | — | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
+| WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | TODO | — | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
+| WP-64 | **Readiness stops being frozen at discovery, and the wizard's step 3 exists** | TODO | — | Depends on WP-21, WP-18a/b, WP-17; Q68 is answered. Folds backlog **46** (major), **45** (major). The completeness must move **as a number**: *"the pages were drafted"* and *"the score moved"* are different claims |
+| WP-65 | **The organisation's own channel, the undelivered metric, the maintenance report, and the storage gauge** | TODO | — | Depends on WP-32, WP-30, WP-36, WP-18a. Folds backlog **80** (major), **81**, **107**, and **Q63**'s operator-facing half. Backlog 80 takes answer (c), the account's channel; the migration carries `nulls not distinct` |
+| WP-66 | **The history bootstrap says how much it read** | TODO | — | Depends on WP-35, WP-18b. Folds backlog **102**, **103**. One column, one `set` clause, one line on the panel — deliberately **not** behind the statistics row |
+| WP-67 | **The idempotency record, the gate that asks again, and the requester nobody wrote** | TODO | — | Depends on WP-15i, WP-21, WP-34, WP-38, WP-37. Folds backlog **47** (major), **99**, **96** (major), **92**. **Q91** decides the `ready_for_merge` case; only the human-owned stops are built if the recommendation stands |
+| WP-68 | **The guards see what they claim to see** | TODO | — | Depends on nothing unbuilt. Folds backlog **8** (major — a security gate that fails open), **10**, **30**, **3**, **111**, **9**, **6**. One shared helper, not eleven repairs; the two guards whose own suites assert the hole get those cases rewritten |
+| WP-69 | **The harness cannot script what production would refuse** | TODO | — | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**. The deliverable is the **detector**, not the fix; the vitest-budget contradiction is resolved by reading the resolved config before any number is chosen |
+| WP-70 | **Coverage: where the debt is, and what may be excluded** | TODO | — | Depends on nothing unbuilt. Folds backlog **87**, **115**. Opens with the measurement `docs/TODO.md` already asks for; the answer is a budget that says **where** coverage is owed, never *"write more tests"* |
+| WP-71 | **The CI surface: the linters, SAST, mutation, the changelog and the tag nobody decided** | TODO | — | Depends on WP-42, WP-22, TD-017, TD-015, TD-019. Folds backlog **116**, **117**, **118**; implements **Q89** — stop publishing `latest`. CodeQL is a **setting** an administrator applies, not a file |
+| WP-72 | **Two processes, one database: the `ROLE` split exercised** | TODO | — | Depends on **TD-028**, WP-53, WP-22, WP-06a, WP-18b, WP-43. Folds backlog **38** (major). TD-028 makes this the shipped topology, so the row asserts the deployment rather than an option |
+| WP-73 | **The sweep: the sentences and the small repairs no row owns** | TODO | — | Depends on nothing unbuilt; shares no file with a group 1–7 row. Folds backlog **1**'s remainder, **19**, **22**, **41**, **56**, **66**, **119**, **7**. Each item is closed **or** its entry says why not, by number |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -21505,3 +21764,242 @@ the e2e rather than by mutation: `task_id: null` on `mr.merged`.
   review round.
 
     *Refined at WP-37 round 2*: the copied-tree recipe cannot mutate an **application-ring duty reached through the composition root** — the copy's `node_modules` symlinks resolve `@platform/*` back to the original, so the planted throw fired in one of fourteen cases and the mutated duty was never the one that ran. For that ring the mutation is made **in place** and reverted (a diff of the file before and after, rule 21), and the canary is the same planted throw, which must fire in every case that reaches the duty.
+
+## WP notes — session 6 (decisions, assumptions, reviewer findings)
+
+### Architect ruling (M4, session 6) — thirty-one rows, and the four that can spend money come before the ones you can see
+
+**What this is.** M1, M2 and M3 are merged but for WP-33. What is left is what their delivery
+discovered: **94 open backlog entries** (0b–119, everything not marked RESOLVED / DECIDED / CLOSED)
+and **Q63–Q90**. This ruling grades every one of them, gives every entry a disposition, and turns
+them into **thirty-one rows** in `docs/technical/13-implementation-plan.md` § "Milestone M4 — a real
+installation" — WP-43…WP-46, whose numbers were already bound to their content on the M3 page, plus
+WP-47…WP-73. **91 entries are scheduled; 3 are deliberately unowned.** Thirty-one entries are graded
+**major** or **blocker** and **every one of them has a row** — that was the brief's test and it is
+met. Each entry also carries a one-line owner note under its own heading, so a reader who arrives at
+the entry meets its disposition without coming back here.
+
+**The ordering argument, one sentence per group.**
+
+1. **Money and state that cannot be recovered (WP-47…WP-52)** come before anything visible, because
+   each of them is already true on a running instance and each gets worse the moment group 2 lands:
+   a dead run reserves its stage budget in *every future window* and the only lever an operator has
+   loses the spend (**109** + **50**); a lost enqueue bricks a bootstrap a unique index then refuses
+   to restart (**106**); a poisoned event is re-dispatched about twelve times an hour for ever
+   (**43**); twenty of thirty-six variables never reach the container, so a stock install cannot
+   create an integration at all (**54**); a binding's host is whatever the caller typed and the
+   platform process has no egress control (**48**); a run's structured output is stored unredacted
+   and copied into a field the API serves (**35**).
+2. **The run that makes them live (WP-53…WP-56)**: most of group 1 is latent for one reason —
+   `startRuntime` composes `unavailableClaudeRunner` — so **WP-53** ends that (TD-028, the launcher
+   transport) and the three rows beside it are what a first real run meets in its first minutes: a
+   run that cannot execute one of its project's commands (**49**), a return that hands the stage a
+   stale complaint (**67**), and a question or approval that parks a task for ever (**74**, **76**,
+   **69**).
+3. **The record (WP-57, WP-58)**: `run_context_pack` is cited as the platform's audit in three
+   documents and has never held a row, and retrieval's instrument cannot falsify its own precision —
+   both are about what a run can later be judged on, so they land once runs exist and before anybody
+   tunes anything.
+4. **Providers (WP-59…WP-61, WP-43)**: the git port cannot close a merge request and reads a task's
+   diff four times; two events two product documents promise are absent from the catalogue; the
+   delivery metrics are wrong in two directions at once; Slack hears nothing a human clicks.
+5. **Screens (WP-44, WP-46, WP-45)**: three finished server features have no caller in the product,
+   and one product promise ships weaker than it reads.
+6. **Onboarding and the dial (WP-62…WP-64)**: seven of fifteen dial policies set nothing while the
+   screen publishes all fifteen as facts; the configuration a team agreed to never reaches their
+   repository; readiness is frozen at the first discovery run.
+7. **Operations (WP-65…WP-67)**: the one budget that stops every project notifies nobody, a failed
+   notification is invisible, and a replayed command performs nothing twice and says it did.
+8. **The instruments last (WP-68…WP-73)**, because they are what stops the next session paying these
+   costs again.
+
+**Parallel-safe**: `{WP-50, WP-68, WP-70, WP-71}` (compose, `scripts/`, `vitest.config.ts`,
+`.github/`) against everything; `{WP-59, WP-60, WP-43}` (integrations); `{WP-63, WP-64, WP-65}`
+(onboarding, knowledge, notify). **Serialise**: WP-47 → WP-48 (one recovery file), WP-53 → WP-54
+(planner and workspace spec), WP-52 → WP-57 (`stage-executor.ts`), WP-55 → WP-46, WP-60 → WP-61,
+WP-44 → WP-46 (`task-detail.tsx`).
+
+**Decisions taken inside rows**, so nobody re-opens them. **WP-47** — the lease belongs to the
+process executing the run, which renews `lease_expires_at` on a heartbeat inside `stage.execute`; a
+sweep may conclude from a missing heartbeat **only that no process is renewing it**, never that the
+model stopped, so it ends the run `run.failed` with a named terminal reason and releases the
+reservation **with** whatever the run reported rather than with a zero; the wall clock is the
+backstop for rows written before the column had a writer, not the primary. **WP-56** — one
+`deadline.sweep` queue carrying `(aggregate, id, kind)` rather than four named ones, so the pool
+floor moves **+1** and not **+4**; a stated deviation from TD-004, amended there. **WP-52** —
+backlog 35's answer **(b)**, a per-field artifact policy (prose redacted, an identifier containing a
+secret refused), because (a) is contradicted by the saga reading the row back to address a merge
+request. **WP-55** — backlog 67's answer **(a)**, reader-side, with a `returned_to` column. **WP-57**
+— backlog 31's answer **(a)**, keep the table. **WP-51** — backlog 97's answer **(a)**, state that
+the audit is per binding and that a bindingless call is audited by its own module under a named
+checklist. **WP-69** — backlog 25's **harness-level** answer, not a bigger number. **WP-71** —
+Q89's answer, stop publishing `latest`. **WP-65** — backlog 80's answer **(c)**, the account's own
+channel. **WP-62** — build `businessReview` first as the carrier, then `stopAfterStage`.
+
+**One decision was too big for a row: `docs/decisions/technical/TD-028-launcher-control-plane.md`**
+(indexed). It splits Q52's transport in two — an authenticated HTTP control plane on an
+`internal: true` compose network for the five request/response verbs, and TD-025 §2's unchanged data
+plane for the run's stdio, so no byte of an agent's output crosses HTTP; the `ctl` mount goes on a
+second product container rather than on `app`, which is what `compose.yml:43-48` already says it is
+waiting for; and `stage.execute` is subscribed **by configuration, never by role**, which closes the
+per-queue-subscription gap `apps/server/src/role.ts:39-43` measures as a lottery that escalates
+tasks. Its stated consequence: a deployment with no runner container leaves agent jobs queued, so
+that becomes a metric, a `/readyz` line and a sentence in the operator guide.
+
+**Open questions filed: Q91–Q95**, each with a recommendation strong enough to build from — Q91 (may
+the platform stop a merge a human is already looking at; recommendation: leave it refused and keep
+the record), Q92 (a reworked task's branch and the merge request it leaves open; recommendation: a
+new branch, the old merge request closed), Q93 (may a take-over export outlive the transcript;
+recommendation: serve rather than copy, same retention as the workspace), Q94 (repository versus UI
+precedence for `.agentic/config.yml`, and whether a direct commit is ever allowed; recommendation:
+the repository wins, never a direct commit), Q95 (does an approval expire at all; recommendation:
+yes, on the question's calendar and default, or delete the mechanism). No product question was
+decided here.
+
+**What M4 deliberately does not contain.** Q52's alternative transports beyond the one TD-028 picks.
+Phase-2 search (TD-008's pgvector, TD-009's embeddings) — nothing in the backlog asks for it and
+backlog 16 says the instrument cannot yet judge phase 1. A human *"this bug belongs to that merge
+request"* action — Q87 refuses it for 0.1. A second provider of any type — BD-017's whole point is
+that adding one touches no core row. And no new product scope: every row closes a gap against an
+already-accepted document. **Nothing in M4 waits on WP-33**; three *measurements* do need a real
+model (backlog **66**, **100**, **102**/**103**) and each is written into its row as needs-measurement
+rather than guessed.
+
+#### Disposition — every open backlog entry
+
+`WP-nn` means scheduled on that M4 row. Grades are this architect's, read from each entry's own text
+(the reviewer's word where it has one, the consequence where it does not).
+
+| Entry | Grade | Disposition |
+|---|---|---|
+| 0b | small | WP-53 |
+| 1 | small | WP-73 (the remainder: the consumption table is derived from the implementation rather than being a declaration it must meet) |
+| 2 | nit | unowned — a session-4 branch status note; the branch merged and there is nothing left to build |
+| 3 | nit | WP-68 |
+| 4 | nit | WP-69 |
+| 5 | nit | WP-49 |
+| 6 | nit | WP-68 |
+| 7 | nit | WP-73 (its two live bullets ride with WP-53 and WP-59) |
+| 8 | **major** | WP-68 — a security gate that reports success over zero bytes |
+| 9 | nit | WP-68 |
+| 10 | small | WP-68 |
+| 12 | small | WP-58 (the surviving query half) |
+| 13 | nit | WP-58 |
+| 14 | small | WP-58 |
+| 15 | small | WP-58 |
+| 16 | small | WP-58 |
+| 19 | small | WP-73 |
+| 21 | nit | WP-69 |
+| 22 | small | WP-73 |
+| 23 | — | unowned — met by WP-15f (merged); its only live remainder is entry 12's zero-width query half, folded into WP-58 |
+| 25 | small | WP-69 |
+| 30 | small | WP-68 |
+| 31 | **major** | WP-57 — a table three documents cite as the audit, never written |
+| 32 | small | WP-55 |
+| 34 | **major** | WP-53 — latent, and it fires on the first real run in the real image |
+| 35 | **major** | WP-52 — measured: a planted credential verbatim in `artifacts`, reachable through `questions.text` |
+| 36 | small | WP-48 |
+| 37 | small | WP-57 (the invalid-documents half; the reader half is merged) |
+| 38 | **major** | WP-72 — every branch of the per-role arithmetic except one is unexecuted in every tier |
+| 39 | small | WP-54 |
+| 40 | small | WP-54 |
+| 41 | small | WP-73 |
+| 43 | **major** | WP-49 — a stream stalls with no error on the task |
+| 44 | **major** | WP-63 — against product/12 and BD-028's repository half |
+| 45 | **major** | WP-64 — completeness bounded at 3/10 against R12's 0.7, so every project is capped |
+| 46 | **major** | WP-64 — a project's level is frozen at its first discovery run |
+| 47 | **major** | WP-67 — a command whose aggregate cannot refuse a repeat is performed twice under one key |
+| 48 | **blocker** | WP-51 — the credential the API never reveals can be sent to a host the caller chose |
+| 49 | **blocker** | WP-54 — no run of any role can execute a project command; the developer stage's first act |
+| 50 | **major** | WP-47 — cancelling is the one human action that spends a budget without charging it |
+| 51 | small | WP-59 (latent; the port cannot close a merge request at all) |
+| 54 | **blocker** | WP-50 — a stock install cannot complete the product's front door |
+| 56 | nit | WP-73 |
+| 59 | small | WP-60 |
+| 61 | small | WP-58 |
+| 63 | — | unowned — met at WP-41: `taskRecordSchema.conflict` is published and `apps/web/src/features/board.tsx:117-129` renders the badge; the heading is stale, and the pair's asymmetry is entry 65 |
+| 64 | small | WP-59 |
+| 65 | small | WP-59 |
+| 66 | small | WP-73 (the documentation half; the decision waits on a measurement WP-33 or a dogfood task produces) |
+| 67 | **major** | WP-55 — a wrong answer inside the prompt's feedback block, live on every return |
+| 68 | **major** | WP-44 — two documents promise a download that has no endpoint |
+| 69 | small | WP-56 |
+| 70 | small | WP-44 |
+| 71 | **major** | WP-53 — latent: every run would start from the default branch |
+| 72 | **major** | WP-62 — the screen publishes fifteen policies as facts and seven set nothing |
+| 74 | **major** | WP-56 — BD-006's timeout unbuilt end to end; a task parks for ever holding a WIP slot |
+| 75 | small | WP-47 |
+| 76 | **major** | WP-56 — dead machinery that looks finished, at both approval gates |
+| 77 | small | WP-69 |
+| 78 | **major** | WP-43 — product/03 UJ-2's chat third reaches nothing, and it looks live |
+| 80 | **major** | WP-65 — live: the one cap that stops every project cannot even be recorded |
+| 81 | small | WP-65 |
+| 82 | small | WP-53 (latent) |
+| 83 | **major** | WP-54 — the platform tool ten roles hold refuses by name |
+| 85 | small | WP-52 |
+| 86 | nit | WP-52 |
+| 87 | small | WP-70 |
+| 88 | **major** | WP-61 — live since WP-29: every reviewer-minutes figure over-counts |
+| 89 | nit | WP-61 |
+| 90 | small | WP-60 |
+| 91 | **major** | WP-45 — the two classes a maintainer most wants gated are the two that ship incomplete, one silently |
+| 92 | small | WP-67 |
+| 94 | nit | WP-61 |
+| 95 | **major** | WP-46, with its gate-row half (items 1 and 2) in WP-55 — one item is worse than absent: a passed gate publishes as `running` |
+| 96 | **major** | WP-67 — the `block` ending means a blocked package can merge |
+| 97 | small | WP-51 |
+| 99 | small | WP-67 |
+| 100 | small | WP-45 |
+| 102 | small | WP-66 |
+| 103 | small | WP-66 |
+| 106 | **major** | WP-48 — bricks a bootstrap in the way entry 101 called the one an operator cannot work around |
+| 107 | nit-to-small | WP-65 |
+| 108 | **major** | WP-44 — a feature that can file tickets in somebody else's backlog with no consent surface |
+| 109 | **blocker** | WP-47 — a reservation charged to every future window, releasable only by the lever that loses the spend |
+| 110 | **major** | WP-47 — in `local` provider mode that is every run |
+| 111 | nit | WP-68 |
+| 112 | small | WP-57 |
+| 113 | small | WP-59 (one of its three halves is live in the history bootstrap) |
+| 114 | small | WP-61 |
+| 115 | nit-to-small | WP-70 |
+| 116 | small | WP-71 |
+| 117 | small | WP-71 |
+| 118 | small | WP-71 (with a dated trigger: the first release PR) |
+| 119 | nit-to-small | WP-73 |
+
+#### Disposition — Q63 to Q90
+
+An open question is implemented per its recommendation and never waited on. *Implemented* below
+means the recommendation is already in the tree and the question stays open only for a founder's
+confirmation; those are deliberately unowned because there is nothing left to build.
+
+| Question | Disposition |
+|---|---|
+| Q63 | **WP-65** — the operator-facing half (the mirrors are in no storage gauge; purge by last use) |
+| Q64 | **WP-52** — store the assembled prompt redacted at the write and amend TD-012 in the same change |
+| Q65 | unowned — implemented at WP-19; revisiting (a) needs twenty dogfood tasks, which no row can produce |
+| Q66 | unowned — implemented at WP-18b; `auto_apply` reads as "no queue entry", not "no review" |
+| Q67 | unowned — implemented at WP-14a; the project-skills consequence is stated on the record |
+| Q68 | unowned — implemented; the ten paths are fixed in the domain table, and WP-64 writes to six of them |
+| Q69 | **WP-54** — answer (ii), a per-role declared baseline the project may narrow |
+| Q70 | **WP-47** — (b), the mechanism for a cancelled run's spend; (a) is implemented |
+| Q71 | unowned — implemented at WP-28: gate on the point estimate for 0.1 |
+| Q72 | unowned — implemented at WP-31, all four parts |
+| Q73 | unowned — implemented at WP-41: do not convert minutes to money |
+| Q74 | unowned — implemented at WP-24: one review per merge request, drafts included |
+| Q75 | unowned — implemented at WP-25 |
+| Q76 | unowned — implemented at WP-26 and TD-027: the block stands and the resolution merges |
+| Q77 | — not open: answered by TD-027 (session 5) |
+| Q78 | **WP-62** — widen to exactly the fields that have a reader, and make that the rule |
+| Q79 | **WP-62** — park in `needs_human` with a brief naming the policy; "continue" is a hand-back |
+| Q80 | unowned — implemented at WP-32: the digest carries what quiet hours deferred and nothing else |
+| Q81 | unowned — implemented at WP-31 |
+| Q82 | unowned — implemented at WP-34, all three parts |
+| Q83 | **WP-45** — a checklist is a named list of review items a project declares |
+| Q84 | unowned — implemented at WP-38, narrowly |
+| Q85 | **WP-44** — the acceptance surface; the queue itself shipped at WP-40 |
+| Q86 | unowned — implemented: the shadow skip stands and BD-006 and product/18 carry the amendment |
+| Q87 | **WP-61** — publish the rate only with its coverage, absent below a declared floor |
+| Q88 | unowned — answered as built (the Covenant's contact names the maintainers); a real reporting address is a human's to choose |
+| Q89 | **WP-71** — stop publishing `latest`, and state in TD-019 what the four published tags mean |
+| Q90 | unowned — implemented (the workflow takes the administrator token when one exists); creating that token is a human's act, like WP-33's credential |
