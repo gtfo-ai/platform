@@ -8,9 +8,11 @@
  * writes and writes nothing.
  *
  * **`maintenanceSpendSince` is the second query in the platform that sums the ledger for a feature
- * cap**, after `PostgresShadowStore.shadowSpendSince`, and it is deliberately the same shape: sum
- * `cost_entries` — the record — rather than `tasks.cost_actual`, which is a running total the
- * workpad job can lag. What differs is the predicate, and it is the one thing this feature had to
+ * cap**, after `PostgresShadowStore.shadowSpendSince`, and it is deliberately the same shape — now
+ * including the second number both of them answer: sum `cost_entries` — the record — rather than
+ * `tasks.cost_actual`, which is a running total the workpad job can lag, and add the chore runs of
+ * the window the ledger has **not** recorded yet, because it writes from a handler that commits
+ * after the run's own transaction (`../cost/pending-run-spend.ts`). What differs is the predicate, and it is the one thing this feature had to
  * decide: the chores this scheduler created, recognised by their reference. `tasks.template` would
  * charge a `chore` ticket a *human* filed to the maintenance cap, and `runs.mode` would too,
  * because a maintenance chore's runs are ordinary delivery runs. `coalesce(sum(...), 0)` — a
@@ -26,12 +28,19 @@
  * answer is the one that reflects what the registry last said.
  */
 import type {
+  CapSpend,
   KbHygieneReport,
   MaintenanceStore,
   StaleDependency,
   Transaction,
 } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
+import {
+  ACTIVE_RUN_STATUSES_PARAM,
+  PENDING_RUN_WINDOW_SQL,
+  pendingRunUsdSql,
+  UNLEDGERED_RUN_SQL,
+} from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -59,15 +68,34 @@ interface DependencyRow extends Record<string, unknown> {
 }
 
 export class PostgresMaintenanceStore implements MaintenanceStore {
-  async maintenanceSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number> {
-    const { rows } = await sqlOf(tx).query<{ usd: string }>(
-      `select coalesce(sum(c.usd), 0)::text as usd
-         from cost_entries c
-         join tasks t on t.id = c.task_id
-        where c.project_id = $1 and ${MAINTENANCE_TASK_PREDICATE} and c.created_at >= $2`,
-      [projectId, since],
+  async maintenanceSpendSince(
+    tx: Transaction,
+    projectId: Id,
+    since: IsoDateTime,
+    reserveUsd: number,
+  ): Promise<CapSpend> {
+    const { rows } = await sqlOf(tx).query<{ spent_usd: string; pending_usd: string }>(
+      // Two numbers for one cap: what the ledger has charged this month's chores, and what their
+      // runs have committed that the ledger has not written yet (`../cost/pending-run-spend.ts`).
+      `select coalesce((
+                select sum(c.usd) from cost_entries c
+                  join tasks t on t.id = c.task_id
+                 where c.project_id = $1 and ${MAINTENANCE_TASK_PREDICATE} and c.created_at >= $2
+              ), 0)::text as spent_usd,
+              coalesce((
+                select sum(${pendingRunUsdSql('$3', '$4')})
+                  from runs r
+                  join tasks t on t.id = r.task_id
+                 where r.project_id = $1 and ${MAINTENANCE_TASK_PREDICATE}
+                   and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$2')}
+              ), 0)::text as pending_usd`,
+      [projectId, since, [...ACTIVE_RUN_STATUSES_PARAM], reserveUsd],
     );
-    return Number(rows[0]?.usd ?? 0);
+    const row = rows[0];
+    return {
+      spentUsd: Number(row?.spent_usd ?? 0),
+      pendingUsd: Number(row?.pending_usd ?? 0),
+    };
   }
 
   async latestKbHygiene(tx: Transaction, projectId: Id): Promise<KbHygieneReport | null> {

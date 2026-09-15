@@ -292,11 +292,13 @@ export const runShadowStoreContract = (options: {
 
     it('sums nothing for a project with no shadow spend, rather than refusing', async () => {
       // The one place a zero is the right answer: a project that has spent nothing has spent
-      // nothing, and the budget guard compares against it.
+      // nothing, and the budget guard compares against it. Both numbers, because the cap adds
+      // them: a `pendingUsd` neither implementation answered would be `NaN` at the comparison
+      // and `NaN > cap` is false for every cap (`cost/pending.ts`, standing rule 16).
       const context = await start();
       expect(
-        await run(context, (tx) => context.store.shadowSpendSince(tx, context.projectId, AT)),
-      ).toBe(0);
+        await run(context, (tx) => context.store.shadowSpendSince(tx, context.projectId, AT, 5)),
+      ).toEqual({ spentUsd: 0, pendingUsd: 0 });
     });
   });
 };

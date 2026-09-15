@@ -97,8 +97,10 @@ export const readShadowReport = (raw: unknown): ShadowReportData | null => readR
  * the running total the stage executor maintains, so this figure can lag a run that has finished
  * and whose ledger rows have not been folded yet. It is the same number the board and the task page
  * already show for a task, which is what a reader comparing the two screens expects; the **budget**
- * is enforced against the ledger (`ShadowStore.shadowSpendSince`), where lagging would be a defect
- * rather than a cosmetic delay.
+ * is enforced against the ledger *and* against the shadow runs the ledger has not recorded yet
+ * (`ShadowStore.shadowSpendSince`, whose two numbers and their reasoning are in
+ * `packages/application/src/cost/pending.ts`), because a cap that lagged a run would admit one
+ * more rather than show a number a moment late.
  */
 export const listShadowBatches = async (
   database: Database,

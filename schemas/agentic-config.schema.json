@@ -465,6 +465,33 @@
           },
           "additionalProperties": false
         },
+        "epic_split": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "issue_types": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            "child_issue_type": {
+              "$ref": "#/$defs/NonEmptyString"
+            }
+          },
+          "additionalProperties": false
+        },
+        "spike": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
         "history_bootstrap": {
           "type": "object",
           "properties": {
@@ -564,7 +591,9 @@
         "ReadinessReport",
         "DiscoveryDraft",
         "AskAnswer",
-        "HistoryFindings"
+        "HistoryFindings",
+        "ResearchReport",
+        "TicketBreakdown"
       ]
     },
     "AutonomyLevel": {

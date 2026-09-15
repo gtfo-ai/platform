@@ -155,11 +155,35 @@ describe('what only the database can answer', () => {
       const store = new shadowAdapters.PostgresShadowStore();
       const tx = { adapter: 'postgres', client } as unknown as Transaction;
       const since = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
-      expect(await store.shadowSpendSince(tx, projectId as Id, since as never)).toBe(3);
+      expect(await store.shadowSpendSince(tx, projectId as Id, since as never, 5)).toEqual({
+        spentUsd: 3,
+        pendingUsd: 0,
+      });
       // The other direction: widen the window and the older shadow entry joins in — which is what
       // makes the figure above a *window* rather than a coincidence.
       const wide = new Date(now.getTime() - 7 * 24 * 60 * 60_000).toISOString();
-      expect(await store.shadowSpendSince(tx, projectId as Id, wide as never)).toBe(53);
+      expect(await store.shadowSpendSince(tx, projectId as Id, wide as never, 5)).toEqual({
+        spentUsd: 53,
+        pendingUsd: 0,
+      });
+
+      /**
+       * And the second number, on the same rows: a shadow run the ledger has **not** recorded is
+       * money this sum cannot see, and the cap counts it at the caller's reservation while it is
+       * live (`packages/application/src/cost/pending.ts`). The `normal` task gets one too, because
+       * the pending term has to obey the same `tasks.mode` predicate the spend does — a term that
+       * did not would charge a delivery run to the demo's budget.
+       */
+      await pool.query(
+        `insert into runs (task_id, project_id, role, model, prompt_version, status)
+         values ($1, $2, 'developer', 'claude-opus-5', 'developer@1', 'running'),
+                ($3, $2, 'developer', 'claude-opus-5', 'developer@1', 'running')`,
+        [taskIds[0], projectId, normalTask],
+      );
+      expect(await store.shadowSpendSince(tx, projectId as Id, since as never, 5)).toEqual({
+        spentUsd: 3,
+        pendingUsd: 5,
+      });
     } finally {
       await client.end();
     }

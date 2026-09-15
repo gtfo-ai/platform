@@ -10,10 +10,12 @@
  */
 import * as z from 'zod';
 import {
+  acceptanceCriterionSchema,
   artifactRefSchema,
   artifactSchema,
   askAnswerCitationSchema,
   kbHealthFindingSchema,
+  MAX_BREAKDOWN_CHILDREN,
   shadowReportDataSchema,
 } from './artifacts.js';
 import {
@@ -884,6 +886,87 @@ export const taskAskSchema = z.strictObject({
 export const taskAskListSchema = z.strictObject({ items: z.array(taskAskSchema) });
 
 /**
+ * One proposed child ticket in the epic-split queue — `GET /api/tasks/:task_id/breakdown` (WP-40).
+ *
+ * The queue's shape is `kb_proposals`' rather than `approvals`' and the reason is Q85's: a
+ * breakdown is **N independent decisions** and an approval is one, so a PM who wants five of seven
+ * children has to have a row per child to say so. `status` is therefore per row, `decided_by_user_id`
+ * and `decided_at` are per row, and a **rejection leaves the row** with its reason — the Librarian
+ * learns from rejections (product/10:52) and so does whoever reads this queue.
+ *
+ * **Every string on this row is untrusted** (BD-022) and none of them is the platform's:
+ * `title`, `description`, `rationale` and every acceptance criterion are model output over an
+ * untrusted epic, and `reason` is a human's free text. Render them as text, never as markup. They
+ * are stored **redacted** — TD-012 step 2 at the write, in `pipeline/epic-split.ts` for the
+ * model's fields and in `decideBreakdown` for `reason` — so what this endpoint publishes is the
+ * redacted copy and a placeholder is what a reader sees where a credential was.
+ *
+ * `ticket_key` and `ticket_url` are what the `createTicket` call produced, and they stay `null`
+ * for an accepted child whose call has not happened yet — which is the honest difference between
+ * *"accepted"* and *"created"*.
+ */
+export const ticketBreakdownItemSchema = z.strictObject({
+  id: idSchema,
+  task_id: idSchema,
+  /** Declaration order of the artifact's `children`, which is the order a PM reads them in. */
+  position: z.int().nonnegative(),
+  title: z.string(),
+  description: z.string(),
+  acceptance_criteria: z.array(acceptanceCriterionSchema),
+  size: sizeSchema,
+  rationale: z.string(),
+  status: z.enum(['queued', 'accepted', 'rejected']),
+  decided_by_user_id: idSchema.nullable(),
+  decided_at: isoDateTimeSchema.nullable(),
+  /**
+   * **A human's own words about the decision, not the platform's** — untrusted text (BD-022).
+   *
+   * It is typed into the accept/reject command by whoever decided, bounded there by
+   * {@link decideBreakdownRequestSchema}'s `MAX_COMMAND_TEXT_CHARS` and stored redacted (TD-012)
+   * by `decideBreakdown`, which is why this field carries no cap and no redaction of its own: a
+   * value bounded twice has two untestable guards (standing rule 41). Rendered as text like every
+   * other string here.
+   */
+  reason: z.string().nullable(),
+  ticket_key: z.string().nullable(),
+  ticket_url: urlSchema.nullable(),
+  created_at: isoDateTimeSchema,
+});
+
+export const taskBreakdownSchema = z.strictObject({
+  items: z.array(ticketBreakdownItemSchema),
+});
+
+/**
+ * `POST /api/tasks/:task_id/breakdown/decide` — the acceptance product/04:117 asks for.
+ *
+ * **One request, N rows, one decision.** `item_ids` names the children this decision is about, so
+ * accepting five of seven is one call and the other two stay `queued`; an empty list is refused by
+ * `min(1)` because a decision about nothing is a request that meant to say something else.
+ *
+ * `reason` is the human's own words and is bounded like every other command's free text. It is
+ * recorded on the rows the decision moved — on an acceptance too, because *"why we are building
+ * this"* is worth as much as *"why we are not"*  — and it is **redacted where it is stored**
+ * (`decideBreakdown`, TD-012), because a stored copy of untrusted human text is TD-012's business
+ * wherever it came from (the answer `returnTaskToStage`'s `reason` already gets).
+ */
+export const decideBreakdownRequestSchema = z.strictObject({
+  decision: z.enum(['accept', 'reject']),
+  item_ids: z.array(idSchema).min(1).max(MAX_BREAKDOWN_CHILDREN),
+  reason: z.string().max(MAX_COMMAND_TEXT_CHARS).optional(),
+});
+
+export const decideBreakdownResponseSchema = z.strictObject({
+  task_id: idSchema,
+  /** `false` for a replayed `Idempotency-Key`: the decision was made and nothing happened twice. */
+  performed: z.boolean(),
+  accepted: z.int().nonnegative(),
+  rejected: z.int().nonnegative(),
+  /** Children still waiting for a human after this decision. */
+  remaining: z.int().nonnegative(),
+});
+
+/**
  * One `human_actions` row of a task — `GET /api/tasks/:task_id/audit` (WP-31 criterion 10,
  * PROGRESS backlog 52).
  *
@@ -1417,6 +1500,10 @@ export type AskTaskRequest = z.infer<typeof askTaskRequestSchema>;
 export type AskTaskResponse = z.infer<typeof askTaskResponseSchema>;
 export type TaskAsk = z.infer<typeof taskAskSchema>;
 export type TaskAskList = z.infer<typeof taskAskListSchema>;
+export type TicketBreakdownItem = z.infer<typeof ticketBreakdownItemSchema>;
+export type TaskBreakdown = z.infer<typeof taskBreakdownSchema>;
+export type DecideBreakdownRequest = z.infer<typeof decideBreakdownRequestSchema>;
+export type DecideBreakdownResponse = z.infer<typeof decideBreakdownResponseSchema>;
 export type TaskAuditEntry = z.infer<typeof taskAuditEntrySchema>;
 export type TaskAuditPage = z.infer<typeof taskAuditPageSchema>;
 export type CreateIdentityMappingRequest = z.infer<typeof createIdentityMappingRequestSchema>;

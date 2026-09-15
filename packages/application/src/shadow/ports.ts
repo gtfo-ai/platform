@@ -13,6 +13,7 @@
  * that announces it — and a store that opened its own transaction could not give them that.
  */
 import type { Id, IsoDateTime, MergeRequestRef, ShadowHumanMrSource } from '@platform/contracts';
+import type { CapSpend } from '../cost/pending.js';
 import type { Transaction } from '../ports/transaction.js';
 
 /** One ticket of a batch, as it is written and as it is read back. */
@@ -109,14 +110,25 @@ export interface ShadowStore {
   completeIfDone(tx: Transaction, batchId: Id, at: IsoDateTime): Promise<boolean>;
 
   /**
-   * What this project's **shadow** tasks have spent since an instant, from `cost_entries`.
+   * What this project's **shadow** tasks have spent since an instant, and what they have committed.
    *
-   * The ledger rather than `tasks.cost_actual`, for the reason WP-19 gives everywhere else: the
-   * entries are the record and the task column is a running total the executor maintains. It is the
-   * number the separate shadow budget is checked against, and the reason it is here rather than on
-   * `CostStore` is that it is the only query in the platform that groups spend by `tasks.mode`.
+   * `spentUsd` is `cost_entries` — the ledger rather than `tasks.cost_actual`, for the reason WP-19
+   * gives everywhere else: the entries are the record and the task column is a running total the
+   * executor maintains. The reason the query is here rather than on `CostStore` is that it is the
+   * only one in the platform that groups spend by `tasks.mode`.
+   *
+   * `pendingUsd` is the shadow runs of that window the ledger has **not** recorded, valued at
+   * `reserveUsd` while they are live and at what they reported once they have ended. Without it the
+   * cap is read from a projection a later handler writes, and a second admission inside that window
+   * sees a spend lower than it is — the rule, and the measurement, are in
+   * `packages/application/src/cost/pending.ts`.
    */
-  shadowSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number>;
+  shadowSpendSince(
+    tx: Transaction,
+    projectId: Id,
+    since: IsoDateTime,
+    reserveUsd: number,
+  ): Promise<CapSpend>;
 
   /**
    * The commit a shadow task's workspace should be checked out at — Q82 (a), PROGRESS backlog 71.

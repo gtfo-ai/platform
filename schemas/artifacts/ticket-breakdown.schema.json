@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TicketBreakdown data",
+  "description": "Structured output of the stage that produces a TicketBreakdown artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "epic_summary": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "children": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_bba22d10"
+      }
+    },
+    "out_of_scope": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_b54c3534"
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactQuestion"
+      }
+    }
+  },
+  "required": [
+    "epic_summary",
+    "children",
+    "out_of_scope",
+    "open_questions"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "AcceptanceCriterion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "given": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "when": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "then": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "validation": {
+          "$ref": "#/$defs/ValidationCheck"
+        }
+      },
+      "required": [
+        "id",
+        "given",
+        "when",
+        "then",
+        "validation"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "text": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "blocking"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Size": {
+      "type": "string",
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ]
+    },
+    "ValidationCheck": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "test",
+            "manual"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "anon_b54c3534": {
+      "maxLength": 200,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_bba22d10": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "maxLength": 200,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "acceptance_criteria": {
+          "minItems": 1,
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcceptanceCriterion"
+          }
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "acceptance_criteria",
+        "size",
+        "rationale"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -77,6 +77,16 @@
       "description": "Structured output of the stage that produces a HistoryFindings artifact (technical/12)."
     },
     {
+      "file": "artifacts/research-report.schema.json",
+      "title": "ResearchReport data",
+      "description": "Structured output of the stage that produces a ResearchReport artifact (technical/12)."
+    },
+    {
+      "file": "artifacts/ticket-breakdown.schema.json",
+      "title": "TicketBreakdown data",
+      "description": "Structured output of the stage that produces a TicketBreakdown artifact (technical/12)."
+    },
+    {
       "file": "agentic-config.schema.json",
       "title": ".agentic/config.yml",
       "description": "Repository configuration; unknown keys are errors (technical/12)."

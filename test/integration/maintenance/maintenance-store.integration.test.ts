@@ -144,11 +144,39 @@ describe('what the dedicated budget counts', () => {
 
     await withTx(async (tx) => {
       const since = new Date(now.getTime() - 24 * 60 * 60_000).toISOString() as IsoDateTime;
-      expect(await store.maintenanceSpendSince(tx, projectId as Id, since)).toBe(3);
+      expect(await store.maintenanceSpendSince(tx, projectId as Id, since, 0)).toEqual({
+        spentUsd: 3,
+        pendingUsd: 0,
+      });
       // The other direction: widen the window and the older chore joins in, which is what makes the
       // figure above a window rather than a coincidence (standing rule 42).
       const wide = new Date(now.getTime() - 7 * 24 * 60 * 60_000).toISOString() as IsoDateTime;
-      expect(await store.maintenanceSpendSince(tx, projectId as Id, wide)).toBe(10);
+      expect(await store.maintenanceSpendSince(tx, projectId as Id, wide, 0)).toEqual({
+        spentUsd: 10,
+        pendingUsd: 0,
+      });
+    });
+
+    /**
+     * The **pending** half, against the same rows: a chore run the ledger has not written yet is
+     * money the `cost_entries` sum cannot see, and the cap counts it at the caller's reservation
+     * while it is live (`packages/application/src/cost/pending.ts`). The human's task and the
+     * review task get one each too — neither may reach the maintenance cap, which is this file's
+     * whole subject.
+     */
+    await pool.query(
+      `insert into runs (task_id, project_id, role, model, prompt_version, status)
+       values ($1, $2, 'developer', 'claude-opus-5', 'developer@1', 'running'),
+              ($3, $2, 'developer', 'claude-opus-5', 'developer@1', 'running'),
+              ($4, $2, 'developer', 'claude-opus-5', 'developer@1', 'running')`,
+      [scheduled, projectId, human, review],
+    );
+    await withTx(async (tx) => {
+      const since = new Date(now.getTime() - 24 * 60 * 60_000).toISOString() as IsoDateTime;
+      expect(await store.maintenanceSpendSince(tx, projectId as Id, since, 2)).toEqual({
+        spentUsd: 3,
+        pendingUsd: 2,
+      });
     });
   });
 });

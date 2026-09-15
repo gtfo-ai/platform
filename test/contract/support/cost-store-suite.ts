@@ -309,6 +309,37 @@ export const runCostStoreContract = (harness: CostStoreHarness): void => {
         );
         expect(forNewRun.map((budget) => budget.scope).sort()).toEqual(['org', 'project']);
       });
+
+      /**
+       * `pendingSpend` — what the guard adds to the window because the ledger writes it later
+       * (`packages/application/src/cost/pending.ts`).
+       *
+       * Both implementations owe the two answers a *shared* case can make: a scope with no runs
+       * commits nothing, and a run that has **ended reporting nothing** commits nothing either —
+       * the seeder's run is `completed` with no `usd_reported`, which is the residual that module
+       * states. The **derivation** (a live run at the reservation, an ended one at its reported
+       * figure) is the adapter's and is asserted in `test/integration/cost/`, because the
+       * in-memory store holds no run status at all (its divergence 7).
+       *
+       * The second half is what makes this more than a smoke test (standing rule 43): an adapter
+       * that valued *every* unledgered run at the reservation would pass the first and fail here,
+       * and it would charge a window for a run that cost nothing.
+       */
+      it('commits nothing for a scope with no runs, and nothing for a run that reported nothing', async () => {
+        const project = { scope: 'project' as const, scopeId: projectId };
+        expect(await store.pendingSpend(tx, project, MONTH, 5)).toBe(0);
+
+        const taskId = nextId();
+        await seed.task({ id: taskId });
+        await seed.run({
+          runId: nextId(),
+          taskId,
+          stage: 'refinement',
+          model: 'claude-sonnet-5',
+          startedAt: MONTH,
+        });
+        expect(await store.pendingSpend(tx, project, MONTH, 5)).toBe(0);
+      });
     });
 
     describe('estimates', () => {

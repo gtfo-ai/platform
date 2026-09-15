@@ -218,5 +218,26 @@ export interface CostStore {
     readonly samples: number | null;
   } | null>;
 
+  /**
+   * What the runs charged to a budget's scope have **committed** since its window opened, and that
+   * the ledger has not recorded yet.
+   *
+   * Asked by {@link BudgetGuard} at admission, beside `budget_windows.spent_usd`, and by nothing
+   * else: the projection is written by the ledger *handler*, after the run's own transaction, so a
+   * budget read from it alone is read one run late. The rule, the measurement and the residual are
+   * in `./pending.ts`; a live run is valued at `reserveUsd`, an ended one at the figure its own
+   * transaction wrote.
+   *
+   * It is **not** folded into {@link BudgetRepository.applicable}, deliberately: that answer is
+   * also what the ledger's `recordSpend` adds to and writes back, so a reservation inside it would
+   * be persisted as spend.
+   */
+  pendingSpend(
+    tx: Transaction,
+    budget: { readonly scope: BudgetScope; readonly scopeId: Id | null },
+    since: IsoDateTime,
+    reserveUsd: number,
+  ): Promise<number>;
+
   readonly budgets: BudgetRepository;
 }

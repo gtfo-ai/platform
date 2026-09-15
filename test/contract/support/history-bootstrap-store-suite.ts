@@ -266,14 +266,21 @@ export const runHistoryBootstrapStoreContract = (options: {
       const context = await start();
       await seed(context, { capUsd: 7.5 });
       const cap = await run(context, (tx) =>
-        context.store.capForTask(tx, context.taskIds[0] as Id),
+        context.store.capForTask(tx, context.taskIds[0] as Id, 2),
       );
       expect(cap?.capUsd).toBe(7.5);
       // The spend is the ledger's; a batch that has spent nothing has spent nothing.
       expect(cap?.spentUsd).toBe(0);
+      /**
+       * And the third number: a batch whose runs are all in the ledger — here, a batch with no runs
+       * at all — has nothing committed. It is asserted for both implementations because a cap that
+       * counted a run twice would refuse a batch that has room (`cost/pending.ts`), and neither
+       * side may answer `undefined` for a number the executor adds.
+       */
+      expect(cap?.pendingUsd).toBe(0);
       expect(
         await run(context, (tx) =>
-          context.store.capForTask(tx, '00000000-0000-4000-8000-0000000fffff' as Id),
+          context.store.capForTask(tx, '00000000-0000-4000-8000-0000000fffff' as Id, 2),
         ),
       ).toBeNull();
     });

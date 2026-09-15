@@ -343,6 +343,32 @@ describe('collecting a project’s merged history', () => {
     expect(spent.store.snapshot().map((task) => task.task.state)).toEqual(['paused']);
   });
 
+  it('stops a mining run on a run of the batch the ledger has not recorded yet', async () => {
+    /**
+     * **The race the cap had, measured on WP-40's tree and closed here** (`../cost/pending.ts`).
+     *
+     * The ledger writes `cost_entries` from a handler on `run.finished`, *after* the run's own
+     * transaction, so the second chunk of a batch is admitted while the first chunk's spend is
+     * still invisible: with the handler delayed by 8 s, the batch's e2e admitted **two** runs
+     * against a cap that allows **one**, three times out of three. `capForTask` therefore answers a
+     * second number — the batch's runs with no ledger row, valued at what a run of this stage may
+     * spend — and this case is that number doing the stopping with the ledger at **zero**.
+     *
+     * The other direction is the case above: the same cap with nothing spent and nothing in flight
+     * admits the run (standing rule 42).
+     */
+    const harness = world({ merged: 2, runsMining: true });
+    const batchId = await seedBatch(harness, { mergeRequests: 2, batchSize: 20, capUsd: 2.2 });
+    await collect(harness, batchId);
+    // Nothing charged, one run of this batch still unaccounted for: 0 + 2 + 2 > 2.2.
+    harness.bootstrap.seedSpend(batchId, 0);
+    harness.bootstrap.seedPendingRuns(batchId, 1);
+    await harness.publish([]);
+
+    expect(harness.specs.filter((spec) => spec.stage === 'history_mining')).toEqual([]);
+    expect(harness.store.snapshot().map((task) => task.task.state)).toEqual(['paused']);
+  });
+
   it('runs one mining stage per chunk, each on its own slice of the history', async () => {
     /**
      * The assertion rule 82 asks for, one ring below the e2e: the run's **prompt** is what this

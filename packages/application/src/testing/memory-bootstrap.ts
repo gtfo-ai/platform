@@ -23,7 +23,12 @@
  *    `cost_entries`: {@link MemoryHistoryBootstrapStore.seedSpend} is the seam. It is **stricter**
  *    in one way that matters — the seeded number is used exactly, where the adapter sums a
  *    `numeric(12,6)` column and could round — so a test that depends on a rounding is one only the
- *    adapter can answer.
+ *    adapter can answer. The **pending** half of `capForTask` is seeded the same way
+ *    ({@link MemoryHistoryBootstrapStore.seedPendingRuns}) and is the one place this double is
+ *    *kinder* than the adapter (standing rule 1): it holds no `runs`, so it cannot derive the
+ *    batch's unledgered runs and answers `0` unless a test says otherwise — where the adapter
+ *    finds them. A test that wants the cap's pending term seeds it; the adapter's own derivation
+ *    is held by the integration tier.
  * 5. **`markChunkRecorded` and `completeIfDone` answer `true` only on the transition**, which is
  *    the same predicate the adapter puts in its `where`, so the recorder's idempotency is exercised
  *    here as well as there.
@@ -44,6 +49,14 @@ export interface MemoryHistoryBootstrapStore extends HistoryBootstrapStore {
   chunksOf(batchId: Id): readonly HistoryBootstrapChunkRow[];
   /** Divergence 4: what `spendOfBatch` and `capForTask` answer for a batch. */
   seedSpend(batchId: Id, usd: number): void;
+  /**
+   * Divergence 4: how many runs of this batch the ledger has not recorded.
+   *
+   * `capForTask` values each of them at the `reserveUsd` its caller passes, which is what the
+   * adapter does for a **live** run; an ended-but-unledgered run's own reported figure is a `runs`
+   * column this double does not hold.
+   */
+  seedPendingRuns(batchId: Id, runs: number): void;
 }
 
 export const createMemoryHistoryBootstrapStore = (
@@ -52,6 +65,7 @@ export const createMemoryHistoryBootstrapStore = (
   const batches: HistoryBootstrapBatchRow[] = [];
   const chunks: HistoryBootstrapChunkRow[] = [];
   const spend = new Map<Id, number>();
+  const pendingRuns = new Map<Id, number>();
 
   const replace = (batch: HistoryBootstrapBatchRow): void => {
     const index = batches.findIndex((row) => row.id === batch.id);
@@ -75,6 +89,10 @@ export const createMemoryHistoryBootstrapStore = (
       chunks.filter((row) => row.batchId === batchId).sort((a, b) => a.chunkIndex - b.chunkIndex),
     seedSpend: (batchId, usd) => {
       spend.set(batchId, usd);
+    },
+
+    seedPendingRuns: (batchId, runs) => {
+      pendingRuns.set(batchId, runs);
     },
 
     createBatch: async (_tx: Transaction, batch) => {
@@ -158,7 +176,7 @@ export const createMemoryHistoryBootstrapStore = (
 
     spendOfBatch: async (_tx, batchId) => spend.get(batchId) ?? 0,
 
-    capForTask: async (_tx, taskId) => {
+    capForTask: async (_tx, taskId, reserveUsd) => {
       const chunk = chunks.find((row) => row.taskId === taskId);
       if (chunk === undefined) {
         return null;
@@ -166,7 +184,11 @@ export const createMemoryHistoryBootstrapStore = (
       const batch = batches.find((row) => row.id === chunk.batchId);
       return batch === undefined
         ? null
-        : { capUsd: batch.capUsd, spentUsd: spend.get(batch.id) ?? 0 };
+        : {
+            capUsd: batch.capUsd,
+            spentUsd: spend.get(batch.id) ?? 0,
+            pendingUsd: (pendingRuns.get(batch.id) ?? 0) * reserveUsd,
+          };
     },
   };
 };

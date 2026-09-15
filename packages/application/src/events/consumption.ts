@@ -250,6 +250,11 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // without a second provider read, which is why neither has a projection of its own here.
   'task.rebase.checked': 'unconsumed',
   'task.conflict.warned': 'unconsumed',
+  // WP-40: the **spike's human stage subscribes to it**. `EPIC_SPLIT_TEMPLATE`'s `human_review`
+  // names it in its `on` list, so `pipeline.epic.split.decided` steps the task out of the wait and
+  // the interpreter decides where it goes — which is the same shape `default_branch.moved` has for
+  // `ready_for_merge`, and the reason this one is `handled` rather than a statistics baseline.
+  'task.breakdown.decided': 'handled',
   // WP-34's first consumer: `shadow.batch.completion` (`shadow/report.ts`) marks a batch finished
   // once every task of it has a report. Small on purpose — product/19 §13's aggregate is a
   // projection over the batch's rows, not a number a handler accumulates.

@@ -68,6 +68,7 @@ import {
   createHistoryBootstrapCommands,
   createHistoryBootstrapGate,
 } from './bootstrap.js';
+import { composeBreakdown } from './breakdown.js';
 import { createTaskCommands } from './commands.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
@@ -573,6 +574,21 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * of it works: without a queue the reads still answer and the write refuses by name, because a
      * recorded question nothing will ever pick up is worse than a refusal.
      */
+    /**
+     * The epic split's API half (WP-40): the decision and the queue read, over one pipeline store.
+     *
+     * Composed unconditionally, unlike `taskCommands`: accepting a breakdown needs no queue, because
+     * the event it appends is what a worker turns into `createTicket` calls. See `breakdown.ts`.
+     */
+    const breakdown = composeBreakdown({
+      eventing: {
+        unitOfWork: eventing.unitOfWork,
+        ids: { next: () => randomUUID() as never },
+        clock: { now: () => new Date().toISOString() as never },
+      },
+      logger: loggerPort,
+    });
+
     const asks = composeAsks({
       eventing: {
         unitOfWork: eventing.unitOfWork,
@@ -754,6 +770,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       historyBootstrapGate: bootstrapGate,
       commands: taskCommands,
       asks,
+      breakdown,
       /**
        * The browser application (WP-15j): the operator's directory, or the one the image carries.
        *

@@ -29,8 +29,11 @@ describe('Drizzle schema', () => {
     // which `shadow_reports` (a row per task) cannot express (migration 0029, WP-34), plus
     // `history_bootstrap_batches` and `history_bootstrap_chunks` — the history bootstrap's
     // selection and its per-run chunks, which product/19 §18's *"batches of ~20 MRs per run"*
-    // needs somewhere to live and which no earlier table describes (migration 0030, WP-35).
-    expect(tables.length).toBe(56);
+    // needs somewhere to live and which no earlier table describes (migration 0030, WP-35), plus
+    // `ticket_breakdown_items` — the epic split's queue, one row per proposed child ticket, which
+    // `approvals` cannot express because a breakdown is N independent decisions and an approval is
+    // one (Q85, migration 0033, WP-40).
+    expect(tables.length).toBe(57);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

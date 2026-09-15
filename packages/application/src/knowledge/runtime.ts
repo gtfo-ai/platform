@@ -34,6 +34,7 @@ import {
   librarianProposalsHandler,
   librarianTriggerHandlers,
 } from './librarian.js';
+import { researchPageJobHandler, researchTriggerHandlers } from './research.js';
 
 export interface LibrarianRuntimeOptions {
   readonly curation: LibrarianJobOptions;
@@ -54,10 +55,18 @@ export const createLibrarianRuntime = (options: LibrarianRuntimeOptions): Librar
   const workers: JobWorker[] = [];
   const { jobs } = options.curation;
   return {
-    handlers: librarianTriggerHandlers({
-      jobs,
-      ...(options.curation.logger === undefined ? {} : { logger: options.curation.logger }),
-    }),
+    handlers: [
+      ...librarianTriggerHandlers({
+        jobs,
+        ...(options.curation.logger === undefined ? {} : { logger: options.curation.logger }),
+      }),
+      // WP-40: the same queue, a different artifact type. Registered here rather than in the
+      // pipeline runtime because the collaborators a curation needs are this runtime's.
+      ...researchTriggerHandlers({
+        jobs,
+        ...(options.curation.logger === undefined ? {} : { logger: options.curation.logger }),
+      }),
+    ],
     start: async () => {
       await declareLibrarianQueues(jobs);
       await declareKnowledgeApplyQueue(jobs);
@@ -65,7 +74,13 @@ export const createLibrarianRuntime = (options: LibrarianRuntimeOptions): Librar
       workers.push(
         await jobs.work<KnowledgeProposalsData>({
           queue: JOB_QUEUES.knowledgeProposals,
-          handler: librarianProposalsHandler(options.curation),
+          // Two curations on one queue, dispatched on the payload's `artifact_type` (WP-40).
+          // Absent is the Librarian's, which is what every job enqueued before that row carries —
+          // so a rolling upgrade's in-flight wake-ups keep working (standing rule 20).
+          handler: async (job) =>
+            job.data.artifact_type === 'ResearchReport'
+              ? researchPageJobHandler(options.curation)(job)
+              : librarianProposalsHandler(options.curation)(job),
           concurrency: 1,
         }),
         await jobs.work<KnowledgeApplyData>({

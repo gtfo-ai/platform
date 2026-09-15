@@ -2070,6 +2070,84 @@
         },
         "type": {
           "type": "string",
+          "const": "task.breakdown.decided"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "accepted": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rejected": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "remaining": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "project_id",
+            "task_id",
+            "accepted",
+            "rejected",
+            "remaining"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
           "const": "run.created"
         },
         "payload": {
@@ -4646,7 +4724,9 @@
         "ReadinessReport",
         "DiscoveryDraft",
         "AskAnswer",
-        "HistoryFindings"
+        "HistoryFindings",
+        "ResearchReport",
+        "TicketBreakdown"
       ]
     },
     "BudgetScope": {

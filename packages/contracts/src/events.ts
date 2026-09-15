@@ -403,6 +403,29 @@ export const taskConflictWarnedEvent = defineEvent('task.conflict.warned', {
   truncated: z.boolean(),
 });
 
+/**
+ * A human decided a proposed ticket breakdown — product/04:117's *"for the PM to accept"* (WP-40).
+ *
+ * One event per **decision**, not per child, because that is what a person did: a PM who accepts
+ * five of seven children makes one decision about seven rows, and two events would make the
+ * board's history read as two visits. The counts are the platform's own tally of the rows it moved,
+ * so a redelivered command (which the `Idempotency-Key` refuses before anything is written) cannot
+ * produce a second one.
+ *
+ * It is the event the spike's **human stage** subscribes to: `EPIC_SPLIT_TEMPLATE`'s `human_review`
+ * names it in its `on` list, so a decided breakdown is what ends the task, and an epic split nobody
+ * has looked at stays visibly waiting instead of finishing on the run's own verdict.
+ */
+export const taskBreakdownDecidedEvent = defineEvent('task.breakdown.decided', {
+  ...taskScoped,
+  /** How many of the queued children the decision accepted; each becomes one `createTicket` call. */
+  accepted: z.int().nonnegative(),
+  /** How many it rejected. A rejection leaves the row with its reason, never deletes it (Q85). */
+  rejected: z.int().nonnegative(),
+  /** How many were still queued afterwards — a decision may name a subset (Q85's *"five of seven"*). */
+  remaining: z.int().nonnegative(),
+});
+
 export const taskCancelledEvent = defineEvent('task.cancelled', {
   ...taskScoped,
   outcome: nonEmptyStringSchema,
@@ -701,6 +724,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskLintPostedEvent,
   taskRebaseCheckedEvent,
   taskConflictWarnedEvent,
+  taskBreakdownDecidedEvent,
   runCreatedEvent,
   runStartedEvent,
   runFinishedEvent,

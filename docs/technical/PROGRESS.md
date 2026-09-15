@@ -82,7 +82,7 @@ majors, and the finding underneath — no run of any role can execute a project 
 Q69), **WP-15i** (the eleven task and run commands: the aggregate decides, one `human_actions` row per
 accepted command, `Idempotency-Key` scoped to the caller; one review round approving with three minors
 fixed before the merge; Q70, backlog 47 widened, 50–53 filed), **WP-15j** (the SPA served from the image with the platform's own realpath guard after `@fastify/static` was measured to serve a planted symlink; three review rounds — compression absent behind a docblock deferring it to a finished row, then a false CSP premise — ending with the full policy the measured bundle permits, proven in a browser, which found zod's JIT probe; backlog 33 closed), **WP-23** (the operator and user guides held to the evidence standard of code, a 63-second dogfood install that found five guide defects, and `THIRD_PARTY_NOTICES.md` generated from the lockfile and the Dockerfiles with a check inside `verify:static`; one review round, APPROVE with two minors and a nit fixed before the merge) — **M1 is complete**; **WP-24** (review-only mode: a one-stage template on the provider's diff, findings from `pipeline.outbound` keyed on the platform's own index after round 1 measured two same-id findings collapsing into one thread, the credential residual measured to be none; two review rounds; backlog 57–58, Q74), **WP-25** (the ticket readiness linter on WP-24's shape with a new `ticket.created` event; the orchestrator's own `verify:e2e` caught a rule-50 wait before the review, and round 1 found the already-a-delivery-task guard dead in the same-delivery case and never re-validated on fire; two review rounds; backlog 59–62, Q75), **WP-26** (the rebase gate's bounded resolution as a run behind `ci_gate`, conflict warnings as MR threads; round 1 measured the implementer's `git merge *` allow promoting `--no-verify` to `allow` and the refiner named it a widening of the organisation maximum, so an architect ruled **TD-027** — a stage-scoped, add-only command default — and round 2 measured one of its clauses wrong (an allow glob spans spaces) and the record was amended; the orchestrator's own `verify:e2e` caught a rule-87 wait in WP-24's merged e2e on the way; two review rounds; backlog 63–66, Q76–Q77), **WP-27** (steer into the live session on the CLI's stdin, take-over as product/19's protocol through the launcher with a hold marker volume because a label cannot be updated on this engine, hand-back to any named stage; the census's admitted gaps now empty; one review round, APPROVE with four minors fixed before the merge; backlog 67–71), **WP-30** (the dial materialised per BD-027:14 in `projects.autonomy_policies`, `planApprovalGate` reading it, one operating-mode screen for the wizard and the new project settings page, budgets with a production writer; backlog 52's project half, 53, 55 and 58 closed; two review rounds — a blocker in round 1 (an existing test suite overwritten), APPROVE in round 2 with a minor the orchestrator fixed; backlog 72–74 and Q78 filed), **WP-28** (the budget-approval gate on the materialised threshold with the estimate and its basis on the workpad, migration 0022; product/19:144 amended as built; one review round, APPROVE with two minors the orchestrator fixed before the merge (a stale discovered-work bullet; the accuracy ratio's understatement on intervened tasks stated at the DTO); backlog 75–77 and Q79 filed), **WP-32** (the notify band, the digest and quiet hours; two review rounds — the per-mode digest split unasserted in round 1, APPROVE in round 2 with a derivation sentence the orchestrator fixed; the Docker VM reached 100 % during the round and the user chose to prune images older than 30 days (124.8 GB reclaimed); backlog 60 resolved, 78–81 and Q80 filed), **WP-31** (ask-the-task; two review rounds — the identity route without an audit row or a route test in round 1, APPROVE in round 2 with a minor and three nits the orchestrator fixed; backlog 52 and 79 resolved, 82–87 and Q81 filed; the product/13 Ask row added), **WP-29** (human time accounting; one review round, APPROVE with a minor and two nits the orchestrator fixed; WP-31's identity route 500 fixed on this tree in a pre-review round; backlog 88–90 filed; TD-005's counts amended) — **M2 is complete but for WP-33**, blocked on a human credential; **WP-37** (risk classes and reviewer routing, M3's first row; two review rounds — the CODEOWNERS-at-the-default-branch property unasserted in round 1, APPROVE in round 2 with two nits the orchestrator fixed; a live TypeError in the shadow path found by the added case; rule 77 refined; backlog 73 resolved, 91–92 filed, WP-45 named), **WP-39** (coverage delta; one review round, APPROVE with three nits, one fixed by the orchestrator; backlog 93–94 filed, 64 restated), **WP-38** (dependency policy and the Checks panel; two review rounds — three majors in round 1 including a fail-open on a long licence string, APPROVE in round 2 with a minor and a nit recorded as residuals; the registry call's executor deviation accepted as honest and the non-negotiable qualified in CLAUDE.md; backlog 93 resolved, 95–97 filed, 64 restated, rule 81's third instance), **WP-34** (shadow mode, the ShadowReport and the Shadow screen; two review rounds — an invented zero in round 1, APPROVE in round 2 with three nits; the shadow plan-approval skip judged sound and recorded as an amendment to BD-006 and product/18 (Q86); backlog 72 (c) resolved, 98–100 filed, 71 folded, the budget carrier recorded on WP-36's row), **WP-35** (history bootstrap; two review rounds — the source value invisible on the proposals screen in round 1, APPROVE in round 2 with three nits; the composition census built (backlog 104); rule 88 earned; backlog 98 and 104 (pipeline half) resolved, 101–104 filed, rule 3 instances), **WP-36** (the maintenance pipeline; two review rounds — the reconciler's unbounded second paid run in round 1, APPROVE in round 2 with two nits; backlog 105 graded a major and closed, 106's second half closed; backlog 57, 62 and 105 resolved, 101 resolved for two sites, 106–107 filed) — plus three ci-fixes for harness flakes, an architect ruling (TD-026), TD-018 amended as built,
-product/13 amended twice, backlog entries 30–107, Q63–Q86, TD-027, BD-006 amended, rule 88, and refinements to rules 61 and 1. **M1 has no
+product/13 amended twice, backlog entries 30–111, Q63–Q86, TD-027, BD-006 amended, rule 88, and refinements to rules 61 and 1. **M1 has no
 rows left.** M2 in this order: ~~WP-24~~ ~~WP-25~~ ~~WP-26~~ ~~WP-27~~ (done), then ~~WP-30~~ ~~WP-28~~ ~~WP-32~~ ~~WP-31~~ ~~WP-29~~ (done); **WP-33 stays blocked** on a human credential (a blocker brief is in this ledger). **M3 next, in the refiner's order** (a refiner expanded the nine one-line items into acceptance rows in the plan's M3 table this session, with Q82–Q85 filed and implemented per recommendation like every open question since Q63): ~~WP-37~~ ~~WP-39~~ ~~WP-38~~ ~~WP-34~~ ~~WP-35~~ ~~WP-36~~ (done) → **WP-40** (the maintenance pipeline, `retro`/`librarian` in `runs.mode`, backlog 57) → WP-40 → WP-41 (statistics, after its three wrong inputs 57/75/63 are paid) → WP-42 (the release, which needs WP-33). Two rows proposed and unscheduled: **WP-43** (Slack Socket Mode, backlog 78) and **WP-44** (the export's delivery and the take-over screen, backlog 68 and 70). Q71–Q73 are implemented per their recommendation like Q63–Q70 — an autonomous session does not wait on them. **The Docker VM was at 97 % for most of the session and hit 100 % during WP-32's round 2** (WP-15j's implementer had removed 18 437 anonymous dangling volumes; named volumes untouched); the orchestrator asked and **the user chose `docker image prune -a --filter until=720h`** — 124.8 GB reclaimed, the VM at 40 % with 116 GB free — so container tiers run normally again. Rule 66 still holds: never prune the user's images on an agent's own judgement; ask. **Both rows now exist** (refiner, session
 5): **WP-15i** is the eleven task and run commands — `POST /api/runs/:run_id/steer` stays WP-27's — and
 **WP-15j** is serving the SPA from the bundle the product image already carries, both in M1 after WP-15h,
@@ -1132,6 +1132,16 @@ unrelated work, so it is not a substitute and was not touched.
    is already what WP-33's plan row expects.
 3. Then `pnpm eval` (or `pnpm eval --roles=reviewer`) runs the **36 checked-in cases**.
 
+*Refiner (session 5): **the corpus is 58 cases now, not 36**, and none has ever been run against a model —
+counted off disk from `packages/prompts/roles/*/evals/cases.json` (no eval run, rule 66; the offline half,
+`packages/prompts/src/evals.test.ts`, does run and holds every case to its artifact schema). WP-40 added the
+last four — `architect` 4 → 6 and `product_manager` 4 → 6, with `ROLE_PROMPT_VERSIONS` 1 → 2 for both — and
+made a case's artifact type **per case**, which is what stopped a case whose type differs from its set's from
+being validated against the set's schema. **No backlog entry is filed for that**: the brief is the record and
+the blocker is unchanged. What the growth changes is the *price* of the missing credential — every prompt bump
+adds to a surface nobody can test, so it is a number that goes up rather than a constant, and whoever supplies
+the credential inherits 58 cases rather than 36.*
+
 **What was deliberately not done, and why it matters.** `pnpm eval` **exits 1** naming both missing pieces
 rather than exiting 0 having run nothing, and `scripts/eval.test.ts` holds it there — including the case where
 the key is set but **empty**, which standing rule 18 exists for and which backlog entry **8** shows live in
@@ -1900,6 +1910,15 @@ compared with what the runner reported, because the ledger's own invariant canno
 rollup and the budgets are its tables and `CostStore` is where a late write lands; the alternative
 owner is whichever row composes the provisioner, because that is when the loss becomes real. Q70
 blocks (b) only; (a), pausing the task, is answered and implemented.
+
+*Refiner (session 5, from WP-40's cap-race fix): **a fourth consequence, and it is new.** Admission now
+counts a live run's commitment against every cap but the task's (`packages/application/src/cost/pending.ts`),
+so cancelling is also the **only** thing on this build that releases the reservation of a run whose process
+died — the reservation clears the moment `ended_at` is set, and `usd_reported` is null on the cancel path,
+so the run then counts **0**. That makes this entry the exit door of backlog **109**, and it means the one
+remedy for a pinned cap turns it into an under-charged one. Nothing else changes here: (b)'s mechanism
+question is untouched, and taking 109 with this entry is cheaper than taking either alone, because both
+want the same thing — a run that ends outside its own process still reaching `chargeBudgets`.*
 
 ### 51. **`rework` resets the task and leaves the merge request open on the provider — and the port it would need has no way to close one** (TODO, latent — **no work package owns it**; found by WP-15i, session 5)
 **What is wrong.** product/04:86 makes human rejection a reset with two halves, and only the first is
@@ -5455,7 +5474,7 @@ recommends whoever changes the contract should make. Three canaries died and eac
 pre-mutation md5; the sentence that this class "had no guard" is now false, and the WP-35 notes carry the
 detail.*
 
-### 105. **The lost-wake-up recovery re-enqueues a stranded row on *every* pass and has no ending, so the one site that was already bricked stays bricked while paying for a retry a minute — the bound the worked example has did not carry into the table built from it** (TODO, small — **no work package owns it**; found by the refiner while marking backlog 101 resolved, session 5)
+### 105. **The lost-wake-up recovery re-enqueues a stranded row on *every* pass and has no ending, so the one site that was already bricked stays bricked while paying for a retry a minute — the bound the worked example has did not carry into the table built from it** (**RESOLVED** at `344b5b0`, WP-36 round 2 — graded a major in the review and closed on the tree; kept for its evidence; found by the refiner while marking backlog 101 resolved, session 5)
 
 **What is wrong.** `runStrandedRecovery` (`packages/application/src/recovery/stranded.ts:130-175`) reads the
 two queries, enqueues one job per row found and writes **nothing**: no mark, no attempt counter, no terminal
@@ -5648,6 +5667,316 @@ Whoever takes it may then drop the refusal to `info` on repeat, because the refu
 package owns it.** Related: backlog **81** (the notifications outbox has no reader outside the digest) and
 **102** (a count that reaches a log line and no reader) — the same shape at two other features, which is
 worth knowing before anybody builds a third one-off reader.
+
+### 108. **WP-40 shipped no `apps/web` change at all, so the epic split is unreachable from the product at both ends — no screen can turn the feature on and no screen can accept its output** (TODO — one cause, two symptoms; **no work package owns it**; found by WP-40, session 5)
+
+**What is wrong.** One cause: the row built a complete server feature and touched no screen. Two symptoms,
+and each is a different kind of unreachable. **(a) The acceptance queue has no panel**: `GET
+/api/tasks/:task_id/breakdown` and `POST /api/tasks/:task_id/breakdown/decide` are served, permissioned
+(`task.approve_plan`, maintainer) and audited (`apps/server/src/routes/breakdown.ts:134,153-162`), and no
+component calls either — so the only way a PM can accept a breakdown on this build is an HTTP client.
+**(b) `features.epic_split` has no card**, so no screen can turn the feature on either; and because
+`DEFAULT_TEMPLATE_BY_ISSUE_TYPE` deliberately keeps `epic: 'feature'`
+(`packages/application/src/pipeline/settings.ts:93-113`, pinned by `settings.test.ts:118`), that switch is
+the **only** thing that ever routes an epic to the variant. The map decision is right and is not the
+finding — it is what makes the missing card load-bearing rather than cosmetic.
+
+**Evidence**, quoted from WP-40's discovered-work bullet: *"`GET /api/tasks/:id/breakdown` and `POST
+…/breakdown/decide` are served, guarded, tested at three tiers and named by hand in
+`routes/client-census.test.ts` — and **no `apps/web` screen calls either**, so the only way a PM can accept
+a breakdown on this build is an HTTP client. The feature is complete on the server and unreachable in the
+product, which is a different and worse shape than the census's other blind spots (`kb/health` is a
+diagnostic; `take-over`/`hand-back` are buttons a row deliberately deferred). It is one panel on the task
+page — the queue, a checkbox per child and one button — plus a card in `FEATURE_CARDS` for
+`features.epic_split`, which the wizard does not offer either."*
+
+**Read off disk while filing this** (grep over `git ls-files` and reading, no test run — rule 66), because
+it changes symptom (b) from an omission into an instance of something with no guard:
+- `git grep breakdown apps/web/src` returns **one** hit and it is unrelated (`features/task-detail.test.ts:90`,
+  the human-time breakdown line). There is no client function in `apps/web/src/api/endpoints.ts` either.
+- The hand-written census case is `apps/server/src/routes/client-census.test.ts:545-574`, and it asserts
+  **both** directions — the two paths are served and answer `401 unauthenticated` by each of their own
+  methods, *and* `expect(paths).not.toContain('/api/tasks/{}/breakdown')`, so the day a screen calls them
+  that case fails and has to be deleted. That is the same self-expiring shape backlog **70** left behind.
+- **`FEATURE_CARDS` covers five of the eight shipped feature keys and nothing compares the two lists.**
+  *(WP-40 review round 2 made it five of **nine**: `features.spike` is a new key with no card, for the
+  same reason and with the same fix — the count is updated here rather than left to read false, and the
+  entry is otherwise untouched.)*
+  `PLATFORM_DEFAULT_CONFIG.features` ships `ticket_linter, review_only, maintenance, digest, shadow_mode,
+  epic_split, spike, human_time, ask` (`packages/domain/src/config/effective-config.ts`); `FEATURE_CARDS`
+  (`apps/web/src/features/operating-mode.tsx:137-188`) has cards for the first five and none for
+  `epic_split` or `spike`. The component is rendered by **both** surfaces — the wizard (`features/onboarding.tsx:366`)
+  and project settings (`features/project-settings.tsx:227`) — so the switch is absent from the whole
+  product, and `PUT /api/projects/:id/config` sends the **whole** document
+  (`packages/contracts/src/api.ts:231-244`), which is the one door left. A third line is imprecise rather
+  than false and is the same missing comparison: `FEATURES_WITHOUT_A_SWITCH` says *"Human time accounting —
+  derived from events; nothing to switch"* while `features.human_time.per_user_breakdown` is a key
+  product/18:32 defines (the `ask` line beside it is already folded into backlog **72**'s note).
+
+**What it costs to leave.** A feature that can run an agent, spend a budget and file tickets in somebody
+else's tracker, with **no consent surface in the product** — and Q85's whole argument is that this is the
+one place the platform writes rows into another team's backlog. What a PM sees today for a finished epic
+split is a `TicketBreakdown` artifact row with no link (backlog **85**), which is *"a row you cannot open"*
+at the one moment the row is the deliverable. It also costs the census its grip again: two more routes are
+excused from WP-15h's comparison by a hand-written case, which is the thing that goes stale.
+
+**Is it live?** **Latent, and the trigger is stated**: nothing can enable `features.epic_split` from a
+screen, so on a stock instance no epic split ever runs and no ticket is ever filed. It becomes live the
+moment an operator PUTs the configuration by hand — at which point symptom (a) is what they meet, because
+the run will finish and the queue will have nobody to answer it.
+
+**What "done" looks like.** Three pieces, one file each.
+1. A breakdown panel on the task screen: the queue as it comes back (one row per proposed child with its
+   acceptance criteria, its state, and a rejected row's reason), a checkbox per child, one button, and the
+   two client functions in `apps/web/src/api/endpoints.ts`. The decision carries the SPA's **per-intent**
+   `Idempotency-Key` (`apps/web/src/app/idempotency.ts`, backlog **53**'s mechanism) because the route
+   **requires** the header, and the control is absent for a member (403) while a viewer may read the queue.
+2. **The two hand-written census cases deleted** (`client-census.test.ts:545-574`) — once a screen calls
+   them, the client-driven comparison covers them, and that deletion is the assertion the work landed. The
+   same sentence is in backlog **70**'s "done", which is why the two belong in one change.
+3. A card for `features.epic_split` in `FEATURE_CARDS` — default **off**, and its *"touches"* line is the
+   one no other card has to say: *creates tickets in your tracker* — **plus the comparison that stops the
+   next one**: `FEATURE_CARDS`' keys against `PLATFORM_DEFAULT_CONFIG.features`, both directions, with
+   `FEATURES_WITHOUT_A_SWITCH` as the declared exemption list. The shape exists to copy —
+   `operating-mode.test.tsx` already compares the maintenance card with the platform's own table
+   (`MAINTENANCE_CHORES`) rather than pinning its sentence — and backlog **72**'s note already owes two
+   string edits in that same file, so all of it is one edit of one file.
+
+**Depends on / owner.** Depends on nothing unbuilt; the routes, the DTOs, the permissions and the config
+key all ship. **No work package owns it.** Cheapest owner is **WP-44** (backlog **68** + **70**, named on
+the M3 page), the only proposed row that opens the task page at all and the one that already owes the same
+census-case deletion; if WP-44 is not scheduled, whoever next edits `features/task-detail.tsx` for (1)+(2)
+and `features/operating-mode.tsx` for (3). **WP-41 is the wrong home** (statistics, for backlog 95/102's
+reason) and so is **WP-46** (the merge-readiness Checks panel, a different screen).
+
+**Adjacent, and deliberately not given a number of its own.** WP-40's assumption (b): the plain spike's
+`human_review` subscribes to nothing, so such a task **rests in `active` holding a WIP slot** until a human
+cancels it or sends it back, and `human_review` is not one of the four stage ids `transitions.ts` maps to a
+task state. That is the fourth site of the class entries **69**, **74** and **76** register, with one
+difference that keeps it out of them: here **no deadline is missing** — product/04:117's last arrow *is* a
+human — so what it wants is a task state (a new `task_state` value and a new edge in technical/02's table),
+which belongs to whoever owns that enum rather than to this entry. Assumption (a) — `spike: 'spike'` added
+to the shipped map, so a project whose tracker literally types tickets *Spike* changes pipeline on upgrade
+with no notice — is **not** filed either: it is in WP-40's own reversible-assumption list and the review
+round in progress is where it is decided.
+
+### 109. **A run whose process died stays `running` for ever — and since WP-40's cap fix it holds a budget reservation for ever with it, in every future window, releasable only by the one command that loses the spend** (TODO — the stuck row is old, **the cost is new at WP-40**; **no work package owns it**; found by the cap-race fix on WP-40's tree, session 5)
+
+**What is wrong.** Nothing in this build ever ends a run whose process vanished, and nothing detects one.
+Until WP-40 that cost a row in a wrong state. Since WP-40's pre-review fix, admission counts a **live**
+run's commitment against every cap that is not the task cap, so a dead-but-`running` row permanently
+reserves its stage's per-run budget — against the project budget, the organisation budget, the shadow cap,
+the maintenance cap and the history-bootstrap cap. Exactly one thing on this build releases it: a human
+calling `POST /api/runs/:run_id/cancel`.
+
+**Evidence** (refiner, session 5; file reads and greps, no test run — rule 66).
+- **The lease columns have no reader and no writer.** `lease_owner`/`lease_expires_at` have existed since
+  `packages/infrastructure/src/db/migrations/0004_pipeline.sql:90-91`, and a grep over `packages/`, `apps/`
+  and `test/` answers **three** sites, all of them declarations or prose: the migration, the Drizzle
+  definition (`packages/infrastructure/src/db/schema/pipeline.ts:200-201`) and the sentence that says so
+  (`packages/application/src/cost/pending.ts:60`).
+- **What a live row now reserves.** `pendingRunUsdSql` values a run whose status is one of
+  `ACTIVE_RUN_STATUSES` at the admitting stage's `reserveUsd`, and an ended one at
+  `coalesce(r.usd_reported, 0)` (`packages/infrastructure/src/cost/pending-run-spend.ts:33-35`);
+  `UNLEDGERED_RUN_SQL` keeps it in the pending set until a `cost_entries` row exists (`:43-44`) — which,
+  for a run nothing ever ends, is never.
+- **It does not clear at a rollover.** `PENDING_RUN_WINDOW_SQL` bounds *ended* runs to the cap's window and
+  states the reason at the line: *"A **live** run is always in the window — it is spending now, whatever
+  instant the window started"* (`pending-run-spend.ts:46-56`). WP-19's windows are implicit — a window is
+  identified by its start instant, so no job rolls one over — so nothing exists that could retire it. The
+  reservation is charged to **every** future daily and monthly window.
+- **The size, at the shipped defaults.** `DEFAULT_STAGE_RUN_BUDGET_USD`
+  (`packages/domain/src/policies/budgets.ts:26-60`): `implementation` **15**,
+  `investigation`/`architecture`/`code_review`/`conflict_resolution` **5**, `business_review` 3,
+  `refinement`/`retrospective`/`librarian`/`discovery` **2**, `ticket_lint` 0.5, `intake` 0.1 — against
+  `DEFAULT_TASK_BUDGET_USD` **50** (`:20`) and `DEFAULT_BOOTSTRAP_BUDGET_USD` **20**
+  (`packages/contracts/src/config.ts:389`). One stranded implementation run therefore subtracts **$15**
+  from every future window of its project *and* of its organisation; one stranded mining run subtracts a
+  tenth of its batch cap, and that batch is bricked anyway (backlog **101**, **106**).
+- **Both watchdogs are in-process, which is precisely the case they cannot cover.** The wall clock
+  (`spec.limits.wallClockMs`, default **1 h**, `packages/application/src/ports/runner.ts:90`) and the stall
+  detector are armed inside the process running the query (`packages/infrastructure/src/runner/claude-runner.ts:433-437`).
+  A process that is gone stops neither.
+- **The recovery pass cannot see it, by construction.** `recovery/stranded.ts` has two rows and both key on
+  a *feature's* row rather than on `runs` — a batch at `collecting` with no chunks, an ask `pending` with
+  **no run attached** — and the ask row excludes this case in as many words: an ask pending *with* a run
+  attached *"is never re-enqueued and never ended … its wake-up arrived and its run died, which is a
+  different question ("is there a run that will never finish?") with a different reader (`runs.status`) and
+  no cheap idempotency"* (`stranded.ts:75-80`). `pending.ts:58-67` names the same question for the cap.
+  **Two modules now describe this defect and neither owns it**; this entry is its number.
+
+**What it costs to leave — and the only remedy is the other defect.** A cap that reads high by one run's
+budget, for ever, on a scope a human has to notice by hand. The direction is deliberate and correct (rule
+**20**, fail closed) and it is *partly* visible: the pause names the committed figure apart from the spent
+one (`capSpendDetail`, `pending.ts:96-110`). What no surface answers is **which** run is holding it — no
+screen and no endpoint lists a scope's unledgered reservations. And the remedy available today makes the
+books worse, not better: `POST /api/runs/:run_id/cancel` ends the row as a record
+(`apps/server/src/routes/commands.ts:921-951`) and the reservation goes with `ended_at`, but cancelling is
+exactly the path backlog **50** measures as losing the money — `finishRun(cancelled)` emits `run.finished`
+with zeros, the ledger takes its `no_spend` branch, and no `cost_entries` row, no rollup and **no budget
+window** moves. So the operator's only lever turns a cap that reads $15 **too high** into one that reads
+whatever the dead run actually burned **too low**.
+
+**Is it live, and what would make it urgent.** **Latent on this build**, for backlog 49 and 50's reason:
+`startRuntime` composes `unavailableClaudeRunner` unless a `RunWorkspaceProvisioner` is present, so no
+production run has ever executed. It goes live with the first deployment that composes one — and the
+trigger is then **not** exotic. The run executes in a `stage.execute` job inside the server process, the
+graceful shutdown budget is **30 s** (`apps/server/src/config.ts:339`) and a run's wall clock is **1 h**, so
+an ordinary redeploy in the middle of a run cannot wait for it. Whether pg-boss's expired-lease maintenance
+later re-delivers the abandoned job is **not read here** and does not change the row: nothing writes a
+terminal status for the first run either way.
+
+**What "done" looks like.** A sweep that ends a run no process is running. The **bound is the entry's one
+decision** and both candidates are cheap:
+ - *No migration.* `started_at` older than the stage's own `wallClockMs` plus a grace. A living run is
+   guaranteed to stop at that ceiling by the in-process watchdog, so a row past it is either dead or a
+   runner defect, and both want the same ending. `runs_active_idx` (`0004_pipeline.sql:111`) already serves
+   the query.
+ - *The columns that exist.* Give `lease_owner`/`lease_expires_at` a writer — the executor renews while the
+   run is live — and sweep the expired. Honest, it is what the columns were added for, and it costs one
+   heartbeat write per run.
+
+The ending is `run.failed` with a named terminal reason, so the stage executor's existing escalation applies
+and the cost ledger gets its chance to record what the run cost (which is backlog **50**'s mechanism
+question — taking the two together is cheaper than taking either alone). Where it belongs: a **third row of
+`recovery/stranded.ts`'s table** — same pass, same timer, same bound shape (`recovery_attempted_at`,
+migration 0032) — which also discharges the residual that module states. Assert it the way that table's rows
+are asserted: leave a `running` row behind with the clock advanced, let two passes run, and read
+`runs.status` **and** the scope's pending term back.
+
+**Needs measurement: none for the mechanism.** Every claim above is a file read. The magnitudes are
+arithmetic over the shipped defaults and are labelled as such.
+
+**Depends on / owner.** No dependency — the pass, its store, the index and the ending (`failRun`) all exist.
+**No work package owns it.** Cheapest home is whoever next edits
+`packages/application/src/recovery/stranded.ts`: the same file, pass and commit as backlog **106**. The
+alternative owner is whichever row first composes a `RunWorkspaceProvisioner`, because that is when it
+becomes real. Related: **50** (the exit door, and the other half of the same fix), **106** (the sibling
+site), **110** (the other half of the pending term's blindness), **49**.
+
+### 110. **A run that ends without a provider figure commits nothing to any cap until its ledger row lands — and in `local` provider mode that is every run, because `runs.usd_estimated` has never had a writer** (TODO, small — one cause, two symptoms; a **stated residual** of WP-40's cap fix, widened by one reading, plus one plain defect; **no work package owns it**; found by the refiner on WP-40's tree, session 5)
+
+**What is wrong.** WP-40's fix closed the cap race for a run that reports its own cost: `RunRepository.finish`
+writes `runs.usd_reported` in the run's **own** transaction and admission counts it until the ledger's rows
+replace it. That column is written **only when the cost is not an estimate** —
+`usd_reported = outcome.cost.is_estimate ? null : outcome.cost.usd`
+(`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:734,748`) — and the column that would carry
+the other case, `runs.usd_estimated`, is `numeric(12,6) not null default 0` with **no writer anywhere in the
+tree**. So a run that ends without a provider figure contributes **0** to the pending term until its ledger
+row lands: the same window WP-40 closed for everything else, left open for this population. The population
+is not marginal — `is_estimate: spec.providerMode === 'local'`
+(`packages/infrastructure/src/runner/claude-runner.ts:556`), so under BD-004 `local` mode it is **every run**.
+
+**Evidence** (refiner, session 5; file reads and greps, no test run — rule 66).
+- **No writer, and the fact is already recorded twice without being an entry.** A grep for `usd_estimated`
+  over `packages/` and `apps/` answers the migration (`0004_pipeline.sql:100`), the Drizzle definition
+  (`db/schema/pipeline.ts:209`), three readers and one docblock naming it as the road not taken
+  (`packages/application/src/cost/pending.ts:48`). `postgres-cost-store.ts:362-371` writes a column of that
+  name on `run_model_usage`, a different table. The same no-writer fact sits in WP-15h's discovered-work
+  bullet (*"`exit_detail` and `usd_estimated` are left at their defaults by every writer in the tree"*) and
+  inside backlog **50**'s evidence — neither says what it costs.
+- **Symptom (a), the cap.** `pendingRunUsdSql` values an ended run at `coalesce(r.usd_reported, 0)`
+  (`packages/infrastructure/src/cost/pending-run-spend.ts:33-35`); for this population that is 0, and the
+  run is invisible to every cap until the ledger handler commits. The residual is stated accurately at
+  `pending.ts:41-50` — *"the exposure is one such run's spend for the dispatcher's latency, and it fails in
+  the same direction as before this change rather than in a new one"*. **What it does not say** is that in
+  one whole provider mode the exception is the rule, which is the reading this entry adds.
+- **Symptom (b), the wire.** `toRunRecord` answers
+  `cost: { usd: usd(row.usdReported ?? row.usdEstimated), is_estimate: row.usdReported === null }`
+  (`apps/server/src/queries/pipeline-queries.ts:213-216`), and the per-model list one level down the same
+  way (`:245-248`). For a `local`-mode run that is `{usd: 0, is_estimate: true}` on `GET /api/runs/:id` —
+  a zero that reads as a free run (rule **16**) — while `cost_entries` for the same run carries the priced
+  figure the ledger wrote. The docblock above it states the rule it implements and not this consequence
+  (`:172-177`).
+- **The sharper sub-case is `cost_unreported`.** In API mode such a run carries `{usd: 0, is_estimate:
+  false}` — the `?? 0` floor with the estimate flag off (`claude-runner.ts:549-557`) — so `usd_reported = 0`
+  and the read API publishes *"the provider reported $0"*, a **stronger** claim than an estimate, for a run
+  WP-12 stopped precisely because it could not see the cost. WP-19 prices it into the ledger and labels it
+  an estimate (`### WP-19`, point 3), so the run row and the ledger disagree by design and nothing on the
+  wire says which the reader is looking at.
+
+**Defect or working as designed?** Both, and they are different halves. (a) is a **stated residual** whose
+magnitude is understated; leaving it is a decision somebody may reasonably take. (b) is a **defect**:
+nothing in BD-011 or migration 0017 says a run with no provider figure cost zero, and 0017's own reasoning
+is the opposite — `not null default 0` *"cannot say 'the price table has no row for this model' — a real
+state … that a zero spells as a free run"*, which is why it made `run_model_usage.usd_estimated` nullable
+and left `runs` alone.
+
+**What it costs to leave.** (a) The race WP-40 measured — 2 runs admitted against a cap that allows 1,
+three times out of three with the ledger delayed 8 s — stays open, unchanged, for every local-mode run and
+for every `run.failed` carrying no cost; the window is the dispatcher's latency rather than a run's
+lifetime, so it is far smaller than the pre-fix exposure but it is not zero. (b) Every local-mode run reads
+as free on the run screen, which is the operator-facing number in the one provider mode BD-004 offers to
+someone without an API key.
+
+**What "done" looks like.** One writer closes both symptoms, and it needs one decision first, because
+`runs.usd_estimated` is `not null default 0` and therefore cannot tell *"nothing priced it"* from *"it cost
+zero"*. The honest shape is the one migration 0017 already chose one table over: make the column nullable,
+have `finish` write `outcome.cost.usd` into it when `is_estimate` is set (BD-004 keeps the SDK's number
+*"so there is something to reconcile against"*), and then `coalesce(r.usd_reported, r.usd_estimated, 0)` in
+the pending fragment and an honest `usd`/`is_estimate` pair on the wire. Pricing at admission is the
+alternative and `pending.ts:46-50` already refuses it with a reason (*"a price table is the ledger's to
+read, not an admission's"*). Asserted: one local-mode run's figure in the pending term and on
+`GET /api/runs/:id`, compared with what the ledger charges the same run.
+
+**Needs measurement, two things, neither of which this role may run (rule 66).** How wide the window
+between a run's own commit and its ledger row actually is under load — WP-40 produced the defect with an
+**injected 8 s delay** and nobody has measured the real dispatcher's latency, so the residual's practical
+size is unknown. And symptom (b) is **read off the tree, not observed**: nothing in this repository has ever
+run in `local` provider mode end to end (`docs/TODO.md`'s own `local`-mode item). Both are filed in
+`docs/TODO.md` under Verification.
+
+**Depends on / owner.** No dependency. **No work package owns it.** Cheapest home is **WP-19**'s owner —
+the ledger's tables and this column's semantics are its subject — or whoever takes backlog **50**, since one
+`finish` write plus one migration serves 50, this entry and the projection together. Related: **50**,
+**109**, and WP-19's own *"`tasks.cost_estimated` has no writer — a `local`-mode task calls an estimate an
+actual"* (backlog **18**'s territory), which is this same BD-004 blind spot one table up.
+
+### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
+
+**What is wrong.** One sentence in the docblock of the guard that exists to stop prose from claiming
+something about a test that does not exist: *"Markdown is in that list because `CLAUDE.md`, `PROGRESS.md`
+and `docs/technical/*` are where this class of claim also lives; no Markdown citation exists yet, so that
+half is a guard waiting rather than a guard working, and the recall check will say so the day one is
+written"* (`scripts/citations.ts:67-70`). It was true when it was written. The day came and the sentence
+did not move.
+
+**Evidence** (refiner, session 5; grep only, no test run — rule 66).
+- **The report's nine are a floor.** WP-40's discovered-work bullet names nine sites. A grep for the same
+  shape over `git ls-files` filtered to `*.md` answers **56** lines in **5** files:
+  `docs/technical/PROGRESS.md` **50**, `docs/OPEN-QUESTIONS.md` **3**, `docs/TODO.md` **1**,
+  `docs/technical/12-configuration-and-schemas.md` **1**, `docs/technical/13-implementation-plan.md` **1**.
+  The grep is a looser expression than the parser's, so 56 is an upper bound on the parser's own count and
+  the exact figure belongs to `citationSites`, which needs the unit tier.
+- **There is no gap in the guard's scope — the half is working.** `CITED_SOURCE` is
+  `/\.(?:ts|tsx|mjs|md)$/` and `continuationFor` gives a `.md` file the `'prose'` continuation the docblock's
+  own wrap section describes (`scripts/citations.test.ts:69-73`); the sources come from `git ls-files`
+  (`:75-78`); and **both** assertions — resolve, and recall at every site — run over that same list
+  (`:227-262`). The live proof is this round: the guard refused the orchestrator's new PROGRESS citations
+  until they were written in the repository's own shape.
+- **One thing the correction should carry with it.** `MINIMUM_CITATION_SITES = 14`
+  (`citations.test.ts:52`) is a single floor over every file type, and the Markdown corpus alone is now
+  several times it — so that floor can no longer fail if the Markdown half ever stopped being parsed. A
+  per-kind floor, or a raised number with the date beside it, is what makes the corrected sentence stay
+  true.
+
+**What it costs to leave.** Small and real: a guard that describes itself as dormant is a guard the next
+reader does not trust, does not extend, and may work around — in the file written to enforce rule **11**.
+It is rule **83**'s shape (*"closing a gap falsifies every sentence that described it, and the sentence
+nearest the fix is the one nobody re-reads"*), with the twist that here the gap was closed by the **corpus
+growing** rather than by a change, so there was no fix for anyone to re-read next to. WP-40's bullet grades
+it rule **86**; rule 86 is a *prediction quoted as a measurement*, and this sentence was a true statement
+about the tree when written — recorded here so the distinction is not re-litigated.
+
+**Needs measurement: none**, beyond the parser's own count, which the unit tier prints for free to whoever
+takes it.
+
+**What "done" looks like.** The sentence replaced by what is true — the Markdown half is enforced, with the
+file list or the count and the date — plus whichever floor keeps it honest, in the same edit. No behaviour
+changes.
+
+**Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next edits
+`scripts/citations.ts` or `scripts/citations.test.ts`.
 
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
@@ -7600,6 +7929,47 @@ the change: a reviewer, CI's Docker jobs, or an operator.
 images and is the row that would otherwise discover this the expensive way. Nothing blocks it; (1) is
 one line plus its calibration.
 
+**It recurred at WP-40, by the same construct and caught by the same accidental guard** (refiner,
+session 5, folding that row's discovered-work bullet here rather than giving it a number — the class,
+the remedy and the owner are the same, and two entries would split the evidence). Quoted:
+
+> `constructor(readonly reason: string)` is valid TypeScript, passes `tsc`, passes biome, and passes
+> every unit test — because vitest transforms the sources — and is refused by **Node's type stripping**
+> with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`, which is how `apps/server`, `apps/launcher` and
+> `apps/runlet` run them (`scripts/ts-source-resolver.mjs`). The only thing that caught it was
+> `runlet/conformance.contract.test.ts` starting the real shim, whose failure mode is *"the control
+> socket never appeared"* — a message that names neither the file nor the syntax.
+
+The class was `BreakdownRefusedError`; WP-40's own note puts the cost at *"a parameter property would
+have stopped two whole processes from booting"* and the fix at three lines. So this is rule **30**'s
+shape twice over: the lesson was written down at WP-15e, the check was not added, and it recurred
+twenty-five work packages later with the same failure message.
+
+**What that second occurrence settles, read off disk by the refiner (grep, `strings` over the pinned
+binaries and reading — no test run, no container, rule 66).**
+- **Availability at the pinned compiler is no longer a question** — which was this entry's one
+  "needs verification". `erasableSyntaxOnly` appears **4** times in the pinned TypeScript **7.0.2**
+  native binary, together with its diagnostic *"This syntax is not allowed when 'erasableSyntaxOnly' is
+  enabled."* (`node_modules/.pnpm/@typescript+typescript-darwin-arm64@7.0.2/…/lib/tsc`). What is still
+  unmeasured is only what `pnpm typecheck` **reports** with the flag on, which is (1)'s calibration.
+- **The blast radius is seven sites and none of them ships.** Over the **1 020** tracked `.ts`/`.tsx`
+  files: **zero** enums, **zero** value namespaces, **zero** `declare` fields, and **seven** parameter
+  properties, all in two unit-test files that only ever run under vitest —
+  `packages/domain/src/aggregates/run.model.test.ts:223,249` and `task.model.test.ts:211,252,288,439,571`.
+  No multi-line spelling exists either: **no** tracked line begins with `private`, `public` or
+  `protected`. So turning the flag on today costs seven test doubles rewritten as a field plus an
+  assignment, and nothing in a ring that ships.
+- **The `tsc` flag closes it; the lint rule does not.** Biome **2.5.12** does ship
+  `noParameterProperties` (present in the pinned CLI binary), and it would ride `verify:static` — but it
+  covers **one** of the four constructs, so it buys a better message at the right line and not the
+  class. `erasableSyntaxOnly` rides `verify:types`. **Rule 34 costs nothing either way**: `verify:static`
+  is CI's lint job and `verify:types` is CI's typecheck job, both already in `scripts/verify-targets.ts`,
+  so no new target and no new CI job is needed — which is the whole reason this is a one-line change and
+  has been for twenty-five rows. **Recommendation: the flag in `tsconfig.base.json`** (inherited by every
+  ring, which is also why it reaches the seven test files), the seven edits, and a **planted** parameter
+  property in a ring that ships failing `pnpm typecheck` **by name** as the calibration (rule 85). The
+  biome rule afterwards only if somebody wants the error where the author is typing.
+
 ### 43. **A handler that keeps failing is retried for ever, and exhausting WP-15e's conflict bound is a second way in** (TODO — **no work package owns it**; recorded as a WP-04 note since session 1 and never given an entry; restated by WP-15e, session 5)
 
 **What is wrong.** WP-15e bounded the *conflict* retry at three attempts. What happens after the third
@@ -8398,7 +8768,7 @@ the browser tier has never seen the sentence this entry is about.
 | WP-17 | **Role prompts + the delimiter contract + the real context pack** | WP-12, WP-16 | yes | DONE | `1497fe9` | **2 review rounds (the second by fresh eyes on round 2's fixes) + a pre-merge round.** The delimiter landed **in the same change as the wiring**, which is what backlog 12 required: a block is `<untrusted-data-<nonce> kind="…">` … `</untrusted-data-<nonce>>`, nonce 32 hex from `randomUUID` drawn **per prompt**, and the rule inside it is that *every byte of the prompt is either text the platform wrote or is inside a block*. Body **byte-identical** — no sanitiser, nothing for a later transform to undo (`apps/web/src/ui/untrusted.tsx`'s answer to the same question). Nothing untrusted reaches a **marker**: a value outside `SAFE_ATTRIBUTE_VALUE` is **refused**, a body containing the nonce is refused after four draws, and the reviewer established the part that actually closes it — the degradation renders a **closed set of three platform literals**, so **no input renders attacker bytes in a marker**. Nothing persists the nonce (`runs.system_prompt`/`user_prompt` exist and nothing writes them). **The ledger was wrong and is corrected at the source**: two of the ten hostile constructs do *not* flow byte-identical — `sanitiseDocumentText` replaces each control/bidi character with one `U+FFFD` and counts it, **2 per construct** as written and **4** over `HOSTILE_TEXT` (backlog 12 amended). The four zero-width characters do arrive untouched and buy nothing **against the structural parse** — a spliced nonce fails `NONCE_PATTERN` for the reader too — which is one word narrower than the implementer first claimed, because the reader is a parse and the model is not. **Round 1 found a live veto**: a vault path past the marker alphabet **threw**, failing `plan()`, failing the run and escalating to `needs_human` — *one deeply nested KB page stopping every task on the project*, measured at 476 renders / 568 throws with `.agentic/knowledge/<255>/<255>` reaching 530. Both names derived from a vault path now degrade independently; the implementer audited the attribute **set** unprompted (rule 68) and found no third asymmetry, and the reviewer re-derived the set off the code rather than off its table. **Three wrong causes attached to correct numbers** in one work package (rule **81**), all three found by re-deriving the cause rather than re-checking the figure. **Backlog 13 closed** (`.max(200_000)`); **backlog 14's unit half closed** — `ceil(utf8Bytes/4)`, 48 000 CJK 12 000 → 36 000, ASCII unchanged, and the new property **fails** for a wrong ratio where the old two could not; the ratio stays a **hypothesis**, labelled with a vendor datum. Backlog 15/Q58 deliberately not taken. **The ten platform skills were refused and the refusal was upheld**: `skills?: string[] | 'all'` is *a context filter, not a sandbox* (`@anthropic-ai/claude-agent-sdk@0.3.267/sdk.d.ts:2109`), mounted at provisioning, which needs a `WorkspaceProvider` the pipeline does not compose — ten files nothing reads is backlog 11's shape. Now **WP-14a**. **Eval half externally BLOCKED** and nothing stubbed: `pnpm eval` exists and **exits 1** naming what is missing, and `scripts/eval.test.ts` holds it there including rule 18's empty-key case. See "Blocker briefs needing a human". Left behind: backlog **23**, which is why M1 is not complete. |
 | WP-18a | **The git-backed vault read path and the `KnowledgeIndexer` job** (TD-026) — part a of WP-18 | WP-16, WP-17, WP-15c, WP-15a; TD-026 | no | DONE | `79cb3f9` | **1 review round (APPROVE) + a pre-merge round.** CI `34714681328` and `image` `34714681356`, read as `completed success`. **The index reads a bare mirror the platform owns**: `packages/infrastructure/src/knowledge/git-vault.ts` is a second `VaultSource` over `git rev-parse`, `git ls-tree -r -z` and one `git cat-file --batch` — no working tree, no Docker client, never the launcher's `repo-cache` — the application-ring port unchanged; the mirror lives at `mirrorCacheKeyFor(projectId)` under `APP_KNOWLEDGE_MIRROR_ROOT`, **no default** (absent → no source composed, `/readyz` ok, the job refuses by name, the index untouched); the fetch credential travels bindings → `SecretStore` → the env of the **two network commands only**, through a credential helper, never inside a URL. **All seven read-path criteria asserted on rows** after a real `git clone --mirror` from a seeded remote, through real pg-boss (`test/integration/knowledge/git-vault-index.integration.test.ts`): no working tree; `repoPaths` is the tree; a `120000` symlink to `/etc/passwd` and a `160000` gitlink listed and never read; a later push indexed with no manual fetch; an unreachable remote → `vault_unavailable` with the count unchanged and non-zero; an `agentic/*` head refused by `merge-base --is-ancestor`; absent config refuses by name. **The singleton, measured**: the first version passed with pg-boss's singleton key deleted — pg-boss folds a null key too — so the case now demands that a second project's enqueue be admitted while the first is queued; the reviewer re-derived it without mutating the tree. Triggers: `task.created`; `mr.merged` **unpinned** and `default_branch.moved` **pinned**, because `mr.merged` names only the source branch. **The fetch writes no `integration_actions` row**, judged defensible: technical/06 scopes the executor to provider-port actions, the git transport has no port and nothing to replay, `updateMirror` is the precedent, and BD-003 is satisfied by `knowledge.index.rebuilt` — now stated in technical/07. `ROLE=indexer` is a worker (the WP-15g argument); the pool floor recomputed. Pre-merge: the credential env had been attached to **every** git child (least privilege, and a "password really supplied" assertion passing off local plumbing); `projectId` became a path with no shape check (rule 55's shape); a docblock claimed a branch pattern "refuses `..` by construction" when `.` was in the class (git refused the path anyway — the outcome was safe and the sentence false, rule 44); `unchanged` was "free" while its early exit sits after the full read; a `SECRET_MARKER` assertion that could not fail (rule 43: git stores a symlink's target *path*, never its bytes). **Needs measurement, stated in the notes**: the in-flight half of the singleton (one active run plus two triggers → one trailing run) is asserted only on the in-memory adapter; a `file://` fetch never invokes the credential helper, so proving the credential path needs `git http-backend` over `http://` with auth. Q63 annotated (no ceiling on the mirror; no storage gauge). **The machine got two votes during this row**: the orchestrator's wait loop and then its detached `verify:e2e` were killed by the harness for low memory (`memory_pressure` said 53 % free — the harness's own threshold); the killed e2e left two containers, a network and about a dozen anonymous volumes, removed by hand, and the rerun passed with the count two above baseline. |
 | WP-18b | Librarian pipeline + proposals + apply policy + knowledge MR flow + nightly hygiene — part b of WP-18 | WP-18a | no | DONE | `24efdc7` | **2 review rounds + a pre-merge round; CI `34721840974` and `image` `34721840941`, read as `completed success`.** **99 files.** A `LibrarianProposals` artifact (strict, in `packages/contracts`), migration **0018** (an enum label and `kb_health_reports`), domain curator/policy/health, application `knowledge/{librarian,apply,hygiene,decide,runtime}.ts`, a `KnowledgeProposalStore` port with a memory double, a contract suite and a PostgreSQL adapter, **a new `GitProviderPort.commitFiles` obligation** (port, GitLab with a recorded fixture and `SOURCES`, fake with divergence 9 stricter than GitLab, shared contract case both ways), `apps/server/src/routes/kb.ts` with its queries, and the librarian stage **back in the templates** (after `retrospective`, entered by fall-through, running in `retro`). The flow: proposal → `knowledge.proposals` job → rows and events → `knowledge.apply` job (stately per project) → `commitFiles` + `openMergeRequest` through the executor, **outside any transaction** (asserted through `TransactionOpenError`) → `applied`; provenance in the row, in the `Agentic-Source` trailer and in the audit row; **always a branch under `agentic/knowledge/` and an MR, never the default branch** (Q66; the e2e reads the fake back and proves `main` never holds the page); "approved" is `queued` + `decided_at`, no sixth status; hygiene writes a report, makes no git call, deletes nothing (both halves, pg-boss and memory). The four `kb/*` census gaps closed with a positive case; project guards run at `preValidation` so a 401 precedes validation. Prompt v2 with eval cases held offline (`pnpm eval --check` still exits 1 naming the blocker). Thresholds asserted on both sides of both edges; the interpreter's property tier gained a deterministic *reaches complete through every stage* case. The e2e (`test/e2e/pipeline/librarian.e2e.test.ts`) drives the real runner over the fake CLI through a real instance, with the planted secret absent from the proposal row, the commit body and the HTTP response. **Round 1's major was a BD-022 forgery path**: the provenance trailer interpolated `tasks.ticket_key` — untrusted, uncapped, no charset — into a line-structured commit message and an unbounded MR body, so a key containing a newline forged extra `Agentic-Source:` lines. Fixed by **refusal, not escaping** (outside `[A-Za-z0-9._/-]` or over the cap → the task uuid; the run id through the same check; `.max()` on the message and description **parsed** at the executor's seam, rule 14; a hostile key driven through the whole pass, rule 40). Round 1's minors: `rbac.ts` docblocks falsified by the `preValidation` guards; a keyset cursor on `created_at` alone dropping rows inside a same-timestamp batch — now `(created_at, id)`; a branch name stable only within a UTC day — now dated from the batch's earliest proposal; a stale consumption sentence. **Round 2**: a maintainer's rejection `reason` reaching `events` **unredacted** beside a redacted `delta` (TD-012); the decide DTO's `delta` unbounded, bypassing the 64 KiB cap (rule 13's shape; the constant moved to contracts so one budget serves two rings, rule 41); the MR body's refusal safe by construction but **unevidenced** (rule 43). **Measured and filed rather than fixed** (refiner): backlog **35** — `artifacts.data` is written unredacted while TD-012 names artifacts, the class finally numbered, reproduced by this WP's own e2e, and the proposal row does **not** inherit it; **36** — a lost curation wake-up loses one task's proposals; **37** — `kb_health_reports` has no reader and invalid documents reach no report (a `kb/health` read is now a WP-15h part 2 criterion, because the census cannot see a path no client calls); **38** — `ROLE=api`+`worker` never tested as a deployment. Residuals: `commitFiles` never run against a real GitLab (fixture `documented`, its 400 `inferred`; a TODO verification item); apply idempotency never driven twice (backlog 7). |
-| WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, estimates, **and the backfill** | WP-04 | no | DONE | `8100c50` | **3 review rounds + a pre-merge case.** **Four tables that had existed since 0004/0007 got their first writer** (`cost_entries`, `run_model_usage`, `cost_rollup_daily`, `budget_windows`); migration **0017**. The ledger **totals to the invoice**: per-model rows from the provider's breakdown, the rounding residual attributed to the run's own model and reported rather than smoothed, a property test over any breakdown (BD-011). **Rule 16 honoured**: a missing `total_cost_usd` is priced from `price_list` and labelled `is_estimate`; an unpriced model writes **no** ledger row and is named in the log, its tokens still recorded. The model id is the only producer string stored, bounded 128 and **refused** past it. Budgets are a **read at admission** in the stage executor, not a `budget.exhausted` handler; windows are implicit in their start instant, so TD-004's `budget.window.reset` queue is deliberately not started. **The backfill uses `handler_executions` rather than bypassing it**: `replayEvents` claims `(position, handler)` exactly as the dispatcher does, so a handler registered later is served, a second pass skips, and a throwing handler stops the pass with `lastPosition` as the resume point. **Rule 82 audited first**: `FakeClaudeRunner` reports `modelUsage: []`, so the per-model criterion runs the real runner over the fake CLI whose scripted `result` reports **two** models. `run.finished`, `run.failed`, `artifact.created` are `handled`, held by a test that reads the set **off the handlers**. **Q65** filed and implemented. **The price job fetches nothing** — no verified feed, no credential; it closes superseded windows and names uncostable models. Round 1's major: the budgets route was the one untested module and its `spent_usd` came from a string-keyed join reporting **0** on any mismatch — a plausible number; fixed by an e2e reading the endpoint, and a window-blind mutant that **survived the first fix** dies now. Round 2's major was **the orchestrator's** (the ledger said TD-005's counts were unedited after I had edited them — rule 83 on my own writing); its minors found the budgets read **and the admission guard** throwing 500 on the very timezone the ledger fails open for — one `resolveBudgetTimezone` now serves all three — and a port method with no production caller, deleted because its loader writes under `for update`. Round 3's survived mutant: the guard half had no regression case; added pre-merge, calibrated with a planted-throw canary. Rule **77** refined: a copied tree resolves `@platform/*` back to the original through `node_modules` symlinks. Left behind: `tasks.cost_estimated` has no writer (a `local`-mode task calls an estimate an actual — backlog 18's territory), nothing consumes the estimate (WP-28), no price feed, two biome infos in test fixtures. |
+| WP-19 | Cost ledger, rollups, budgets projection, price table maintenance job, estimates, **and the backfill** | WP-04 | no | DONE | `8100c50` | **3 review rounds + a pre-merge case.** **Four tables that had existed since 0004/0007 got their first writer** (`cost_entries`, `run_model_usage`, `cost_rollup_daily`, `budget_windows`); migration **0017**. The ledger **totals to the invoice**: per-model rows from the provider's breakdown, the rounding residual attributed to the run's own model and reported rather than smoothed, a property test over any breakdown (BD-011). **Rule 16 honoured**: a missing `total_cost_usd` is priced from `price_list` and labelled `is_estimate`; an unpriced model writes **no** ledger row and is named in the log, its tokens still recorded. The model id is the only producer string stored, bounded 128 and **refused** past it. Budgets are a **read at admission** in the stage executor, not a `budget.exhausted` handler; windows are implicit in their start instant, so TD-004's `budget.window.reset` queue is deliberately not started. **The backfill uses `handler_executions` rather than bypassing it**: `replayEvents` claims `(position, handler)` exactly as the dispatcher does, so a handler registered later is served, a second pass skips, and a throwing handler stops the pass with `lastPosition` as the resume point. **Rule 82 audited first**: `FakeClaudeRunner` reports `modelUsage: []`, so the per-model criterion runs the real runner over the fake CLI whose scripted `result` reports **two** models. `run.finished`, `run.failed`, `artifact.created` are `handled`, held by a test that reads the set **off the handlers**. **Q65** filed and implemented. **The price job fetches nothing** — no verified feed, no credential; it closes superseded windows and names uncostable models. Round 1's major: the budgets route was the one untested module and its `spent_usd` came from a string-keyed join reporting **0** on any mismatch — a plausible number; fixed by an e2e reading the endpoint, and a window-blind mutant that **survived the first fix** dies now. Round 2's major was **the orchestrator's** (the ledger said TD-005's counts were unedited after I had edited them — rule 83 on my own writing); its minors found the budgets read **and the admission guard** throwing 500 on the very timezone the ledger fails open for — one `resolveBudgetTimezone` now serves all three — and a port method with no production caller, deleted because its loader writes under `for update`. Round 3's survived mutant: the guard half had no regression case; added pre-merge, calibrated with a planted-throw canary. Rule **77** refined: a copied tree resolves `@platform/*` back to the original through `node_modules` symlinks. Left behind: `tasks.cost_estimated` has no writer (a `local`-mode task calls an estimate an actual — backlog 18's territory), nothing consumes the estimate (WP-28), no price feed, two biome infos in test fixtures. **Amended on WP-40's tree (the cap race, refiner session 5): criterion 5's *"read at admission"* is no longer a read of `cost_entries` alone.** That read lagged the ledger's own handler, so two admissions inside the window between a run's commit and its `cost_entries` row both saw the lower figure — measured at **2 runs admitted against a cap that allows 1, 3 times out of 3**, with the handler delayed 8 s. Admission now asks `CostStore.pendingSpend` **per budget** and adds what the scope has **committed**: a live run at the admitting stage's per-run cap, an ended one at `runs.usd_reported`. The rule, the measurement and the residuals are in `packages/application/src/cost/pending.ts`; the SQL is `packages/infrastructure/src/cost/pending-run-spend.ts`; the shadow (WP-34), maintenance (WP-36) and bootstrap (WP-35) caps take the same term through their own stores. **Two residuals carry this row's subject and are filed**: backlog **109** (a run whose process died reserves its stage budget for ever, in every future window) and backlog **110** (a run that ends without a provider figure — every run in `local` mode — commits nothing until its ledger row lands, because `runs.usd_estimated` has no writer). The task cap is untouched and needs none of it: it reads `tasks.cost_actual`, which the run's own transaction increments. |
 | WP-20 | Web app foundation (TD-013) | WP-06 | yes | DONE | `c744904` | 2 review rounds + pre-merge; ui 2 → 245, web-e2e 33; rules 44, 45, 47, 48; **Q44–Q49** |
 | WP-21 | Onboarding wizard steps 1–5 incl. discovery agent and readiness evaluation (product/06, /17) | WP-16, WP-17, WP-20 | no | DONE | `23c5d37` | **3 review rounds + a pre-merge round; CI `34742367222` and `image` `34742367313`, read as `completed success`.** The wizard's **seven commands** (`apps/server/src/routes/onboarding.ts`; `Idempotency-Key` required, a reused key with a different canonical request refused with the digest stored beside the effect in `human_actions`; the organisation created on the first project under an advisory lock, two driven transactions asserting one), the wizard screen and route in `apps/web`, and the readiness read answering **200 by itself** — WP-15h part 2's 409 had carried the row count so this day would differ from "no producer yet". **Discovery is a stage of a one-off task** (`DISCOVERY_TEMPLATE` beside `TICKET_TEMPLATES`; `runs.task_id` is `not null`, so the executor, budget and transcript paths are reused); the task machine gained `active → done`, which it could not express for discovery *or* product/04's spike — technical/02 amended. **Readiness** (`packages/domain/src/readiness/`): product/17's fourteen criteria and the ladder, both sides of each edge; R9, R11 and R12 platform-answered and a model's claim for them dropped; evidence capped and redact-then-cut; the report through narrow writes (the evaluation, `projects.readiness_level`, drafts as `bootstrap` proposals never auto-applied). No migration. **Q68** filed and implemented. **Round 1 — four majors, two of them security**: the probe called the provider port **directly**, bypassing the executor's audit and rate limit (now routed through it as a non-mutating action, asserted against a real executor; a 10 s deadline answers `429 probe_busy` with `Retry-After`); `secret_refs` read **any** environment variable by name, so an `integration.write` caller could have named `APP_SECRET_KEY` and, with a caller-chosen `base_url` and the probe, sent the envelope key to a host they picked (now an operator-declared allow-list `APP_INTEGRATION_SECRET_ENV`, empty by default, refusing with identical bytes whether or not the variable exists; the host half is backlog **48**); "a different body under a used key is a 409" claimed in four places and implemented for one field (now per command); the discovery prompt asked the agent to have *run* the suite while the role had no `Bash` (rule 86 in a prompt). **Round 2 — two majors**: a credential could still be stored **plaintext** through `config` (now refused at the only writer over every shipped provider's `secretFields`, both ways); step 4 overwrote the whole config with no `base_hash` and could not write `commands.allow`, so no project could leave level 0 through the shipped UI (now `base_hash`, a stale hash refused, and the e2e drives 0 → 1 through the shipped commands). **Round 3 found what lay under three of the findings**: BD-025 lets a project only *narrow* the organisation's command maximum and the shipped maximum names **no test or setup command**, so **no run of any role can execute a project command today**; R1, R2 and R6 now read what a run can establish, `COMMAND_BASELINE_BY_ROLE` selects the read-only list for discovery, product/13 gained the Discovery row it never had (orchestrator), and the gap is backlog **49** with **Q69** carrying the recommendation (product/19 already grants the project's declared commands). Two defects the fixes found: a PUT answered 400 before 401 (all seven guards at `preValidation`); `secrets` and `integrations` inserted in separate transactions. Residuals stated: a crash between the commit and `enqueueStage` leaves a discovery task `active` with no reconciler (backlog 20's shape); a pg-boss retry after commit duplicates the evaluation (the librarian's shape); the e2e's level 1 rests on a scripted draft. Filed by the refiner: **44** (config export), **45** (the business interview, Step 3, owned by nobody — level 3 unreachable while discovery drafts technical pages only), **46** (readiness re-check), **47** (same key, different body — for WP-15i), **48**, **49**; backlog **10** gained a second column (a path vanishing between `git ls-files` and the read: four censuses tolerate it, six do not). |
 | WP-22 | Docker images (base, runtime, egress, launcher, product), Compose with a `compose.local.yml` override, `image.yml`, `base-image.yml`, size checks, attestations — **and the tier that runs the real provider against the real images** | WP-14 | no | DONE | `2fa285c` + ci-fix `d337173` | **3 review rounds + a pre-merge round + one ci-fix.** CI is the tier of record and it was read as `completed`: `2fa285c` — `image` `34708614552` and `base-image` `34708614542` **success** (the five images build and publish on amd64 and arm64), `ci` `34708614539` **failure** on one check of seven in the container script (rule 71's third environment defect, the cloud runner's DNS search list, in a script that had never run on CI); `d337173` — `ci` `34709029809` and `image` `34709029816` **success**. Five Dockerfiles; `compose.yml` with the socket behind `docker-socket-proxy` on an internal network the launcher alone joins (from the app container: `DOCKER_HOST` empty, no socket, the proxy unreachable — measured); `migrate` on the same entrypoint as `pnpm db:migrate`; no healthcheck gates on `/readyz`; `git` and the `knowledge` volume for TD-026; `scripts/build-images.mjs` as the one place that knows which file makes which image and its **unpacked** budget. **The stand-ins are gone**: `test/e2e/workspace/docker-workspace.e2e.test.ts` runs against `platform-runtime` and `platform-egress` with `runtimeSourceDir` unset and no `egressCommand`; a missing image **throws** naming the build command; CI **builds the commit's own images** (the row amended). **Backlog 27's mutant, both ways**: a one-look `#waitForControlSocket` left the pre-existing attach case green (6913 ms — the happy path, not the wait) and the new case *"attaches to a workspace whose socket appears only after attach"* fails by name, the ordering forced. **The real image found what the stand-in hid**: `chmod 0600` on a socket in a bind-backed volume answers `EINVAL` on virtiofs, so the shim exited after creating it; replaced by a property check (`<ctl>/<run-id>` is `0700` owned by this uid, which denies what the mode did), refusing on a wider mode, another uid, a missing or symlinked directory, re-throwing any other `chmod` error — judged sound by two reviewers. **Backlog 7 discharged, one claim falsified**: tinyproxy 1.11.2 starts and serves as uid 1000 with `cap_drop ALL` and `User nobody` present; the lines removed because the process does not honour them; and round 1 found that prediction **copied into a docblock as a measurement** — standing rule **86**. The runlet is bundled to one file; sidecar liveness is asserted at `create` and caught the alpine stand-in in `scripts/runlet-launcher-check.mjs`. **Found by deploying**: `@platform/prompts` declared no dependencies and crash-looped the product image (a census over `git ls-files` now holds every workspace package, including side-effect and dynamic imports); the launcher exited 0 in a restart loop on an unref'd timer (its test passed with the defect present until round 2); **220 anonymous volumes per e2e run** from `alpine/git`'s `VOLUME /git` with `v=false`, now removed with the container, the harness's own `rm -f` too (the orchestrator's +1 volume, attributed); build metadata was step env `docker build` never forwarded, so every image would have reported `0.0.0-dev` — the script now asserts the built image's `Config.Env`; `docker image inspect` reported ~4× under `docker images` on the containerd store, so the budget names the quantity it bounds; the backup sidecar pinned PostgreSQL 17 tooling against an 18 database (`pg_dump` version mismatch, measured) — pinned to 18 by digest with the majors compared off the file. **Compose's `local` profile could not express "this service instead of that"** (two `app` services on one port, measured) — a `compose.local.yml` override now, TD-018 amended, `test/e2e/compose/compose-config.e2e.test.ts` holds the service set under every setting. **Backlog 0b refused with the measurement** (`CAP_DAC_OVERRIDE` gone since WP-14; a per-run volume contradicts TD-025 §2 and TD-021). `docker compose up` measured here: 17 migrations, `/readyz` ok on all four checks, launcher up. Signing needs no credential (`actions/attest-build-provenance` over OIDC; no SBOM, stated). Left behind: backlog **33** (nothing serves the SPA though the bundle is in the image), **34** (the SDK's executable-path mismatch and a 217 MB binary), the orphan-directory sweep in 0b, `acli` unpinnable, 46 biome infos (`useLiteralKeys`) in scripts and tests. |
@@ -8433,9 +8803,9 @@ the browser tier has never seen the sentence this entry is about.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
-| WP-34 | **Shadow mode on closed tickets, the ShadowReport and the Shadow screen** — the guard had no producer | DONE | `621b57f` | Depends on WP-15g, WP-15c, WP-19, WP-21, WP-30, WP-09. **Two review rounds**: round 1 REQUEST_CHANGES — `size_ratio` answered `0` when the human side had no countable lines (omitted or null patches), printed on the screen as `size ratio: 0.00`, the invented zero rule 16 forbids, with two docblocks contradicting the code; a `candidates` count justified in a docblock and carried nowhere; a tautological `base_sha` contract case that a null mutant passed; a wrong scoping citation; `until: null` so reviewer minutes never reached the merge; no test naming the shadow plan-approval skip; the skip itself judged sound — the only creator of a shadow task is gated and no external write can result — and **BD-006 and product/18 amended by the orchestrator** (Q86); round 2 **APPROVE** with three nits, two fixed by the orchestrator (a test comment misstating round 1's pairing; a null check read backwards) and one left (an unreachable empty-notes guard on the screen); editing migration 0029 rather than adding 0030 is a stated TD-011 deviation, defensible because the file was never applied outside a test container — `size_ratio` nullish in the domain, the schema and the screen with the unrendered side named in `notes` (the both-empty case `null` too); `candidates` and `mergedAt` carried through two columns added to this row's own unapplied migration 0029 so the report's notes and the reviewer window's `until` are real; `mergeBaseIid` in the contract context so the `base_sha` case demands a sha; `scopeToProject` on the batch read; the skip pair in `saga.test.ts`; ten canaries, one of which **survived first** — the batch writing `null` for both new fields, proved by the store suite's round trip and by nothing about the writer — so `batch.test.ts` asserts the writer. **A batch is tasks and there is no second entry point**: `POST /api/projects/:id/shadow-batches` (`apps/server/src/routes/shadow.ts`) creates N `tasks` rows with `mode = 'shadow'` on the ordinary templates, so the admission guard, the ledger, the transcript sink and the cap are the ones every run gets; `Idempotency-Key` required, a replay performing nothing twice decided by the unique index; migration **0029** (`shadow_batches`, `shadow_batch_tickets`). **Q82 as implemented**: the base is the human MR's own `base_sha` — a new port field, GitLab's `diff_refs` on the *single* MR, verified against the vendor page (the list endpoint does not publish it) — the MR found by ticket link first then a title or branch scan with `human_mr_source` recording which; a ticket whose base is null is refused by name and gets no task. **The report** gains `overlap.tests_added_ratio` with both counts, `shadow_cost` and `reviewer_minutes_estimate`; acceptance-criteria coverage refused by name (refined); three fields became nullable; the aggregate is a projection (`summariseShadowBatch`), never stored. **The budget** is `features.shadow_mode.budget_usd`, monthly, checked by the stage executor against `cost_entries` grouped by `tasks.mode` — not a `budgets` row — with the e2e reading the ledger. **The dial's two Observe policies have their reader**: `picksUpNewTickets` at intake, `shadowMode` at the batch, both `kind: 'read'` in the readers table (backlog **72 (c)** closed). Plan approval is **skipped** for shadow tasks — measured: Observe's preset otherwise stopped every ticket — a decision recorded for the product (refined); both gates must say yes; no WIP admission. The fake runner emits the ordinary feature scenarios selected from `spec.mode === 'shadow'`. Rule 83: technical/02, /03, /04, /08, the operating-mode caveats. Left behind (refined): GitLab's recorded fixtures over-claim `diff_refs` on the list response and mislabel the create response — backlog **98**, WP-35's; a replayed batch leaves an empty batch row and a second `human_actions` row — backlog **99**; acceptance-criteria coverage and `agent_review_of_human_mr` refused for one cause, a yardstick decision — backlog **100**; `RunSpec.checkoutRef` folded into 71 with the measurement; the budget carrier recorded on WP-36's row for reuse; backlog 72 (c) resolved (eight read, seven unread); **Q86** — the unconditional plan-approval skip for shadow tasks lifts size policy, probation and risk classes at once; kept, with BD-006 and product/18 amended by the orchestrator. |
-| WP-35 | **History bootstrap** — the read built at WP-09 gets its caller, and the wizard its step 3b | DONE | `7a6041f` | Depends on WP-18b, WP-21, WP-16, WP-09, WP-19, WP-15g. **Two review rounds**: round 1 REQUEST_CHANGES — the proposal card never rendered `source`, so the value the migration exists for reached no reader; `Idempotency-Key` refused only a different body, so the same request after the batch completed started a second $20 batch (the route test pinned a 202 and nothing countable); a race on the one-live index raised an unmapped `23505` → 500; and no census guards the composition root's optional collaborators (backlog 104); round 2 **APPROVE** with three nits, two fixed by the orchestrator in the ledger (the notes' assumption (a) now says it was reversed; backlog 104 resolved for the pipeline runtime with the four other runtimes named as the remainder) and one recorded (a crash between `start()` and the audit row leaves no key row, bounded only by the one-live index) — the source badge through a `Record` over the enum so a seventh value fails the typecheck; `idempotentReplay` answering the recorded batch with one command call and one audit row; `23505` on the one-live index mapped to `already_running` at three tiers including a real race through a barrier; `apps/server/src/pipeline-census.test.ts` holding the composition root's optional collaborators both ways (backlog 104); and one recovery — a `git checkout --` on an intent-to-add path emptied a file mid-canary, rebuilt and proven by its recorded md5, which is rule **88**. **A one-off task, batched, through the one entry point**: `POST /api/projects/:id/history-bootstraps` records a batch and enqueues `bootstrap.history`, which reads the provider and creates one task per twenty merge requests (`BOOTSTRAP_BATCH_SIZE`) on `HISTORY_BOOTSTRAP_TEMPLATE`; N defaults to 200 and is refused above 1 000 at the value and one past it, on the request and the config path. **Evidence is checked by the platform**: `HistoryFindings` is the extraction schema; `curateHistoryFindings` refuses a citation that does not resolve into `tasks.history_sample.evidence_links` — the platform's own record of that run's prompt — and holds product/19 § 18's two counts against the platform's; refusals are `discarded` rows carrying the reason; source value `history` distinct from Discovery's `bootstrap` (migration **0030**, with the `historian` role and the artifact type). **The cap is derived, not chosen**: `features.history_bootstrap.budget_usd` defaults to $20 = 200 ÷ 20 runs × the $2 stage cap, published per N by the read before start, enforced at admission from `cost_entries`. **The port**: `listCommits` with the fake (divergence 15), the GitLab adapter, two fixtures with `source` blocks and two contract cases (the narrow window is the one an adapter that dropped `since` fails); backlog **98** closed — `history.json`'s `diff_refs` deleted, `merge-requests.json` relabelled, `SOURCES.md` extended. Wizard step 3b and its settings mirror in the census. **Two canaries changed code rather than comments** (`autoApply: false` unreachable behind `proposalAbove: 0`; the per-batch cap had no fast-tier test) and **the e2e found a live composition defect** — `apps/server/src/pipeline.ts` never passed the store to `createPipelineRuntime`, invisible to every tier below it. Rule 83: technical/06, the wizard's step count, `record.ts`, `git-provider.ts`. Left behind (refined): a lost `bootstrap.history` enqueue is the fourth site of the lost-wake-up class and the only one with no human workaround (the one-live index makes it a permanent `already_running`) — backlog **101**, and the class earns a row: WP-36's criterion 10; `merge_requests_read` reaches a log line and no reader — backlog **102**; the five-tickets-per-chunk bound is deliberate, not derived — backlog **103**; the composition-root omission is rule 30's unpaid half, a census nobody owns — backlog **104**; backlog **98** resolved; rule 3 gained both canary instances. |
-| WP-36 | **The maintenance pipeline** — a stored toggle gets its scheduler, and `runs.mode` stops lying | DONE | `344b5b0` | Depends on WP-15, WP-05, WP-19, WP-21, WP-30, WP-18b, WP-34, WP-38. **Two review rounds**: round 1 REQUEST_CHANGES — the reconciler's ask query ignored `task_asks.run_id`, so an ask left pending after its run was ended by another writer was re-enqueued into a **second paid run every minute with no bound** (measured on a canary with the clock advanced: ask specs 1 → 2, the ledger unchanged, so the ask budget never fired); the runtime's docblock claiming every composition shares the wrapped `Jobs` while three workers received the unwrapped one (backlog 106); three docblocks detached from their subjects by insertion; a cap sentence disagreeing with its comparison; round 2 **APPROVE** with two nits — a census docblock's count fixed by the orchestrator, and a recorded residual: `endBootstrap` reaches `markEmpty`, whose guard is only `completed_at is null`, in a transaction after the read, so a collect landing in that gap would be flipped to `empty` with chunks written (a `status = 'collecting'` predicate plus the no-chunk check closes it; for a refiner) — the ask query filters `run_id is null` and every row the pass re-enqueues is bounded by migration **0032**'s `recovery_attempted_at` (one attempt, committed before the enqueue, then the feature's own ending after a one-hour window derived from the two queues' latency); the reproduction now holds three ask runs, three specs and one ledger row across two ticks where it had grown a fourth run; the three worker runtimes and both crons take the wrapped `Jobs`, held by the composition census; the docblocks back on their subjects; site 84's drop-the-enqueue e2e added. **No table**: the period rides in the platform-issued key `chore!<type>-<period>` and `unique(project_id, ticket_key, mode)` is the idempotency, so a double fire creates one task; technical/02's ScheduledJob line amended to say so; a daily cron at 04:35 in the org zone, exclusive. **A chore files no ticket**: `ticketReads.ticket` refuses a platform-issued reference (backlog **62** closed) and the review-only, discovery, `createTicket` and technical/06 docblocks are corrected. **Five chore types, two performable**: `kb` reads WP-18b's `kb_health_reports`, `deps` reads WP-38's `tasks.dependencies`; `flaky`, `docs` and `lint` refuse by name at schedule time — a warning, a report line and a card sentence, never a silent skip (rule 18). **`runs.mode` is right for `retrospective` and `librarian`** through a stage table beside `RUN_MODE_BY_TEMPLATE` with the precedence stated (the template wins), the walk at 26 rows, and a data-only backfill in migration **0031** (backlog **57** closed). **The budget** reuses WP-34's mechanism with the platform-issued reference as the predicate — not `tasks.template`, because a human's chore ticket shares the template (measured in the integration tier). **The lost-wake-up class** (criterion 10): `packages/application/src/recovery/stranded.ts` and a reconcile tick re-enqueue stranded wake-ups across backlog 101's four sites, with a recovery e2e. The fake runner reads the `ticket` data block, refuses a chore whose brief names no finding, and quotes the page back (rule 82). `PipelineComposition.jobs` moved to `startRuntime`; the pool floor 20 → 21. Rule 83: technical/02, /03, /06, the card's caveat. Left behind (refined): the reconcile pass has no bound and no ending, its ask query ignores `run_id` so an in-flight ask older than a minute is warned about falsely, and a pending-after-run ask can cost repeated paid runs — backlog **105**, graded a major and closed in round 2; a lost `record` wake-up bricks a history-bootstrap batch invisibly because three worker runtimes receive the unwrapped `Jobs` while the runtime's docblock claims otherwise — backlog **106**; the refused-chore log line once per pass is a stated choice whose carrier is the digest — backlog **107**; backlog 57 and 62 resolved, 101 resolved for two of its four sites (20 was event-shaped, 36 remains with its blocker stated); the feature cards' stale copy folded into 72; entry 22's instance recorded with the five pool-floor sites consistent. |
+| WP-34 | **Shadow mode on closed tickets, the ShadowReport and the Shadow screen** — the guard had no producer | DONE | `621b57f` | Depends on WP-15g, WP-15c, WP-19, WP-21, WP-30, WP-09. **Two review rounds**: round 1 REQUEST_CHANGES — `size_ratio` answered `0` when the human side had no countable lines (omitted or null patches), printed on the screen as `size ratio: 0.00`, the invented zero rule 16 forbids, with two docblocks contradicting the code; a `candidates` count justified in a docblock and carried nowhere; a tautological `base_sha` contract case that a null mutant passed; a wrong scoping citation; `until: null` so reviewer minutes never reached the merge; no test naming the shadow plan-approval skip; the skip itself judged sound — the only creator of a shadow task is gated and no external write can result — and **BD-006 and product/18 amended by the orchestrator** (Q86); round 2 **APPROVE** with three nits, two fixed by the orchestrator (a test comment misstating round 1's pairing; a null check read backwards) and one left (an unreachable empty-notes guard on the screen); editing migration 0029 rather than adding 0030 is a stated TD-011 deviation, defensible because the file was never applied outside a test container — `size_ratio` nullish in the domain, the schema and the screen with the unrendered side named in `notes` (the both-empty case `null` too); `candidates` and `mergedAt` carried through two columns added to this row's own unapplied migration 0029 so the report's notes and the reviewer window's `until` are real; `mergeBaseIid` in the contract context so the `base_sha` case demands a sha; `scopeToProject` on the batch read; the skip pair in `saga.test.ts`; ten canaries, one of which **survived first** — the batch writing `null` for both new fields, proved by the store suite's round trip and by nothing about the writer — so `batch.test.ts` asserts the writer. **A batch is tasks and there is no second entry point**: `POST /api/projects/:id/shadow-batches` (`apps/server/src/routes/shadow.ts`) creates N `tasks` rows with `mode = 'shadow'` on the ordinary templates, so the admission guard, the ledger, the transcript sink and the cap are the ones every run gets; `Idempotency-Key` required, a replay performing nothing twice decided by the unique index; migration **0029** (`shadow_batches`, `shadow_batch_tickets`). **Q82 as implemented**: the base is the human MR's own `base_sha` — a new port field, GitLab's `diff_refs` on the *single* MR, verified against the vendor page (the list endpoint does not publish it) — the MR found by ticket link first then a title or branch scan with `human_mr_source` recording which; a ticket whose base is null is refused by name and gets no task. **The report** gains `overlap.tests_added_ratio` with both counts, `shadow_cost` and `reviewer_minutes_estimate`; acceptance-criteria coverage refused by name (refined); three fields became nullable; the aggregate is a projection (`summariseShadowBatch`), never stored. **The budget** is `features.shadow_mode.budget_usd`, monthly, checked by the stage executor against `cost_entries` grouped by `tasks.mode` — not a `budgets` row — with the e2e reading the ledger. **The dial's two Observe policies have their reader**: `picksUpNewTickets` at intake, `shadowMode` at the batch, both `kind: 'read'` in the readers table (backlog **72 (c)** closed). Plan approval is **skipped** for shadow tasks — measured: Observe's preset otherwise stopped every ticket — a decision recorded for the product (refined); both gates must say yes; no WIP admission. The fake runner emits the ordinary feature scenarios selected from `spec.mode === 'shadow'`. Rule 83: technical/02, /03, /04, /08, the operating-mode caveats. Left behind (refined): GitLab's recorded fixtures over-claim `diff_refs` on the list response and mislabel the create response — backlog **98**, WP-35's; a replayed batch leaves an empty batch row and a second `human_actions` row — backlog **99**; acceptance-criteria coverage and `agent_review_of_human_mr` refused for one cause, a yardstick decision — backlog **100**; `RunSpec.checkoutRef` folded into 71 with the measurement; the budget carrier recorded on WP-36's row for reuse; backlog 72 (c) resolved (eight read, seven unread); **Q86** — the unconditional plan-approval skip for shadow tasks lifts size policy, probation and risk classes at once; kept, with BD-006 and product/18 amended by the orchestrator. **Since WP-40's cap fix** the shadow cap takes `CapSpend` from `packages/infrastructure/src/cost/pending-run-spend.ts`, counting a live run's commitment beside the ledger; residuals backlog **109–110**. |
+| WP-35 | **History bootstrap** — the read built at WP-09 gets its caller, and the wizard its step 3b | DONE | `7a6041f` | Depends on WP-18b, WP-21, WP-16, WP-09, WP-19, WP-15g. **Two review rounds**: round 1 REQUEST_CHANGES — the proposal card never rendered `source`, so the value the migration exists for reached no reader; `Idempotency-Key` refused only a different body, so the same request after the batch completed started a second $20 batch (the route test pinned a 202 and nothing countable); a race on the one-live index raised an unmapped `23505` → 500; and no census guards the composition root's optional collaborators (backlog 104); round 2 **APPROVE** with three nits, two fixed by the orchestrator in the ledger (the notes' assumption (a) now says it was reversed; backlog 104 resolved for the pipeline runtime with the four other runtimes named as the remainder) and one recorded (a crash between `start()` and the audit row leaves no key row, bounded only by the one-live index) — the source badge through a `Record` over the enum so a seventh value fails the typecheck; `idempotentReplay` answering the recorded batch with one command call and one audit row; `23505` on the one-live index mapped to `already_running` at three tiers including a real race through a barrier; `apps/server/src/pipeline-census.test.ts` holding the composition root's optional collaborators both ways (backlog 104); and one recovery — a `git checkout --` on an intent-to-add path emptied a file mid-canary, rebuilt and proven by its recorded md5, which is rule **88**. **A one-off task, batched, through the one entry point**: `POST /api/projects/:id/history-bootstraps` records a batch and enqueues `bootstrap.history`, which reads the provider and creates one task per twenty merge requests (`BOOTSTRAP_BATCH_SIZE`) on `HISTORY_BOOTSTRAP_TEMPLATE`; N defaults to 200 and is refused above 1 000 at the value and one past it, on the request and the config path. **Evidence is checked by the platform**: `HistoryFindings` is the extraction schema; `curateHistoryFindings` refuses a citation that does not resolve into `tasks.history_sample.evidence_links` — the platform's own record of that run's prompt — and holds product/19 § 18's two counts against the platform's; refusals are `discarded` rows carrying the reason; source value `history` distinct from Discovery's `bootstrap` (migration **0030**, with the `historian` role and the artifact type). **The cap is derived, not chosen**: `features.history_bootstrap.budget_usd` defaults to $20 = 200 ÷ 20 runs × the $2 stage cap, published per N by the read before start, enforced at admission from `cost_entries`. **The port**: `listCommits` with the fake (divergence 15), the GitLab adapter, two fixtures with `source` blocks and two contract cases (the narrow window is the one an adapter that dropped `since` fails); backlog **98** closed — `history.json`'s `diff_refs` deleted, `merge-requests.json` relabelled, `SOURCES.md` extended. Wizard step 3b and its settings mirror in the census. **Two canaries changed code rather than comments** (`autoApply: false` unreachable behind `proposalAbove: 0`; the per-batch cap had no fast-tier test) and **the e2e found a live composition defect** — `apps/server/src/pipeline.ts` never passed the store to `createPipelineRuntime`, invisible to every tier below it. Rule 83: technical/06, the wizard's step count, `record.ts`, `git-provider.ts`. Left behind (refined): a lost `bootstrap.history` enqueue is the fourth site of the lost-wake-up class and the only one with no human workaround (the one-live index makes it a permanent `already_running`) — backlog **101**, and the class earns a row: WP-36's criterion 10; `merge_requests_read` reaches a log line and no reader — backlog **102**; the five-tickets-per-chunk bound is deliberate, not derived — backlog **103**; the composition-root omission is rule 30's unpaid half, a census nobody owns — backlog **104**; backlog **98** resolved; rule 3 gained both canary instances. **Since WP-40's cap fix** the bootstrap cap takes `CapSpend` from `packages/infrastructure/src/cost/pending-run-spend.ts` — the *stops the batch when its budget cap is spent* case measured the overrun; residuals backlog **109–110**. |
+| WP-36 | **The maintenance pipeline** — a stored toggle gets its scheduler, and `runs.mode` stops lying | DONE | `344b5b0` | Depends on WP-15, WP-05, WP-19, WP-21, WP-30, WP-18b, WP-34, WP-38. **Two review rounds**: round 1 REQUEST_CHANGES — the reconciler's ask query ignored `task_asks.run_id`, so an ask left pending after its run was ended by another writer was re-enqueued into a **second paid run every minute with no bound** (measured on a canary with the clock advanced: ask specs 1 → 2, the ledger unchanged, so the ask budget never fired); the runtime's docblock claiming every composition shares the wrapped `Jobs` while three workers received the unwrapped one (backlog 106); three docblocks detached from their subjects by insertion; a cap sentence disagreeing with its comparison; round 2 **APPROVE** with two nits — a census docblock's count fixed by the orchestrator, and a recorded residual: `endBootstrap` reaches `markEmpty`, whose guard is only `completed_at is null`, in a transaction after the read, so a collect landing in that gap would be flipped to `empty` with chunks written (a `status = 'collecting'` predicate plus the no-chunk check closes it; for a refiner) — the ask query filters `run_id is null` and every row the pass re-enqueues is bounded by migration **0032**'s `recovery_attempted_at` (one attempt, committed before the enqueue, then the feature's own ending after a one-hour window derived from the two queues' latency); the reproduction now holds three ask runs, three specs and one ledger row across two ticks where it had grown a fourth run; the three worker runtimes and both crons take the wrapped `Jobs`, held by the composition census; the docblocks back on their subjects; site 84's drop-the-enqueue e2e added. **No table**: the period rides in the platform-issued key `chore!<type>-<period>` and `unique(project_id, ticket_key, mode)` is the idempotency, so a double fire creates one task; technical/02's ScheduledJob line amended to say so; a daily cron at 04:35 in the org zone, exclusive. **A chore files no ticket**: `ticketReads.ticket` refuses a platform-issued reference (backlog **62** closed) and the review-only, discovery, `createTicket` and technical/06 docblocks are corrected. **Five chore types, two performable**: `kb` reads WP-18b's `kb_health_reports`, `deps` reads WP-38's `tasks.dependencies`; `flaky`, `docs` and `lint` refuse by name at schedule time — a warning, a report line and a card sentence, never a silent skip (rule 18). **`runs.mode` is right for `retrospective` and `librarian`** through a stage table beside `RUN_MODE_BY_TEMPLATE` with the precedence stated (the template wins), the walk at 26 rows, and a data-only backfill in migration **0031** (backlog **57** closed). **The budget** reuses WP-34's mechanism with the platform-issued reference as the predicate — not `tasks.template`, because a human's chore ticket shares the template (measured in the integration tier). **The lost-wake-up class** (criterion 10): `packages/application/src/recovery/stranded.ts` and a reconcile tick re-enqueue stranded wake-ups across backlog 101's four sites, with a recovery e2e. The fake runner reads the `ticket` data block, refuses a chore whose brief names no finding, and quotes the page back (rule 82). `PipelineComposition.jobs` moved to `startRuntime`; the pool floor 20 → 21. Rule 83: technical/02, /03, /06, the card's caveat. Left behind (refined): the reconcile pass has no bound and no ending, its ask query ignores `run_id` so an in-flight ask older than a minute is warned about falsely, and a pending-after-run ask can cost repeated paid runs — backlog **105**, graded a major and closed in round 2; a lost `record` wake-up bricks a history-bootstrap batch invisibly because three worker runtimes receive the unwrapped `Jobs` while the runtime's docblock claims otherwise — backlog **106**; the refused-chore log line once per pass is a stated choice whose carrier is the digest — backlog **107**; backlog 57 and 62 resolved, 101 resolved for two of its four sites (20 was event-shaped, 36 remains with its blocker stated); the feature cards' stale copy folded into 72; entry 22's instance recorded with the five pool-floor sites consistent. **Since WP-40's cap fix** the maintenance cap takes `CapSpend` from `packages/infrastructure/src/cost/pending-run-spend.ts`, counting a live run's commitment beside the ledger; residuals backlog **109–110**. |
 | WP-37 | **Risk classes and reviewer routing** — the gate WP-30 built gets its producer, and CODEOWNERS its first caller | DONE | `78e48fc` | Depends on WP-30, WP-26, WP-21, WP-09, WP-28. **Two review rounds**: round 1 REQUEST_CHANGES — the claim that CODEOWNERS is read at the default branch and never inside the change (so an author cannot appoint their own reviewer) was asserted in no tier, the harness stub ignoring `ref` and the fake storing the file per project, so reading at the task branch passed everything; plus a docblock promising a shadow case that did not exist and a quotation not matching its source; round 2 **APPROVE** with two nits the orchestrator fixed before the merge (the new contract case returned silently without the capability where its sibling asserts the refusal; a test title claiming no provider call) — the ref asserted at three levels (a unit double answering a different file per ref, the fake keeping CODEOWNERS per ref as divergence 12, a both-ways contract-suite case with a GitLab fixture, and the e2e planting a hostile file on the task branch and reading the production audit's `ref`); the shadow case added found and fixed a live `TypeError` in `reviewWrites.reviewers`' shadow result; and a **rule 77 refinement**: a copied tree cannot mutate an outbound duty because the runtime imports the original through `node_modules`, so the planted throw fired in one of fourteen cases — the mutation has to be made in place and reverted. **A proposal, never a silent default**: `PLATFORM_DEFAULT_CONFIG` still carries no `risk_classes`; the server publishes `risk_class_proposal` on `GET …/config` (source `discovery` when the agent returned suggestions — `discoveryDraftDataSchema` gained the field, the prompt asks, `ROLE_PROMPT_VERSIONS` bumped with eval cases — or `platform` otherwise, stored by migration **0026** `projects.proposed_risk_classes`), and the settings screen's *Accept these classes* writes the whole document through the existing `PUT …/config` with its `human_actions` row. **`tasks.risk_classes` has a writer**: the new `risk_route` `pipeline.outbound` duty at the rebase gate computes classes from `getMergeRequestDiff` and writes them through the narrow `TaskRepository.saveRiskClasses`; the e2e's fake plan names `src/totals.ts` while the fake git's diff carries `db/migrations/…`, so the row reads `['data']` and WP-30's gate fires. **Reviewer routing** in product/19:138's precedence: CODEOWNERS read at the default branch (`readCodeowners`'s first caller; GitLab `resolveUserId`; a contract-suite case and fake divergence 11) → the new `policies.reviewers` key → the requesting human through `user_identities`, which is **dead** because `requested_by_user_id` has no writer and says so; classes add reviewers; `set_reviewers` through the executor. **`checklist:<name>` refused by name with Q83 in the message**; a class-forced `budget_approval` refused because `spendIsStillAhead` makes it unreachable; `public_api` ships as a named non-proposal rather than one of the six. Twelve duty cases through the real handler, duty and executor; three canaries. Rule 83: `risk-classes.ts:9` (refused, not parsed), `git-provider.ts`'s "no caller", `operating-mode.tsx`, three cost sentences. Branches 80.04 % against 80. Left behind (refined): no review checklist exists, so product/19 § 14's two checklist classes ship as a refusal (`public_api`) and a half-proposal (`payments` with `plan_approval` only, missing from the screen's "not proposed" list) — backlog **91**, blocked on Q83, with **WP-45** named for the feature; `tasks.requested_by_user_id` unwritten at all four creation sites while three already hold the actor — backlog **92**; a class-forced `budget_approval` is a stated residual folded into 73 (§ 14 requires it nowhere); required reviewers on the DTO folded into WP-38's row; the stale inbox docblock into 79; backlog 64 restated — the rebase gate's floor is now four provider reads per entry; backlog **73** resolved with three remainders. The five-of-six deviation is against this row's criterion 1, not product/19. |
 | WP-38 | **Dependency policy and the Checks panel** — the key with no reader gets its gate, and the panel is built once | DONE | `0960c44` | Depends on WP-15, WP-26, WP-24, WP-37, WP-39, WP-28. **Two review rounds**: round 1 REQUEST_CHANGES — three majors: npm's licence string unbounded at the client against a `.max(200)` schema, so a long licence made the gate throw and **fail open** (no record, no question, no block; probed against the real schema); the 25-package cap applied before the policy so package 26 was neither blocked nor asked, contradicting its docblock; a docblock describing the loop design round 1's own fix had replaced — plus technical/12's example still scalar, two wrong census citations, `assigned` written before the call, and `.env.example` silent about what reaches a registry host; the executor deviation accepted as honest with rate limits and audit named as genuinely lost; round 2 <r2> — a `MAX_LICENCE_CHARS` bound at the client that drops rather than truncates plus a `safeParse` on every registry answer substituting `unavailable`, so the gate refuses **closed** (npm's `modified` was measured rendering an instant the ISO schema refuses — the same class again); the detector returns everything and `boundReportedDependencies` cuts after the policy keeping every `block` then `ask`, with a 26-package case; the docblocks true; technical/12's example in the object form with its fixture and the holding test named; `assigned` written after the call and empty on refusal and in shadow mode (a second defect found by the fix); `.env.example` stating what reaches a registry host with measured headers. **Detection from the change, both ways**: `packages/domain/src/policies/dependencies.ts` reads npm, pypi, go and cargo manifests and lockfiles; maven, gradle, composer, rubygems and nuget are named unread; a version bump is not an addition; a manifest hunk without its section header under-reports, stated. **Three endings, countable**: `allow` records only; `ask` parks one `questions` row on the existing gate with its timeout; `block` returns the stage spending a new `dependency_policy` loop — `human_rounds` was measured being spent instead, rule 81's shape. **The schema says what the document says**: `policies.dependency_policy` is a union of the scalar and a per-ecosystem map plus an allow-list. **Q84 as built, narrowly**: registry metadata (`packages/infrastructure/src/dependencies/registry-metadata.ts`) is fetched only from hosts in `APP_DEPENDENCY_REGISTRY_HOSTS`, empty by default, so no request leaves the process unless an operator asks; untrusted, bounded and redacted at the write, text nodes on the panel; **not through `IntegrationActionExecutor`** because `integration_actions.integration_id` is a `NOT NULL` FK and a registry has no binding row — a deviation from criterion 4 argued at the code (refined). **Migration 0028** stores `tasks.dependencies` and `required_reviewers` as columns (WP-37's duty writes the reviewers; no audit row exists when nothing resolved). **The panel built once**: five of product/10:38's eleven items rendered, six named absent with their owning row in `apps/web/src/features/checks-panel.test.tsx`'s census; the stale caveat corrected; the thirteen untyped web fixtures typed (backlog **93**). Eleven gate branches, twenty detector cases with a property walk, eleven registry-client cases counting what reached the network, three e2e cases through a real instance. Left behind (refined): the six absent Checks items are four pieces of work with an owner each — CI green and rebase status share one cause (a passing gate never writes `task_stages.outcome`, so a walked-through gate publishes as `running`), business verdict and acceptance criteria wait on backlog 85, the tamper check's result is unrecorded — WP-41 ruled the wrong home, **WP-46** if one row (backlog **95**); the gate is one-shot with no re-entry, live and split by state — `ask` gives up in seven states, `block` in four, the human-owned stops closable with a re-attempt (backlog **96**); the executor's binding-row assumption, three shapes priced (backlog **97**); backlog **93** resolved; backlog 64 restated at four diff reads per implementation completion; rule 81's third instance; the lookup budget's ordering and the silent dropped settlement, this row's residuals for a refiner. |
 | WP-39 | **Coverage delta** — head minus a named base, on the Checks panel | DONE | `958f1d1` | Depends on WP-15, WP-09, WP-38. **One review round, APPROVE** with three nits — the cache's stated invalidation now names the one case it does not cover (a base pipeline re-run on the same sha), fixed by the orchestrator; a job enqueued per event even under `'none'` (zero reads, stated); and `coverage_source` absent from technical/12's example, left as decided because the example is held to a fixture byte for byte and product/18:38 names the key. Criterion 8 judged met: the event is real and the provenance is proven by replacing the head pipeline between deliveries and counting the reads. **The base is named**: the project's default branch and its head at the moment of measurement (`base_branch`, `base_sha`, `measured_at` on the row and printed on the panel); the branch point is stored nowhere; staleness is *as fresh as the last pipeline that finished on the MR* and nothing re-reads on render. **Both numbers come off `get_pipeline_status`** — a delta may only subtract two answers of one read — and the event's own `coverage_pct` is never read, because GitLab's pipeline hook publishes none while the fake does (divergence **13**, asserted); a stated deviation from the row's criterion 8. **The cache is the task's own row** (migration **0027** `tasks.coverage`, written by the narrow `store.saveCoverage`, ownership census updated): key `(task_id, base_sha)`, lifetime the row, invalidated by the default branch moving; a `null` base is re-read so a running pipeline's "no number" is never pinned; two to three provider reads per event through the executor outside every transaction, zero when off or unreported. **Never a zero for a missing number**: the panel prints `not measured`, `not reported`, `81.5 %` and `+2.5 pp`, and a measured zero `0.0 pp`; both directions asserted. `policies.coverage_source` is `'pipeline' | 'none'`, default `'pipeline'` — no `'artifact'`, because per-file needs the artifact nothing downloads, stated at the code. Eleven application cases through the real handler, duty and executor; three contract-suite cases in both stores; one e2e over three signed deliveries; seven mutants dead by name. The panel caveat's CI/rebase half is knowingly WP-38's criterion 6. Left behind (refined): the duty's head-pipeline read duplicates the CI gate's stage-entry read, folded into backlog 64 with the judgement that a sha-keyed coalesce does not transfer to a pipeline status that changes; thirteen untyped DTO literals in `apps/web` fixtures, a diagnostic gap rather than rule 1's (backlog **93**, WP-38); `ci.pipeline.finished.coverage_pct` has no production reader, a sentence owed at the schema (backlog **94**); the plan row's criterion 8 records the deviation as decided — the event is real, the number is not from it. |
@@ -18251,6 +18621,12 @@ dropping a commit with no `committed_date` rather than stamping it `now()`), two
 with `source` blocks, and **two** contract-suite cases — the wide window and a narrow one that
 *excludes* the commit, because an adapter that dropped `since` would pass the first (rule 43).
 
+**Amended by the pre-review fix at the end of WP-40's notes (the cap race):** point 8's *"enforced
+from the ledger"* is now *"enforced from the ledger **and from the batch's runs the ledger has not
+recorded yet**"* — the ledger is a handler that commits after the run's own transaction, and with it
+delayed the batch admitted two runs against a cap that allows one, 3/3. `capForTask` answers a third
+number; the rule is `packages/application/src/cost/pending.ts`.
+
 **8. The cap is per batch, shown before start, and enforced from the ledger.**
 `features.history_bootstrap` is the strict-schema key (four keys, all read: `enabled`,
 `merge_requests`, `days`, `budget_usd`), `budget_usd` defaulting to product/19's **$20** — and the
@@ -18708,7 +19084,375 @@ three integration cases. Ignoring the ask's mark (`if (true)`) → *"does not re
 already attempted"* and the mixed-pass case. `spent >= cap` → `>` → the cap case at the value.
 Restoring `jobs: jobsRuntime.jobs` in one worker composition → the new census case.
 
+### WP-40 — the spike template and the epic split
+
+**What shipped**: the template `BUILTIN_TEMPLATE_IDS` has declared since WP-15 and nothing ran, its
+opt-in variant, two artifact types, the first caller `TaskManagementPort.createTicket` has ever had,
+and the acceptance surface Q85 says it needs. Migration **0033** — two `artifact_type` values and one
+table.
+
+**1. Two templates, because a stage's `produces` is data.** `SPIKE_TEMPLATE` is product/04:117's
+sentence — `intake → refinement → architecture (a document) → human_review → done`, no merge tail at
+all — and `EPIC_SPLIT_TEMPLATE` is the same graph with **one stage changed**: `produces:
+'TicketBreakdown'` and `role: 'product_manager'`. One template cannot produce two artifact types, so
+the variant is a second value in `SHIPPED_TEMPLATES` (which already holds four ids outside
+`BUILTIN_TEMPLATE_IDS`) rather than a flag. The stage id is `architecture` for both, which is the
+**opposite** call from `TICKET_LINT_TEMPLATE`'s and the reasons that made a stage id of its own right
+there do not apply: nothing about a spike is *"light"* (product/04 gives it the same Architect at the
+same effort) and a research ticket moving into the project's architecture column is what a human
+expects. The **role** differs because the artefact does: a breakdown is N tickets with acceptance
+criteria, which is the Product Manager's prompt, quality bar and eval corpus.
+
+**2. The human stage rests, and the residual is stated rather than hidden.** `human_review` is a
+`human` stage; the plain spike subscribes to **nothing**, so product/04's last arrow is a task that
+waits until a person cancels it or sends it back, and the epic split subscribes to
+`task.breakdown.decided`. `human_review` is not one of the four stage ids `transitions.ts` maps to a
+task **state**, so a resting spike reads `active` on the board — giving it a state of its own is a
+new `task_state` value and a new edge in technical/02's table, which is a decision for whoever owns
+that enum. The **property test was changed rather than exempted**: the happy-path walk now derives
+its expectation from the template's own data (*does its last reachable stage wait on an event nobody
+can send?*), so a template that parks every task one stage short of `done` **by accident** still
+fails — an accidental park is a stage the interpreter could leave, and this one cannot be left at all.
+
+**3. The map stays and the variant is an override (criterion 2).** `DEFAULT_TEMPLATE_BY_ISSUE_TYPE`
+still maps `epic: 'feature'`; `templateForIssueType` takes a third argument and consults
+`epicSplitRouting`. Editing the map was the alternative and is wrong twice over: the map is the
+*project's* to override (technical/12), so a changed shipped default would move every existing
+project's epics at once, and the feature's switch is `features.epic_split.enabled` — a feature that
+could be turned on from two places is a feature whose state nobody can read off one screen. What
+**did** change in the map is `spike: 'spike'`: product/04 S0 classifies into four templates and this
+map could produce only three, so a ticket a team had literally typed *Spike* ran the feature pipeline
+and opened a merge request for a research question. **A reviewer may reverse that one** — it changes
+behaviour for a project with a `Spike` issue type, in the direction the document asks for.
+
+**4. Criterion 6 is answered twice and the earlier one is the one that matters.** A binding without
+`createTicket` is refused **at intake** (`epicSplitRouting`, with the binding in hand outside the
+transaction) rather than at the write, because a queued breakdown whose acceptance could only throw
+is worse than an ordinary feature ticket: a human has spent a decision on it by then.
+`ticketWrites.createChildTicket` checks the flag again and makes **no call and no audit row** when it
+is false — reachable only by a capability that was true when the task was created and false when the
+duty called, which is the case the test drives. A **shadow** task is refused at the same door, and
+the executor's own guard is asserted separately (`would_have`, no provider call, the obviously fake
+key on the row).
+
+**5. The acceptance is Q85's queue, not an approval.** `ticket_breakdown_items` (migration 0033), one
+row per proposed child, shaped like `kb_proposals`: `queued | accepted | rejected`, `decided_by`,
+`decided_at`, and a rejection that **leaves the row with its reason**. `approval_kind` is untouched.
+The reasoning is Q85's and it is the whole design: a breakdown is N independent decisions and an
+approval is one, so a PM who wants five of seven has to have a row per child to say so —
+`POST /api/tasks/:id/breakdown/decide` takes `item_ids`, and the task leaves `human_review` only when
+**no child is still queued** (the handler decides that, not the template, because a template has no
+idea how many rows are waiting). `task.approve_plan` (maintainer) is the capability, verbatim from
+Q85; a **member** gets 403 and a **viewer** may read the queue.
+
+**6. Accepting creates real tickets, from a `pipeline.outbound` duty, keyed per child.**
+`breakdown_create` re-derives its work from committed state — the rows that are `accepted` and have
+**no ticket yet** — so a duplicate wake-up files nothing, and each child's `IdempotencyPlan` is keyed
+on the row's own id, so even two concurrent duties replay rather than file twice. The countable
+effect is asserted at three tiers: two `createTicket` calls and two `integration_actions` rows after
+an accept of two of three, unchanged after a replayed `Idempotency-Key` and unchanged after the third
+child is rejected.
+
+**7. What is redacted where, and the honest limit.** **— reversed in review round 2; the paragraph
+below is what this row shipped before it, kept because the round-2 note argues against it.**
+`ticket_breakdown_items` stores the artifact's
+own strings, bounded by the schema that produced them and **not** redacted a second time — which is
+exactly where `artifacts.data` already is (backlog **35**), and this table is a projection of that row
+rather than a new exposure. Every word that *leaves* the platform is redacted at the call by the
+binding's own redactor (`createChildTicket`, `reportComment`), and both are asserted with a planted
+credential. The created ticket's longest body is **16 605 characters**, produced by driving the
+renderer at the shipped caps rather than quoted (rule 39) — and the note at that assertion says which
+of its inputs are platform caps and which are the fixture's, because only the first kind moves it.
+
+**8. The report goes through the proposal queue rather than a second store.** `knowledge/research.ts`
+rides the Librarian's own `knowledge.proposals` job (the payload gained an `artifact_type`, the
+runtime dispatches on it), because everything a curation needs — `knowledge_dir`, the indexed paths,
+the artifact, the redactor, the ids, the clock — is already composed there. Thresholds are **forced**
+(`autoApply: false`), so a project whose `policies.knowledge_apply` says otherwise still gets a
+queued page; the canary that swaps in the project's thresholds kills three cases. The path is
+`research/<ticket-key>.md`, **the platform's and never the model's**: a model that could name the
+page could name `research/../../ci.yml`, and a refusal a human has to read in a queue is worse than a
+path a model never had.
+
+**9. TD-016's format gained a per-case artifact type.** Two roles now produce two artifact types
+each, and TD-016's `cases.json` carries one per file. A second file per role was the alternative and
+is worse — `roleEvalPath` is one path, promptfoo's config points at one file, and a corpus in two
+places is one nobody reads whole. So `EvalCase.artifact_type` overrides the set's, every check in
+`evals.test.ts` resolves **per case**, and the is-json assertion is now held to *that* document
+rather than to any generated one (a `TicketBreakdown` case validated against `refined-spec.schema.json`
+used to pass). `ROLE_PROMPT_VERSIONS`: `architect` 1 → 2, `product_manager` 1 → 2, four new cases,
+two of them hostile-input.
+
+**10. A parameter property would have stopped two whole processes from booting.**
+`class BreakdownRefusedError { constructor(readonly reason: string) }` is refused by Node's type
+stripping (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`), which is how `apps/server` and `apps/runlet` run
+their sources (`scripts/ts-source-resolver.mjs`). Nothing in `verify` sees it — `tsc` is happy, biome
+is happy, every unit test imports through vitest's own transform — and it was caught only because
+`runlet/conformance.contract.test.ts` **starts the real shim**, which died with the socket never
+appearing. The fix is three lines and the lesson is at the class: this repository's application ring
+may not use a parameter property.
+
+**11. Eight canaries, each dead by a named test, each file restored to its pre-mutation md5**
+(rules 3, 21, 62, 77, 88; mutated in place with a script, digests read before and after, and the
+unmutated run calibrated first). Dropping the write-level capability check → *"makes no call at all
+when the binding can no longer create tickets"*. Never refusing at the routing → two cases, one per
+ring. Dropping the `remaining > 0` guard → *"accepts a subset…"*. Dropping the `queued` predicate from
+the queue's `decide` → *"refuses a second decision…"*. The project's thresholds in place of the forced
+ones → three research cases. Dropping the child draft's redaction → *"files one ticket per accepted
+child…"*. Making the `Idempotency-Key` optional → *"requires an Idempotency-Key…"*. Emptying the
+variant's human-stage subscription → one domain case and one application case.
+
+**One of the eight survived on the first run and the fix was the test.** The `remaining > 0` guard's
+case asserted `current_stage === 'human_review'` after a partial decision — which the mutant also
+satisfies, because a task the interpreter moved illegally **escalates and keeps its stage**. It now
+asserts the stage, the state and the absence of `task.completed`/`task.escalated` together (standing
+rule 10: a test satisfied by every branch certifies the observable, not the code).
+
+**Assumptions a reviewer may reverse.** (a) `spike: 'spike'` added to the shipped issue-type map
+(point 3) — **reversed in round 2: the entry stays and is gated by `features.spike.enabled`**. (b) The plain spike's human stage subscribes to nothing, so such a task rests in `active`
+until a human ends it, and holds a WIP slot while it does — exactly as `ready_for_merge` does, which
+is the precedent, but a reviewer may prefer a task state of its own. (c) `features.epic_split` has
+**three** keys where product/18:45's Configuration column is *"—"*: `enabled` is the document's own
+default, and `issue_types`/`child_issue_type` are the platform's answers to two questions the feature
+cannot be built without (which types the variant claims, and what a child is created as — neither may
+be a model's choice). (d) The queue rows are not redacted at rest (point 7) — **reversed in round 2: they are**. (e) The child's project
+key is read off the parent's own key (`ACME-7` → `ACME`), so a provider whose keys are not
+`PROJECT-N` files into a project it names whole and is refused by the provider rather than guessed at.
+
+**Coverage is at 80.08 % branches with the global floor at 80 %** — six branches of slack, which is
+worth saying because it is the number a reviewer's own run is most likely to move. Three cases were
+added for margin after the first green run (the report's empty sections, an option with only reasons
+against it, and a decision on a task nobody has); the shortfall came from this row's own
+uncovered-by-construction surface (`apps/server/src/breakdown.ts` is a composition with no unit test
+of its own, exactly as `asks.ts` and `commands.ts` are).
+
+**Needs measurement (rule 66, not run here).** What a real model produces for `MAX_BREAKDOWN_CHILDREN`
+is unknown: the cap is derived from what *accepting* costs (one provider mutation, one audit row and
+one idempotency record per child) rather than from any observation of how many children an epic
+yields, and nobody has watched a PM accept a breakdown. The e2e accepts two of three; a seven-child
+epic on a real tracker is the first thing that would price the fan-out honestly.
+
+**Rule 83 — sentences this change falsified, found by grep and corrected.** `templates.ts:13-16`'s
+refusal to ship the template (the paragraph now records that the refusal was right for WP-15 and is
+paid here); `DEFAULT_TEMPLATE_BY_ISSUE_TYPE`'s `epic` entry, which now says why it stays;
+`task-management.ts`'s `createTicket` docblock, which named two callers and had **none** — one of them
+now exists; technical/06:18's port sketch, amended a second time for the same line.
+
+**For CLAUDE.md's "Where to look", if the orchestrator wants it** (this file is the orchestrator's,
+so the wording is here rather than there): *"**The spike template and the epic split** (WP-40):
+`SPIKE_TEMPLATE` is product/04:117's `intake → refinement → architecture (a document) → human_review
+→ done` with no merge tail, and `EPIC_SPLIT_TEMPLATE` is the same graph with one stage changed —
+`produces: 'TicketBreakdown'`, written by the **Product Manager**, because one template cannot
+produce two artifact types. `DEFAULT_TEMPLATE_BY_ISSUE_TYPE` still maps `epic: 'feature'`; the
+variant is an override applied by `epicSplitRouting` (`pipeline/settings.ts`), which is also where a
+binding that cannot create tickets is refused **by name at intake** rather than at the write.
+Nothing is created on a run's verdict: `pipeline/epic-split.ts`'s handler writes
+`ticket_breakdown_items` (migration 0033 — Q85's queue, **not** an `approval_kind`, because a
+breakdown is N independent decisions), `POST /api/tasks/:id/breakdown/decide` is the acceptance
+(`task.approve_plan`, maintainer, `Idempotency-Key` required), and the `breakdown_create` outbound
+duty files one ticket per accepted child through `IntegrationActionExecutor`, keyed on the child's
+own row. The spike's report is attached to the ticket by the `spike_report` duty and queued for the
+knowledge base under `research/<ticket-key>.md` by `knowledge/research.ts` — on the Librarian's own
+job, with **forced** thresholds, so no project's `knowledge_apply` can auto-apply it."*
+
+**Review round 2:** one major, one decision, one minor and three nits. The **major** was that four
+sentences claimed a redaction that did not happen — `store.ts`'s *"every model-written field is
+stored redacted (TD-012)"*, its `reason` field's *"redacted by the command that owns them"*,
+migration `0033`'s *"stored as they stand … a projection of `artifacts.data`"*, and
+`decideBreakdown`'s *"redacted by the caller"* — while `itemFor` copied the artifact verbatim and
+`routes/breakdown.ts` said at the call site that it had no redactor. Point 7 and assumption (d) had
+recorded the opposite decision, so this is a **reversal, not a correction of prose**: the queue rows
+are stored external text (model output over an untrusted epic, plus a human's free text) and are now
+the platform's **sixth** such sink after `inbox`, `kb_chunks`, `ticket_snapshot`, `review_subject`
+and `task_asks`. `redactBreakdownChild` (the `redactAskAnswer` shape from WP-31 — every
+model-authored string, redact **then** cut, count summed) runs at the queue write and
+`decideBreakdown` redacts the `reason` at the decision; migration 0033 gained
+`redaction_count integer not null default 0`, which the insert sets and the decision **adds** to, so
+a count that overwrote would read as *"nothing was redacted when this row was written"*. The
+redactor is **required** on both option types (rule 31) and is the composition root's
+`patternRedactor()`, the same one `routes/commands.ts` and the ask executor get; `api.ts`'s `reason`
+was **relabelled** from *"Platform text"* to a human's untrusted words (a BD-022 misclassification on
+a boundary schema). Editing 0033 rather than adding 0034 is deliberate: the file is this work
+package's own and has never been committed or applied outside a throw-away container, and a
+two-migration history for a table nobody has is a history nobody needs.
+
+**What that redaction is, and the residual that is now measured rather than claimed.** It is TD-012
+**step 2**: the queue is written inside the dispatcher's transaction, where `integrationsForProject`
+is refused by construction, so no binding — and therefore no step-1 exact-match redactor — is in
+reach. A binding's own credential still leaves in the row and is removed at the write into the
+tracker. That is asserted rather than asserted-around: the unit tier now plants **two** fake
+credentials, one the platform's redactor knows and one only the binding's does, because a single
+credential known to both would make the queue's redaction hide the adapter's and leave WP-40's
+canary 6 with nothing to kill (standing rule 22). The e2e plants a third — `glpat-…`, the shape the
+**production** `patternRedactor` really matches — and asserts it is absent from the PostgreSQL row,
+absent from the DTO, and that the placeholder and the count are present in both. `artifacts.data`
+keeps the unredacted copy, which is backlog **35** and is named at the code rather than left implied.
+
+**The decision: `spike: 'spike'` is gated, and the opt-in is `features.spike.enabled` (default
+off).** Round 1 added that map entry unconditionally, so a project whose tracker has a `Spike` issue
+type stopped getting merge requests for those tickets — a behaviour change outside product/18:39's
+*"off (spike template option)"*. Three shapes were weighed. Deleting the entry (leaving a project to
+map it) was rejected because product/04 S0 classifies into four templates and a map that cannot
+express the fourth is the gap WP-40 was paid to close. Folding it into `features.epic_split` was
+rejected because that key is the **variant's** switch and one switch for two features is a feature
+nobody can read the state of. What shipped is a strict-schema key of its own with one field —
+`features.spike.enabled`, default `false` in `PLATFORM_DEFAULT_CONFIG` — and **no `issue_types`**,
+because which types route is already `templateByIssueType` and a second list would be a second place
+to change it (assumption (c)'s reasoning, applied in the direction of fewer invented keys). The gate
+is on the **answer** rather than on the map entry, so a project that maps `research → spike` itself
+meets the same switch: `features.spike.enabled` is the whole state of the feature. `spikeRefusal`
+gives the intake duty a line to log when a mapped `Spike` is left on the default pipeline (rule 18),
+and the two switches are asserted independent both ways.
+
+**The minor was a real divergence, and the port had no contract test at all.** `breakdown.decide`'s
+`select` beside its data-modifying CTE read the statement's snapshot, so PostgreSQL answered the
+moved rows **as they were** — `queued`, `decided_at` null — while the in-memory fake answered them
+decided: the fake was kinder than the adapter, which is the one direction standing rule 1 forbids,
+and nothing caught it because `BreakdownRepository` was not in `pipeline-store-suite.ts` (standing
+rule 23). The adapter now reads out of `returning *` through one shared column list
+(`breakdownSelectFrom`), and the suite gained two cases — *"answers the rows a decision moved, as
+they are after it"* and *"moves no child a decision has already been made about"* — which run on both
+stores. Nits: `MAX_RESEARCH_OPTIONS`'s *"past four"* now derives the 8 it guards (and says it is a
+choice, not a measurement); `templates.ts`'s `epic_split_create` is `breakdown_create`; `config.ts`'s
+`['epic']` is `['Epic']`.
+
+**One sentence elsewhere that this round falsified** (rule 83): backlog **108** and the plan's M3 note
+both say `FEATURE_CARDS` covers *"five of the **eight** shipped `features.*` keys"*. `features.spike`
+makes it nine, with no card either, so the backlog entry's count and key list are corrected in place
+and the **plan's copy is not** — an implementer does not edit the plan, and the two now disagree by
+one word until whoever owns that row fixes it. Canaries this round, each dead by a named test and each
+file restored to its pre-mutation md5 (rules 3, 21, 62, 77, 88): `returning *` → `returning id` with
+the outer select, killing *"answers the rows a decision moved, as they are after it"* on **postgres**
+only (calibrated green first, and the in-memory run stays green — which is the divergence itself);
+`redactBreakdownChild` → identity, killing *"redacts every model-written field of a queued child, and
+counts it"*; the reason's redaction → identity, killing *"redacts the reason a human gave…"*; the
+spike gate → `&& false`, killing two settings cases. The gate's canary is also the one that caught the
+harness's own reversion hazard: an empty replacement string cannot be reverted by search-and-replace,
+so it was restored with the editor and re-proved by the digest (rule 88's shape, one tool further in).
+
+**For CLAUDE.md, if the orchestrator wants it, two sentences to add to the WP-40 paragraph:** *"The
+plain spike template is opt-in too — `features.spike.enabled`, default off, gating any route to
+`spike` whatever the issue-type map says, because a spike ends at a human with no merge request.
+`ticket_breakdown_items` is the sixth sink of untrusted external text: every model-written field is
+redacted at the queue write and the human's `reason` at the decision, with `redaction_count` summing
+both, and the binding's own step-1 redactor still applied at the write into the tracker."*
+
+**Pre-review fix (the cap race, found on WP-40's tree):** the orchestrator's full `verify:e2e` failed
+once on `history-bootstrap.e2e.test.ts` › "stops the batch when its budget cap is spent" under a load
+average of 11. **It was the platform, not the test's wait.** Measured first (rule 76): with the cost
+ledger's handler delayed by 8 s in place and nothing else changed, the batch admitted **2** mining
+runs against a cap that allows **1**, **3 runs out of 3** (`expect(2).toBe(1)` on a new count
+assertion); with the canary removed the same case passes. The mechanism: a cap is read at admission
+from `cost_entries`, which the ledger writes from a **handler** on `run.finished` in its own
+transaction *after* the run's — so a second admission inside that window sees a spend lower than it
+is. Every cap on the mechanism is exposed (WP-19's org and project budgets, WP-34's shadow, WP-36's
+maintenance, WP-35's bootstrap), by up to one run per admission that lands in the window; the **task**
+cap is not, because it reads `tasks.cost_actual`, which the run's own transaction increments.
+
+*The fix*, chosen over *"write the ledger row in the run's transaction"* (which would delete WP-19's
+handler, its `handler_executions` idempotency and `events/replay.ts`'s backfill, and contradicts
+CLAUDE.md's description of the ledger — an implementer does not amend a decision): **admission counts
+what the scope has spent *and* what it has committed.** A run with no ledger row is valued at the
+stage's per-run cap while it is live and at `runs.usd_reported` — written by `RunRepository.finish`
+beside `run.finished` — once it has ended. The rule, the measurement and the residuals are in one
+place, `packages/application/src/cost/pending.ts`, with the SQL fragments in
+`packages/infrastructure/src/cost/pending-run-spend.ts`; the three feature-cap ports now answer
+`CapSpend` (two numbers, kept apart so a pause can tell a charge from a reservation) and `CostStore`
+gained `pendingSpend` for the org/project guard, asked per budget rather than folded into
+`applicable`, whose answer the ledger writes back as spend. Asserted **both ways with the handler
+delayed** (rule 42): the cap case passes **2/2**, and `history-bootstrap.e2e.test.ts` › "mines the
+history into evidenced proposals, and queues every one of them" — a batch under its cap — still mines
+both chunks and completes. Both canaries of the **fix** died by name (rules 3, 21, 62): dropping
+`pendingUsd` from `capIsSpent` kills the three new cap cases, dropping it from the guard kills the two
+new guard cases; both files were restored to their pre-mutation md5 (rule 88), as was the ledger.
+
+*The e2e's own change is a diagnosis, not the fix*: the wait now binds **the batch settling** (two
+chunk tasks, neither runnable), which is true in both worlds, so the defect fails with `runs = 2`
+instead of timing out on a pause only the correct platform produces. The `cost_entries` assertion is
+now waited for, because the pause is decided *before* the ledger commits.
+
+*Sweep of the other cap tests* (rule 49). `shadow.e2e.test.ts` › "stops a batch when the project’s
+separate shadow budget is spent" has the same `settle(paused)` wait shape but is **not exposed**:
+its second admission is `architecture`, whose $5 reservation exceeds the $2.50 cap on its own, so the
+verdict
+does not depend on the ledger (its own *exactly one run started* count is the assertion that would
+catch a regression). `ledger.e2e.test.ts` › "pauses the task when the project’s budget is exhausted,
+and runs nothing" seeds a window already at its limit and refuses the **first** run — no
+concurrency, no lag. `maintenance.e2e` has no cap case at all (its `budget_usd` is 50 against cheap
+chores). `budget-approval.e2e` is the **estimate** gate, which reads `tasks.estimate_usd` and not the
+ledger. So one file was exposed and it is fixed; the other three are recorded as swept.
+
+*Residuals, stated at the code*: (a) a run that ends **without a reported figure** (local mode's
+priced-from-the-table run, or a `run.failed` carrying no cost) commits nothing until its ledger row
+lands — the window is unchanged from before this fix, not widened; (b) a live run is valued at the
+**admitting** stage's per-run cap, exact for a bootstrap batch and an approximation for an
+organisation; (c) **a run whose process died is `running` for ever in this build** — nothing expires
+`runs.lease_*` and `recovery/stranded.ts` names *"a run that will never finish"* as a question with no
+owner — so it holds its reservation until a human ends the row or raises the cap. That is the
+fail-closed direction (rule 20) and it is **visible**, because the pause names the committed figure
+apart from the spent one; the alternative silently spends past the cap. Filed under discovered work.
+
 ## Discovered work — session 5 (not in plan)
+
+- **A run whose process died holds a budget reservation for ever** (found by the cap-race fix on
+  WP-40's tree). Admission now counts a live run's per-run cap against its scope's caps
+  (`packages/application/src/cost/pending.ts`), and nothing in this build ever ends a run whose
+  process vanished: `runs.lease_owner`/`lease_expires_at` have **no reader and no writer**, and
+  `packages/application/src/recovery/stranded.ts` states that *"is there a run that will never
+  finish?"* is a different question with a different reader and no owner. The consequence is a cap
+  that reads high by one run's budget until a human intervenes — bounded, visible in the pause reason
+  (which separates spent from committed), and fail-closed, but it wants the lease sweep that row
+  always implied. The cheapest shape: a job that ends runs whose `lease_expires_at` has passed with
+  `run.failed`, which also gives the cost ledger the chance to record what they cost.
+- **`scripts/citations.ts`'s docblock says *"no Markdown citation exists yet, so that half is a guard
+  waiting rather than a guard working"*, and at least nine do** (noticed while making this round's
+  PROGRESS citations resolve, which the guard duly refused until they were written in the repository's
+  own `file.ts › "name"` shape, in one code span here so that this sentence is not itself a citation). `PROGRESS.md:58`, `:1349`, `:6283`, `docs/TODO.md:163`,
+  `docs/OPEN-QUESTIONS.md:94`, `:104`, `:139`, `docs/technical/12-configuration-and-schemas.md:102`
+  and `13-implementation-plan.md:65` all carry one, and they resolve — so the guard has been *working*
+  on Markdown for several work packages while its own docblock calls itself dormant (rule 83's shape,
+  in the file written to enforce rule 11). One sentence to correct; left alone here because it is not
+  this fix's file.
+
+
+- **The epic split's acceptance has no screen** (WP-40). `GET /api/tasks/:id/breakdown` and
+  `POST …/breakdown/decide` are served, guarded, tested at three tiers and named by hand in
+  `routes/client-census.test.ts` — and **no `apps/web` screen calls either**, so the only way a PM
+  can accept a breakdown on this build is an HTTP client. The feature is complete on the server and
+  unreachable in the product, which is a different and worse shape than the census's other blind
+  spots (`kb/health` is a diagnostic; `take-over`/`hand-back` are buttons a row deliberately
+  deferred). It is one panel on the task page — the queue, a checkbox per child and one button —
+  plus a card in `FEATURE_CARDS` for `features.epic_split`, which the wizard does not offer either.
+  **No work package owns it**; it is the same shape as backlog 72's feature-card note and belongs
+  with whoever next opens the task page.
+  *Refiner (session 5): **filed as backlog 108**, one entry with the cause named (the row shipped no
+  `apps/web` change) and both symptoms under it — and symptom (b) widened by one reading: `FEATURE_CARDS`
+  covers **five of the nine** shipped `features.*` keys (eight before `features.spike`, WP-40 round 2) and nothing compares the two lists, so the missing
+  `epic_split` card is an instance rather than an omission and the close includes that comparison. The
+  `DEFAULT_TEMPLATE_BY_ISSUE_TYPE` `epic: 'feature'` decision is **folded in there as working-as-designed**,
+  because it is what makes the missing card load-bearing. Cheapest owner named: **WP-44** (the take-over
+  screen row on the M3 page), which already owes the same deletion of hand-written census cases;
+  **WP-41 and WP-46 are the wrong homes**.*
+- **Nothing refuses a TypeScript parameter property, and one of them stops two processes from
+  booting** (WP-40). `constructor(readonly reason: string)` is valid TypeScript, passes `tsc`, passes
+  biome, and passes every unit test — because vitest transforms the sources — and is refused by
+  **Node's type stripping** with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`, which is how `apps/server`,
+  `apps/launcher` and `apps/runlet` run them (`scripts/ts-source-resolver.mjs`). The only thing that
+  caught it was `runlet/conformance.contract.test.ts` starting the real shim, whose failure mode is
+  *"the control socket never appeared"* — a message that names neither the file nor the syntax. That
+  is standing rule **30**'s shape (a mechanically detectable defect deserves a check rather than a
+  sentence) and the check is cheap: a `verify:static` step over `git ls-files` for a `constructor(`
+  whose parameter list carries `readonly`, `public`, `private` or `protected`, scoped to the rings a
+  resolver runs. Not done here for scope. **No work package owns it.**
+  *Refiner (session 5): **folded into backlog 42**, which is the same class and already carried the WP-15e
+  occurrence — two entries would split the evidence. Three things added there. The **census**: seven
+  parameter properties in **1 020** tracked sources, all in two unit-test files, and **no** enum, value
+  namespace or `declare` field anywhere — so the flag costs seven test edits and nothing that ships. The
+  **answer to which check**: the `tsc` flag `erasableSyntaxOnly`, whose availability at the pinned
+  TypeScript **7.0.2** is no longer a question (the option and its diagnostic are in the compiler's own
+  binary), with biome 2.5.12's `noParameterProperties` as a one-construct fallback that buys a better
+  message and not the class. And **rule 34 costs nothing here**: `verify:types` and `verify:static` are
+  both already CI jobs, so neither shape needs a new target. Owner unchanged — **none**, nearest WP-22.*
 
 - **Two feature cards still say a shipped feature does nothing** (WP-36, found while correcting the
   maintenance card's). `FEATURE_CARDS` in `apps/web/src/features/operating-mode.tsx` carries

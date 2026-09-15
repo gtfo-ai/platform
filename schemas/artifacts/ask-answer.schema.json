@@ -54,7 +54,9 @@
         "ReadinessReport",
         "DiscoveryDraft",
         "AskAnswer",
-        "HistoryFindings"
+        "HistoryFindings",
+        "ResearchReport",
+        "TicketBreakdown"
       ]
     },
     "Id": {

@@ -387,6 +387,35 @@ export const taskAsks = pgTable('task_asks', {
   recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
 });
 
+/**
+ * The epic-split queue — one proposed child ticket per row (WP-40, migration 0033).
+ *
+ * `acceptance_criteria` is `jsonb` and typed as `JsonValue` here for `task_asks.citations`' reason:
+ * the column is written by one module and read by one projection, and **both parse it** with
+ * `acceptanceCriterionSchema` rather than trusting this declaration.
+ */
+export const ticketBreakdownItems = pgTable('ticket_breakdown_items', {
+  id: uuid('id').primaryKey().default(uuidv7),
+  projectId: uuid('project_id').notNull(),
+  taskId: uuid('task_id').notNull(),
+  runId: uuid('run_id'),
+  artifactId: uuid('artifact_id').notNull(),
+  position: integer('position').notNull(),
+  title: text('title').notNull(),
+  description: text('description').notNull(),
+  acceptanceCriteria: jsonb('acceptance_criteria').$type<JsonValue>().notNull(),
+  size: text('size').notNull(),
+  rationale: text('rationale').notNull(),
+  status: text('status').notNull().default('queued'),
+  decidedByUserId: uuid('decided_by_user_id'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  reason: text('reason'),
+  ticketKey: text('ticket_key'),
+  ticketUrl: text('ticket_url'),
+  redactionCount: integer('redaction_count').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Task = typeof tasks.$inferSelect;
 export type TaskStage = typeof taskStages.$inferSelect;
 export type Run = typeof runs.$inferSelect;
@@ -397,3 +426,4 @@ export type Workspace = typeof workspaces.$inferSelect;
 export type HumanAction = typeof humanActions.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type TaskAsk = typeof taskAsks.$inferSelect;
+export type TicketBreakdownItem = typeof ticketBreakdownItems.$inferSelect;

@@ -132,7 +132,22 @@ export interface PipelineOutboundData {
     /** WP-32, the notify band: say one thing in the project's chat channel. */
     | 'notify'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */
-    | 'ask_answer';
+    | 'ask_answer'
+    /**
+     * WP-40, the spike template: attach the research report to the ticket (product/04:117).
+     *
+     * The knowledge page is **not** this duty's: it is queued by the knowledge ring's own job off
+     * `artifact.created`, where the vault path, the byte budget and BD-018's apply policy already
+     * live (`knowledge/research.ts`).
+     */
+    | 'spike_report'
+    /**
+     * WP-40, the epic split: file the children a human accepted, one `createTicket` each.
+     *
+     * Woken by `task.breakdown.decided` and **only** by it: nothing is created on the run's own
+     * verdict, which is what product/04:117's *"for the PM to accept"* means.
+     */
+    | 'breakdown_create';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;

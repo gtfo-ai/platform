@@ -45,6 +45,9 @@ describe('published JSON Schemas', () => {
       'artifacts/discovery-draft.schema.json',
       'artifacts/ask-answer.schema.json',
       'artifacts/history-findings.schema.json',
+      // WP-40: the spike's document and the epic-split variant's breakdown.
+      'artifacts/research-report.schema.json',
+      'artifacts/ticket-breakdown.schema.json',
       'agentic-config.schema.json',
       'agentic-pipeline.schema.json',
       'transcript-event.schema.json',

@@ -23,11 +23,13 @@
 import type {
   ApprovalRepository,
   ArtifactRepository,
+  BreakdownRepository,
   PipelineStore,
   QuestionRepository,
   RunRepository,
   StoredApproval,
   StoredArtifact,
+  StoredBreakdownItem,
   StoredRun,
   StoredTask,
   TaskRepository,
@@ -52,6 +54,7 @@ import type {
   WorkpadRef,
 } from '@platform/contracts';
 import {
+  acceptanceCriterionSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
@@ -59,6 +62,7 @@ import {
 } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
 import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
+import * as z from 'zod';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -74,6 +78,9 @@ const usd = (value: string | number | null): number =>
 
 const iso = (value: Date | string | null): IsoDateTime | null =>
   value === null ? null : (new Date(value).toISOString() as IsoDateTime);
+
+/** The same, for a column the schema declares `not null`. */
+const isoOf = (value: Date | string): IsoDateTime => new Date(value).toISOString() as IsoDateTime;
 
 interface TaskRow extends Record<string, unknown> {
   id: string;
@@ -917,7 +924,185 @@ export const createPostgresPipelineStore = (
     },
   };
 
-  return { tasks, artifacts, runs, questions, approvals };
+  /**
+   * The epic-split queue (WP-40, migration 0033).
+   *
+   * Three narrow writes and one read, and the narrowness is standing rule 79's: the rows are
+   * inserted by a `task.stage.completed` handler, moved by an HTTP command and stamped with a
+   * ticket key by a `pipeline.outbound` duty that runs beside both — so a whole-row save from any
+   * of the three would be a lost update. Each statement names the columns its writer owns.
+   */
+  const breakdown: BreakdownRepository = {
+    insert: async (tx, items) => {
+      if (items.length === 0) {
+        return;
+      }
+      // One statement for the batch: the children of one artifact are written together or not at
+      // all, and `ticket_breakdown_items_one_per_position` is what makes a second write a failure
+      // rather than a duplicate queue.
+      const columns = 12;
+      const values = items
+        .map((_item, row) => {
+          const at = (offset: number) => `$${row * columns + offset}`;
+          return (
+            `(${at(1)}, ${at(2)}, ${at(3)}, ${at(4)}, ${at(5)}, ${at(6)}, ${at(7)}, ` +
+            `${at(8)}, ${at(9)}::jsonb, ${at(10)}, ${at(11)}, ${at(12)})`
+          );
+        })
+        .join(', ');
+      await sqlOf(tx).query(
+        `insert into ticket_breakdown_items
+           (id, project_id, task_id, run_id, artifact_id, position,
+            title, description, acceptance_criteria, size, rationale, redaction_count)
+         values ${values}`,
+        items.flatMap((item) => [
+          item.id,
+          item.projectId,
+          item.taskId,
+          item.runId,
+          item.artifactId,
+          item.position,
+          item.title,
+          item.description,
+          JSON.stringify(item.acceptanceCriteria),
+          item.size,
+          item.rationale,
+          item.redactionCount,
+        ]),
+      );
+    },
+    listForTask: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<BreakdownRow>(
+        `${BREAKDOWN_SELECT} where b.task_id = $1 order by b.position`,
+        [taskId],
+      );
+      return rows.map(toBreakdownItem);
+    },
+    decide: async (tx, input) => {
+      if (input.itemIds.length === 0) {
+        return [];
+      }
+      // `status = 'queued'` is **in the statement**: two maintainers deciding the same child at the
+      // same instant is a race the database settles, and the loser gets an empty list for that id
+      // rather than overwriting the winner's decision.
+      //
+      // The rows come back **out of the CTE** (`returning *`) rather than out of a select beside
+      // it, and that is the difference between answering the decision and answering the state it
+      // found: a data-modifying CTE is invisible to the rest of its own statement, so the first
+      // version of this query returned every moved row still reading `queued`, with a null
+      // `decided_at`, while the in-memory fake returned them decided (WP-40 round 2, held by
+      // `pipeline-store-suite.ts` › "answers the rows a decision moved, as they are after it").
+      const { rows } = await sqlOf(tx).query<BreakdownRow>(
+        `with moved as (
+           update ticket_breakdown_items
+              set status = $3, decided_by_user_id = $4, decided_at = $5, reason = $6,
+                  redaction_count = redaction_count + $7
+            where task_id = $1 and id = any($2::uuid[]) and status = 'queued'
+            returning *
+         )
+         ${breakdownSelectFrom('moved')} order by b.position`,
+        [
+          input.taskId,
+          [...input.itemIds],
+          input.status,
+          input.decidedByUserId,
+          input.decidedAt,
+          input.reason,
+          input.reasonRedactions,
+        ],
+      );
+      return rows.map(toBreakdownItem);
+    },
+    recordTicket: async (tx, input) => {
+      const result = await sqlOf(tx).query(
+        `update ticket_breakdown_items
+            set ticket_key = $2, ticket_url = $3
+          where id = $1 and status = 'accepted'`,
+        [input.itemId, input.ticketKey, input.ticketUrl],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(
+          `breakdown item ${input.itemId} is not an accepted child of any task`,
+        );
+      }
+    },
+  };
+
+  return { tasks, artifacts, runs, questions, approvals, breakdown };
+};
+
+/** One `ticket_breakdown_items` row as `pg` hands it back. */
+interface BreakdownRow extends Record<string, unknown> {
+  id: string;
+  project_id: string;
+  task_id: string;
+  run_id: string | null;
+  artifact_id: string;
+  position: number;
+  title: string;
+  description: string;
+  acceptance_criteria: unknown;
+  size: string;
+  rationale: string;
+  status: string;
+  decided_by_user_id: string | null;
+  decided_at: Date | string | null;
+  reason: string | null;
+  ticket_key: string | null;
+  ticket_url: string | null;
+  redaction_count: number;
+  created_at: Date | string;
+}
+
+/**
+ * One projection of the queue, over the table or over a data-modifying CTE's `returning *`.
+ *
+ * Parameterised by the relation for one reason: `decide` has to read the rows **it just wrote**,
+ * and a `select` from the table beside its own CTE reads the statement's snapshot — the rows as
+ * they were. One column list, two relations, so the read and the decision cannot describe a row
+ * differently.
+ */
+const breakdownSelectFrom = (
+  relation: string,
+) => `select b.id, b.project_id, b.task_id, b.run_id, b.artifact_id, b.position,
+       b.title, b.description, b.acceptance_criteria, b.size, b.rationale, b.status,
+       b.decided_by_user_id, b.decided_at, b.reason, b.ticket_key, b.ticket_url,
+       b.redaction_count, b.created_at
+  from ${relation} b`;
+
+const BREAKDOWN_SELECT = breakdownSelectFrom('ticket_breakdown_items');
+
+/**
+ * One row as the application reads it.
+ *
+ * `acceptance_criteria` is **parsed**, not cast: it is `jsonb`, which is to say anything the column
+ * was ever given, and a row whose criteria are not an array answers `[]` rather than propagating a
+ * value the DTO's schema would then refuse at the route — the fail-closed direction `PostgresAskStore`
+ * takes for `citations`.
+ */
+const toBreakdownItem = (row: BreakdownRow): StoredBreakdownItem => {
+  const criteria = z.array(acceptanceCriterionSchema).safeParse(row.acceptance_criteria);
+  return {
+    id: row.id as Id,
+    projectId: row.project_id as Id,
+    taskId: row.task_id as Id,
+    runId: row.run_id as Id | null,
+    artifactId: row.artifact_id as Id,
+    position: row.position,
+    title: row.title,
+    description: row.description,
+    acceptanceCriteria: criteria.success ? criteria.data : [],
+    size: row.size as StoredBreakdownItem['size'],
+    rationale: row.rationale,
+    status: row.status as StoredBreakdownItem['status'],
+    decidedByUserId: row.decided_by_user_id as Id | null,
+    decidedAt: row.decided_at === null ? null : isoOf(row.decided_at),
+    reason: row.reason,
+    ticketKey: row.ticket_key,
+    ticketUrl: row.ticket_url,
+    redactionCount: row.redaction_count,
+    createdAt: isoOf(row.created_at),
+  };
 };
 
 /**

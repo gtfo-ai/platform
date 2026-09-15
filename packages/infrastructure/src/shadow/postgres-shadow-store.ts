@@ -16,7 +16,10 @@
  * **`shadowSpendSince` joins `cost_entries` to `tasks`.** It is the only query in the platform that
  * groups spend by `tasks.mode`, which is why it lives here rather than on `CostStore`. It sums the
  * ledger rather than `tasks.cost_actual` for WP-19's reason: the entries are the record and the
- * column is a running total. `coalesce(sum(...), 0)` — a project with no shadow spend has spent
+ * column is a running total — and it answers a **second** number beside it, the shadow runs of the
+ * window the ledger has not recorded yet, because the ledger is a handler that commits after the
+ * run's own transaction and a cap read from it alone is read one run late
+ * (`../cost/pending-run-spend.ts`). `coalesce(sum(...), 0)` — a project with no shadow spend has spent
  * nothing, which is the one place a zero is the right answer rather than an invented one.
  *
  * **`checkoutBaseFor` reads through the batch.** A shadow task belongs to exactly one batch
@@ -27,6 +30,7 @@
  */
 
 import type {
+  CapSpend,
   ShadowBatchRow,
   ShadowBatchTicketRow,
   ShadowReportRow,
@@ -34,6 +38,12 @@ import type {
   Transaction,
 } from '@platform/application';
 import type { Id, IsoDateTime, MergeRequestRef, ShadowHumanMrSource } from '@platform/contracts';
+import {
+  ACTIVE_RUN_STATUSES_PARAM,
+  PENDING_RUN_WINDOW_SQL,
+  pendingRunUsdSql,
+  UNLEDGERED_RUN_SQL,
+} from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -237,15 +247,35 @@ export class PostgresShadowStore implements ShadowStore {
     return (rowCount ?? 0) > 0;
   }
 
-  async shadowSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number> {
-    const { rows } = await sqlOf(tx).query<{ usd: string }>(
-      `select coalesce(sum(c.usd), 0)::text as usd
-         from cost_entries c
-         join tasks t on t.id = c.task_id
-        where c.project_id = $1 and t.mode = 'shadow' and c.created_at >= $2`,
-      [projectId, since],
+  async shadowSpendSince(
+    tx: Transaction,
+    projectId: Id,
+    since: IsoDateTime,
+    reserveUsd: number,
+  ): Promise<CapSpend> {
+    const { rows } = await sqlOf(tx).query<{ spent_usd: string; pending_usd: string }>(
+      // The ledger's rows, and the shadow runs of this window it has not written yet — the second
+      // number is what keeps the cap from admitting a run per dispatcher lag
+      // (`../cost/pending-run-spend.ts`).
+      `select coalesce((
+                select sum(c.usd) from cost_entries c
+                  join tasks t on t.id = c.task_id
+                 where c.project_id = $1 and t.mode = 'shadow' and c.created_at >= $2
+              ), 0)::text as spent_usd,
+              coalesce((
+                select sum(${pendingRunUsdSql('$3', '$4')})
+                  from runs r
+                  join tasks t on t.id = r.task_id
+                 where r.project_id = $1 and t.mode = 'shadow'
+                   and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$2')}
+              ), 0)::text as pending_usd`,
+      [projectId, since, [...ACTIVE_RUN_STATUSES_PARAM], reserveUsd],
     );
-    return Number(rows[0]?.usd ?? 0);
+    const row = rows[0];
+    return {
+      spentUsd: Number(row?.spent_usd ?? 0),
+      pendingUsd: Number(row?.pending_usd ?? 0),
+    };
   }
 
   async checkoutBaseFor(tx: Transaction, taskId: Id): Promise<string | null> {

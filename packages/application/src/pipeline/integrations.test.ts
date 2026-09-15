@@ -95,6 +95,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // binding, has no credential, and is the one outbound call the pipeline makes outside
   // `IntegrationActionExecutor` (`registry-metadata.ts` carries the measurement that decided it).
   'dependency-gate.ts': 1,
+  // WP-40's two duties: the spike's report before it comments, the epic split's creation before it
+  // files the accepted children. One resolution each, and the second one files N tickets through it.
+  'epic-split.ts': 2,
   'gates.ts': 1,
   'jobs.ts': 1,
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the

@@ -75,7 +75,9 @@
         "ReadinessReport",
         "DiscoveryDraft",
         "AskAnswer",
-        "HistoryFindings"
+        "HistoryFindings",
+        "ResearchReport",
+        "TicketBreakdown"
       ]
     },
     "CustomStage": {
@@ -145,6 +147,7 @@
         "task.lint.posted",
         "task.rebase.checked",
         "task.conflict.warned",
+        "task.breakdown.decided",
         "run.created",
         "run.started",
         "run.finished",

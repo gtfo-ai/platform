@@ -299,13 +299,20 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       scope.tx,
       ask.projectId,
       options.context(ask.id).clock.now(),
+      // What *this* run may spend, which is what the guard puts on a run of the scope that is live
+      // and therefore not in the ledger yet (`../cost/pending.ts`). For an ask it is the
+      // per-question budget rather than a stage's — the same figure `askBudgetExhausted` uses.
+      feature.budgetUsd,
     );
     if (blocker !== null) {
       return {
         kind: 'refused',
         reason:
           `the ${blocker.scope} budget for this ${blocker.window} is exhausted: ` +
-          `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}`,
+          `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}` +
+          (blocker.pendingUsd > 0
+            ? `, plus ${blocker.pendingUsd} committed by runs the ledger has not recorded yet`
+            : ''),
       };
     }
     return { kind: 'ok', ask, task };

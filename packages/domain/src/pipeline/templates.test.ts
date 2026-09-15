@@ -7,12 +7,17 @@ import {
   BUG_TEMPLATE,
   CHORE_TEMPLATE,
   DISCOVERY_TEMPLATE,
+  EPIC_SPLIT_TEMPLATE,
+  EPIC_SPLIT_TEMPLATE_ID,
   FALLBACK_STAGE_AGENT_DEFAULTS,
   FEATURE_TEMPLATE,
   HISTORY_BOOTSTRAP_TEMPLATE,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   REVIEW_ONLY_TEMPLATE,
   SHIPPED_TEMPLATES,
+  SPIKE_HUMAN_STAGE,
+  SPIKE_TEMPLATE,
+  SPIKE_TEMPLATE_ID,
   stageAgentDefaults,
   TICKET_LINT_TEMPLATE,
   TICKET_TEMPLATES,
@@ -104,7 +109,7 @@ describe('the shipped templates', () => {
     }
   });
 
-  it('ships the three ticket templates plus discovery, review-only, the linter and the history bootstrap, and nothing else', () => {
+  it('ships the three ticket templates plus discovery, review-only, the linter, the history bootstrap and the two spikes, and nothing else', () => {
     // The two maps are asserted against each other rather than each against a literal: `discovery`
     // is deliberately outside `TICKET_TEMPLATES` (it opens no merge request), and the case below
     // relies on that split being exactly this one.
@@ -117,11 +122,77 @@ describe('the shipped templates', () => {
       'review_only',
       'ticket_lint',
       'history_bootstrap',
+      // WP-40. `spike` is in `BUILTIN_TEMPLATE_IDS` and was refused at WP-15; `epic_split` is its
+      // opt-in variant and is a second template value because a stage's `produces` is data.
+      'spike',
+      'epic_split',
     ]);
     expect(SHIPPED_TEMPLATES.discovery).toBe(DISCOVERY_TEMPLATE);
     expect(SHIPPED_TEMPLATES.review_only).toBe(REVIEW_ONLY_TEMPLATE);
     expect(SHIPPED_TEMPLATES.ticket_lint).toBe(TICKET_LINT_TEMPLATE);
     expect(SHIPPED_TEMPLATES[HISTORY_BOOTSTRAP_TEMPLATE_ID]).toBe(HISTORY_BOOTSTRAP_TEMPLATE);
+    expect(SHIPPED_TEMPLATES[SPIKE_TEMPLATE_ID]).toBe(SPIKE_TEMPLATE);
+    expect(SHIPPED_TEMPLATES[EPIC_SPLIT_TEMPLATE_ID]).toBe(EPIC_SPLIT_TEMPLATE);
+  });
+
+  /**
+   * product/04:117's spike, clause by clause — *"`Intake → Refinement → Architecture (produces a
+   * document instead of a plan) → Human`"* and *"No MR"* — and the variant's one difference.
+   *
+   * Both halves are asserted (standing rule 42): the document instead of the plan, **and** the
+   * absence of everything a merge request needs. Without the second half a spike that quietly kept
+   * the merge tail would pass on the first.
+   */
+  it('gives both spikes product/04:117’s shape: a document, a human, and no merge request', () => {
+    for (const [id, template] of [
+      [SPIKE_TEMPLATE_ID, SPIKE_TEMPLATE],
+      [EPIC_SPLIT_TEMPLATE_ID, EPIC_SPLIT_TEMPLATE],
+    ] as const) {
+      const ids = template.stages.map((stage) => stage.id);
+      expect({ id, ids }).toEqual({
+        id,
+        ids: ['intake', 'refinement', 'architecture', SPIKE_HUMAN_STAGE, 'done'],
+      });
+      const architecture = template.stages.find((stage) => stage.id === 'architecture');
+      expect({
+        id,
+        produces: architecture && 'produces' in architecture ? architecture.produces : null,
+      }).toEqual({
+        id,
+        produces: id === SPIKE_TEMPLATE_ID ? 'ResearchReport' : 'TicketBreakdown',
+      });
+      // "No MR": not one of the stages a merge request needs, in either direction.
+      for (const absent of [
+        'implementation',
+        'conflict_resolution',
+        'ci_gate',
+        'code_review',
+        'business_review',
+        'rebase_gate',
+        'ready_for_merge',
+        'merged_gate',
+        'retrospective',
+        'librarian',
+      ]) {
+        expect({ id, absent, present: ids.includes(absent) }).toEqual({
+          id,
+          absent,
+          present: false,
+        });
+      }
+      const human = template.stages.find((stage) => stage.id === SPIKE_HUMAN_STAGE);
+      expect(human?.kind).toBe('human');
+    }
+    // The variant's one behavioural difference: the human stage has something that ends it, and the
+    // plain spike's rests until a person acts. Both directions, because a template whose human
+    // stage subscribed to nothing *and* one that advanced on the run's verdict would otherwise look
+    // alike from the outside.
+    const spikeHuman = SPIKE_TEMPLATE.stages.find((stage) => stage.id === SPIKE_HUMAN_STAGE);
+    const splitHuman = EPIC_SPLIT_TEMPLATE.stages.find((stage) => stage.id === SPIKE_HUMAN_STAGE);
+    expect(spikeHuman && 'on' in spikeHuman ? spikeHuman.on : null).toEqual([]);
+    expect(splitHuman && 'on' in splitHuman ? splitHuman.on : null).toEqual([
+      { on: 'task.breakdown.decided', to: 'done' },
+    ]);
   });
 
   /**

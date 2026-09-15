@@ -47,6 +47,8 @@ interface DoubleOptions {
   readonly hygiene?: KbHygieneReport | null;
   readonly stale?: readonly StaleDependency[];
   readonly spentUsd?: number;
+  /** What the month's chore runs have committed that the ledger has not recorded yet. */
+  readonly pendingUsd?: number;
 }
 
 /**
@@ -63,9 +65,13 @@ const storeDouble = (options: DoubleOptions = {}): MaintenanceStore & { spendCal
     get spendCalls() {
       return spendCalls;
     },
-    maintenanceSpendSince: async () => {
+    maintenanceSpendSince: async (_tx, _projectId, _since, reserveUsd) => {
       spendCalls += 1;
-      return options.spentUsd ?? 0;
+      // The scheduler is creating a task rather than admitting a run, so it passes no reservation
+      // — asserted here rather than described, because a non-zero one would value every chore run
+      // in flight and stop a batch the cap still has room for (`../cost/pending.ts`).
+      expect(reserveUsd).toBe(0);
+      return { spentUsd: options.spentUsd ?? 0, pendingUsd: options.pendingUsd ?? 0 };
     },
     latestKbHygiene: async () => options.hygiene ?? null,
     staleDependencies: async () => options.stale ?? [],
@@ -255,6 +261,23 @@ describe('one maintenance pass', () => {
     },
   );
 
+  /**
+   * The ledger is a **handler** on `run.finished`, so a chore run that has just ended is money the
+   * `cost_entries` sum cannot see yet; a scheduler that read only the sum would create one more
+   * chore per dispatcher lag. `packages/application/src/cost/pending.ts` has the measurement.
+   */
+  it('stops the batch on a chore run the ledger has not recorded yet', async () => {
+    const harness = harnessWith({
+      features: { maintenance: { enabled: true, budget_usd: 10, chores: ['kb'] } },
+    });
+    const report = await pass(
+      harness,
+      storeDouble({ hygiene: HYGIENE, spentUsd: 9, pendingUsd: 1 }),
+    );
+    expect(report.results[0]?.chores[0]?.outcome.status).toBe('over_budget');
+    expect(harness.store.snapshot()).toHaveLength(0);
+  });
+
   it('creates the chore one cent under the cap, so the cases above are not vacuous', async () => {
     // Standing rule 42's other direction: without this half, a scheduler that refused every chore
     // would pass the ones above and every refusal case in this file.
@@ -385,7 +408,7 @@ describe('one maintenance pass', () => {
       features: { maintenance: { enabled: true, chores: ['deps'] } },
     });
     const store: MaintenanceStore = {
-      maintenanceSpendSince: async () => 0,
+      maintenanceSpendSince: async () => ({ spentUsd: 0, pendingUsd: 0 }),
       latestKbHygiene: async () => null,
       staleDependencies: async (_tx, _projectId, options) => {
         asked = options.unreleasedSince;
@@ -443,7 +466,7 @@ describe('a chore run’s admission', () => {
     mr: null,
   };
 
-  const choreHarness = (spentUsd: number, capUsd: number): PipelineHarness =>
+  const choreHarness = (spentUsd: number, capUsd: number, pendingRuns = 0): PipelineHarness =>
     createPipelineHarness({
       projectId: PROJECT,
       settings: {
@@ -452,6 +475,7 @@ describe('a chore run’s admission', () => {
         } as never,
       },
       maintenanceSpentUsd: spentUsd,
+      maintenancePendingRuns: pendingRuns,
       runs: {
         refinement: {
           status: 'completed',
@@ -479,6 +503,20 @@ describe('a chore run’s admission', () => {
     // comparison adds what this run may spend, so the guard fires before the run rather than one
     // run too late.
     const harness = choreHarness(9.8, 10);
+    await pass(harness, storeDouble({ hygiene: HYGIENE }));
+    await harness.drain();
+
+    expect(await choreState(harness)).toBe('paused');
+    expect(harness.specs).toEqual([]);
+  });
+
+  /**
+   * The same cap, with the spend the **ledger has not recorded** doing the stopping: nothing has
+   * been charged, and one chore run of this month is in flight holding the 2 a `refinement` may
+   * spend. 0 + 2 + 2 > 3 (`../cost/pending.ts`).
+   */
+  it('pauses the chore on a run in flight the ledger has not recorded', async () => {
+    const harness = choreHarness(0, 3, 1);
     await pass(harness, storeDouble({ hygiene: HYGIENE }));
     await harness.drain();
 

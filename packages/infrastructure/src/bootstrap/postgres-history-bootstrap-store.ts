@@ -26,9 +26,14 @@
  * reason: the entries are the record and the column is a running total the executor maintains.
  * `coalesce(sum(...), 0)` — a batch that has spent nothing has spent nothing, which is the one
  * place a zero is the right answer rather than an invented one (standing rule 16's other side).
+ * **`capForTask` adds a second number the ledger cannot give it**: the batch's runs that have no
+ * ledger row yet, because the ledger is a handler that commits after the run's own transaction and
+ * a cap read from it alone admits one run too many (`pending-run-spend.ts`, and the rule in
+ * `packages/application/src/cost/pending.ts`).
  */
 
 import type {
+  CapSpend,
   HistoryBootstrapBatchRow,
   HistoryBootstrapChunkRow,
   HistoryBootstrapStatus,
@@ -37,6 +42,11 @@ import type {
 } from '@platform/application';
 import { LiveHistoryBootstrapError } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
+import {
+  ACTIVE_RUN_STATUSES_PARAM,
+  pendingRunUsdSql,
+  UNLEDGERED_RUN_SQL,
+} from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -334,23 +344,46 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
   async capForTask(
     tx: Transaction,
     taskId: Id,
-  ): Promise<{ readonly capUsd: number; readonly spentUsd: number } | null> {
-    const { rows } = await sqlOf(tx).query<{ cap_usd: string; spent_usd: string }>(
+    reserveUsd: number,
+  ): Promise<({ readonly capUsd: number } & CapSpend) | null> {
+    const { rows } = await sqlOf(tx).query<{
+      cap_usd: string;
+      spent_usd: string;
+      pending_usd: string;
+    }>(
+      /**
+       * One query, three numbers: the cap the batch recorded, what the ledger has charged its
+       * chunks, and what its runs have committed that the ledger has not recorded yet.
+       *
+       * No window on the pending term — the batch **is** the window (see
+       * `pending-run-spend.ts`), and a mining run of a batch that finished months ago without ever
+       * reaching the ledger is a run that really did cost what it reported.
+       */
       `select b.cap_usd,
               coalesce((
                 select sum(c.usd) from cost_entries c
                   join history_bootstrap_chunks k2 on k2.task_id = c.task_id
                  where k2.batch_id = b.id
-              ), 0)::text as spent_usd
+              ), 0)::text as spent_usd,
+              coalesce((
+                select sum(${pendingRunUsdSql('$2', '$3')})
+                  from runs r
+                  join history_bootstrap_chunks k3 on k3.task_id = r.task_id
+                 where k3.batch_id = b.id and ${UNLEDGERED_RUN_SQL}
+              ), 0)::text as pending_usd
          from history_bootstrap_chunks k
          join history_bootstrap_batches b on b.id = k.batch_id
         where k.task_id = $1
         limit 1`,
-      [taskId],
+      [taskId, [...ACTIVE_RUN_STATUSES_PARAM], reserveUsd],
     );
     const row = rows[0];
     return row === undefined
       ? null
-      : { capUsd: Number(row.cap_usd), spentUsd: Number(row.spent_usd) };
+      : {
+          capUsd: Number(row.cap_usd),
+          spentUsd: Number(row.spent_usd),
+          pendingUsd: Number(row.pending_usd),
+        };
   }
 }

@@ -22,6 +22,7 @@
  * **workpad** comment it edits in place (BD-023), and the **spend so far**. Those live on the row.
  */
 import type {
+  AcceptanceCriterion,
   Actor,
   ArtifactType,
   EstimateBasis,
@@ -36,6 +37,7 @@ import type {
   RunCost,
   RunStatus,
   RunTerminalReason,
+  Size,
   Slug,
   TaskCoverage,
   TaskDependencies,
@@ -682,12 +684,131 @@ export interface ApprovalRepository {
   ): Promise<StoredApproval | null>;
 }
 
+/**
+ * One proposed child ticket of an epic split, as the platform stores it (WP-40, migration 0033).
+ *
+ * **A queue of its own rather than an `approvals` row**, which is Q85's recommendation and its
+ * reasoning: a breakdown is *N independent decisions* and an approval is one, so a PM who accepts
+ * five of seven children needs a row per child to say so. The shape is `kb_proposals`' — a status,
+ * who decided and when, and a rejection that **leaves the row** rather than deleting it.
+ *
+ * **Every string here is untrusted and every one of them is stored redacted** (TD-012, BD-022).
+ * `title`, `description`, `acceptanceCriteria` and `rationale` are model output over an untrusted
+ * epic and go through the platform's redactor in `breakdownQueueHandler`; `reason` is a human's
+ * free text and goes through the same redactor in `decideBreakdown`. This is the **sixth** place
+ * the platform stores untrusted external text, after `inbox`, `kb_chunks`, `tasks.ticket_snapshot`,
+ * `tasks.review_subject` and `task_asks`, and it is the one whose contents become tickets in
+ * somebody else's tracker — the largest external write this platform makes.
+ *
+ * What that redaction is and is not: TD-012 **step 2**, the pattern rules. Step 1 — the exact
+ * values of a binding's own credentials — belongs to the binding, which this writer cannot resolve
+ * (it runs inside the dispatcher's transaction, where `integrationsForProject` is refused), and is
+ * applied by the adapter at the call. So a binding credential a model echoed leaves here at the
+ * write and is removed at the write into the tracker; `epic-split.ts`'s own note carries the
+ * measurement and `redactionCount` is what says a redactor stopped working.
+ */
+export interface StoredBreakdownItem {
+  readonly id: Id;
+  readonly projectId: Id;
+  readonly taskId: Id;
+  /** The run whose artifact proposed it; `null` only for a row a harness inserted. */
+  readonly runId: Id | null;
+  readonly artifactId: Id;
+  /** Declaration order in the artifact, which is the order a PM reads them in. */
+  readonly position: number;
+  readonly title: string;
+  readonly description: string;
+  readonly acceptanceCriteria: readonly AcceptanceCriterion[];
+  readonly size: Size;
+  readonly rationale: string;
+  readonly status: 'queued' | 'accepted' | 'rejected';
+  readonly decidedByUserId: Id | null;
+  readonly decidedAt: IsoDateTime | null;
+  /**
+   * The human's own words about the decision — untrusted text, redacted by `decideBreakdown`.
+   *
+   * The command that owns them is the one place they are stored, so that is where TD-012 is
+   * applied: the route hands them over bounded by `decideBreakdownRequestSchema` and nothing else
+   * on the way has a redactor.
+   */
+  readonly reason: string | null;
+  /** What `createTicket` produced. `null` on an accepted row whose call has not happened yet. */
+  readonly ticketKey: string | null;
+  readonly ticketUrl: string | null;
+  /**
+   * How many replacements the redactor made in everything stored on this row.
+   *
+   * Summed over **both** writers — the model's fields at the insert and the human's `reason` at the
+   * decision, which adds to it — for the reason migration 0024's note gives: a redactor that
+   * stopped working leaves no other trace, and a count that covered one field of five would
+   * under-report the row it sits beside. Not published: it is an operator's signal, not a reader's.
+   */
+  readonly redactionCount: number;
+  readonly createdAt: IsoDateTime;
+}
+
+/**
+ * The epic-split queue (WP-40).
+ *
+ * `decide` is a **narrow** write for standing rule 79's reason: the rows are written by the stage's
+ * own handler, decided by an HTTP command and stamped with a ticket key by a `pipeline.outbound`
+ * duty that runs beside both, so a whole-row save from any of the three would be a lost update.
+ * Each method names the columns its writer owns and no others.
+ */
+export interface BreakdownRepository {
+  insert(tx: Transaction, items: readonly StoredBreakdownItem[]): Promise<void>;
+  /** Every child of a task, in `position` order — the queue as a human reads it. */
+  listForTask(tx: Transaction, taskId: Id): Promise<readonly StoredBreakdownItem[]>;
+  /**
+   * Moves the named **queued** children to `accepted` or `rejected`, and answers the rows it moved
+   * **as they now are** — the decision applied, not the state it found.
+   *
+   * That is a contract rather than an implementation detail, and it is asserted on both stores
+   * (`pipeline-store-suite.ts` › "answers the rows a decision moved, as they are after it"): a
+   * data-modifying CTE is invisible to the rest of its own statement, so the adapter's first
+   * version returned the rows it had just updated *with their old status* while the in-memory fake
+   * returned them updated — the divergence standing rule 1 exists to catch, in the direction that
+   * would have made the fake kinder.
+   *
+   * The `queued` predicate is in the statement rather than in the caller: two maintainers deciding
+   * the same child at the same instant is a race the database settles, and the second one gets an
+   * empty list for that id rather than overwriting the first one's decision.
+   *
+   * `reason` arrives **already redacted** by {@link StoredBreakdownItem.reason}'s owner, with
+   * `reasonRedactions` the count that redaction made, which this write adds to the row's own
+   * {@link StoredBreakdownItem.redactionCount}.
+   */
+  decide(
+    tx: Transaction,
+    input: {
+      readonly taskId: Id;
+      readonly itemIds: readonly Id[];
+      readonly status: 'accepted' | 'rejected';
+      readonly decidedByUserId: Id;
+      readonly decidedAt: IsoDateTime;
+      readonly reason: string | null;
+      readonly reasonRedactions: number;
+    },
+  ): Promise<readonly StoredBreakdownItem[]>;
+  /** The ticket a `createTicket` call produced, on the child that asked for it. */
+  recordTicket(
+    tx: Transaction,
+    input: {
+      readonly itemId: Id;
+      readonly ticketKey: string;
+      readonly ticketUrl: string | null;
+    },
+  ): Promise<void>;
+}
+
 export interface PipelineStore {
   readonly tasks: TaskRepository;
   readonly artifacts: ArtifactRepository;
   readonly runs: RunRepository;
   readonly questions: QuestionRepository;
   readonly approvals: ApprovalRepository;
+  /** WP-40's epic-split queue: one row per proposed child ticket. */
+  readonly breakdown: BreakdownRepository;
 }
 
 /** Everything the pipeline needs to name a ticket it has not created a task for yet. */

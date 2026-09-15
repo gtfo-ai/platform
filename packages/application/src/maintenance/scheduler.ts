@@ -357,7 +357,8 @@ const scheduleProject = async (
       }
 
       /**
-       * The dedicated budget, read from the **ledger** rather than from a running total, and asked
+       * The dedicated budget, read from the **ledger** (and from the runs it has not recorded yet,
+       * `../cost/pending.ts`) rather than from a running total, and asked
        * **once per chore**, so the batch stops at the first chore whose creation would find the
        * month's maintenance spend already **at or past** the cap — `spent >= cap`, and the sentence
        * and the comparison say the same thing (rule 79: the effect is countable — the tasks that
@@ -376,7 +377,23 @@ const scheduleProject = async (
        */
       if (config.budgetUsd !== null) {
         const since = monthStartUtc(options.clock.now());
-        const spent = await options.maintenance.maintenanceSpendSince(scope.tx, projectId, since);
+        /**
+         * `reserveUsd: 0` — and it is a decision rather than a placeholder.
+         *
+         * The second number `maintenanceSpendSince` answers values a **live** run at what the
+         * caller is about to spend on one; this caller is about to create a *task*, not a run, and
+         * has no stage to take that figure from (see the paragraph above). Zero therefore counts
+         * exactly what this side can know: the chore runs that have **ended** and whose cost the
+         * ledger has not written yet, which without it would make a scheduler running beside a
+         * finishing chore create one more (`../cost/pending.ts`).
+         */
+        const spend = await options.maintenance.maintenanceSpendSince(
+          scope.tx,
+          projectId,
+          since,
+          0,
+        );
+        const spent = spend.spentUsd + spend.pendingUsd;
         if (spent >= config.budgetUsd) {
           return {
             status: 'over_budget',

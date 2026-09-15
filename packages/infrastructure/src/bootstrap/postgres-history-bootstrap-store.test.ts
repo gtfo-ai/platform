@@ -108,7 +108,7 @@ describe('PostgresHistoryBootstrapStore — reading a batch', () => {
     expect(await store.batch(scripted([]), BATCH as never)).toBeNull();
     expect(await store.liveBatch(scripted([]), PROJECT as never)).toBeNull();
     expect(await store.chunkOfTask(scripted([]), TASK as never)).toBeNull();
-    expect(await store.capForTask(scripted([]), TASK as never)).toBeNull();
+    expect(await store.capForTask(scripted([]), TASK as never, 2)).toBeNull();
   });
 
   it('renders `timestamptz` as an instant the port can hand on', async () => {
@@ -204,13 +204,35 @@ describe('PostgresHistoryBootstrapStore — the spend the cap is compared agains
     expect(await store.spendOfBatch(scripted([]), BATCH as never)).toBe(0);
   });
 
-  it('answers the cap and the spend together, so admission compares two numbers from one read', async () => {
+  it('answers the cap, the spend and what is in flight from one read', async () => {
     expect(
       await store.capForTask(
-        scripted([{ cap_usd: '20.000000', spent_usd: '18.400000' }]),
+        scripted([{ cap_usd: '20.000000', spent_usd: '18.400000', pending_usd: '2.000000' }]),
         TASK as never,
+        2,
       ),
-    ).toEqual({ capUsd: 20, spentUsd: 18.4 });
+    ).toEqual({ capUsd: 20, spentUsd: 18.4, pendingUsd: 2 });
+  });
+
+  /**
+   * The pending term is a **third** column of the same row rather than a second query, and the
+   * reservation the caller passes is what a live run of the batch is valued at — so the parameter
+   * has to reach the statement. Asserted on the parameters, because this tier scripts the rows.
+   */
+  it('passes the reservation and the live-run statuses to the cap query', async () => {
+    const calls: { text: string; values: readonly unknown[] }[] = [];
+    const recording = {
+      adapter: 'postgres',
+      client: {
+        query: async (text: string, values: readonly unknown[]) => {
+          calls.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        },
+      } as unknown as SqlExecutor,
+    } as unknown as Transaction;
+    await store.capForTask(recording, TASK as never, 2.5);
+    expect(calls[0]?.values).toEqual([TASK, ['created', 'starting', 'running'], 2.5]);
+    expect(calls[0]?.text).toContain('pending_usd');
   });
 });
 

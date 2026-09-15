@@ -12,6 +12,7 @@
  * it either would be an invitation (`StageExecutorShadowPort`'s argument, taken again).
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
+import type { CapSpend } from '../cost/pending.js';
 import type { Transaction } from '../ports/transaction.js';
 
 /**
@@ -19,12 +20,23 @@ import type { Transaction } from '../ports/transaction.js';
  *
  * The predicate is the platform-issued reference (`namesAMaintenanceChore`), not `tasks.template`
  * and not `runs.mode`: a `chore` ticket a human filed runs on the same template, and a maintenance
- * chore's runs are ordinary delivery runs. Measured from `cost_entries` — the ledger, where
- * lagging would be a defect — rather than from `tasks.cost_actual`, which the workpad job can lag
- * (WP-34's assumption (e), taken again for the same reason).
+ * chore's runs are ordinary delivery runs. `spentUsd` is measured from `cost_entries` — the ledger,
+ * the platform's record of money — rather than from `tasks.cost_actual`, which the workpad job can
+ * lag (WP-34's assumption (e), taken again for the same reason).
+ *
+ * `pendingUsd` is the chore runs of that window the ledger has **not** recorded, valued at
+ * `reserveUsd` while they are live and at what they reported once they have ended. The ledger is
+ * written by a handler *after* the run's own transaction, so a cap read from it alone is read one
+ * run late: `packages/application/src/cost/pending.ts` has the rule and the measurement. A caller
+ * that is not admitting a run passes `0` and gets the two numbers it can know.
  */
 export interface MaintenanceSpendReader {
-  maintenanceSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number>;
+  maintenanceSpendSince(
+    tx: Transaction,
+    projectId: Id,
+    since: IsoDateTime,
+    reserveUsd: number,
+  ): Promise<CapSpend>;
 }
 
 /** The latest nightly hygiene report for a project — WP-18b's `kb_health_reports`. */

@@ -405,6 +405,25 @@ describe('the separate shadow budget', () => {
     expect(harness.specs).toEqual([]);
   });
 
+  /**
+   * The same cap, stopped by the spend the **ledger has not recorded** (`../cost/pending.ts`).
+   *
+   * `cost_entries` is written by a handler on `run.finished`, after the run's own transaction, so a
+   * cap read from it alone lets a second admission through inside that window — measured on WP-40's
+   * tree, where a delayed ledger handler let a batch run twice against a cap that allows one. Here
+   * the ledger reports **nothing** and a single shadow run in flight, holding the 2 a `refinement`
+   * may spend, is what reaches the 3.
+   */
+  it('stops a shadow run on a run the ledger has not recorded yet', async () => {
+    const harness = world({ budgetUsd: 3 });
+    harness.shadow.seedShadowSpend(PROJECT, 0);
+    harness.shadow.seedPendingShadowRuns(PROJECT, 1);
+    await run(harness, ['ACME-1']);
+    await harness.drain();
+    expect(await taskState(harness)).toBe('paused');
+    expect(harness.specs).toEqual([]);
+  });
+
   it('lets the same run start when the cap is not reached — the other direction', async () => {
     const harness = world({ budgetUsd: 1000 });
     harness.shadow.seedShadowSpend(PROJECT, 10);

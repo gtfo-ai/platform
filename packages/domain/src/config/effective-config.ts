@@ -31,6 +31,10 @@ import {
   type ResolvedCommandPolicy,
 } from '../policies/command-policy.js';
 import { DEFAULT_COVERAGE_SOURCE } from '../policies/coverage.js';
+import {
+  DEFAULT_CHILD_ISSUE_TYPE,
+  DEFAULT_EPIC_SPLIT_ISSUE_TYPES,
+} from '../policies/epic-split.js';
 import { DEFAULT_URGENT_NOTIFICATION_CLASSES } from '../policies/notifications.js';
 import { DEFAULT_MAX_REVIEW_FINDINGS } from '../policies/review-only.js';
 import { DEFAULT_LINT_ISSUE_TYPES, DEFAULT_LINT_LABEL } from '../policies/ticket-lint.js';
@@ -143,6 +147,22 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       urgent: [...DEFAULT_URGENT_NOTIFICATION_CLASSES],
     },
     shadow_mode: { enabled: false },
+    // product/18:45's default column is *"off (spike template option)"* (WP-40). The two keys beside
+    // the switch are the platform's own answers to questions the feature cannot be built without —
+    // which ticket types the variant claims, and what an accepted child is created as — and both are
+    // named here so a project that turns the feature on and configures nothing gets the document's
+    // reading rather than a value invented at a call site.
+    epic_split: {
+      enabled: false,
+      issue_types: [...DEFAULT_EPIC_SPLIT_ISSUE_TYPES],
+      child_issue_type: DEFAULT_CHILD_ISSUE_TYPE,
+    },
+    // product/18:39's *"off (spike template option)"* read over the template the option belongs to
+    // (WP-40 review round 2). The spike template ends at a human with **no merge request**, so
+    // routing a `Spike`-typed ticket to it changes what an existing project gets — which is a
+    // change that has to be asked for. Off means `templateForIssueType` never answers `spike`,
+    // whatever the issue-type map says.
+    spike: { enabled: false },
     // product/18:32's one setting for human time accounting: *"show per-user breakdown off/on
     // (default off)"*. The entries are recorded either way — this key decides a **read** — so the
     // default is about who is named on a task page, not about what the platform measures (WP-29).

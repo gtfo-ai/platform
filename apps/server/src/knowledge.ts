@@ -357,8 +357,11 @@ export const composeKnowledgeIndexing = async (
             data: unknown;
             produced_by_run_id: string | null;
             mode: string;
+            ticket_key: string;
           }>(
-            `select a.data, a.produced_by_run_id, t.mode
+            // `ticket_key` since WP-40: a spike's research page is filed at `research/<key>.md`,
+            // and it comes from the same join that already answers the task's mode.
+            `select a.data, a.produced_by_run_id, t.mode, t.ticket_key
                from artifacts a
                join tasks t on t.id = a.task_id
               where a.id = $1 and a.task_id = $2`,
@@ -371,6 +374,7 @@ export const composeKnowledgeIndexing = async (
                 data: (row.data ?? null) as LibrarianArtifact['data'],
                 runId: row.produced_by_run_id as Id | null,
                 taskMode: row.mode as TaskMode,
+                ticketKey: row.ticket_key,
               };
         },
       },

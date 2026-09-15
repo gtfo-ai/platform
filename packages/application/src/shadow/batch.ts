@@ -301,7 +301,11 @@ export const startShadowBatch = async (
         continue;
       }
 
-      const template = templateForIssueType(settings, entry.issueType);
+      // `shadow: true` (WP-40): a shadow task never routes to the epic-split variant. The whole
+      // point of shadow mode is comparing what the agent produced with what a human did
+      // (product/19 §13), and there is no human breakdown to compare a proposed one against — so an
+      // epic on a shadow batch runs the ordinary template. `epicSplitRouting` states the refusal.
+      const template = templateForIssueType(settings, entry.issueType, { shadow: true });
       const created = createTask(
         {
           id: options.ids.next(),

@@ -43,6 +43,7 @@ export * from './bootstrap/sample.js';
 export * from './cost/estimate.js';
 export * from './cost/guard.js';
 export * from './cost/ledger.js';
+export * from './cost/pending.js';
 export * from './cost/ports.js';
 export * from './cost/runtime.js';
 export * from './cost/window.js';
@@ -76,6 +77,7 @@ export * from './knowledge/indexer.js';
 export * from './knowledge/kb-search.js';
 export * from './knowledge/librarian.js';
 export * from './knowledge/ports.js';
+export * from './knowledge/research.js';
 export * from './knowledge/runtime.js';
 // The maintenance pipeline — product/18:31's scheduled chores (WP-36)
 export * from './maintenance/ports.js';
@@ -95,6 +97,7 @@ export * from './onboarding/record.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';
+export * from './pipeline/epic-split.js';
 export * from './pipeline/gates.js';
 export * from './pipeline/intake-reconcile.js';
 export * from './pipeline/integrations.js';

@@ -10,7 +10,7 @@
  * asserts technical/02's invariant directly — "iteration counters never exceed their limits
  * without a `task.escalated` event" — plus the thing that invariant exists for: the walk stops.
  */
-import type { PipelineTemplate } from '@platform/contracts';
+import type { DomainEventType, PipelineTemplate } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
@@ -229,19 +229,48 @@ describe('a whole task, walked with arbitrary verdicts', () => {
       (Object.values(LIMITS).reduce((total, limit) => total + limit, 0) + 1) +
     16;
 
+  /**
+   * The event the walk delivers at a human stage.
+   *
+   * Read off the **stage's own subscriptions** rather than fixed at `mr.merged`, because WP-40's
+   * spike templates put a human stage outside the merge tail: `epic_split` waits for
+   * `task.breakdown.decided` and the plain `spike` subscribes to nothing at all. Taking the
+   * stage's first subscription keeps the merge tail's behaviour exactly as it was (its first entry
+   * *is* `mr.review.comment`, which is why the caller still chooses between the two below) and lets
+   * a template say for itself what ends its wait.
+   */
+  const humanEventFor = (
+    pipeline: CompiledPipeline,
+    stage: string,
+    preferred: 'mr.merged' | 'mr.review.comment',
+  ): DomainEventType | null => {
+    const subscriptions = stageOf(pipeline, stage)?.on ?? [];
+    if (subscriptions.length === 0) {
+      return null;
+    }
+    return subscriptions.some((entry) => entry.on === preferred)
+      ? preferred
+      : (subscriptions[0]?.on ?? null);
+  };
+
   const signalFor = (
     pipeline: CompiledPipeline,
     stage: string,
     verdict: string,
     passed: boolean,
     event: 'mr.merged' | 'mr.review.comment',
-  ): PipelineSignal => {
+  ): PipelineSignal | null => {
     const kind = stageOf(pipeline, stage)?.kind;
     if (kind === 'gate') {
       return { kind: 'gate_settled', stage, passed, detail: 'walked' };
     }
     if (kind === 'human') {
-      return { kind: 'event', stage, event, detail: 'walked' };
+      const chosen = humanEventFor(pipeline, stage, event);
+      // A human stage that subscribes to nothing is where the walk **ends**: no event moves it, so
+      // there is no signal to send. `spike` is the one shipped template in that position and it is
+      // product/04:117's own ending (*"→ Human"*), which the assertions below name rather than
+      // filter.
+      return chosen === null ? null : { kind: 'event', stage, event: chosen, detail: 'walked' };
     }
     return { kind: 'stage_completed', stage, verdict: kind === 'system' ? null : verdict };
   };
@@ -254,7 +283,16 @@ describe('a whole task, walked with arbitrary verdicts', () => {
    * parks *every* task one stage short of `done`. That is the exact failure WP-15 predicted for a
    * `librarian` stage with no executor, and the reason the stage was cut then and is back now. So
    * this one drives the happy path deterministically and insists on `complete`, parameterised over
-   * the same three templates (standing rule 68).
+   * every shipped template (standing rule 68).
+   *
+   * **One template's approving path deliberately does not complete, and WP-40 made the exception a
+   * property rather than a name.** `spike` ends at a `human` stage that subscribes to nothing —
+   * product/04:117's own `… → Human`, where the report has been delivered and what happens next is
+   * a person's — so the walk ends in `wait` at that stage. The expectation below is therefore
+   * derived from the template's **data** (does its last reachable stage wait on an event nobody can
+   * send?) rather than from a list of names, so a template that parks every task one stage short of
+   * `done` *by accident* still fails here: an accidental park is a stage the interpreter could
+   * leave, and this one cannot be left at all.
    */
   it.each(compiled.map((pipeline) => [pipeline.templateId, pipeline] as const))(
     'reaches `complete` on %s when every stage approves and every gate passes',
@@ -263,14 +301,37 @@ describe('a whole task, walked with arbitrary verdicts', () => {
       let decision = interpret(pipeline, { kind: 'start' });
       let steps = 0;
       while (decision.kind === 'enter' && steps < MAX_STEPS) {
+        const signal = signalFor(pipeline, decision.stage, 'approve', true, 'mr.merged');
+        if (signal === null) {
+          // A human stage nothing can move: the walk stops where the template says it stops.
+          break;
+        }
         visited.push(decision.stage);
         steps += 1;
-        decision = interpret(
-          pipeline,
-          signalFor(pipeline, decision.stage, 'approve', true, 'mr.merged'),
-        );
+        decision = interpret(pipeline, signal);
       }
-      expect(decision).toEqual({ kind: 'complete', from: 'done' });
+      const restingStage = pipeline.stages.find(
+        (stage) => stage.kind === 'human' && stage.on.length === 0,
+      );
+      expect(decision).toEqual(
+        restingStage === undefined
+          ? { kind: 'complete', from: 'done' }
+          : { kind: 'enter', stage: restingStage.id },
+      );
+      if (restingStage !== undefined) {
+        // …and it really is the *last* thing before `done`, so "rests at a human stage" cannot hide
+        // a template that rests three stages early (standing rule 10).
+        expect(pipeline.stages.map((stage) => stage.id).slice(-2)).toEqual([
+          restingStage.id,
+          'done',
+        ]);
+        expect(visited).toEqual(
+          pipeline.stages
+            .map((stage) => stage.id)
+            .filter((id) => id !== restingStage.id && id !== 'done'),
+        );
+        return;
+      }
       /**
        * …through every stage the template declares **that an approving path can reach**, in order:
        * a walk that skipped the tail would also "complete" (standing rule 10).
@@ -329,10 +390,22 @@ describe('a whole task, walked with arbitrary verdicts', () => {
                 break;
               }
               steps += 1;
-              const next = interpret(
+              const signal = signalFor(
                 pipeline,
-                signalFor(pipeline, decision.stage, move.verdict, move.passed, move.event),
+                decision.stage,
+                move.verdict,
+                move.passed,
+                move.event,
               );
+              if (signal === null) {
+                // WP-40: a human stage nothing subscribes to. The task rests there, which is one of
+                // the three legitimate endings this walk admits — and it is the *same* ending
+                // `wait` names, reached because no signal exists rather than because the stage
+                // ignored one.
+                ended = 'wait';
+                break;
+              }
+              const next = interpret(pipeline, signal);
               if (next.kind === 'return') {
                 const iteration = evaluateIteration(counters, next.loop, LIMITS);
                 if (!iteration.allowed) {

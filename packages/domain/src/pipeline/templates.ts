@@ -10,10 +10,14 @@
  *
  * ## What is here and what is deliberately not
  *
- *  - **feature, bug, chore** — the three the WP-15 row of the implementation plan names. `spike`
- *    (product/04 § "Spike template") is in `BUILTIN_TEMPLATE_IDS` and is **not** shipped here: it
- *    ends at a human with no MR, so it exercises none of the loop this work package is about, and a
- *    template nothing runs is a template nothing tests.
+ *  - **feature, bug, chore** — the three the WP-15 row of the implementation plan names.
+ *  - **spike**, and its **epic-split** variant (product/04 § "Spike template") — shipped at
+ *    **WP-40**. This paragraph used to record WP-15's refusal to ship them (*"it ends at a human
+ *    with no MR, so it exercises none of the loop this work package is about, and a template
+ *    nothing runs is a template nothing tests"*), which was right for that row and is falsified by
+ *    this one: both templates run, both are enumerated by this file's property tests, and the
+ *    epic-split variant is driven end to end (standing rule 83 — closing a gap falsifies the
+ *    sentence that described it, and the sentence nearest the fix is the one nobody re-reads).
  *  - **The `librarian` stage** technical/12's example template carries after `retrospective`. It was
  *    cut at WP-15 ("a stage whose executor does not exist would park every task one step short of
  *    `done`") and put back at **WP-18b**, which built the executor's other half: the
@@ -588,12 +592,136 @@ export const HISTORY_BOOTSTRAP_TEMPLATE: PipelineTemplate = {
   ],
 };
 
+/**
+ * product/04 § "Spike template": *"Research/analysis tickets: `Intake → Refinement → Architecture
+ * (produces a document instead of a plan) → Human`. Output is a markdown report attached to the
+ * ticket and stored in the KB under `research/`. No MR."* — WP-40.
+ *
+ * ## Four decisions, and each is the document's rather than this file's
+ *
+ * **The stage ids are the ticket templates'.** `refinement` and `architecture`, so the Product
+ * Manager and the Architect run on their own prompts, their own stage defaults
+ * (`STAGE_AGENT_DEFAULTS`), their own per-run budgets and their own `status_mapping` rows. That is
+ * the *opposite* call from `TICKET_LINT_TEMPLATE`'s, and the two reasons that made a stage id of its
+ * own right there do not apply here: nothing about a spike is *"light"* (product/04 gives it the
+ * same Architect at the same effort), and a spike's ticket moving into the project's architecture
+ * column is exactly what a human would expect of a research ticket the platform has picked up.
+ *
+ * **What changes is what the stage `produces`**: `ResearchReport` instead of `ImplementationPlan`,
+ * which is product/04's *"produces a document instead of a plan"* as data. The artifact type carries
+ * the argument for being a type rather than a plan with empty lists.
+ *
+ * **No merge tail at all.** No `implementation`, no gates, no `ready_for_merge`, no
+ * `merged_gate`, no retrospective and no librarian — *"No MR"*. `REVIEW_ONLY_TEMPLATE` makes the
+ * same cut for the same reason: nothing here produces a commit, so there is nothing to rebase,
+ * nothing to merge and no delivery to learn from.
+ *
+ * **It ends at a `human` stage, and the stage's `on` list is empty.** product/04's arrow ends at
+ * *"Human"*, so the task **rests** there: the report has been attached to the ticket and queued for
+ * the knowledge base, and what happens next is a person's. An empty `on` means no event moves it —
+ * a human ends it with `cancel`, or sends it back with `return-to-stage`, the same two commands
+ * every other parked task has. The residual, stated because a reader will see it on the board:
+ * `human_review` is not one of the four stage ids `transitions.ts` maps to a task **state**, so the
+ * task reads `active` while it waits, exactly as it would at any other non-tail stage. Giving it a
+ * state of its own is a new value in `task_state` and a new edge in technical/02's table, which is a
+ * decision for whoever owns that enum rather than a side effect of shipping this template.
+ */
+export const SPIKE_TEMPLATE_ID = 'spike';
+
+/** The one stage id both spike templates add, and the only `human` stage outside the merge tail. */
+export const SPIKE_HUMAN_STAGE = 'human_review';
+
+export const SPIKE_TEMPLATE: PipelineTemplate = {
+  stages: [
+    { id: 'intake', kind: 'system' },
+    {
+      id: 'refinement',
+      kind: 'agent',
+      role: 'product_manager',
+      produces: 'RefinedSpec',
+      requires: [],
+    },
+    {
+      id: 'architecture',
+      kind: 'agent',
+      role: 'architect',
+      produces: 'ResearchReport',
+      requires: ['RefinedSpec'],
+      return_to: 'refinement',
+    },
+    { id: SPIKE_HUMAN_STAGE, kind: 'human', on: [] },
+    { id: 'done', kind: 'system' },
+  ],
+};
+
+/**
+ * product/04 § "Spike template", the variant: *"Variant **epic split** (opt-in): the input is an
+ * epic and the output is a proposed ticket breakdown with acceptance criteria for the PM to
+ * accept"* — WP-40, product/18:45 (*"off (spike template option)"*).
+ *
+ * ## Why it is a second template value rather than a flag on the first
+ *
+ * *"A pipeline is data, not code"*, and a stage's `produces` is data: one template cannot produce
+ * two artifact types. The variant is therefore the spike's graph with **one stage changed** — the
+ * artifact and the role that writes it — and everything else is shared by construction rather than
+ * by discipline. `SHIPPED_TEMPLATES` already holds ids outside `BUILTIN_TEMPLATE_IDS`
+ * (`review_only`, `ticket_lint`, `history_bootstrap`, `discovery`), so a variant with an id of its
+ * own is the shape this file already has.
+ *
+ * ## Why the Product Manager writes the breakdown
+ *
+ * The stage is still `architecture` — for `SPIKE_TEMPLATE`'s reasons, and so the split is budgeted
+ * and mapped like the research it replaces — but its **role** is `product_manager`, because what it
+ * produces is N tickets with acceptance criteria, which is the artefact that role's prompt, its
+ * quality bar (*"could someone who has never seen this ticket start work, and know when they are
+ * done?"*) and its eval corpus are all about. An Architect asked for acceptance criteria would be a
+ * second role with the Product Manager's job and a prompt nobody keeps in step.
+ *
+ * ## The human stage is not decorative here
+ *
+ * `human_review` subscribes to `task.breakdown.decided`, so the task leaves it when a person has
+ * decided — and **nothing is created before that**: the run writes a queue, the queue waits, and the
+ * `breakdown_create` duty runs on the decision. A template that advanced on the run's own verdict
+ * would be creating tickets in somebody's backlog on a model's say-so, which product/04's *"for the
+ * PM to accept"* forbids in as many words.
+ */
+export const EPIC_SPLIT_TEMPLATE_ID = 'epic_split';
+
+export const EPIC_SPLIT_TEMPLATE: PipelineTemplate = {
+  stages: [
+    { id: 'intake', kind: 'system' },
+    {
+      id: 'refinement',
+      kind: 'agent',
+      role: 'product_manager',
+      produces: 'RefinedSpec',
+      requires: [],
+    },
+    {
+      id: 'architecture',
+      kind: 'agent',
+      role: 'product_manager',
+      produces: 'TicketBreakdown',
+      requires: ['RefinedSpec'],
+      return_to: 'refinement',
+    },
+    {
+      id: SPIKE_HUMAN_STAGE,
+      kind: 'human',
+      on: [{ on: 'task.breakdown.decided', to: 'done' }],
+    },
+    { id: 'done', kind: 'system' },
+  ],
+};
+
 export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
   ...TICKET_TEMPLATES,
   [DISCOVERY_TEMPLATE_ID]: DISCOVERY_TEMPLATE,
   review_only: REVIEW_ONLY_TEMPLATE,
   ticket_lint: TICKET_LINT_TEMPLATE,
   [HISTORY_BOOTSTRAP_TEMPLATE_ID]: HISTORY_BOOTSTRAP_TEMPLATE,
+  [SPIKE_TEMPLATE_ID]: SPIKE_TEMPLATE,
+  [EPIC_SPLIT_TEMPLATE_ID]: EPIC_SPLIT_TEMPLATE,
 };
 
 /**

@@ -72,6 +72,7 @@ import {
   toQuestionRecord,
 } from '@platform/domain';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import { type CapSpend, capIsSpent, capSpendDetail } from '../cost/pending.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -308,8 +309,16 @@ export const COST_UNREPORTED = 'cost_unreported';
  * a batch or writing a report, and a port that offered it either would be an invitation.
  */
 export interface StageExecutorShadowPort {
-  /** This project's shadow spend since an instant, from `cost_entries` (WP-34, criterion 7). */
-  shadowSpendSince(tx: Transaction, projectId: Id, since: IsoDateTime): Promise<number>;
+  /**
+   * This project's shadow spend since an instant — the ledger's, and what the ledger cannot see
+   * yet (WP-34 criterion 7, and `../cost/pending.ts` for the second number).
+   */
+  shadowSpendSince(
+    tx: Transaction,
+    projectId: Id,
+    since: IsoDateTime,
+    reserveUsd: number,
+  ): Promise<CapSpend>;
   /** Q82 (a): the commit this shadow task's workspace should start from (PROGRESS backlog 71). */
   checkoutBaseFor(tx: Transaction, taskId: Id): Promise<string | null>;
 }
@@ -317,15 +326,17 @@ export interface StageExecutorShadowPort {
 /**
  * What the stage executor asks about a **history bootstrap** task (WP-35).
  *
- * One query, keyed by the task, answering the cap the batch recorded and what its tasks have spent
- * from `cost_entries`. It is asked **only** for a task on `HISTORY_BOOTSTRAP_TEMPLATE_ID`, so an
- * ordinary delivery pays nothing for it — the same bargain the shadow port makes with `tasks.mode`.
+ * One query, keyed by the task, answering the cap the batch recorded, what its tasks have spent
+ * from `cost_entries` and what its runs have committed that the ledger has not recorded yet. It is
+ * asked **only** for a task on `HISTORY_BOOTSTRAP_TEMPLATE_ID`, so an ordinary delivery pays
+ * nothing for it — the same bargain the shadow port makes with `tasks.mode`.
  */
 export interface StageExecutorBootstrapPort {
   capForTask(
     tx: Transaction,
     taskId: Id,
-  ): Promise<{ readonly capUsd: number; readonly spentUsd: number } | null>;
+    reserveUsd: number,
+  ): Promise<({ readonly capUsd: number } & CapSpend) | null>;
 }
 
 /**
@@ -360,6 +371,10 @@ export const runBudgetUsd = (settings: ProjectSettings, stage: Slug): number =>
 /**
  * Has the task spent its cap? product/09: the task scope "pauses the task rather than blocking
  * silently, and a human may raise the cap".
+ *
+ * **The one cap that needs no pending term** (`../cost/pending.ts`): `costActualUsd` is
+ * `tasks.cost_actual`, which `record`'s own transaction increments beside `runs.finish` and
+ * `run.finished`, so it cannot lag the run the way the ledger's projections do.
  *
  * The comparison adds what *this* run may spend to what the task has already spent, because a
  * budget checked only against past spend is a budget discovered one run too late.
@@ -492,19 +507,25 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        *
        * Asked here because this is the only moment the question has an answer — a handler on
        * `budget.exhausted` would have to guess which tasks are about to start a run. The spend it
-       * reads is the ledger's own `budget_windows` projection (WP-19).
+       * reads is the ledger's own `budget_windows` projection (WP-19) **plus** what the scope's
+       * runs have committed that the projection cannot see yet (`../cost/pending.ts`), which is
+       * why it is told what a run of this stage may spend.
        */
       const blocker = await budgets.blockingFor(
         scope.tx,
         task.projectId,
         options.context(task.id).clock.now(),
+        runBudgetUsd(settings, job.stage),
       );
       if (blocker !== null) {
         return pause(
           scope,
           stored,
           `the ${blocker.scope} budget for this ${blocker.window} is exhausted: ` +
-            `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}`,
+            `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}` +
+            (blocker.pendingUsd > 0
+              ? `, plus ${blocker.pendingUsd} committed by runs the ledger has not recorded yet`
+              : ''),
         );
       }
 
@@ -515,6 +536,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * is a configuration key rather than a `budgets` row, and the spend it is measured against is
        * grouped by `tasks.mode` rather than by a scope. An ordinary delivery pays no query for it.
        *
+       * The comparison is `capIsSpent`, so it counts the shadow runs the ledger has not recorded
+       * yet beside the ones it has (`../cost/pending.ts`).
+       *
        * The window is the calendar month **in UTC**, which is stated rather than hidden: the
        * organisation's own zone decides a `budgets` window (`cost/window.ts`), and reading it here
        * would mean a second query on every shadow admission for a cap whose whole purpose is "stop
@@ -524,13 +548,20 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       const shadowCap = task.mode === 'shadow' ? shadowBudgetUsdOf(settings) : null;
       if (shadowCap !== null && options.shadow !== undefined) {
         const since = monthStartUtc(options.context(task.id).clock.now());
-        const spent = await options.shadow.shadowSpendSince(scope.tx, task.projectId, since);
-        if (spent + runBudgetUsd(settings, job.stage) > shadowCap) {
+        const reserveUsd = runBudgetUsd(settings, job.stage);
+        const spend = await options.shadow.shadowSpendSince(
+          scope.tx,
+          task.projectId,
+          since,
+          reserveUsd,
+        );
+        const admission = { ...spend, capUsd: shadowCap, reserveUsd };
+        if (capIsSpent(admission)) {
           return pause(
             scope,
             stored,
-            `this project’s shadow budget for the month is spent: ${spent} of ${shadowCap} USD ` +
-              `since ${since}, and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
+            `this project’s shadow budget for the month since ${since} is spent: ` +
+              capSpendDetail(admission, job.stage),
           );
         }
       }
@@ -547,23 +578,28 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * are ordinary delivery runs, which is what "an ordinary `chore` task" means.
        *
        * Month in UTC, from the same `monthStartUtc` the shadow cap uses, for the same stated
-       * reason; the comparison adds what this run may spend, for {@link taskBudgetExhausted}'s.
+       * reason; the comparison adds what this run may spend, for {@link taskBudgetExhausted}'s, and
+       * what the month's chore runs have committed that the ledger has not recorded
+       * (`../cost/pending.ts`).
        */
       if (options.maintenance !== undefined && namesAMaintenanceChore(task.ticket)) {
         const cap = maintenanceBudgetUsdOf(settings.config);
         if (cap !== null) {
           const since = monthStartUtc(options.context(task.id).clock.now());
-          const spent = await options.maintenance.maintenanceSpendSince(
+          const reserveUsd = runBudgetUsd(settings, job.stage);
+          const spend = await options.maintenance.maintenanceSpendSince(
             scope.tx,
             task.projectId,
             since,
+            reserveUsd,
           );
-          if (spent + runBudgetUsd(settings, job.stage) > cap) {
+          const admission = { ...spend, capUsd: cap, reserveUsd };
+          if (capIsSpent(admission)) {
             return pause(
               scope,
               stored,
-              `this project’s maintenance budget for the month is spent: ${spent} of ${cap} USD ` +
-                `since ${since}, and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
+              `this project’s maintenance budget for the month since ${since} is spent: ` +
+                capSpendDetail(admission, job.stage),
             );
           }
         }
@@ -581,19 +617,26 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * what *this* run may spend, for {@link taskBudgetExhausted}'s reason: a budget checked only
        * against past spend is discovered one run too late.
        *
+       * **It also adds what the batch's other runs have committed and the ledger has not recorded**
+       * (`cap.pendingUsd`). The ledger is a handler on `run.finished`, so between a mining run's own
+       * transaction and its ledger row the batch's spend reads lower than it is — and with the
+       * handler delayed the batch admitted two runs against a cap that allows one, three times out
+       * of three. `../cost/pending.ts` states the rule, the measurement and the residual.
+       *
        * The ending is the ordinary one: the task is **paused** with the reason, exactly as an
        * exhausted task or project budget pauses it. So a bootstrap whose cap is spent leaves some
        * chunks mined and the rest paused, which is what "stops when it is spent" means, and a human
        * raising the cap is the way out.
        */
       if (task.template === HISTORY_BOOTSTRAP_TEMPLATE_ID && options.bootstrap !== undefined) {
-        const cap = await options.bootstrap.capForTask(scope.tx, task.id);
-        if (cap !== null && cap.spentUsd + runBudgetUsd(settings, job.stage) > cap.capUsd) {
+        const reserveUsd = runBudgetUsd(settings, job.stage);
+        const cap = await options.bootstrap.capForTask(scope.tx, task.id, reserveUsd);
+        if (cap !== null && capIsSpent({ ...cap, reserveUsd })) {
           return pause(
             scope,
             stored,
-            `this history bootstrap’s budget is spent: ${cap.spentUsd} of ${cap.capUsd} USD, ` +
-              `and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
+            `this history bootstrap’s budget is spent: ` +
+              `${capSpendDetail({ ...cap, reserveUsd }, job.stage)}`,
           );
         }
       }

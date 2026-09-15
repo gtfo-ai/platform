@@ -88,9 +88,14 @@ describe('the project settings port', () => {
       'bug',
       'chore',
       'discovery',
+      // WP-40's opt-in variant. It is in the map for every project, which is what makes turning the
+      // feature on a *settings* change rather than a deployment one; `templateForIssueType` is what
+      // decides whether an epic ever reaches it.
+      'epic_split',
       'feature',
       'history_bootstrap',
       'review_only',
+      'spike',
       'ticket_lint',
     ]);
   });

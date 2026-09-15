@@ -547,6 +547,72 @@ export const featuresConfigSchema = z.strictObject({
     })
     .optional(),
   /**
+   * The epic-split variant of the spike template — product/04:117, product/18:45 (WP-40).
+   *
+   * > *"Variant **epic split** (opt-in): the input is an epic and the output is a proposed ticket
+   * > breakdown with acceptance criteria for the PM to accept"* · Default: *"off (spike template
+   * > option)"*.
+   *
+   * product/18's Configuration column for this feature is **"—"**, so two of the three keys here
+   * are the platform's own answers to questions the feature cannot be built without, and both are
+   * defaulted and read:
+   *
+   *  - `enabled` is the document's own default, **off**. Off means `templateForIssueType` never
+   *    returns `epic_split`, so an epic is delivered as a feature exactly as it is today.
+   *  - `issue_types` is *which* ticket types the variant claims. It defaults to the one the
+   *    document names (`['Epic']`), compared case-insensitively and after trimming because a human
+   *    types them into a wizard, and an **explicitly empty** list claims nothing — the fail-closed
+   *    reading of "the types I named" that `review_only.paths` and `maintenance.chores` both give.
+   *  - `child_issue_type` is what an accepted child is created as in the tracker. It is here rather
+   *    than on the artifact because a *model* that chose the issue type could choose one whose
+   *    workflow the project has no `status_mapping` for; `'Task'` is the type every tracker in this
+   *    build's fixtures ships with.
+   *
+   * There is deliberately **no auto-accept key**. product/04 says the breakdown is *"for the PM to
+   * accept"*, and creating N tickets in somebody's backlog is the largest write this platform makes
+   * into another team's tool — a switch that skipped the human would be the one configuration this
+   * feature must not have (BD-028's opt-in reasoning, one step further).
+   */
+  epic_split: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+      issue_types: z.array(nonEmptyStringSchema).optional(),
+      child_issue_type: nonEmptyStringSchema.optional(),
+    })
+    .optional(),
+  /**
+   * The **spike template itself** — product/04:117, product/18:39 (WP-40, review round 2).
+   *
+   * > *"**Spike template** Research/analysis tickets: `Intake → Refinement → Architecture (produces
+   * > a document instead of a plan) → Human`. Output is a markdown report attached to the ticket and
+   * > stored in the KB under `research/`. **No MR.**"* · Default: *"off (spike template option)"*.
+   *
+   * One key, and it is a **switch rather than a description of the feature**: which ticket types
+   * reach the spike template is already the project's `templateByIssueType` map (technical/12), and
+   * a second list here would be a second place to change it. `enabled` decides whether **any**
+   * mapping to the spike template is honoured at all, so the feature's state can be read off one
+   * screen — the argument `features.epic_split.enabled` was given, applied to the template the
+   * variant is an option of.
+   *
+   * **Off is the shipped default and it is load-bearing.** product/04 S0 classifies a ticket as
+   * `feature | bug | chore | spike`, and WP-40 shipped `spike: 'spike'` in the default map for that
+   * reason — but the spike template ends at a human with **no merge request**, so on a project whose
+   * tracker already has a `Spike` issue type that default silently stopped the platform opening MRs
+   * for tickets it opens them for today. product/18:39's Default column says *"off"* for this row,
+   * and off is what a behaviour change of that size has to be until somebody turns it on.
+   *
+   * It does **not** gate `features.epic_split`: the variant routes to its own template
+   * (`epic_split`), it is opt-in in its own right, and a feature that needed two switches on is a
+   * feature nobody can turn on. Each ends differently — one posts a report, the other proposes rows
+   * for somebody's backlog — so each is decided on its own.
+   */
+  spike: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+    })
+    .optional(),
+
+  /**
    * The history bootstrap — product/18:27, product/19 §18, product/06's wizard step 3b (WP-35).
    *
    * > *"During onboarding, mines the last N merged MRs and their review comments plus closed

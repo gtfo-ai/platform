@@ -1689,6 +1689,171 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "ResearchReport"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "maxLength": 2000,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "findings": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_90d4ef8d"
+              }
+            },
+            "options": {
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_838f2997"
+              }
+            },
+            "recommendation": {
+              "maxLength": 2000,
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArtifactQuestion"
+              }
+            },
+            "kb_citations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/KbCitation"
+              }
+            }
+          },
+          "required": [
+            "question",
+            "summary",
+            "findings",
+            "options",
+            "recommendation",
+            "open_questions",
+            "kb_citations"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "artifact_type": {
+          "type": "string",
+          "const": "TicketBreakdown"
+        },
+        "version": {
+          "$ref": "#/$defs/anon_03c948b9"
+        },
+        "task_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "run_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "language": {
+          "$ref": "#/$defs/LanguageTag"
+        },
+        "markdown": {
+          "$ref": "#/$defs/anon_4682db72"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "epic_summary": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "children": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_bba22d10"
+              }
+            },
+            "out_of_scope": {
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_b54c3534"
+              }
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArtifactQuestion"
+              }
+            }
+          },
+          "required": [
+            "epic_summary",
+            "children",
+            "out_of_scope",
+            "open_questions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "artifact_type",
+        "version",
+        "task_id",
+        "run_id",
+        "created_at",
+        "language",
+        "markdown",
+        "data"
+      ],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -1774,7 +1939,9 @@
         "ReadinessReport",
         "DiscoveryDraft",
         "AskAnswer",
-        "HistoryFindings"
+        "HistoryFindings",
+        "ResearchReport",
+        "TicketBreakdown"
       ]
     },
     "Id": {
@@ -2077,6 +2244,39 @@
     "anon_4682db72": {
       "type": "string"
     },
+    "anon_838f2997": {
+      "type": "object",
+      "properties": {
+        "option": {
+          "maxLength": 2000,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "pros": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_b33e40fa"
+          }
+        },
+        "cons": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_b33e40fa"
+          }
+        },
+        "effort": {
+          "$ref": "#/$defs/Size"
+        }
+      },
+      "required": [
+        "option",
+        "pros",
+        "cons",
+        "effort"
+      ],
+      "additionalProperties": false
+    },
     "anon_85f500a1": {
       "type": "object",
       "properties": {
@@ -2143,6 +2343,36 @@
       ],
       "additionalProperties": false
     },
+    "anon_90d4ef8d": {
+      "type": "object",
+      "properties": {
+        "statement": {
+          "maxLength": 2000,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "evidence": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_b33e40fa"
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        }
+      },
+      "required": [
+        "statement",
+        "evidence",
+        "confidence"
+      ],
+      "additionalProperties": false
+    },
     "anon_ac146fff": {
       "type": "string",
       "enum": [
@@ -2150,6 +2380,50 @@
         "technical",
         "process"
       ]
+    },
+    "anon_b33e40fa": {
+      "maxLength": 2000,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_b54c3534": {
+      "maxLength": 200,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_bba22d10": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "maxLength": 200,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "acceptance_criteria": {
+          "minItems": 1,
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcceptanceCriterion"
+          }
+        },
+        "size": {
+          "$ref": "#/$defs/Size"
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "acceptance_criteria",
+        "size",
+        "rationale"
+      ],
+      "additionalProperties": false
     },
     "anon_d36cabed": {
       "type": "object",

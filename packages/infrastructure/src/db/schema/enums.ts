@@ -117,6 +117,9 @@ export const artifactTypeEnum = pgEnum('artifact_type', [
   'AskAnswer',
   // WP-35, migration 0030: product/19 §18's fixed extraction schema.
   'HistoryFindings',
+  // WP-40, migration 0033: the spike's document and the epic-split variant's breakdown.
+  'ResearchReport',
+  'TicketBreakdown',
 ]);
 export const questionStatusEnum = pgEnum('question_status', [
   'open',

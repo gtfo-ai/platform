@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchReport data",
+  "description": "Structured output of the stage that produces a ResearchReport artifact (technical/12).",
+  "type": "object",
+  "properties": {
+    "question": {
+      "maxLength": 2000,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "findings": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_90d4ef8d"
+      }
+    },
+    "options": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_838f2997"
+      }
+    },
+    "recommendation": {
+      "maxLength": 2000,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactQuestion"
+      }
+    },
+    "kb_citations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/KbCitation"
+      }
+    }
+  },
+  "required": [
+    "question",
+    "summary",
+    "findings",
+    "options",
+    "recommendation",
+    "open_questions",
+    "kb_citations"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ArtifactQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "text": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NonEmptyString"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggested_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "blocking"
+      ],
+      "additionalProperties": false
+    },
+    "KbCitation": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/PathPattern"
+        },
+        "commit_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "PathPattern": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "Size": {
+      "type": "string",
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ]
+    },
+    "anon_838f2997": {
+      "type": "object",
+      "properties": {
+        "option": {
+          "maxLength": 2000,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "pros": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_b33e40fa"
+          }
+        },
+        "cons": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_b33e40fa"
+          }
+        },
+        "effort": {
+          "$ref": "#/$defs/Size"
+        }
+      },
+      "required": [
+        "option",
+        "pros",
+        "cons",
+        "effort"
+      ],
+      "additionalProperties": false
+    },
+    "anon_90d4ef8d": {
+      "type": "object",
+      "properties": {
+        "statement": {
+          "maxLength": 2000,
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "evidence": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anon_b33e40fa"
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        }
+      },
+      "required": [
+        "statement",
+        "evidence",
+        "confidence"
+      ],
+      "additionalProperties": false
+    },
+    "anon_b33e40fa": {
+      "maxLength": 2000,
+      "$ref": "#/$defs/NonEmptyString"
+    }
+  }
+}

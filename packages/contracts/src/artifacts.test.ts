@@ -245,6 +245,57 @@ const DATA: Record<ArtifactType, unknown> = {
     merge_requests_read: 20,
     summary: 'Reviews in this batch are mostly about money handling and test naming.',
   },
+  ResearchReport: {
+    question: 'Can we move the refund ledger onto the outbox without a second queue?',
+    summary: 'The outbox already carries an ordering key; the ledger does not need one of its own.',
+    findings: [
+      {
+        statement: 'The outbox writer takes the same advisory lock the ledger would.',
+        evidence: ['src/outbox/writer.ts:88', 'ran `rg "advisory_lock" src/`'],
+        confidence: 'high',
+      },
+    ],
+    options: [
+      {
+        option: 'Reuse the outbox',
+        pros: ['no second queue to operate'],
+        cons: ['couples two release cadences'],
+        effort: 'M',
+      },
+      {
+        option: 'A dedicated ledger queue',
+        pros: ['independent backpressure'],
+        cons: ['a second thing to page somebody about'],
+        effort: 'L',
+      },
+    ],
+    recommendation: 'Reuse the outbox and revisit if the ledger ever needs its own retention.',
+    open_questions: [
+      { id: 'Q-1', text: 'What retention does finance need?', blocking: false, options: null },
+    ],
+    kb_citations: [{ path: 'technical/outbox.md', commit_sha: 'cafe123', reason: 'ordering key' }],
+  },
+  TicketBreakdown: {
+    epic_summary: 'Slack approvals, split into the smallest pieces that each ship on their own.',
+    children: [
+      {
+        title: 'Render the approval message',
+        description: 'Build the Block Kit payload from the plan the task already stored.',
+        acceptance_criteria: [criterion],
+        size: 'S',
+        rationale: 'The message can be reviewed before any button does anything.',
+      },
+      {
+        title: 'Handle the button callback',
+        description: 'Verify the signature and record the decision.',
+        acceptance_criteria: [criterion],
+        size: 'M',
+        rationale: 'Separates the write from the render, so each can be reverted alone.',
+      },
+    ],
+    out_of_scope: ['email approvals'],
+    open_questions: [],
+  },
 };
 
 const ARTIFACT_TYPES = artifactTypeSchema.options;

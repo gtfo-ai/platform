@@ -45,13 +45,13 @@ describe('createBudgetGuard (BD-010: an org or project budget stops *new* runs)'
   it('lets a run start below the limit', async () => {
     const { store } = storeWith(10, 0, 'project');
     await charge(store, 9.999999);
-    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW)).toBeNull();
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toBeNull();
   });
 
   it('blocks at the limit, not one cent past it', async () => {
     const { store } = storeWith(10, 0, 'project');
     await charge(store, 10);
-    const blocker = await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW);
+    const blocker = await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0);
     expect(blocker).toMatchObject({
       scope: 'project',
       window: 'month',
@@ -60,11 +60,63 @@ describe('createBudgetGuard (BD-010: an org or project budget stops *new* runs)'
     });
   });
 
+  /**
+   * **The window the ledger has not finished writing** — the defect measured on WP-40's tree.
+   *
+   * `budget_windows.spent_usd` is written by the cost ledger's handler on `run.finished`, after the
+   * run's own transaction; between the two a second admission reads a window that is lower than it
+   * is. The guard therefore asks `pendingSpend` as well, and the two numbers stay apart in the
+   * answer: 9 charged and one live run holding the 2 it may spend is 11 against a limit of 10.
+   */
+  it('counts a run the ledger has not recorded yet, and reports it apart from the spend', async () => {
+    const { store } = storeWith(10, 0, 'project');
+    await charge(store, 9);
+    store.seedPendingRuns(PROJECT, 1);
+    const blocker = await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 2);
+    expect(blocker).toMatchObject({ scope: 'project', limitUsd: 10, spentUsd: 9, pendingUsd: 2 });
+  });
+
+  /** Standing rule 42: the same mechanism, from the other side — a window under its limit runs. */
+  it('lets a run start when the spend and what is in flight are still under the limit', async () => {
+    const { store } = storeWith(10, 0, 'project');
+    await charge(store, 5);
+    store.seedPendingRuns(PROJECT, 1);
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 2)).toBeNull();
+  });
+
+  /**
+   * The valuation is the **caller's** reservation, not a constant this module chose: the same
+   * seeded run values at nothing when the caller says a run may spend nothing, which is what the
+   * maintenance scheduler passes when it is creating a task rather than admitting a run.
+   */
+  it('values a run in flight at what the caller says a run may spend', async () => {
+    const { store } = storeWith(10, 0, 'project');
+    await charge(store, 9);
+    store.seedPendingRuns(PROJECT, 1);
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toBeNull();
+  });
+
   it('blocks on the organisation’s budget too', async () => {
     const { store } = storeWith(5, 0, 'org');
     await charge(store, 5);
-    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW)).toMatchObject({
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toMatchObject({
       scope: 'org',
+    });
+  });
+
+  /**
+   * The organisation scope's `scope_id` is **null** (migration 0007: *"exactly one subject"*), so
+   * its pending term is every run of the deployment rather than a join on a column that is not
+   * there — a separate branch in the adapter, and therefore a case of its own here.
+   */
+  it('counts what is in flight for the organisation scope, whose scope_id is null', async () => {
+    const { store } = storeWith(5, 0, 'org');
+    await charge(store, 4);
+    store.seedPendingRuns(null, 1);
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 1)).toMatchObject({
+      scope: 'org',
+      spentUsd: 4,
+      pendingUsd: 1,
     });
   });
 
@@ -76,12 +128,12 @@ describe('createBudgetGuard (BD-010: an org or project budget stops *new* runs)'
   it('ignores a task-scoped budget row, which the executor enforces from configuration', async () => {
     const { store } = storeWith(1, 0, 'task');
     await charge(store, 100);
-    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW)).toBeNull();
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toBeNull();
   });
 
   it('never blocks when a deployment has no budgets at all', async () => {
     const store = createMemoryCostStore();
-    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW)).toBeNull();
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toBeNull();
   });
 
   /**
@@ -103,7 +155,7 @@ describe('createBudgetGuard (BD-010: an org or project budget stops *new* runs)'
     const { store } = storeWith(10, 0, 'project');
     store.seedTimezone(PROJECT, '+02:00');
     await charge(store, 10);
-    const blocker = await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW);
+    const blocker = await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0);
     expect(blocker).toMatchObject({
       scope: 'project',
       spentUsd: 10,
@@ -117,13 +169,13 @@ describe('createBudgetGuard (BD-010: an org or project budget stops *new* runs)'
     await charge(store, 10);
     // The June window in Prague starts at 22:00 UTC on 31 May, so the row charged above (keyed on
     // the UTC month start) is a *different* window and does not block.
-    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW)).toBeNull();
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toBeNull();
   });
 });
 
 describe('noBudgetGuard', () => {
   it('is the default, and it never blocks', async () => {
-    expect(await noBudgetGuard.blockingFor(TX, PROJECT, NOW)).toBeNull();
+    expect(await noBudgetGuard.blockingFor(TX, PROJECT, NOW, 0)).toBeNull();
   });
 });
 

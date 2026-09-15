@@ -76,6 +76,9 @@ const EXPECTED_TABLES = [
   'task_asks',
   'task_stages',
   'tasks',
+  // WP-40 (migration 0033): the epic split's queue, one row per proposed child ticket. `approvals`
+  // cannot express it — a breakdown is N independent decisions and an approval is one (Q85).
+  'ticket_breakdown_items',
   'user_identities',
   'users',
   'verifications',
@@ -207,6 +210,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // WP-31 (migration 0024): the ask-the-task thread. `read_write` because a row is updated at
       // most three times — the run is attached, the answer is stored, the ticket mirror is stamped.
       row('task_asks', 'read_write', null),
+      // WP-40 (migration 0033): the epic-split queue. `read_write` because a row is written once by
+      // the stage's handler, moved once by a human's decision and stamped once by the duty.
+      row('ticket_breakdown_items', 'read_write', null),
       row('users', 'read_write', null),
       row('verifications', 'read_write', null),
     ]);

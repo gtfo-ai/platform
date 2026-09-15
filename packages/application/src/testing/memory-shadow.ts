@@ -21,7 +21,11 @@
  *    {@link MemoryShadowStore.seedShadowSpend} is the seam. It is **stricter** in one way that
  *    matters — the seeded number is used exactly, where the adapter sums a `numeric(12,6)` column
  *    and could round — so a test that depends on a rounding is a test that only the adapter can
- *    answer.
+ *    answer. Its second number, `pendingUsd`, is seeded too
+ *    ({@link MemoryShadowStore.seedPendingShadowRuns}) and is where this double is *kinder* than
+ *    the adapter (standing rule 1): holding no `runs`, it answers `0` for a window whose runs the
+ *    ledger has not recorded unless a test says otherwise. The adapter's derivation is the
+ *    integration tier's.
  * 5. **`completeIfDone` compares the same sets the adapter's SQL does** — every ticket row with a
  *    `task_id`, against the reports written — and answers `true` only on the transition, so the
  *    idempotency the `shadow.report.created` consumer rests on is exercised here too.
@@ -42,8 +46,15 @@ export interface MemoryShadowStore extends ShadowStore {
   ticketsOf(batchId: Id): readonly ShadowBatchTicketRow[];
   /** Every report written, oldest first. */
   readonly reportRows: readonly ShadowReportRow[];
-  /** Divergence 4: what `shadowSpendSince` answers for a project. */
+  /** Divergence 4: what `shadowSpendSince`'s `spentUsd` answers for a project. */
   seedShadowSpend(projectId: Id, usd: number): void;
+  /**
+   * Divergence 4: how many shadow runs of the project the ledger has not recorded.
+   *
+   * Each is valued at the `reserveUsd` the caller passes, which is what the adapter does for a
+   * **live** run; an ended one's reported figure is a `runs` column this double does not hold.
+   */
+  seedPendingShadowRuns(projectId: Id, runs: number): void;
 }
 
 export const createMemoryShadowStore = (
@@ -53,6 +64,7 @@ export const createMemoryShadowStore = (
   const tickets = new Map<Id, ShadowBatchTicketRow[]>();
   const reports: ShadowReportRow[] = [];
   const spend = new Map<Id, number>();
+  const pendingRuns = new Map<Id, number>();
 
   const batchById = (batchId: Id): ShadowBatchRow | undefined =>
     batches.find((row) => row.id === batchId);
@@ -74,6 +86,10 @@ export const createMemoryShadowStore = (
     },
     seedShadowSpend: (projectId, usd) => {
       spend.set(projectId, usd);
+    },
+
+    seedPendingShadowRuns: (projectId, runs) => {
+      pendingRuns.set(projectId, runs);
     },
 
     createBatch: async (_tx: Transaction, batch) => {
@@ -149,7 +165,10 @@ export const createMemoryShadowStore = (
       return true;
     },
 
-    shadowSpendSince: async (_tx: Transaction, projectId) => spend.get(projectId) ?? 0,
+    shadowSpendSince: async (_tx: Transaction, projectId, _since, reserveUsd) => ({
+      spentUsd: spend.get(projectId) ?? 0,
+      pendingUsd: (pendingRuns.get(projectId) ?? 0) * reserveUsd,
+    }),
 
     checkoutBaseFor: async (_tx: Transaction, taskId) => {
       for (const list of tickets.values()) {

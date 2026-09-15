@@ -30,6 +30,15 @@ Markdown → provider format converter (ADF for Jira Cloud, wiki markup for DC) 
 > task directly, on a platform-issued reference (`chore!<type>-<period>`) that every ticket read and
 > every ticket write refuses by name, so no maintenance chore files a ticket on anybody's board.
 
+> **Amendment (WP-40): the second of the two callers now exists.** `createTicket` had no caller in
+> any ring from WP-08 until this row; the epic split is the first, through
+> `ticketWrites.createChildTicket` from the `breakdown_create` outbound duty, and **only after a
+> human has accepted the child** (product/04:117, Q85). The scope-creep valve is still unbuilt. The
+> capability flag is read **twice** on that path, and the earlier of the two is the one that matters:
+> intake refuses to route an epic to the variant at all when the binding reports `createTicket:
+> false`, because a queued breakdown whose acceptance could only throw is worse than an ordinary
+> feature ticket — a human has spent a decision on it by then.
+
 
 > **The inbound half, as implemented at WP-07.** Every type port carries one `InboundNormaliser`
 > instead of the loose `webhookVerify` / `normalizeEvent` pair: `verify(delivery) -> bool`,

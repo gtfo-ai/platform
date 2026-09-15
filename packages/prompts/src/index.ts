@@ -56,9 +56,11 @@ export interface RolePrompt {
  */
 export const ROLE_PROMPT_VERSIONS = {
   triager: '1',
-  product_manager: '1',
+  // WP-40: the epic-split variant's `TicketBreakdown` section.
+  product_manager: '2',
   investigator: '1',
-  architect: '1',
+  // WP-40: the spike template's `ResearchReport` section.
+  architect: '2',
   developer: '1',
   reviewer: '2',
   acceptance_tester: '1',

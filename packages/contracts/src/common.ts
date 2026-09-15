@@ -455,6 +455,29 @@ export const artifactTypeSchema = z.enum([
    * citation the batch never contained.
    */
   'HistoryFindings',
+  /**
+   * The spike template's document — product/04:117's *"Architecture (**produces a document instead
+   * of a plan**)"* (WP-40).
+   *
+   * A type of its own rather than an `ImplementationPlan` with empty lists, and the document is the
+   * reason: a plan names files, modules, a test plan and a validation contract, and a research
+   * report that filled those in with `[]` would be a plan claiming *"nothing has to change"* — the
+   * one sentence a spike is least entitled to. What this type carries instead is what a spike
+   * produces: the question, the options weighed, a recommendation, and the open questions the
+   * research did not close. The report a human reads is the envelope's `markdown`.
+   */
+  'ResearchReport',
+  /**
+   * The epic-split variant's output — product/04:117's *"a proposed ticket breakdown with acceptance
+   * criteria for the PM to accept"* (WP-40).
+   *
+   * Not `ImplementationPlan.split_proposal`, which is `{title, scope}` and carries **no acceptance
+   * criteria**: the whole of what a PM is asked to accept here is *"is each of these a ticket a
+   * developer could start, and know when they are done?"*, which is the criteria. And not
+   * `RefinedSpec`, which is one ticket's specification — a breakdown is N of them, and a schema that
+   * could express both would be a schema neither side could rely on.
+   */
+  'TicketBreakdown',
 ]);
 
 /** Pipeline templates the platform ships (BD-005). Projects may define more in `pipeline.yml`. */

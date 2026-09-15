@@ -54,6 +54,16 @@ export interface KnowledgeProposalsData {
   readonly project_id: string;
   readonly task_id: string;
   readonly artifact_id: string;
+  /**
+   * Which curation this wake-up is for — absent means the Librarian's, which is what every job
+   * enqueued before WP-40 carries (`createLibrarianRuntime` dispatches on it).
+   *
+   * A second **artifact type** on one queue rather than a second queue, because everything a
+   * curation needs is already composed for this one: the project's `knowledge_dir`, the indexed
+   * paths, the artifact, the redactor, the ids and the clock. `knowledge/research.ts` has the
+   * argument for reusing the proposal queue at all.
+   */
+  readonly artifact_type?: 'LibrarianProposals' | 'ResearchReport';
   readonly [key: string]: unknown;
 }
 
@@ -70,6 +80,15 @@ export interface LibrarianArtifact {
   readonly data: JsonValue;
   readonly runId: Id | null;
   readonly taskMode: TaskMode;
+  /**
+   * The task's ticket key (WP-40).
+   *
+   * Read here rather than carried on the job payload because a job re-reads committed state when it
+   * fires (TD-004), and it is the same query that already answers `taskMode`. The Librarian's own
+   * curation does not use it; a spike's research page is filed at `research/<ticket-key>.md`, which
+   * is the **platform's** path rather than the model's.
+   */
+  readonly ticketKey: string;
 }
 
 export interface LibrarianJobOptions {

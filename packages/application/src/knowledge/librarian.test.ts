@@ -102,6 +102,7 @@ const harness = (
               data: (options.data ?? artifactData([proposal()])) as never,
               runId: RUN,
               taskMode: options.taskMode ?? 'normal',
+              ticketKey: 'ACME-1',
             }
           : options.artifact,
       logger: silentLogger,

@@ -12,11 +12,19 @@
  * rewrite history (`shadow_batches.budget_usd`'s argument, one work package on).
  *
  * `spent_usd` is summed from **`cost_entries`** and not from `tasks.cost_actual`, which is the
- * opposite call from the shadow screen's and is stated rather than inherited: this is the same
- * number the batch **cap** is enforced against (`HistoryBootstrapStore.capForTask`), so a screen
- * reading a different source would tell an operator the batch had room a moment after the executor
- * refused it. The shadow screen's lag is cosmetic because its budget is enforced elsewhere; here
- * the two must agree.
+ * opposite call from the shadow screen's and is stated rather than inherited: it is the ledger's
+ * own figure, which is what the cap is charged against
+ * (`HistoryBootstrapStore.capForTask.spentUsd`), so a screen reading a different source would tell
+ * an operator the batch had spent something other than what it was charged.
+ *
+ * **What this screen does not show is what the cap also counts**: the batch's runs the ledger has
+ * not recorded yet (`capForTask.pendingUsd`, and
+ * `packages/application/src/cost/pending.ts` for why a cap that ignored them admits one run too
+ * many). So an operator can see a batch pause with `spent_usd` still under the cap — which is
+ * correct, and the pause reason names the committed figure apart from the spent one. Publishing the
+ * pending term here would mean publishing a **reservation** as spend on a screen whose column says
+ * *"spent"*; it is a reader that does not exist yet rather than a number folded into one that
+ * means something else.
  *
  * ## `proposals` counts rows, and the count is the chunk's own
  *

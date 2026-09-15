@@ -255,6 +255,15 @@ export interface HarnessOptions {
    * else, so it changes nothing for any other task in this harness.
    */
   readonly maintenanceSpentUsd?: number;
+  /**
+   * How many chore runs of this project the **ledger has not recorded yet** (`../cost/pending.ts`).
+   *
+   * The executor's maintenance cap counts each of them at what a run of the admitting stage may
+   * spend, because the ledger writes from a handler that commits after the run's own transaction —
+   * so a cap that read only {@link HarnessOptions.maintenanceSpentUsd} would admit one run per
+   * dispatcher lag. Defaults to **0**: nothing is in flight in a fresh harness.
+   */
+  readonly maintenancePendingRuns?: number;
   readonly git?: Partial<GitProviderPort> | null;
   /**
    * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
@@ -813,9 +822,16 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
      * working day (WP-35's own canary survey).
      *
      * It answers {@link HarnessOptions.maintenanceSpentUsd}, defaulting to **0** — a project whose
-     * chores have cost nothing, which is what a fresh instance is.
+     * chores have cost nothing, which is what a fresh instance is — and
+     * {@link HarnessOptions.maintenancePendingRuns} chore runs the ledger has not recorded, each
+     * valued at the reservation the executor passes (`../cost/pending.ts`).
      */
-    maintenance: { maintenanceSpendSince: async () => options.maintenanceSpentUsd ?? 0 },
+    maintenance: {
+      maintenanceSpendSince: async (_tx, _projectId, _since, reserveUsd) => ({
+        spentUsd: options.maintenanceSpentUsd ?? 0,
+        pendingUsd: (options.maintenancePendingRuns ?? 0) * reserveUsd,
+      }),
+    },
     settings: staticProjectSettings(() => settings),
     jobs,
     notifications,
@@ -827,6 +843,15 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     clock: { now: () => clock.now() },
     unitOfWork: memory,
     baseUrl: 'https://agentic.example.test',
+    /**
+     * TD-012 step 2's stand-in for the handlers that **store** untrusted text (WP-40 round 2).
+     *
+     * The same `exactSecretRedactor` the command surface below is armed with, and armed from the
+     * same {@link HarnessOptions.commandSecrets}: production composes `patternRedactor()` here, and
+     * a harness that passed a do-nothing double would make every redaction assertion on this tier a
+     * statement about a fake (standing rule 31).
+     */
+    redactor: exactSecretRedactor(options.commandSecrets ?? []),
     ...(options.dependencyMetadata === undefined
       ? {}
       : { dependencyMetadata: options.dependencyMetadata }),

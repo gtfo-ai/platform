@@ -52,6 +52,7 @@ import { startDigestRuntime } from '../notify/digest.js';
 import { notifyHandlers } from '../notify/handlers.js';
 import type { NotifyOptions } from '../notify/options.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -61,6 +62,7 @@ import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
 import { dependencyGateHandlers } from './dependency-gate.js';
+import { epicSplitHandlers } from './epic-split.js';
 import {
   declarePipelineQueues,
   type PipelineJobOptions,
@@ -143,6 +145,17 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * creates no chore to admit.
    */
   readonly maintenance?: MaintenanceSpendReader;
+  /**
+   * TD-012 step 2 over the untrusted text this runtime's handlers **store** (WP-40 round 2).
+   *
+   * Today that is the epic split's queue — a model's proposed child tickets, written inside the
+   * dispatcher's transaction where no binding can be resolved, so the platform's own pattern rules
+   * are the redaction available (`epic-split.ts`'s module note has the division and the residual).
+   * Required rather than optional, because an optional security dependency is an absent one
+   * (standing rule 31) and this is the same redactor `routes/commands.ts` and the ask executor are
+   * given.
+   */
+  readonly redactor: SecretRedactor;
 }
 
 export interface PipelineRuntime {
@@ -244,6 +257,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...notifyHandlers(options),
       // Ask-the-task (WP-31), TD-005 core band at 60: `ticket.comment.added`'s first consumer.
       ...ask.handlers,
+      // WP-40: the spike's report duty, the epic split's queue, and the decision that ends the wait.
+      ...epicSplitHandlers({ ...options, unitOfWork }),
     ],
     executor,
     start: async () => {

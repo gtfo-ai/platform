@@ -11,7 +11,12 @@
  * `Transaction` handle and ignores it, which is its one kind divergence; the e2e tier is where a
  * rollback means anything.
  */
-import type { PipelineStore, StoredTask, Transaction } from '@platform/application';
+import type {
+  PipelineStore,
+  StoredBreakdownItem,
+  StoredTask,
+  Transaction,
+} from '@platform/application';
 import { INITIAL_TASK_VERSION } from '@platform/application';
 import type { Id, IsoDateTime, Slug, TaskDependencies, TaskReviewers } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
@@ -1251,6 +1256,156 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(
           await store.approvals.latestOfKind(tx, { taskId: other.task.id, kind: 'budget' }),
         ).toBeNull();
+      });
+    });
+
+    /**
+     * The epic-split queue (WP-40) — a port whose two writers race each other by design.
+     *
+     * The cases are the two places the adapter and the fake could differ and did: what `decide`
+     * **answers** (the rows as they are *after* the decision, which a select beside a data-modifying
+     * CTE cannot see), and what it refuses (a child somebody has already decided). `redactionCount`
+     * rides along because it is summed by two writers — the queue's insert and the decision — and a
+     * store that overwrote it instead of adding would hide the queue's own redactions.
+     */
+    describe('breakdown', () => {
+      const seedQueue = async (): Promise<{
+        readonly taskId: Id;
+        readonly items: readonly StoredBreakdownItem[];
+      }> => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const artifactId = nextId();
+        await store.artifacts.insert(tx, {
+          id: artifactId,
+          taskId: stored.task.id,
+          type: 'TicketBreakdown',
+          version: 1,
+          markdown: null,
+          data: { children: [] },
+          schemaVersion: '1',
+          producedByRunId: null,
+          createdAt: '2026-06-01T09:00:00.000Z',
+        });
+        const child = (position: number): StoredBreakdownItem => ({
+          id: nextId(),
+          projectId,
+          taskId: stored.task.id,
+          runId: null,
+          artifactId,
+          position,
+          title: `Child ${position + 1}`,
+          description: 'What it covers.',
+          acceptanceCriteria: [
+            {
+              id: `AC-${position}`,
+              given: 'a queue',
+              when: 'a human decides',
+              // biome-ignore lint/suspicious/noThenProperty: the published acceptance-criterion field name
+              then: 'the row moves',
+              validation: { kind: 'test', value: 'breakdown.test.ts' },
+            },
+          ],
+          size: 'S',
+          rationale: 'It can be reverted on its own.',
+          status: 'queued',
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          ticketKey: null,
+          ticketUrl: null,
+          redactionCount: 2,
+          createdAt: '2026-06-01T09:00:00.000Z',
+        });
+        const items = [child(0), child(1)];
+        await store.breakdown.insert(tx, items);
+        return { taskId: stored.task.id, items };
+      };
+
+      it('answers the rows a decision moved, as they are after it', async () => {
+        const queue = await seedQueue();
+        const first = queue.items[0] as StoredBreakdownItem;
+
+        const moved = await store.breakdown.decide(tx, {
+          taskId: queue.taskId,
+          itemIds: [first.id],
+          status: 'accepted',
+          decidedByUserId: userId,
+          decidedAt: '2026-06-02T10:00:00.000Z' as IsoDateTime,
+          reason: 'this one first',
+          reasonRedactions: 1,
+        });
+
+        // The decision, not the state it found: a `select` beside the CTE would answer `queued`
+        // here, with a null `decided_at` and the row's original count.
+        expect(moved).toHaveLength(1);
+        expect(moved[0]).toMatchObject({
+          id: first.id,
+          status: 'accepted',
+          decidedByUserId: userId,
+          decidedAt: '2026-06-02T10:00:00.000Z',
+          reason: 'this one first',
+          // Summed over both writers rather than overwritten (2 from the insert + 1 here).
+          redactionCount: 3,
+        });
+        // …and what the store answers is what the store holds.
+        const listed = await store.breakdown.listForTask(tx, queue.taskId);
+        expect(listed.map((item) => [item.position, item.status])).toEqual([
+          [0, 'accepted'],
+          [1, 'queued'],
+        ]);
+        expect(listed[0]).toEqual(moved[0]);
+        expect(listed[0]?.acceptanceCriteria[0]?.given).toBe('a queue');
+
+        // The ticket is stamped on the accepted row by a third writer, and only there.
+        await store.breakdown.recordTicket(tx, {
+          itemId: first.id,
+          ticketKey: 'ACME-1001',
+          ticketUrl: 'https://tickets.example.test/browse/ACME-1001',
+        });
+        expect((await store.breakdown.listForTask(tx, queue.taskId))[0]).toMatchObject({
+          ticketKey: 'ACME-1001',
+          status: 'accepted',
+        });
+      });
+
+      it('moves no child a decision has already been made about', async () => {
+        const queue = await seedQueue();
+        const first = queue.items[0] as StoredBreakdownItem;
+        const decide = async (status: 'accepted' | 'rejected', at: string, reason: string) =>
+          store.breakdown.decide(tx, {
+            taskId: queue.taskId,
+            itemIds: [first.id],
+            status,
+            decidedByUserId: userId,
+            decidedAt: at as IsoDateTime,
+            reason,
+            reasonRedactions: 0,
+          });
+
+        expect(await decide('accepted', '2026-06-02T10:00:00.000Z', 'mine')).toHaveLength(1);
+        // The second maintainer gets an empty list rather than the first one's decision undone:
+        // the `queued` predicate is the store's, so two concurrent deciders cannot both win.
+        expect(await decide('rejected', '2026-06-02T10:00:01.000Z', 'no, mine')).toEqual([]);
+        expect((await store.breakdown.listForTask(tx, queue.taskId))[0]).toMatchObject({
+          status: 'accepted',
+          reason: 'mine',
+        });
+
+        // A task that owns none of the named rows moves none of them either.
+        const other = task();
+        await store.tasks.insert(tx, other);
+        expect(
+          await store.breakdown.decide(tx, {
+            taskId: other.task.id,
+            itemIds: [queue.items[1]?.id as Id],
+            status: 'accepted',
+            decidedByUserId: userId,
+            decidedAt: '2026-06-02T10:00:02.000Z' as IsoDateTime,
+            reason: null,
+            reasonRedactions: 0,
+          }),
+        ).toEqual([]);
       });
     });
   });

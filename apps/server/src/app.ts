@@ -66,6 +66,7 @@ import type { AskComposition } from './asks.js';
 import type { Auth } from './auth/better-auth.js';
 import { authPlugin } from './auth/plugin.js';
 import type { HistoryBootstrapCommands, HistoryBootstrapGateResult } from './bootstrap.js';
+import type { BreakdownComposition } from './breakdown.js';
 import type { TaskCommands } from './commands.js';
 import type { ServerConfig } from './config.js';
 import { toApiError } from './errors.js';
@@ -102,6 +103,7 @@ import {
 import { roleCapabilities } from './role.js';
 import { registerAskRoutes } from './routes/asks.js';
 import { registerBootstrapRoutes } from './routes/bootstrap.js';
+import { registerBreakdownRoutes } from './routes/breakdown.js';
 import { registerCommandRoutes } from './routes/commands.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
@@ -226,6 +228,17 @@ export interface BuildAppOptions {
    * on a worker is readable from an API-only replica.
    */
   readonly asks: AskComposition;
+  /**
+   * The epic split's acceptance surface (WP-40): the decision and the queue read.
+   *
+   * Nullable **here** and non-null in production, which is the same shape `knowledge` and
+   * `onboarding` have: `runtime.ts` composes it on every process — accepting a breakdown needs no
+   * queue, because the event it appends is what a worker turns into `createTicket` calls — while
+   * `app.test.ts` and the census build an app with no database at all, and a stub that pretended to
+   * hold a pipeline store would be the harness being kinder than the composition (standing rule 1).
+   * The write then answers `503` by name.
+   */
+  readonly breakdown: BreakdownComposition | null;
   /**
    * The directory holding the built SPA, or absent for a process that serves no browser
    * application (WP-15j).
@@ -561,6 +574,17 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         ...options.asks.queries,
       },
       asks: options.asks.commands,
+    });
+    await registerBreakdownRoutes(app, {
+      queries: {
+        taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+        listBreakdown: options.breakdown?.queries.listBreakdown ?? (async () => []),
+      },
+      breakdown: options.breakdown?.commands ?? null,
     });
     await registerCommandRoutes(app, {
       // The seven functions the command routes need, bound to this process's database here so

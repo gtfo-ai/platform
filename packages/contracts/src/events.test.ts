@@ -196,6 +196,12 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     questions_posted: 3,
     ticket_updated_at: AT,
   },
+  'task.breakdown.decided': {
+    ...taskScoped,
+    accepted: 2,
+    rejected: 1,
+    remaining: 0,
+  },
   'task.rebase.checked': {
     ...taskScoped,
     mr,

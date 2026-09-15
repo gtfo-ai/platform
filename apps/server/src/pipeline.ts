@@ -708,6 +708,16 @@ export const composePipeline = async (
      */
     maintenance: maintenanceStore,
     timezone: options.timezone,
+    /**
+     * TD-012 **step 2** over the untrusted text the pipeline's handlers store (WP-40 round 2).
+     *
+     * The same composition `routes/commands.ts`, `routes/settings.ts` and the ask executor are
+     * given, and for the same reason: a handler that writes a model's words into a row of its own
+     * runs inside the dispatcher's transaction, where no binding — and therefore no step-1
+     * exact-match redactor — can be resolved. `epic-split.ts` states what that leaves and where it
+     * is caught.
+     */
+    redactor: redactionAdapters.patternRedactor(),
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,

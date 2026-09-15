@@ -674,6 +674,15 @@ describe('the platform skills a stage is planned with', () => {
       // WP-35's, mapped in the work package that created the template rather than left to fall
       // through to `normal` — which is backlog 57's own complaint.
       'history_bootstrap.history_mining': 'bootstrap',
+      // WP-40's two spikes. Both take `normal` **from the fall-through** and that is the decision
+      // rather than an omission: `runs.mode` means *what this run was for*, and a spike is delivery
+      // work on somebody's ticket — the Product Manager refines it and the Architect (or, for the
+      // variant, the Product Manager again) answers it. A mode of its own would make the run screen
+      // and product/16's delivery-versus-upkeep split call a research ticket upkeep.
+      'spike.refinement': 'normal',
+      'spike.architecture': 'normal',
+      'epic_split.refinement': 'normal',
+      'epic_split.architecture': 'normal',
     });
   });
 

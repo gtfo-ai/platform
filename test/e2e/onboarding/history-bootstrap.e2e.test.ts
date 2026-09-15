@@ -479,17 +479,64 @@ describe('a history bootstrap on a project’s merged history', () => {
     const created = await startBootstrap(client, pipeline.projectId, 'boot-cap');
     expect(created.status).toBe(202);
 
-    await pipeline.waitFor('a mining task is paused for budget', async () => {
+    /**
+     * **The wait binds the batch settling rather than the pause**, and that is the difference
+     * between a defect that names itself and one that times out.
+     *
+     * Both chunk tasks are inserted in one transaction, so *"two rows and neither of them
+     * runnable"* is false until the batch has finished deciding and true in **both** worlds: one
+     * run and a pause (the cap bit) or two runs and no pause (the admission read a spend the
+     * ledger had not written yet). Waiting on the pause is a wait only the *correct* platform can
+     * satisfy, which turns a wrong answer into ninety seconds of silence — the shape standing rule
+     * 87 is about, one step earlier than the waits it was written for.
+     */
+    await pipeline.waitFor('both mining tasks have stopped', async () => {
+      const [row] = await pipeline.query<{ tasks: string; settled: string }>(
+        `select count(*)::text as tasks,
+                count(*) filter (
+                  where state in ('done', 'paused', 'needs_human', 'cancelled')
+                )::text as settled
+           from tasks where project_id = $1 and template = 'history_bootstrap'`,
+        [pipeline.projectId],
+      );
+      return Number(row?.tasks ?? 0) === 2 && row?.tasks === row?.settled;
+    });
+
+    /**
+     * **Exactly one run, and exactly one pause** — the assertion the race moves.
+     *
+     * The spend the cap is read against is written by the ledger **handler**, after the run's own
+     * transaction; the second chunk's admission happens in between. Counting the runs is what
+     * makes that visible: a batch that overran its cap leaves two `runs` rows and no paused task
+     * while every other assertion below still holds.
+     */
+    const runs = await pipeline.query<{ count: string }>(
+      `select count(*)::text as count
+         from runs r
+         join history_bootstrap_chunks k on k.task_id = r.task_id
+         join history_bootstrap_batches b on b.id = k.batch_id
+        where b.project_id = $1`,
+      [pipeline.projectId],
+    );
+    expect(Number(runs[0]?.count)).toBe(1);
+    const paused = await pipeline.query<{ count: string }>(
+      `select count(*)::text as count from tasks
+        where project_id = $1 and template = 'history_bootstrap' and state = 'paused'`,
+      [pipeline.projectId],
+    );
+    expect(Number(paused[0]?.count)).toBe(1);
+
+    // One run happened and one did not: the ledger has a row, and the batch never completes —
+    // "stops when it is spent" rather than "refuses before it starts". The row is **waited for**
+    // rather than read: the pause is decided before the ledger handler commits (that is the whole
+    // point of the guard's pending term), so the entry lands after the task has stopped.
+    await pipeline.waitFor('the finished run reached the ledger', async () => {
       const rows = await pipeline.query<{ count: string }>(
-        `select count(*)::text as count from tasks
-          where project_id = $1 and template = 'history_bootstrap' and state = 'paused'`,
+        'select count(*)::text as count from cost_entries where project_id = $1',
         [pipeline.projectId],
       );
       return Number(rows[0]?.count ?? 0) > 0;
     });
-
-    // One run happened and one did not: the ledger has a row, and the batch never completes —
-    // "stops when it is spent" rather than "refuses before it starts".
     const entries = await pipeline.query<{ count: string }>(
       'select count(*)::text as count from cost_entries where project_id = $1',
       [pipeline.projectId],

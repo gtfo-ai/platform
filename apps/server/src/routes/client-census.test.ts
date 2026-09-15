@@ -168,6 +168,8 @@ beforeAll(async () => {
       commands: null,
       queries: { listAsks: async () => [], taskAudit: async () => [] },
     },
+    // WP-40: no pipeline store here, so the decision refuses by name and the queue reads empty.
+    breakdown: null,
     version: { version: '0.0.0-test', commit: null, builtAt: null },
     readiness: async () => ({ status: 'ok', checks: {} }),
     isShuttingDown: () => false,
@@ -538,6 +540,38 @@ describe('the client’s endpoint list against the server’s router', () => {
       })),
     );
     expect(paths).not.toContain('/api/org/identities');
+  });
+
+  it('serves the two breakdown paths no screen calls, by each of their own methods', async () => {
+    // WP-40's acceptance surface. No SPA screen calls either yet, so the comparison above is blind
+    // to both by construction — the position `kb/health`, `take-over` and `hand-back` are in.
+    // Asked **by each method**, because `probe()` tries GET first and would otherwise judge the
+    // POST on its sibling's answer, and with **no body at all** on the write, because its guard is
+    // a `preValidation` hook: one that slipped back to `preHandler` would answer 400 describing the
+    // route's shape instead of 401 (the hole WP-21's review found for the wizard).
+    for (const path of ['/api/tasks/{}/breakdown', '/api/tasks/{}/breakdown/decide']) {
+      const probed = await probe(path);
+      expect(probed.served, path).toBe(true);
+    }
+    for (const [method, path] of [
+      ['GET', '/api/tasks/{}/breakdown'],
+      ['POST', '/api/tasks/{}/breakdown/decide'],
+    ] as const) {
+      const response = await app.inject({ method, url: probeUrl(path) });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${path} -> 401 unauthenticated`,
+      );
+    }
+
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+      })),
+    );
+    expect(paths).not.toContain('/api/tasks/{}/breakdown');
+    expect(paths).not.toContain('/api/tasks/{}/breakdown/decide');
   });
 
   it('serves the kb health read no client calls, which is why the census cannot see it', async () => {

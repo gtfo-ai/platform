@@ -221,6 +221,87 @@ describe('what only the database can answer', () => {
     await pool.query('delete from history_bootstrap_batches where id = $1', [batchId]);
   });
 
+  /**
+   * **The pending term, derived rather than seeded** — the half the in-memory double cannot answer
+   * (its divergence 4) and the one the WP-40 measurement is about: the ledger is a handler that
+   * commits after the run's own transaction, so a cap read from `cost_entries` alone admits a run
+   * per dispatcher lag (`packages/application/src/cost/pending.ts`).
+   *
+   * Three states of one batch, in order, against a real database: a run that is **live** counts the
+   * reservation, a run that has **ended** counts the figure its own transaction wrote, and a run
+   * the ledger has **charged** counts its entries and nothing more — which is what makes the term
+   * self-clearing rather than a second total to keep true.
+   */
+  it('values a batch’s runs the ledger has not recorded, and stops once it has', async () => {
+    const batchId = nextId();
+    await pool.query(
+      `insert into history_bootstrap_batches
+         (id, project_id, merge_requests, batch_size, days, cap_usd, estimated_usd)
+       values ($1, $2, 40, 20, 183, 20, 4)`,
+      [batchId, projectId],
+    );
+    await pool.query(
+      `insert into history_bootstrap_chunks
+         (id, batch_id, chunk_index, task_id, merge_requests, tickets, commits)
+       values ($1, $2, 0, $3, 20, 5, 20)`,
+      [nextId(), batchId, taskIds[1]],
+    );
+    const insertRun = async (
+      status: string,
+      usdReported: string | null,
+      endedAt: string | null,
+    ): Promise<string> => {
+      const created = await pool.query<{ id: string }>(
+        `insert into runs (task_id, project_id, role, model, prompt_version, status,
+                           usd_reported, ended_at)
+         values ($1, $2, 'developer', 'claude-sonnet-5', 'historian@1', $3::run_status, $4, $5)
+         returning id`,
+        [taskIds[1], projectId, status, usdReported, endedAt],
+      );
+      return created.rows[0]?.id as string;
+    };
+
+    const client = new pg.Client({ connectionString: database.connectionString });
+    await client.connect();
+    try {
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      const store = new bootstrapAdapters.PostgresHistoryBootstrapStore();
+
+      await insertRun('running', null, null);
+      expect(await store.capForTask(tx, taskIds[1] as Id, 2)).toEqual({
+        capUsd: 20,
+        spentUsd: 0,
+        pendingUsd: 2,
+      });
+
+      const ended = await insertRun('completed', '0.400000', new Date().toISOString());
+      expect(await store.capForTask(tx, taskIds[1] as Id, 2)).toEqual({
+        capUsd: 20,
+        spentUsd: 0,
+        pendingUsd: 2.4,
+      });
+
+      await pool.query(
+        `insert into cost_entries (run_id, task_id, project_id, stage, model, usd)
+         values ($1, $2, $3, 'history_mining', 'claude-sonnet-5', 0.4)`,
+        [ended, taskIds[1], projectId],
+      );
+      expect(await store.capForTask(tx, taskIds[1] as Id, 2)).toEqual({
+        capUsd: 20,
+        spentUsd: 0.4,
+        pendingUsd: 2,
+      });
+    } finally {
+      await client.end();
+    }
+    // The entries first: `cost_entries.run_id` references `runs`, so the other order is a foreign
+    // key violation rather than a cleanup. The second task is used throughout so nothing this test
+    // leaves behind can reach the batch the next one builds on the first.
+    await pool.query('delete from history_bootstrap_batches where id = $1', [batchId]);
+    await pool.query('delete from cost_entries where task_id = $1', [taskIds[1]]);
+    await pool.query('delete from runs where task_id = $1', [taskIds[1]]);
+  });
+
   it('sums only this batch’s tasks from the ledger', async () => {
     const other = await pool.query<{ id: string }>(
       `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode)
@@ -269,9 +350,10 @@ describe('what only the database can answer', () => {
       const store = new bootstrapAdapters.PostgresHistoryBootstrapStore();
       expect(await store.spendOfBatch(tx, batchId)).toBe(1.25);
       // …and `capForTask` answers the same number beside the cap, which is what admission compares.
-      expect(await store.capForTask(tx, taskIds[0] as Id)).toEqual({
+      expect(await store.capForTask(tx, taskIds[0] as Id, 2)).toEqual({
         capUsd: 20,
         spentUsd: 1.25,
+        pendingUsd: 0,
       });
     } finally {
       await client.end();

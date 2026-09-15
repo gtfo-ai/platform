@@ -48,6 +48,7 @@ import { runShadowReport, type ShadowReportOptions } from '../shadow/report.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
 import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
+import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
@@ -127,6 +128,12 @@ export const pipelineOutboundHandler = (
         return;
       case 'ask_answer':
         await runAskMirror(options, data);
+        return;
+      case 'spike_report':
+        await runSpikeReport(options, data);
+        return;
+      case 'breakdown_create':
+        await runBreakdownCreate(options, data);
         return;
       default:
         logger.warn(

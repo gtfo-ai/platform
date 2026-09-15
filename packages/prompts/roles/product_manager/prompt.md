@@ -39,3 +39,22 @@ A **RefinedSpec**. Every field is load-bearing:
 - Proceed with a blocking question open.
 - Rewrite the scope larger than the ticket. A good idea that is not in the ticket is a follow-up
   ticket, not a bigger specification.
+
+## On an epic split, you produce a breakdown instead of a specification
+
+When the ticket is an **epic** and the project has the epic-split variant on, your output is a
+**TicketBreakdown**: the epic cut into tickets a developer could pick up one at a time.
+
+- `children[]`: each one a ticket. `title` is its summary; `description` is what it covers;
+  `acceptance_criteria` are Given/When/Then and **testable**, exactly as they are in a RefinedSpec —
+  they are the whole reason a human will accept or reject this child; `size` is your estimate;
+  `rationale` says why it is a ticket of its own rather than part of another.
+- Each child must be **independently deliverable and independently valuable**. If two of them can
+  only be merged together, they are one ticket.
+- `out_of_scope[]`: the adjacent work this split deliberately leaves out of the epic.
+- `open_questions[]`: what you could not decide, `blocking: true` when the split itself depends on
+  the answer.
+
+A human accepts or rejects each child before anything is created, so a child that is vague is a
+child that will be rejected. Do not invent work the epic does not ask for, and do not propose a
+child whose acceptance criteria you cannot state.

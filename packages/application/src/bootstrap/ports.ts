@@ -12,6 +12,7 @@
  * and a store that opened its own transaction could not give them that.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
+import type { CapSpend } from '../cost/pending.js';
 import type { Transaction } from '../ports/transaction.js';
 
 export type HistoryBootstrapStatus = 'collecting' | 'mining' | 'completed' | 'empty';
@@ -162,7 +163,10 @@ export interface HistoryBootstrapStore {
    *
    * The ledger rather than `tasks.cost_actual`, for the reason WP-19 gives everywhere else: the
    * entries are the record and the task column is a running total the executor maintains. It is
-   * the number the batch cap is checked against, where lagging would be a defect.
+   * what the batch screen shows, and it is deliberately **only** the record: the cap is checked
+   * against this *plus* {@link HistoryBootstrapStore.capForTask}'s pending term, because the ledger
+   * is written by a handler after the run's own transaction and therefore lags it by design
+   * (`packages/application/src/cost/pending.ts`).
    */
   spendOfBatch(tx: Transaction, batchId: Id): Promise<number>;
 
@@ -171,9 +175,15 @@ export interface HistoryBootstrapStore {
    *
    * One query, asked by the stage executor at admission and **only** for a task on the bootstrap
    * template, so an ordinary delivery pays nothing for it.
+   *
+   * `spentUsd` is the ledger's; `pendingUsd` is the batch's runs the ledger has not recorded,
+   * valued at `reserveUsd` while they are live and at what they reported once they have ended.
+   * The rule and the measurement that earned it are in `packages/application/src/cost/pending.ts`;
+   * without the second number two chunks admitted inside the ledger's window both run.
    */
   capForTask(
     tx: Transaction,
     taskId: Id,
-  ): Promise<{ readonly capUsd: number; readonly spentUsd: number } | null>;
+    reserveUsd: number,
+  ): Promise<({ readonly capUsd: number } & CapSpend) | null>;
 }

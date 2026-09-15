@@ -81,7 +81,12 @@ import {
   type PipelineOutboundData,
 } from './jobs.js';
 import type { ProjectSettingsPort } from './settings.js';
-import { autonomyPresetFor, templateForIssueType } from './settings.js';
+import {
+  autonomyPresetFor,
+  epicSplitRouting,
+  spikeRefusal,
+  templateForIssueType,
+} from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { readTicketSnapshot } from './ticket-snapshot.js';
@@ -342,6 +347,39 @@ export const runIntakeCheck = async (
     integrations,
   );
 
+  /**
+   * **Can this project's tracker be written to at all?** (WP-40, criterion 6.)
+   *
+   * Asked here because it is the last place with the binding in hand and outside a transaction, and
+   * asked *before* the template is chosen because the answer decides the template: the epic-split
+   * variant ends in `createTicket` calls, so routing an epic to it on a read-only binding would
+   * queue a breakdown whose acceptance could only throw — a human's decision spent on nothing. The
+   * refusal is logged by name rather than left for the duty to discover (standing rule 18).
+   *
+   * Every other template is unaffected: `epicSplitRouting` is the only reader, and it answers
+   * `not_claimed` for a project that has not turned the variant on.
+   */
+  const routing = {
+    canCreateTickets: integrations.taskManagement?.port.capabilities().createTicket === true,
+  };
+  const splitRouting = epicSplitRouting(settings, data.issue_type ?? null, routing);
+  if (splitRouting.kind === 'refused') {
+    (options.logger ?? silentLogger).info(
+      { project_id: projectId, ticket_key: ticket.key, reason: splitRouting.reason },
+      'this ticket was not routed to the epic-split variant',
+    );
+  }
+  // The plain spike's own opt-in (WP-40 round 2). Said out loud for standing rule 18's reason: a
+  // ticket typed `Spike` on a project that has not turned the template on runs the default
+  // pipeline, which is the shipped behaviour and looks like nothing happening.
+  const spikeOff = spikeRefusal(settings, data.issue_type ?? null);
+  if (spikeOff !== null) {
+    (options.logger ?? silentLogger).info(
+      { project_id: projectId, ticket_key: ticket.key, reason: spikeOff },
+      'this ticket was not routed to the spike template',
+    );
+  }
+
   const work = await options.unitOfWork.transaction(async (scope) => {
     const existing = await options.store.tasks.findByTicket(scope.tx, {
       projectId,
@@ -352,7 +390,7 @@ export const runIntakeCheck = async (
     if (existing !== null) {
       return null;
     }
-    const template = templateForIssueType(settings, data.issue_type ?? null);
+    const template = templateForIssueType(settings, data.issue_type ?? null, routing);
     const commandContext = contextFor(options, projectId, causeEventId);
     const created = createTask(
       {

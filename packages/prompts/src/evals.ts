@@ -46,6 +46,18 @@ export interface EvalAssertion {
 export interface EvalCase {
   readonly id: string;
   readonly description: string;
+  /**
+   * The artifact this case is about, when it is **not** the set's own (WP-40).
+   *
+   * TD-016's format is one artifact type per role, which held while every role produced one. WP-40
+   * gives two roles a second: the Architect produces a `ResearchReport` on the spike template and
+   * the Product Manager a `TicketBreakdown` on the epic-split variant. A second *file* per role
+   * would have been the alternative and is worse — `roleEvalPath` is one path, promptfoo's config
+   * points at one file, and a role whose cases live in two places is a role whose corpus nobody
+   * reads whole. So the set keeps the role's usual type and a case may name another one; every
+   * check in `evals.test.ts` resolves per case rather than per set.
+   */
+  readonly artifact_type?: ArtifactType;
   /** Nunjucks variables the prompt template fills. Every one of them is untrusted in production. */
   readonly vars: Readonly<Record<string, string>>;
   /**
@@ -86,8 +98,20 @@ const load = (role: AgentRole): RoleEvalSet => {
   if (parsed.artifact_type !== null && !artifactTypeSchema.options.includes(parsed.artifact_type)) {
     throw new Error(`${roleEvalPath(role)} names an unknown artifact type`);
   }
+  for (const entry of parsed.cases) {
+    if (
+      entry.artifact_type !== undefined &&
+      !artifactTypeSchema.options.includes(entry.artifact_type)
+    ) {
+      throw new Error(`${roleEvalPath(role)} case ${entry.id} names an unknown artifact type`);
+    }
+  }
   return parsed;
 };
+
+/** The artifact a case is about: its own when it names one, otherwise the set's. */
+export const caseArtifactType = (set: RoleEvalSet, entry: EvalCase): ArtifactType | null =>
+  entry.artifact_type ?? set.artifact_type;
 
 export const ROLE_EVALS: Readonly<Record<AgentRole, RoleEvalSet>> = Object.fromEntries(
   agentRoleSchema.options.map((role) => [role, load(role)]),

@@ -29,11 +29,13 @@ import { countsAsActive, countsInPipeline, isActiveRunStatus } from '@platform/d
 import type {
   ApprovalRepository,
   ArtifactRepository,
+  BreakdownRepository,
   PipelineStore,
   QuestionRepository,
   RunRepository,
   StoredApproval,
   StoredArtifact,
+  StoredBreakdownItem,
   StoredRun,
   StoredTask,
   TaskRepository,
@@ -105,6 +107,7 @@ export const createMemoryPipelineStore = (
   const runs = new Map<Id, StoredRun>();
   const questions = new Map<Id, Question>();
   const approvals = new Map<Id, StoredApproval>();
+  const breakdown = new Map<Id, StoredBreakdownItem>();
   let sequence = 0;
 
   /**
@@ -511,12 +514,73 @@ export const createMemoryPipelineStore = (
     },
   };
 
+  /**
+   * WP-40's epic-split queue.
+   *
+   * `decide` filters on `status === 'queued'` here exactly as the SQL's `where status = 'queued'`
+   * does, because that predicate is the race two maintainers deciding the same child lose to — a
+   * fake that decided an already-decided row would be **kinder** than the adapter, which is the one
+   * direction a fake may never take (standing rule 1).
+   *
+   * It answers the moved rows **as they now are** and adds the reason's redaction count to each,
+   * which is what the adapter does and what the contract suite holds both of them to: the adapter's
+   * first version answered them as they *were*, because a data-modifying CTE is invisible to the
+   * rest of its own statement, and this fake was the kinder of the two (WP-40 round 2).
+   */
+  const breakdownRepository: BreakdownRepository = {
+    insert: async (_tx, items) => {
+      for (const item of items) {
+        breakdown.set(item.id, clone(item));
+      }
+    },
+    listForTask: async (_tx, taskId) =>
+      [...breakdown.values()]
+        .filter((item) => item.taskId === taskId)
+        .sort((left, right) => left.position - right.position)
+        .map(clone),
+    decide: async (_tx, input) => {
+      const moved: StoredBreakdownItem[] = [];
+      for (const itemId of input.itemIds) {
+        const current = breakdown.get(itemId);
+        if (current === undefined || current.taskId !== input.taskId) {
+          continue;
+        }
+        if (current.status !== 'queued') {
+          continue;
+        }
+        const next: StoredBreakdownItem = {
+          ...current,
+          status: input.status,
+          decidedByUserId: input.decidedByUserId,
+          decidedAt: input.decidedAt,
+          reason: input.reason,
+          redactionCount: current.redactionCount + input.reasonRedactions,
+        };
+        breakdown.set(itemId, next);
+        moved.push(clone(next));
+      }
+      return moved.sort((left, right) => left.position - right.position);
+    },
+    recordTicket: async (_tx, input) => {
+      const current = breakdown.get(input.itemId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`breakdown item ${input.itemId} does not exist`);
+      }
+      breakdown.set(input.itemId, {
+        ...current,
+        ticketKey: input.ticketKey,
+        ticketUrl: input.ticketUrl,
+      });
+    },
+  };
+
   return {
     tasks: taskRepository,
     artifacts: artifactRepository,
     runs: runRepository,
     questions: questionRepository,
     approvals: approvalRepository,
+    breakdown: breakdownRepository,
     writeEstimate: (taskId, estimate) => {
       const current = tasks.get(taskId);
       if (current === undefined) {

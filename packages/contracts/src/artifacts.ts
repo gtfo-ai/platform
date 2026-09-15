@@ -602,6 +602,121 @@ export const historyFindingsDataSchema = z.strictObject({
   summary: z.string().max(4_000),
 });
 
+/**
+ * The spike template's document and the epic-split variant's breakdown — product/04:117 (WP-40).
+ *
+ * Both caps are on **model output that leaves the platform**: the report becomes a comment on
+ * somebody's ticket and a page in the knowledge base, and each child of a breakdown becomes a
+ * ticket in somebody's tracker. The derivation is at each constant rather than left to the reader
+ * (standing rule 63), and the writers cut rather than refuse where a human still has to be told
+ * something (standing rule 20).
+ */
+
+/**
+ * How many options one research report may weigh.
+ *
+ * Eight, and the derivation is what *reading* them costs rather than what producing them does: the
+ * report is rendered whole into a ticket comment and into a knowledge page, each option carrying
+ * its own prose at {@link MAX_RESEARCH_TEXT_CHARS}, so this cap is the widest fan-out those two
+ * documents stay readable at. It is the platform's choice and not a measurement — nobody has
+ * watched a spike weigh eight — and a report that proposes more than eight has stopped
+ * recommending and started surveying, which product/04:117's *"recommendation"* is not.
+ */
+export const MAX_RESEARCH_OPTIONS = 8;
+/** How many findings it may state. The report itself is the envelope's `markdown`. */
+export const MAX_RESEARCH_FINDINGS = 20;
+/** One finding's or one option's prose, in characters — a paragraph, not a page. */
+export const MAX_RESEARCH_TEXT_CHARS = 2_000;
+
+/**
+ * A claim the research established, with what it rests on.
+ *
+ * `evidence` is the model's own list of what it read — a path, a URL, a command it ran. It is
+ * **not** resolved by the platform (nothing here can check that a repository path exists at the
+ * commit the run saw), so it is rendered as text and never as a link, exactly as
+ * `historyEvidenceSchema`'s note says of a citation nobody followed.
+ */
+export const researchFindingSchema = z.strictObject({
+  statement: nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS),
+  evidence: z.array(nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS)).max(10),
+  confidence: z.enum(['high', 'medium', 'low']),
+});
+
+export const researchOptionSchema = z.strictObject({
+  option: nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS),
+  pros: z.array(nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS)).max(10),
+  cons: z.array(nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS)).max(10),
+  effort: sizeSchema,
+});
+
+/**
+ * ResearchReport — what an `architecture` stage produces on the spike template.
+ *
+ * `recommendation` is required and `options` may be empty: a spike that weighed nothing still owes
+ * an answer, and a spike that weighed three things and recommends none of them has not finished.
+ */
+export const researchReportDataSchema = z.strictObject({
+  question: nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS),
+  summary: z.string().max(4_000),
+  findings: z.array(researchFindingSchema).max(MAX_RESEARCH_FINDINGS),
+  options: z.array(researchOptionSchema).max(MAX_RESEARCH_OPTIONS),
+  recommendation: nonEmptyStringSchema.max(MAX_RESEARCH_TEXT_CHARS),
+  open_questions: z.array(artifactQuestionSchema),
+  kb_citations: z.array(kbCitationSchema),
+});
+
+/**
+ * How many child tickets one epic split may propose.
+ *
+ * **Derived from what accepting them costs, not chosen.** Each accepted child is one
+ * `createTicket` call through `IntegrationActionExecutor` — one provider mutation, one
+ * `integration_actions` row and one idempotency record — so this number is the fan-out of a single
+ * human decision into somebody else's tracker. Twenty is the same order as
+ * `MAX_PROPOSALS_PER_RUN` (20, the curator's own per-run cap on pages) and an epic that needs more
+ * than twenty tickets is an epic that needs splitting first. It is a **schema** bound, so a run that
+ * proposed twenty-one fails validation and is reported as such rather than having one child
+ * silently dropped — the answer `MAX_HISTORY_PROPOSALS_PER_RUN` gives for the same reason.
+ */
+export const MAX_BREAKDOWN_CHILDREN = 20;
+/** A child's title, in characters — it becomes a ticket summary, which every tracker bounds. */
+export const MAX_BREAKDOWN_TITLE_CHARS = 200;
+/** A child's description. An order of magnitude under `MAX_ARTIFACT_CHARS`; it is a ticket body. */
+export const MAX_BREAKDOWN_DESCRIPTION_CHARS = 4_000;
+/** Acceptance criteria per child. product/19 §17 lints for their presence; three is its example. */
+export const MAX_BREAKDOWN_CRITERIA = 10;
+
+/**
+ * One proposed child ticket. **The acceptance criteria are the model's words**, in the shape every
+ * other artifact states them in (`acceptanceCriterionSchema`), so the platform never writes one.
+ *
+ * There is deliberately no `issue_type` and no `labels`: what a child is *called* in a tracker is
+ * the project's configuration (`features.epic_split.child_issue_type`), and a model that could
+ * choose the type could choose one whose workflow the platform has no mapping for.
+ */
+export const breakdownChildSchema = z.strictObject({
+  title: nonEmptyStringSchema.max(MAX_BREAKDOWN_TITLE_CHARS),
+  description: z.string().max(MAX_BREAKDOWN_DESCRIPTION_CHARS),
+  acceptance_criteria: z.array(acceptanceCriterionSchema).min(1).max(MAX_BREAKDOWN_CRITERIA),
+  size: sizeSchema,
+  /** Why this is a ticket of its own — what a PM reads before accepting it. */
+  rationale: z.string().max(MAX_BREAKDOWN_DESCRIPTION_CHARS),
+});
+
+/**
+ * TicketBreakdown — what the epic-split variant's `architecture` stage produces.
+ *
+ * `children` has **no `min`** and that is the honest shape: an epic the model could not split is a
+ * finding, and the queue then holds nothing for a human to accept, which is different from a run
+ * that failed. `out_of_scope` is where the work the split deliberately leaves out is named — the
+ * same boundary `RefinedSpec` asks for, at the epic's grain.
+ */
+export const ticketBreakdownDataSchema = z.strictObject({
+  epic_summary: z.string().max(4_000),
+  children: z.array(breakdownChildSchema).max(MAX_BREAKDOWN_CHILDREN),
+  out_of_scope: z.array(nonEmptyStringSchema.max(MAX_BREAKDOWN_TITLE_CHARS)).max(20),
+  open_questions: z.array(artifactQuestionSchema),
+});
+
 /** `artifact_type` → the schema for that type's `data`. */
 export const artifactDataSchemas = {
   RefinedSpec: refinedSpecDataSchema,
@@ -617,6 +732,8 @@ export const artifactDataSchemas = {
   DiscoveryDraft: discoveryDraftDataSchema,
   AskAnswer: askAnswerDataSchema,
   HistoryFindings: historyFindingsDataSchema,
+  ResearchReport: researchReportDataSchema,
+  TicketBreakdown: ticketBreakdownDataSchema,
 } as const;
 
 // ── Envelope ─────────────────────────────────────────────────────────────────
@@ -657,6 +774,8 @@ export const artifactSchema = z.discriminatedUnion('artifact_type', [
   artifactOf('DiscoveryDraft', discoveryDraftDataSchema),
   artifactOf('AskAnswer', askAnswerDataSchema),
   artifactOf('HistoryFindings', historyFindingsDataSchema),
+  artifactOf('ResearchReport', researchReportDataSchema),
+  artifactOf('TicketBreakdown', ticketBreakdownDataSchema),
 ]);
 
 /** A reference to a stored artifact, used in event payloads and API DTOs. */
@@ -692,6 +811,11 @@ export type HistoryFindingKind = z.infer<typeof historyFindingKindSchema>;
 export type HistoryEvidence = z.infer<typeof historyEvidenceSchema>;
 export type HistoryProposal = z.infer<typeof historyProposalSchema>;
 export type HistoryFindingsData = z.infer<typeof historyFindingsDataSchema>;
+export type ResearchFinding = z.infer<typeof researchFindingSchema>;
+export type ResearchOption = z.infer<typeof researchOptionSchema>;
+export type ResearchReportData = z.infer<typeof researchReportDataSchema>;
+export type BreakdownChild = z.infer<typeof breakdownChildSchema>;
+export type TicketBreakdownData = z.infer<typeof ticketBreakdownDataSchema>;
 export type AskAnswerCitation = z.infer<typeof askAnswerCitationSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;

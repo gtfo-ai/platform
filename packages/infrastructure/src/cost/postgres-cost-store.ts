@@ -30,11 +30,17 @@ import type {
   Transaction,
   WindowStartOf,
 } from '@platform/application';
-import type { EstimateBasis, Id, IsoDateTime, Size } from '@platform/contracts';
+import type { BudgetScope, EstimateBasis, Id, IsoDateTime, Size } from '@platform/contracts';
 import { refinedSpecDataSchema } from '@platform/contracts';
 import type { PriceRates, RollupDelta, TaskCostSample } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import {
+  ACTIVE_RUN_STATUSES_PARAM,
+  PENDING_RUN_WINDOW_SQL,
+  pendingRunUsdSql,
+  UNLEDGERED_RUN_SQL,
+} from './pending-run-spend.js';
 
 /** Raised when a write that had to change a row changed none. */
 export class CostRowMissingError extends Error {
@@ -212,7 +218,49 @@ const budgetRepository: BudgetRepository = {
   },
 };
 
+/**
+ * The runs a budget's spend is charged from, as a `where` fragment over the alias `r` (`runs`).
+ *
+ * `$4` is the budget's `scope_id`; the **organisation** scope has none — migration 0007's column is
+ * null *"for the organisation scope, which has exactly one subject"*, and `scopeFilter` above reads
+ * it the same way — so its fragment names every run in the deployment rather than joining a column
+ * that would be null. `null` here means *"no scope over runs of a window"*: a `run` budget is one
+ * run rather than a set of them, and a `project`/`task` row with no `scope_id` is malformed.
+ */
+const pendingScopeSql = (budget: {
+  readonly scope: BudgetScope;
+  readonly scopeId: Id | null;
+}): { readonly text: string; readonly needsScopeId: boolean } | null => {
+  if (budget.scope === 'org') return { text: 'true', needsScopeId: false };
+  if (budget.scopeId === null) return null;
+  if (budget.scope === 'project') return { text: 'r.project_id = $4', needsScopeId: true };
+  if (budget.scope === 'task') return { text: 'r.task_id = $4', needsScopeId: true };
+  return null;
+};
+
 export const createPostgresCostStore = (): CostStore => ({
+  pendingSpend: async (tx, budget, since, reserveUsd) => {
+    const scope = pendingScopeSql(budget);
+    if (scope === null) {
+      return 0;
+    }
+    const { rows } = await sqlOf(tx).query<{ usd: string }>(
+      // What this scope's runs have committed and the ledger has not recorded — see
+      // `./pending-run-spend.ts` for the valuation and `packages/application/src/cost/pending.ts`
+      // for why a cap that reads only the projection is read one run late.
+      `select coalesce(sum(${pendingRunUsdSql('$2', '$3')}), 0)::text as usd
+         from runs r
+        where ${scope.text} and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$1')}`,
+      [
+        since,
+        [...ACTIVE_RUN_STATUSES_PARAM],
+        reserveUsd,
+        ...(scope.needsScopeId ? [budget.scopeId] : []),
+      ],
+    );
+    return Number(rows[0]?.usd ?? 0);
+  },
+
   runContext: async (tx, runId) => {
     const { rows } = await sqlOf(tx).query<RunContextRow>(
       `select r.id as run_id, r.task_id, r.project_id, p.org_id, t.template,

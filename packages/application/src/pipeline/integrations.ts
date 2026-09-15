@@ -64,6 +64,7 @@ import type {
   CommentRef,
   TaskManagementPort,
   Ticket,
+  TicketDraft,
   TicketMatch,
   TicketMatchRule,
   TicketRefInput,
@@ -795,6 +796,120 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
       }),
       (result) => ({ comment_id: result.comment_id }),
       replayable<CommentRef>(context.idempotencyKey),
+    );
+  },
+
+  /**
+   * The spike's report, attached to the ticket — product/04:117's *"a markdown report attached to
+   * the ticket"* (WP-40).
+   *
+   * A third sibling of {@link lintComment} and {@link askComment}, for the reason those two are
+   * siblings of each other: what differs is the **identity the idempotency key names**. A lint is
+   * posted once per task, an ask once per ask, and a report once per *architecture attempt* — a
+   * spike that returns to refinement and produces a second report has something new to say, and a
+   * key that named only the task would replay the first one for ever.
+   *
+   * `addComment` rather than `upsertWorkpad` because product/08 says *"a new comment every time —
+   * questions and linter output must notify"*, and a research report a nobody is notified about is
+   * a report nobody reads. The markdown is redacted **here, at the call**, like every other model
+   * text on its way to a third party.
+   */
+  reportComment: async (
+    ticket: TicketRefInput,
+    markdown: string,
+    context: CallContext & {
+      readonly mode: TaskMode;
+      readonly idempotencyKey: string;
+      readonly markerId: string;
+    },
+  ): Promise<CommentRef | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !namesAProviderTicket(ticket)) {
+      return null;
+    }
+    const redacted = binding.redactor.redactText(markdown).value;
+    return mutate(
+      integrations,
+      binding.ref,
+      'add_comment',
+      { ticket_key: ticket.key, marker_id: context.markerId },
+      context,
+      async () => binding.port.addComment(ticket, redacted, { markerId: context.markerId }),
+      () => ({
+        provider: ticket.provider,
+        ticket_key: ticket.key,
+        comment_id: 'would-have-report',
+        url: null,
+        marker_id: context.markerId,
+      }),
+      (result) => ({ comment_id: result.comment_id }),
+      replayable<CommentRef>(context.idempotencyKey),
+    );
+  },
+
+  /**
+   * **The largest external write this platform makes**: a ticket in somebody else's backlog
+   * (product/08:9's *"create follow-up tickets"*, product/04:117's epic split — WP-40).
+   *
+   * Four properties, and each is here rather than at the caller so that a second caller cannot
+   * forget one:
+   *
+   *  - **The capability is checked before the call.** `TaskManagementCapabilities.createTicket` is
+   *    the port's own contract (*"a caller checks the flag before asking; a provider that is asked
+   *    anyway throws `IntegrationUnsupportedError` rather than pretending"*), so a read-only binding
+   *    answers `null` and **no provider call and no audit row** happen — the same answer a project
+   *    with no binding gets.
+   *  - **A shadow task creates nothing.** That is `mutate`'s guard rather than a branch here, and it
+   *    is why the `shadowResult` below is an obviously fake key: BD-021, and the same sentence Jira's
+   *    own adapter carries (*"a shadow task must not be able to pretend it filed a ticket"*).
+   *  - **The idempotency key is the caller's and identifies the child**, never the wake-up: a
+   *    replayed job and a second decision on the same row must both replay the first answer rather
+   *    than file a second ticket. No part of it is model output, so `idempotencyScopeFor` has
+   *    nothing to refuse (the rule WP-24's review round 2 earned).
+   *  - **Every word of the draft is redacted here** — title, description, labels and the parent key
+   *    — because all four reach a third party and three of the four are model output over untrusted
+   *    input (BD-022, TD-012).
+   *
+   * The `payload` recorded on the audit row is the parent and the child's **title**, never the
+   * body: `integration_actions.payload` wants what was touched rather than a copy of the ticket
+   * (the rule `add_comment` follows).
+   */
+  createChildTicket: async (
+    draft: TicketDraft,
+    context: CallContext & { readonly mode: TaskMode; readonly idempotencyKey: string },
+  ): Promise<TicketRefInput | null> => {
+    const binding = integrations.taskManagement;
+    if (binding === null || !binding.port.capabilities().createTicket) {
+      return null;
+    }
+    const text = (value: string): string => binding.redactor.redactText(value).value;
+    const redacted: TicketDraft = {
+      ...draft,
+      title: text(draft.title),
+      description: text(draft.description),
+      labels: draft.labels.map(text),
+      ...(draft.parent_key === undefined || draft.parent_key === null
+        ? {}
+        : { parent_key: text(draft.parent_key) }),
+    };
+    return mutate(
+      integrations,
+      binding.ref,
+      'create_ticket',
+      {
+        project_key: redacted.project_key,
+        parent_key: redacted.parent_key ?? null,
+        title: redacted.title,
+      },
+      context,
+      async () => binding.port.createTicket(redacted),
+      () => ({
+        provider: binding.ref.provider,
+        key: `WOULD-HAVE-NOT-A-REAL-TICKET`,
+        url: 'https://shadow.invalid/would-have-created',
+      }),
+      (result) => ({ ticket_key: result.key }),
+      replayable<TicketRefInput>(context.idempotencyKey),
     );
   },
 

@@ -135,6 +135,11 @@ export const transitionResultSchema = z.strictObject({
  * a chore *"produces a normal `chore` task"* — which the scheduler creates directly, on a
  * platform-issued reference that every ticket read and every ticket write refuses by name. A
  * maintenance chore files no ticket on anybody's board.
+ *
+ * **One of the two is built** (WP-40): the epic split calls it through
+ * `ticketWrites.createChildTicket`, from the `breakdown_create` outbound duty, once per child a
+ * human accepted and never on a run's own verdict. The scope-creep valve is still unbuilt, so this
+ * method had no caller at all from WP-08 until that row.
  */
 export const ticketDraftSchema = z.strictObject({
   project_key: nonEmptyStringSchema,
