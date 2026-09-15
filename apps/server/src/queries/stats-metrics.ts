@@ -608,7 +608,10 @@ const pointOf = (series: Series, bucket: string): Point => {
 class Fold {
   private readonly series = new Map<StatMetricId, Series>();
 
-  constructor(private readonly bucket: StatBucketSize) {}
+  private readonly bucket: StatBucketSize;
+  constructor(bucket: StatBucketSize) {
+    this.bucket = bucket;
+  }
 
   /** Adds one observation to a metric's bucket. */
   add(

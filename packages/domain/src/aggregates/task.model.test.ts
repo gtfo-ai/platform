@@ -208,7 +208,10 @@ const transition = (
 type TaskCommand = fc.Command<TaskModel, TaskReal>;
 
 class EnterStage implements TaskCommand {
-  constructor(private readonly stage: string) {}
+  private readonly stage: string;
+  constructor(stage: string) {
+    this.stage = stage;
+  }
   check(): boolean {
     return true;
   }
@@ -249,7 +252,10 @@ class CompleteStage implements TaskCommand {
 }
 
 class ReturnToStage implements TaskCommand {
-  constructor(private readonly loop: IterationLoop) {}
+  private readonly loop: IterationLoop;
+  constructor(loop: IterationLoop) {
+    this.loop = loop;
+  }
   check(): boolean {
     return true;
   }
@@ -285,7 +291,10 @@ class ReturnToStage implements TaskCommand {
 }
 
 class AskQuestion implements TaskCommand {
-  constructor(private readonly blocking: boolean) {}
+  private readonly blocking: boolean;
+  constructor(blocking: boolean) {
+    this.blocking = blocking;
+  }
   check(): boolean {
     return true;
   }
@@ -436,7 +445,10 @@ class HandBack implements TaskCommand {
  * on this aggregate.
  */
 class Steer implements TaskCommand {
-  constructor(private readonly status: RunStatus) {}
+  private readonly status: RunStatus;
+  constructor(status: RunStatus) {
+    this.status = status;
+  }
   check(): boolean {
     return true;
   }
@@ -568,7 +580,10 @@ class Queue implements TaskCommand {
 
 /** Wraps a command so the invariants are re-checked after every step of every sequence. */
 class Checked implements TaskCommand {
-  constructor(private readonly inner: TaskCommand) {}
+  private readonly inner: TaskCommand;
+  constructor(inner: TaskCommand) {
+    this.inner = inner;
+  }
   check(model: Readonly<TaskModel>): boolean {
     return this.inner.check(model);
   }

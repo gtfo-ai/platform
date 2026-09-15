@@ -188,10 +188,15 @@ class RecordOutput implements RunCommand {
 }
 
 class Finish implements RunCommand {
+  private readonly status: 'completed' | 'cancelled' | 'budget_exceeded' | 'timed_out';
+  private readonly reason: RunTerminalReason;
   constructor(
-    private readonly status: 'completed' | 'cancelled' | 'budget_exceeded' | 'timed_out',
-    private readonly reason: RunTerminalReason,
-  ) {}
+    status: 'completed' | 'cancelled' | 'budget_exceeded' | 'timed_out',
+    reason: RunTerminalReason,
+  ) {
+    this.status = status;
+    this.reason = reason;
+  }
   check(): boolean {
     return true;
   }
@@ -220,7 +225,10 @@ class Finish implements RunCommand {
 }
 
 class Fail implements RunCommand {
-  constructor(private readonly status: 'failed' | 'stalled') {}
+  private readonly status: 'failed' | 'stalled';
+  constructor(status: 'failed' | 'stalled') {
+    this.status = status;
+  }
   check(): boolean {
     return true;
   }
@@ -246,7 +254,10 @@ class Fail implements RunCommand {
 }
 
 class Checked implements RunCommand {
-  constructor(private readonly inner: RunCommand) {}
+  private readonly inner: RunCommand;
+  constructor(inner: RunCommand) {
+    this.inner = inner;
+  }
   check(model: Readonly<RunModel>): boolean {
     return this.inner.check(model);
   }

@@ -61,13 +61,14 @@ export const MAX_TASK_ROWS = 5_000;
 /** Raised when a range holds more tasks than one answer may be folded from. */
 export class StatsRangeTooLargeError extends Error {
   override readonly name = 'StatsRangeTooLargeError';
-  constructor(
-    readonly kind: 'started' | 'delivered',
-    readonly limit: number,
-  ) {
+  readonly kind: 'started' | 'delivered';
+  readonly limit: number;
+  constructor(kind: 'started' | 'delivered', limit: number) {
     super(
       `this range covers more than ${limit} ${kind} tasks, which is more than one statistics answer is folded from; narrow the range or the project`,
     );
+    this.kind = kind;
+    this.limit = limit;
   }
 }
 
