@@ -115,11 +115,12 @@ handler for it, or it destroys a work item belonging to another process in the d
 **`—` declares the event unconsumed** — nothing is expected to handle it, and a sweeper needs no handler
 for it. `packages/application/src/events/consumption.ts` is that column as code, its keys held to
 `DOMAIN_EVENT_TYPES` so a new event type cannot be added without answering the question. **It differs
-from this column on 22 rows today** (23 before WP-29, which closed `run.steered`; 25 before WP-32,
+from this column on 18 rows today** (22 before WP-41, which closed `task.review.observed`, `task.lint.posted`,
+`task.rebase.checked` and `task.conflict.warned`; 23 before WP-29, which closed `run.steered`; 25 before WP-32,
 which closed `budget.threshold.reached` and `budget.exhausted`; 28 before WP-19, which closed
 `run.finished`, `run.failed` and `artifact.created`) — the column states the finished product's consumers and the declaration states
-this build's, so each divergent entry names the work package that closes it (TD-005's amendment
-records the trade).
+this build's, so each divergent entry names the work package that closes it, or — for `mr.updated`, whose payload carries
+no author — the backlog entry that says why nothing will (TD-005's amendment records the trade).
 
 > **The Slack consumer at priority 210 exists, since WP-32.** The six task rows below that name it —
 > `task.created`, `task.stage.returned`, `task.question.asked`, `task.escalated`, `task.cancelled`

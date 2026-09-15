@@ -16,6 +16,11 @@ export const queryKeys = {
   integrations: ['integrations'] as const,
   integrationSetupGuide: (id: string) => ['integrations', id, 'setup-guide'] as const,
   orgBudgets: ['org', 'budgets'] as const,
+  /**
+   * WP-41. Keyed by the filters, because a range and a bucket are two different answers rather than
+   * one cached one — the shape `historyBootstraps` uses for its N.
+   */
+  orgStats: (filters: Readonly<Record<string, unknown>> = {}) => ['org', 'stats', filters] as const,
 
   projects: ['projects'] as const,
   project: (id: string) => ['project', id] as const,

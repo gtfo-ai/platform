@@ -11,9 +11,11 @@
  *
  * **What is not here, and why.**
  *
- * - `GET /api/org/stats` has no DTO anywhere in contracts, so the statistics screen has nothing to
- *   parse and ships as an honest empty state rather than as a screen built on a shape this work
- *   package invented (Q45).
+ * - ~~`GET /api/org/stats`~~ **is here since WP-41**, which is the work package that answered Q45's
+ *   statistics half: the DTO is `orgStatsResponseSchema` and the CSV is the same numbers in long
+ *   form, on a path of its own (`/api/org/stats.csv`) so that neither answer has to publish the
+ *   other's schema. The screen no longer ships as an empty state (standing rule 83: closing a gap
+ *   falsifies the sentence that described it).
  * - `POST /api/tasks/:id/{take-over,hand-back}`. **The reason this list gave has been answered, and
  *   the remaining absence is a smaller one.** It used to read *"each command's whole value is in a
  *   response no schema publishes"*; WP-27 built both routes and published `takeOverResponseSchema`,
@@ -51,6 +53,7 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
+  orgStatsResponseSchema,
   orgUsersResponseSchema,
   pauseTaskRequestSchema,
   projectAuditResponseSchema,
@@ -108,6 +111,17 @@ export interface Endpoints {
     readonly limit?: number;
     readonly entity_type?: string;
   }) => Promise<z.output<typeof orgAuditResponseSchema>>;
+  /**
+   * The organisation's delivery statistics (WP-41, product/16).
+   *
+   * `range` and `bucket` are omitted rather than defaulted here: the server's defaults are the
+   * contract, and a second copy of them in the client is a second thing to drift.
+   */
+  readonly orgStats: (query?: {
+    readonly range?: string;
+    readonly bucket?: string;
+    readonly project_id?: string;
+  }) => Promise<z.output<typeof orgStatsResponseSchema>>;
   readonly agents: () => Promise<z.output<typeof agentsResponseSchema>>;
   readonly inbox: () => Promise<z.output<typeof inboxResponseSchema>>;
   readonly integrations: () => Promise<z.output<typeof integrationsResponseSchema>>;
@@ -314,6 +328,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     orgUsers: () => client.get('/api/org/users', { schema: orgUsersResponseSchema }),
     orgAudit: (query) =>
       client.get('/api/org/audit', { schema: orgAuditResponseSchema, query: { ...query } }),
+    orgStats: (query) =>
+      client.get('/api/org/stats', { schema: orgStatsResponseSchema, query: { ...query } }),
     agents: () => client.get('/api/org/agents', { schema: agentsResponseSchema }),
     inbox: () => client.get('/api/org/inbox', { schema: inboxResponseSchema }),
     integrations: () => client.get('/api/integrations', { schema: integrationsResponseSchema }),

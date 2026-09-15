@@ -14,4 +14,5 @@ export * from './identity.js';
 export * from './knowledge.js';
 export * from './pipeline.js';
 export * from './platform.js';
+export * from './stats.js';
 export * from './transcripts.js';

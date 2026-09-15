@@ -29,10 +29,11 @@
  *
  * A path the app builds from pieces (`'/api/' + resource`), a path in a `*.test.ts`/`*.test.tsx`
  * file (deliberately out of scope — `api/http.test.ts` names `/api/thing`, which is not an
- * endpoint), and a path in a comment (block comments and comment-only lines are stripped, so
- * `endpoints.ts`'s own docblock naming `GET /api/org/stats` does not make the app a caller of it).
- * It also says nothing about the *shape* either side expects; that is `packages/contracts`, which
- * both import.
+ * endpoint), and a path in a comment (block comments and comment-only lines are stripped, which
+ * the first case below asserts over `clientPaths` itself — it used to be asserted against
+ * `endpoints.ts`'s docblock naming `GET /api/org/stats`, and WP-41 made the app a real caller of
+ * that path). It also says nothing about the *shape* either side expects; that is
+ * `packages/contracts`, which both import.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -234,8 +235,17 @@ describe('the client’s endpoint list against the server’s router', () => {
     );
     expect(paths).toContain('/api/runs/{}/messages');
     expect(paths).toContain('/api/auth/get-session');
-    // …and a path that appears only in a docblock is not a path the app calls.
-    expect(paths).not.toContain('/api/org/stats');
+    // …and a path that appears only in a comment is not a path the app calls. This used to be
+    // asserted against `/api/org/stats`, which `endpoints.ts` named in a docblock while nothing
+    // called it — **WP-41 made the app a caller**, so the assertion moved from an observation about
+    // the repository to a case over the function itself, which is stronger and cannot go stale the
+    // same way (standing rule 83: closing a gap falsifies the sentence that described it).
+    expect(
+      clientPaths([
+        { path: 'fake.ts', source: '/** names `/api/never-called` */\nconst a = 1;\n' },
+        { path: 'fake2.ts', source: '// also /api/never-called-either\nconst b = 2;\n' },
+      ]),
+    ).toEqual([]);
   });
 
   it('serves every path the client names, or admits the gap with the row that owns it', async () => {
@@ -317,6 +327,16 @@ describe('the client’s endpoint list against the server’s router', () => {
       '/api/projects/{}/discovery',
       '/api/projects/{}/readiness',
     ]) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('serves the statistics pair WP-41 added', async () => {
+    // Named positively (standing rule 10): "not in the gap list" is also satisfied by a path the
+    // client sweep failed to find at all. Two paths rather than one `?format=` parameter, because
+    // one of them answers `text/csv` and a route cannot publish two response schemas honestly
+    // (`routes/stats.ts` says so).
+    for (const path of ['/api/org/stats', '/api/org/stats.csv']) {
       expect((await probe(path)).served, path).toBe(true);
     }
   });

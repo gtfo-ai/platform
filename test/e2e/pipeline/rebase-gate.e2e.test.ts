@@ -16,6 +16,7 @@
  * that precedes one.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
   GIT_PROJECT,
   inboundEvent,
@@ -409,5 +410,43 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
       (row) => row.action === 'get_merge_request_diff',
     );
     expect(diffReads).toHaveLength(4);
+
+    /**
+     * **And the board's half** — product/04 S6b's *"the board warns when two active tasks touch
+     * the same files"*, which until WP-41 reached no screen at all (PROGRESS backlog 63).
+     *
+     * The field is a projection over this task's own event stream (`conflictsFor`), so it is read
+     * back through the real API rather than computed here. The wait above already binds the event
+     * the projection reads, which is what makes this assertion safe to make immediately after it
+     * (standing rule 87).
+     */
+    const client = new Client(pipeline.instance.baseUrl);
+    const signedIn = await client.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status, JSON.stringify(signedIn.body)).toBe(200);
+    const page = await client.json<{
+      items: readonly {
+        ticket: { key: string };
+        conflict: { other_ticket_key: string; path_count: number; truncated: boolean } | null;
+      }[];
+    }>(`/api/projects/${pipeline.projectId}/tasks`);
+    expect(page.status, JSON.stringify(page.body)).toBe(200);
+
+    const warnedCard = page.body.items.find((item) => item.ticket.key === 'ACME-1');
+    expect(warnedCard?.conflict).toEqual({
+      other_task_id: overlapping,
+      other_ticket_key: 'ACME-98',
+      path_count: 1,
+      truncated: false,
+      warned_at: expect.any(String),
+    });
+    // Both directions (rule 42): the peer that shares nothing carries no badge, and neither does
+    // the task that was compared *against* — the comparison is not symmetric (backlog 65) and the
+    // board must not imply otherwise.
+    expect(
+      page.body.items.filter((item) => item.conflict !== null).map((item) => item.ticket.key),
+    ).toEqual(['ACME-1']);
   }, 180_000);
 });

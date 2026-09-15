@@ -90,6 +90,16 @@ describe('records', () => {
         truncated: false,
         routed_at: AT,
       },
+      // WP-41, backlog 63: the latest conflict warning, or `null`. Not a column — a projection
+      // over the task's own event stream — and asymmetric by construction, so the *absence* of a
+      // warning says nothing about the other task of a pair.
+      conflict: {
+        other_task_id: uuid(7),
+        other_ticket_key: 'ACME-98',
+        path_count: 3,
+        truncated: false,
+        warned_at: AT,
+      },
       cost_actual_usd: 3.2,
       cost_estimated_usd: 0,
       estimate_usd: 2.5,

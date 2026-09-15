@@ -150,6 +150,11 @@ export * from './shadow/human-merge-request.js';
 export * from './shadow/ports.js';
 export * from './shadow/report.js';
 export * from './shadow/reviewer-minutes.js';
+// Statistics: the four metric events nothing read, and the delivery row (WP-41)
+export * from './stats/metrics.js';
+export * from './stats/ports.js';
+export * from './stats/projector.js';
+export * from './stats/runtime.js';
 // Test doubles (technical/10: fakes are first-class code)
 export * from './testing/fixture-vault.js';
 export * from './testing/fixtures.js';
@@ -165,5 +170,6 @@ export * from './testing/memory-pipeline.js';
 export * from './testing/memory-proposals.js';
 export * from './testing/memory-readiness.js';
 export * from './testing/memory-shadow.js';
+export * from './testing/memory-stats.js';
 
 export const packageId = '@platform/application' as const;

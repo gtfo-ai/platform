@@ -24,6 +24,7 @@ import {
   effortSchema,
   idSchema,
   integrationTypeSchema,
+  isoDateSchema,
   isoDateTimeSchema,
   MAX_PROPOSAL_DELTA_BYTES,
   mergeRequestRefSchema,
@@ -1554,3 +1555,175 @@ export type ShadowBatchAggregate = z.infer<typeof shadowBatchAggregateSchema>;
 export type ShadowBatchSummary = z.infer<typeof shadowBatchSummarySchema>;
 export type ShadowBatchesResponse = z.infer<typeof shadowBatchesResponseSchema>;
 export type ShadowBatchResponse = z.infer<typeof shadowBatchResponseSchema>;
+
+// ── Statistics (WP-41, product/16, product/19 §10, technical/08 `GET /api/org/stats?range=…`) ──
+
+/**
+ * **Q45's statistics half, answered here.**
+ *
+ * The question was *"no rollup DTO, no CSV shape … decide whether the statistics DTO belongs in
+ * WP-19 (which computes the rollups) or WP-41 (which defines the deep-dive metrics)"*. It belongs
+ * here, in `packages/contracts`, and the work package that publishes it is the one that defines
+ * what each number **means**: a rollup is a table, and a statistic is a table plus a definition,
+ * and the definition is the half a screen has to render (product/10:63 — *"every number shown has
+ * a tooltip with its definition"*).
+ *
+ * So the shape is **a list of metrics rather than an object of numbers**, and every metric carries
+ * its own definition, its unit, its samples and — this is the part a record of numbers cannot
+ * express — its **absence**. A metric this build cannot compute publishes `value: null` with an
+ * {@link statAbsenceSchema} saying why and who owns it; it is structurally impossible to publish
+ * *"nobody counted"* as a zero, which is standing rule 16 moved from a convention into a type.
+ */
+export const statUnitSchema = z.enum(['count', 'ratio', 'usd', 'minutes', 'hours']);
+
+/** The metric vocabulary. Platform-chosen, so it is an enum rather than a record's free key. */
+export const statMetricIdSchema = z.enum([
+  // ── delivery (product/19 §10) ──
+  'tasks_started',
+  'tasks_delivered',
+  'merge_rate',
+  'first_pass_acceptance',
+  'clean_first_mr_rate',
+  'human_intervention_rate',
+  'returns_per_delivered_task',
+  'cycle_time_hours',
+  'agent_time_hours',
+  // ── cost (product/16 § "Operational metrics", BD-011) ──
+  'cost_total',
+  'cost_per_delivered_task',
+  'estimated_spend_share',
+  'estimate_accuracy',
+  'cache_hit_ratio',
+  // ── people (product/19 §16, product/18:32) ──
+  'question_response_minutes',
+  'reviewer_minutes_per_delivered_task',
+  'human_minutes',
+  // ── knowledge (product/05) ──
+  'kb_proposal_acceptance',
+  'kb_usage',
+  // ── the adoption features' own metrics (product/18:59-63) ──
+  'rebase_conflicts_resolved',
+  'rebase_conflicts_escalated',
+  'concurrent_task_overlaps',
+  'review_findings_accepted',
+  'review_findings_dismissed',
+  'ticket_lint_comments',
+  'tickets_edited_after_lint',
+  'shadow_similarity',
+  // ── named absent, and named because a screen that omits them silently reads as complete ──
+  'clean_first_mr_rate_by_author',
+  'readiness_attributed_returns',
+  'loc_changed',
+  'defect_escape',
+  'queue_wait_minutes',
+  'total_cost_of_delivery',
+]);
+
+/**
+ * Why a metric has no value, and who would give it one.
+ *
+ * `owner` is a work package, a PROGRESS backlog entry, an open question or an endpoint that
+ * already serves the number — never empty, because *"not measured"* with no address is what turns
+ * into a zero on the next screen somebody builds (standing rule 18).
+ */
+export const statAbsenceSchema = z.strictObject({
+  reason: nonEmptyStringSchema,
+  owner: nonEmptyStringSchema,
+});
+
+/**
+ * One bucket of a metric's series.
+ *
+ * `start` is a **civil date** in the organisation's timezone, not an instant: the buckets are the
+ * calendar the cost rollup and the budget windows already use (`rollupDay`, Q12), and rendering
+ * them as instants would invite a client to re-bucket them in the reader's zone and disagree with
+ * the totals underneath.
+ */
+export const statBucketSchema = z.strictObject({
+  start: isoDateSchema,
+  /** Exclusive, so `[start, end)` tiles the range with no overlapping day. */
+  end: isoDateSchema,
+  value: z.number().nonnegative().finite().nullable(),
+  samples: z.int().nonnegative(),
+});
+
+export const statMetricSchema = z.strictObject({
+  id: statMetricIdSchema,
+  label: nonEmptyStringSchema,
+  /** product/10:63's tooltip, published **with** the number so the two cannot drift apart. */
+  definition: nonEmptyStringSchema,
+  unit: statUnitSchema,
+  /**
+   * The metric over the whole range, or `null` when it is absent or has no samples.
+   *
+   * `null` with `absent: null` is *"nothing happened in this range"*; `null` with an absence is
+   * *"this build cannot measure it"*. A reader that prints `0` for either is wrong in two
+   * different ways, which is why they are two fields.
+   */
+  value: z.number().nonnegative().finite().nullable(),
+  samples: z.int().nonnegative(),
+  buckets: z.array(statBucketSchema),
+  absent: statAbsenceSchema.nullable(),
+  /**
+   * What is known to be wrong with this number, in its own words.
+   *
+   * Reviewer minutes carry three (PROGRESS backlog **88**, **89**, **90**) and they do not cancel:
+   * a bot that is not this platform inflates a review window, an approval without a comment is
+   * invisible, and the eight-hour day cap is applied per entry by the projector. A figure that
+   * published none of them would read as measured rather than as approximate.
+   */
+  caveats: z.array(nonEmptyStringSchema),
+});
+
+/** A stage's share of the returns — product/19 §10's *"returns into stage / stage entries"*. */
+export const statStageReturnSchema = z.strictObject({
+  stage: stageIdSchema,
+  entries: z.int().nonnegative(),
+  returns: z.int().nonnegative(),
+  rate: z.number().nonnegative().finite().nullable(),
+});
+
+export const statRangeSchema = z.enum(['7d', '30d', '90d', '365d']);
+export const statBucketSizeSchema = z.enum(['day', 'week', 'month']);
+
+export const orgStatsQuerySchema = z.strictObject({
+  range: statRangeSchema.optional(),
+  bucket: statBucketSizeSchema.optional(),
+  /** Narrows every metric to one project; omitted, the answer is the whole organisation. */
+  project_id: idSchema.optional(),
+  /** `csv` answers `text/csv` with the same numbers (product/10:24's *"CSV export"*). */
+  format: z.enum(['json', 'csv']).optional(),
+});
+
+export const orgStatsResponseSchema = z.strictObject({
+  range: z.strictObject({
+    range: statRangeSchema,
+    bucket: statBucketSizeSchema,
+    /** Inclusive first civil day of the range. */
+    from: isoDateSchema,
+    /** Inclusive last civil day — *today* in the organisation's timezone. */
+    to: isoDateSchema,
+    /**
+     * The zone the days were cut in (Q12, BD-010). `substituted` is true when the organisation's
+     * setting is not a zone this runtime can do calendar arithmetic in and UTC was used instead —
+     * the same fail-open the cost ledger makes, said out loud rather than inferred from a total.
+     */
+    timezone: nonEmptyStringSchema,
+    timezone_substituted: z.boolean(),
+  }),
+  project_id: idSchema.nullable(),
+  metrics: z.array(statMetricSchema),
+  returns_by_stage: z.array(statStageReturnSchema),
+  generated_at: isoDateTimeSchema,
+});
+
+export type StatUnit = z.infer<typeof statUnitSchema>;
+export type StatMetricId = z.infer<typeof statMetricIdSchema>;
+export type StatAbsence = z.infer<typeof statAbsenceSchema>;
+export type StatBucket = z.infer<typeof statBucketSchema>;
+export type StatMetric = z.infer<typeof statMetricSchema>;
+export type StatStageReturn = z.infer<typeof statStageReturnSchema>;
+export type StatRange = z.infer<typeof statRangeSchema>;
+export type StatBucketSize = z.infer<typeof statBucketSizeSchema>;
+export type OrgStatsQuery = z.infer<typeof orgStatsQuerySchema>;
+export type OrgStatsResponse = z.infer<typeof orgStatsResponseSchema>;

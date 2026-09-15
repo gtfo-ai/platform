@@ -356,6 +356,7 @@ describe('the list envelopes and the KB health report', () => {
       coverage: null,
       dependencies: null,
       required_reviewers: null,
+      conflict: null,
       cost_actual_usd: 0,
       cost_estimated_usd: 0,
       estimate_usd: null,

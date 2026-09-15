@@ -164,6 +164,17 @@ export default defineConfig({
         // (`packages/infrastructure/src/runlet/conformance.contract.test.ts`), which is the only
         // way to exercise an entrypoint and collects no coverage from a subprocess.
         'apps/runlet/src/index.ts',
+        // WP-41's statistics **reads**: eight SQL statements and their row mappers, and nothing a
+        // unit test could reach without a database — every branch in the file is a `where` clause or
+        // a `numeric`-to-number conversion. They are driven end to end by
+        // `test/integration/stats/stats-queries.integration.test.ts`, which runs a real PostgreSQL
+        // 18 and collects no coverage, and the arithmetic they feed is `queries/stats-metrics.ts`,
+        // which is *not* excluded: every definition, ratio, cap and stated absence is asserted in
+        // the unit tier against rows a test wrote. The one **guard** this file owns — the refusal
+        // of a range holding more tasks than one answer is folded from — has a case of its own on
+        // that tier, so the exclusion stays a statement about wiring rather than a place a branch
+        // can hide (the reasoning `db/client.ts` established above).
+        'apps/server/src/queries/stats-queries.ts',
       ],
       thresholds: {
         lines: 80,

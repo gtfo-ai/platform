@@ -33,6 +33,7 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
+  orgStatsResponseSchema,
   orgUsersResponseSchema,
   projectAuditResponseSchema,
   projectSummarySchema,
@@ -225,6 +226,18 @@ const baseTask = {
     truncated: false,
     routed_at: now,
   },
+  /**
+   * WP-41, PROGRESS backlog 63: the board's conflict badge, with a peer ticket key that carries a
+   * script tag — the key is provider text (BD-022) and the badge renders it *and* puts it in a
+   * `title`, which is a second sink the browser tier is here to watch.
+   */
+  conflict: {
+    other_task_id: IDS.taskBug,
+    other_ticket_key: `DEMO-98 ${HOSTILE.script}`,
+    path_count: 3,
+    truncated: false,
+    warned_at: now,
+  },
   cost_actual_usd: 4.25,
   cost_estimated_usd: 6,
   // WP-28: the refinement estimate and its provenance. Deliberately **not** equal to
@@ -269,6 +282,88 @@ export const bugTask = taskRecordSchema.parse({
   // request has not been routed, so *"not checked"* and *"not routed"* are rendered somewhere.
   dependencies: null,
   required_reviewers: null,
+  // …and the same both-ways rule for WP-41's field: this task was never compared, so its card
+  // carries no badge — which on a warned *pair* is also what the task compared first sees, because
+  // the comparison is not symmetric (PROGRESS backlog 65).
+  conflict: null,
+});
+
+/**
+ * `GET /api/org/stats` (WP-41), parsed by the published schema so this fixture cannot drift from
+ * the DTO the real server sends.
+ *
+ * Four metrics, chosen for the four renderings the screen has to keep apart: a **count** with a
+ * value, a **ratio** with nothing to divide (`null`, and *not* 0.0 %), a figure carrying **caveats**,
+ * and one that is **absent** with a reason and an owner. The absent one's reason carries a hostile
+ * string, because it is prose this screen prints and the browser tier is where "prints" is proved
+ * to mean "as text".
+ */
+export const orgStats = orgStatsResponseSchema.parse({
+  range: {
+    range: '30d',
+    bucket: 'day',
+    from: '2026-05-09',
+    to: '2026-06-07',
+    timezone: 'Europe/Prague',
+    timezone_substituted: false,
+  },
+  project_id: null,
+  metrics: [
+    {
+      id: 'tasks_delivered',
+      label: 'Tasks delivered',
+      definition: 'Tasks whose merge request merged, counted at merge time (product/19 §10).',
+      unit: 'count',
+      value: 3,
+      samples: 3,
+      buckets: [{ start: '2026-06-03', end: '2026-06-04', value: 3, samples: 3 }],
+      absent: null,
+      caveats: [],
+    },
+    {
+      id: 'merge_rate',
+      label: 'Merge rate',
+      definition: 'Tasks delivered in the period divided by tasks started in the period.',
+      unit: 'ratio',
+      value: null,
+      samples: 0,
+      buckets: [{ start: '2026-06-03', end: '2026-06-04', value: null, samples: 0 }],
+      absent: null,
+      caveats: [],
+    },
+    {
+      id: 'reviewer_minutes_per_delivered_task',
+      label: 'Reviewer minutes per delivered task',
+      definition: 'Human review minutes in the period divided by the tasks delivered in it.',
+      unit: 'minutes',
+      value: 45,
+      samples: 3,
+      buckets: [{ start: '2026-06-03', end: '2026-06-04', value: 45, samples: 3 }],
+      absent: null,
+      caveats: [
+        'Over-counts: a bot that is not this platform opens a review window like a person.',
+      ],
+    },
+    {
+      id: 'loc_changed',
+      label: 'Lines changed per merged MR',
+      definition: 'LOC added/removed/changed per merged MR, shown for information.',
+      unit: 'count',
+      value: null,
+      samples: 0,
+      buckets: [],
+      absent: {
+        reason: `The one git provider this build ships publishes no diff stats ${HOSTILE.image}`,
+        owner: 'Unowned — filed as discovered work by WP-41.',
+      },
+      caveats: [],
+    },
+  ],
+  returns_by_stage: [
+    { stage: 'code_review', entries: 4, returns: 1, rate: 0.25 },
+    { stage: 'ci_gate', entries: 0, returns: 0, rate: null },
+  ],
+  generated_at: now,
 });
 
 export const question = {

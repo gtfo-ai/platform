@@ -75,6 +75,7 @@ import {
   registerMaintenanceSchedule,
   silentLogger,
   startIntakeReconciliation,
+  statsHandlers,
 } from '@platform/application';
 import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
@@ -100,6 +101,7 @@ import {
   redaction as redactionAdapters,
   secrets as secretAdapters,
   shadow as shadowAdapters,
+  stats as statsAdapters,
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import {
@@ -859,6 +861,21 @@ export const composePipeline = async (
    */
   for (const handler of humanTimeHandlers({
     store: humanTimeAdapters.createPostgresHumanTimeStore(),
+    logger: options.logger,
+  })) {
+    options.eventing.bus.register(handler);
+  }
+  /**
+   * The statistics projection (WP-41), composed here for the same reason the two above are: a
+   * process that registers the pipeline must register it too, because `EVENT_CONSUMPTION` declares
+   * the four metric events handled and `sweepReadiness` refuses to sweep a process that cannot
+   * handle them.
+   *
+   * It borrows no connection of its own — the projector runs inside the dispatcher's handler
+   * transaction — and it enqueues nothing, so `POOL_RESERVATIONS` is unchanged.
+   */
+  for (const handler of statsHandlers({
+    store: statsAdapters.createPostgresStatsStore(),
     logger: options.logger,
   })) {
     options.eventing.bus.register(handler);

@@ -164,6 +164,34 @@ test('a hostile scheme in a DTO url never reaches an href on the board', async (
   expect(await page.locator('[data-link-refused]').count()).toBe(2);
 });
 
+/**
+ * WP-41's two new rendering paths, both of which print text that did not come from this repository:
+ * the board's conflict badge (a **peer's ticket key**, which is provider text — PROGRESS backlog
+ * 63) and the statistics screen's *"not measured, and why"* prose.
+ *
+ * The badge is the more interesting of the two because it puts the same string in **two** places:
+ * a text node and a `title` attribute. The attribute cannot become markup, but it can carry a bidi
+ * override into a tooltip, which is why it goes through `sanitiseUntrusted` rather than straight in.
+ */
+test('a peer ticket key on the board and a stated absence are text, not markup', async ({
+  page,
+}) => {
+  await page.goto(`/projects/${PROJECT_KEY}`);
+  // Positive first (standing rule 4): the badge is on screen at all, so "no script" is not true
+  // because the board rendered nothing.
+  await expect(page.getByText(/touches/).first()).toBeVisible();
+  await expect(page.getByText(HOSTILE.script, { exact: false }).first()).toBeVisible();
+  expect(await page.locator('main script').count()).toBe(0);
+  expect(await page.evaluate(PWNED)).toBeUndefined();
+
+  await page.goto('/stats');
+  await expect(page.getByText('Not measured, and why')).toBeVisible();
+  // The reason carries an `<img onerror=…>`; it is on screen as characters and there is no image.
+  await expect(page.getByText(HOSTILE.image, { exact: false })).toBeVisible();
+  expect(await page.locator('main img').count()).toBe(0);
+  expect(await page.evaluate(PWNED)).toBeUndefined();
+});
+
 test('a hostile scheme in a DTO url never reaches an href on the task screen', async ({ page }) => {
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();

@@ -16,8 +16,10 @@ import { describe, expect, it } from 'vitest';
 import { costHandlers } from '../cost/runtime.js';
 import { humanTimeHandlers } from '../human-time/runtime.js';
 import { notifyHandlers } from '../notify/handlers.js';
+import { statsHandlers } from '../stats/runtime.js';
 import { createMemoryCostStore } from '../testing/memory-cost.js';
 import { createMemoryHumanTimeStore } from '../testing/memory-human-time.js';
+import { createMemoryStatsStore } from '../testing/memory-stats.js';
 import { createPipelineHarness } from '../testing/pipeline-harness.js';
 import { EVENT_CONSUMPTION, HANDLED_EVENT_TYPES, sweepReadiness } from './consumption.js';
 import type { EventHandler } from './handler.js';
@@ -167,11 +169,11 @@ describe('the declared table against the composed registrations', () => {
   /**
    * Every handler this build registers, from **all three** composition functions.
    *
-   * It was the pipeline alone until WP-19; the cost ledger is the second and the human-time
-   * projector (WP-29) the third, and a reader who assumes one registration will under-count
-   * (standing rule 83 — closing a gap falsifies the sentence that described it). The list is what
-   * `apps/server/src/pipeline.ts` really registers, which is the point: this file's equality is
-   * only an equality if both sides are read off the code.
+   * It was the pipeline alone until WP-19; the cost ledger is the second, the human-time projector
+   * (WP-29) the third and the statistics projector (WP-41) the fourth, and a reader who assumes one
+   * registration will under-count (standing rule 83 — closing a gap falsifies the sentence that
+   * described it). The list is what `apps/server/src/pipeline.ts` really registers, which is the
+   * point: this file's equality is only an equality if both sides are read off the code.
    */
   const composedHandlers = () => [
     ...createPipelineHarness({ runs: {} }).runtime.handlers,
@@ -182,6 +184,7 @@ describe('the declared table against the composed registrations', () => {
       },
     }),
     ...humanTimeHandlers({ store: createMemoryHumanTimeStore() }),
+    ...statsHandlers({ store: createMemoryStatsStore() }),
   ];
 
   it('has a real handler for every type it declares handled', () => {

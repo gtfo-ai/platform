@@ -27,18 +27,20 @@
  * technical/02's "Core consumers" column is the normative source and the amendment makes it so, with
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
- * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for **29**
- * of them — 22 from the pipeline, 3 from the cost ledger (WP-19), the 2 budget events the
- * notification band added (WP-32; its other six types were already handled by the saga),
- * `ticket.comment.added`, whose first consumer is ask-the-task (WP-31), and
- * `shadow.report.created`, whose first consumer is WP-34's batch completion. A table
- * transcribed from the
- * column would therefore stop the outbox
- * worker in every build that exists today, including the one whose e2e walks a ticket to
- * `task.completed` — the acceptance criterion this work package is for.
+ * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for
+ * **38** of them, the count of `handled` rows below. That figure is deliberately not broken down
+ * per work package any more: it was, and it went stale four work packages later while reading as a
+ * measurement (standing rule 86). `consumption.test.ts` is the census — it composes the same
+ * handlers `apps/server/src/pipeline.ts` does and asserts this table equals what they register, in
+ * **both** directions — so the number is produced rather than quoted. A table transcribed from
+ * technical/02's column would stop the outbox worker in every build that exists today, including
+ * the one whose e2e walks a ticket to `task.completed`.
  *
- * The table below is therefore **what this build consumes**, and every `unconsumed` entry names the
- * work package that flips it. The properties the amendment is protecting are unchanged: a sweeper
+ * The table below is therefore **what this build consumes**, and every `unconsumed` entry names an
+ * address: the work package that will flip it, or — when nothing will, because the *event* cannot
+ * answer the question — the backlog entry that says so. `mr.updated` is the second kind.
+ *
+ * The properties the amendment is protecting are unchanged: a sweeper
  * must be complete for everything declared consumed, removing a handler fails a named test, and a new
  * event type cannot be added without answering the question (the keys are held to
  * `DOMAIN_EVENT_TYPES`). What it does not do is pretend the product's future consumers exist.
@@ -80,11 +82,16 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * `mr.merged`, `task.question.answered` and `task.approval.decided`. The table answers "must a
    * sweeper be able to handle this type", so a second handler does not move an entry; the two
    * budget entries below **did** move, and so did `run.steered`, because they had none.
+   *
+   * **A fifth gained one at WP-41** — the statistics projector at priority 240
+   * (`stats/projector.ts`), which reads `mr.merged` for the instant a delivery happened. Its own
+   * four types are at the bottom of this table and they *did* move, because they had no consumer
+   * at all.
    */
   'ticket.matched': 'handled',
   'task.created': 'handled',
   'task.queued': 'handled',
-  'task.dequeued': 'unconsumed', // WP-15's scheduler emits it; nothing listens. UI band is WP-20's.
+  'task.dequeued': 'unconsumed', // WP-15's scheduler emits it; nothing listens. WP-20 shipped without a projection of it; the statistics screen's queue-wait metric names it absent for that reason.
   'task.stage.entered': 'handled',
   'task.stage.completed': 'handled',
   'task.stage.returned': 'handled',
@@ -189,14 +196,22 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.
   /**
-   * Still WP-41's, and **WP-29 looked**: the human-time projector does not read it.
+   * **WP-41 looked too, and left it unconsumed — so this line no longer names a work package that
+   * will flip it** (standing rule 83: the sentence nearest the change is the one nobody re-reads).
    *
-   * product/19 §16 starts the review window at *"the first human MR activity"*, and this event
-   * cannot say whose activity it was — `mrPayload` carries no author at all — so it could not
-   * attribute a minute to anybody. It also fires for the platform's **own** pushes, so reading it
-   * as human activity would record the Developer stage pushing a commit as somebody reviewing.
+   * Both of WP-29's reasons are properties of the payload rather than of the work package that
+   * meets it. It carries **no author** (`mrPayload` has none), so nothing it records can be
+   * attributed to anybody; and it fires for the platform's **own** pushes, so counting it as
+   * activity would record the Developer stage pushing a commit as a human touching the merge
+   * request. A statistic folded from it would be a number about the platform's own behaviour
+   * labelled as a number about people.
+   *
+   * What would change that is an **author on the payload**, which is a normaliser change with a
+   * fixture and a contract-suite case (standing rule 23) and is the same shape PROGRESS backlog
+   * **90** prices for `mr.approved`. It is recorded there rather than owned here: an entry naming
+   * a work package that is not going to flip it is worse than one naming none (rule 18).
    */
-  'mr.updated': 'unconsumed', // WP-41 statistics.
+  'mr.updated': 'unconsumed', // No author on the payload; PROGRESS backlog 90's shape.
   // ── The notification band (WP-32), registered by `notifyHandlers` at TD-005 priority 210 ──
   /**
    * A budget window crossed a threshold, or is spent — product/18:33's *"budget 100 %"*.
@@ -239,17 +254,31 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // and the backfill. They have no work package, which is why no number is named here.
   'integration.action.performed': 'unconsumed', // Audit and health projections; unowned.
   'integration.action.failed': 'unconsumed', // As above.
-  'task.review.observed': 'unconsumed', // WP-41 statistics: product/18's accepted-vs-dismissed.
-  // WP-41 statistics: product/18:60's "tickets improved after lint". The *other* half of that
-  // metric — "edited within 48 h" — needs a "this ticket changed" signal no normaliser produces
-  // today; `taskLintPostedEvent`'s docblock carries the measurement and the baseline it records.
-  'task.lint.posted': 'unconsumed',
-  // WP-41 statistics: product/16's "conflicts auto-resolved vs escalated" and "concurrent-task
-  // overlaps". Both are appended by WP-26 — `task.rebase.checked` once per settlement of the rebase
-  // gate, `task.conflict.warned` once per warned pair — and both carry the numbers a consumer needs
-  // without a second provider read, which is why neither has a projection of its own here.
-  'task.rebase.checked': 'unconsumed',
-  'task.conflict.warned': 'unconsumed',
+  // ── The statistics projection (WP-41), registered by `statsHandlers` at TD-005 priority 240 ──
+  /**
+   * The four types this work package moved, and the one thing they have in common: **their only
+   * record was the event**.
+   *
+   * `task.review.observed` is product/18:59's *"findings accepted vs dismissed"*, `task.lint.posted`
+   * product/18:60's baseline, `task.rebase.checked` product/16's *"conflicts auto-resolved vs
+   * escalated"* and `task.conflict.warned` its *"concurrent-task overlaps"*. Each carries the
+   * numbers a consumer needs without a second provider read, and each wrote no row anywhere — so
+   * until this work package they accrued history whose meaning nobody could re-derive.
+   *
+   * They are folded into `stats_event_daily` by one projector (`stats/projector.ts`), which also
+   * writes the delivery row from `mr.merged`. **A second consumer does not move an entry** —
+   * `mr.merged` was already `handled` by the pipeline and stays where it was, and the same is true
+   * of the human-time projector's four (see the note at the top of this table).
+   *
+   * **Half of product/18:60 is still absent and stays that way**: *"tickets improved after lint
+   * (edited within 48 h)"* needs a *this ticket changed* signal no normaliser produces (PROGRESS
+   * backlog **59**), so the statistics screen names that metric absent with its entry rather than
+   * publishing the half it can count as if it were the whole.
+   */
+  'task.review.observed': 'handled',
+  'task.lint.posted': 'handled',
+  'task.rebase.checked': 'handled',
+  'task.conflict.warned': 'handled',
   // WP-40: the **spike's human stage subscribes to it**. `EPIC_SPLIT_TEMPLATE`'s `human_review`
   // names it in its `on` list, so `pipeline.epic.split.decided` steps the task out of the wait and
   // the interpreter decides where it goes — which is the same shape `default_branch.moved` has for

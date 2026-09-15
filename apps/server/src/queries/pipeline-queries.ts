@@ -54,6 +54,7 @@ import type {
   QuestionRecord,
   RunRecord,
   RunStatus,
+  TaskConflict,
   TaskDetailResponse,
   TaskRecord,
   TaskState,
@@ -477,7 +478,70 @@ export const findHumanTime = async (
   });
 };
 
-const toTaskRecord = (row: typeof tasks.$inferSelect): TaskRecord => ({
+/**
+ * The latest conflict warning per task — product/04 S6b's board badge (WP-26's event, WP-41's
+ * field; PROGRESS backlog **63**).
+ *
+ * A projection over the task's own event stream rather than a table: `task.conflict.warned` already
+ * carries everything the badge renders — the peer's ticket key, how many paths overlapped and
+ * whether the comparison read every file — so a table would be a second copy of a row that exists.
+ *
+ * `distinct on (stream_id)` with the newest first: a task compared twice shows what the **last**
+ * comparison found, because that is the state of the world the reader is looking at. The ordering
+ * falls back to `position` so two warnings inside one transaction still have a winner.
+ *
+ * **Bounded by construction**: it is only ever asked about the tasks of one page, so the `in` list
+ * is at most `limit` long and the read uses the stream index rather than scanning a partition.
+ */
+const conflictsFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, TaskConflict>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .selectDistinctOn([events.streamId], {
+      streamId: events.streamId,
+      payload: events.payload,
+      occurredAt: events.occurredAt,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.streamType, 'task'),
+        eq(events.type, 'task.conflict.warned'),
+        inArray(events.streamId, [...taskIds]),
+      ),
+    )
+    .orderBy(events.streamId, desc(events.occurredAt), desc(events.position));
+
+  return new Map(
+    rows.map((row) => {
+      const payload = row.payload as unknown as {
+        other_task_id: string;
+        other_ticket_key: string;
+        path_count: number;
+        truncated: boolean;
+      };
+      return [
+        row.streamId,
+        {
+          other_task_id: payload.other_task_id as Id,
+          other_ticket_key: payload.other_ticket_key,
+          path_count: payload.path_count,
+          truncated: payload.truncated,
+          warned_at: isoRequired(row.occurredAt),
+        },
+      ];
+    }),
+  );
+};
+
+const toTaskRecord = (
+  row: typeof tasks.$inferSelect,
+  conflict: TaskConflict | null,
+): TaskRecord => ({
   id: row.id as Id,
   project_id: row.projectId as Id,
   ticket: { provider: row.ticketProvider, key: row.ticketKey, url: row.ticketUrl },
@@ -508,6 +572,12 @@ const toTaskRecord = (row: typeof tasks.$inferSelect): TaskRecord => ({
   // handles it could not resolve — which the `set_reviewers` audit row cannot say, because no call
   // is made when nothing resolved.
   required_reviewers: row.requiredReviewers,
+  // WP-41, backlog 63: **not** a column — the latest `task.conflict.warned` off the task's own
+  // stream (`conflictsFor`). `null` is "no warning has been appended for this task", which on a
+  // pair of overlapping tasks is also what the one compared *first* sees: the comparison is not
+  // symmetric (backlog 65), and the badge's tooltip says so rather than letting a reader infer
+  // that the other task is clear.
+  conflict,
   cost_actual_usd: usd(row.costActual),
   cost_estimated_usd: usd(row.costEstimated),
   // The refinement estimate, its provenance, and product/19 §10's accuracy metric — which is
@@ -671,7 +741,7 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const [usage, takenOver, humanTime] = await Promise.all([
+  const [usage, takenOver, humanTime, conflicts] = await Promise.all([
     modelUsageFor(
       database,
       runRows.map((row) => row.id),
@@ -680,10 +750,11 @@ export const findTaskDetail = async (
     // The project id comes from the task row rather than from the request: the breakdown setting
     // belongs to the project that owns the task, and a caller cannot name a different one.
     findHumanTime(database, taskId, task.projectId),
+    conflictsFor(database, [taskId]),
   ]);
 
   return {
-    task: toTaskRecord(task),
+    task: toTaskRecord(task, conflicts.get(task.id) ?? null),
     taken_over: takenOver,
     human_time: humanTime,
     stages: stageRows.map((row) => ({
@@ -926,8 +997,15 @@ export const listProjectTasks = async (
 
   const page = rows.slice(0, query.limit);
   const last = page.at(-1);
+  // One extra read per page for the board's conflict badge (backlog 63), over the ids of the page
+  // and never over the project: a warning for a task the caller is not being shown is not a row
+  // this answer has anywhere to put.
+  const conflicts = await conflictsFor(
+    database,
+    page.map((row) => row.task.id),
+  );
   return {
-    items: page.map((row) => toTaskRecord(row.task)),
+    items: page.map((row) => toTaskRecord(row.task, conflicts.get(row.task.id) ?? null)),
     ...(rows.length > query.limit && last !== undefined
       ? { next: { createdAt: last.cursorAt, id: last.task.id } }
       : {}),

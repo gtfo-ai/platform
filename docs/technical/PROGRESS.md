@@ -5979,6 +5979,252 @@ changes.
 **Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next edits
 `scripts/citations.ts` or `scripts/citations.test.ts`.
 
+### 112. **The citation half of product/16's knowledge-usage metric already exists on two artifact types and has no reader, while the half WP-41 calls present has never held a row — the absence is stated the wrong way round, and closing it is a join plus backlog 31, not a runner change** (TODO, small — **no work package owns it**; **WP-41 is the wrong home**, the metric ships correctly absent; found by WP-41, refined off the tree, session 5)
+
+**What is wrong.** `STATS_CATALOGUE.kb_usage` is published `absent` with the reason *"Nothing records
+which context-pack items a run cited. `run_context_pack` stores what was *included* (tier, path,
+tokens, whether it validated) and there is no citation signal anywhere in the transcript pipeline, so
+the denominator exists and the numerator does not"* (`apps/server/src/queries/stats-metrics.ts:438`, owner at `:440`).
+Publishing it absent is right. The **sentence** is the wrong way round, and the direction matters
+because it decides what somebody builds: a partial **numerator** exists and is unread, and the
+**denominator** is a table nothing has ever inserted into.
+
+**Evidence** (refiner, session 5; reading only, rule 66 — no test run).
+- **The numerator exists, for two artifact types.** `kb_citations: z.array(kbCitationSchema)` is a
+  **required** field of `refinedSpecDataSchema` (`packages/contracts/src/artifacts.ts:83`) and of
+  `researchReportDataSchema` (`:665`), and `kbCitationSchema` is `{path, commit_sha?, reason?}`
+  (`:59-63`) — *"A knowledge-base document the agent used, with the commit it read (product/05)"*.
+  The row that stores it carries the run: `artifacts.produced_by_run_id`
+  (`0004_pipeline.sql:146`). The model is told to fill it in two places — the PM prompt's *"Cite the
+  business knowledge pages you used, by the `path` on their data block"*
+  (`packages/prompts/roles/product_manager/prompt.md:31`) and the `kb` skill's *"Cite the **path** of
+  the item you used and say what you took from it"* / *"Never invent a KB item, a path or a
+  decision id. If you did not read it, do not cite it"* (`packages/prompts/skills/kb/SKILL.md:28-29,48`).
+  A grep for `kb_citations` over `packages/`, `apps/` and `test/` returns the two schema lines, one
+  contract test and ****eighteen** test fixtures that set it to `[]`, two contract-test cases that set real values,** — no production reader anywhere.
+  Two of the **fifteen** `artifactTypeSchema` values carry it (`packages/contracts/src/common.ts:422-481`),
+  so it is a numerator over **refinement and spike runs**, not over all runs.
+- **The denominator has never existed as data.** `run_context_pack` has no insert anywhere in the
+  tree and could not hold the record if it had one — that is backlog **31**, restated at
+  `apps/server/src/queries/pipeline-queries.ts:29` and refused at the API by name:
+  *"run … has no readable context pack (… `run_context_pack` rows): the table has no column for the
+  pack's budget_tokens and stores reason/score as nullable where the published record requires them
+  … Giving this endpoint an answer is a schema change plus a writer, not a reader. The pack is built
+  per run (WP-17) and currently lives only in the prompt it produced"* (`apps/server/src/routes/runs.ts:200`).
+  `runs.system_prompt`/`user_prompt` have no writer either, so the prompt is not a fallback.
+- **The transcript can answer a *different* question, and it is not this one.** `run_messages` stores
+  `tool_name` and the `tool_use`/`tool_result` blocks (`packages/contracts/src/transcript.ts:63-74`,
+  `0006_transcripts.sql:24-47`, which even carries `run_messages_tool_use_idx … where tool_use_id is
+  not null`), and `kb_search` is a real tool on this build (`apps/server/src/platform-tools.ts`). A
+  query over it answers *"which runs searched the knowledge base"* — **retrieval, not citation**.
+  Published under `kb_usage` that would be standing rule 16's shape: a number that is nearly the one
+  product/16 asks for.
+
+**What it costs to leave.** product/16:14 gives this metric a **target** — *"% runs whose context
+pack included a KB document that the agent cited — ≥ 80%"* — and it is the only number in that table
+that measures whether the knowledge base does anything. product/18:27 sells the KB as *"starts at
+'week six', not empty"* and product/17's readiness ladder rests on it; with no measurement, WP-16's
+whole retrieval layer is judged by backlog **16**'s fixture-vault claims alone. Leaving the absence
+sentence as written also costs the next implementer a wrong start: it reads as *"write a citation
+signal into the runner"*, which is the expensive half, when the cheap half is a reader and the
+blocking half is somebody else's entry.
+
+**What "done" looks like.** Either the metric computed or the absence re-stated, and the two are the
+same piece of work up to backlog 31:
+1. `run_context_pack` gets its writer and the two columns it lacks (**backlog 31** — that entry owns
+   the schema change; this one must not duplicate it).
+2. `kb_usage` is a join: the run's pack paths against `artifacts.data->'kb_citations'` for the
+   artifact whose `produced_by_run_id` is the run. A cited path that is **not** in the pack counts as
+   no citation and is worth its own caveat — the model can name a page it reached with `kb_search`
+   rather than one the pack carried, and product/16's sentence is about the pack.
+3. The **denominator is named in the metric's own `definition`**, not in a comment: this is a ratio
+   over runs whose role produces a `kb_citations`-bearing artifact (refinement, spike), not over all
+   runs, and product/16:14's ≥ 80 % target is then a target about that subset. The WP-41 DTO already
+   carries `definition` and `caveats` for exactly this, so the narrowing is publishable rather than
+   hidden.
+4. If it ships before step 1, it ships as the *"runs that searched the KB"* metric **under its own
+   name**, never under `kb_usage`.
+5. Rule 83: `stats-metrics.ts:438-441`'s reason and owner are rewritten in the same change.
+
+**Needs measurement: none to start** — every fact above is a grep. What cannot be known until then:
+**how often a model actually fills `kb_citations`**, which no run of this build has ever been
+observed doing (no production `RunWorkspaceProvisioner` is composed, WP-15g/Q52), so the numerator's
+*quality* is unmeasured even though its shape exists.
+
+**Trigger.** Latent: nothing can be non-empty until a real run exists. It becomes live the first time
+the platform runs an agent against a project with a vault — the same moment backlog 31 becomes live.
+
+**Depends on / owner.** **Backlog 31** for the pack rows; **no work package owns either**. WP-41 is
+explicitly the wrong home — the statistics row made the right call and published the absence with an
+owner; this is knowledge-side work. Cheapest home: whoever takes backlog 31, since steps 1 and 2 are
+one migration and one query apart.
+
+### 113. **The one git provider this build ships publishes no diff stats and the fake fills them on all three surfaces, so the field is measured in every tier and `null` on every instance — the fake's fifteen-item divergence register does not name it, and the follow-up that two documents say was *“recorded as discovered work”* never was** (TODO, small — one cause, three consequences, one of them **live** in WP-35's history bootstrap; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
+
+**What is wrong.** `MergeRequest.diff_stats` / `MergedMergeRequest.diff_stats` (`diffStatsSchema` =
+`{files_changed, insertions, deletions}`, `packages/contracts/src/records.ts:180-184`) is `null` on
+every path the GitLab adapter produces and filled on every path the fake produces. Three separate
+things follow, and only the first is recorded anywhere.
+
+**Evidence** (refiner, session 5; reading only, rule 66).
+- **The adapter is honest and says so.** Three write sites, all `null`:
+  `providers/gitlab/provider.ts:360` (`getMergeRequest`), `:912` (`listMergedMergeRequests`) and
+  `providers/gitlab/inbound.ts:162` (the `mr.*` webhook payload, with the reason at `:159-161`).
+  Divergence **1** of the adapter's own register states it: *"**`diff_stats` is always `null`.**
+  GitLab's REST merge request publishes `changes_count` — a *file* count, and the string `"1000+"`
+  above a thousand — and no insertion/deletion counts. Filling two of `diffStatsSchema`'s three
+  fields with zeroes would put invented numbers into `mr.opened` payloads and into WP-39's
+  coverage/diff deltas. GraphQL's `diffStatsSummary` has them; adding a GraphQL call is out of this
+  work package's scope and **is recorded as discovered work**"* (`provider.ts:23-27`). One assertion
+  pins it: `providers/gitlab/inbound.test.ts:211` — `expect(payload.diff_stats, 'GitLab publishes no
+  insertion/deletion counts').toBeNull()`.
+- **It was never recorded.** A grep for `diffStatsSummary` over the whole repository returns
+  **exactly two hits, and both are the claim**: `provider.ts:23-27` above, and WP-09's own notes —
+  *"GraphQL's `diffStatsSummary` has them — recorded as discovered work"*
+  (`docs/technical/PROGRESS.md:9917`). There is no discovered-work bullet, no backlog entry and no
+  plan row. Standing rule **86**'s shape (a prediction written as an observation), and the reason
+  this gap survived from WP-09 to WP-41 unowned: two documents each said the other had it.
+- **The fake fills it on the same three surfaces, and its register does not say so.**
+  `openMergeRequest` hard-codes `diff_stats: { files_changed: 1, insertions: 10, deletions: 2 }`
+  (`packages/integrations/src/git/fake.ts:1038`), and the value is served by `toMergeRequest`
+  (`:624`), by `normalise`'s `mr.opened`/`mr.merged` payload (`:825`) and by
+  `listMergedMergeRequests` (`:1281`) — the three surfaces GitLab answers `null` on. The fake's
+  register is fifteen numbered divergences (`fake.ts:16-129`) and **`diff_stats` is in none of
+  them** — although divergence **13** is the identical case for `coverage_pct`, written out in
+  full: *"the pipeline webhook carries the pipeline's `coverage`, and GitLab's does not … a platform
+  feature that read the *event's* number would be green on this fake and blank in production, which
+  is why WP-39's coverage duty reads `getPipelineStatus` for both sides … Anything else that reaches
+  for `coverage_pct` on a delivery owes itself the same check"* (`:96-107`). The precedent, the
+  wording and the reasoning all exist one field away.
+- **What the LOC metric would show on a real GitLab binding: nothing, and WP-41 is why.**
+  `loc_changed` is published `absent` rather than computed, with the reason *"The one git provider
+  this build ships publishes no insertion/deletion counts: every `mr.*` event GitLab produces carries
+  `diff_stats: null` … The **fake** git provider does fill the field, which is exactly why this
+  metric is named absent rather than computed — a number that is measured in every test and null in
+  production is worse than one that is missing in both"*
+  (`apps/server/src/queries/stats-metrics.ts:540`). Had it been folded, the per-day sum would
+  have been non-zero in every tier and **zero rows on every instance** — standing rule 1.
+- **One consequence is live, and it is not the statistic.** WP-35's history bootstrap puts
+  `files_changed: input.mr.diff_stats?.files_changed ?? null` into the sample the historian model
+  reads (`packages/application/src/bootstrap/sample.ts:171`), with **no note when it is absent** — so
+  on a real GitLab binding every mined merge request reaches the prompt with no size at all, while
+  product/19 §18 specifies *"last N merged MRs (default 200, max 1 000) **with discussions and diff
+  stats**"*. Its only assertion is the fake's shape twice removed: `sample.test.ts:70` builds
+  `diff_stats: { files_changed: 3, additions: 40, deletions: 2 }` behind an `as MergedMergeRequest`
+  cast and `:159` asserts the 3 — note `additions`, which is **not** a field of `diffStatsSchema`
+  (`insertions` is, and it is missing), so the object the one pinning test uses would be refused by
+  the strict schema that describes it. One line, no behaviour, worth fixing with the rest.
+
+**What it costs to leave.** (a) product/16:22's *"LOC added/removed/changed per merged MR"* stays
+absent — the cheapest of the three, and product/16:24 is explicit that LOC is *"shown for
+information"*, never a target. (b) WP-35's mined sample silently drops one of the three inputs its
+own specification names, on every real run, and nobody reading its tests can see it. (c) The fake
+stays kinder than the adapter in a way its register denies, which is the exact failure mode
+divergence 13 was written to prevent — the next feature to reach for `diff_stats` will be green here
+and blank in production, and there is no sentence to warn it.
+
+**What "done" looks like** — three pieces, and the first is worth doing alone:
+1. **The fake's register gets divergence 16**, in divergence 13's words and with the same warning:
+   the field is filled here and `null` on every path of the only shipped adapter; anything reading it
+   owes itself a check. **This is one paragraph and closes the whole class of surprise.** Do it even
+   if nothing else is done.
+2. **`sample.ts` says what it lost**: either a note on the bounded merge request when the provider
+   published no diff stats (the sample already carries `truncated` for the same kind of honesty), or
+   product/19 §18 amended to drop *"diff stats"* for providers that publish none (docs win, rule 8).
+   The fixture's `additions`/`insertions` mismatch goes with it.
+3. **The read, if anybody wants the number**: GitLab's GraphQL `diffStatsSummary` (or the changes
+   endpoint) behind `getMergeRequestDiffStats`, with the fake, the contract-suite case and a recorded
+   fixture carrying a `source` block — rule 23, non-negotiable for a new provider read. Cost is a
+   call per merge request, which at WP-35's N = 200 is 200 more provider reads on top of the `1 + N`
+   discussions fan-out backlog **64** already records.
+
+**Needs measurement** (rule 66 — the refiner made no network read): whether GraphQL `diffStatsSummary`
+or the deprecated `…/changes` actually publishes insertions and deletions, and at what cost per merge
+request. **`docs/TODO.md` already asks this**, for backlog **64**'s paths question — *"Check the two
+candidates the refiner could not: GraphQL `MergeRequest.diffStats`, and the deprecated `…/changes`"* —
+so it is **one** source read that answers both, and whoever takes either should take both. Record the
+page and the retrieval date the way `test/fixtures/http/gitlab/SOURCES.md` does.
+
+**Trigger.** Piece (b) is **live today** for any project that turns the history bootstrap on against a
+real GitLab. (a) and (c) are latent until somebody computes from the field.
+
+**Depends on / owner.** **No work package owns it**, and two documents each believed the other did
+(`provider.ts:23-27`, PROGRESS:9917). Nearest homes: piece 1 — whoever next edits `git/fake.ts`,
+which is a one-paragraph change; piece 2 — **WP-35**'s follow-on, since the bootstrap is the live
+consumer; piece 3 — whoever next touches the GitLab adapter, alongside backlog **64**'s question.
+Related: backlog **98** (a GitLab fixture's `diff_refs` provenance over-claim), which is the same
+adapter and a different field.
+
+### 114. **Nothing links a bug ticket to the merge request it escaped from, so product/16's defect-escape rate has no source — and the platform already ships the resolver that could supply one, built for shadow mode and pointed the other way** (TODO, small — **no work package owns it**; the product half is **Q87**; found by WP-41, refined off the tree, session 5)
+
+**What is wrong.** `STATS_CATALOGUE.defect_escape` is published `absent`: *"Nothing links a later bug
+ticket to the merge request that caused it. The platform sees bug tickets it is given and merge
+requests it made, and no signal connects the two — inferring it from text would be a guess published
+as a defect rate"* (`apps/server/src/queries/stats-metrics.ts:553`). Correct, and incomplete in
+one way that changes the size of the work: the **inference is already built, tested and shipped** —
+for the opposite direction, in shadow mode.
+
+**Evidence** (refiner, session 5; reading only, rule 66).
+- **Both endpoints of the link are already stored.** The merge request the platform made is
+  `tasks.mr_ref` (`0004_pipeline.sql:23`), and WP-41's own delivery projector looks a task up through
+  it because `mr.merged` carries `task_id: null` on every event a git adapter produces. The bug is a
+  ticket the platform is **already told about**: `ticket.created` carries `{project_id, ticket,
+  issue_type}` (`packages/contracts/src/events.ts:152-156`), is `'handled'`
+  (`packages/application/src/events/consumption.ts:149`, WP-25's ticket lint), and fires *"whether or
+  not it is for the agent"* (`packages/application/src/ports/integrations/task-management.ts:189-190`).
+  So the platform sees the bug arrive, with its issue type, on the day it is filed.
+- **The resolver exists.** `packages/application/src/shadow/human-merge-request.ts` (WP-34, Q82 (b))
+  turns a ticket into a merge request two ways: *"**`ticket_link`** — a link on the ticket itself
+  (Jira's remote links, `Ticket.links`). This is the authoritative answer when it exists, because a
+  human put it there"*, then *"**`title_scan`** — the ticket key appearing as a whole token in a
+  merged merge request's **title** or **source branch**"* — and it **records which answered**
+  (`shadow_batch_tickets.human_mr_source`). It already parses GitLab's and GitHub's URL shapes, and
+  it already refuses a link whose iid resolves to a different merge request inside the project by
+  comparing the provider's own `ref.url`. For defect escape only the first half is wanted, run on the
+  bug's own links.
+- **What the link cannot be today.** `ticketLinkSchema` is `{kind, key, url?, state?}` with `key`
+  **required** and documented as *"A link between tickets: `blocks`, `is_blocked_by`, `relates_to`,
+  `duplicates`"* (`task-management.ts:30-37`) — so a ticket→merge-request link rides in the `url`,
+  and `kind` is whatever the provider names it. `TaskManagementCapabilities.links` exists (`:176`),
+  which is the flag that says whether a binding can answer links at all.
+- **The adjacency alternative is a guess and should be named one.** *"`mr.merged` within 30 days,
+  then a bug ticket in the same project"* is a correlation with no join key; published as a defect
+  rate it is a number about ticket volume. It is a **hypothesis, not a signal**, and belongs in no
+  build.
+
+**What it costs to leave.** product/16:17 — *"bugs filed against agent-merged MRs within 30 days /
+merged MRs — tracked, no target yet"* — is the only metric in that table that measures whether the
+platform's merged work **breaks things**. Its absence is the cheapest to defend (no target) and the
+most expensive to be wrong about: an adoption argument (product/18, product/19 §21's dogfood phases)
+that reports cycle time and cost with no defect number reports only the good half.
+
+**What "done" looks like.**
+1. A stored link, one row or one column, written when a bug ticket arrives: on `ticket.created` with
+   a bug `issue_type`, read the ticket, run the **link half** of `human-merge-request.ts` over
+   `Ticket.links`, and record the resolved merge request **and how it was found** — the same
+   `human_mr_source` honesty, so a reader can judge the rate. The title scan is the wrong half here
+   (a bug ticket does not carry the delivery ticket's key).
+2. The metric is then a query: bugs whose resolved merge request matches a `tasks.mr_ref` the
+   platform merged, within 30 days, over merged merge requests.
+3. **The caveat is published with the number, or the number is not published**: a bug nobody linked
+   is invisible, so the rate under-reports, and it under-reports in the direction that flatters the
+   platform. That is what **Q87** asks a human to settle before anything ships.
+4. Rule 83: `stats-metrics.ts:553-554`'s reason and owner are rewritten in the same change.
+
+**Needs measurement** (rule 66): **what fraction of real bug tickets carry a link to the merge
+request at all.** Nobody knows, and it is the number that decides whether step 1 is a metric or a
+rounding error — the same unknown `docs/TODO.md` already records for shadow's `human_mr_source` split
+on the dogfood project, and it can be counted in the same pass.
+
+**Trigger.** Latent and doubly so: it needs a real board *and* a merge request the platform made, so
+it cannot become live before a production runner exists (WP-15g/Q52).
+
+**Depends on / owner.** **No work package owns it.** The engineering leans on **WP-34**'s resolver
+(shipped) and **WP-25**'s `ticket.created` consumer (shipped); the product half is **Q87** — whether
+an under-reporting defect rate may be published at all, or whether the product asks a human to mark a
+bug against a merge request. WP-41 is the wrong home for the same reason as backlog **112**: the
+statistics row published the absence correctly and cannot manufacture the signal.
+
 ### 23. **The platform never reads the ticket's text, so the first agent stage is given a key and a URL** (TODO — **no work package owned it**; now **WP-15f**, and its product half is **Q61**)
 Placed here, above the concurrency findings and above the retrieval family it heads, because it is
 entry 1's sentence one layer further in: *the loop starts now, and what it starts on is a ticket
@@ -8586,6 +8832,51 @@ sentence; the existing 403 assertions read the status and the `error.code` and n
 Playwright fake backend composes the same string itself (`test/web-e2e/support/fake-backend.ts:273`)
 and already differs from production — it omits the `role … may not perform …` wrapper entirely — so
 the browser tier has never seen the sentence this entry is about.
+
+### 115. **A query module is excluded from unit coverage for the first time, and the one branch that is not wiring is asserted only in the tier that collects none** (nit-to-small, TODO — **working as designed**, one precedent to bound before it is inherited by citation; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
+`vitest.config.ts:167-177` adds `apps/server/src/queries/stats-queries.ts` to the coverage
+`exclude` list with a written justification in the established shape — *"eight SQL statements and
+their row mappers, and nothing a unit test could reach without a database … the exclusion stays a
+statement about wiring rather than a place a branch can hide (the reasoning `db/client.ts`
+established above)"*. Two things are worth a line, and neither is a defect.
+**It is a first for that directory.** The four existing exclusions are all entrypoints or I/O shells
+— `packages/infrastructure/src/db/client.ts`, `apps/server/src/migrate.ts`,
+`apps/launcher/src/index.ts`, `apps/runlet/src/index.ts` (`:146-166`) — while **eleven** other
+modules in `apps/server/src/queries/` are included, three of which (`cost-queries.ts` 251 lines,
+`identity-queries.ts` 352, `knowledge-queries.ts` 193) have no `*.test.ts` of their own and are
+therefore counted, uncovered, against the global `lines/branches/functions/statements: 80`
+(`:179-183`). So a SQL-only module being *included* is the house shape and this is the first
+exemption; the precedent the comment cites (`db/client.ts`) is a module of a different kind.
+**The safety sentence rests on a test in a tier that does not gate.** The file owns one branch that
+is not a `where` clause: `MAX_TASK_ROWS = 5 000` and two throw sites,
+`stats-queries.ts:162` (`'started'`) and `:211` (`'delivered'`). The comment says the guard *"has a
+case of its own on that tier"*; the case is
+`test/integration/stats/stats-queries.integration.test.ts:334-350`, which seeds `MAX_TASK_ROWS + 1`
+tasks, asserts the refusal and then deletes one row to assert the boundary (standing rule 42, done
+properly) — in the **integration** tier, which by the same comment's words *"collects no coverage"*
+and which `verify` does not run (`verify:integration` is a separate target). The unit tier's only
+touch is `apps/server/src/routes/stats.test.ts:171-176`, which **constructs** `StatsRangeTooLargeError`
+by hand to pin the route's `409 stats_range_too_large` — it exercises the translation, never the
+comparison. And the `'delivered'` throw site has no assertion in any tier: the integration case seeds
+plain `tasks` rows with no `stats_task_delivery` row, so only the `'started'` site can fire.
+**Why it is a nit and not a defect.** Nothing is wrong on the tree: the guard *is* asserted, at the
+boundary, against a real database, which is stronger evidence than a unit test would be. What is
+missing is the bound on the precedent — the next `queries/*.ts` whose author reads this comment can
+add a line to the same list citing it, and the list has no census and no per-file rule.
+**What "done" looks like** (any one of the three, and the first is a sentence): the comment says
+plainly that the guard's case lives in the **integration** tier, which `verify` does not run, so the
+exclusion is bounded by a test that gates on `verify:integration` only; **or** `MAX_TASK_ROWS`'
+comparison moves to `queries/stats-metrics.ts` (the pure half, already unit-tested and *not*
+excluded) so the branch is covered where it is counted; **or** the exclusion list gets what
+`packages/infrastructure/src/db/pool-errors.test.ts` and `tasks-column-ownership.test.ts` already are
+for their lists — a census, so a new entry is a decision somebody makes rather than a line somebody
+adds. Either way the `'delivered'` throw site gets one case.
+**Needs measurement: none** — every figure above is read off the two files (rule 66, nothing was
+run). Adjacent and *not* the same finding: backlog **87** (branch coverage at 80.05 % against the
+global 80) and its `docs/TODO.md` row, which asks which files carry the uncovered branches; this
+entry is about a file deliberately taken *out* of that number.
+**Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next adds a module
+to `apps/server/src/queries/` or edits `vitest.config.ts`'s exclude list.
 
 ### 7. Carried, not yet scheduled
 - **Nit (WP-21, session 5): a credential sealed by `POST /api/integrations` has never been opened by
@@ -19393,7 +19684,136 @@ owner — so it holds its reservation until a human ends the row or raises the c
 fail-closed direction (rule 20) and it is **visible**, because the pause names the committed figure
 apart from the spent one; the alternative silently spends past the cap. Filed under discovered work.
 
+### WP-41 — the statistics deep-dive
+
+**What shipped**: `GET /api/org/stats` and `GET /api/org/stats.csv` with a strict published DTO, a
+projector for the four metric events nothing consumed, the board's conflict badge, and a screen that
+renders an **absence as prose** instead of a zero. Migration **0034** — two tables.
+
+**1. Q45's statistics half, answered.** The DTO lives in `packages/contracts` (`orgStatsResponseSchema`)
+and the work package that publishes it is the one that defines what each number *means*: a rollup is a
+table, a statistic is a table **plus a definition**, and the definition is the half a screen has to
+render (product/10:63). So the response is **a list of metrics rather than an object of numbers**, and
+every metric carries `definition`, `unit`, `samples`, `buckets`, `caveats` and — this is the part a
+record of numbers cannot express — `absent: {reason, owner}`. A metric this build cannot compute
+publishes `value: null` with an owner and **no buckets at all**; publishing *"nobody counted"* as `0`
+is structurally impossible, which is standing rule 16 moved from a convention into a type. The **CSV
+is long** — one row per (metric, scope, bucket) — for exactly that reason: a wide table needs a column
+per metric and therefore a *cell* for an absent one, and an empty cell is read as zero by every
+spreadsheet and every `SUM()`. In long form an absent metric has **no rows** and its total row carries
+the reason. Two paths rather than one `?format=`: Fastify compiles a response serialiser per status
+code, so a route that sometimes answers an object and sometimes `text/csv` must publish a schema that
+is a lie for one of them.
+
+**2. Thirty-three metrics: twenty-four computed, nine named absent with an owner.** The absent nine are
+`kb_usage` (nothing records which pack items a run *cited* — the denominator exists and the numerator
+does not), `tickets_edited_after_lint` (backlog **59**), `shadow_similarity` (served per **batch** by
+`GET /api/shadow-batches/:id`, which is the unit the comparison is meaningful in),
+`clean_first_mr_rate_by_author` (**Q48** for the field, backlog **79** for the mapping — the ungrouped
+rate *is* published), `readiness_attributed_returns` (no return carries a criterion id and readiness is
+evaluated once, backlog **46**), `loc_changed`, `defect_escape`, `queue_wait_minutes`
+(`task.dequeued` is unconsumed) and `total_cost_of_delivery` (**Q73**). **`loc_changed` is the one
+worth reading twice**: `mrPayload.diff_stats` exists, the **fake** git provider fills it
+(`{files_changed: 1, insertions: 10, deletions: 2}`) and the shipped GitLab adapter writes `null` on
+every path (`provider.ts:23` states why — GitLab publishes `changes_count`, a string like `"5+"`). A
+LOC metric would therefore have been measured in every test tier and null on every real instance,
+which is standing rule 1 in the shape that survives review. It is named absent instead.
+
+**3. Q73 is implemented as its recommendation and nothing else.** Minutes and dollars are two fields
+that no code path adds; the single number is the absent metric whose `owner` is the question. The
+optional `human_hour_rate_usd` setting is **not** built, for the reason WP-29 gave: a control that
+gates a multiplication this build refuses to make is worse than an absent one.
+
+**4. The three wrong inputs, paid or excluded by name.** Backlog **57** (`runs.mode`) — **no metric
+groups by it**, stated at the module: the row's filter is `tasks.mode` plus the task's *template*,
+which is a different column and a different question. Backlog **75** (`tasks.cost_estimated` has no
+writer) — `estimated_spend_share` is the projection that entry recommends, `sum(usd) where is_estimate`
+over `cost_entries`, and the column is **never read**. Backlog **63** (the board badge) — one nullish
+field on `taskRecordSchema` fed by a projection over the task's own event stream (`conflictsFor`), a
+badge on the card, the census line, and **64**'s and **65**'s residuals in the badge's own tooltip
+(the comparison is not symmetric, so the *absence* of a badge says nothing about the other task).
+
+**5. Two defects the fold would have shipped, both found by asking what production really sends.**
+(a) **`mr.merged` carries `task_id: null` on every event a git adapter produces** — the adapter cannot
+know the task — so a projector that read the payload alone would have written **no delivery row on any
+instance** while passing a unit test that handed it one. It looks the task up through
+`tasks.mr_ref`, exactly as the human-time projector and the saga do, and the e2e drives the merge with
+`task_id: null` for that reason. (b) **`task_stages.state` only ever holds `entered`/`exited`**; the
+return is in `outcome`. A predicate on `state = 'returned'` matches nothing and publishes a return rate
+of exactly zero on every instance — a silent zero no fake could have caught. Both are canaried.
+
+**6. What the projector writes, and what it deliberately does not.** One handler at TD-005 priority
+**240**, two tables, and the fold is a **pure function of one event** (`countersFor`): the only read it
+makes is the organisation's timezone. That restraint *is* criterion 5 — a fold that asked the database
+"how many returns does this task have?" would answer differently in a replay than it did live, and the
+two row sets would not be equal. Every metric that needs such a question is answered at **read time**.
+`mr.updated` stays `unconsumed` and its entry now names a **backlog entry instead of a work package**:
+the payload carries no author and fires for the platform's own pushes, so no work package will flip it
+until the *event* changes (backlog **90**'s shape). Four entries flipped: `task.review.observed`,
+`task.lint.posted`, `task.rebase.checked`, `task.conflict.warned`.
+
+**7. Backlog 89's read-side cap is applied, and says so where the number is.** The projector stays
+per entry (a fold-time cross-row cap is order-dependent and would break the replay equality); the read
+caps again over `(user_id or external_author, civil day)` across tasks, and
+`reviewer_minutes_per_delivered_task` carries three caveats naming backlog **88**, **89** and **90**
+with the words *"the two errors run in opposite directions and do not cancel"* on the screen.
+
+**8. Assumptions, written because the docs do not decide them.** (a) The **range** vocabulary is
+`7d|30d|90d|365d` with `bucket=day|week|month`, resolved against *today in the organisation's zone*;
+technical/08 writes only `?range=…`. (b) `from` is **not** snapped to a bucket boundary — a 30-day
+range asked for on a Wednesday ends on that Wednesday and its first week bucket is partial, because
+snapping answers a different question from the one the caller asked. (c) The permission is `org.read`
+(**viewer**): product/16 makes one of these numbers explicitly visible to everyone in the project
+(Q22) and the cost figures are already viewer-visible through `budget.read`. (d) A range holding more
+than **5 000** tasks is refused `409 stats_range_too_large` rather than served short, because a
+truncated total is indistinguishable from a real one on a screen. (e) product/19 §10 asks for a
+**median** and a p90 for cycle time and estimate accuracy; a daily rollup holds no distribution, so
+the **mean** is published and each definition says so in its own words. (f) *"Tasks started"* counts
+only tasks whose template can deliver a merge request — read off the task's own `template_snapshot`
+(does it contain a `merged_gate`?), so a project's own template is judged on what it does rather than
+on what it is called; without that filter a discovery, review-only, lint, bootstrap or epic-split task
+would drag the merge rate down and make it a statement about how many features are switched on.
+
+**9. Where to look** (for `CLAUDE.md`, whose wording is the orchestrator's): *the statistics deep-dive
+(WP-41) is `GET /api/org/stats` (+`.csv`), served by `apps/server/src/routes/stats.ts` over two
+modules that split on whether a database is needed — `queries/stats-metrics.ts` is the catalogue, the
+arithmetic, the absences and the CSV (pure, unit-tested) and `queries/stats-queries.ts` is eight reads
+(SQL, integration-tested). Only two facts are stored: `stats_task_delivery` and `stats_event_daily`
+(migration 0034), written by one projector at priority 240
+(`packages/application/src/stats/projector.ts`) and by nothing else (`stats-writers.test.ts`).
+Everything else is read where it already lives. A metric this build cannot compute is `absent` with a
+reason and an owner, never a zero; minutes and dollars are two fields (Q73).*
+
+**Canaries killed** (rule 3, each reverted in place and checked against an md5 taken first, rule 88):
+`outcome = 'returned'` → `state = 'returned'` kills the delivery case **and** the per-stage rate; the
+read-side day cap removed reports 720 minutes instead of 600; the delivery-template filter removed
+counts a discovery task as started; `loc_changed`'s `absent` block removed kills three cases across
+two files (the fold, the CSV's row count, the route's CSV comparison). A fifth was found by writing
+the e2e rather than by mutation: `task_id: null` on `mr.merged`.
+
 ## Discovered work — session 5 (not in plan)
+
+- **Nothing records which context-pack items a run cited, so product/16's "knowledge usage" has a
+  denominator and no numerator** (found by WP-41). `run_context_pack` stores what was *included*
+  (tier, path, tokens, `validated`) and no signal anywhere says the model referred to a document:
+  the artifact schemas carry `kbCitationSchema`, but nothing joins a citation back to the pack row
+  it came from, and the transcript is not read for one. The metric ships **absent with this entry as
+  its owner** (`STATS_CATALOGUE.kb_usage`). It is not a query: it needs the run to report what it
+  cited, which is a runner/artifact change.
+- **The one git provider this build ships publishes no diff stats, and the fake does** — so any LOC
+  metric is measured in every test tier and null in production (found by WP-41, measured off
+  `packages/integrations/src/providers/gitlab/{inbound,provider}.ts`, which write `diff_stats: null`
+  on all three paths, against `git/fake.ts:1038`'s `{files_changed: 1, insertions: 10, deletions: 2}`).
+  product/16 asks for *"LOC added/removed/changed per merged MR"* for information; it ships **absent
+  with this entry as its owner** rather than computed. Closing it is a provider read per merge
+  request (GitLab's `changes_count` is a *string* like `"5+"`, so the count has to come from the
+  changes endpoint) plus the fixture and contract-suite case rule 23 requires — and it would make
+  the fake honest, which is the half that matters.
+- **Nothing links a later bug ticket to the merge request that caused it**, so product/16's *"defect
+  escape"* has no source at all (found by WP-41). The platform sees bug tickets it is given and merge
+  requests it made, and inferring the link from text would publish a guess as a defect rate. Absent
+  with this entry as its owner. It needs either a provider link type the intake reads or a human
+  action that says *"this bug is about that MR"*.
 
 - **A run whose process died holds a budget reservation for ever** (found by the cap-race fix on
   WP-40's tree). Admission now counts a live run's per-run cap against its scope's caps

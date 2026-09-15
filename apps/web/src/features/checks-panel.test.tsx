@@ -82,6 +82,7 @@ const TASK_ROW: TaskRecord = {
     question_id: '00000000-0000-4000-8000-0000000000c9',
     checked_at: '2026-09-13T04:30:00.000Z',
   },
+  conflict: null,
   required_reviewers: {
     source: 'codeowners',
     handles: ['@ana', '@billing-team'],

@@ -216,10 +216,33 @@ test('the project panels render the vault, the proposals and the budget meter', 
   await expect(page.getByText('fakehash1')).toBeVisible();
 });
 
-test('statistics says plainly that it has no data source yet', async ({ page }) => {
+/**
+ * The statistics screen (WP-41). It used to say plainly that it had no data source; it has one now,
+ * and what this case keeps is the *reason* that sentence existed: **a number the platform cannot
+ * compute must not appear as a zero.**
+ */
+test('statistics renders a number, a null ratio and an absence as three different things', async ({
+  page,
+}) => {
   await page.goto('/stats');
-  await expect(page.getByText('Statistics are not available on this instance yet')).toBeVisible();
-  await expect(page.getByText('Clean first-MR rate')).toBeVisible();
+  // `.first()` and exact matches throughout: every definition is also rendered into a hidden
+  // `aria-describedby` node, which is the point of `Metric` — a tooltip that reaches a screen
+  // reader — and makes a loose text match ambiguous by design.
+  await expect(page.getByText('Tasks delivered', { exact: true })).toBeVisible();
+  await expect(page.getByText('3', { exact: true }).first()).toBeVisible();
+  // The ratio with nothing to divide — not "0.0%".
+  await expect(page.getByText('no data in this range').first()).toBeVisible();
+  // The absence, in the section that exists for it, with the owner beside the reason.
+  await expect(page.getByText('Not measured, and why')).toBeVisible();
+  await expect(page.getByText('Lines changed per merged MR', { exact: true })).toBeVisible();
+  await expect(page.getByText('Unowned — filed as discovered work by WP-41.')).toBeVisible();
+  // The error direction of a figure that has one is on the screen rather than in a docblock.
+  await expect(page.getByText(/Over-counts: a bot that is not this platform/)).toBeVisible();
+  // The CSV export points at the endpoint that serves it.
+  await expect(page.getByRole('link', { name: 'Download CSV' })).toHaveAttribute(
+    'href',
+    /\/api\/org\/stats\.csv\?range=30d&bucket=day$/,
+  );
 });
 
 test('the integrations screen loads a provider setup guide on demand', async ({ page }) => {

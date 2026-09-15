@@ -100,6 +100,7 @@ import {
   findShadowBatchProjectId,
   listShadowBatches,
 } from './queries/shadow-queries.js';
+import { findOrganisationTimezone, readStatsSources } from './queries/stats-queries.js';
 import { roleCapabilities } from './role.js';
 import { registerAskRoutes } from './routes/asks.js';
 import { registerBootstrapRoutes } from './routes/bootstrap.js';
@@ -114,6 +115,7 @@ import { registerProjectRoutes } from './routes/projects.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerShadowRoutes } from './routes/shadow.js';
+import { registerStatsRoutes } from './routes/stats.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { ShadowCommands } from './shadow.js';
@@ -558,6 +560,18 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       // TD-012 step 2, the platform's patterns — the same composition `commands.ts` gives every
       // task command, and for the same reason: an HTTP request carries no run-scoped credential.
       redactor: redactionAdapters.patternRedactor(),
+    });
+    // WP-41: the organisation statistics and their CSV twin. It needs the database and nothing
+    // else — every number is a projection, and the two the projector writes are read like the six
+    // that already existed.
+    await registerStatsRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        timezone: async () => findOrganisationTimezone(options.database),
+        sources: async (range, statsOptions) =>
+          readStatsSources(options.database, range, statsOptions),
+      },
     });
     await registerKbRoutes(app, {
       database: options.database,

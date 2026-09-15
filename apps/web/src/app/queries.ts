@@ -343,6 +343,27 @@ export const useRunContextPack = (runId: string, enabled: boolean) => {
   });
 };
 
+/**
+ * `GET /api/org/stats` — the delivery statistics (WP-41, product/16).
+ *
+ * `FOREVER` like every other read on this app: the SSE stream is the invalidation signal, and a
+ * statistics screen that polled would hide a broken stream behind numbers that happen to be fresh.
+ * Nothing invalidates this key today — no frame says *"a task was delivered"* — so the screen is
+ * refreshed by a navigation or a reload, which is stated on it rather than implied.
+ */
+export const useOrgStats = (query: {
+  readonly range?: string;
+  readonly bucket?: string;
+  readonly project_id?: string;
+}) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.orgStats(query),
+    queryFn: () => endpoints.orgStats(query),
+    ...FOREVER,
+  });
+};
+
 export const useAgents = () => {
   const { endpoints } = useServices();
   return useQuery({

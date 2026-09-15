@@ -45,8 +45,12 @@
 > for an evaluated project and keeps the 409, with the row count, for one whose discovery run has
 > not happened; what a projection over `projects.readiness_level` could answer is still refused,
 > because `evaluated_at` and `criteria` would be invented. What is still missing from this document's tables is **part of** the
-> command surface (the list two paragraphs down) and three more reads — `GET /api/org`,
-> `GET /api/org/stats` and `GET …/stats`.
+> command surface (the list two paragraphs down) and two more reads — `GET /api/org` and the
+> project-scoped `GET …/stats`. **WP-41 served the organisation's:** `GET /api/org/stats?range=…`
+> answers a published DTO (`orgStatsResponseSchema`), and product/10:24's *"CSV export"* is a
+> **second path**, `GET /api/org/stats.csv`, which this table does not name — a route cannot
+> publish both a strict object schema and a `text/csv` body honestly, so the two representations
+> are two routes (Q45 records the shape and the reasoning).
 >
 > **WP-21 served the onboarding wizard's seven** (product/06): `POST /api/projects`,
 > `POST /api/integrations`, `POST /api/integrations/:id/test`, `GET/PUT /api/projects/:id/bindings`,

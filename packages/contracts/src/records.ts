@@ -398,6 +398,37 @@ export const taskReviewersSchema = z.strictObject({
 
 export type TaskReviewers = z.infer<typeof taskReviewersSchema>;
 
+/**
+ * The peer merge request this task overlaps with — product/04 S6b's *"the board warns when two
+ * active tasks touch the same files"* and product/18's *"touches the same files as PROJ-98"*
+ * (WP-26's event, WP-41's field; PROGRESS backlog **63**).
+ *
+ * A projection over the task's own event stream rather than a stored column: `task.conflict.warned`
+ * already carries everything the badge renders, so a table would be a second copy of it. The
+ * **latest** warning is published — a task compared twice reports what the last comparison found.
+ *
+ * Two residuals ride with it, both stated rather than implied, because they are visible on the
+ * screen and a reader would otherwise derive the wrong rule from them:
+ *
+ *  - **The warning is not symmetric** (PROGRESS backlog **65**): it is appended on the stream of
+ *    the task whose rebase gate ran, so on a pair only one card carries a badge. A reader must not
+ *    conclude that the other task is clear — it was never compared.
+ *  - **`truncated` means the comparison did not read every file** (backlog **64**), so
+ *    `path_count: 0` under `truncated: true` is *"nothing found in what was compared"* rather than
+ *    *"nothing to find"*.
+ */
+export const taskConflictSchema = z.strictObject({
+  other_task_id: idSchema,
+  /** The other task's ticket key — untrusted provider text (BD-022), bounded at the event. */
+  other_ticket_key: nonEmptyStringSchema.max(256),
+  /** Overlapping paths **found**, which is not the length of the event's bounded `paths` list. */
+  path_count: z.int().nonnegative(),
+  truncated: z.boolean(),
+  warned_at: isoDateTimeSchema,
+});
+
+export type TaskConflict = z.infer<typeof taskConflictSchema>;
+
 export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
@@ -442,6 +473,16 @@ export const taskRecordSchema = z.strictObject({
    * rather than about the platform.
    */
   required_reviewers: taskReviewersSchema.nullable(),
+  /**
+   * The latest `task.conflict.warned` for this task, or `null` (WP-41, PROGRESS backlog **63**).
+   *
+   * `null` is *"no warning has been appended for this task"* — which on a pair of overlapping
+   * tasks is also what the task that was compared **first** sees, because the comparison is not
+   * symmetric ({@link taskConflictSchema} carries the reasoning). It is deliberately not the same
+   * shape as *"the rebase gate ran and found nothing"*, which produces `task.rebase.checked` and
+   * no warning at all.
+   */
+  conflict: taskConflictSchema.nullable(),
   cost_actual_usd: usdSchema,
   cost_estimated_usd: usdSchema,
   /**

@@ -63,6 +63,7 @@ const TASK_DETAIL: TaskDetailResponse = {
     // nothing has been routed — the two `null`s a task page starts with.
     dependencies: null,
     required_reviewers: null,
+    conflict: null,
     cost_actual_usd: 1.25,
     cost_estimated_usd: 0,
     estimate_usd: null,

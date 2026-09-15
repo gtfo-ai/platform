@@ -27,6 +27,10 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+// A tooltip is text the browser renders, not markup — but it is still provider text, and
+// `sanitiseUntrusted` is what strips the bidi overrides and control characters that make a line
+// read backwards (CVE-2021-42574). `ExternalLink`'s own refusal tooltip does the same.
+import { sanitiseUntrusted } from '../ui/untrusted-text.js';
 
 /** The columns, in pipeline order. Every state appears exactly once, so no task can be invisible. */
 export const BOARD_COLUMNS = [
@@ -96,6 +100,37 @@ const TaskCard = ({
           <Badge key={stage} tone="warning">{`${stage} ${count}`}</Badge>
         ))}
       </div>
+      {/*
+        product/04 S6b's *"the board warns when two active tasks touch the same files"* and
+        product/18's *"touches the same files as PROJ-98"* (WP-26's event, WP-41's field; PROGRESS
+        backlog 63). Two residuals are in the tooltip rather than in a comment only this file's
+        reader sees, because both are visible on the screen:
+
+         - the warning is **not symmetric** (backlog 65) — it is appended on the stream of the task
+           whose rebase gate ran, so on a pair only one card carries a badge, and the *absence* of
+           one says nothing about the other task;
+         - `truncated` means the comparison did not read every file (backlog 64), so a count of
+           zero under it is "nothing found in what was compared".
+
+        The peer's ticket key is provider text (BD-022) and goes through `UntrustedText`.
+      */}
+      {task.conflict === null || task.conflict === undefined ? null : (
+        <p className="text-[11px]">
+          <Badge tone="warning">
+            <span
+              title={`Touches the same files as ${sanitiseUntrusted(task.conflict.other_ticket_key)}: ${task.conflict.path_count} overlapping path(s)${
+                task.conflict.truncated
+                  ? ', and the comparison did not read every file of both merge requests, so there may be more'
+                  : ''
+              }. The comparison runs when a task enters the rebase gate and is not symmetric: the other task is warned only if its own gate ran after this one had a merge request.`}
+            >
+              {'touches '}
+              <UntrustedText value={task.conflict.other_ticket_key} />
+              {` · ${task.conflict.path_count} file${task.conflict.path_count === 1 ? '' : 's'}`}
+            </span>
+          </Badge>
+        </p>
+      )}
       <div className="flex flex-wrap gap-2 text-[11px]">
         {/* Both URLs came from a ticket or git provider: `ExternalLink` is the only renderer
             allowed to produce an `href`, and it refuses any scheme but http(s). */}

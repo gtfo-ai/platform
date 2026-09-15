@@ -40,6 +40,7 @@ export * as runlet from './runlet/index.js';
 export * as runner from './runner/index.js';
 export * as secrets from './secrets/index.js';
 export * as shadow from './shadow/index.js';
+export * as stats from './stats/index.js';
 export * as workspace from './workspace/index.js';
 
 export const packageId = '@platform/infrastructure' as const;
