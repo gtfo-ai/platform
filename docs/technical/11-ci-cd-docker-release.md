@@ -55,6 +55,20 @@ profiles:
 ```
 Secrets via env or `<NAME>_FILE`. `.env.example` lists every variable with defaults (no secret values).
 
+**How `.env` reaches the process, amended at WP-50.** The `app` and `migrate` services take
+`env_file: [{path: .env, required: false}]`, so `.env` **is** the container's environment; only what
+compose computes or the topology pins stays in `environment:` (`DATABASE_URL`, `HOST`, `PORT` and
+the two in-container data paths), and `environment:` wins over `env_file:`. The hand-written list
+this replaced delivered eighteen names while the server reads fifty-nine, so twenty were silently
+dropped — including `APP_INTEGRATION_SECRET_ENV`, without which no integration can be created, and
+every `<NAME>_FILE` variant, which made the sentence above untrue for every variable. A curated list
+cannot be complete in principle: `APP_INTEGRATION_SECRET_ENV` is operator-declared, so the set of
+credential names the server must read is unknowable when this file is written. The comparison is
+`test/e2e/compose/compose-config.e2e.test.ts`, in both directions, and the live instance is
+`scripts/compose-stock-check.mjs`, run from `image.yml` beside `web-compose-check.mjs`. The
+`launcher` keeps a list of its own: it is the one container with a route to the daemon (TD-021), and
+what it reads is a short fixed set rather than an unknowable one.
+
 ## Release
 - release-please (conventional commits → release PR → tag `vX.Y.Z`); commitlint enforced by lefthook and CI; agents sign off commits (DCO).
 - Migrations forward-only, run by the `migrate` service with an advisory lock; the app refuses to start when the DB schema is newer than the code; release notes state whether a migration is required; `pg_dump` before upgrade documented.

@@ -103,17 +103,37 @@ jobs:
           node scripts/web-compose-check.mjs --tag ci --no-build
           --project-suffix ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
 
-      - name: tear down the compose project
-        if: always()
-        env:
-          # `docker compose down` interpolates the file, and `app` declares `APP_SECRET_KEY` with
-          # `:?`, so a value has to be present even for a teardown. Obviously fake, and unused: no
-          # container is started by this step.
-          APP_SECRET_KEY: web-compose-check-teardown-not-a-real-secret
+      # WP-50's live half, and the only place it can be measured either: that a stock `.env` — the
+      # operator guide's `cp .env.example .env` plus the values §2 names, and **no override file** —
+      # reaches a created integration, an authenticated `/metrics` and an instance configured with
+      # only `APP_SECRET_KEY_FILE`. It needs a daemon *and* both images, which is this job and not
+      # `ci.yml`'s e2e job (that one builds `platform-runtime` and `platform-egress` only). The
+      # compose-file half of the same row is asserted client-side in the e2e tier.
+      - name: a stock instance of the image just built creates an integration
         run: >-
-          docker compose
-          -p agentic-web-check-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
-          --env-file /dev/null -f compose.yml down -v --remove-orphans
+          node scripts/compose-stock-check.mjs --tag ci
+          --project-suffix ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+
+      # Both scripts tear their own project down in a `finally`; these repeat it unconditionally.
+      # Every command below ends `|| true` on purpose: this is cleanup after the verdict, and a
+      # teardown that fails must not turn a green build red or hide a red one — it is silent where
+      # the old single step failed the job, which is the trade. The scripts' own `finally` is the
+      # teardown that reports.
+      # because a killed step has no `finally`. No `APP_SECRET_KEY` is needed any more: WP-50
+      # removed the `${APP_SECRET_KEY:?…}` interpolation that used to make even a teardown require
+      # a value.
+      - name: tear down the compose projects
+        if: always()
+        run: |
+          set -eu
+          suffix=ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          for project in agentic-web-check-"${suffix}" agentic-stock-check-"${suffix}"; do
+            docker compose -p "${project}" --env-file /dev/null -f compose.yml \
+              down -v --remove-orphans || true
+            # `ctl` is named globally in compose.yml, so the stock check gives it a name of its
+            # own; a `down` that interpolates /dev/null would look for the default instead.
+            docker volume rm -f "${project}-ctl" "${project}-repo-cache" >/dev/null 2>&1 || true
+          done
 
       - name: log in to the registry
         if: github.event_name != 'pull_request'

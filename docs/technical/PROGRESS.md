@@ -6576,6 +6576,206 @@ Related: **43** (the entry WP-49 closed; its producer list is this entry's trigg
 **107** (the same shape for two other tables, both unowned), **52** (why the audit row needs a task
 id), **1** (no production load, so no producer today).
 
+### 127. **Nine knobs — thirteen variable names — that `.env.example` and technical/12 both document have no reader in this build, and two of them promise behaviour the shipped code decides the other way** (TODO, small — one cause, nine instances, **three different verdicts**; three are already carried by entry **74** and owned; the rest folded into **WP-73**; found by WP-50, confirmed off the tree by the refiner, session 6)
+
+**What is wrong.** `.env.example` is the instance's single configuration list (technical/11 § Compose,
+technical/12 § Environment variables), so rule **7**'s shape applies to it: a name in the file that
+nothing reads is a lie an operator acts on. WP-50 made the file reach the container, so these nine are
+no longer *also* undelivered — they arrive, and are ignored. They are not one piece of work: three are
+already owned, four document a feature this build does not have, and two say something the code
+decides the other way.
+
+**Evidence** (refiner, session 6; file reads and greps, nothing run — rule 66). WP-50's census is the
+instrument: `loadServerConfig` under a recording `Proxy` asks for **59** names, a stock `.env` delivers
+**139** to the `app` container, and the 80-name residual is classified by a table in
+`test/e2e/compose/compose-config.e2e.test.ts:387-401`, whose group *"declared with no reader in this
+build"* is exactly this list. WP-50's implementer, quoted: *"Nine variables `.env.example` documents
+have no reader in this build … each is a documented knob that does nothing."*
+
+Per knob — what it was for, and what it actually does.
+
+- **`APP_FEATURE_TICKET_LINTER|REVIEW_ONLY|MAINTENANCE|SHADOW_MODE|DIGEST`** (`.env.example:109-113`,
+  technical/12:31). The file states a behaviour: *"Every flag is off unless set to true; the
+  instance-wide value is the ceiling for what a project may enable in .agentic/config.yml"*
+  (`.env.example:106-108`). A `git grep APP_FEATURE` over the whole tree answers `.env.example`,
+  technical/12, this ledger and the compose test's residual table — **no source at all**. The ceiling
+  does not exist: `featuresConfigSchema` (`packages/contracts/src/config.ts:722`) is a key of the
+  **project's** `.agentic/config.yml` and is the only switch anything reads, so a project that sets
+  `features.review_only: true` gets it on an instance whose operator set `APP_FEATURE_REVIEW_ONLY=false`.
+  Added at **WP-00** round 2 (item 7 of its response), before any feature that would read them existed.
+- **`APP_TRANSCRIPT_STORE=db`** (`.env.example:98`, technical/12:27, `db | fs:<path> | s3:<bucket>`).
+  The two non-`db` values need an external blob store: `blobs` has had no writer since migration 0006
+  and `run_messages.blob_id` is never set (WP-15g's discovered work, already carried). The shipped
+  value is the only implemented one.
+- **`APP_RUNNER_MAX_PARALLEL=4`** (`.env.example:99`, technical/12:28, *"org `max_parallel_runs`
+  seed"*). The target **is** read — `evaluateTaskAdmission` against `settings.wip`
+  (`packages/application/src/pipeline/saga.ts:454`) — but its value is the domain constant
+  `DEFAULT_WIP_LIMITS.maxParallelRuns = 4` (`packages/domain/src/policies/wip.ts:23`) handed over by
+  `defaultProjectSettings` (`packages/application/src/pipeline/settings.ts:141`). Nothing seeds it
+  from the environment and no surface writes it either, so the knob promises tuning that no code path
+  offers.
+- **`APP_WEBHOOK_PUBLIC_URL=`** (`.env.example:101`, technical/12:29, technical/06:410).
+  **Superseded, and the substitute disagrees with two shipped operator documents.**
+  `GET /api/integrations/:id/setup-guide` builds the URL it publishes from **`APP_BASE_URL`**
+  (`apps/server/src/routes/integrations.ts:67-68`, called at `:154`), while
+  `packages/integrations/src/providers/gitlab/setup-guide.md:41` and
+  `packages/integrations/src/providers/jira-cloud/setup-guide.md:68` tell the operator to paste
+  `<APP_WEBHOOK_PUBLIC_URL>/webhooks/…` and to skip the step when it is unset. The *"else polling"*
+  half it gates is separately unbuilt and carried in `docs/TODO.md`.
+- **`APP_DISABLE_TELEMETRY=true`** (`.env.example:102`, technical/12:30, *"no phone-home by
+  default"*). This build has no telemetry client at all, so the documented default is the whole
+  behaviour and the variable cannot change it in either direction.
+- **`APP_WORKSPACE_ROOT=/var/lib/app/workspaces`** (`.env.example:85`, technical/12:23, *"runner
+  volume"*). Superseded by the launcher's own `APP_WORKSPACE_*` set
+  (`apps/launcher/src/config.ts:19-34`), and the field it would have seeded —
+  `ProjectSettings.workspaceRoot`, defaulted to `/workspaces` at
+  `packages/application/src/pipeline/settings.ts:143` — is itself read by nothing. **This is the one
+  dead knob that can fail a process rather than be ignored**: `readLauncherConfig` filters the
+  environment by the prefix `APP_WORKSPACE_` and then parses it with `z.strictObject`
+  (`apps/launcher/src/config.ts:123-131` over the schema at `:19`), so a launcher handed a stock
+  `.env` **throws at start-up** on this name. The schema's docblock says why it is strict, and the
+  reasoning is right; the knob is what makes it fire.
+- **`APP_WORKING_DAYS`, `APP_WORKING_HOURS`, `APP_HOLIDAYS`** (`.env.example:383`, `:385`, `:388`) —
+  **already recorded and already owned**. The measurement sits inside backlog **74**
+  (*"the three variables are declared to operators and parsed by nothing"*), `loadWorkingCalendar`
+  exists at `packages/infrastructure/src/jobs/config.ts:158` with no production caller, and **WP-56**
+  composes the working calendar for the first time. Nothing here is new; they are listed so the count
+  is honest and so this entry is not read as re-opening them.
+
+**Defect or working as designed?** Both, by knob, which is why one verdict would be wrong. The ceiling
+sentence and the two setup guides' `<APP_WEBHOOK_PUBLIC_URL>` are **documentation that is false about
+the shipped code** — rule **83**'s class, discovered late rather than created here. The other four are
+**working as designed with the design undocumented**: a feature nobody scheduled, with the knob left
+standing where the feature was described.
+
+**What it costs to leave.** Three costs an order of magnitude apart. (1) `APP_FEATURE_SHADOW_MODE` is
+the expensive one: an operator who turns the instance flag off believes no project can make a live
+write, and the project's own key is what actually decides — a false belief about a safety switch is
+worse than no switch. (2) `APP_WEBHOOK_PUBLIC_URL` costs a wrong webhook URL pasted into GitLab or
+Jira during the wizard, or a skipped step, while the API publishes the right URL on the same screen.
+(3) The other four cost a reader's time and rule 7's credibility: once one documented name does
+nothing, no name in the file can be trusted without a grep — which is the cost WP-50 just paid to
+remove in the other direction.
+
+**What "done" looks like.** For the six that are not already owned: a decision per knob, recorded at
+the line, never a silent deletion.
+
+1. **Delete** `APP_TRANSCRIPT_STORE`, `APP_RUNNER_MAX_PARALLEL`, `APP_DISABLE_TELEMETRY` and
+   `APP_WORKSPACE_ROOT` from `.env.example` **and** from technical/12's table in the same change, each
+   with the one sentence that says where the behaviour actually lives (the `db`-only store,
+   `DEFAULT_WIP_LIMITS`, *"this build sends nothing"*, the launcher's own variables).
+2. **Delete `APP_WEBHOOK_PUBLIC_URL`** and make `APP_BASE_URL` the single answer, correcting the two
+   setup guides and technical/06:410 with it. If a second public host is genuinely wanted, that is a
+   feature with a reader, not a line in a file.
+3. **`APP_FEATURE_*`: the recommendation is to delete the five and the ceiling sentence**, and to state
+   at technical/12:31 that a project's `.agentic/config.yml` is the only switch. Building the ceiling
+   is the other answer and it is a **product decision**, not a sweep's: it needs a read in the
+   composition root, a stated rule for how the instance value and the project value combine per flag,
+   and a refusal surface for a project that asks for a disabled feature.
+4. Whatever is **kept** gains a reader, and its name leaves the compose test's *"declared with no
+   reader in this build"* group — the check that already exists, so the outcome is asserted rather
+   than asserted-to-have-been-done.
+
+**Needs no measurement**: every claim above is a grep or a file read, and the compose census WP-50
+already paid for is the denominator. **What would make it urgent.** Two triggers. The
+`APP_WEBHOOK_PUBLIC_URL` half is **live today** for any operator who reaches the wizard's integration
+step. And any row that hands a **launcher** process an `env_file` makes `APP_WORKSPACE_ROOT` a start-up
+failure rather than a dead line — **WP-72**'s second product container under TD-028 is the named
+candidate, which is why its row now carries the clause.
+
+**Depends on / owner. WP-73**, the sweep of the sentences and small repairs no row owns: six of the
+nine are one deletion and one sentence each, which is exactly its shape, and rule 7 is already on its
+list. The working-calendar three stay with entry **74** and **WP-56**. The `APP_FEATURE_*` decision is
+WP-73's to *take* with the recommendation above; only a founder's answer turns it into a build.
+Related: **74** (the three), **72** (the same class one layer in — a declared policy with no reader,
+whose `AUTONOMY_POLICY_READERS` is the precedent for a declaration table held to the code by a test),
+**54** and WP-50 (which delivered these names and classified them), **22** (a number restated where
+nothing reads it).
+
+### 128. **`compose.local.yml` demands a credential nothing in this build reads, and BD-004's `local` mode passes no credential to the run container at all — so the mode Q14 calls first-class cannot authenticate a run** (TODO, small-to-major — one cause, a false sentence and a **latent** gap with the same trigger as backlog **34**; folded into **WP-53**; found by WP-50, confirmed off the tree by the refiner, session 6)
+
+**What is wrong.** Two halves of one fact. The file that turns local mode on says the server requires
+the token and refuses without it — `compose.local.yml:15-16`: *"`APP_PROVIDER_MODE=local` and
+`CLAUDE_CODE_OAUTH_TOKEN`, which `loadServerConfig` requires together (an empty token with `local` is
+a startup error, not an anonymous run)"* — and `${CLAUDE_CODE_OAUTH_TOKEN:?…}` at `:28` makes compose
+refuse to resolve the file without one. **No server source reads the name.** And the code that decides
+what a run's environment contains answers `local` with **nothing**, so even an operator who sets it
+correctly starts a run container with no credential of any kind.
+
+**Evidence** (refiner, session 6; greps and file reads, nothing run — rule 66).
+- WP-50's implementer, quoted: *"`git grep CLAUDE_CODE_OAUTH_TOKEN` over `*.ts`/`*.mjs` finds
+  `scripts/eval.mjs`, its test, and this repository's compose test — **no server source reads it at
+  all**, and the recording `Proxy` over `loadServerConfig` never asks for it."*
+- Reproduced: the same grep over `apps/` and `packages/` answers **nothing**.
+  `apps/server/src/config.ts:55-61` maps `providerMode`, `modelApiKey` (`ANTHROPIC_API_KEY`) and
+  `claudeBinary` and has no entry for the token, so there is no `loadServerConfig` refusal to be had —
+  the claimed start-up error is compose's `:?`, in the very file that describes it as the server's,
+  and it fires at `config` time rather than at boot.
+- **The second half is pinned by a test rather than being an accident.** `agentRunEnvironment`
+  (`apps/server/src/agent.ts:235-244`) returns `{ env: {}, secretEnvNames: [] }` unless
+  `providerMode === 'api'`, and `apps/server/src/agent.test.ts:151-159` asserts it by name —
+  *"injects nothing in local mode or with no key"*. It is *"the one function that decides what a run's
+  environment contains"* (its own docblock, `apps/server/src/agent.ts:117`), and
+  `apps/server/src/pipeline.ts:674` plus four sites in `apps/server/src/runtime.ts` are the only
+  callers. So in `local` mode the CLI inside `platform-runtime` receives neither
+  `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY`.
+- `compose.local.yml:29-31` deliberately blanks `ANTHROPIC_API_KEY` (*"`api` mode's credential is
+  meaningless here and would be a second secret in the container for nothing"*), so the mode removes
+  the one credential that does reach a run and supplies nothing in its place. That reasoning is sound;
+  what is missing is the replacement.
+- The token is documented in three further places that the above makes wrong or thin, and they do not
+  agree with each other: `.env.example:411-413` (*"Secret. Optional, APP_PROVIDER_MODE=local only"*,
+  with a `_FILE` variant that also has no reader), technical/12:22 (*"secret, `local` mode, optional —
+  operator-supplied"*), and **Q14**, whose recorded answer is *"First-class (documented compose
+  profile)"*. Two documents say **optional**, `compose.local.yml` makes it **mandatory**, and the code
+  reads it **never**.
+
+**Defect or working as designed?** The sentence is a **documentation defect** — rule 18's shape stated
+in reverse, a file claiming a refusal that does not exist, and rule 83's class because the refusal was
+described where a reader would most trust it. The missing credential is a **latent defect** with the
+same trigger as backlog **34**: it fires on the first run that composes a real
+`RunWorkspaceProvisioner`, which nothing does today because `unavailableClaudeRunner` throws first. It
+is not working as designed in the sense that a design chose it: nothing in this ledger, in BD-004 or in
+TD-021 says a `local`-mode run authenticates from somewhere else, and there is no other channel —
+`RunSpec.env` is it.
+
+**What it costs to leave.** Today nothing runs, so the cost is the diagnosis later, and it is three
+layers deep: the first operator to try BD-004's local mode sets a token compose demands, watches the
+instance start cleanly, and gets an authentication failure inside a run container whose environment
+they cannot see. It also costs the opposite false belief in the meantime — a reader of
+`compose.local.yml` concludes the platform validates the credential at boot, which is the sentence a
+reviewer would otherwise accept as evidence.
+
+**What "done" looks like.**
+1. **Decide what `local` mode passes to a run, and implement it in `agentRunEnvironment`**, which is
+   the one place: the token under `CLAUDE_CODE_OAUTH_TOKEN` **with its name in `secretEnvNames`** — a
+   key in `env` that is not named there is a credential no redactor knows about, which is the defect
+   that docblock exists to prevent (TD-012 step 1) — **or** a stated decision that `local` mode runs
+   nothing on this build, in which case `compose.local.yml` and Q14's disposition say so.
+2. **The refusal the file claims becomes real, or the sentence goes.** If the mode needs the token,
+   `loadServerConfig` refuses an empty one (rule 18) and `compose.local.yml:15-16` describes what
+   happens rather than what would be reassuring.
+3. The `_FILE` variant gets the same answer as the name it shadows.
+4. Rule 83: `.env.example:411`, technical/12:22 and Q14's line move in the same change.
+
+**Needs measurement: whether the pinned CLI inside `platform-runtime` accepts
+`CLAUDE_CODE_OAUTH_TOKEN` from the process environment at all.** Nobody has run it that way in this
+repository, and the answer decides whether (1) is one line or a credential-helper change. It is a
+Docker measurement and belongs to the row, not to this entry (rule 66).
+
+**What would make it urgent.** WP-53 landing, or anybody running
+`docker compose -f compose.yml -f compose.local.yml up` against a build that composes a provisioner.
+
+**Depends on / owner. WP-53**, the row that composes the first production `RunWorkspaceProvisioner`
+and already carries backlog **34** (the CLI's *path* in the same container) and **71** — the same
+trigger, the same files, and *"a run starts, streams and ends"* as its own criterion (1), which
+explicitly needs no model credential, so this does not block it. What it adds is one decision and one
+assertion. If WP-53 declines the credential half, the **sentence** half alone is **WP-73**'s and the
+gap must be re-owned by number rather than dropped: deleting the sentence leaves `local` mode silently
+unauthenticated, which is the worse of the two states. Related: **34** (same latency, same trigger),
+**110** (`local` mode's spend is always an estimate — the other place this mode is half-built),
+**127** (the neighbouring class: a documented knob with no reader), **Q14**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -10094,7 +10294,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-50 | **The compose file passes what the server reads** | TODO | — | Depends on WP-22, WP-23. Folds backlog **54** (**blocker**: on a stock instance no integration can be created and no `_FILE` secret can be used). Shape (1) + (2) per the entry's recommendation; the guide currently teaches the workaround |
 | WP-51 | **The platform's own egress: a declared host allow-list, and an audit for a call with no binding** | TODO | — | Depends on WP-15b, WP-21, WP-38. Folds backlog **48** (**blocker**), **97**. Backlog 97 is ruled shape (a) — state the audit's scope rather than widen the table |
 | WP-52 | **Redaction at the artifact write, the two prompt columns, and the route that may then serve a body** | TODO | — | Depends on WP-15g, WP-15h, WP-19; run **before** WP-57. Folds backlog **35** (major, measured), **85**, **86**; implements **Q64**. Backlog 35 is ruled answer (b), the per-field policy |
-| WP-53 | **The launcher control plane and the first production `RunWorkspaceProvisioner`** | TODO | — | Depends on **TD-028** (written in session 6), WP-14, WP-13, WP-15g, WP-22. Folds backlog **34** (major), **71** (major), **82**, **0b**; implements **Q52**. **Not blocked on WP-33** — verified against the real images with the scripted CLI. This is the row that makes eleven latent findings testable |
+| WP-53 | **The launcher control plane and the first production `RunWorkspaceProvisioner`** | TODO | — | Depends on **TD-028** (written in session 6), WP-14, WP-13, WP-15g, WP-22. Folds backlog **34** (major), **71** (major), **82**, **0b**; implements **Q52**. **Not blocked on WP-33** — verified against the real images with the scripted CLI. This is the row that makes eleven latent findings testable. **Refiner (session 6): also folds backlog 128** — in `local` mode `agentRunEnvironment` passes the run container **no** credential (pinned by a test) while `compose.local.yml:15` claims a `loadServerConfig` refusal no source implements; same trigger as 34, one decision and one assertion |
 | WP-54 | **What a run may do: the project's declared commands, the role tables, and `get_task_context`** | TODO | — | Depends on WP-53 (same files), WP-17, WP-21, WP-14a, TD-027. Folds backlog **49** (**blocker**), **39**, **40**, **83**; implements **Q69** answer (ii). An e2e must run a fixture repository's test command — a fake that runs nothing is how this survived every row |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | TODO | — | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
 | WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
@@ -10117,8 +10317,8 @@ file, or the first work package that touches upgrade behaviour.
 | WP-69 | **The harness cannot script what production would refuse** | TODO | — | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**. The deliverable is the **detector**, not the fix; the vitest-budget contradiction is resolved by reading the resolved config before any number is chosen |
 | WP-70 | **Coverage: where the debt is, and what may be excluded** | TODO | — | Depends on nothing unbuilt. Folds backlog **87**, **115**. Opens with the measurement `docs/TODO.md` already asks for; the answer is a budget that says **where** coverage is owed, never *"write more tests"* |
 | WP-71 | **The CI surface: the linters, SAST, mutation, the changelog and the tag nobody decided** | TODO | — | Depends on WP-42, WP-22, TD-017, TD-015, TD-019. Folds backlog **116**, **117**, **118**; implements **Q89** — stop publishing `latest`. CodeQL is a **setting** an administrator applies, not a file |
-| WP-72 | **Two processes, one database: the `ROLE` split exercised** | TODO | — | Depends on **TD-028**, WP-53, WP-22, WP-06a, WP-18b, WP-43. Folds backlog **38** (major). TD-028 makes this the shipped topology, so the row asserts the deployment rather than an option |
-| WP-73 | **The sweep: the sentences and the small repairs no row owns** | TODO | — | Depends on nothing unbuilt; shares no file with a group 1–7 row. Folds backlog **1**'s remainder, **19**, **22**, **41**, **56**, **66**, **119**, **7**. Each item is closed **or** its entry says why not, by number |
+| WP-72 | **Two processes, one database: the `ROLE` split exercised** | TODO | — | Depends on **TD-028**, WP-53, WP-22, WP-06a, WP-18b, WP-43. Folds backlog **38** (major). TD-028 makes this the shipped topology, so the row asserts the deployment rather than an option. **Refiner (session 6), a trip-wire this row is the first to meet (backlog 127, owned by WP-73)**: `readLauncherConfig` filters by the `APP_WORKSPACE_` prefix and strict-parses, so a launcher-role process handed WP-50's `.env` **fails at start-up** on `APP_WORKSPACE_ROOT`, a knob nothing reads |
+| WP-73 | **The sweep: the sentences and the small repairs no row owns** | TODO | — | Depends on nothing unbuilt; shares no file with a group 1–7 row. Folds backlog **1**'s remainder, **19**, **22**, **41**, **56**, **66**, **119**, **7**. Each item is closed **or** its entry says why not, by number. **Refiner (session 6): also folds backlog 127** — six of the nine knobs `.env.example` and technical/12 document with no reader (the working-calendar three stay with 74/WP-56); the recommendation per knob is in the entry, and `APP_FEATURE_*` is a decision this row **takes** rather than defers |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -22930,3 +23130,144 @@ non-reproduction up as one (rule 86). Both restored files were checked back to t
 - **No command re-queues a dead-lettered event.** The remedy is an `update` by hand (documented in
   migration 0037 and in `.env.example`) or a `replayEvents` range; a maintainer-facing "retry this
   event" has no owner.
+
+#### WP-50 — `.env` is the app container's environment, and a test compares it with what the server reads
+
+**The shape, as the row decided it.** `compose.yml`'s `app` and `migrate` services take
+`env_file: [{path: .env, required: false}]`; `environment:` keeps only what compose **computes**
+(`DATABASE_URL` from `POSTGRES_*`) or what the topology must **pin** (`HOST`, `PORT`, and the two
+in-container data paths). Everything else an operator sets arrives through `.env`, and what an
+operator sets nowhere falls back to `SERVER_CONFIG_DEFAULTS`, which is the same value `.env.example`
+documents — so dropping a passthrough line changed no default. `ROLE` was dropped too: the image
+bakes `ENV ROLE=all`, and it is a passthrough rather than a computation.
+
+**The numbers, all measured on this tree** (Docker 29.7.2 / Compose v5.5.1, `docker compose config`
+with `.env` = `.env.example` in a temporary project directory):
+
+| | before | after |
+|---|---|---|
+| names delivered to `app` | **18** | **139** |
+| names `loadServerConfig` reads | 59 | 59 |
+| of those, **missing** from the container | **20** | **0** |
+| residual (delivered, not read by `loadServerConfig`) | 0 | **80**, classified by a table in the test |
+
+The row and backlog 54 say *"the server reads 36 variable names"*; **59** is the honest figure and
+the difference is not a correction of the entry but a change of instrument. 36 is `config.ts`'s own
+reads; 59 is what the code asks for when `loadServerConfig` is called with a recording `Proxy` —
+which also counts the `_FILE` variants `readEnvWithFile` probes and the `APP_DB_*`/`APP_DISPATCH_*`/
+`APP_JOBS_*` the three sub-loaders read (the entry names those separately in prose). Every one of
+the 59 is declared in `.env.example`, so **there are no deliberate omissions in that direction** —
+the test asserts an empty list rather than naming exceptions it does not have.
+
+**`--project-directory` is what makes the comparison deterministic**, and it was measured rather
+than assumed: it moves **both** compose's interpolation `.env` and the service's `env_file`
+resolution. Without it a developer with a real `.env` would measure their own credentials, and the
+test would drift between machines.
+
+**Three things this change had to answer that the row did not name.**
+
+1. **An empty `.env` line overrides an image's baked `ENV`.** `docker/app.Dockerfile` writes
+   `ENV APP_VERSION=${APP_VERSION}` (and `APP_COMMIT`, `APP_BUILT_AT`), and `.env.example` declared
+   all three empty — so `cp .env.example .env` would have made a **released image report
+   `0.0.0-dev` and `"commit": null` at `GET /api/version`**, which is the one place an operator looks
+   to find out what they are running. The three lines are now **commented out** in `.env.example`
+   with the reasoning at the line; they are still build arguments, because compose's interpolation
+   reads the file regardless of `env_file`. Asserted both ways in the test (absent from the
+   container, present in `build.args`).
+2. **`scripts/web-compose-check.mjs` would have broken.** It handed the container `APP_SECRET_KEY`,
+   `APP_BASE_URL` and `LOG_LEVEL` by *interpolation*, which no longer reaches the service. It writes
+   a small override file of its own now (`environment:` wins over `env_file:`), which also restores
+   the isolation `--env-file /dev/null` used to give alone — that flag bounds interpolation only,
+   and a service's `env_file` is resolved against the project directory whatever it says.
+3. **`compose.yml` names two volumes globally** (`ctl` is `name: agentic-ctl` so the launcher can
+   address the object the daemon knows). A check that ran `down -v` with the defaults would delete a
+   developer's own `agentic-ctl`, so `scripts/compose-stock-check.mjs` gives both a project-scoped
+   name in its `.env`, and `image.yml`'s belt-and-braces teardown removes them by name.
+
+**Where each criterion is asserted, and what runs it on CI (rule 71).**
+
+- **(2), (3) compose half, (4) compose half, (6)** — `test/e2e/compose/compose-config.e2e.test.ts`,
+  eight new cases plus two rewritten ones. `docker compose config` is client-side, so CI's
+  **`e2e-fake-claude` job runs them today** with no new image build.
+- **(1), (3) live, (4) live** — `scripts/compose-stock-check.mjs`, a running instance, wired into
+  **`.github/workflows/image.yml`**'s build job on both architectures. **This is a deviation from
+  the brief's "criterion (1) in the e2e tier", and the measurement that decided it**: `ci.yml`'s e2e
+  job builds `platform-runtime` and `platform-egress` only, so an e2e case that starts a compose
+  instance would need `platform` (1.1 GB) and `platform-launcher` (971 MB) built there — duplicating
+  what `image.yml` already builds on two architectures for every PR, for a job that would then take
+  minutes longer. `image.yml` has a daemon *and* both images at `:ci`, and it is where
+  `web-compose-check.mjs` already runs for exactly this reason. The e2e test's docblock says where
+  the live half lives, so neither is findable only from the other.
+- **(5)** — `docs/operator-guide.md` §2 lost the override subsection (replaced by *"`.env` **is** the
+  app container's environment"*, a table of the five pinned values, and the three consequences), §4
+  step 1 lost *"plus the override from §2"*, `README.md:26` lost *"add the four-line
+  `compose.override.yml`"*, and `docs/technical/11` § Compose and `docs/technical/12` § Environment
+  variables gained a paragraph each stating what the file now does. The guide's *"eighteen"* is gone
+  with the sentence that carried it; the old count was never corrected because the claim it was part
+  of is no longer true.
+
+**The live run, on this tree** (`node scripts/compose-stock-check.mjs`, images `platform:dev`
+`sha256:8246454e…` and `platform-launcher:dev` `sha256:4e966388…`, built from this checkout):
+eight checks, all green — `app running | db running | docker-socket-proxy running | launcher
+running | migrate exited`, six of six variables present inside the container, `/metrics` **401**
+anonymous and **200** with the credential, sign-in 200, `POST /api/integrations` **201** with
+`secret_refs: {auth_token: SENTRY_AUTH_TOKEN}`, `APP_SECRET_KEY` still refused **403**
+`secret_name_not_permitted`, and an instance reconfigured with only `APP_SECRET_KEY_FILE` starting
+and signing a session with `APP_SECRET_KEY` **present but empty** in its environment — the script
+writes `APP_SECRET_KEY=` rather than dropping the line (round-1 reviewer, rule 39: the sentence first
+said *absent*, which the measurement did not support); `readEnvWithFile` prefers `_FILE`, and genuine
+absence is the compose-config test's own case.
+
+**The canary (rule 42), also live.** The same script against `git show HEAD:compose.yml` fails
+**4 of 8**, and they are the defect: `printenv` finds none of the six, `/metrics` answers **200**
+anonymously, `POST /api/integrations` answers **403 secret_name_not_permitted** for
+`SENTRY_AUTH_TOKEN` *with the name set in `.env`*, and the `_FILE` phase cannot even start —
+`error while interpolating services.app.environment.APP_SECRET_KEY: required variable
+APP_SECRET_KEY is missing a value`, on `app` and on `migrate`. That last line is **`docs/TODO.md`
+measurement (a), executed** on a real `up` rather than on `config`; measurement (b) is the 139/59/80
+table above. Both are ticked there with the numbers. The compose-config cases were canaried the same
+way: 7 of 18 fail against `HEAD`'s file.
+
+**Assumptions written down.**
+- The `launcher` keeps its own `environment:` list. Stated at the line in `compose.yml`: its read
+  set is *knowable* (`readLauncherConfig` filters to `DOCKER_HOST`, `LOG_LEVEL`, `APP_WORKSPACE_*`
+  and parses them strictly) where the app's is not, and it is the one container with a route to the
+  daemon — handing it `APP_SECRET_KEY`, `ANTHROPIC_API_KEY` and every provider credential would put
+  them in the blast radius TD-021 exists to bound, in exchange for nothing it reads.
+- The TD-021 compose assertion **changed rather than being kept green**: it asserted `DOCKER_HOST` is
+  set on exactly one service, which passes here only because this repository has no `.env`. With a
+  stock `.env` the variable *is* in the `app` container, so the test now asserts the property that
+  survives — one service binds the socket, two join `docker-proxy`, `app` joins neither — and
+  measures the residual instead of claiming it. The source half is unchanged
+  (`apps/launcher/src/docker-access.test.ts`).
+- `migrate` gets the same `.env` although `migrate.ts` reads only the database half: the two
+  services run the same image, and a migration step whose environment differed from the process it
+  migrates for is a difference nobody would look for.
+
+**Tiers.** `PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e` twice. `verify:ui` and
+`verify:web-e2e` were not run: nothing under `apps/web` changed (`apps/server/src/web/bundle-path.test.ts`
+is a server unit test). Every Docker run was started at a one-minute load under 12 and the daemon
+was held alone; `docker ps` and `docker volume ls` were equal before and after (11 containers, all
+the user's own, and 97 volumes) — the canary run's teardown failed *because the old file could not
+interpolate*, and its project was removed by hand in the same session.
+
+**Discovered work (not fixed here).**
+- **`CLAUDE.md` § "Where to look" still says an instance needs a `compose.override.yml` "because
+  `compose.yml` passes the `app` service a fixed eighteen-variable list"** — false as of this row.
+  It is the one rule-83 sentence this change did not correct, deliberately: that file is also this
+  session's agent configuration, and an implementer does not edit it on an agent's instruction. One
+  clause, for whoever commits this row.
+- **Nine variables `.env.example` documents have no reader in this build**: `APP_FEATURE_*` (five),
+  `APP_TRANSCRIPT_STORE`, `APP_RUNNER_MAX_PARALLEL`, `APP_WEBHOOK_PUBLIC_URL`,
+  `APP_DISABLE_TELEMETRY`, `APP_WORKSPACE_ROOT`, and the working-calendar three (`APP_WORKING_DAYS`,
+  `APP_WORKING_HOURS`, `APP_HOLIDAYS` — `loadWorkingCalendar` exists and has **no production
+  caller**, so the file's *"It seeds the organisation setting"* is a claim nothing implements). They
+  are now named in the residual table of the compose test, so a tenth is a decision somebody makes
+  rather than a line somebody adds — but each is a documented knob that does nothing.
+- **`compose.local.yml`'s docblock says `loadServerConfig` requires `CLAUDE_CODE_OAUTH_TOKEN` and
+  `APP_PROVIDER_MODE=local` together ("an empty token with `local` is a startup error, not an
+  anonymous run"). It does not**: `git grep CLAUDE_CODE_OAUTH_TOKEN` over `*.ts`/`*.mjs` finds
+  `scripts/eval.mjs`, its test, and this repository's compose test — **no server source reads it at
+  all**, and the recording `Proxy` over `loadServerConfig` never asks for it. So local mode passes a
+  credential nothing consumes, and rule 18's shape is in the file that claims otherwise. Not this
+  row's: the row names `compose.yml:106` and shape (1), and this is BD-004's plumbing.

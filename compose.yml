@@ -26,9 +26,18 @@
 # amendment: "No process that composes the pipeline or serves `/webhooks/*` may construct a Docker
 # client"). `docker-socket-proxy` is the only service with the socket bound; it exposes a filtered
 # Engine API on an `internal: true` network that only `launcher` joins. The `app` service — which
-# serves the API, the SSE stream and the unauthenticated `/webhooks/*` endpoint — has no socket, no
-# `DOCKER_HOST` and no route to the proxy. That arrangement, not a `ROLE`, is what bounds the blast
-# radius of an RCE in the API process.
+# serves the API, the SSE stream and the unauthenticated `/webhooks/*` endpoint — has **no socket
+# and no route to the proxy**. That arrangement, not a `ROLE`, is what bounds the blast radius of an
+# RCE in the API process.
+#
+# Since WP-50 that sentence no longer says "no `DOCKER_HOST`": `.env` is the `app` container's
+# environment, so a stock `.env` does put the variable there. It is an address, not an
+# authorisation. What the property rests on is the two facts above plus a third that is checked
+# rather than asserted — `apps/launcher/src/docker-access.test.ts` reads every file `git ls-files`
+# knows about and fails if a Docker client is constructed, or `DOCKER_HOST` read, outside
+# `apps/launcher/src/`. The compose half is asserted in `test/e2e/compose/compose-config.e2e.test.ts`
+# in the form that survives the change: which service binds the socket, and which services can reach
+# the proxy's network.
 #
 # **`depends_on` never gates on `/readyz`** (TD-023's amendment). On `ROLE=all` readiness is 503
 # until a pipeline can be composed, which is honest and intended, so a `service_healthy` condition
@@ -84,13 +93,15 @@ services:
   migrate:
     <<: *platform-image
     command: ['apps/server/src/migrate.ts']
+    # The same `.env` the `app` service gets, for the same reason and with the same precedence.
+    # `migrate.ts` reads only the database half today (`db.loadDatabaseConfig(process.env)`), but
+    # the two services run the same image and a migration step that saw a different environment
+    # from the process it migrates for is a difference nobody would look for.
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
-      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env — see .env.example}
-      APP_DB_PARTITION_MONTHS_AHEAD: ${APP_DB_PARTITION_MONTHS_AHEAD:-3}
-      APP_TRANSCRIPT_RETENTION_DAYS: ${APP_TRANSCRIPT_RETENTION_DAYS:-}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       db:
         condition: service_healthy
@@ -98,31 +109,55 @@ services:
 
   app:
     <<: *platform-image
+    # **`.env` is this container's environment** (WP-50). Until then this service carried an
+    # explicit eighteen-key `environment:` map and nothing else in `.env` reached the process:
+    # `.env` is *compose's* environment, where it interpolates `${…}` in this file and stops. The
+    # measured cost was that a stock instance could not complete the product's front door —
+    # `APP_INTEGRATION_SECRET_ENV` never arrived, so `POST /api/integrations` refused every name
+    # with `(declared: none)` — and that TD-020's `_FILE` convention was unusable for every
+    # variable, because a `_FILE` name is itself an environment variable and not one was in the map.
+    #
+    # **Why a passthrough and not a longer list.** A curated list cannot be complete *in principle*:
+    # `APP_INTEGRATION_SECRET_ENV` is operator-declared, so the set of credential variable names the
+    # server must read (`apps/server/src/routes/onboarding.ts` reads them out of `process.env` by
+    # name) is unknowable when this file is written. `environment:` still wins over `env_file:`, so
+    # the values below are unaffected, and `test/e2e/compose/compose-config.e2e.test.ts` compares
+    # what this resolves to against the names `loadServerConfig` actually reads, in both directions.
+    #
+    # **`required: false`** so that a checkout with no `.env` still resolves — `docker compose
+    # config`, a teardown, CI. A missing `APP_SECRET_KEY` is then refused by the *server*
+    # (`invalid server configuration: APP_SECRET_KEY must be at least 32 characters …`) rather than
+    # by compose's old `${APP_SECRET_KEY:?…}`, which had to go: `:?` fails on unset **or empty**, so
+    # it refused to start the operator who did what TD-020 says and set only `APP_SECRET_KEY_FILE`.
+    #
+    # **The residual, stated rather than discovered.** This container now also sees
+    # `POSTGRES_PASSWORD` (no new exposure — `DATABASE_URL` below already carries it), `DOCKER_HOST`
+    # and the launcher's `APP_WORKSPACE_*`, and `RUNLET_*`. They are inert here: no process in this
+    # image constructs a Docker client (TD-021's WP-15g amendment, held over every tracked source by
+    # `apps/launcher/src/docker-access.test.ts`), this service joins neither `docker-proxy` nor the
+    # host's socket, and `RUNLET_*` is read inside a run container. A variable that names a daemon
+    # nothing here can reach and no code here would ask for is not a route to one.
+    env_file:
+      - path: .env
+        required: false
+    # Only what compose itself must **compute**, or must pin because the topology depends on it.
+    # Everything else an operator sets arrives through `.env` above; what an operator sets nowhere
+    # falls back to `SERVER_CONFIG_DEFAULTS` in `apps/server/src/config.ts`, which is the same value
+    # `.env.example` documents — so dropping a passthrough line from here changes no default.
     environment:
-      ROLE: ${ROLE:-all}
+      # Computed from the `db` service's own credentials.
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      # Pinned, not passed through: the publisher below maps the host's `${APP_PORT}` onto 8080 in
+      # *this* container, and `PORT` in a `.env` reads like the host-side knob (which is
+      # `APP_PORT`). Passed through, an operator's `PORT=9000` would move the listener while compose
+      # kept publishing `->8080`, and the instance would be unreachable with no error anywhere.
       HOST: 0.0.0.0
       PORT: 8080
-      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
-      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env — see .env.example}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
-      APP_PROVIDER_MODE: ${APP_PROVIDER_MODE:-api}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-}
-      APP_BOOTSTRAP_ADMIN_NAME: ${APP_BOOTSTRAP_ADMIN_NAME:-Administrator}
-      APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
-      APP_ALLOW_SIGNUP: ${APP_ALLOW_SIGNUP:-false}
       # TD-026: the knowledge indexer's per-project bare mirrors live on a volume this container
-      # owns and fetches into itself with `git`, never the launcher's `repo-cache`.
+      # owns and fetches into itself with `git`, never the launcher's `repo-cache`. Pinned because
+      # it names a path inside this container, on the volume mounted below.
       APP_KNOWLEDGE_MIRROR_ROOT: /var/lib/app/knowledge
       APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
-      # WP-15j: where this process reads the browser application from. Empty means the directory
-      # the image carries -- `docker/app.Dockerfile` copies the Vite output there and
-      # `apps/server/src/web/bundle.ts` names it once, so there is deliberately no second copy of
-      # the path here. Set it to serve a patched bundle from a mounted volume.
-      APP_WEB_ROOT: ${APP_WEB_ROOT:-}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      TZ: ${TZ:-UTC}
     volumes:
       - knowledge:/var/lib/app/knowledge
       - exports:/var/lib/app/exports
@@ -181,6 +216,14 @@ services:
         APP_VERSION: ${APP_VERSION:-}
         APP_COMMIT: ${APP_COMMIT:-}
         APP_BUILT_AT: ${APP_BUILT_AT:-}
+    # **No `env_file` here, and that is a decision rather than an omission** (WP-50). The `app`
+    # service takes the whole of `.env` because the set of names it must read is unknowable — an
+    # operator declares credential variables through `APP_INTEGRATION_SECRET_ENV`. This process's
+    # set is the opposite: `readLauncherConfig` filters to `DOCKER_HOST`, `LOG_LEVEL` and
+    # `APP_WORKSPACE_*` and parses them with a **strict** schema, so the list is knowable, and this
+    # is the one container with a route to the daemon. Handing it `APP_SECRET_KEY`, the provider
+    # credentials and `ANTHROPIC_API_KEY` would put every secret the instance holds in the blast
+    # radius TD-021 exists to bound, in exchange for nothing it reads.
     environment:
       # Absent is a startup error and there is no default (TD-021's WP-15g amendment); this is the
       # proxy above, never the socket. A `unix:///var/run/docker.sock` here would also need the

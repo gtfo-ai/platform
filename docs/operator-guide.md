@@ -90,35 +90,40 @@ Keep it — **it encrypts the integration credentials in the database, so losing
 every credential.** Every secret also accepts a `<NAME>_FILE` variant holding a path, which is what
 to use with Docker secrets; the `_FILE` variant wins.
 
-### `.env` is not the app container's environment — add the override
+### `.env` is the app container's environment
 
-**`compose.yml` passes the `app` service a fixed list of eighteen variables**, and everything else in
-`.env` is simply not there. Measured on a running instance: `printenv` inside the container shows
-`APP_SECRET_KEY`, `APP_BASE_URL`, the three `APP_BOOTSTRAP_ADMIN_*`, `APP_ALLOW_SIGNUP`,
-`APP_PROVIDER_MODE`, `ANTHROPIC_API_KEY`, the two data-directory paths, `APP_WEB_ROOT`, `ROLE`,
-`HOST`, `PORT`, `DATABASE_URL`, `LOG_*` and `TZ` — and **not** `APP_INTEGRATION_SECRET_ENV`, not
-`GITLAB_TOKEN` or any other provider credential, not `APP_TRUST_PROXY`, not `APP_METRICS_*`, not
-`OTEL_EXPORTER_OTLP_ENDPOINT`, not `SENTRY_DSN`. Setting one of those in `.env` and expecting the app
-to read it is the first thing that goes wrong on a real install: the value is in compose's own
-environment, where it interpolates `${…}` in the file, and never in the process.
+`compose.yml` gives the `app` and `migrate` services `env_file: .env`, so **every line of `.env`
+reaches the process** — the provider credentials, `APP_INTEGRATION_SECRET_ENV`, `APP_TRUST_PROXY`,
+`APP_METRICS_*`, the `APP_SSE_*` and `APP_DB_*` knobs, and every `<NAME>_FILE` variant. Five values
+stay on the service because compose computes them or the topology depends on them, and
+`environment:` wins over `env_file:`, so setting any of these five in `.env` does nothing:
 
-One four-line file fixes it, and compose picks it up automatically:
+| Pinned | Why |
+|---|---|
+| `DATABASE_URL` | built from `POSTGRES_USER`/`PASSWORD`/`DB` and the `db` service's name |
+| `HOST`, `PORT` | the container always listens on `0.0.0.0:8080`; the host-side knob is `APP_PORT` |
+| `APP_KNOWLEDGE_MIRROR_ROOT`, `APP_WORKSPACE_EXPORT_DIR` | paths inside the container, on its volumes |
 
-```yaml
-# compose.override.yml
-services:
-  app:
-    env_file:
-      - .env
-```
+> **Earlier releases needed a `compose.override.yml`.** Until WP-50 the service carried a
+> hand-written list of eighteen variables and everything else in `.env` was simply not there —
+> it sat in compose's own environment, where it interpolates `${…}` in the file and stops. If you
+> wrote the four-line override this guide used to teach, it is now redundant; it still works
+> (`env_file` lists merge), and deleting it changes nothing.
 
-Everything in `.env` now reaches the app process. `environment:` still wins over `env_file:`, so the
-values `compose.yml` sets — `DATABASE_URL` pointing at the `db` service, for one — are unaffected.
-The rest of this guide assumes this file exists.
+Three consequences worth knowing:
 
-> Compose loads `compose.override.yml` automatically **only when you pass no `-f`**. The local
-> provider mode in §8 passes two, so add a third: `-f compose.yml -f compose.local.yml -f
-> compose.override.yml`.
+- **`APP_VERSION`, `APP_COMMIT` and `APP_BUILT_AT` are commented out in `.env.example` on purpose.**
+  The image bakes them, and an empty value in `.env` would override the image's — making a released
+  build report `0.0.0-dev` at `GET /api/version`.
+- **A missing `APP_SECRET_KEY` is now refused by the app, not by compose.** `docker compose up`
+  starts, the container exits, and `docker compose logs app` says
+  `invalid server configuration: APP_SECRET_KEY must be at least 32 characters …`. That is the
+  trade for making `APP_SECRET_KEY_FILE` usable at all: compose's old `${APP_SECRET_KEY:?…}` failed
+  on unset *or empty*, so an instance that kept its key in a file — which is what Docker secrets
+  means — could not start.
+- **The `launcher` container does not get `.env`**, and that is deliberate: it is the only container
+  with a route to the Docker daemon, and it reads a short, fixed list (`DOCKER_HOST`, `LOG_LEVEL`,
+  `APP_WORKSPACE_*`). Everything it needs is written on the service.
 
 Then:
 
@@ -246,8 +251,8 @@ the [user guide](user-guide.md) walks through it. What the operator owns is the 
 ([TD-020](decisions/technical/TD-020-configuration-and-env-naming.md),
 [BD-002](decisions/business/BD-002-open-source-build-in-public.md)). So the flow is:
 
-1. put the credential in the `app` container's environment — `.env` **plus the override from §2**,
-   or a `_FILE` secret;
+1. put the credential in the `app` container's environment — a line in `.env`, or a `_FILE` secret
+   (`.env` **is** that environment, §2);
 2. add that variable's **name** to `APP_INTEGRATION_SECRET_ENV`, a comma-separated allow-list that is
    **empty by default**;
 3. create the integration, naming the variable;

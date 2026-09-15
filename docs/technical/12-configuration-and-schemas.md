@@ -6,6 +6,8 @@
 
 Neutral names, no product prefix for standard variables; `APP_` for product-specific ones (BD-014: rename-friendly). All have documented defaults in `.env.example`; only secrets have none.
 
+**`.env.example` is the instance's configuration surface, and since WP-50 that is true of a compose instance too.** `compose.yml` gives the `app` and `migrate` services `env_file: .env`, so a name declared here reaches the process; before that the service carried a hand-written eighteen-name `environment:` map and twenty of the names the server reads never arrived, which made TD-020's `_FILE` convention unusable and left `APP_INTEGRATION_SECRET_ENV` — the allow-list `POST /api/integrations` reads — permanently empty on a stock instance. Two consequences are part of the contract: the three build-metadata names (`APP_VERSION`, `APP_COMMIT`, `APP_BUILT_AT`) are **commented out** in `.env.example`, because the image bakes them as `ENV` and an empty value in `.env` would override it; and a missing `APP_SECRET_KEY` is refused by `loadServerConfig` rather than by compose's interpolation, which is what allows an instance to be configured with `APP_SECRET_KEY_FILE` alone.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | HTTP port (API + UI + SSE) |

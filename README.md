@@ -23,8 +23,8 @@ pnpm dev                              # apps/server on $PORT, and the Vite dev s
 
 To run a **whole instance** instead — five containers, the browser application included — read the
 [operator guide](docs/operator-guide.md). The short version is `cp .env.example .env`, set
-`APP_SECRET_KEY` and the bootstrap administrator, add the four-line `compose.override.yml` the guide
-gives, and `docker compose up -d --build`.
+`APP_SECRET_KEY` and the bootstrap administrator, and `docker compose up -d --build`: `.env` is the
+app container's environment, so there is no override file to write.
 
 ## Layout
 

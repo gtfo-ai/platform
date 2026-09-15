@@ -41,7 +41,9 @@
  *   6. `docker compose down -v`, always, including on a failure.
  */
 import { execFile } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -109,13 +111,45 @@ const freePort = async () =>
     });
   });
 
+/**
+ * The configuration this check needs, as an override file of its own (WP-50).
+ *
+ * Until WP-50 these three values reached the container by *interpolation*: `compose.yml` wrote
+ * `APP_SECRET_KEY: ${APP_SECRET_KEY:?…}` on the service, so exporting the variable was enough.
+ * The service takes `env_file: .env` now — which is the fix, because a hand-written list silently
+ * dropped twenty other names — and interpolation no longer reaches it. A check must not need a
+ * `.env` in the checkout (BD-002 says one is never there), and it cannot move the project
+ * directory either: this script **builds**, and the build context is the project directory.
+ *
+ * So it writes what it needs on the service. `environment:` wins over `env_file:`, so this also
+ * restores the isolation `--env-file /dev/null` used to give on its own: a developer's `.env` can
+ * no longer decide the secret, the origin or the log level this instance runs with.
+ */
+const OVERRIDE = path.join(
+  mkdtempSync(path.join(tmpdir(), 'web-compose-check-')),
+  'compose.web-check.yml',
+);
+
 const compose = async (args, env) =>
   run(
     'docker',
     // `--env-file /dev/null` rather than the default `.env`: this check measures the file in the
     // repository, not whatever a developer has in their working copy. Verified against Docker
-    // Compose v5.5.1, which reads it as an empty environment rather than refusing it.
-    ['compose', '-p', PROJECT, '--env-file', '/dev/null', '-f', 'compose.yml', ...args],
+    // Compose v5.5.1, which reads it as an empty environment rather than refusing it. Note it
+    // bounds *interpolation* only — a service's own `env_file` is resolved against the project
+    // directory and is unaffected, which is why the override above pins what matters.
+    [
+      'compose',
+      '-p',
+      PROJECT,
+      '--env-file',
+      '/dev/null',
+      '-f',
+      'compose.yml',
+      '-f',
+      OVERRIDE,
+      ...args,
+    ],
     {
       cwd: REPO,
       env: { ...process.env, ...env },
@@ -154,13 +188,22 @@ const main = async () => {
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const env = {
-    APP_PORT: String(port),
-    APP_SECRET_KEY: SECRET_KEY,
-    APP_BASE_URL: baseUrl,
-    PLATFORM_TAG: TAG,
-    LOG_LEVEL: 'warn',
-  };
+  // `APP_PORT` and `PLATFORM_TAG` are still interpolation — they are read by compose itself, in
+  // the port publisher and the image reference. The three the *process* reads go on the service.
+  const env = { APP_PORT: String(port), PLATFORM_TAG: TAG };
+  writeFileSync(
+    OVERRIDE,
+    [
+      'services:',
+      '  app:',
+      '    environment:',
+      `      APP_SECRET_KEY: ${SECRET_KEY}`,
+      `      APP_BASE_URL: ${baseUrl}`,
+      '      LOG_LEVEL: warn',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
 
   try {
     console.log(
