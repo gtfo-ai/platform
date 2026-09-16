@@ -118,10 +118,8 @@ jobs:
       # Every command below ends `|| true` on purpose: this is cleanup after the verdict, and a
       # teardown that fails must not turn a green build red or hide a red one — it is silent where
       # the old single step failed the job, which is the trade. The scripts' own `finally` is the
-      # teardown that reports.
-      # because a killed step has no `finally`. No `APP_SECRET_KEY` is needed any more: WP-50
-      # removed the `${APP_SECRET_KEY:?…}` interpolation that used to make even a teardown require
-      # a value.
+      # teardown that reports. No `APP_SECRET_KEY` is needed for the teardown: WP-50 removed the
+      # `${APP_SECRET_KEY:?…}` interpolation that used to make even a `down` require a value.
       - name: tear down the compose projects
         if: always()
         run: |
@@ -179,7 +177,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # `X.Y.Z`, `X.Y`, `X`, `latest` on a tag; `edge` and `sha-<7>` on main (technical/11).
+      # `X.Y.Z`, `X.Y`, `X`, `latest` on a tag; `sha-<7>`, `edge` **and `latest`** on `main`;
+      # `sha-<7>` **and nothing else** on any other ref.
+      #
+      # **`latest` is the newest push to `main`** — TD-019's amendment of 2026-09-16, the product
+      # owner's continuous-deployment decision. It supersedes that record's original "never
+      # `latest` in docs" clause and Q89's recommendation to stop publishing it: every push to
+      # `main` is reviewed, verified by six targets and published here on two architectures, which
+      # is what makes it the release. The tag branch is untouched and keeps `X.Y.Z`/`X.Y`/`X` for
+      # whenever WP-71 reintroduces versions; nothing in this file computes a version.
+      #
+      # **The branch arm is guarded on the ref, and the guard is the whole of the claim.** This job
+      # is gated only on `github.event_name != 'pull_request'` (line 161) and this workflow declares
+      # `workflow_dispatch` (line 27), so "not a tag" is **not** the same as "a push to `main`": a
+      # manual dispatch on a feature branch takes the `else` arm, and without this guard it would
+      # publish `latest` and `edge` from code nobody reviewed. `GITHUB_REF` is compared rather than
+      # `GITHUB_REF_NAME`, because a *tag* named `main` would match the name and this arm is only
+      # ever reached with `refs/heads/…`; belt and braces, since `GITHUB_REF_TYPE` already sent a
+      # tag down the other branch. Any other ref gets `sha-<7>` alone — the artefact is still built,
+      # published and attested, and is addressable by exactly the name that identifies the commit
+      # it came from.
+      #
+      # **`edge` follows the same rule as `latest`, deliberately.** Before this guard `edge` meant
+      # "the last thing that ran this workflow", which is the hazard Q89 filed; both names are
+      # *moving pointers an operator pulls*, and a moving pointer that can be moved from a branch
+      # nobody reviewed is the defect whichever of the two it is. Keeping `edge` loose to preserve
+      # a dispatch habit would leave exactly half the hole open.
+      #
+      # **Residual, stated rather than discovered**: a **re-run** of this workflow at an older
+      # `main` commit, or a dispatch on `main` at an older sha, moves `latest` *backwards*. It is
+      # not refused here, because a re-run is an operator's deliberate act on a commit that *was*
+      # on `main` — the artefact is genuine and re-publishing it is sometimes the point (a
+      # registry-side transient is re-run three times in this project's own log). What is lost is
+      # the "newest" in *newest push to `main`*, and the recovery is the same act: re-run the head.
+      # Refusing it would need this job to compare `GITHUB_SHA` with the branch's current head,
+      # which is a second API read and a race of its own.
       - id: merge
         run: |
           set -euo pipefail
@@ -188,10 +220,19 @@ jobs:
           short="${GITHUB_SHA::7}"
           tags="sha-${short}"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # `latest` here is the **second** definition of that name in this file, and it is left
+            # for WP-71 rather than resolved: this arm says "the newest version tag" while the one
+            # below says "the newest push to `main`", which is TD-019's amendment's wording. No
+            # `v*` tag exists — `git tag -l` is empty — so nothing takes this arm today and the two
+            # cannot yet disagree. The row that reintroduces versions owns the choice, because it
+            # is the row that first makes it reachable: either this `latest` goes (a version is
+            # addressed by `X.Y.Z`) or the branch one does (`latest` means the newest release
+            # again, and `edge` alone tracks `main`). Deciding it here would be deciding WP-71's
+            # acceptance criterion from a workflow comment.
             version="${GITHUB_REF_NAME#v}"
             tags="${tags} ${version} ${version%.*} ${version%%.*} latest"
-          else
-            tags="${tags} edge"
+          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            tags="${tags} edge latest"
           fi
           refs=""
           for tag in ${tags}; do refs="${refs} -t ${repo}:${tag}"; done

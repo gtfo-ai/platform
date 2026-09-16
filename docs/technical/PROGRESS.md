@@ -10548,7 +10548,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-68 | **The guards see what they claim to see** | TODO | — | Depends on nothing unbuilt. Folds backlog **8** (major — a security gate that fails open), **10**, **30**, **3**, **111**, **9**, **6**. One shared helper, not eleven repairs; the two guards whose own suites assert the hole get those cases rewritten. **Refiner (session 6): also folds backlog 130** (nit-to-small) — `apps/server/src/queries/onboarding-queries.ts:388` claims `createIntegration` is the **only** writer of `integrations.config`, which is true today and held by nothing; the endpoint that would falsify it is specified at technical/08:15 and unbuilt, and it would skip two write-time refusals, one of which (credential-in-config) has no call-time twin. A census in `task-save-sites.test.ts`'s shape, with the spellings it cannot see stated |
 | WP-69 | **The harness cannot script what production would refuse** | TODO | — | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**. The deliverable is the **detector**, not the fix; the vitest-budget contradiction is resolved by reading the resolved config before any number is chosen |
 | WP-70 | **Coverage: where the debt is, and what may be excluded** | TODO | — | Depends on nothing unbuilt. Folds backlog **87**, **115**. Opens with the measurement `docs/TODO.md` already asks for; the answer is a budget that says **where** coverage is owed, never *"write more tests"* |
-| WP-71 | **The CI surface: the linters, SAST, mutation, the changelog and the tag nobody decided** | TODO | — | Depends on WP-42, WP-22, TD-017, TD-015, TD-019. Folds backlog **116**, **117**, **118**; implements **Q89** — stop publishing `latest`. CodeQL is a **setting** an administrator applies, not a file |
+| WP-71 | **The CI surface: the linters, SAST, mutation, the changelog and the tag nobody decided** | TODO | — | Depends on WP-42, WP-22, TD-017, TD-015, TD-019. Folds backlog **116**, **117**, **118**; implements **Q96** (the user's decision, session 6: continuous deployment — every push to `main` is a release, versions computed from the commits and tagged by the workflow itself, no release PR, the changelog in the release body, and **`latest` kept** as the newest push, which answers **Q89** the other way; the architect amends **TD-019** first, docs win) — Q89's "stop publishing `latest`" is **superseded**. CodeQL is a **setting** an administrator applies, not a file |
 | WP-72 | **Two processes, one database: the `ROLE` split exercised** | TODO | — | Depends on **TD-028**, WP-53, WP-22, WP-06a, WP-18b, WP-43. Folds backlog **38** (major). TD-028 makes this the shipped topology, so the row asserts the deployment rather than an option. **Refiner (session 6), a trip-wire this row is the first to meet (backlog 127, owned by WP-73)**: `readLauncherConfig` filters by the `APP_WORKSPACE_` prefix and strict-parses, so a launcher-role process handed WP-50's `.env` **fails at start-up** on `APP_WORKSPACE_ROOT`, a knob nothing reads |
 | WP-73 | **The sweep: the sentences and the small repairs no row owns** | TODO | — | Depends on nothing unbuilt; shares no file with a group 1–7 row. Folds backlog **1**'s remainder, **19**, **22**, **41**, **56**, **66**, **119**, **7**. Each item is closed **or** its entry says why not, by number. **Refiner (session 6): also folds backlog 127** — six of the nine knobs `.env.example` and technical/12 document with no reader (the working-calendar three stay with 74/WP-56); the recommendation per knob is in the entry, and `APP_FEATURE_*` is a decision this row **takes** rather than defers |
 
@@ -22990,7 +22990,7 @@ confirmation; those are deliberately unowned because there is nothing left to bu
 | Q86 | unowned — implemented: the shadow skip stands and BD-006 and product/18 carry the amendment |
 | Q87 | **WP-61** — publish the rate only with its coverage, absent below a declared floor |
 | Q88 | unowned — answered as built (the Covenant's contact names the maintainers); a real reporting address is a human's to choose |
-| Q89 | **WP-71** — stop publishing `latest`, and state in TD-019 what the four published tags mean |
+| Q89 | **WP-71** — *superseded on 2026-09-16 by the owner's decision (Q96, TD-019 amended)*: `latest` **stays** and means the newest push to `main`, published by `image.yml` from `refs/heads/main` only; WP-71 keeps the half about stating in TD-019 what every published tag means, and the tag arm's own `latest` is named there as its residual |
 | Q90 | unowned — implemented (the workflow takes the administrator token when one exists); creating that token is a human's act, like WP-33's credential |
 
 #### WP-47 — the run lease, and the spend a run that ends outside its own process still owes
@@ -23656,3 +23656,48 @@ compose-stock-check`**, exit **0**, nine `ok` lines including *"an undeclared ho
 operator guide's §2/§4 runs `node scripts/compose-stock-check.mjs` locally before it reports. Two
 rows in a row have now been red for the same reason, and both were green in every tier a developer
 runs.
+
+#### CD (owner's decision, session 6) — `latest` on every push to `main`, the release PR retired
+
+**The spec came first.** `docs/decisions/technical/TD-019-release-engineering.md` ends with an
+amendment dated 2026-09-16 recording the product owner's answer to **Q96**; this change is the code
+catching up to it, and nothing here re-opens it.
+
+**What changed, and the test that holds each claim** (rule 3 — a workflow claim with no test is a
+comment; mutated on a copy, the named case is the one that died):
+
+| claim | where | test that fails without it |
+|---|---|---|
+| a push to `main` publishes `sha-<7>`, `edge` **and `latest`** | `image.yml`'s manifest step, branch arm | `release.test.ts` › *"publishes sha-<7>, edge and latest, so the newest push to main is `latest`"* — it reads the **arm** rather than the file, because `latest` appears on the tag branch too and a `workflow.includes('latest')` would have passed before the change |
+| **only `refs/heads/main`** gets the two moving tags; any other ref gets `sha-<7>` alone | the same arm's condition | › *"publishes both moving tags only from refs/heads/main, never from a dispatch on a branch"* — **review round 1's first major**: the arm was a bare `else`, and this job is gated only on `event_name != 'pull_request'` while the workflow declares `workflow_dispatch`, so a manual dispatch on a feature branch would have published `latest` and `edge` from unreviewed code (Q89's hazard, enlarged from `edge` to `latest`). `edge` is guarded with `latest` because both are moving pointers an operator pulls, and half a guard is the hole. Both mutations die here: a bare `else` fails this case **and** the tag-list one; an `else` added *beside* the `elif` fails this one alone |
+| the tag branch is untouched (versions are WP-71's) | same step, `if` arm | › *"keeps the tag branch as it was, because versions are WP-71 and not this change"* |
+| no push can start `release.yml` | its `on:` block | › *"cannot be started by a push: it is workflow_dispatch and nothing else (TD-019 amendment)"* — two assertions, the block equals `workflow_dispatch:` **and** does not contain `push:`, because a regex that merely found the dispatch would pass a file that kept both |
+| the documents no longer instruct a setup step for it | `CONTRIBUTING.md`, `docs/TODO.md` | › *"takes an administrator's token, falls back, and states what the fallback costs"*, whose document half **inverted**: it used to require both files to name `RELEASE_PLEASE_TOKEN` ("a secret nobody is told to create is a secret nobody creates") and now requires `CONTRIBUTING.md` to have lost § *What an administrator sets up once* and both files to say **retired**. The workflow half is unchanged: the header and the dispatch path still take the token if a human runs it |
+
+Every `uses:` stays SHA-pinned (› *"is a corpus, and every `uses:` in it is pinned to a commit SHA"*),
+and `release.yml`'s shell is still executed against a stub `gh` on all four paths — the mechanism is
+retired, not deleted, so the cases that describe it still hold.
+
+**Review round 1, second major**: `docs/OPEN-QUESTIONS.md` **Q89** still read *"stop publishing it
+… the present state is not defensible"* as live while the amendment claimed to supersede it. It now
+carries a dated supersession line: `latest` is kept and given the positive definition Q89 asked for
+(the newest push to `main`), the hazard half of its recommendation **is** taken as the ref guard, and
+the re-run residual is named. A nit left on purpose: `release.yml:68-69` still calls `latest`
+unauthorised, and that paragraph is under the file's history marker.
+
+**Sentences falsified** (rule 83): `CONTRIBUTING.md` § *Releasing* (rewritten: every push is the
+release) and § *Branch protection*'s "`release.yml` runs only on `main`", with § *What an
+administrator sets up once* **deleted**; `docs/operator-guide.md` § 5 (now "pull `latest`, or pin a
+`sha-<7>` tag", and the `PLATFORM_TAG` comment no longer says "new version");
+`docs/technical/11-ci-cd-docker-release.md`'s workflow table (both the `image.yml` and `release.yml`
+rows), its § Release summary line, the "divergence Q89 files" sentence and the pointer to the
+withdrawn CONTRIBUTING section, plus a **supersession banner** at the head of the WP-42 amendment so
+its remaining pages read as history; `docs/TODO.md`'s two first-release rows (withdrawn, with the
+two halves that survive as WP-71's named); `CLAUDE.md`'s release paragraph; `docs/OPEN-QUESTIONS.md`
+**Q90** (closed by withdrawal — there is no release PR to give CI to) and **Q89** (superseded, with the guard it asked for). `README.md` names neither the
+release PR nor an image tag, so it needed no change; PROGRESS's session-5 run log is left alone,
+because it records what was true on those runs.
+
+**Tiers owed** (rule 80): `verify` only. Nothing under `packages/` or `apps/` changed and no package
+this change touches is imported by any of them — the edits are two workflow files, one script test,
+and documents — so no integration, e2e, ui or web-e2e target has an input that moved.

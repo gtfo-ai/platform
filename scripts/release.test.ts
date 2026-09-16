@@ -73,10 +73,24 @@ interface ReleasePleaseConfig {
 describe('.github/workflows/release.yml', () => {
   const workflow = read(RELEASE_WORKFLOW);
 
-  it('is triggered by a push to main and by nothing else (technical/11 § Workflows)', () => {
+  /**
+   * **The retirement, asserted as the absence it is** (TD-019's amendment, 2026-09-16).
+   *
+   * This case used to read *"is triggered by a push to main and by nothing else"*. The owner's
+   * continuous-deployment decision inverts it: a push to `main` must start **nothing** here, because
+   * this job was red on every commit and could not have been otherwise — the `GITHUB_TOKEN` path is
+   * refused until an administrator changes a repository setting (measured, run 34966305421) and the
+   * token path needs a credential this repository does not carry (Q90).
+   *
+   * Two assertions, because one would not have caught the change that matters: the trigger block is
+   * exactly `workflow_dispatch:`, **and** the string `push:` does not appear in it. A regex that
+   * merely found `workflow_dispatch` would pass a file that kept both.
+   */
+  it('cannot be started by a push: it is workflow_dispatch and nothing else (TD-019 amendment)', () => {
     const triggers = (/\non:\n((?:[ \t]+.*\n|\n)+)/.exec(workflow)?.[1] ?? '').trim();
     expect(triggers).not.toBe('');
-    expect(triggers).toBe('push:\n    branches: [main]');
+    expect(triggers).toBe('workflow_dispatch:');
+    expect(triggers).not.toContain('push:');
   });
 
   it('runs release-please v5 against the config and manifest that exist', () => {
@@ -148,10 +162,29 @@ describe('.github/workflows/release.yml', () => {
     expect(header).toContain('merge_group');
     expect(header).toContain('Q90');
 
-    // Both ends (standing rule 42): a secret nobody is told to create is a secret nobody creates.
-    for (const path of ['CONTRIBUTING.md', 'docs/TODO.md']) {
-      expect(read(path)).toContain('RELEASE_PLEASE_TOKEN');
-    }
+    /*
+     * **The documents' half of this inverted at TD-019's amendment** (2026-09-16).
+     *
+     * It used to read *"a secret nobody is told to create is a secret nobody creates"* and required
+     * both documents to name `RELEASE_PLEASE_TOKEN`. With the job retired nobody is told to create
+     * it, and an instruction to set up a secret for a workflow no push can start is worse than no
+     * instruction: it is a setup step that buys nothing. So the assertion is the other way round —
+     * `CONTRIBUTING.md` no longer carries the setup section, and the two documents that described
+     * the mechanism say it is retired rather than pending. The **workflow** half above is unchanged,
+     * because the header and the dispatch path still take the token if somebody runs it by hand.
+     */
+    expect(read('CONTRIBUTING.md')).not.toContain('What an administrator sets up once');
+    /*
+     * The **specific sentence** each document must carry, not the word "retired" anywhere in it.
+     * `toContain('retired')` over a whole file is standing rule 43's shape: every wrong version of
+     * these documents satisfies it too — one paragraph about a retired *anything*, or the word left
+     * behind by a half-finished edit, would pass while the instruction it is meant to have replaced
+     * sat three lines above.
+     */
+    expect(read('CONTRIBUTING.md')).toContain(
+      'is **retired**: it is `workflow_dispatch` only, so no push starts it.',
+    );
+    expect(read('docs/TODO.md')).toContain('the release-please job is **retired** by TD-019');
   });
 
   /**
@@ -436,6 +469,77 @@ describe('the shell that finds and watches the image build', () => {
 
     expect(watched(outcome)).toEqual(['7001']);
     expect(outcome.status).toBe(1);
+  });
+});
+
+/**
+ * **What `image.yml` publishes on a push to `main`** — TD-019's amendment of 2026-09-16.
+ *
+ * The amendment is the spec and this is the only executable thing that holds it: *"`image.yml`
+ * publishes every push to `main` as `sha-<7>`, `edge` **and `latest`**"*. Without a case here the
+ * claim lives in a comment and in a shell line nothing runs off a checkout (standing rules 3 and
+ * 71 — no test in this repository has ever started a workflow).
+ *
+ * It reads the **main branch** of the tag computation, not the file as a whole: `latest` also
+ * appears on the tag branch and in the header comment, so `workflow.includes('latest')` would have
+ * passed before the change as readily as after it. The `else` arm is the one a push to `main`
+ * takes, and it is the one quoted.
+ */
+describe("image.yml's tags on a push to main (TD-019 amendment)", () => {
+  const workflow = read(IMAGE_WORKFLOW);
+
+  /**
+   * The branch arm of the tag computation, **with the condition that guards it**.
+   *
+   * Read as one regex on purpose. The first version of this case matched a bare `else`, and a bare
+   * `else` is exactly the defect review found: this job is gated only on
+   * `github.event_name != 'pull_request'` and the workflow declares `workflow_dispatch`, so "not a
+   * tag" admits a manual dispatch on a feature branch. A test that reads the arm without its
+   * condition cannot tell the two apart.
+   */
+  const mainBranchArm = (): { condition: string; tags: string } => {
+    const arm = /\n\s+elif \[ (.+?) \]; then\n\s+tags="([^"]+)"\n/.exec(workflow);
+    expect(
+      arm,
+      'the manifest step has no guarded branch arm: a bare `else` publishes from any ref',
+    ).not.toBeNull();
+    return { condition: arm?.[1] ?? '', tags: arm?.[2] ?? '' };
+  };
+
+  it('publishes sha-<7>, edge and latest, so the newest push to main is `latest`', () => {
+    const { tags } = mainBranchArm();
+
+    // `${tags}` is `sha-<7>`, computed one line above and asserted separately below.
+    expect(tags.split(/\s+/).filter((tag) => tag !== '${tags}')).toEqual(['edge', 'latest']);
+    expect(workflow).toContain('tags="sha-${short}"');
+  });
+
+  /**
+   * **The guard, which is what makes "the newest push to `main`" true** (the amendment's words).
+   *
+   * Without it a `workflow_dispatch` on a feature branch republishes `latest` and `edge` from
+   * unreviewed code — Q89's recorded hazard, enlarged from `edge` to `latest` by the amendment.
+   * The condition is compared literally: `GITHUB_REF`, not `GITHUB_REF_NAME`, because a *tag*
+   * called `main` matches the name, and `refs/heads/main` in full so a branch called `mainline`
+   * cannot satisfy a prefix test somebody writes later.
+   */
+  it('publishes both moving tags only from refs/heads/main, never from a dispatch on a branch', () => {
+    const { condition } = mainBranchArm();
+
+    expect(condition).toBe('"${GITHUB_REF}" = "refs/heads/main"');
+    // …and there is no unguarded fall-through beside it: an `else` here would restore the hole
+    // while leaving the `elif` above it green.
+    const step = workflow.slice(workflow.indexOf('tags="sha-${short}"'));
+    expect(step.slice(0, step.indexOf('\n          refs='))).not.toMatch(/\n\s+else\n/);
+  });
+
+  it('keeps the tag branch as it was, because versions are WP-71 and not this change', () => {
+    const tagArm = /version="\$\{GITHUB_REF_NAME#v\}"\n\s+tags="([^"]+)"/.exec(workflow)?.[1] ?? '';
+    expect(tagArm).not.toBe('');
+    expect(tagArm).toContain('${version}');
+    expect(tagArm).toContain('${version%.*}');
+    expect(tagArm).toContain('${version%%.*}');
+    expect(tagArm).toContain('latest');
   });
 });
 

@@ -1,8 +1,32 @@
 name: release
 
-# technical/11 § Workflows: "`release.yml` | `push: main` | release-please release PR; on merge:
-# tag → `image.yml`". TD-019 decides the mechanism — release-please v5 keeps a release PR up to
-# date, a **human** merges it, and merging it is what creates the `vX.Y.Z` tag.
+# **RETIRED as an automatic workflow** — TD-019's amendment of 2026-09-16, the product owner's
+# continuous-deployment decision. It no longer runs on a push: the trigger below is
+# `workflow_dispatch` and nothing else, so **no push to `main` can start this file**.
+#
+# Why it is kept rather than deleted: the amendment permits either, and this is the batched-release
+# mechanism intact, with its four decisions and their citations, for the day somebody wants a
+# version again. **What replaced it**: every push to `main` is the release, `image.yml` publishes it
+# as `sha-<7>`, `edge` and `latest` on two architectures, and semantic versions, the changelog in a
+# release body and the version image tags are deferred to **WP-71**, whose criteria are rewritten
+# from that amendment.
+#
+# Why it had to stop running on push: this job was red on every push and could not have been
+# otherwise. The `GITHUB_TOKEN` path is refused — *"GitHub Actions is not permitted to create or
+# approve pull requests"*, measured at run 34966305421 — until an administrator changes a repository
+# setting, and the token path needs a credential this repository does not carry (**Q90**). A red
+# check on every commit for a setting nobody intends to change is a check that teaches people to
+# ignore checks.
+#
+# Everything below this line describes the retired mechanism and is **history**, not a statement
+# about what runs today. `scripts/release.test.ts` still holds the parts that remain true of this
+# file — its trigger, its pins, its permissions and the shell of its last step.
+#
+# ---
+#
+# technical/11 § Workflows used to give this workflow `push: main`. TD-019's decision line chose the
+# mechanism — release-please v5 keeps a release PR up to date, a **human** merges it, and merging it
+# is what creates the `vX.Y.Z` tag.
 #
 # Nothing in this file has ever run. There is no way to run GitHub Actions from a checkout, so
 # every claim below was read out of a pinned source rather than observed (standing rule 71), and
@@ -82,11 +106,13 @@ name: release
 # `scripts/changelog.mjs --upgrade-note` (standing rule 7: a hand-written "no migration needed"
 # line is wrong the first time somebody forgets), and appended here.
 
-# `push: main` and nothing else, which is the whole trigger technical/11 gives this workflow. A
-# `workflow_dispatch` here would be a second way to reach a release path that has never run once.
+# `workflow_dispatch` and nothing else (TD-019's amendment, 2026-09-16). The `push: main` trigger
+# this file carried is **removed**, which is the whole of the retirement: a workflow that cannot be
+# started by an event cannot make a commit red. A manual dispatch remains so that the mechanism can
+# be exercised on purpose if a batched version is ever wanted again — a human's action, never a
+# push's.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

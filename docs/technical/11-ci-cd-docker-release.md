@@ -18,11 +18,11 @@ THIRD_PARTY_NOTICES.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
 | ~~`integration.yml`~~ | — | **absorbed**: the `integration` and `e2e-fake-claude` jobs of `ci.yml`. The e2e tier runs whole `apps/server` instances against the Testcontainers database rather than `docker compose` (the reasoning is in `vitest.config.ts`) |
 | `evals.yml` | as designed | **not built — WP-33**, blocked on a model credential (`pnpm eval` says so and exits 1). A release cut without it ships prompts no tier has measured against a model, which `scripts/changelog.mjs` states in the release notes *because* this file is absent |
 | `nightly-llm.yml` | as designed | **not built — WP-33**, same blocker, same sentence in the release notes |
-| `image.yml` | `push: main`, tags `v*`, `pull_request` (build only), `workflow_dispatch` | native amd64 + arm64 runners, manifest merge; tags `X.Y.Z`, `X.Y`, `X`, `sha-<7>`, `edge` **and `latest` on a tag** (as built — TD-019 says “never `latest` in docs” and the docs name versions, but the registry tag is published; WP-42 files the divergence rather than changing WP-22's file); provenance attestation, **no SBOM** (WP-22 amendment); size check per image. A release reaches it by **`push: tags`** when the tag was created with an administrator's token and by **`workflow_dispatch`** when it was created with `GITHUB_TOKEN` — see `release.yml` below |
+| `image.yml` | `push: main`, tags `v*`, `pull_request` (build only), `workflow_dispatch` | native amd64 + arm64 runners, manifest merge; a push to `main` publishes `sha-<7>`, `edge` **and `latest`**, a tag publishes `X.Y.Z`, `X.Y`, `X`, `sha-<7>` and `latest` (**TD-019's amendment of 2026-09-16**: every push to `main` is the release and `latest` is the newest one, which supersedes that record's “never `latest` in docs” clause and closes Q89's recommendation the other way; the tag branch is kept for WP-71); provenance attestation, **no SBOM** (WP-22 amendment); size check per image. A release reaches it by **`push: tags`** when the tag was created with an administrator's token and by **`workflow_dispatch`** when it was created with `GITHUB_TOKEN` — see `release.yml` below |
 | `base-image.yml` | weekly, `workflow_dispatch`, paths `docker/base.Dockerfile` | rebuild base with pinned CLIs |
 | `codeql.yml` | default setup | **not built, and no work package owns it** (WP-42 finding) |
 | ~~`secrets-scan.yml`~~ | — | **absorbed**: the `secret scan` job of `ci.yml`, gitleaks over the full history. trufflehog is not run |
-| `release.yml` | `push: main` | **built at WP-42**: release-please v5 grooms a release PR; a human merges it, which creates `vX.Y.Z`. How the tag reaches `image.yml` depends on the token that created it: with `RELEASE_PLEASE_TOKEN` set the tag push starts `image.yml` by itself and the release **watches that run**; on the `GITHUB_TOKEN` fallback the tag starts nothing — `workflow_dispatch` is the documented exception — so the release dispatches `image.yml` on the tag ref and watches that. Either way the image build's verdict is the release job's. The workflow also appends the upgrade note (migration required or not, derived from the migration files) to the release body. **Never run** — see the amendment below |
+| `release.yml` | `workflow_dispatch` only — **retired** (TD-019's amendment, 2026-09-16): no push starts it, because it was red on every commit for a repository setting nobody intends to change (Q90) and continuous deployment replaced the batched release. The rest of this row describes the mechanism as **history**, kept for WP-71. Was `push: main`; **built at WP-42**: release-please v5 grooms a release PR; a human merges it, which creates `vX.Y.Z`. How the tag reaches `image.yml` depends on the token that created it: with `RELEASE_PLEASE_TOKEN` set the tag push starts `image.yml` by itself and the release **watches that run**; on the `GITHUB_TOKEN` fallback the tag starts nothing — `workflow_dispatch` is the documented exception — so the release dispatches `image.yml` on the tag ref and watches that. Either way the image build's verdict is the release job's. The workflow also appends the upgrade note (migration required or not, derived from the migration files) to the release body. **Never run** — see the amendment below |
 | `mutation.yml` | weekly | **not built, and no work package owns it** (WP-42 finding). Mutation testing has been done by hand, per work package |
 | `dco.yml` | `pull_request`, `push: main`, `merge_group` | DCO check. Implemented as the `dco` and `commitlint` jobs of `ci.yml`: both walk the commit range of the event (`before..after` on a push, `base..head` otherwise) and fail when the range cannot be determined, so a direct push to `main` is gated exactly like a pull request |
 All `uses:` pinned to SHAs — enforced since WP-42 by `scripts/release.test.ts`, over every
@@ -70,7 +70,7 @@ credential names the server must read is unknowable when this file is written. T
 what it reads is a short fixed set rather than an unknowable one.
 
 ## Release
-- release-please (conventional commits → release PR → tag `vX.Y.Z`); commitlint enforced by lefthook and CI; agents sign off commits (DCO).
+- **Continuous deployment since TD-019's amendment of 2026-09-16**: every push to `main` is the release, published as `sha-<7>`, `edge` and `latest`; the release-please pull request is retired and semantic versions are WP-71's, computed from the conventional commits and applied by retagging the sha manifests. commitlint is still enforced by lefthook and CI (the history is what a version will be computed from); agents sign off commits (DCO).
 - Migrations forward-only, run by the `migrate` service with an advisory lock; the app refuses to start when the DB schema is newer than the code; release notes state whether a migration is required; `pg_dump` before upgrade documented.
 - `.agentic` schema `version` with JSON Schemas under `schemas/` served by the app for editor validation; N-1 upcast in memory + migration proposal.
 - Hygiene: CONTRIBUTING, CODE_OF_CONDUCT, SECURITY (private reporting), CODEOWNERS, issue forms, PR template with a "no secrets" checkbox, lefthook (lint, typecheck, gitleaks, commitlint, unit on push), DCO.
@@ -180,6 +180,13 @@ silent one.
 
 ## Amendment (WP-42, 2026-09-15) — the release mechanism, as built
 
+> **Superseded as a description of what runs, by TD-019's amendment of 2026-09-16** (the product
+> owner's continuous-deployment decision). Everything in this section is still an accurate account
+> of the batched release-please mechanism and of the four decisions inside it — it is kept for
+> **WP-71**, which reintroduces semantic versions — but *none of it is triggered any more*:
+> `release.yml` is `workflow_dispatch` only, there is no release pull request, and `latest` is the
+> newest push to `main` rather than the newest tag. Read every sentence below as history.
+
 The workflow table above is corrected in place. What follows is the part of the **Release** section
 that turned out to be a plan rather than a description, and one thing it never said.
 
@@ -213,7 +220,8 @@ package did — would start a second run on the same ref, and `image.yml`'s
 rebuilds five images on two architectures, republishes identical tags, and is waited for under the
 same `timeout-minutes: 120`, so a healthy release can go red on that cap. Either way
 `GITHUB_REF_TYPE` is `tag` and the existing tag path publishes `X.Y.Z`, `X.Y`, `X`, `sha-<7>` — and
-`latest`, which is the divergence Q89 files. No copy of the tag scheme was made. The run is
+`latest`, which WP-42 filed as a divergence under Q89 and which TD-019's 2026-09-16 amendment
+resolved the other way: `latest` is published on purpose, and on a push to `main` too. No copy of the tag scheme was made. The run is
 **watched to its verdict** (`gh run watch --exit-status`): `gh workflow run` returns as soon as the
 dispatch is accepted, so a step that only dispatched would report success for a release whose images
 never built. **Which** run is watched is decided against a baseline taken *before* release-please
@@ -230,8 +238,9 @@ request opened with `GITHUB_TOKEN` starts no workflow run either, so none of `ci
 token, created by an administrator; the name only, never a value — BD-002) and falls back to
 `GITHUB_TOKEN` **with the consequence stated in its own header**: no checks on the PR, a
 close-and-reopen re-trigger, and a `dco` verdict reachable only through `merge_group` or the
-`push: main` run after the merge. Recorded as **Q90**, with the administrator's two steps in
-`CONTRIBUTING.md` § *What an administrator sets up once*.
+`push: main` run after the merge. Recorded as **Q90** — and it is the reason the job was **retired**
+rather than fixed: it was red on every push for a repository setting nobody intended to change. The
+administrator's two steps `CONTRIBUTING.md` used to carry are withdrawn with it.
 
 **"Release notes state whether a migration is required" is derived, not written.** `pnpm changelog`
 (`scripts/changelog.mjs`) reads `packages/infrastructure/src/db/migrations/` and the previous release

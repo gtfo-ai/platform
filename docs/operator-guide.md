@@ -384,9 +384,17 @@ scheme sends the binding's own webhook secret in `X-Gitlab-Token`).
 Migrations are **forward-only** and applied under a PostgreSQL advisory lock, so the order is always
 the same: stop serving on the old code, migrate, start the new code.
 
+**Which image to upgrade to.** This project ships continuously
+([TD-019](decisions/technical/TD-019-release-engineering.md)'s amendment of 2026-09-16): every push
+to `main` is reviewed, verified and published to GHCR on `amd64` and `arm64` as `sha-<7>`, `edge`
+and `latest`. So **pull `latest`, or pin a `sha-<7>` tag** — `latest` is the newest push to `main`
+and `sha-<7>` is one exact commit, which is what to pin when you want the upgrade to be a decision
+rather than a schedule. There are no version tags yet: semantic versions are deferred to a later
+piece of work, and nothing published today carries one.
+
 ```bash
 cd agentic
-git pull                                  # or: export PLATFORM_TAG=<new version> and pull the images
+git pull                                  # or: export PLATFORM_TAG=latest (or sha-<7>) and pull the images
 docker compose build                      # skip when you pulled published images
 docker compose run --rm migrate           # forward-only, advisory-locked, idempotent
 docker compose up -d                      # recreates app and launcher on the new image
