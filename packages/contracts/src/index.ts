@@ -17,6 +17,7 @@
  *  - Types are always inferred with `z.infer`; nothing is declared twice.
  */
 export * from './api.js';
+export * from './artifact-fields.js';
 export * from './artifacts.js';
 export * from './common.js';
 export * from './config.js';

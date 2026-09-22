@@ -21,6 +21,7 @@ import type { SessionResponse } from '../auth/session.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
+const ARTIFACT = '00000000-0000-4000-8000-0000000000a7';
 const RUN = '00000000-0000-4000-8000-0000000000c1';
 
 /**
@@ -86,7 +87,16 @@ const TASK_DETAIL: TaskDetailResponse = {
     entries: 0,
   },
   stages: [],
-  artifacts: [],
+  // WP-52: the task's own artifacts are what an `artifact` citation's `(type, version)` resolves
+  // against — the citation carries no id, by design (`askAnswerCitationSchema`).
+  artifacts: [
+    {
+      id: ARTIFACT,
+      artifact_type: 'ImplementationPlan',
+      version: 2,
+      url: `/api/artifacts/${ARTIFACT}`,
+    },
+  ],
   questions: [],
   approvals: [],
   runs: [],
@@ -163,7 +173,7 @@ describe('the ask-the-task thread', () => {
     expect(container.querySelector('b')).toBeNull();
   });
 
-  it('links a run citation through the router, and names the ones it cannot link', async () => {
+  it('links a run citation and an artifact citation, and names the ones it cannot link', async () => {
     const { container } = render(
       createApp({ fetchImpl: fetchFor([ANSWERED]), realtime: false }).element,
     );
@@ -177,8 +187,25 @@ describe('the ask-the-task thread', () => {
       anchor.getAttribute('href')?.includes(`/runs/${RUN}`),
     );
     expect(link).toBeTruthy();
-    // The artifact citation is named and **not** linked: no screen addresses an artifact version.
+    /**
+     * **The artifact citation is a link since WP-52** — it used to be plain text, and this
+     * assertion said so (PROGRESS backlog 85: *"there is no screen that addresses [one] by id"*).
+     * The id is resolved here from the task's own artifact list, because a citation names a
+     * `(type, version)` pair and never an id; the link targets `?artifact=<id>` on this task, which
+     * is the panel `task-detail.tsx` renders.
+     */
     expect(container.textContent).toContain('ImplementationPlan v2');
+    const artifactLink = [...container.querySelectorAll('a')].find((anchor) =>
+      anchor.getAttribute('href')?.includes(`artifact=${ARTIFACT}`),
+    );
+    expect(artifactLink).toBeTruthy();
+    // …and `audit`/`knowledge` still do not link, which is declined rather than forgotten
+    // (backlog 86; the reasoning is in `ask-thread.tsx`'s `Citation` docblock).
+    expect(
+      [...container.querySelectorAll('a')].some((anchor) =>
+        anchor.getAttribute('href')?.includes('knowledge'),
+      ),
+    ).toBe(false);
   });
 
   it('shows how many citations were dropped for naming another task or project', async () => {

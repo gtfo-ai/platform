@@ -83,6 +83,28 @@ export const urlSchema = z.url();
  */
 export const httpUrlSchema = z.url({ protocol: /^https?$/ });
 
+/**
+ * A path on **this** API — `/api/artifacts/<id>`, and nothing that can leave the origin (WP-52).
+ *
+ * It exists because {@link artifactRefSchema}'s `url` finally has something to say. The task
+ * projection published a literal `null` there (backlog 85: *"no route serves an artifact's body"*)
+ * and now publishes where the body is; but the platform does not know its own external base URL in
+ * a read projection, and an absolute one would be configuration leaking into a DTO. A root-relative
+ * path is the honest answer and it is the **server's** own string, never a provider's or a model's.
+ *
+ * It is a regex rather than `z.url({ protocol })` because it must refuse a *scheme* outright: this
+ * value reaches `safeHref` in `apps/web/src/ui/untrusted.tsx` like every other URL the app renders,
+ * and a field that could carry `javascript:` would be relying on that guard rather than on itself.
+ * No `//` either (a protocol-relative URL is an absolute one), and no `..`.
+ */
+export const apiPathSchema = z
+  .string()
+  .regex(
+    /^\/api\/(?!\/)[A-Za-z0-9._~\-/]*$/,
+    'an API path starts "/api/" and contains only unreserved URL characters',
+  )
+  .refine((value) => !value.includes('..'), 'an API path may not climb');
+
 /** Money in USD. Postgres stores `numeric(12,6)`; the wire carries a JSON number. */
 export const usdSchema = z.number().nonnegative().finite();
 

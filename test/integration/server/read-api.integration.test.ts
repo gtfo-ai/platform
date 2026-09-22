@@ -29,6 +29,7 @@ import {
 } from '../../../apps/server/src/queries/integration-queries.js';
 import { findKbHealth } from '../../../apps/server/src/queries/knowledge-queries.js';
 import {
+  findArtifactBody,
   findRun,
   findRunContextPack,
   findRunPrompt,
@@ -45,7 +46,7 @@ import {
 import { SseHub, type SseTransport } from '../../../apps/server/src/sse/hub.js';
 import { startTranscriptBridge } from '../../../apps/server/src/sse/transcript-bridge.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestPool } from '../support/postgres.js';
+import { createTestPool, withClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let pool: pg.Pool;
@@ -299,6 +300,95 @@ describe('the transcript page', () => {
     const before = await listRunMessages(drizzled, blobRunId, { limit: 1, partials: true });
     expect(before.items.map((item) => item.seq)).toEqual([0]);
     expect(before.nextSeq).toBe(0);
+  });
+});
+
+/**
+ * **The read that refuses a row written before its column existed** (WP-52 round 3).
+ *
+ * `findArtifactBody`'s two branches turn on `artifacts.redaction_count is null`, which means *"no
+ * redactor ran over this row"* — the state every artifact on an upgraded instance is in for ever,
+ * because migration 0038 adds the column nullable behind a `NOT VALID` check. A `null` in that
+ * column is a thing only a database can produce honestly, which is why this is the integration tier
+ * and not a stub: `pipeline-queries.test.ts`'s own docblock refuses a stubbed Drizzle handle, and
+ * no integration test builds the real router, so the query's branches are asserted here and the
+ * **route's 409** in `test/e2e/server/run-api.e2e.test.ts`.
+ *
+ * The pre-0038 row is produced the only honest way: the same drop / insert / re-add-`NOT VALID`
+ * dance `migrations.integration.test.ts` already establishes, which reproduces exactly what an
+ * upgrade leaves behind — a row the constraint was never validated against.
+ */
+describe('one artifact’s body', () => {
+  it('serves a redacted row and refuses one written before anything redacted it', async () => {
+    const insertArtifact = async (text: string, values: readonly unknown[]): Promise<string> => {
+      const result = await pool.query<{ id: string }>(text, [...values]);
+      return result.rows[0]?.id as string;
+    };
+
+    const redactedId = await insertArtifact(
+      `insert into artifacts (task_id, type, version, markdown, data, schema_version,
+                              produced_by_run_id, redaction_count)
+       values ($1, 'RefinedSpec', 1, null, '{"goal":"ship it"}'::jsonb, '1', $2, 2) returning id`,
+      [taskId, runId],
+    );
+
+    // The row this build writes: served, with the count it recorded.
+    const served = await findArtifactBody(drizzled, redactedId);
+    expect(served.found).toBe(true);
+    expect(served.found === true && served.redacted).toBe(true);
+    if (served.found === true && served.redacted === true) {
+      expect(served.body.artifact_type).toBe('RefinedSpec');
+      expect(served.body.task_id).toBe(taskId);
+      expect(served.body.redaction_count).toBe(2);
+      expect(served.body.data).toEqual({ goal: 'ship it' });
+    }
+
+    /**
+     * …and the row an upgrade left behind: refused, with the instant a human is told.
+     *
+     * The constraint dance runs on the **owner** connection, not on `pool` — and finding that out
+     * was worth the round trip: `pool` connects as `platform_app` (`-c role=platform_app`), which
+     * PostgreSQL answers with *"must be owner of table artifacts"*. **That is what was measured**:
+     * the application role cannot drop this constraint. It is not the same as "the branch cannot be
+     * bypassed from inside the server", which additionally rests on the check still rejecting every
+     * INSERT and UPDATE — true, and pinned independently by
+     * `test/integration/db/grants.integration.test.ts`, but not established here.
+     *
+     * `try`/`finally` because the constraint is real schema: a failure between the drop and the
+     * re-add would leave this file's remaining cases running against a table with no check.
+     */
+    const legacyId = await withClient(database.connectionString, async (client) => {
+      await client.query(
+        'alter table artifacts drop constraint artifacts_redaction_count_recorded',
+      );
+      try {
+        const inserted = await client.query<{ id: string }>(
+          `insert into artifacts (task_id, type, version, data, schema_version)
+           values ($1, 'RefinedSpec', 2, '{"goal":"from before"}'::jsonb, '1') returning id`,
+          [taskId],
+        );
+        return inserted.rows[0]?.id as string;
+      } finally {
+        await client.query(
+          `alter table artifacts add constraint artifacts_redaction_count_recorded
+           check (redaction_count is not null and redaction_count >= 0) not valid`,
+        );
+      }
+    });
+
+    const refused = await findArtifactBody(drizzled, legacyId);
+    expect(refused.found).toBe(true);
+    expect(refused.found === true && refused.redacted).toBe(false);
+    // The refusal carries the instant rather than the body: it is what the 409 tells a reader, and
+    // a branch that returned nothing at all would make the message a guess.
+    if (refused.found === true && refused.redacted === false) {
+      expect(refused.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    }
+
+    // The third answer, which is a different fact from either (standing rule 18).
+    expect(await findArtifactBody(drizzled, '00000000-0000-4000-8000-00000000dead')).toEqual({
+      found: false,
+    });
   });
 });
 

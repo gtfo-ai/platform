@@ -93,7 +93,13 @@ import {
   recordHumanAction,
   writeProjectAutonomy,
 } from './queries/onboarding-queries.js';
-import { findRunPosition, findTaskPosition } from './queries/pipeline-queries.js';
+import {
+  findArtifactBody,
+  findArtifactProjectId,
+  findRunPosition,
+  findTaskDetail,
+  findTaskPosition,
+} from './queries/pipeline-queries.js';
 import { findProjectAutonomy, listProjectAudit } from './queries/project-queries.js';
 import {
   findShadowBatch,
@@ -581,7 +587,17 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       database: options.database,
       knowledge: options.knowledge,
     });
-    await registerTaskRoutes(app, { database: options.database });
+    await registerTaskRoutes(app, {
+      queries: {
+        taskDetail: async (taskId) => findTaskDetail(options.database, taskId),
+        taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        artifactBody: async (artifactId) => findArtifactBody(options.database, artifactId),
+        artifactProjectId: async (artifactId) =>
+          findArtifactProjectId(options.database, artifactId),
+      },
+    });
     await registerAskRoutes(app, {
       queries: {
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),

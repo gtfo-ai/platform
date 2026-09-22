@@ -642,9 +642,12 @@ export const createPostgresPipelineStore = (
     },
     insert: async (tx, artifact) => {
       await sqlOf(tx).query(
+        // `redaction_count` is named explicitly and has no default (migration 0038): an insert
+        // that omitted it would be refused by `artifacts_redaction_count_recorded` rather than
+        // recorded as "no redactor ran", which is what a null in that column means.
         `insert into artifacts (id, task_id, type, version, markdown, data, schema_version,
-                                produced_by_run_id)
-         values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
+                                produced_by_run_id, redaction_count)
+         values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)`,
         [
           artifact.id,
           artifact.taskId,
@@ -654,13 +657,14 @@ export const createPostgresPipelineStore = (
           JSON.stringify(artifact.data),
           artifact.schemaVersion,
           artifact.producedByRunId,
+          artifact.redactionCount,
         ],
       );
     },
     latest: async (tx, taskId, type) => {
       const { rows } = await sqlOf(tx).query<ArtifactRow>(
         `select id, task_id, type, version, markdown, data, schema_version, produced_by_run_id,
-                created_at
+                redaction_count, created_at
            from artifacts where task_id = $1 and type = $2 order by version desc limit 1`,
         [taskId, type],
       );
@@ -670,7 +674,7 @@ export const createPostgresPipelineStore = (
     listFor: async (tx, taskId) => {
       const { rows } = await sqlOf(tx).query<ArtifactRow>(
         `select id, task_id, type, version, markdown, data, schema_version, produced_by_run_id,
-                created_at
+                redaction_count, created_at
            from artifacts where task_id = $1 order by created_at, version`,
         [taskId],
       );
@@ -698,12 +702,17 @@ export const createPostgresPipelineStore = (
      */
     insert: async (tx, run) => {
       await sqlOf(tx).query(
+        // `system_prompt`, `user_prompt` and `redaction_count` are written **here**, at creation,
+        // and never re-derived (Q64, WP-52): the prompt's nonce is drawn per prompt and the pack is
+        // a point-in-time read, so a re-derivation is a different document answering a different
+        // question. `runs.redaction_count` is what the redactor replaced *in those two columns*.
         `insert into runs (id, task_id, project_id, task_stage_id, role, mode, attempt, model,
-                           effort, prompt_version, status, started_at)
+                           effort, prompt_version, status, started_at,
+                           system_prompt, user_prompt, redaction_count)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
-                 $4, $5, $6, $7, $8, $9, $10, $12)`,
+                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15)`,
         [
           run.id,
           run.taskId,
@@ -719,6 +728,12 @@ export const createPostgresPipelineStore = (
           // The caller's clock rather than `now()`, so the column and the `run.started` event agree
           // and so the in-memory store can answer the same value (WP-15i).
           run.startedAt,
+          run.systemPrompt,
+          run.userPrompt,
+          // 0004's `not null default 0` is still on the column, so a null here would be refused
+          // rather than stored — which is why the caller's type makes the count required for a row
+          // that carries a prompt (see `StoredRun.redactionCount`).
+          run.redactionCount,
         ],
       );
     },
@@ -1208,6 +1223,8 @@ interface ArtifactRow extends Record<string, unknown> {
   data: JsonValue;
   schema_version: string;
   produced_by_run_id: string | null;
+  /** Null only for a row written before migration 0038, when no redactor ran. */
+  redaction_count: number | null;
   created_at: Date;
 }
 
@@ -1220,6 +1237,7 @@ const toStoredArtifact = (row: ArtifactRow): StoredArtifact => ({
   data: row.data,
   schemaVersion: row.schema_version,
   producedByRunId: row.produced_by_run_id,
+  redactionCount: row.redaction_count,
   createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
 });
 

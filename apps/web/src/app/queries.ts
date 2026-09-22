@@ -323,6 +323,24 @@ export const useRunMessages = (runId: string) => {
   });
 };
 
+/**
+ * One artifact's body — WP-52, PROGRESS backlog 85.
+ *
+ * `enabled` is the disclosure on the task screen: the list shows every artifact and the body is
+ * fetched only for the one a reader opened, which is why this is a query per artifact rather than a
+ * field on `taskDetailResponseSchema`. `FOREVER` because an artifact version is immutable: a stage
+ * re-run writes a new version and never overwrites one (technical/02's invariant).
+ */
+export const useArtifactBody = (taskId: string, artifactId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.artifact(taskId, artifactId ?? 'none'),
+    queryFn: () => endpoints.artifact(artifactId as string),
+    enabled: artifactId !== null,
+    ...FOREVER,
+  });
+};
+
 export const useRunPrompt = (runId: string, enabled: boolean) => {
   const { endpoints } = useServices();
   return useQuery({

@@ -135,6 +135,13 @@ command that the domain can refuse, not by dropping a card.
 Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: checks, cost and
 links. Live on that task's topic.
 
+Every artifact in the centre column **opens**: *Open* shows the document the stage produced, on this
+page, as text. It is model output, so it is rendered the way everything else untrusted is — as
+characters, never as markup and never as a link. The line above it says how many credentials the
+platform replaced in it before storing it. An artifact produced **before** the upgrade that
+introduced that redaction is not shown at all: nothing redacted it, artifacts are never rewritten,
+and the platform will not publish a document it cannot vouch for — it says so by name instead.
+
 ### What you can do from here
 
 Nine of the eleven commands the product serves (the other two are on the run screen). Each is an
@@ -200,12 +207,17 @@ pushes a turn into a session that is already running, which needs a transport to
 container that this build does not have. Cancelling has the same limit from the other side: it ends
 the run as a *record*, and does not interrupt what is executing.
 
-Two tabs can answer "not available" rather than showing you a document, and that too is deliberate:
+One tab can answer "not available" rather than showing you a document, and that too is deliberate:
 
-- **Prompt** — nothing writes the stored prompt columns yet, so the endpoint refuses with a message
-  naming why instead of returning an empty document.
 - **Context pack** — the stored row cannot hold two of the fields the pack requires, and summing what
   is there would publish "budget equals total" as a fact the screen would then render as true.
+
+**Prompt** used to be the second, and is not any more: the two columns have had a writer since
+migration 0038, so a run started by this build shows the exact prompt it was given — redacted at the
+write, because a prompt carries the credentials the run was handed. A run started *before* that
+migration still answers "not available", and always will: the prompt is not re-derivable, because
+its delimiter is a fresh random value per prompt and its knowledge excerpts are a point-in-time
+read, so re-assembling one would show you a document that run never saw.
 
 This is the product's rule about numbers: every one shown has a definition, and one that has none is
 absent rather than invented. It is why the **Agents** screen shows no "tokens per minute" — a rate

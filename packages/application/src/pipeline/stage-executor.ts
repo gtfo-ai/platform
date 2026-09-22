@@ -71,10 +71,17 @@ import {
   startRun,
   toQuestionRecord,
 } from '@platform/domain';
+import {
+  ArtifactIdentifierSecretError,
+  type RedactedArtifact,
+  redactArtifactData,
+} from '../artifacts/redaction.js';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
 import { type LateCostRecorder, noLateCostRecorder } from '../cost/late.js';
 import { type CapSpend, capIsSpent, capSpendDetail } from '../cost/pending.js';
+import { composeSecretRedactors } from '../integrations/redaction.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
@@ -91,6 +98,7 @@ import {
   type RunLeaseOptions,
   startRunHeartbeat,
 } from './lease.js';
+import { injectedSecretRedactorFor } from './run-redaction.js';
 import type { ProjectSettings } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type { PipelineStore, StoredArtifact, StoredTask } from './store.js';
@@ -197,6 +205,32 @@ export interface StageExecutorOptions {
   /** A fresh `CommandContext` per command: ids, clock and the pipeline's system actor. */
   readonly context: (correlationId: Id) => CommandContext;
   readonly settings: (projectId: Id) => Promise<ProjectSettings>;
+  /**
+   * **TD-012 step 2** — the gitleaks-derived pattern rules — over what this executor *stores*
+   * (WP-52 round 2).
+   *
+   * Required, not optional: an optional security dependency is an absent one (standing rule 31),
+   * and it is the same redactor `routes/commands.ts`, the epic split and the ask executor are
+   * given (`PipelineRuntimeOptions.redactor` hands it down).
+   *
+   * **It is composed with step 1 rather than replacing it, because the decision is not optional
+   * about either.** TD-012 reads *"Before any write to … artifacts: (1) replace every secret value
+   * the platform injected … (2) apply a curated subset of gitleaks' rule set"*, and round 1 of this
+   * row shipped step 1 alone at the artifact write while `claude-runner.ts` composed **both** for
+   * the transcript of the very same model message. So a credential the model *read out of the
+   * repository* — one the platform never injected and step 1 therefore cannot know — was redacted
+   * in `run_messages` and stored verbatim in `artifacts.data`. The permission direction made that
+   * worse rather than neutral: `transcript.read` is `member` and `artifact.read` is `viewer`, so
+   * the weaker-redacted copy was the one served to the lower role, through the route this very work
+   * package added.
+   *
+   * The order is TD-012's own — step 1, then step 2 — which is also `createClaudeRunner`'s
+   * (`composeRedactors(deps.injectedSecretRedactorFor(spec), patternRedactor())`). It matters for
+   * the placeholder a value ends up carrying: an injected credential should read
+   * `[REDACTED:integration:anthropic_api_key]`, which names *which* credential, rather than the
+   * pattern rules' `[REDACTED sha256:…]`, which does not.
+   */
+  readonly redactor: SecretRedactor;
   /**
    * The organisation and project budgets (BD-010, WP-19), asked inside the admission transaction.
    *
@@ -420,6 +454,16 @@ type Prepared =
       readonly stage: PipelineStage;
       readonly stored: StoredTask;
       readonly run: Run;
+      /**
+       * The run's own TD-012 step-1 redactor, built **once** from the spec this run was started
+       * with (WP-52).
+       *
+       * It is carried rather than rebuilt at each write for the reason the TD-012 amendment gives:
+       * the prompt columns (transaction 1b), the artifact (transaction 2) and the transcript (the
+       * runner, through `RunSpec.env`/`secretEnvNames`) must name the same secrets, and three
+       * constructions are three chances to disagree.
+       */
+      readonly redactor: SecretRedactor;
     };
 
 type Admitted = {
@@ -707,6 +751,21 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       const { stored } = valid;
       const { task } = stored;
       const context = options.context(task.id);
+      /**
+       * The run's redactor and the two prompt columns — Q64, implemented at WP-52.
+       *
+       * **Written here and never re-derived.** The nonce `assemblePrompt` draws is per prompt and
+       * the context pack is a point-in-time read, so re-assembling the prompt later would produce a
+       * different document answering a different question — the argument `tasks.template_snapshot`
+       * and `ticket_snapshot` have already won. What is stored is exactly the bytes the runner is
+       * handed on the next line but one, minus the secrets this run was given.
+       */
+      const redactor = composeSecretRedactors(
+        injectedSecretRedactorFor(spec, logger),
+        options.redactor,
+      );
+      const systemPrompt = redactor.redactText(spec.systemPromptAppend);
+      const userPrompt = redactor.redactText(spec.userPrompt);
 
       // `created → starting → running`: two transitions, two catalogue events, and no observable
       // moment between them here — the platform has the spec and is handing it to the runner. The
@@ -751,6 +810,13 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // The domain's clock, not the database's: the same instant stamps `run.started`, and a
         // run ended from another process computes its wall time from this column (WP-15i).
         startedAt: context.clock.now(),
+        systemPrompt: systemPrompt.value,
+        userPrompt: userPrompt.value,
+        // The sum over both columns, which is what `runs.redaction_count` means from migration
+        // 0038 onwards — not the run's total. The transcript's count is the runner's and the
+        // artifact's is on the artifact row; a column that mixed the three could not be read back
+        // as "the redactor ran over this prompt and replaced nothing".
+        redactionCount: systemPrompt.count + userPrompt.count,
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).
@@ -768,7 +834,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         });
       }
       await scope.events.append([...starting.events, ...running.events]);
-      return { kind: 'ready', spec, stage: valid.stage, stored, run: running.aggregate };
+      return { kind: 'ready', spec, stage: valid.stage, stored, run: running.aggregate, redactor };
     });
 
   /**
@@ -936,6 +1002,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         outcome,
         stopReason,
         options,
+        redactor: prepared.redactor,
       }),
     );
   };
@@ -969,6 +1036,8 @@ interface RecordInput {
   readonly outcome: RunOutcome;
   readonly stopReason: string | null;
   readonly options: StageExecutorOptions;
+  /** The run's own redactor — TD-012 at the artifact write (WP-52). */
+  readonly redactor: SecretRedactor;
 }
 
 /**
@@ -1072,7 +1141,40 @@ const record = async (
         ...finished.events,
       ]);
     }
-    data = outcome.structuredOutput;
+    /**
+     * TD-012 **at the write**, which this line did not do until WP-52 (PROGRESS backlog 35).
+     *
+     * `data = outcome.structuredOutput` stored the model's answer verbatim, so a credential the
+     * platform injected into the run reached `artifacts.data` — and from there `questions.text`
+     * below and, through `recordMergeRequest`, the `tasks` row. `artifacts` is append-only, so the
+     * redaction has to happen before the insert or not at all.
+     *
+     * The refusal is the identifier half of the amendment: a field the platform *reads as a name*
+     * is never rewritten, because a `[REDACTED:integration:…]` in `mr.head_sha` is a value the
+     * platform then queries a provider with (standing rule 70). Nothing is stored, the run is
+     * already recorded as finished above, and the task escalates — the ending this branch already
+     * has for "the run produced no artifact", reused rather than invented.
+     */
+    let redacted: RedactedArtifact;
+    try {
+      redacted = redactArtifactData(stage.produces, outcome.structuredOutput, input.redactor);
+    } catch (error) {
+      if (!(error instanceof ArtifactIdentifierSecretError)) {
+        throw error;
+      }
+      return escalateOnRun(
+        scope,
+        input,
+        withCost,
+        context,
+        // The **path**, never the value: this reason is written to `events.payload` and into the
+        // blocker brief a human reads.
+        `the run wrote a secret this run was given into "${error.path}", which the platform reads ` +
+          'as an identifier and therefore refuses to rewrite',
+        [...finished.events],
+      );
+    }
+    data = redacted.data;
     const version = await store.artifacts.nextVersion(scope.tx, job.taskId, stage.produces);
     const artifactId = context.ids.next();
     await store.artifacts.insert(scope.tx, {
@@ -1084,6 +1186,7 @@ const record = async (
       data,
       schemaVersion: '1',
       producedByRunId: run.id,
+      redactionCount: redacted.count,
       createdAt: context.clock.now(),
     });
     artifactRef = { id: artifactId, artifact_type: stage.produces, version, url: null };

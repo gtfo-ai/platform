@@ -65,10 +65,10 @@
  * credential source (BD-021), asserted end to end in
  * `packages/infrastructure/src/workspace/spec.test.ts` § "is none for a review-only run". The gap
  * opens only for a future role that both mints a credential and posts provider text. The model's own
- * key is covered whatever happens, because `sk-ant-…` is a pattern rule. `artifacts.data` still
- * stores the verdict unredacted (PROGRESS backlog 35), which this work package neither closes nor
- * widens: it adds no artifact-derived column, and the one place the text leaves the platform redacts
- * it.
+ * key is covered whatever happens, because `sk-ant-…` is a pattern rule. `artifacts.data` stored
+ * the verdict **unredacted** when this was written (PROGRESS backlog 35) and is redacted at the
+ * write since WP-52; this module's redaction is unchanged and still the load-bearing one here,
+ * because it covers the text where it **leaves the platform** rather than where it is stored.
  */
 import type {
   Actor,

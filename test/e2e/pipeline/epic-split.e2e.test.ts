@@ -227,8 +227,19 @@ describe('the epic-split variant, from a matched epic to real child tickets', ()
     // both sides, because a writer that dropped the field would pass the first half alone.
     expect(queued[0]?.description).not.toContain(PLANTED);
     expect(queued[0]?.description).toMatch(PLACEHOLDER);
-    expect(queued[0]?.redaction_count).toBe(1);
-    // …and a child that carried no credential is stored whole and counted as zero.
+    /**
+     * **The count moved to the artifact row at WP-52, and that is the change rather than a loss.**
+     *
+     * It was `1` here because this queue's writer was the *first* thing to redact that text:
+     * `artifacts.data` held the `TicketBreakdown` unredacted (PROGRESS backlog 35). The artifact is
+     * now redacted at **its own** write, so by the time the breakdown handler reads the row there is
+     * nothing left to replace and its own count is legitimately `0`. The assertion therefore moved
+     * rather than weakened — a count of `0` alone would be satisfied by a redactor that never ran
+     * (standing rule 10), so the replacement is asserted where it happened.
+     */
+    expect(await pipeline.artifactRedactionCount('TicketBreakdown')).toBe(1);
+    expect(queued[0]?.redaction_count).toBe(0);
+    // …and a child that carried no credential is stored whole and counted as zero either way.
     expect(queued[1]?.redaction_count).toBe(0);
 
     // **Nothing has been created**, which is the criterion a change that filed on the run's own
@@ -281,11 +292,19 @@ describe('the epic-split variant, from a matched epic to real child tickets', ()
       // The third is untouched: Q85's *"a PM who wants five of seven"*.
       ['queued', null],
     ]);
-    // The human's own words are stored too, and redacted where they are stored — with the count
-    // **added** to what the row already carried rather than overwriting it.
+    /**
+     * The human's own words are stored too, and redacted where they are stored — with the count
+     * **added** to what the row already carried rather than overwriting it.
+     *
+     * The *addition* is now asserted as a pair across this test rather than as a single `2`: the
+     * queue row read **0** above (the model's text was already redacted at the artifact's own
+     * write, WP-52) and reads **1** here, so the increment is the assertion. Before WP-52 it was
+     * `1 → 2`; the property is the same and the arithmetic moved, because the first replacement
+     * now happens one write earlier.
+     */
     expect(filed[0]?.reason).not.toContain(PLANTED);
     expect(filed[0]?.reason).toMatch(PLACEHOLDER);
-    expect(filed[0]?.redaction_count).toBe(2);
+    expect(filed[0]?.redaction_count).toBe(1);
     expect(filed[1]?.redaction_count).toBe(1);
 
     // …and the tickets the row implies really exist on the board, under the epic.

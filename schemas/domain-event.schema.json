@@ -4694,7 +4694,15 @@
         "url": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Url"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\/api\\/(?!\\/)[A-Za-z0-9._~\\-/]*$"
+                },
+                {
+                  "$ref": "#/$defs/Url"
+                }
+              ]
             },
             {
               "type": "null"

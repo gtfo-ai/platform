@@ -393,9 +393,21 @@ describe('the epic-split variant', () => {
    *
    * Every model-authored field is asserted from both sides (standing rule 42): the credential is
    * gone *and* the placeholder is there, because a field the writer dropped altogether would pass
-   * the first half alone. `redactionCount` is pinned exactly rather than `> 0` — an under-reporting
-   * count is the one signal a redactor that stopped working leaves (migration 0024's note), so a
-   * redactor applied to four fields of five has to fail here.
+   * the first half alone.
+   *
+   * **`redactionCount` is `0` since WP-52, and that is the change rather than a regression.** It
+   * was pinned at **4** — one per model-authored field — because this writer was the *first* thing
+   * to redact that text: `artifacts.data` held the `TicketBreakdown` unredacted (backlog 35). The
+   * artifact is now redacted **at its own write**, with the same platform redactor composed on top
+   * of the run's injected-secret one, so by the time this handler reads the row there is nothing
+   * left for it to replace. The assertion therefore moved rather than weakened: the placeholder is
+   * asserted in the **artifact row** as well as in the queued child, which is what says *where* the
+   * redaction happened — a count of 0 alone would be satisfied by a redactor that never ran
+   * (standing rule 10).
+   *
+   * This handler's own redaction is not dead: it is the only one a `TicketBreakdown` row written
+   * **before** migration 0038 ever gets, and it is what a future writer of this queue that does not
+   * come from an artifact would still meet.
    *
    * The **residual is measured rather than claimed**: the binding's own credential is still in the
    * row, because this writer runs inside the dispatcher's transaction and has no binding to get a
@@ -423,9 +435,18 @@ describe('the epic-split variant', () => {
     // A field with nothing to redact is passed through whole rather than emptied.
     expect(child?.title).toBe('Child 1');
     expect(criteria?.when).toBe('the plan is posted');
-    // One occurrence in the description, one in the rationale, one in `given`, one in the
-    // validation command: four, and every one of them a different field.
-    expect(child?.redactionCount).toBe(4);
+    // Where the redaction happened: the artifact row itself, at its own write (WP-52).
+    const stored = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, (await items(harness))[0]?.taskId as Id),
+    );
+    const breakdown = stored.find((artifact) => artifact.type === 'TicketBreakdown');
+    const breakdownJson = JSON.stringify(breakdown?.data);
+    expect(breakdownJson).not.toContain(PLATFORM_PLANTED);
+    expect(breakdownJson).toContain(PLATFORM_PLACEHOLDER);
+    // Four replacements, one per model-authored field — counted on the row that made them.
+    expect(breakdown?.redactionCount).toBe(4);
+    // …and nothing was left for this handler to do, which is what its own 0 means here.
+    expect(child?.redactionCount).toBe(0);
 
     // The stated residual, measured: the *binding's* token is not the platform redactor's to know.
     expect(child?.description).toContain(PLANTED);

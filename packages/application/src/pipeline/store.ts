@@ -517,16 +517,44 @@ export interface StoredArtifact {
   readonly type: ArtifactType;
   readonly version: number;
   readonly markdown: string | null;
+  /**
+   * The artifact's `data`, **already redacted** (TD-012, WP-52).
+   *
+   * Every writer passes it through `redactArtifactData` first: prose replaced, an identifier field
+   * carrying an injected secret refused rather than rewritten. The redaction is at the write
+   * because `artifacts` is append-only — a row written today cannot be fixed later.
+   */
   readonly data: JsonValue;
   readonly schemaVersion: string;
   readonly producedByRunId: Id | null;
+  /**
+   * How many replacements the redaction made in {@link data}.
+   *
+   * `null` reads as *"no redactor ran"* and is reachable only for a row written before migration
+   * 0038; `0` is *"the redactor ran and replaced nothing"*. The two are different facts, which is
+   * why this is nullable on the way **out** and required on the way **in** ({@link NewArtifact}).
+   */
+  readonly redactionCount: number | null;
   readonly createdAt: IsoDateTime;
 }
+
+/**
+ * What a writer must supply — {@link StoredArtifact} with the redaction count **required**.
+ *
+ * A new row may never claim the pre-0038 `null`: a writer with nothing to redact writes `0`, and
+ * one that skipped redaction altogether is refused by the type here and by the table's own
+ * `artifacts_redaction_count_recorded` check (migration 0038). That is criterion (2)'s second
+ * direction — "a writer that redacted nothing is impossible" — held in two places rather than
+ * promised in one (standing rule 42).
+ */
+export type NewArtifact = Omit<StoredArtifact, 'redactionCount'> & {
+  readonly redactionCount: number;
+};
 
 export interface ArtifactRepository {
   /** "Artifacts are versioned; a stage re-run creates a new version, never overwrites." */
   nextVersion(tx: Transaction, taskId: Id, type: ArtifactType): Promise<number>;
-  insert(tx: Transaction, artifact: StoredArtifact): Promise<void>;
+  insert(tx: Transaction, artifact: NewArtifact): Promise<void>;
   latest(tx: Transaction, taskId: Id, type: ArtifactType): Promise<StoredArtifact | null>;
   listFor(tx: Transaction, taskId: Id): Promise<readonly StoredArtifact[]>;
 }
@@ -574,8 +602,39 @@ export interface StoredRun {
   readonly startedAt: IsoDateTime | null;
 }
 
+/**
+ * What a writer must supply to create a run — {@link StoredRun} plus the three columns Q64 gave a
+ * writer at WP-52.
+ *
+ * They are on the **write** shape only, and deliberately not on `StoredRun`: `load` would then have
+ * to select two `text` columns holding a whole assembled prompt on every read of a run row, for the
+ * benefit of no caller in the pipeline. The reader that wants them is the API projection
+ * (`apps/server/src/queries/pipeline-queries.ts`), which selects exactly those columns and nothing
+ * else.
+ */
+export type NewRun = StoredRun & {
+  /**
+   * `RunSpec.systemPromptAppend` — layers 1-3 — redacted at the write (TD-012).
+   *
+   * `null` is *"this run was created without an assembled prompt"*, which no production path
+   * produces: both `runs.insert` call sites pass the spec the runner was handed. It exists for a
+   * store-level fixture that creates a row to test something else, and it is what the reader
+   * distinguishes from a stored prompt by name (409 `prompt_not_recorded`).
+   */
+  readonly systemPrompt: string | null;
+  /** `RunSpec.userPrompt` — layers 4-6: the task block, the context pack, the output contract. */
+  readonly userPrompt: string | null;
+  /**
+   * How many replacements the redactor made **in those two columns**.
+   *
+   * Not the run's total: the transcript's own count is the runner's (`RunOutcome.redactionCount`)
+   * and the artifact's is on the artifact row. A prompt with nothing to redact writes `0`.
+   */
+  readonly redactionCount: number;
+};
+
 export interface RunRepository {
-  insert(tx: Transaction, run: StoredRun): Promise<void>;
+  insert(tx: Transaction, run: NewRun): Promise<void>;
   /**
    * Moves a **live** run to a terminal status, and answers whether this caller is the one that did.
    *

@@ -428,7 +428,13 @@ export const createMemoryPipelineStore = (
         (row) =>
           row.taskId === run.taskId && row.stage === run.stage && row.attempt === run.attempt,
       );
-      runs.set(run.id, clone({ ...run, stage: linked ? run.stage : null }));
+      // The three write-only columns of `NewRun` are **dropped**, for the same rule-1 reason the
+      // stage link is narrowed: the SQL adapter's `load` does not select `system_prompt`,
+      // `user_prompt` or `redaction_count`, so keeping them here would let a test read back a
+      // prompt no production caller of `load` can see. The reader that wants them is the API
+      // projection, and it has its own integration coverage.
+      const { systemPrompt: _s, userPrompt: _u, redactionCount: _r, ...stored } = run;
+      runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));
     },
     /** Conditional on the run still being live, exactly as the SQL adapter's `where` clause is. */
     finish: async (_tx, outcome) => {

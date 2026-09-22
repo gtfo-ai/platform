@@ -105,9 +105,24 @@ const boardRoute = createRoute({
   },
 });
 
+/**
+ * `?artifact=<id>` — which artifact's body the task screen has open (WP-52).
+ *
+ * It is a **search parameter and not component state** because it is what makes an artifact
+ * *addressable*: the ask thread's `artifact` citation is a link that sets it, and a reader can send
+ * somebody the URL. Both task routes declare it, so `<Link to="." search={…}>` works from either
+ * without the component having to know which one it is on.
+ *
+ * `z.string()` rather than `z.uuid()`: the value is compared against the ids the task's own
+ * projection returned and an unknown one shows nothing, so a bad id is a no-op rather than a router
+ * error — and the value never reaches an attribute (`apps/web/src/no-html.test.ts`).
+ */
+const taskSearchSchema = z.object({ artifact: z.string().optional() });
+
 const projectTaskRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/projects/$key/tasks/$taskId',
+  validateSearch: taskSearchSchema,
   component: function ProjectTask() {
     const { taskId } = projectTaskRoute.useParams();
     return <TaskDetailScreen taskId={taskId} />;
@@ -118,6 +133,7 @@ const projectTaskRoute = createRoute({
 const taskRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/tasks/$taskId',
+  validateSearch: taskSearchSchema,
   component: function Task() {
     const { taskId } = taskRoute.useParams();
     return <TaskDetailScreen taskId={taskId} />;

@@ -35,6 +35,7 @@ import type {
   ContextPackRecord,
   DomainEvent,
   Id,
+  JsonValue,
 } from '@platform/contracts';
 import {
   askAnswerDataSchema,
@@ -52,13 +53,19 @@ import {
   markRunning,
   startRun,
 } from '@platform/domain';
+import {
+  ArtifactIdentifierSecretError,
+  findArtifactIdentifierSecret,
+} from '../artifacts/redaction.js';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import { composeSecretRedactors } from '../integrations/redaction.js';
 import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
   type RunLeaseOptions,
   startRunHeartbeat,
 } from '../pipeline/lease.js';
+import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
@@ -211,6 +218,16 @@ export const scopeCitations = (
  * redacting it would trade a leak that cannot exist for a link that resolves to nothing (standing
  * rule 70). `kind` and `confidence` are enums the contract fixes.
  *
+ * **WP-52 changed none of that, and the check it added is why.** TD-012's WP-52 amendment makes an
+ * *identifier* — a field the platform **addresses something with** — refused rather than rewritten,
+ * and the shared table (`ARTIFACT_FIELD_POLICIES.AskAnswer`) declares exactly one for this type:
+ * `citations[].run_id`, which is the paragraph above turned into data that a check keeps complete.
+ * `reference` stays **prose** and keeps passing the redactor, because the worst a redacted one
+ * produces is a citation that points nowhere, while refusing it would fail a whole ask over a
+ * citation — and an `audit` reference has already been *dropped* by {@link scopeCitations} if it is
+ * not one of this task's own rows. What the amendment adds here is the refusal above: an identifier
+ * carrying an injected secret ends the ask by name instead of storing a rewritten key.
+ *
  * **Redact, then cut — in that order, and the cut is not optional.** WP-30 measured the order: a
  * truncation applied first can publish `glpat-FAKE`, a prefix no rule matches, while redacting
  * first publishes the placeholder and cuts *that*. The cut afterwards is what keeps the row
@@ -226,6 +243,16 @@ export const redactAskAnswer = (
   citations: readonly AskAnswerCitation[],
   redactor: SecretRedactor,
 ): { readonly data: AskAnswerData; readonly count: number } => {
+  // The identifier half of the artifact policy, asked of the **same** table the stage executor
+  // asks, over the citations that survived scoping.
+  const offending = findArtifactIdentifierSecret(
+    'AskAnswer',
+    { ...answer, citations: [...citations] } as unknown as JsonValue,
+    redactor,
+  );
+  if (offending !== null) {
+    throw new ArtifactIdentifierSecretError('AskAnswer', offending);
+  }
   let count = 0;
   const clean = (value: string, cap: number): string => {
     const redacted = redactor.redactText(value);
@@ -401,7 +428,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     runId: Id,
     settings: ProjectSettings,
   ): Promise<
-    | { readonly kind: 'started'; readonly run: Run }
+    | { readonly kind: 'started'; readonly run: Run; readonly redactor: SecretRedactor }
     | { readonly kind: 'skipped'; readonly reason: string }
     | { readonly kind: 'refused'; readonly reason: string }
   > =>
@@ -414,6 +441,25 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         return await refuse(scope, ask.id, verdict.reason);
       }
       const context = options.context(ask.taskId);
+      /**
+       * The run's own TD-012 redactor and the two prompt columns (Q64, WP-52) — the stage
+       * executor's rule at the second `runs.insert` call site, which standing rule 49 is the reason
+       * this row swept for.
+       *
+       * Composed with `options.redactor` (TD-012 step 2, the pattern rules) because an ask's
+       * *answer* already passes that one: the prompt is model input rather than model output, but
+       * it carries the ticket's own words and the context pack, so it gets both halves rather than
+       * the weaker of the two. **Step 1 first**, which is TD-012's own order and
+       * `createClaudeRunner`'s — it decides which placeholder an injected credential ends up
+       * carrying, and `[REDACTED:integration:anthropic_api_key]` names the credential while
+       * `[REDACTED sha256:…]` does not.
+       */
+      const runRedactor = composeSecretRedactors(
+        injectedSecretRedactorFor(plan.spec, logger),
+        options.redactor,
+      );
+      const systemPrompt = runRedactor.redactText(plan.spec.systemPromptAppend);
+      const userPrompt = runRedactor.redactText(plan.spec.userPrompt);
       const created = createRun({
         id: runId,
         taskId: ask.taskId,
@@ -453,6 +499,9 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         wallMs: 0,
         createdAt: context.clock.now(),
         startedAt: context.clock.now(),
+        systemPrompt: systemPrompt.value,
+        userPrompt: userPrompt.value,
+        redactionCount: systemPrompt.count + userPrompt.count,
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and
@@ -468,7 +517,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       }
       await options.asks.attachRun(scope.tx, ask.id, runId);
       await scope.events.append([...starting.events, ...running.events]);
-      return { kind: 'started' as const, run: running.aggregate };
+      return { kind: 'started' as const, run: running.aggregate, redactor: runRedactor };
     });
 
   /** tx 2: the answer, the artifact, the spend and the run's ending, in one write. */
@@ -477,6 +526,13 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     readonly run: Run;
     readonly outcome: RunOutcome;
     readonly stopReason: string | null;
+    /**
+     * The run's own redactor — `options.redactor` (TD-012 step 2) composed with the injected-secret
+     * redactor built from this run's spec (step 1), which {@link startTheRun} also used for the two
+     * prompt columns. One construction per run, so the prompt, the answer and the transcript cannot
+     * name different secrets.
+     */
+    readonly redactor: SecretRedactor;
     readonly knownRunIds: ReadonlySet<string>;
     readonly knownAuditIds: ReadonlySet<string>;
   }): Promise<AskExecutionOutcome> =>
@@ -490,11 +546,47 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           ? askAnswerDataSchema.safeParse(outcome.structuredOutput)
           : null;
 
-      if (parsed === null || !parsed.success) {
+      /**
+       * Scope, then redact — **before** the ending is chosen, so that TD-012's identifier refusal
+       * has somewhere to land (WP-52).
+       *
+       * Scoping first because `run_id` and an `audit` `reference` are the keys the check is made
+       * of: a redacted key would answer one row's citation with another's, or with none (standing
+       * rule 70). Redaction then runs over what survived — and if it *refuses*, the ask ends as a
+       * failure with the field named, rather than throwing out of the transaction and leaving the
+       * run `running` and the ask `pending` for the lease sweep to find an hour later.
+       */
+      let refusedPath: string | null = null;
+      const prepared = ((): {
+        readonly safe: ReturnType<typeof redactAskAnswer>;
+        readonly dropped: number;
+      } | null => {
+        if (parsed === null || !parsed.success) return null;
+        const { kept, dropped } = scopeCitations(parsed.data.citations, {
+          runIds: input.knownRunIds,
+          auditIds: input.knownAuditIds,
+        });
+        try {
+          return { safe: redactAskAnswer(parsed.data, kept, input.redactor), dropped };
+        } catch (error) {
+          if (!(error instanceof ArtifactIdentifierSecretError)) {
+            throw error;
+          }
+          refusedPath = error.path;
+          return null;
+        }
+      })();
+
+      if (prepared === null) {
         const reason =
-          outcome.status === 'completed'
-            ? 'the run produced no answer the AskAnswer contract accepts'
-            : `the run ended "${outcome.status}"${input.stopReason === null ? '' : ` (${input.stopReason})`}`;
+          refusedPath !== null
+            ? // The **path**, never the value: this string is stored on the ask row, published by
+              // `GET /api/tasks/:id/asks` and rendered in the thread.
+              `the answer put a secret this run was given in "${refusedPath}", which the platform ` +
+              'reads as an identifier and therefore refuses to rewrite'
+            : outcome.status === 'completed'
+              ? 'the run produced no answer the AskAnswer contract accepts'
+              : `the run ended "${outcome.status}"${input.stopReason === null ? '' : ` (${input.stopReason})`}`;
         const failed = failRun(
           run,
           {
@@ -540,15 +632,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         return { kind: 'failed' as const, askId: ask.id, reason };
       }
 
-      const answer: AskAnswerData = parsed.data;
-      // Scoped **before** redacting, because `run_id` and an `audit` `reference` are the keys this
-      // check is made of: a redacted key would answer one row's citation with another's, or with
-      // none (standing rule 70). Redaction then runs over what survived.
-      const { kept, dropped } = scopeCitations(answer.citations, {
-        runIds: input.knownRunIds,
-        auditIds: input.knownAuditIds,
-      });
-      const safe = redactAskAnswer(answer, kept, options.redactor);
+      const { safe, dropped } = prepared;
 
       const finished = finishRun(
         run,
@@ -597,6 +681,10 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         data: safe.data,
         schemaVersion: '1',
         producedByRunId: run.id,
+        // The same number the ask row records, and for the same reason: it is the sum over every
+        // model-authored string in the answer, not the `answer` field's alone (WP-52 wires it to
+        // `artifacts.redaction_count`, which had no column at all before migration 0038).
+        redactionCount: safe.count,
         createdAt: context.clock.now(),
       });
       await options.store.tasks.addSpend(scope.tx, ask.taskId, spent);
@@ -733,6 +821,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         run: started.run,
         outcome,
         stopReason,
+        redactor: started.redactor,
         knownRunIds: new Set(admitted.runs.map((line) => line.runId)),
         knownAuditIds: new Set(admitted.audit.map((line) => line.id)),
       });

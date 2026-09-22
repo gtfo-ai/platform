@@ -719,6 +719,10 @@ const seedLiveRun = async (harness: PipelineHarness, stage: Slug): Promise<Id> =
       model: 'claude-opus-5',
       effort: 'medium',
       promptVersion: 'harness@1',
+      // A fixture, not a run: no prompt was assembled, which is what null says (migration 0038).
+      systemPrompt: null,
+      userPrompt: null,
+      redactionCount: 0,
       status: 'running',
       terminalReason: null,
       sessionId: 'session-live',

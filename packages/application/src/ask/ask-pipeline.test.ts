@@ -29,6 +29,7 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { createMemoryAskStore } from '../testing/memory-ask.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
@@ -111,7 +112,7 @@ const harnessWith = (
     readonly askStatus?: 'completed' | 'failed';
     readonly question?: string;
     readonly identities?: Record<string, Record<string, string>>;
-    readonly askRedactor?: ReturnType<typeof exactSecretRedactor>;
+    readonly askRedactor?: SecretRedactor;
     readonly settings?: Record<string, unknown>;
     /** The ledger, for the one case that reads `cost_entries` (criterion 9). */
     readonly cost?: boolean;
@@ -406,9 +407,9 @@ describe('every model-authored string in the answer is redacted (round 2)', () =
   });
 
   it('carries the redacted answer into the `artifacts` row as well, not only the thread', async () => {
-    // The row a citation resolves through, and `artifacts.data` is the place PROGRESS backlog 35
-    // measured a planted key surviving for every *other* artifact type. `AskAnswer` is the
-    // exception, and this is the assertion that makes it one.
+    // The row a citation resolves through, and `artifacts.data` is where PROGRESS backlog 35
+    // measured a planted key surviving for every *other* artifact type. `AskAnswer` was the
+    // exception this assertion made; WP-52 made every type keep the property, at the write.
     const { harness, taskId } = await answered();
     const artifacts = await harness.memory.transaction(async (scope) =>
       harness.store.artifacts.listFor(scope.tx, taskId),
@@ -427,23 +428,114 @@ describe('every model-authored string in the answer is redacted (round 2)', () =
   });
 
   it('leaves `run_id` alone, because it is the key the thread builds a link from', async () => {
-    // Standing rule 70: redacting a value used as a key trades a leak for a collision. Driven
-    // directly, with the run id itself registered as the credential — the most hostile form of the
-    // question — so the choice is asserted rather than reached by accident. The `detail` beside it
-    // in the same citation *is* redacted, which is what makes this about the field and not the row.
+    // Standing rule 70: redacting a value used as a key trades a leak for a collision. The
+    // `detail` beside it in the same citation *is* redacted, which is what makes this about the
+    // field and not the row.
     const runId = '00000000-0000-4000-8000-00000000c0de';
     const redacted = redactAskAnswer(
       {
         answer: 'see the run',
-        citations: [{ kind: 'run', run_id: runId, detail: `the run ${runId} decided it` }],
+        citations: [{ kind: 'run', run_id: runId, detail: `the run ${runId} used ${SECRET}` }],
         unanswered: [],
         confidence: 'high',
       },
-      [{ kind: 'run', run_id: runId, detail: `the run ${runId} decided it` }],
-      exactSecretRedactor([{ name: 'GIT_TOKEN', value: runId }]),
+      [{ kind: 'run', run_id: runId, detail: `the run ${runId} used ${SECRET}` }],
+      exactSecretRedactor([{ name: 'GIT_TOKEN', value: SECRET }]),
     );
     expect(redacted.data.citations[0]?.run_id).toBe(runId);
-    expect(redacted.data.citations[0]?.detail).not.toContain(runId);
+    expect(redacted.data.citations[0]?.detail).toBe(`the run ${runId} used ${placeholder}`);
+  });
+
+  /**
+   * **The refusal's *ending*, through the executor** (WP-52 round 2).
+   *
+   * The case below drives `redactAskAnswer` directly, which pins the *decision*; what had no test
+   * was what `AskExecutor.record` does with it — and a fail-open there would have stored a citation
+   * whose key is a credential, in `task_asks.citations` and in `artifacts.data`, both of which this
+   * work package's own route now serves.
+   *
+   * The credential has to **be** a run id this task really has, because `scopeCitations` drops a
+   * citation naming any other run *before* redaction runs. So the redactor is late-bound: the
+   * harness is built with an empty one, the task is seeded (which executes `refinement` and leaves
+   * a run), and the run's own id is then registered as the secret. That is the only way this branch
+   * is reachable at all, which is itself worth knowing.
+   */
+  it('ends the ask as failed, names the field and stores no artifact (WP-52)', async () => {
+    let inner = exactSecretRedactor([]);
+    const lateBound: SecretRedactor = {
+      redactText: (text) => inner.redactText(text),
+      redactJson: (value) => inner.redactJson(value),
+    };
+    const harness = harnessWith({ askRedactor: lateBound });
+    await seedTask(harness);
+
+    const priorRunId = harness.specs[0]?.runId;
+    expect(priorRunId, 'seeding did not execute a run to cite').toBeDefined();
+    // Divergence 2 of `memory-ask.ts`: the run projection is **seeded** rather than derived, so
+    // the citation is only in scope if this store is told the run exists.
+    harness.asks.seedRun({
+      taskId: harness.store.snapshot()[0]?.task.id as Id,
+      runId: priorRunId as Id,
+      stage: 'refinement' as never,
+      role: 'product_manager',
+      mode: 'normal',
+      attempt: 1,
+      model: 'claude-opus-5',
+      status: 'completed',
+      terminalReason: 'success',
+      costUsd: 0.1,
+      createdAt: '2026-06-01T09:00:00.000Z' as never,
+    });
+    inner = exactSecretRedactor([{ name: 'GIT_TOKEN', value: priorRunId as string }]);
+    harness.script(`ask:${QUESTION}`, {
+      status: 'completed',
+      terminalReason: 'success',
+      structuredOutput: {
+        answer: 'see the run',
+        citations: [{ kind: 'run', run_id: priorRunId, detail: 'the refinement run' }],
+        unanswered: [],
+        confidence: 'high',
+      },
+      costUsd: 0.2,
+    });
+
+    await askThroughHttp(harness);
+
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('failed');
+    expect(ask?.refusalReason).toContain('citations[].run_id');
+    // The value is the run id itself, and it is **not** in the reason: this string is stored on the
+    // ask row and published by `GET /api/tasks/:id/asks`.
+    expect(ask?.refusalReason).not.toContain(priorRunId as string);
+    // Nothing was written: no answer, and no `AskAnswer` row for the route to serve.
+    expect(ask?.answer).toBeNull();
+    const artifacts = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, ask?.taskId as Id),
+    );
+    expect(artifacts.map((artifact) => artifact.type)).not.toContain('AskAnswer');
+  });
+
+  it('refuses the whole answer when the key itself is the credential (WP-52)', () => {
+    /**
+     * The most hostile form of the question, and **the answer changed at WP-52** — so it is
+     * asserted here rather than left to be inferred from the case above.
+     *
+     * Until then this exact input was *stored verbatim*: the redactor skipped `run_id` because it
+     * is a key, so a run id that happens to equal an injected credential was written into
+     * `task_asks.citations` and into `artifacts.data` in the clear. That is rule 70's dilemma
+     * answered by taking the **leak** rather than the collision. TD-012's WP-52 amendment adds the
+     * third option — refuse — and it is the one that costs neither: the ask fails by name, the
+     * field is named and the value is not.
+     */
+    const runId = '00000000-0000-4000-8000-00000000c0de';
+    const citation = { kind: 'run' as const, run_id: runId, detail: 'see the run' };
+    expect(() =>
+      redactAskAnswer(
+        { answer: 'see the run', citations: [citation], unanswered: [], confidence: 'high' },
+        [citation],
+        exactSecretRedactor([{ name: 'GIT_TOKEN', value: runId }]),
+      ),
+    ).toThrowError(/citations\[\]\.run_id/);
   });
 
   it('cuts each field after redacting, so a placeholder cannot push it past its own contract', async () => {

@@ -850,6 +850,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             data: { goal: `v${version}` },
             schemaVersion: '1',
             producedByRunId: null,
+            redactionCount: 0,
             createdAt: '2026-06-01T09:00:00.000Z',
           });
         }
@@ -859,6 +860,49 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(latest?.data).toEqual({ goal: 'v2' });
         expect(await store.artifacts.listFor(tx, stored.task.id)).toHaveLength(2);
         expect(await store.artifacts.latest(tx, stored.task.id, 'RetroReport')).toBeNull();
+      });
+
+      /**
+       * TD-012's only visible signal on this table (WP-52, migration 0038).
+       *
+       * Both directions, because one is half a test (standing rule 42): a row whose writer redacted
+       * nothing reads **0**, and a row whose writer redacted two things reads **2**. The value the
+       * column may never take from a writer is `null` — that spelling is reserved for a row written
+       * before the column existed, and `NewArtifact` makes the count required so no caller can
+       * claim it.
+       */
+      it('carries the redaction count back on every read, and 0 is a value rather than an absence', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.artifacts.insert(tx, {
+          id: nextId(),
+          taskId: stored.task.id,
+          type: 'RefinedSpec',
+          version: 1,
+          markdown: null,
+          data: { goal: 'nothing to hide' },
+          schemaVersion: '1',
+          producedByRunId: null,
+          redactionCount: 0,
+          createdAt: '2026-06-01T09:00:00.000Z',
+        });
+        await store.artifacts.insert(tx, {
+          id: nextId(),
+          taskId: stored.task.id,
+          type: 'RefinedSpec',
+          version: 2,
+          markdown: null,
+          data: { goal: '[REDACTED:integration:anthropic_api_key] twice' },
+          schemaVersion: '1',
+          producedByRunId: null,
+          redactionCount: 2,
+          createdAt: '2026-06-01T09:01:00.000Z',
+        });
+        const rows = await store.artifacts.listFor(tx, stored.task.id);
+        expect(rows.map((row) => row.redactionCount)).toEqual([0, 2]);
+        expect(
+          (await store.artifacts.latest(tx, stored.task.id, 'RefinedSpec'))?.redactionCount,
+        ).toBe(2);
       });
     });
 
@@ -888,6 +932,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           model: 'claude-opus-5',
           effort: 'medium',
           promptVersion: 'basic@1+product_manager',
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -966,6 +1013,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           model: 'claude-opus-5',
           effort: 'medium',
           promptVersion: 'basic@1+product_manager',
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -1011,6 +1061,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           model: 'claude-opus-5',
           effort: 'medium',
           promptVersion: 'basic@1+product_manager',
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -1075,6 +1128,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           model: 'claude-opus-5',
           effort: 'medium',
           promptVersion: 'basic@1+product_manager',
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -1518,6 +1574,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           data: { children: [] },
           schemaVersion: '1',
           producedByRunId: null,
+          redactionCount: 0,
           createdAt: '2026-06-01T09:00:00.000Z',
         });
         const child = (position: number): StoredBreakdownItem => ({

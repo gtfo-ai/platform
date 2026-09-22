@@ -196,9 +196,22 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
 
-  // The safe artifact URL is a link…
+  /**
+   * **The artifact list stopped rendering `artifact.url` as an href at WP-52**, so the three
+   * fixture artifacts below (one safe URL, a `vbscript:` and a `file:`) reach no attribute at all.
+   *
+   * That is a *narrowing* of the sink rather than a loss of coverage, and it is asserted as one:
+   * the artifact row is now a router `Link` to `?artifact=<id>` — the panel that renders the body —
+   * because the body is shown on this screen instead of downloaded, and `url` on the DTO is the
+   * **API** path (`apiPathSchema`), which is what an OpenAPI consumer needs and what a browser must
+   * not be sent to. The hostile-scheme property is still asserted for the whole screen below.
+   */
+  // The positive control stays the **ticket** link, which is still a rendered DTO URL on this
+  // screen (`HOSTILE.safeUrl`), so "no hostile href" is not true because nothing links at all.
   await expect(page.locator(`main a[href="${HOSTILE.safeUrl}"]`).first()).toBeVisible();
-  // …and the `vbscript:` and `file:` artifacts and the `data:` merge request are not.
+  // The artifact rows are links this app built — `?artifact=<id>` — and carry no DTO URL.
+  await expect(page.locator('main a[href*="artifact="]').first()).toBeVisible();
+  // …and the `vbscript:` and `file:` artifacts and the `data:` merge request reach no href.
   await assertNoHostileHref(page);
   // Each refused URL still shows its label, so nothing simply vanished. `exact` because
   // `getByText` with a string matches a **substring**, case-insensitively: WP-29 put the words
@@ -207,11 +220,13 @@ test('a hostile scheme in a DTO url never reaches an href on the task screen', a
   // line is about, so the locator now says so.
   await expect(page.getByText('Merge request', { exact: true })).toBeVisible();
   await expect(page.getByText('ReviewVerdict')).toBeVisible();
-  // Exactly four: the `data:` merge request, the `vbscript:` and `file:` artifacts, and — since
-  // WP-38 — the dependency whose registry page the fixture gives a `data:` URL. Counted rather
-  // than bounded below, so a link that quietly disappears fails here too (rule 42).
+  // Exactly two: the `data:` merge request and — since WP-38 — the dependency whose registry page
+  // the fixture gives a `data:` URL. It was **four** until WP-52: the `vbscript:` and `file:`
+  // artifacts were refused *by `safeHref` at render time*, and now they are not rendered as URLs at
+  // all, so there is nothing to refuse. Counted rather than bounded below, so a link that quietly
+  // disappears fails here too (rule 42).
   await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
-  expect(await page.locator('[data-link-refused]').count()).toBe(4);
+  expect(await page.locator('[data-link-refused]').count()).toBe(2);
 
   await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskBug}`);
   await expect(page.getByRole('heading', { name: 'DEMO-2' })).toBeVisible();

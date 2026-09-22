@@ -34,6 +34,7 @@
 import {
   agentsResponseSchema,
   answerQuestionRequestSchema,
+  artifactBodyResponseSchema,
   askTaskRequestSchema,
   askTaskResponseSchema,
   autonomyResponseSchema,
@@ -166,6 +167,11 @@ export interface Endpoints {
     query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
   ) => Promise<z.output<typeof tasksResponseSchema>>;
   readonly task: (taskId: string) => Promise<z.output<typeof taskDetailResponseSchema>>;
+  /**
+   * One artifact's body (WP-52). It is model output — rendered as React text nodes, never as
+   * markup and never as a link (BD-022, `ui/untrusted.tsx`).
+   */
+  readonly artifact: (artifactId: string) => Promise<z.output<typeof artifactBodyResponseSchema>>;
   readonly run: (runId: string) => Promise<z.output<typeof runRecordSchema>>;
   readonly runMessages: (
     runId: string,
@@ -384,6 +390,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
 
     task: (taskId) => client.get(`/api/tasks/${seg(taskId)}`, { schema: taskDetailResponseSchema }),
+    artifact: (artifactId) =>
+      client.get(`/api/artifacts/${seg(artifactId)}`, { schema: artifactBodyResponseSchema }),
     taskAsks: (taskId) =>
       client.get(`/api/tasks/${seg(taskId)}/asks`, { schema: taskAskListSchema }),
     taskAudit: (taskId) =>

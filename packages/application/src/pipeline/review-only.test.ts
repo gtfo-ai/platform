@@ -619,10 +619,11 @@ describe('the findings and the neutral summary', () => {
   /**
    * TD-012 in the direction the artifact row does not cover.
    *
-   * `artifacts.data` stores the model's structured output unredacted (PROGRESS backlog 35, which
-   * this work package does not close), so the redaction has to happen where the text **leaves the
-   * platform**. The credential is planted in the finding's own explanation, which is how a model
-   * quoting its environment would produce it.
+   * `artifacts.data` stored the model's structured output unredacted when this case was written
+   * (PROGRESS backlog 35, closed at the write by WP-52), and this assertion is about the *other*
+   * direction either way: the redaction where the text **leaves the platform**. The credential is
+   * planted in the finding's own explanation, which is how a model quoting its environment would
+   * produce it.
    */
   it('keeps a planted credential out of every posted thread, and leaves the placeholder behind', async () => {
     const { harness, posted } = reviewHarness({

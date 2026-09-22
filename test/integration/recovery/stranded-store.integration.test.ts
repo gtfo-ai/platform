@@ -201,8 +201,9 @@ const seedArtifact = async (input: {
   readonly createdAt: string;
 }): Promise<string> => {
   const row = await pool.query<{ id: string }>(
-    `insert into artifacts (task_id, type, data, schema_version, created_at)
-     values ($1, $2::artifact_type, '{}'::jsonb, '1', $3)
+    // `redaction_count` has no default since migration 0038; an insert that omits it is refused.
+    `insert into artifacts (task_id, type, data, schema_version, created_at, redaction_count)
+     values ($1, $2::artifact_type, '{}'::jsonb, '1', $3, 0)
      returning id`,
     [input.taskId, input.type, input.createdAt],
   );

@@ -493,6 +493,34 @@ describe('the onboarding wizard', () => {
      * on the set of models and on the total, not on a row count — a count would have to be edited
      * every time the fixture's model list changed, and would say nothing about the money.
      */
+    /**
+     * **The wait this read never had** — standing rule 87, fixed as a pre-review round of WP-52
+     * (the defect is not that row's; see its notes).
+     *
+     * `settle(… task.state === 'done')` above binds the **task aggregate's** state. The ledger is a
+     * handler on `run.finished` at TD-005 priority 10 writing `cost_entries` in its **own
+     * transaction** (WP-19), so it commits after the task is already `done` — the assertion bound a
+     * row written by a later, separate dispatch than the wait's condition. Green at low load, red
+     * at high: it failed once at a one-minute load of about 12, on a second pass over a tree the
+     * first pass had passed.
+     *
+     * The answer is rule 87's own: bind the **assertion's own row**, not widen `settle` to mean
+     * everything — other cases depend on `settle` meaning what it says. The predicate counts the
+     * exact rows the block below reads, so it is false until they exist rather than until something
+     * adjacent does.
+     */
+    await pipeline.waitFor('the discovery run’s ledger rows', async () => {
+      // Scoped by **task** as well as stage: one discovery run exists today, so `stage` alone is
+      // exact — but exact-by-fixture decays the moment a second one does, and the predicate is
+      // meant to be exact by construction.
+      const rows = await pipeline.query<{ count: number }>(
+        `select count(*)::int as count from cost_entries
+          where stage = 'discovery' and task_id = $1`,
+        [discovery.body.task_id],
+      );
+      return (rows[0]?.count ?? 0) > 0;
+    });
+
     const cost = await pipeline.costRows();
     const charged = cost.entries.filter((entry) => entry.stage === 'discovery');
     expect(charged.length).toBeGreaterThan(0);
@@ -500,7 +528,23 @@ describe('the onboarding wizard', () => {
     expect(charged.every((entry) => entry.run_id !== null && !entry.is_estimate)).toBe(true);
     expect(charged.reduce((total, entry) => total + entry.usd, 0)).toBeGreaterThan(0);
 
-    // The transcript is stored and redacted: the run's own model credential is absent from it.
+    /**
+     * The file's other three post-`settle` reads, swept with rule 87's two questions — *is the row
+     * written before or after the thing waited on, and was the predicate already true?* — because
+     * one instance is never one instance (standing rule 49):
+     *
+     *  - **this one, `run_messages`**: the transcript sink appends each entry *during* the run, so
+     *    every row exists before `run.finished`, let alone before the task reaches `done`. Written
+     *    **before** the wait's condition; safe, and no wait is owed;
+     *  - **`proposals()` below**: written by the `onboarding.discovery` job — but in the **same
+     *    transaction** as the `readiness_evaluations` row (`onboarding/record.ts`), and the
+     *    `waitFor('the readiness evaluation', …)` between here and there binds that row. Covered by
+     *    an existing wait rather than by luck, which is why it is stated here and not fixed;
+     *  - **the `human_actions` query**: written synchronously by the HTTP commands this test itself
+     *    awaited. Written before, asserted after; safe.
+     *
+     * So exactly one read was unbound, and it is the one above.
+     */
     const transcript = await pipeline.transcript();
     expect(transcript.length).toBeGreaterThan(0);
     expect(JSON.stringify(transcript)).not.toContain('FAKE-anthropic-key');

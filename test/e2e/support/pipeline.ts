@@ -280,6 +280,22 @@ export interface PipelineE2E {
   /** The `data` of a task's newest artifact of one type — the bytes the model actually produced. */
   artifactData(artifactType: string): Promise<unknown>;
   /**
+   * `artifacts.redaction_count` for the newest artifact of one type (WP-52, migration 0038).
+   *
+   * `null` means *"no redactor ran"* — a row written before that migration — and is a different
+   * fact from `0`, so this returns the column rather than coalescing it.
+   */
+  artifactRedactionCount(artifactType: string): Promise<number | null>;
+  /**
+   * `runs.system_prompt` / `user_prompt` / `redaction_count` for one stage's newest run (Q64,
+   * WP-52). `null` for a run created before migration 0038 gave those columns a writer.
+   */
+  runPromptRow(stage: string): Promise<{
+    readonly systemPrompt: string | null;
+    readonly userPrompt: string | null;
+    readonly redactionCount: number;
+  } | null>;
+  /**
    * What the cost ledger wrote (WP-19), read back out of the database.
    *
    * Read from the tables rather than from a recorder, for the same reason `auditRows` is: nothing
@@ -974,6 +990,35 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
         [artifactType],
       );
       return rows[0]?.data ?? null;
+    },
+    artifactRedactionCount: async (artifactType) => {
+      const { rows } = await pool.query<{ redaction_count: number | null }>(
+        `select redaction_count from artifacts where type = $1::artifact_type
+          order by version desc limit 1`,
+        [artifactType],
+      );
+      return rows[0]?.redaction_count ?? null;
+    },
+    runPromptRow: async (stage) => {
+      const { rows } = await pool.query<{
+        system_prompt: string | null;
+        user_prompt: string | null;
+        redaction_count: number;
+      }>(
+        `select r.system_prompt, r.user_prompt, r.redaction_count
+           from runs r join task_stages s on s.id = r.task_stage_id
+          where s.stage = $1
+          order by r.created_at desc limit 1`,
+        [stage],
+      );
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : {
+            systemPrompt: row.system_prompt,
+            userPrompt: row.user_prompt,
+            redactionCount: row.redaction_count,
+          };
     },
     costRows: async () => {
       const entries = await pool.query<CostRows['entries'][number]>(

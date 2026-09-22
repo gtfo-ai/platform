@@ -37,20 +37,19 @@
  *  - **The injected-secret redactor.** TD-012 step 1 for *this run*: the values behind
  *    `RunSpec.secretEnvNames`, built per run, so the model credential the CLI is given cannot appear
  *    in a transcript row, an error or a stored artifact. The runner composes the pattern rules (step
- *    2) after it.
+ *    2) after it — and since WP-52 round 2 **so does the artifact write**, which had step 1 alone
+ *    while the transcript of the same model message had both (`StageExecutorOptions.redactor`).
  */
 import type {
   Broadcast,
   ClaudeRunner,
   Logger,
   PlatformToolPort,
-  RunSpec,
-  SecretRedactor,
   ToolApprovalPort,
 } from '@platform/application';
 import {
-  exactSecretRedactor,
-  MIN_SECRET_LENGTH,
+  injectedSecretRedactorFor,
+  injectedSecretRedactorForEnvironment,
   RUN_TRANSCRIPT_TOPIC,
 } from '@platform/application';
 import { runner as runnerAdapters } from '@platform/infrastructure';
@@ -90,61 +89,17 @@ export const unattendedToolApprovals = (logger: Logger): ToolApprovalPort => ({
 });
 
 /**
- * TD-012 step 1 for one run: exact match of every secret the platform injected into it.
+ * TD-012 step 1 for one run, and for the environment a run *would* be given.
  *
- * Built from the spec rather than from configuration, because the spec is what the CLI was actually
- * given: a value that is not in `env` cannot leak through this run, and a value that *is* must be
- * redacted whatever put it there. A name whose value is missing or too short to redact safely is
- * **skipped with a warning** rather than failing the run — `exactSecretRedactor` refuses a value
- * under {@link MIN_SECRET_LENGTH} because redacting it would erase ordinary text, and the fail-closed
- * answer to "this run has an 8-character credential" is a warning about the credential, not a run
- * that cannot start.
+ * **Both are re-exports since WP-52**, not definitions. The construction moved to
+ * `packages/application/src/pipeline/run-redaction.ts` because the artifact write and the two
+ * prompt columns are written by the stage executor and the ask executor, which are in that ring and
+ * cannot import a composition root — and a second construction there would have made "the artifact
+ * and the transcript of the run that produced it cannot name different secrets" a claim about two
+ * pieces of code agreeing (standing rule 63). `agent.test.ts` asserts the identity, so the
+ * indirection cannot become a copy.
  */
-export const injectedSecretRedactorFor = (spec: RunSpec, logger: Logger): SecretRedactor =>
-  injectedSecretRedactorForEnvironment(
-    { env: spec.env, secretEnvNames: spec.secretEnvNames },
-    logger,
-    { runId: spec.runId },
-  );
-
-/**
- * The same redactor, built from the environment a run *would* be given rather than from one run.
- *
- * Its second caller is the Librarian (WP-18b): a proposal's text is model output on its way to a
- * `kb_proposals` row and to a commit on the project's repository, and the model that wrote it was
- * handed this process' own model credential. The run-scoped redactor lives inside the runner and is
- * gone by the time a proposal is curated, so the composition root builds the same set of secrets
- * from `agentRunEnvironment` — the one function that decides what a run's environment contains, so
- * the two cannot name different values.
- */
-export const injectedSecretRedactorForEnvironment = (
-  environment: {
-    readonly env: Readonly<Record<string, string>>;
-    readonly secretEnvNames: readonly string[];
-  },
-  logger: Logger,
-  context: { readonly runId?: string } = {},
-): SecretRedactor => {
-  const secrets = environment.secretEnvNames.flatMap((name) => {
-    const value = environment.env[name];
-    if (value === undefined || value.length < MIN_SECRET_LENGTH) {
-      logger.warn(
-        {
-          ...(context.runId === undefined ? {} : { run_id: context.runId }),
-          env_name: name,
-          present: value !== undefined,
-        },
-        'a run names a secret environment variable that cannot be redacted, so its value is not replaced in this run’s transcript',
-      );
-      return [];
-    }
-    // The placeholder is the variable's own name, lower-cased: it is stable, unique inside one spec
-    // (env names are unique by construction), and readable in an audit row as
-    // `[REDACTED:integration:anthropic_api_key]`.
-    return [{ name: name.toLowerCase(), value }];
-  });
-  return exactSecretRedactor(secrets);
-};
+export { injectedSecretRedactorFor, injectedSecretRedactorForEnvironment };
 
 export interface AgentRunnerOptions {
   readonly pool: pg.Pool;

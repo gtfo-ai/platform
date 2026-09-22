@@ -6965,6 +6965,320 @@ alternative owner is whoever adds the second writer, and it is named here so the
 *after* the hole. Related: **48** and **129** (WP-51's other discovered work), rule **63**, rule
 **79**.
 
+### 131. **The one artifact write WP-52 could not give a redactor passes an empty one, and the sentence justifying it is the sentence standing rule 31 was written to refute — a binding-scoped redactor is in lexical scope at that line** (nit-to-small, TODO — **working as designed today, on a false premise**; **latent**, the producer is backlog **100**'s unbuilt Reviewer pass; **no work package owns the redactor**, the sentence half is **WP-73**'s shape; reported by WP-52 as discovered work, established off the tree by the refiner, session 7)
+
+**What is wrong.** Three things, one cause — *the shadow path holds no redactor for the provider text
+it stores*, and the third is the one that will cost something later.
+
+1. `runShadowReport` writes the `ShadowReport` into `artifacts` through `redactArtifactData` with
+   `noSecretsRedactor()` — a redactor over the empty secret set
+   (`packages/application/src/shadow/report.ts:268-272`). Neither TD-012 step (1) (exact match of
+   injected secrets) nor step (2) (the gitleaks-derived pattern set) is applied at this write, and
+   step (2) needs **neither a run nor a binding**: it is the platform redactor the composition root
+   already builds. So `artifacts.redaction_count` reads `0` here *by construction*, and migration
+   0038's own column comment defines that value as *"the redactor ran and replaced nothing"*
+   (`packages/infrastructure/src/db/migrations/0038_artifact_redaction.sql:43-45`). Two rows reading
+   `0` were produced by different amounts of checking and nothing on either row says which.
+2. **The reason written at the line is false.** The docblock says the document is safe because
+   *"every provider read has already been redacted at the call by `IntegrationActionExecutor` with
+   the binding's own credentials"* (`report.ts:259-262`). Standing rule **31** records the opposite,
+   and cites the line it was measured at: the executor redacts the **audit row** and returns the
+   provider's result untouched. Current spellings: `buildEntry` redacts payload, result and error
+   for the row (`packages/application/src/integrations/action-executor.ts:602-639`), and the success
+   path hands the caller the raw `result` (`:950`). The one return that *is* redacted is the
+   `replayed` branch (`:867`), which a first call never takes. Two sibling docblocks in the file
+   this one imports from say so in as many words —
+   `packages/application/src/pipeline/integrations.ts:86-89` and `:106-108`, each explaining why
+   `tasks.review_subject` and `tasks.ticket_snapshot` need *"the redactor of its own"*.
+3. **The reported blocker is not the one on the tree.** WP-52's bullet says the site redacts with an
+   empty redactor *"because no binding-scoped redactor is threaded there"*, and the docblock adds
+   *"it needs the loader, and the loader builds adapters per call"* (`report.ts:265-266`). The loader
+   has **already run** in this function: `integrationsForProject` is called at `report.ts:197-201`
+   and `gitReads` at `:202`, and `integrations` is a `const` of the enclosing function, in lexical
+   scope at the write inside the transaction closure (`:227-310`). `PipelineIntegrations.git` is a
+   `GitBinding` (`integrations.ts:74, :155-161`) carrying `redactor` (`:96`) — **both** TD-012 steps,
+   the binding's resolved credentials composed with the platform's pattern rules. The precedent is
+   one module over: `packages/application/src/pipeline/review-only.ts:734` passes exactly that object
+   into the same class of write. What this site genuinely cannot get is a **run-scoped** redactor:
+   `injectedSecretRedactorFor` needs a `RunSpec`, the run that produced the shadow task's merge
+   request has ended, and this is a `pipeline.outbound` job. Those are different constructions and
+   the entry's whole point is which one the site needs — today, the binding's; after backlog 100,
+   the run's.
+
+**Evidence** (refiner, 2026-09-22; file reads and greps on the WP-52 working tree, **nothing run** —
+rule 66). Line numbers are this tree's, including uncommitted WP-52 changes.
+
+- **What actually reaches the stored document, field by field** — this is the half that makes the
+  entry a nit rather than a defect:
+  - the three provider reads (`report.ts:209`, `:211`, `:213` — two diffs and the human merge
+    request's discussions) are consumed into **numbers**. `summarise` counts `+`/`-` body lines and
+    collects paths (`report.ts:343-374`); `compareShadowDiffs` returns five numbers and no string
+    (`packages/domain/src/shadow/comparison.ts:150-156`); the paths feed the Jaccard and are **never
+    stored**. No diff body, no file path and no discussion text reaches `artifacts.data`.
+  - `agent_review_of_human_mr` — the only field of the type that would hold model-authored prose —
+    is the literal `null` on every report (`report.ts:474`; backlog **100** is why).
+  - the remaining strings are three: `ticket` from the `tasks` row, `human_mr` copied out of
+    `shadow_batch_tickets` (`report.ts:204`), and `notes`, which is platform-composed prose whose one
+    provider-derived value is `ticketRow.baseSha` (`report.ts:433-435`).
+  - `MergeRequestRef` is `provider`, `project_path`, `iid`, `url`, `branch`, `head_sha`
+    (`packages/contracts/src/common.ts:634-641`). The one field an outsider chooses is `branch`, and
+    for this type `human_mr.branch` is declared an **identifier**
+    (`packages/contracts/src/artifact-fields.ts:234-253`) — so a real redactor here would **refuse**
+    the write rather than rewrite it, which is a behaviour change and not a no-op.
+- **The same gap one row upstream, which is where those strings come from.**
+  `shadow_batch_tickets.human_mr` is written with **no redactor at all**, straight from the
+  provider's merged-merge-request list (`packages/application/src/shadow/batch.ts:267`, `:290`,
+  `:354`; the read at `:427`). Redacting the artifact and not its source would leave the plaintext in
+  the row that fed it — the comparison WP-15f's round 2 lost a round to (`inbox` had step 2, the
+  snapshot did not).
+- **The document is stored twice and only one copy goes through `redactArtifactData`.**
+  `insertReport` stores the **pre-redaction** `report` object in `shadow_reports.comparison`
+  (`report.ts:234-238`), a table with no `redaction_count` column at all
+  (`packages/infrastructure/src/db/migrations/0008_knowledge.sql:122-127`), and
+  `apps/server/src/queries/shadow-queries.ts:283-286` serves it to the Shadow screen. The two copies
+  are byte-identical **only because the redactor is empty**; threading a real one makes them differ,
+  which is exactly the objection `report.ts:243-249` answers for today's build and would no longer
+  answer.
+- **Needs measurement: none.** Everything above is a read. What a *fix* needs is the tiers that own
+  the shadow path, because the artifact row's `0` changes from a constant to a measurement.
+
+**Defect or working as designed?** **Working as designed, on a false premise.** Nothing the platform
+injected can reach this document, because no field of it is run-produced — that part of the docblock
+is true and is the real argument. What is wrong is the *stated* reason (point 2), the *stated*
+blocker (point 3), and the fact that the one TD-012 step that applies to provider text with no run
+and no binding — the pattern set — is not applied to the three provider-derived strings that do reach
+it.
+
+**What it costs to leave.** In TD-012's own terms: the decision's first sentence enumerates
+*"`run_messages`, `integration_actions`, `events.payload`, `config_audit`, artifacts and KB commits"*
+and asks for steps (1) **and** (2) before any write to them
+(`docs/decisions/technical/TD-012-secret-redaction-at-write.md:8`). This row satisfies (1) vacuously
+and skips (2), while recording the same `0` a fully redacted run artifact records — standing rule
+**18**'s shape (*a scan of zero bytes is not a scan*) in the column that exists to make a redactor's
+silence visible. The more expensive half is the sentence: it is what the next implementer reads when
+they add a field to `shadowReportDataSchema`, and it tells them the provider reads arrive already
+clean. WP-52's own notes call `artifacts.insert`'s third production caller settled; this entry is the
+residual of backlog **35** that the parent entry's closure does not cover.
+
+**What "done" looks like.**
+
+1. **The premise is corrected** (rule 83, rule 63): the executor redacts the audit row and returns
+   the provider's result, so a sink of its own needs a redactor of its own — the sentence
+   `integrations.ts:86-89` already carries. The honest argument for whatever redactor the site ends
+   up with is stated in its place: which fields of this document are provider-derived (three), and
+   that none is run-produced while `report.ts:474` is `null`.
+2. **The site takes `integrations.git.redactor`** when the binding is present — the
+   `review-only.ts:734` spelling — and keeps `noSecretsRedactor()` only for the `git === null` case,
+   where the document contains no provider string anyway. That is TD-012 step (2) plus the binding's
+   own credentials, at the cost of one argument; the `git === null` branch gets its reason at the
+   line rather than being left to look like an oversight.
+3. **The identifier refusal is given an ending, because this write has no run.** TD-012's WP-52
+   amendment says an identifier carrying a secret makes *"the write fail by name and the run
+   escalate"* (`TD-012…md:32-33`). There is no run here: an `ArtifactIdentifierSecretError` thrown
+   from a `pipeline.outbound` duty takes the job's retry-and-dead-letter path (WP-49), where it would
+   be retried although it can never succeed. Decide it and write it down — the reachable case is
+   `human_mr.branch`, a name somebody outside the organisation chose.
+4. **The second copy is decided in the same change**: either `shadow_reports.comparison` stores the
+   redacted document and gains a `redaction_count` in migration 0038's nullable shape, or the
+   difference between the two copies is stated at `insertReport` and at the Shadow projection. A
+   redacted artifact beside an unredacted `shadow_reports` row is two screens disagreeing about one
+   document, which is the objection `report.ts:243-249` exists to answer.
+5. **`shadow_batch_tickets.human_mr` goes through the same binding redactor**, or this entry is
+   updated with why not, by number. It is the source of the artifact's `human_mr`.
+6. **Explicitly not the answer**: minting a run-scoped redactor for this job. The run is over, its
+   `RunSpec` is gone, and reconstructing one from the environment would name secrets that were never
+   in scope for anything in this document — recorded here so the next reader does not re-open it.
+
+**What would make it urgent.** Backlog **100**: a Reviewer pass over the *human* merge request, which
+is what would fill `agent_review_of_human_mr` (`report.ts:474`). The moment that field holds model
+prose, the document carries **run-produced** text and the redactor it needs is the run's own — which
+is gone by the time this job fires, so it must be taken at the run and carried to the duty, or the
+finding must be produced where a run-scoped redactor exists. Whoever takes backlog 100 has to answer
+that *before* writing the field, not after. A second, cheaper trigger: any new prose field on
+`shadowReportDataSchema` that copies provider text — a merge-request title, a discussion excerpt —
+and `notes` is the field an implementer reaches for first.
+
+**Depends on / owner.** **No work package owns the redactor half.** WP-52's row closed backlog 35 for
+*run-produced* artifacts; this is the one `artifacts.insert` caller of the three that is not one, and
+that row is merged. The **sentence** half is WP-73's subject — *"the sentences and the small repairs
+no row owns, each with its entry"* — and folding it there is the cheapest schedule, with one caveat
+worth stating so nobody discovers it in a conflict: WP-73's dependency cell claims **no** shared file
+with a group 1–7 row, and `shadow/report.ts` is opened by **WP-59** (the coalesced merge-request diff
+read touches `report.ts:209` and `:211`) and by **WP-61** (reviewer minutes, `report.ts:395-406`). If
+either is taken first, either is a cheaper host for a one-line change than WP-73. The redactor half's
+natural owner is whoever takes backlog **100**, which no M4 row schedules. Related: **35** (the
+parent, closed at WP-52), **100**, rule **31**, rule **18**, rule **63**, rule **83**.
+
+### 132. **A `verify:e2e` pass 2 answered an authenticated `GET /api/artifacts/:artifact_id` with 200 and a zero-byte body — a response this route's code has no ending that produces, so something other than the route answered it, and which component that was was never established** (TODO, **an unexplained observation, not a diagnosed defect** — no mechanism is claimed and none should be read out of this entry; **now unobserved**, the assertion that saw it was moved to a deterministic tier; **no work package owns it**, WP-69 is the nearest neighbour; reported by WP-52's implementer as worth filing rather than closing, filed by the refiner, session 7)
+
+**This entry is a shape the rest of this backlog does not carry, and that is the point of it.** Every
+other entry names a cause. This one names a **symptom with no cause**, because the honest filing is
+the unexplained one: the observation is real and reproducible by nobody, and an entry that guessed a
+mechanism would be worse than no entry at all — the next person to meet this symptom would chase the
+guess instead of measuring, which is standing rule **86**'s failure mode with the prediction written
+by a refiner rather than by an implementer. What this entry is for is that the *next* occurrence is
+recognised as a second one rather than investigated from zero.
+
+**What was seen.** Two `verify:e2e` **pass 2** failures during WP-52, on two different trees, in two
+different files. **Only the second is this entry**, and the first is named here so that a reader does
+not re-fix it:
+
+1. **Round 2 — `test/e2e/onboarding/wizard.e2e.test.ts`, the wizard case, `AssertionError: expected 0
+   to be greater than 0` at `:498` on that round's tree. Closed, and not this entry.** It was a standing rule **87** wait
+   defect: `settle(… task.state === 'done')` binds the task aggregate while the assertion read the
+   cost ledger, which WP-19 writes from a handler on `run.finished` in its **own** transaction,
+   committing afterwards. The fix, the sweep of the file's three other post-`settle` reads and the
+   verdict lines are in the WP-52 notes of this file. One figure differs between the two records and
+   is **not** re-derived here (rule 66): those notes say the failure came *"at a one-minute load of
+   about 12"*, and the report that produced this entry said 8.31. The wizard failure is explained
+   either way; the load figure matters only to the second observation below, which has one record
+   and one number.
+2. **Round 3 — `test/e2e/server/run-api.e2e.test.ts`, the run read API case, `AssertionError: null:
+   expected 200 to be 409` at `:277` on that round's tree, at a one-minute load of 9.45. This is the
+   entry.** Green on **pass 1** of the same tree, red on **pass 2**.
+
+**Evidence** (refiner, 2026-09-22; reports quoted, the tree read, **nothing run** — rule 66 — except
+`scripts/citations.test.ts` over this writing, whose verdict is quoted in the report that filed it).
+
+- **What the assertion message establishes, and it is more than it looks.** The failing expectation
+  carried the response body as its message; the surviving spelling of that call is
+  `expect(opened.status, JSON.stringify(opened.body)).toBe(200)`
+  (`test/e2e/server/run-api.e2e.test.ts:245`), and the harness's client answers `body: null` for a
+  **zero-length** response text — `body: (text === '' ? null : JSON.parse(text))`
+  (`test/e2e/support/instance.ts:254-261`), over `response.text()` on an undici `fetch` with
+  `redirect: 'manual'` (`:238-251`). So the message's `null` is not "a body that parsed to null": it
+  is **zero bytes**, on a response that **ended cleanly** — a truncated or reset response would have
+  made `text()` reject rather than resolve. Measured quantity: **status 200, zero bytes, clean end.**
+- **The route has no ending that produces it.** `GET /api/artifacts/:artifact_id`'s handler is three
+  endings and nothing else (`apps/server/src/routes/tasks.ts:136-162`): `throw new NotFoundError`,
+  `throw new HttpError(409, 'artifact_not_redacted', …)`, and `return artifact.body` — a defined
+  object, serialised against a declared 200 response schema. This is the inference the whole entry
+  rests on, and it is an inference from reading, not a measurement: **the request was not answered
+  by this route.**
+- **The tree's own record of the failure**, written by the implementer where the assertion used to
+  be (`test/e2e/server/run-api.e2e.test.ts:251-269`): *"It failed one full-tier run in two on the
+  orchestrator's machine at a one-minute load of 9.45 — `expected 200 to be 409` with an empty
+  response body, which this route's code cannot produce — and did not reproduce here across three
+  runs of this file and two full-tier passes. The mechanism was never established, so none is
+  claimed (standing rules 76 and 86)."*
+
+**What was ruled out, by whom, and by which kind of work.** The two lists are kept apart because a
+measurement and a reading are different evidence, and the second list is the one a future
+investigator may have to redo.
+
+*Ruled out **by measurement**, by WP-52's implementer in round 4:*
+
+- **shared database state** — every `startPipeline` creates a uniquely named database, `label_<uuid>`;
+- **vitest `retry`** — none is configured on any project;
+- **row-order instability** — `findTaskDetail` orders by `created_at, version`, and each stage
+  inserts in its own transaction, so `artifacts[0]` is stable.
+
+*Ruled out **by reading**, by the orchestrator in round 4:*
+
+- **a version-resolution defect** — `findArtifactBody` selects on an exact row id with `limit(1)`
+  (`apps/server/src/queries/pipeline-queries.ts`);
+- **statement ordering** — each statement was awaited;
+- **an undefined id** — which answers 404, 400 or a uuid-cast 500, never 200.
+
+*Ruled out **by reading**, by the refiner filing this:* that the `null` in the message could be a
+body that parsed to null (it is a zero-byte response — the client's own branch, cited above).
+
+**What nobody ruled out: which component answered the request.** That is the open question, and it
+is the whole finding.
+
+**Why it is now unobserved.** Round 4 moved the assertion rather than retrying it. The 409 refusal is
+now a unit case over the `queries` seam `registerTaskRoutes` gained —
+`apps/server/src/routes/tasks.test.ts`, whose 409 case is *refuses a row written before anything
+redacted it, by name and with no document* — with the integration tier producing the same `null` on
+real SQL (`test/integration/server/read-api.integration.test.ts`), and the e2e keeping only the half
+that tier alone can state: a body the pipeline really produced, served without the run's own
+credential. The DDL dance that put a row back into its pre-0038 state went with it. That is the right
+call for the test and it is exactly why this entry exists — in the implementer's own words, *"the
+unexplained 200/empty response is a property of the HTTP layer under load, not of this row. If it
+recurs on any e2e endpoint, it deserves a finding of its own — I would rather it be filed as
+unexplained than closed by my having removed the one test that saw it."*
+
+**The frequency, stated as what it is.** **Two** `verify:e2e` pass-2 failures in one session, of
+which **one is explained** — so **one** unexplained observation, from one machine, in one file. No
+rate is claimed and none can be: standing rule **76** is the reason (a flake's rate can be the only
+random thing about it), and two points do not make a trend. The **one** structural regularity
+available is worth recording because it costs nothing: both failures appeared on a **second
+consecutive** `verify:e2e` pass and never on a first. Load does **not** order the observations — this
+one appeared at 9.45 and the tier then passed twice at **11.48** and **10.66**, higher, green — so
+"it happens under load" is a description of when it was seen, not a condition anybody has
+established.
+
+**What it costs to leave.** Today, almost nothing: one assertion moved to a cheaper tier where it is
+better placed anyway, and no other test has been seen to fail this way. What is lost is the ability
+to recognise the second occurrence. If the e2e tier's HTTP layer really can answer 200 with no body,
+then every `expect(status).toBe(4xx)` in that tier can flip green-to-red at random and every
+`expect(status).toBe(200)` can fail at the schema parse instead — a class of flake that looks like a
+product defect in whichever work package happens to be holding the tier when it fires, which is how
+this one nearly cost WP-52 its round. **Nothing here implicates a production instance**: no such
+symptom has been reported from one, the observation is from a test harness talking to a loopback
+port, and the entry claims no more than that. It also rules nothing out, which is why the
+observation is filed rather than dropped.
+
+**What "done" looks like — and step 1 is instrumentation that already exists.** There is no fix to
+write, because there is no diagnosis. What done looks like is that **the next occurrence answers the
+open question instead of repeating it**:
+
+1. **Capture the server's own log for the failing instance.** `apps/server/src/app.ts:383-403` emits
+   one line per response carrying the **route pattern**, the status and the duration, and
+   `routeLabel` answers `unknown` for a request that matched no route
+   (`apps/server/src/metrics.ts:131-137`). So *which component answered* is decidable from the
+   server's side — and the harness silences it by default: `LOG_LEVEL` is `silent` unless a test
+   passes `logLevel`, with `logDestination` beside it (`test/e2e/support/instance.ts:81-83`,
+   `:100`). Re-running the failing file with the instance's log captured is the whole first step.
+2. **Record the response's headers, not only its status** — `content-length`, `content-encoding` and
+   `connection` — which the harness's client currently discards (`instance.ts:238-261`). A zero-byte
+   200 with a `content-encoding` is a different finding from a zero-byte 200 without one.
+3. **Then, and only then, the candidates.** These are **candidates read off the composition, not a
+   diagnosis**, listed so the next investigator starts with a list rather than a blank page, and in
+   no order of likelihood — nobody has ranked them:
+   - **`@fastify/compress`, registered globally** with `br`/`gzip`/`deflate` and the plugin's default
+     1 024-byte threshold (`apps/server/src/app.ts:350-354`).
+   - **`@fastify/under-pressure`** (`app.ts:356-364`) — the **only load-sensitive component** in the
+     chain, which is the one property the observation and the plugin share. Two cautions: its block's
+     comment says *"no status route and no automatic 503"* while `pressureHandler` is passed
+     `undefined`, and whether those agree needs a read of the installed plugin's own default; and a
+     503 is not the observed 200, so this is a candidate for **how a request could be diverted**, not
+     for the status that came back.
+   - **The unmatched-path handler and the SPA fallback** (`app.ts:431-438`,
+     `apps/server/src/web/fallback.ts:187-238`) — the candidate to **exclude first**, because reading
+     says it cannot be this one: an `/api/…` path's first segment is reserved and the fallback
+     returns `false` for it (`fallback.ts:216-219`), after which the not-found handler answers 404
+     **with** a body. A reading is not a measurement, and step 1's log line distinguishes them.
+   - **The error handler** (`app.ts:406-420`), which always sends `mapped.body` — so it can only be
+     the producer if the reply had already been sent, which the log line would also show.
+   - **The harness's port reservation** (`test/e2e/support/instance.ts:38-53`): it binds port 0,
+     reads the number and **closes the listener before** `startRuntime` binds it. The `e2e-fake-claude`
+     project sets no `fileParallelism` (`vitest.config.ts:106-125`), so files run in parallel and
+     that window is real; what could answer on that port inside it is unmeasured.
+   - **undici's connection pool**: the same test holds a long-lived SSE response open against the
+     same origin through `fetch` (`test/e2e/support/sse-client.ts:45`) while its client makes
+     ordinary requests to it.
+4. **Needs measurement, and it is the entry's whole content**: which component answered a request
+   that the route did not. Nothing in this entry was measured by the refiner (rule 66), and steps 1
+   and 2 are cheap enough to add **before** the next occurrence rather than after it — a harness that
+   captures the server's log and the response headers on an assertion failure costs one change and
+   makes the third such observation the last one.
+
+**What would make it urgent.** A **second** unexplained occurrence anywhere in the e2e tier — at
+which point it is a class rather than an incident and the list above is the investigation — or the
+same symptom on an instance a person uses, which nothing has reported. Until one of those, it is a
+nit that exists to be found by the person who needs it.
+
+**Depends on / owner. No work package owns it**, and that is stated rather than papered over with the
+nearest row. **WP-69** is the nearest neighbour — *"a structural wait in a fully parallel tier is a
+statement about the host's scheduler"* is the same tier under the same condition, and if the symptom
+recurs, the harness half (steps 1 and 2 above) belongs in its scope. It is deliberately **not** folded
+there: WP-69's acceptance criteria are about scripted artifacts and hand-written wait literals, and an
+observation with no mechanism cannot be given an acceptance criterion without inventing one. Related:
+**25** (a hand-written deadline in the fully parallel contract tier, with its own load figures — the
+precedent for recording the number), **28** (the last time an e2e death under CI load had a real
+cause and every test passed), rule **66**, rule **76**, rule **86**, rule **87**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -23701,3 +24015,357 @@ because it records what was true on those runs.
 **Tiers owed** (rule 80): `verify` only. Nothing under `packages/` or `apps/` changed and no package
 this change touches is imported by any of them — the edits are two workflow files, one script test,
 and documents — so no integration, e2e, ui or web-e2e target has an input that moved.
+
+## WP notes — session 7 (decisions, assumptions, reviewer findings)
+
+#### WP-52
+
+**What was wrong, in three parts, and all three are closed at their write.** A run's
+`structuredOutput` reached `artifacts.data` verbatim (backlog **35**, measured at WP-18b with a
+planted `ANTHROPIC_API_KEY` on the **production** runner), and from there `questions.text` — which
+the API serves — and the `tasks` row, through `recordMergeRequest`. `runs.system_prompt` /
+`user_prompt` / `redaction_count` had existed since migration 0004 with **no writer at all** (Q64),
+so `GET /api/runs/:id/prompt` refused every run and the Prompt tab was a permanent error state. And
+no route served an artifact's body, so every artifact on every task screen was a row a reader could
+see and not open (backlog **85**), with an `artifact` citation in an ask's answer rendered as plain
+text (backlog **86**).
+
+**Decisions, each written where it applies.**
+
+1. **The identifier class is drawn at *"a value the platform addresses something with"*, not at
+   *"anything that names something"*.** Backlog 35's candidate (b) was ruled in the row; where the
+   line falls inside it was mine, and the first draft drew it too wide — it classified
+   `AskAnswer.citations[].reference` and every model-authored `id` as identifiers, which made two of
+   WP-31's own cases fail and would have **failed a whole ask** over a vault path a placeholder
+   would merely have made un-resolvable. The rule as shipped is at
+   `packages/contracts/src/artifact-fields.ts`: misclassifying prose as an identifier costs a run,
+   misclassifying an identifier as prose costs a dead link *except* where the platform hands the
+   value to a provider — which is exactly `mr.head_sha`, the case the policy exists for. So the
+   identifier class is the set where a wrong answer is a wrong **action**.
+2. **The completeness check reads the schema, not a list.** `ARTIFACT_FIELD_POLICIES` declares
+   *both* classes for all fifteen types, and `artifact-fields.test.ts` derives every string-valued
+   leaf path of every `artifactDataSchemas` entry through `z.toJSONSchema` — the same representation
+   the model is given — and compares it with the union **in both directions, per type**. A new type
+   fails (standing rule 7), a new field fails until it is classified, a renamed field fails.
+   Enum-valued leaves are excluded *by being enums*, read off the derived document rather than off a
+   list here. `redaction.test.ts` additionally plants a secret at **every** declared identifier path
+   of every type, from an independent implementation of the path grammar, so a path the walker
+   cannot reach is caught rather than silently inert.
+3. **One redactor construction, held as an identity.** `injectedSecretRedactorFor` /
+   `…ForEnvironment` **moved** from `apps/server/src/agent.ts` into
+   `packages/application/src/pipeline/run-redaction.ts`, because the artifact write and the two
+   prompt columns happen in the application ring and cannot import a composition root; `agent.ts`
+   re-exports them and `agent.test.ts` asserts `toBe` (the same function object, not an equivalent
+   one — rule 63).
+4. **Criterion (2) is answered differently on the two tables, and both answers are at the line.**
+   `artifacts.redaction_count` is **new**, so it is nullable with **no default** plus a `NOT VALID`
+   check: `null` = "written before 0038, when no redactor ran", `0` = "the redactor ran and replaced
+   nothing", and a writer that omits the column is refused by the database. Backfilling `0` would
+   have claimed a redaction that never happened. `runs.redaction_count` **keeps** its
+   `not null default 0` — dropping it cannot repair the past (every existing row already reads 0
+   from that default), and the legible boundary is a column *pair*: `system_prompt is null` is
+   exactly "no WP-52 writer touched this row". The third reason is stated last because it is the
+   weakest: dropping it would have forced a redaction count into twenty-one raw `insert into runs`
+   statements across twelve test files that seed rows for other rows' concerns.
+5. **Criterion (8): backlog 85's sentence about the ask's citations was already out of date.** It
+   says *"the citations beside it are model text no redactor touched"*; `redactAskAnswer` has
+   redacted `citations[].detail` and `citations[].reference` since **WP-31 round 2**, and this row
+   **keeps** that unchanged. What WP-52 adds to that path is the identifier refusal over
+   `citations[].run_id` — which the executor previously stored **verbatim**, so a run id that
+   equalled an injected credential was written into `task_asks.citations` and `artifacts.data` in
+   the clear. That is rule 70's dilemma answered by taking the *leak*; the amendment's third option
+   is to refuse, and `ask-pipeline.test.ts` now asserts it by name.
+6. **Criterion (7)'s knowledge and audit halves of backlog 86 are declined, by name and with the
+   reason at the code** (`ask-thread.tsx`'s `Citation` docblock, and repeated in
+   `ask-thread.test.tsx`). The audit half has the catch the entry states — the task audit is paged,
+   so an `#id` anchor resolves only for a row on the first page and the honest shape is a cursor,
+   which is a change to `routes/asks.ts` rather than to this component. The knowledge half is
+   cheaper but needs a search parameter on `/projects/$key/knowledge` and a KB screen that reads it.
+   Neither is dropped silently.
+
+**Rule 49 sweep — every `runs.insert` caller.** Two in production: `pipeline/stage-executor.ts`
+(`startTheRun`, transaction 1b) and `ask/executor.ts` (its own `startTheRun`). **Both** write the
+prompt columns; the ask path composes `options.redactor` (TD-012 step 2) with the run's step-1
+redactor, because an ask's prompt carries the ticket's words and the pack. The remaining callers are
+fixtures — `human-commands.test.ts`, `recovery/run-lease.test.ts` and the two contract suites — and
+each now passes `systemPrompt: null`, which is what "this fixture assembled no prompt" means.
+`artifacts.insert` has **three** production callers, not two: the third is
+`shadow/report.ts`, whose document is platform-computed from rows and already-redacted provider
+reads, so it goes through the same `redactArtifactData` with `noSecretsRedactor()` — a redactor that
+*ran* and found nothing, rather than a skipped step writing a bare `0`.
+
+**Assumptions.** (a) `artifactRefSchema.url` is widened to accept a root-relative
+`apiPathSchema` so the task projection can publish `/api/artifacts/<id>`; an absolute URL would put
+the instance's external base URL into a read projection. Event payloads still carry `null`. (b) The
+route is gated at `artifact.read`, which `PERMISSION_REQUIREMENTS` has carried since WP-04 with no
+user; `routes/tasks.ts` already said the artifacts' content is "separately gated". (c) An artifact
+body is rendered on the task screen behind `?artifact=<id>`, a router search parameter rather than
+component state, because that is what makes an artifact *addressable* by the ask thread's citation.
+
+**Tiers owed** (rule 80): all of them. `@platform/contracts` changed, so `apps/web` has an input
+that moved even where its own sources did not; the migration and the two store adapters put the
+integration tier in scope; the e2e tier carries criteria (1), (4) and (9).
+
+**Criterion (9), measured rather than quoted (rule 66).** Nobody had measured an assembled
+production prompt; the figures below are from `test/e2e/pipeline/agent-run.e2e.test.ts` on the
+**production** planner and the **production** runner, read back out of `runs.system_prompt` /
+`user_prompt` after a ticket walked all five agent stages, printed by the tier itself so the number
+can be re-derived rather than trusted:
+
+| stage | `system_prompt` | `user_prompt` | total |
+|---|---|---|---|
+| `refinement` | 5 822 B | 1 240 B | **7 062 B** |
+| `architecture` | 5 518 B | 2 059 B | **7 577 B** |
+| `implementation` | 4 208 B | 2 622 B | **6 830 B** |
+| `code_review` | 5 741 B | 3 150 B | **8 891 B** |
+| `business_review` | 3 942 B | 3 420 B | **7 362 B** |
+
+**What the figures rest on, stated because they are not the whole answer.** The e2e project has no
+knowledge vault, so the **context pack is empty** in every one of these: what is measured is the
+platform's own contribution — the role prompt (layers 1–3, which *shrinks* down the pipeline as the
+roles' prompts differ) plus the task block and the output contract, with `user_prompt` growing
+1.2 → 3.4 kB as prior artifacts accumulate. So **7–9 kB per run is the floor**, and the pack is the
+variable term.
+
+**The ruling this makes unnecessary.** The row says *"if it is large, truncate the pack portion with
+the truncation declared"*. It is not: the pack is **already bounded before assembly**, by the
+planner's `budget_tokens` (shipped default 12 000), so `user_prompt` is bounded by construction and
+this change introduces no second truncation — which is the better answer anyway, because a
+truncation applied at the *write* would store a document the run never saw. The residual is stated
+rather than hidden: that bound is in **estimated tokens**, and the estimator is `ceil(chars / 4)`,
+which backlog **14** labels a hypothesis — so "≈ 48 kB" is a consequence of an unmeasured
+hypothesis and is deliberately *not* quoted here as a byte figure.
+
+**Rule 83 — the sentences this change falsified, and what happened to each.** Found by the four
+greps the brief names plus two of my own (`artifacts.data`, `backlog 35`), and three of them were
+found by a **test failing** rather than by a grep, which is the stronger finding: the census in
+`apps/server/src/routes/scope.test.ts` reported a resolver named `artifactScope` as *"scopes by a
+value nothing resolves"* (its regex reads `\bscope\w*`, so the repository's own naming — `scope`,
+`scopeRun` — is load-bearing; renamed `scopeArtifact`); `test/e2e/server/run-api.e2e.test.ts`
+asserted the 409 `prompt_not_recorded` the endpoint no longer gives; and `test/web-e2e/xss.spec.ts`
+counted **four** `[data-link-refused]` labels on the task screen, two of which were the `vbscript:`
+and `file:` artifact URLs that `safeHref` used to refuse at render time and that the artifact list no
+longer renders as URLs at all. The rest, corrected in place: `routes/runs.ts` (the OpenAPI
+description **and** the refusal's own docblock and message), `queries/pipeline-queries.ts` (the
+module docblock's "nothing has ever written a prompt", and `listInbox`'s "`artifacts.data` reaches
+this column **unredacted**"), `routes/org.ts`'s published description of `GET /api/org/inbox`
+(user-facing, the WP-47 precedent), `pipeline/epic-split.ts`, `pipeline/integrations.ts`,
+`pipeline/review-only.ts` and its test, `ask/ask-pipeline.test.ts`,
+`apps/web/src/features/ask-thread.test.tsx` (*"no screen addresses an artifact version"*),
+`docs/technical/03-data-model.md` (both table rows), `docs/technical/08-api-and-realtime.md` (the
+Tasks endpoint row) and `docs/user-guide.md` (§5's *"nothing writes the stored prompt columns yet"*,
+and §4 gained the sentence that an artifact opens). **Left alone deliberately**: the backlog entries
+for **35**, **85** and **86** and the session-5/6 notes that quote them — those headings are the
+orchestrator's to mark RESOLVED, and the notes are a record of what was true then.
+
+**Tiers run on this tree**, each quoted as its own verdict line with its exit status:
+`PASS: verify` (exit 0), `PASS: verify:integration` (exit 0), `PASS: verify:e2e` twice (exit 0 both
+times), `PASS: verify:ui` (exit 0), `PASS: verify:web-e2e` (exit 0). `docker volume ls | wc -l`
+back at the baseline **100** after the Docker tiers.
+
+**Round 2 — what the review changed, and the two places my own round-1 reasoning was wrong.**
+
+**Major 1 (the fail-closed ending had no test).** The reviewer measured the hole — a fail-open
+`redacted = { data: outcome.structuredOutput, count: 0 }` left 2167 tests in 148 files green. Both
+endings are now pinned and both were **calibrated against that exact mutant on the working tree,
+reverted by the same tool and checked byte-identical against an md5 taken first** (standing rules 77,
+88, 62): `packages/application/src/pipeline/stage-executor.test.ts` § *"an artifact whose identifier
+carries a secret"* (three cases: nothing stored and the stage not completed, the field named in the
+brief and the value absent, and — standing rule 10 — the *same* secret in prose redacted rather than
+refused, so "the task escalated" cannot pass for the wrong reason) and
+`packages/application/src/ask/ask-pipeline.test.ts` § *"ends the ask as failed, names the field and
+stores no artifact"*. The ask case is worth one sentence of its own: reaching that branch at all
+needs the credential to **be** a run id this task really has, because `scopeCitations` drops any
+other citation first — so the redactor is late-bound and `memory-ask.ts`'s divergence 2 (the run
+projection is seeded, not derived) has to be honoured. Both mutants die by name.
+
+**Major 2 (criterion (2) had one direction) — and the reviewer's premise was wrong in my favour's
+opposite direction, so this is stated rather than quietly fixed.** The brief said *"the planted key
+**is** in that prompt, so assert `> 0`"*. Measured: it is **not**. `PLANTED_MODEL_KEY` is echoed by
+the scripted CLI into the **transcript**, and `ACME-1`'s description does carry a `glpat-…` token —
+but `tasks.ticket_snapshot` was already redacted at *its* write (WP-15f), so what reaches the prompt
+is the placeholder. `redaction_count` is therefore **0** on that tier, honestly: the redactor ran and
+found nothing left. So the assertions are `toBe(0)` — exact, which a double-counting or
+wrong-column writer fails, unlike `>= 0` — with the finding written at the line, plus the
+**positive** direction moved to where a value is plantable: `stage-executor.test.ts` § *"the prompt a
+run was started with"* captures what `runs.insert` was handed, asserts identity with the spec
+(criterion (4)'s "never re-derived", as an identity rather than a similarity) and asserts `> 0` with
+both sides of the placeholder for a secret only that write can redact.
+
+**Major 3 (step 2 at one artifact write and not the other) — taken, as ruled.**
+`StageExecutorOptions.redactor` is now **required** and `createPipelineRuntime` supplies the same
+`PipelineRuntimeOptions.redactor` the epic split and the ask executor already get, so a composition
+root cannot arm one writer and not another; `redactor` joins `store`/`settings` in the `execution:`
+`Omit`. The order is TD-012's own — step 1, then step 2 — which is also `createClaudeRunner`'s, and
+the ask path's order was corrected to match (it decides whether an injected credential reads
+`[REDACTED:integration:anthropic_api_key]`, which names it, or `[REDACTED sha256:…]`, which does
+not). **Two tests changed their arithmetic as a consequence and both are recorded rather than
+patched**: the epic split's own redaction now finds nothing (its count went 1 → 0 at the queue row)
+because the `TicketBreakdown` artifact is redacted at *its* write, so the assertion moved to the
+artifact row and the "count is **added** rather than overwritten" property is now asserted as the
+pair 0 → 1 across the e2e rather than as a single `2`.
+
+**On the permission direction the reviewer raised:** with the pre-0038 refusal below in place, every
+body this route serves has passed **both** TD-012 steps, so the inversion — the weaker-redacted copy
+served to the lower role — no longer exists. Whether `artifact.read` should be `viewer` at all is a
+`PERMISSION_REQUIREMENTS` decision in `packages/domain`, and I did not change it: it is the
+catalogue's existing answer, and a role change is a product decision rather than this row's.
+
+**Minors.** (1) Q64's three false sentences are corrected in `docs/OPEN-QUESTIONS.md` in Q65's house
+form, including the measurement I personally falsified them with. (2) The per-field table's
+*classification* is now pinned independently — `IDENTIFIERS` in `artifact-fields.test.ts`, the shape
+`permissions.test.ts` uses for `PERMISSION_REQUIREMENTS` — because every check derived from the table
+is circular and the completeness test compares the *union*, so it cannot see a field changing sides.
+**The reviewer's canary 1 (moving `LibrarianProposals.proposals[].target_path` to prose) now dies by
+name**, verified on the tree and reverted byte-identical. (3) **A pre-0038 artifact body is refused,
+not served**: `redaction_count is null` means *no redactor ran*, which is backlog 35's measured
+defect, and this route is a new read surface over it at `viewer`. It answers **409
+`artifact_not_redacted`**, the answer `prompt_not_recorded` already gives, and `redaction_count` is
+no longer nullable on the DTO. A reader loses nothing — there was no route at all — and the user
+guide says so.
+
+**Nits.** `agent.ts`'s bullet now says the artifact write composes step 2 as well. The artifact
+citation links `to="."` rather than `to="/tasks/$taskId"`, so following one from
+`/projects/$key/tasks/$taskId` no longer drops the reader out of their project.
+
+**The orchestrator's finding — `shadow/report.ts`'s reason was false, and rule 3 is why it mattered.**
+The docblock claimed the provider reads arrive already redacted because `IntegrationActionExecutor`
+redacted them; the executor redacts the **audit row** and returns the result untouched (standing rule
+31's own measurement), and `GitBinding.redactor` was in lexical scope three lines above. Rewritten to
+the true position: no run produced this document, so there is no `RunSpec` and no step-1 set — that
+is the one thing genuinely absent — while step 2 needs neither a run nor a binding and is simply not
+applied. Both are cited to backlog **131** rather than restated. `redactArtifactData` is still called
+rather than skipped, and the docblock now says why: the **identifier** half is not about secrets, and
+refusing a `human_mr.url` the platform would go on to address something with is worth running over a
+document assembled from provider text whatever redactor it is given.
+
+**Round 2 tiers**, each quoted with its exit status: `PASS: verify` (exit 0),
+`PASS: verify:integration` (exit 0), `PASS: verify:e2e` twice (exit 0 both times), `PASS: verify:ui`
+(exit 0), `PASS: verify:web-e2e` (exit 0).
+
+**Round 3 — the refusal's test, one clause on three sentences, and a wait that was not this row's.**
+
+**Why round 2's `toBe(0)` is non-vacuous, which neither the reviewer nor I had written down.**
+`runs.redaction_count` keeps 0004's `not null default 0`, so a writer that omitted the column reads
+`0` too and would satisfy the count on its own. What kills that is the **identity assertion beside
+it** — the stored column equals the bytes the CLI received — and migration 0038 already names that
+column pair as the discriminator. The pair is both-directional because of the neighbour, not because
+of the number.
+
+**The 409 `artifact_not_redacted` had no test, and the seam was measured before it was chosen**
+(rule 27). The four candidates, because the answer is not obvious and the reasoning is the useful
+part:
+
+| Seam | Query branch | **Route's 409** | Verdict |
+|---|---|---|---|
+| `pipeline-queries.test.ts` (unit) | no | no | its own docblock refuses a stubbed Drizzle handle, and rightly |
+| `routes/*.test.ts` with `{} as Database` | no | no | the stub never reaches the handler |
+| `read-api.integration.test.ts` | **yes** | no | **no integration test builds the real router** — it calls query functions directly |
+| `run-api.e2e.test.ts` | yes | **yes** | the only tier with a real app and real HTTP |
+
+So the reviewer's suggested pair is the cheapest honest combination — confirmed rather than assumed —
+and the **e2e line is the load-bearing half**, because the route's branch is what canary 4 deleted.
+It folds into the existing case (the task-detail read already in it), so it costs no new instance.
+It also asserts `artifacts[].url` is `/api/artifacts/<id>`, which closes backlog 85's original
+symptom at the API rather than only in the SPA. **Canary 4 was re-applied and dies by name** in the
+integration tier — mutated as the *query* rather than as a deleted route branch, because deleting
+the branch does not typecheck (the refused member of the union has no `body`), so the mutation is the
+shape the defect would really take; reverted by the same tool and checked byte-identical against an
+md5 taken first.
+
+**One thing the round trip taught that the test was not written to say.** The first attempt ran the
+constraint dance on `pool`, which connects as `platform_app`, and PostgreSQL answered *"must be
+owner of table artifacts"*. So **the application role cannot drop `artifacts_redaction_count_recorded`
+at runtime** — a stronger statement about the refusal than the case set out to make, and it is now
+written at the line. The dance moved to the owner connection (`withClient`), which is what
+`migrations.integration.test.ts` already uses; the e2e harness's own pool is the owner, so its half
+needed no change.
+
+**The `ShadowReport` clause went on three sentences, not two.** `routes/tasks.ts`'s OpenAPI
+description and `packages/contracts/src/api.ts`'s DTO docblock were the two the review named; my own
+sweep found a third in `apps/web/src/features/task-detail.tsx`, which made the same unqualified
+claim. Each now names `ShadowReport` as the exception and cites backlog **131**, and each says that
+exposure is **unchanged** — the same document is already served at `project.read`, also `viewer`, by
+`apps/server/src/routes/shadow.ts` — so a reader knows it is a sentence being corrected rather than a
+hole being opened. This is rule 3 twice in one row: the same shape as the shadow docblock round 1
+flagged.
+
+**The wizard e2e's wait, fixed as a pre-review round and not this row's defect.**
+`test/e2e/onboarding/wizard.e2e.test.ts` failed the orchestrator's round-2 `verify:e2e` **pass 2** at
+`expected 0 to be greater than 0`, on a tree whose pass 1 had passed and on a path WP-52 never
+touched, at a one-minute load of about 12. Standing rule **87**: `settle(… task.state === 'done')`
+binds the **task aggregate**, while the cost ledger is a handler on `run.finished` at TD-005 priority
+10 writing `cost_entries` in its **own** transaction (WP-19) — so the assertion bound a row written
+by a later, separate dispatch than the wait's condition, which is green at low load and red at high.
+The fix is rule 87's own answer: a `waitFor` over the **assertion's own rows**, never a widening of
+`settle`, which other cases depend on meaning what it says. **The file's other three post-`settle`
+reads were swept** with rule 87's two questions and the result is written at the line: `transcript()`
+is safe (the sink appends *during* the run, so the rows precede `run.finished`); `proposals()` is
+covered by the existing `readiness_evaluations` wait, because `onboarding/record.ts` writes the
+evaluation and the proposals in **one transaction**; the `human_actions` query is safe (written
+synchronously by commands the test awaited). Exactly one read was unbound.
+
+**Round 3 tiers**, each quoted with its exit status: `PASS: verify` (exit 0),
+`PASS: verify:integration` (exit 0), `PASS: verify:e2e` **twice** (exit 0 both times — pass 2 is the
+pass the wait defect appeared on), `PASS: verify:ui` (exit 0), `PASS: verify:web-e2e` (exit 0).
+`docker volume ls | wc -l` back at the baseline **100**.
+
+**Round 4 — a flaky assertion removed rather than retried, and rule 3's fourth firing.**
+
+**The 409 test failed one full-tier run in two, and I did not find the mechanism. That is stated
+rather than papered over.** What was ruled out, by measurement: shared state (every
+`startPipeline` creates a uniquely named database, `label_<uuid>`), vitest `retry` (none configured
+for any project), and row-order instability (`findTaskDetail` orders artifacts by
+`created_at, version`, and each stage inserts in its own transaction, so `artifacts[0]` is stable).
+What the symptom does tell us is that the request was **not answered by this route**: the failure
+reported status **200 with an empty body**, and both of the handler's endings either throw or return
+a defined object, so neither can produce one. What I could not establish is *which* component
+answered it — and I will not write a mechanism I did not measure (standing rule 86). It did not
+reproduce here: three runs of the file alone and, after the change, two full-tier passes at loads
+10.66 and 11.48, green.
+
+**So the assertion moved to where it is deterministic, which is also where it should have been.**
+The reason it was in the e2e tier at all was that `routes/tasks.ts` took a `Database` rather than
+injected queries, so the route's *status* could not be seen anywhere cheaper — round 3's own seam
+table says exactly that. `registerTaskRoutes` now takes the `queries` seam `asks.ts`,
+`breakdown.ts` and `commands.ts` already use, and `apps/server/src/routes/tasks.test.ts` asserts the
+three endings — 200 for a redacted row, 200 for `redaction_count = 0` (rule 18: a measurement is not
+an absence, and without it the refusal could be "any falsy count"), 409 by name for a pre-0038 row,
+404 for a missing one — plus 401, 400 and the scope. **The canary the e2e existed to kill now dies
+in the unit tier**: `if (!artifact.redacted)` neutered fails `refuses a row written before anything
+redacted it` by name, reverted byte-identical against an md5 taken first. The e2e keeps the half only
+it can state — a body the pipeline really produced, served without the run's credential — and the
+DDL that made that tier mutate its own schema mid-walk is gone, which also disposes of the reviewer's
+nit about the fabricated `redaction_count = 0` restore.
+
+**One case I wrote was wrong about the mechanism and is worth recording, because it nearly pinned a
+fiction.** It expected **403** for a caller with no project role. Membership **promotes and never
+demotes** (`auth/rbac.ts`) and `artifact.read` is `viewer` — the floor — so a 403 on this route is
+*unreachable for any signed-in caller*. The case now asserts what "permissioned like its task"
+actually means: the scope resolves the project from the **artifact's own row** (`scopedFor`), the
+guard is asked about *that* project (`guardedFor`), and the task resolver is not consulted. Standing
+rule 10, caught by the test failing rather than by review.
+
+**Rule 3 fired four times in this row, and that is the pattern rather than four incidents.** The
+`ShadowReport` exception had to be added to `routes/tasks.ts`, `packages/contracts/src/api.ts`,
+`apps/web/src/features/task-detail.tsx` and — found by the reviewer after I had swept three —
+`docs/technical/03-data-model.md`, the authoritative one. The lesson is not "sweep harder": it is
+that **a claim with an exception should be written with the exception the first time**, because
+every unqualified copy is a separate thing to find, and the copy in the authoritative document is
+the one a later reader will trust. The SPA's copy also cited the *screen* as evidence that exposure
+is unchanged; the screen renders three fields of the document, so the **endpoint** is the evidence,
+as the other two copies already said.
+
+**Two further nits taken.** The wizard predicate is scoped by `task_id` as well as `stage` — exact
+by construction rather than by today's fixture — and the integration tier's constraint dance gained
+a `try`/`finally`, because a failure between the drop and the re-add would leave the file's
+remaining cases running against a table with no check. The scope claim from round 3 is **tightened
+to what was measured**: `platform_app` cannot drop the constraint, which is not the same as "the
+branch cannot be bypassed from inside the server" — that additionally rests on the check still
+rejecting every INSERT and UPDATE, which is true and pinned by
+`test/integration/db/grants.integration.test.ts`, but was not established by this round trip.
+
+**Round 4 tiers**, each quoted with its exit status: `PASS: verify` (exit 0),
+`PASS: verify:integration` (exit 0), `PASS: verify:e2e` **twice** (exit 0 both times, at one-minute
+loads of 11.48 and 10.66 — the closest yet to the 9.45 the failure appeared at), `PASS: verify:ui`
+(exit 0), `PASS: verify:web-e2e` (exit 0). `docker volume ls | wc -l` back at **100**.

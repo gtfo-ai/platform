@@ -36,6 +36,7 @@
 import type {
   Id,
   IsoDateTime,
+  JsonValue,
   MergeRequestRef,
   ReviewFinding,
   ShadowReportData,
@@ -48,7 +49,9 @@ import {
   type ShadowDiffSummary,
   stageOf,
 } from '@platform/domain';
+import { redactArtifactData } from '../artifacts/redaction.js';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
+import { noSecretsRedactor } from '../integrations/redaction.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from '../pipeline/integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from '../pipeline/jobs.js';
 import type { PipelineSagaOptions } from '../pipeline/saga.js';
@@ -250,16 +253,47 @@ export const runShadowReport = async (
       stored.task.id,
       'ShadowReport',
     );
+    /**
+     * TD-012 at this write, with an **empty** redactor — and the honest reason, corrected in round
+     * 2 (PROGRESS backlog **131**).
+     *
+     * The reason first written here was false and was the sentence standing rule **31** exists to
+     * refute: it claimed the provider reads above arrive already redacted because
+     * `IntegrationActionExecutor` redacted them. The executor redacts the **audit row** and returns
+     * the provider's result untouched; only the `replayed` branch returns a redacted value, and a
+     * first call never takes it. Rule 3 is why this matters: an invariant asserted in a comment is
+     * not evidence it holds, and that comment would have been the next reader's evidence.
+     *
+     * The true position, stated rather than dressed up. This document is **not** a run's structured
+     * output — no run produced it, so there is no `RunSpec` and therefore no TD-012 step **1** set
+     * to build from, which is the one thing genuinely absent here. Step **2**, the platform's own
+     * pattern rules, needs neither a run nor a binding and is *not* applied; a binding-scoped
+     * redactor (`GitBinding.redactor`, the one `review-only.ts` uses) is even in lexical scope
+     * three lines above. Both are left for backlog **131**, which also records that the same
+     * document is stored a second time in `shadow_reports.comparison` and that the `0` this write
+     * produces is indistinguishable from a redactor that ran and found nothing.
+     *
+     * {@link redactArtifactData} is still called rather than skipped, because the **identifier**
+     * half of the policy is not about secrets: it refuses a `human_mr.url` or a `ticket` the
+     * platform would go on to address something with, and that check is worth running over a
+     * document assembled from provider text whatever redactor it is given.
+     */
+    const redacted = redactArtifactData(
+      'ShadowReport',
+      report as unknown as JsonValue,
+      noSecretsRedactor(),
+    );
     await options.store.artifacts.insert(scope.tx, {
       id: artifactId,
       taskId: stored.task.id,
       type: 'ShadowReport',
       version,
       markdown: null,
-      data: report as unknown as never,
+      data: redacted.data as unknown as never,
       schemaVersion: '1',
       // No run produced it: the platform computed it from rows and two provider reads.
       producedByRunId: null,
+      redactionCount: redacted.count,
       createdAt: options.clock.now() as IsoDateTime,
     });
     await scope.events.append([

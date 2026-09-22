@@ -21,7 +21,7 @@ import {
   runBudgetUsd,
   taskBudgetExhausted,
 } from './stage-executor.js';
-import { TaskConcurrentModificationError } from './store.js';
+import { type NewRun, TaskConcurrentModificationError } from './store.js';
 import { MAX_TASK_CONFLICT_ATTEMPTS } from './task-conflict.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -67,6 +67,185 @@ const escalationOf = (harness: PipelineHarness) =>
   harness.events().find((entry) => entry.type === 'task.escalated') as
     | Extract<DomainEvent, { type: 'task.escalated' }>
     | undefined;
+
+/**
+ * **TD-012's identifier refusal, at its ending rather than at the walker** (WP-52 round 2).
+ *
+ * `redactArtifactData`'s refusal is covered by `artifacts/redaction.test.ts`; what had **no** test
+ * anywhere was what the executor *does* with it. The reviewer measured the hole: replacing the
+ * catch below with a fail-open `redacted = { data: outcome.structuredOutput, count: 0 }` — the exact
+ * defect this work package exists to close — left 2167 tests in 148 files green. So these two cases
+ * are about the ending: nothing is stored, the run is recorded, the task escalates, and the brief a
+ * human reads names the **field** and never the value.
+ *
+ * The planted secret goes in `kb_citations[].path`, which is a `RefinedSpec` identifier because the
+ * platform resolves it against the project's vault — and `refinement` is the first stage, so the
+ * case is one run long rather than a walk.
+ */
+describe('an artifact whose identifier carries a secret', () => {
+  const SECRET = 'glpat-FAKEFAKEFAKEFAKEFAKE';
+
+  const refusingHarness = (): PipelineHarness =>
+    harnessWith({
+      commandSecrets: [{ name: 'GIT_TOKEN', value: SECRET }],
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: {
+            goal: 'ship the footer',
+            decision: 'proceed',
+            kb_citations: [{ path: `knowledge/${SECRET}.md`, reason: 'the page' }],
+          },
+        },
+      },
+    });
+
+  it('stores no artifact, records the run and escalates the task', async () => {
+    const harness = refusingHarness();
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.task.state).toBe('needs_human');
+    // Nothing was written: `artifacts` is append-only, so a half-redacted row could not be fixed.
+    const stored = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, task.task.id),
+    );
+    expect(stored).toEqual([]);
+    expect(harness.types()).not.toContain('artifact.created');
+    // `intake_check` completes before the agent stage is entered, so the assertion is on **this**
+    // stage rather than on the event type (standing rule 10 — say which branch ran).
+    expect(
+      harness
+        .events()
+        .filter((entry) => entry.type === 'task.stage.completed')
+        .map((entry) => (entry.payload as { stage: string }).stage),
+    ).not.toContain('refinement');
+    expect(task.task.currentStage).toBe('refinement');
+    // …but the run is recorded, because it happened and it cost money.
+    expect(harness.types()).toContain('run.finished');
+    expect(task.costActualUsd).toBeGreaterThan(0);
+  });
+
+  it('names the field in the brief a human reads, and never the value', async () => {
+    const harness = refusingHarness();
+    await harness.publish([ticketMatched()]);
+
+    const escalation = escalationOf(harness);
+    expect(escalation?.payload.reason).toContain('kb_citations[].path');
+    // Both directions (standing rule 42): the path is there **and** the credential is not — this
+    // string reaches `events.payload` and the blocker brief, neither of which passes a redactor.
+    const brief = JSON.stringify(escalation?.payload);
+    expect(brief).not.toContain(SECRET);
+  });
+
+  it('is the identifier that refuses, not the artifact: the same secret in prose is redacted', async () => {
+    // Standing rule 10 — assert which branch ran. Without this, "the task escalated" would be
+    // satisfied by an executor that refused every artifact carrying a credential anywhere.
+    // `decision: 'ask'` parks the task after this one stage, so the walk stops here rather than
+    // reaching a stage with no script.
+    const harness = harnessWith({
+      commandSecrets: [{ name: 'GIT_TOKEN', value: SECRET }],
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: {
+            goal: `ship the footer with ${SECRET}`,
+            decision: 'ask',
+            questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
+            kb_citations: [{ path: 'knowledge/footer.md', reason: 'the page' }],
+          },
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.task.state).not.toBe('needs_human');
+    const stored = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, task.task.id),
+    );
+    const data = JSON.stringify(stored[0]?.data);
+    expect(data).not.toContain(SECRET);
+    expect(data).toContain('[REDACTED:integration:GIT_TOKEN]');
+    // The count is the row's own, and 0 would be the reading a redactor that never ran produces.
+    expect(stored[0]?.redactionCount).toBe(1);
+  });
+});
+
+/**
+ * **The two prompt columns and the count beside them** (Q64, WP-52 round 2).
+ *
+ * The e2e asserts that the columns carry the bytes the CLI received; what it cannot assert is the
+ * *arithmetic*, because on that tier every input to the prompt has already been redacted at its own
+ * write and the honest count is therefore **0**. These cases drive the real planner and the real
+ * executor and capture what `runs.insert` was handed, so both directions of criterion (2) are
+ * asserted where a positive value is reachable.
+ */
+describe('the prompt a run was started with', () => {
+  const capturedRun = (harness: PipelineHarness): Promise<NewRun[]> => {
+    const rows: NewRun[] = [];
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const original = repository.insert.bind(harness.store.runs);
+    repository.insert = async (tx, run) => {
+      rows.push(run);
+      await original(tx, run);
+    };
+    return harness.publish([ticketMatched()]).then(() => rows);
+  };
+
+  const scripted = {
+    refinement: {
+      status: 'completed' as const,
+      terminalReason: 'success' as const,
+      structuredOutput: {
+        goal: 'ship the footer',
+        decision: 'ask',
+        questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
+      },
+    },
+  };
+
+  it('stores the bytes the runner was handed, never a re-derivation', async () => {
+    const harness = harnessWith({ runs: scripted });
+    const rows = await capturedRun(harness);
+    const spec = harness.specs[0];
+    expect(spec, 'no run was started').toBeDefined();
+    // **Identity with the spec, not merely similarity**: the delimiter nonce is drawn per prompt
+    // and the pack is a point-in-time read, so a re-assembled prompt is a different document.
+    expect(rows[0]?.systemPrompt).toBe(spec?.systemPromptAppend);
+    expect(rows[0]?.userPrompt).toBe(spec?.userPrompt);
+  });
+
+  it('counts what it replaced, and 0 means the redactor ran and found nothing', async () => {
+    // Criterion (2)'s first direction. Exact rather than `>= 0`, which a non-negative integer
+    // column satisfies vacuously: a writer that double-counted would fail here.
+    const clean = harnessWith({ runs: scripted });
+    const cleanRows = await capturedRun(clean);
+    expect(cleanRows[0]?.redactionCount).toBe(0);
+
+    /**
+     * The other direction, and the only way to reach it: something in the prompt that **no earlier
+     * write has already redacted**. Every ordinary input is redacted upstream — the ticket snapshot
+     * at WP-15f, a prior artifact at this very work package — so the planted value here is the
+     * ticket's own **URL**, which `assemblePrompt` puts in the task block verbatim. Registering a
+     * URL as a credential is artificial and is the point: it is the mechanism under test, driven
+     * through the real planner, and nothing else in a first-stage prompt is un-redacted text the
+     * platform can plant.
+     */
+    const planted = harnessWith({
+      runs: scripted,
+      commandSecrets: [{ name: 'GIT_TOKEN', value: 'https://jira.example.test/browse/ACME-1' }],
+    });
+    const plantedRows = await capturedRun(planted);
+    expect(plantedRows[0]?.redactionCount).toBeGreaterThan(0);
+    const both = `${plantedRows[0]?.systemPrompt ?? ''}\n${plantedRows[0]?.userPrompt ?? ''}`;
+    // Both sides (standing rule 42): the value is gone **and** the placeholder is there.
+    expect(both).not.toContain('https://jira.example.test/browse/ACME-1');
+    expect(both).toContain('[REDACTED:integration:GIT_TOKEN]');
+  });
+});
 
 describe('a run the platform stopped', () => {
   it('pauses the task when the run really did overspend', async () => {

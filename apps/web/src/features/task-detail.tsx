@@ -47,9 +47,15 @@ import type {
   TaskRecord,
   TaskReviewers,
 } from '@platform/contracts';
-import { Link } from '@tanstack/react-router';
+import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
-import { useProjects, useTask, useTaskAudit, useTaskCommands } from '../app/queries.js';
+import {
+  useArtifactBody,
+  useProjects,
+  useTask,
+  useTaskAudit,
+  useTaskCommands,
+} from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import {
@@ -604,12 +610,71 @@ const StageCommands = ({
   );
 };
 
+/**
+ * One artifact's body, as React text nodes — WP-52, PROGRESS backlog 85.
+ *
+ * Every artifact on every task screen used to be a row a reader could see and not open: the task
+ * projection published `url: null` as a literal and no route served a body. Both halves landed
+ * together, because a read surface over `artifacts.data` before TD-012 applied at the write was a
+ * way for a credential to leave the building (backlog 35, measured).
+ *
+ * **It renders JSON, not markup, and not a link.** The document is a model's structured output
+ * (BD-022), so it goes through `UntrustedText` inside a `<pre>`: no markdown step, no sanitiser, no
+ * `href` — and `apps/web/src/no-html.test.ts` fails the build if any of those appear. `<pre>` is a
+ * layout decision about whitespace, not a rendering mode; the text is still a text node.
+ *
+ * An artifact stored **before** migration 0038 — when nothing redacted one — is refused by the API
+ * with 409 `artifact_not_redacted` rather than served. The refusal arrives here as an ordinary
+ * error and says so; it is not a rendering case.
+ *
+ * So every body this panel renders has passed TD-012 — **except a `ShadowReport`**, which the
+ * platform assembles from its own rows rather than a run producing it, and which is therefore
+ * written through an empty redactor with neither step applied (PROGRESS backlog **131**). Its
+ * exposure is unchanged, and the evidence for that is the **endpoint** rather than the Shadow
+ * screen — `GET /api/shadow-batches/:id` serves the whole document at `project.read`, while the
+ * screen renders only three of its fields. The clause is here because the sentence above it was
+ * written without it, not because this panel does anything different with one.
+ */
+const ArtifactBody = ({
+  taskId,
+  artifactId,
+}: {
+  readonly taskId: string;
+  readonly artifactId: string;
+}): ReactElement => {
+  const body = useArtifactBody(taskId, artifactId);
+  if (body.isPending) {
+    return <Loading label="Loading artifact…" />;
+  }
+  if (body.isError) {
+    return <ErrorNotice title="Artifact could not be loaded." detail={String(body.error)} />;
+  }
+  const artifact = body.data;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-fg-muted">
+        {artifact.artifact_type} v{artifact.version} · schema {artifact.schema_version} ·{' '}
+        {formatDateTime(artifact.created_at)} ·{' '}
+        {`${artifact.redaction_count} redaction${artifact.redaction_count === 1 ? '' : 's'}`}
+      </p>
+      {artifact.markdown === null ? null : <UntrustedProse value={artifact.markdown} />}
+      <pre className="overflow-x-auto rounded bg-bg-subtle p-2 text-xs">
+        <UntrustedText value={JSON.stringify(artifact.data, null, 2)} />
+      </pre>
+    </div>
+  );
+};
+
 export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): ReactElement => {
   useTopics([`task:${taskId}`]);
   const detail = useTask(taskId);
   const commands = useTaskCommands(taskId);
   const projects = useProjects();
   const { now } = useServices();
+  // `strict: false` because two routes render this screen (`/tasks/$taskId` and
+  // `/projects/$key/tasks/$taskId`) and both declare the same search schema; a strict read would
+  // have to name one of them.
+  const search = useSearch({ strict: false }) as { readonly artifact?: string };
 
   if (detail.isPending) {
     return <Loading label="Loading task…" />;
@@ -632,6 +697,9 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
   const projectKey =
     projects.data?.items.find((project) => project.id === task.project_id)?.key ?? null;
   const nowMs = now();
+  // An unknown id opens nothing rather than erroring: the parameter is a *reference* to one of this
+  // task's own artifacts, and a link that outlived the row is a closed panel.
+  const openArtifactId = artifacts.find((artifact) => artifact.id === search.artifact)?.id ?? null;
   const openQuestions = questions.filter((question) => question.status === 'open');
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
 
@@ -771,7 +839,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           </div>
         )}
 
-        <AskThread taskId={task.id} />
+        <AskThread taskId={task.id} artifacts={artifacts} />
 
         <TaskActivity taskId={task.id} />
 
@@ -786,16 +854,31 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             <ul className="flex flex-col gap-1">
               {artifacts.map((artifact) => (
                 <li key={artifact.id}>
-                  <Card className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{artifact.artifact_type}</span>
-                    <Badge>{`v${artifact.version}`}</Badge>
-                    {artifact.url === null || artifact.url === undefined ? null : (
-                      <ExternalLink
-                        url={artifact.url}
-                        label="Open"
+                  <Card className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{artifact.artifact_type}</span>
+                      <Badge>{`v${artifact.version}`}</Badge>
+                      {/*
+                       * A router `Link`, never an `href` (WP-52): the body is rendered on this
+                       * screen rather than downloaded, and `?artifact=<id>` is what makes it
+                       * addressable — the ask thread's `artifact` citation sets the same parameter.
+                       * `url` on the DTO says where the *API* serves it, which is what an OpenAPI
+                       * consumer needs and what a browser must not be sent to.
+                       */}
+                      <Link
+                        to="."
+                        search={(previous: Record<string, unknown>) => ({
+                          ...previous,
+                          artifact: openArtifactId === artifact.id ? undefined : artifact.id,
+                        })}
                         className="ml-auto text-xs text-accent underline"
-                      />
-                    )}
+                      >
+                        {openArtifactId === artifact.id ? 'Close' : 'Open'}
+                      </Link>
+                    </div>
+                    {openArtifactId === artifact.id ? (
+                      <ArtifactBody taskId={taskId} artifactId={artifact.id} />
+                    ) : null}
                   </Card>
                 </li>
               ))}

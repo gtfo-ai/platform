@@ -21,11 +21,13 @@
  * Three of the four run reads were written against columns nothing fills, and the honest answer
  * differs per column, so each one is stated rather than smoothed over:
  *
- *  - **`runs.system_prompt` / `runs.user_prompt`** — `RunRepository.insert` does not carry them and
- *    `StoredRun` has no field for them at all, so **nothing in this repository has ever written a
- *    prompt to a run row**. `findRunPrompt` therefore reports `recorded: false` and the route
- *    refuses by name. Answering `{system_prompt: "", user_prompt: ""}` would render as "this run
- *    had no prompt", which is a claim about the agent rather than about the schema.
+ *  - **`runs.system_prompt` / `runs.user_prompt`** — **written since WP-52** (Q64, migration 0038):
+ *    both `runs.insert` call sites store the assembled prompt the run was started with, redacted at
+ *    the write. The refusal stayed, and what it says narrowed from a statement about the *build* to
+ *    a statement about the *row*: a run created before that migration has no prompt and never will,
+ *    because the nonce is drawn per prompt and the pack is a point-in-time read, so `findRunPrompt`
+ *    still reports `recorded: false` for it. Answering `{system_prompt: "", user_prompt: ""}` would
+ *    render as "this run had no prompt", which is a claim about the agent rather than about the row.
  *  - **`run_context_pack`** — no insert exists anywhere in the tree either, *and* the table cannot
  *    express `ContextPackRecord.budget_tokens` (there is no such column) or the non-null `reason`
  *    and `score` the published tier-1 entry requires. So `findRunContextPack` has **no success
@@ -47,6 +49,7 @@
  */
 import type {
   AgentsResponse,
+  ArtifactBodyResponse,
   HumanTimeSummary,
   Id,
   InboxResponse,
@@ -60,7 +63,7 @@ import type {
   TaskState,
   TranscriptEvent,
 } from '@platform/contracts';
-import { transcriptEventSchema } from '@platform/contracts';
+import { artifactBodyPath, transcriptEventSchema } from '@platform/contracts';
 import { estimateAccuracy, resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
@@ -351,6 +354,89 @@ export const listRunMessages = async (
     items,
     nextSeq: rows.length > query.limit && last !== undefined ? last.seq : null,
   };
+};
+
+/**
+ * `GET /api/artifacts/:artifact_id` — one artifact's body (WP-52, PROGRESS backlog 85).
+ *
+ * **A row whose `redaction_count` is `null` is refused, not served** (round 2). That spelling means
+ * *"written before migration 0038, when nothing redacted an artifact"* — which is backlog 35's
+ * measured defect, a run's structured output stored verbatim — and this route is a **new read
+ * surface** over it, gated at `artifact.read`, which is `viewer`. Serving such a row would publish
+ * a credential to the widest role on the instance, through the endpoint this work package added to
+ * close the complaint that artifacts cannot be read. A reader loses nothing they had: there was no
+ * route at all. It is the answer `prompt_not_recorded` and `context_pack_not_recorded` already give
+ * — refuse by name rather than serve something the platform cannot vouch for — and it is why
+ * `redaction_count` is on the DTO as a **non-null** number.
+ *
+ * `data` is passed through as opaque JSON. Parsing it against `artifactSchema` on the way out would
+ * make an older row's missing field a 500 rather than a document — `/context-pack`'s refusal is the
+ * other shape of the same rule, and the difference is that *there* the platform would have had to
+ * invent a value, while here it has the whole row.
+ */
+export type ArtifactBody =
+  | { readonly found: false }
+  /** Stored before migration 0038: no redactor ran over it, so it is refused rather than served. */
+  | { readonly found: true; readonly redacted: false; readonly createdAt: string }
+  | { readonly found: true; readonly redacted: true; readonly body: ArtifactBodyResponse };
+
+export const findArtifactBody = async (
+  database: Database,
+  artifactId: string,
+): Promise<ArtifactBody> => {
+  const rows = await database
+    .select({
+      id: artifacts.id,
+      taskId: artifacts.taskId,
+      type: artifacts.type,
+      version: artifacts.version,
+      schemaVersion: artifacts.schemaVersion,
+      producedByRunId: artifacts.producedByRunId,
+      redactionCount: artifacts.redactionCount,
+      markdown: artifacts.markdown,
+      data: artifacts.data,
+      createdAt: artifacts.createdAt,
+    })
+    .from(artifacts)
+    .where(eq(artifacts.id, artifactId))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) {
+    return { found: false };
+  }
+  if (row.redactionCount === null) {
+    return { found: true, redacted: false, createdAt: isoRequired(row.createdAt) };
+  }
+  return {
+    found: true,
+    redacted: true,
+    body: {
+      id: row.id as Id,
+      task_id: row.taskId as Id,
+      artifact_type: row.type,
+      version: row.version,
+      schema_version: row.schemaVersion,
+      produced_by_run_id: row.producedByRunId as Id | null,
+      created_at: isoRequired(row.createdAt),
+      redaction_count: row.redactionCount,
+      markdown: row.markdown,
+      data: row.data,
+    },
+  };
+};
+
+/** The project a given artifact belongs to, for the permission scope. Null when there is no row. */
+export const findArtifactProjectId = async (
+  database: Database,
+  artifactId: string,
+): Promise<string | null> => {
+  const rows = await database
+    .select({ projectId: tasks.projectId })
+    .from(artifacts)
+    .innerJoin(tasks, eq(tasks.id, artifacts.taskId))
+    .where(eq(artifacts.id, artifactId))
+    .limit(1);
+  return rows[0]?.projectId ?? null;
 };
 
 export type RunPrompt =
@@ -811,7 +897,11 @@ export const findTaskDetail = async (
       id: row.id as Id,
       artifact_type: row.type,
       version: row.version,
-      url: null,
+      // Where the body is served (WP-52, PROGRESS backlog 85). It was a literal `null` here — and
+      // the SPA renders a link only when it is not — so every artifact on every task screen was a
+      // row you could see and not open. `artifactBodyPath` is the one spelling of the path, shared
+      // with the route that answers it.
+      url: artifactBodyPath(row.id),
     })),
     questions: questionRows.map(toQuestionRecord),
     approvals: approvalRows.map((row) => ({
@@ -896,14 +986,16 @@ export const listRunningAgents = async (database: Database): Promise<AgentsRespo
  * Oldest first, both lists: an inbox is a queue, and the item that has waited longest is the one a
  * deadline is about to expire on.
  *
- * **`questions.text` is an artifact-derived column, and PROGRESS backlog 35 is open on it.** The
+ * **`questions.text` is an artifact-derived column, and WP-52 closed backlog 35 at its write.** The
  * stage executor copies the draft out of the run's `structuredOutput` (`stage-executor.ts`'s
- * `artifactQuestions(data)`), and that document reaches `artifacts.data` — and therefore this
- * column — **unredacted**, while the same model message's transcript copy went through TD-012 step
- * 1. So a credential the platform injected into the run's environment and the model repeated into a
- * question would be served here. This reader does not fix it: redaction belongs at the write
- * (TD-012), a reader that redacted would give the row and the response two different texts, and
- * backlog 35 is owned by no work package. Stated here rather than discovered by the next reader.
+ * `artifactQuestions(data)`), and until WP-52 that document reached `artifacts.data` — and
+ * therefore this column — **unredacted**, while the same model message's transcript copy went
+ * through TD-012 step 1. The write is redacted now (`artifacts/redaction.ts`, migration 0038), so a
+ * credential the platform injected and the model repeated into a question is a placeholder before
+ * either row exists. This reader still does not redact, and that is unchanged and deliberate:
+ * redaction belongs at the write, and a reader that redacted would give the row and the response
+ * two different texts. The residual is the rows written **before** that migration — they are still
+ * served as they were stored, because `questions` is append-only and nothing may rewrite them.
  */
 export const listInbox = async (database: Database): Promise<InboxResponse> => {
   const [questionRows, approvalRows] = await Promise.all([

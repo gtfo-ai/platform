@@ -125,7 +125,7 @@ export const registerRunRoutes = async (
       schema: {
         summary: 'The prompt a run was given',
         description:
-          'Refuses with 409 `prompt_not_recorded` while nothing writes `runs.system_prompt` / `runs.user_prompt`.',
+          'The assembled prompt the run was started with, redacted at the write (TD-012). It is untrusted content (BD-022) — it contains the ticket’s own words and the context pack — so render it, never execute it. A run created before migration 0038 has no stored prompt and is refused with 409 `prompt_not_recorded`; the prompt is never re-derived, because the nonce is drawn per prompt and the pack is a point-in-time read.',
         tags: ['runs'],
         params: runParamsSchema,
         // The 409 is declared, not just thrown: an OpenAPI document that described only the 200
@@ -142,18 +142,20 @@ export const registerRunRoutes = async (
         /**
          * **The refusal is the honest answer, and it is 409 rather than an empty document.**
          *
-         * `createStageRunPlanner` assembles a real prompt for every run (WP-17) and hands it to the
-         * runner in the `RunSpec`; **no writer stores it**. `RunRepository.insert` carries eleven
-         * columns and neither prompt is among them, and `StoredRun` has no field for them at all,
-         * so `runs.system_prompt` and `runs.user_prompt` have been null for every run this
-         * repository has ever executed. Returning `{system_prompt: "", user_prompt: ""}` would
-         * render as "this run had no prompt", which is a claim about the agent rather than about
-         * the schema.
+         * What it says narrowed at WP-52 from a statement about the *build* to one about the
+         * *row*. Until then `RunRepository.insert` named twelve columns, neither prompt was among
+         * them, and `runs.system_prompt`/`user_prompt` had been null for every run this repository
+         * had ever executed (Q64). Both `runs.insert` call sites now store the assembled prompt at
+         * run creation, redacted (migration 0038) — so a null here means the run predates that
+         * writer, and it will never have one: the nonce `assemblePrompt` draws is per prompt and
+         * the context pack is a point-in-time read, so re-deriving the prompt later would answer
+         * with a different document. Returning `{system_prompt: "", user_prompt: ""}` would render
+         * as "this run had no prompt", which is a claim about the agent rather than about the row.
          */
         throw new HttpError(
           409,
           'prompt_not_recorded',
-          `run ${request.params.run_id} has no stored prompt: the planner assembles one per run and hands it to the runner in the RunSpec, but nothing writes runs.system_prompt / runs.user_prompt. Storing them is the work package that adds a writer; until then the assembled prompt exists only in the run's own process`,
+          `run ${request.params.run_id} has no stored prompt: it was created before migration 0038 gave runs.system_prompt / runs.user_prompt a writer. The prompt is not re-derivable — the delimiter nonce is drawn per prompt and the context pack is a point-in-time read — so this run's assembled prompt is gone rather than merely unfetched`,
         );
       }
       return {

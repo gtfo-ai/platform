@@ -265,10 +265,22 @@ export const artifacts = pgTable('artifacts', {
   type: artifactTypeEnum('type').notNull(),
   version: integer('version').notNull().default(1),
   markdown: text('markdown'),
-  /** Validated against the artifact schema of `@platform/contracts` before it is written. */
+  /**
+   * Validated against the artifact schema of `@platform/contracts` before it is written, and
+   * **redacted** at the write since migration 0038 (TD-012, WP-52): prose through the run's own
+   * injected-secret redactor, an identifier field carrying a secret refused rather than rewritten.
+   */
   data: jsonb('data').$type<JsonValue>().notNull(),
   schemaVersion: text('schema_version').notNull(),
   producedByRunId: uuid('produced_by_run_id'),
+  /**
+   * Nullable and without a default since migration 0038, which is the opposite of
+   * `integration_actions.redaction_count` and deliberately so: this table had rows before the
+   * column existed and their true count is *unknown*, not zero. `null` = no redactor ran (written
+   * before 0038); `0` = it ran and replaced nothing. A writer that omits it is refused by the
+   * table's `NOT VALID` check rather than recorded as a null.
+   */
+  redactionCount: integer('redaction_count'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

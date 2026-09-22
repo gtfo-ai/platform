@@ -9,6 +9,7 @@
 
 import * as z from 'zod';
 import {
+  apiPathSchema,
   artifactTypeSchema,
   idSchema,
   isoDateTimeSchema,
@@ -778,13 +779,26 @@ export const artifactSchema = z.discriminatedUnion('artifact_type', [
   artifactOf('TicketBreakdown', ticketBreakdownDataSchema),
 ]);
 
-/** A reference to a stored artifact, used in event payloads and API DTOs. */
+/**
+ * A reference to a stored artifact, used in event payloads and API DTOs.
+ *
+ * `url` is **where this artifact's body is served**, and it was a literal `null` everywhere until
+ * WP-52 because no route served one (PROGRESS backlog 85). It accepts either form on purpose: an
+ * absolute {@link urlSchema} for a producer that has one, and an {@link apiPathSchema} —
+ * `/api/artifacts/<id>` — for the task projection, which is a read on this API and has no business
+ * knowing the instance's external base URL. An event payload still carries `null`: the event is
+ * appended in the same transaction as the row, and a URL in an append-only log would outlive any
+ * routing decision.
+ */
 export const artifactRefSchema = z.strictObject({
   id: idSchema,
   artifact_type: artifactTypeSchema,
   version: z.int().positive(),
-  url: urlSchema.nullish(),
+  url: z.union([apiPathSchema, urlSchema]).nullish(),
 });
+
+/** Where `GET /api/artifacts/:artifact_id` serves one artifact's body. One spelling, one place. */
+export const artifactBodyPath = (artifactId: string): string => `/api/artifacts/${artifactId}`;
 
 export type ValidationCheck = z.infer<typeof validationCheckSchema>;
 export type AcceptanceCriterion = z.infer<typeof acceptanceCriterionSchema>;

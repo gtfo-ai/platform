@@ -50,6 +50,13 @@ export const queryKeys = {
   kbProposals: (id: string) => ['project', id, 'kb', 'proposals'] as const,
 
   task: (id: string) => ['task', id] as const,
+  /**
+   * One artifact's body (WP-52). Under the **task's** prefix, because an artifact belongs to a task
+   * and a `task:<id>` frame is what tells the app a new version exists — a key of its own would be
+   * outside the invalidation tree, which is the failure this file exists to prevent.
+   */
+  artifact: (taskId: string, artifactId: string) =>
+    ['task', taskId, 'artifact', artifactId] as const,
   /** The ask-the-task thread and the task's own audit trail (WP-31). */
   taskAsks: (id: string) => ['task', id, 'asks'] as const,
   taskAudit: (id: string) => ['task', id, 'audit'] as const,

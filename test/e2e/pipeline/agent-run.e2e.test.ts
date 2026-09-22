@@ -44,6 +44,15 @@ afterEach(async () => {
 /** The title of `ACME-1` in `support/scenarios.ts`; the string the prompt must carry. */
 const TICKET_TITLE = 'Show the totals in the invoice footer';
 
+/**
+ * The planted, obviously-fake token in `ACME-1`'s **description** (`support/scenarios.ts`).
+ *
+ * It matches TD-012 step 2's `gitlab-token` rule, which is what makes it the positive half of the
+ * prompt-redaction assertion: it reaches the prompt through `tasks.ticket_snapshot` and only the
+ * **pattern** rules can replace it.
+ */
+const TICKET_PLANTED_TOKEN = 'glpat-notarealtokenatall';
+
 const ticketMatched = (pipeline: PipelineE2E) =>
   inboundEvent('ticket.matched', {
     project_id: pipeline.projectId,
@@ -195,6 +204,131 @@ describe('the production runner, over a scripted CLI', () => {
     expect(options?.env?.['ANTHROPIC_API_KEY']).toBe(PLANTED_MODEL_KEY);
     // And the workspace's own working directory, not the path the planner invented.
     expect(options?.cwd).toBe('/work/repo');
+  }, 240_000);
+
+  /**
+   * **Q64's two columns, and the measurement WP-52's criterion (9) asks for.**
+   *
+   * `runs.system_prompt` and `runs.user_prompt` have existed since migration 0004 and nothing had
+   * ever written either — `RunRepository.insert` named twelve columns and neither was among them —
+   * so `GET /api/runs/:id/prompt` refused every run by name and the run screen's Prompt tab was a
+   * permanent error state. They are written at run creation now, from the *same* `RunSpec` the
+   * runner is handed on the next line, through the run's own TD-012 redactor.
+   *
+   * Three things are asserted and one is **measured**:
+   *
+   *  - the columns carry the bytes the CLI received, which is what makes this an assertion about
+   *    the prompt rather than about a string somebody stored (standing rule 82);
+   *  - the planted model credential is **not** in either column and the placeholder is (rule 42);
+   *  - the size of one assembled production prompt is printed, because nobody had measured it and
+   *    a storage decision was being made without the number (rule 66). It is printed rather than
+   *    bounded by an assertion: the figure depends on the project's context pack, so a threshold
+   *    here would be a wall-clock-style assertion about a fixture (rule 2).
+   */
+  it('stores the assembled prompt on the run row, redacted, and reports its size', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'agent-prompt',
+      tickets: TICKETS,
+      agent: 'real-over-fake-cli',
+    });
+    harness = pipeline;
+
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.settle('refinement completed', (task) => task.current_stage === 'architecture');
+
+    const stored = await pipeline.runPromptRow('refinement');
+    expect(stored?.systemPrompt).toBeTypeOf('string');
+    expect(stored?.userPrompt).toBeTypeOf('string');
+
+    // The bytes the CLI received, from the other side of the process boundary: the append in the
+    // `initialize` control request is the system half and the user frames are the other.
+    const run = pipeline.agentRuns.find((entry) => entry.stage === 'refinement');
+    const initialize = run?.cli.stdin.find(
+      (frame) => (frame['request'] as { subtype?: string } | undefined)?.subtype === 'initialize',
+    );
+    const append = (initialize?.['request'] as { appendSystemPrompt?: string } | undefined)
+      ?.appendSystemPrompt;
+    expect(stored?.systemPrompt).toBe(append);
+    // The user half is framed by the SDK, so the column is compared by containment rather than by
+    // equality: the frames carry the assembled prompt plus the SDK's own envelope.
+    expect(JSON.stringify(run?.cli.stdin)).toContain(
+      JSON.stringify(stored?.userPrompt).slice(1, -1),
+    );
+
+    /**
+     * **Redacted at the write — and the count here is `0`, which is a finding rather than a gap.**
+     *
+     * Round 1 asserted `>= 0`, which a non-negative integer column satisfies vacuously. Round 2
+     * measured what the value actually is and why. `ACME-1`'s description ends
+     * `Reproduce with glpat-notarealtokenatall`, a shape TD-012 step 2 matches — and the prompt
+     * carries the **placeholder**, not the token, because `tasks.ticket_snapshot` was already
+     * redacted at *its* write (WP-15f). Every other input to a first-stage prompt is the platform's
+     * own text. So the run's redactor really does run over the assembled prompt and really does
+     * find nothing left: `0` is *"it ran and replaced nothing"*, which is exactly the reading
+     * migration 0038 exists to make possible.
+     *
+     * It is pinned **exactly** rather than loosely, so a writer that double-counted or that stored
+     * the count of some other document fails here; and the positive direction — a prompt that does
+     * carry something only this write can redact — is asserted in
+     * `packages/application/src/pipeline/stage-executor.test.ts`, where such a value is plantable.
+     *
+     * The end-to-end chain is asserted by the placeholder below rather than by the count: the token
+     * was in the ticket, it is not in the stored prompt, and what is there is a redaction marker.
+     */
+    const both = `${stored?.systemPrompt ?? ''}\n${stored?.userPrompt ?? ''}`;
+    expect(both).not.toContain(PLANTED_MODEL_KEY);
+    expect(both).not.toContain(TICKET_PLANTED_TOKEN);
+    expect(both).toContain('[REDACTED sha256:');
+    expect(stored?.redactionCount).toBe(0);
+
+    // The measurement, printed with what it rests on so the number is interpretable.
+    const bytes = (value: string | null | undefined): number =>
+      Buffer.byteLength(value ?? '', 'utf8');
+    // A test reporting a measurement, not server code: `pino` is the rule for the platform's
+    // own logs and this line exists to be read in the tier's output (rule 66).
+    console.log(
+      `WP-52 criterion 9 — one assembled production prompt (stage "refinement"): ` +
+        `system_prompt ${bytes(stored?.systemPrompt)} B, user_prompt ${bytes(stored?.userPrompt)} B, ` +
+        `total ${bytes(stored?.systemPrompt) + bytes(stored?.userPrompt)} B, ` +
+        `redaction_count ${stored?.redactionCount ?? 'null'}`,
+    );
+  }, 240_000);
+
+  /**
+   * The same measurement across **every** agent stage of a walked ticket, because one stage is one
+   * sample: a later stage's user prompt carries the prior artifacts, which is where the size
+   * actually varies. The context pack is empty in this tier (the project has no vault), so this
+   * bounds the *platform's own* contribution and the pack's is the planner's `budget_tokens`,
+   * enforced before assembly. Printed rather than asserted, for the reason the case above gives.
+   */
+  it('reports the assembled prompt size at every agent stage', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'agent-prompt-sizes',
+      tickets: TICKETS,
+      agent: 'real-over-fake-cli',
+    });
+    harness = pipeline;
+
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+
+    const bytes = (value: string | null | undefined): number =>
+      Buffer.byteLength(value ?? '', 'utf8');
+    const sizes: string[] = [];
+    for (const run of pipeline.agentRuns) {
+      const row = await pipeline.runPromptRow(run.stage);
+      // Every stage stored one: criterion (4) across the whole walk, not at the first stage
+      // (standing rule 68 — enumerate what you branch on).
+      expect(row?.systemPrompt, `stage ${run.stage}`).toBeTypeOf('string');
+      expect(row?.userPrompt, `stage ${run.stage}`).toBeTypeOf('string');
+      sizes.push(
+        `${run.stage}: system ${bytes(row?.systemPrompt)} B + user ${bytes(row?.userPrompt)} B ` +
+          `= ${bytes(row?.systemPrompt) + bytes(row?.userPrompt)} B`,
+      );
+    }
+    console.log(`WP-52 criterion 9 — per stage (empty context pack): ${sizes.join('; ')}`);
   }, 240_000);
 });
 

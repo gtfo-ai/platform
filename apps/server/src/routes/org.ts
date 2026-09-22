@@ -238,7 +238,7 @@ export const registerOrgRoutes = async (
       schema: {
         summary: 'Questions and approvals that are still waiting',
         description:
-          'Open questions and pending approvals across the organisation, oldest first. technical/08 says "pending for the caller"; nothing records an assignee, so this answers what is pending and the permission check is what scopes it (see the module note). Question text is written by an agent and is untrusted content (BD-022): render it, never execute it — and it is copied out of `artifacts.data`, which TD-012 does not redact yet (PROGRESS backlog 35).',
+          'Open questions and pending approvals across the organisation, oldest first. technical/08 says "pending for the caller"; nothing records an assignee, so this answers what is pending and the permission check is what scopes it (see the module note). Question text is written by an agent and is untrusted content (BD-022): render it, never execute it — and it is copied out of `artifacts.data`, which has been redacted at the write since migration 0038 (TD-012, WP-52) — a question stored before that migration is served as it was stored, because `questions` is append-only.',
         tags: ['org'],
         response: { 200: inboxResponseSchema },
       },

@@ -13,6 +13,7 @@ import type {
   RunSpec,
   ToolApprovalRequest,
 } from '@platform/application';
+import * as applicationRunRedaction from '@platform/application';
 import { runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +22,7 @@ import {
   type ComposedAgentRunner,
   composeAgentRunner,
   injectedSecretRedactorFor,
+  injectedSecretRedactorForEnvironment,
   unattendedToolApprovals,
 } from './agent.js';
 
@@ -186,6 +188,22 @@ describe('the per-run redactor', () => {
     );
     expect(redactor.redactText('abc').count).toBe(0);
     expect(lines.filter((line) => line.message.includes('cannot be redacted'))).toHaveLength(2);
+  });
+
+  /**
+   * **The same function, not an equivalent one** — TD-012's WP-52 amendment, held as an identity.
+   *
+   * The construction moved to `packages/application/src/pipeline/run-redaction.ts` because the
+   * artifact write and the two prompt columns happen in that ring, and this module re-exports it.
+   * An equality of *behaviour* would pass against a copy that drifts; an equality of *object* is
+   * what makes "the artifact and the transcript of the run that produced it cannot name different
+   * secrets" a fact about the build rather than about two pieces of code agreeing (rule 63).
+   */
+  it('is literally the application ring’s function, so the two constructions cannot diverge', () => {
+    expect(injectedSecretRedactorFor).toBe(applicationRunRedaction.injectedSecretRedactorFor);
+    expect(injectedSecretRedactorForEnvironment).toBe(
+      applicationRunRedaction.injectedSecretRedactorForEnvironment,
+    );
   });
 });
 

@@ -18,7 +18,7 @@
  * another task or another project and was refused (product/11:30). A reader who can see that two
  * claims lost their evidence knows how much of the answer to trust.
  */
-import type { AskAnswerCitation, TaskAsk } from '@platform/contracts';
+import type { ArtifactRef, AskAnswerCitation, TaskAsk } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import { useAskTask, useTaskAsks } from '../app/queries.js';
@@ -52,11 +52,32 @@ const STATUS_LABEL = {
 /**
  * One citation, as a link this application built.
  *
- * A `run` citation is the only one this build can link: the run screen exists. An `artifact` or an
- * `audit` citation is rendered as the row it names, without a link, because there is no screen that
- * addresses one — naming what is missing rather than drawing a dead link (standing rule 18).
+ * Two of the four kinds link. A **`run`** citation goes to the run screen, which has existed since
+ * WP-20. An **`artifact`** citation goes to `?artifact=<id>` on this very task — the panel WP-52
+ * added to `task-detail.tsx` — and the id is resolved *here*, from the task's own artifact list,
+ * because a citation names a `(type, version)` pair and never an id (`askAnswerCitationSchema`:
+ * a model that could write a link would be writing a link this application publishes). A citation
+ * naming a version this task does not have stays plain text, which is the honest answer: the row it
+ * points at is not on this task.
+ *
+ * **`audit` and `knowledge` still do not link, and that is declined rather than forgotten** —
+ * PROGRESS backlog **86**, whose two halves WP-52 deliberately leaves. The audit half has a catch
+ * the entry states: the task audit is **paged** (`apps/server/src/routes/asks.ts`), so an `#id`
+ * anchor resolves only for a row on the first page and the honest shape is a cursor that lands on
+ * the citation's row — a change to the audit endpoint, not to this component. The knowledge half is
+ * cheaper (the API already takes a path) but needs a search parameter on `/projects/$key/knowledge`
+ * and a KB screen that reads it, which is a second screen's worth of work in a row that already
+ * opens the redaction path, the migration and the artifact route. Both stay as they are, printed as
+ * the kind and the row they name — never as a dead link (standing rule 18).
  */
-const Citation = ({ citation }: { readonly citation: AskAnswerCitation }): ReactElement => {
+const Citation = ({
+  citation,
+  artifacts,
+}: {
+  readonly citation: AskAnswerCitation;
+  /** The task's own artifacts: a citation names a `(type, version)` pair and never an id. */
+  readonly artifacts: readonly ArtifactRef[];
+}): ReactElement => {
   if (citation.kind === 'run' && typeof citation.run_id === 'string') {
     return (
       <li className="text-xs">
@@ -68,11 +89,27 @@ const Citation = ({ citation }: { readonly citation: AskAnswerCitation }): React
     );
   }
   if (citation.kind === 'artifact') {
+    const named = artifacts.find(
+      (artifact) =>
+        artifact.artifact_type === citation.artifact_type && artifact.version === citation.version,
+    );
+    const label = `${citation.artifact_type ?? 'artifact'} v${citation.version ?? '?'}`;
     return (
       <li className="text-xs">
-        <UntrustedText
-          value={`${citation.artifact_type ?? 'artifact'} v${citation.version ?? '?'}`}
-        />{' '}
+        {named === undefined ? (
+          <UntrustedText value={label} />
+        ) : (
+          // `to="."` keeps whichever task route the reader is on — the thread is rendered from
+          // both `/tasks/$taskId` and `/projects/$key/tasks/$taskId`, and naming the first would
+          // drop a reader out of their project's context on every citation they followed.
+          <Link
+            to="."
+            search={(previous: Record<string, unknown>) => ({ ...previous, artifact: named.id })}
+            className="underline"
+          >
+            <UntrustedText value={label} />
+          </Link>
+        )}{' '}
         — <UntrustedText value={citation.detail} />
       </li>
     );
@@ -96,7 +133,13 @@ const citationKey = (citation: AskAnswerCitation): string =>
     citation.reference ?? '',
   ].join('|');
 
-const AskCard = ({ ask }: { readonly ask: TaskAsk }): ReactElement => (
+const AskCard = ({
+  ask,
+  artifacts,
+}: {
+  readonly ask: TaskAsk;
+  readonly artifacts: readonly ArtifactRef[];
+}): ReactElement => (
   <Card className="flex flex-col gap-2">
     <div className="flex items-center gap-2">
       <Badge tone={STATUS_TONE[ask.status]}>{STATUS_LABEL[ask.status]}</Badge>
@@ -120,7 +163,7 @@ const AskCard = ({ ask }: { readonly ask: TaskAsk }): ReactElement => (
           // identity of its own, and an index key would make two answers' lists collide in React's
           // reconciliation if the thread ever re-sorted. Two identical citations in one answer are
           // the only collision this can have, and they render identically.
-          <Citation key={citationKey(citation)} citation={citation} />
+          <Citation key={citationKey(citation)} citation={citation} artifacts={artifacts} />
         ))}
       </ul>
     )}
@@ -136,7 +179,14 @@ const AskCard = ({ ask }: { readonly ask: TaskAsk }): ReactElement => (
   </Card>
 );
 
-export const AskThread = ({ taskId }: { readonly taskId: string }): ReactElement => {
+export const AskThread = ({
+  taskId,
+  artifacts,
+}: {
+  readonly taskId: string;
+  /** The task's own artifacts, so an `artifact` citation's `(type, version)` resolves to an id. */
+  readonly artifacts: readonly ArtifactRef[];
+}): ReactElement => {
   const asks = useTaskAsks(taskId);
   const ask = useAskTask(taskId);
   const [question, setQuestion] = useState('');
@@ -201,7 +251,7 @@ export const AskThread = ({ taskId }: { readonly taskId: string }): ReactElement
         />
       ) : null}
       {(asks.data?.items ?? []).map((entry) => (
-        <AskCard key={entry.id} ask={entry} />
+        <AskCard key={entry.id} ask={entry} artifacts={artifacts} />
       ))}
     </section>
   );

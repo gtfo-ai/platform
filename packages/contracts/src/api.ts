@@ -20,6 +20,7 @@ import {
 } from './artifacts.js';
 import {
   agentRoleSchema,
+  artifactTypeSchema,
   autonomyLevelSchema,
   effortSchema,
   idSchema,
@@ -54,6 +55,7 @@ import {
   contextPackRecordSchema,
   humanTimeKindSchema,
   jsonObjectSchema,
+  jsonValueSchema,
   knowledgeProposalRecordSchema,
   projectRecordSchema,
   questionRecordSchema,
@@ -1045,6 +1047,43 @@ export const takeOverResponseSchema = z.strictObject({
   workspace_export: z.enum(['requested', 'no_live_run']),
 });
 
+/**
+ * `GET /api/artifacts/:artifact_id` — one artifact's body (WP-52, PROGRESS backlog 85).
+ *
+ * `data` is published as **opaque JSON** rather than through `artifactSchema`'s discriminated
+ * union, and that is a refusal rather than laziness: the union is strict, so a row written by an
+ * older build — or by a type whose schema has since gained a field — would make this endpoint
+ * answer 500 instead of showing a reader the document that exists. The SPA renders every string in
+ * it as React text nodes (BD-022, `apps/web/src/ui/untrusted.tsx`); nothing here is markup and
+ * nothing here is a link.
+ *
+ * `redaction_count` is on the wire because it is the only signal TD-012 ran at all, and it is
+ * **not nullable**: the `null` spelling means *"written before migration 0038, when nothing
+ * redacted an artifact"*, and such a row is refused by the route (409 `artifact_not_redacted`)
+ * rather than published — this endpoint is a new read surface over exactly the defect backlog 35
+ * measured, gated at `artifact.read`, which is `viewer`.
+ *
+ * **One exception, named rather than left in the gap between two true sentences.** `ShadowReport`
+ * is written by `runShadowReport`, which has no run and therefore no TD-012 step-1 secret set, and
+ * passes `noSecretsRedactor()` — so its row carries `redaction_count = 0` with **neither** step
+ * applied, and it is served here normally. That is PROGRESS backlog **131**, which owns the write.
+ * Exposure is unchanged either way: the same document is already served at `project.read`, which is
+ * also `viewer`, by `apps/server/src/routes/shadow.ts`. This clause corrects a sentence, it does not
+ * open a hole.
+ */
+export const artifactBodyResponseSchema = z.strictObject({
+  id: idSchema,
+  task_id: idSchema,
+  artifact_type: artifactTypeSchema,
+  version: z.int().positive(),
+  schema_version: nonEmptyStringSchema,
+  produced_by_run_id: idSchema.nullable(),
+  created_at: isoDateTimeSchema,
+  redaction_count: z.int().nonnegative(),
+  markdown: z.string().nullable(),
+  data: jsonValueSchema,
+});
+
 export const taskExportResponseSchema = z.strictObject({
   task: taskRecordSchema,
   events: z.array(domainEventSchema),
@@ -1513,6 +1552,7 @@ export type HandBackRequest = z.infer<typeof handBackRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema>;
 export type TaskExportResponse = z.infer<typeof taskExportResponseSchema>;
+export type ArtifactBodyResponse = z.infer<typeof artifactBodyResponseSchema>;
 export type RunMessagesQuery = z.infer<typeof runMessagesQuerySchema>;
 export type RunMessagesResponse = z.infer<typeof runMessagesResponseSchema>;
 export type SteerRunRequest = z.infer<typeof steerRunRequestSchema>;

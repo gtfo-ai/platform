@@ -88,9 +88,10 @@ export interface GitBinding {
    *    `outcome.result` unredacted (standing rule 31's note), so a sink of its own needs the
    *    redactor of its own;
    *  - **a review finding on its way to a discussion thread**, which is the *other* direction — a
-   *    model's words going out to a third party. `artifacts.data` holds them unredacted (PROGRESS
-   *    backlog 35, which this work package does not close and does not widen), so the redaction
-   *    happens where the text leaves the platform.
+   *    model's words going out to a third party. `artifacts.data` held them unredacted until WP-52
+   *    (PROGRESS backlog 35, closed at the write by `artifacts/redaction.ts`); this redaction is
+   *    still owed and is not the same one, because it covers what a **provider** is sent and
+   *    composes the binding's own credentials on top of the run's.
    */
   readonly redactor: SecretRedactor;
 }

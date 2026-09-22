@@ -51,10 +51,11 @@
  * it", "files one ticket per accepted child, under the parent, and none twice"), and the second one
  * is what would still be measuring if the first ever redacted everything.
  *
- * The residual, stated: `artifacts.data` keeps the **unredacted** copy of the same words (PROGRESS
- * backlog **35**, which names artifacts as a TD-012 write list nobody applied). This row is no
- * longer a projection of that one, and closing the artifact is that backlog entry's, not this
- * module's.
+ * The residual this used to state is **closed**: `artifacts.data` kept an unredacted copy of the
+ * same words (PROGRESS backlog **35**, which named artifacts as a TD-012 write list nobody
+ * applied), and WP-52 redacts it at the write (`artifacts/redaction.ts`, migration 0038). The two
+ * redactions are still separate on purpose — this one happens where the text **leaves** the
+ * platform and covers what a provider is sent, which is not the same question as what is stored.
  */
 import type {
   Actor,

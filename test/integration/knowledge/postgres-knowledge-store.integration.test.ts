@@ -167,8 +167,9 @@ runKnowledgeProposalsContract({
           [projectId, `KB-${++seededArtifacts}`],
         );
         const artifact = await client.query<{ id: string }>(
-          `insert into artifacts (task_id, type, data, schema_version)
-           values ($1, 'LibrarianProposals', '{}'::jsonb, '1') returning id`,
+          // `redaction_count` has no default since migration 0038; an insert that omits it is refused.
+          `insert into artifacts (task_id, type, data, schema_version, redaction_count)
+           values ($1, 'LibrarianProposals', '{}'::jsonb, '1', 0) returning id`,
           [task.rows[0]?.id],
         );
         return artifact.rows[0]?.id as Id;

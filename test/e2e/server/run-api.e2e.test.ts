@@ -23,8 +23,17 @@
  *    broadcast hint, a read-back and `SseHub.publish`) and is the half backlog 29 named as missing;
  *  - every one of the five endpoints refuses an anonymous caller, per route.
  */
-import type { RunMessagesResponse, RunRecord, TaskDetailResponse } from '@platform/contracts';
-import { runMessagesResponseSchema, runRecordSchema } from '@platform/contracts';
+import type {
+  ArtifactBodyResponse,
+  RunMessagesResponse,
+  RunRecord,
+  TaskDetailResponse,
+} from '@platform/contracts';
+import {
+  artifactBodyResponseSchema,
+  runMessagesResponseSchema,
+  runRecordSchema,
+} from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   PLANTED_MODEL_KEY,
@@ -147,7 +156,12 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
     expect(parsed.stage).toBe('refinement');
     expect(parsed.status).toBe('completed');
     expect(parsed.project_id).toBe(pipeline.projectId);
-    expect(parsed.redaction_count).toBeGreaterThanOrEqual(0);
+    // `>= 0` stood here in round 1 and is vacuous for a non-negative integer column. The run's
+    // `redaction_count` is what the redactor replaced in its two **prompt** columns (migration
+    // 0038), and on this tier that is exactly **0** — every input to a first-stage prompt has
+    // already been redacted at its own write, which `agent-run.e2e.test.ts` measures and explains.
+    // Pinned exactly, so a projection reading some other column fails here.
+    expect(parsed.redaction_count).toBe(0);
 
     const messages = await client.json<RunMessagesResponse>(`/api/runs/${runId}/messages`);
     expect(messages.status, JSON.stringify(messages.body)).toBe(200);
@@ -174,13 +188,25 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
       page.items.slice(1).map((item) => item.seq),
     );
 
-    // ── the two refusals, which are the honest answer while nothing writes the columns ──
-    const prompt = await client.json<{ error: { code: string; message: string } }>(
-      `/api/runs/${runId}/prompt`,
-    );
-    expect(prompt.status).toBe(409);
-    expect(prompt.body.error.code).toBe('prompt_not_recorded');
-    expect(prompt.body.error.message).toContain('runs.system_prompt');
+    // ── the prompt, which this endpoint refused until WP-52 ───────────────────
+    //
+    // **This assertion inverted.** `runs.system_prompt`/`user_prompt` had no writer at all (Q64),
+    // so the route answered 409 `prompt_not_recorded` for every run and the Prompt tab was a
+    // permanent error state. Both are written at run creation now, redacted at the write, so the
+    // live run of this very pipeline answers **200** — and the refusal survives for a row created
+    // before migration 0038, which `pipeline-queries.ts` still has a branch for.
+    const prompt = await client.json<{
+      prompt_version: string;
+      system_prompt: string;
+      user_prompt: string;
+    }>(`/api/runs/${runId}/prompt`);
+    expect(prompt.status, JSON.stringify(prompt.body)).toBe(200);
+    expect(prompt.body.system_prompt.length).toBeGreaterThan(0);
+    expect(prompt.body.user_prompt).toContain('ACME-1');
+    // Redacted at the write, in both directions: the planted model key is the run's own
+    // `ANTHROPIC_API_KEY`, and the transcript assertions above prove it was really in the run.
+    const served = `${prompt.body.system_prompt}\n${prompt.body.user_prompt}`;
+    expect(served).not.toContain(PLANTED_MODEL_KEY);
 
     const pack = await client.json<{ error: { code: string; message: string } }>(
       `/api/runs/${runId}/context-pack`,
@@ -204,6 +230,43 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
     ]);
     expect(task.body.artifacts.length).toBeGreaterThan(0);
     expect(JSON.stringify(task.body)).not.toContain(PLANTED_MODEL_KEY);
+
+    // ── one artifact's body (WP-52, PROGRESS backlog 85) ──────────────────────
+    //
+    // The `url` was a literal `null` in this projection and no route served a body, so every
+    // artifact on every task screen was a row a reader could see and not open. Asserting the path
+    // here closes that symptom where it was filed — at the API, not only in the SPA.
+    const artifact = task.body.artifacts[0];
+    expect(artifact?.url).toBe(`/api/artifacts/${artifact?.id}`);
+
+    const opened = await client.json<ArtifactBodyResponse>(`/api/artifacts/${artifact?.id}`);
+    expect(opened.status, JSON.stringify(opened.body)).toBe(200);
+    const artifactBody = artifactBodyResponseSchema.parse(opened.body);
+    expect(artifactBody.task_id).toBe(waiting.id);
+    expect(artifactBody.redaction_count).toBeGreaterThanOrEqual(0);
+    // The run's own credential is not in the document this route serves — which is the whole
+    // reason the route could not exist before the write was redacted (backlog 35).
+    expect(JSON.stringify(artifactBody)).not.toContain(PLANTED_MODEL_KEY);
+
+    /**
+     * **The refusal is asserted next door, and that is a decision rather than an omission**
+     * (round 4).
+     *
+     * Round 3 put the 409 `artifact_not_redacted` assertion here, with a drop / update / re-add
+     * dance that put a row back into its pre-0038 state. It failed **one full-tier run in two** on
+     * the orchestrator's machine at a one-minute load of 9.45 — `expected 200 to be 409` with an
+     * **empty** response body, which this route's code cannot produce — and did not reproduce here
+     * across three runs of this file and two full-tier passes. The mechanism was never established,
+     * so none is claimed (standing rules 76 and 86), and a test that fails one run in two is worse
+     * than no test.
+     *
+     * It moved to where it is deterministic rather than being retried until green:
+     * `apps/server/src/routes/tasks.test.ts` drives the real router, guards, schemas and error
+     * handler against plain functions, and `test/integration/server/read-api.integration.test.ts`
+     * produces the `null` on real SQL. What stays here is the half only this tier can state — a
+     * body **the pipeline really produced**, served, without the run's own credential in it — and
+     * the DDL that made the tier mutate its own schema mid-walk is gone with it.
+     */
 
     // ── unknown ids are 404, not 500 or an empty document ──
     const unknown = '00000000-0000-4000-8000-0000000000ff';

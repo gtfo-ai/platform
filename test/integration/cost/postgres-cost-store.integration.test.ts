@@ -154,8 +154,10 @@ runCostStoreContract({
         },
         refinedSize: async (taskId, size) => {
           await client.query(
-            `insert into artifacts (task_id, type, version, data, schema_version)
-             values ($1, 'RefinedSpec', 1, $2, 'v1')`,
+            // `redaction_count` is named because migration 0038 gave the column no default and a
+            // `NOT VALID` check: an insert that omits it is refused, which is the point.
+            `insert into artifacts (task_id, type, version, data, schema_version, redaction_count)
+             values ($1, 'RefinedSpec', 1, $2, 'v1', 0)`,
             [taskId, JSON.stringify(size === null ? { not: 'a refined spec' } : refinedSpec(size))],
           );
         },

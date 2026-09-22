@@ -229,17 +229,21 @@ describe('the librarian stage, over a merged ticket', () => {
 
     // ── redaction, in both directions (TD-012, standing rule 42) ─────────────
     //
-    // The runner passes `structuredOutput` through untouched, so the raw credential really is in
-    // the artifact row — which is what makes the two `not.toContain`s below evidence rather than a
-    // fixture that never carried a secret.
-    //
-    // **It is also a finding, and this line is its reproduction.** TD-012's write list names
-    // *artifacts*, and `artifacts.data` is written unredacted by the stage executor — for every
-    // artifact type, not only this one. It is reported as discovered work rather than fixed here
-    // (it is a change to the executor's write path, and this work package owns the proposals).
-    // When somebody does fix it, **this** expectation becomes the placeholder and the two below it
-    // do not move: they are about the redactor the curation composes.
-    expect(JSON.stringify(artifact)).toContain(PLANTED_MODEL_KEY);
+    // **This is backlog 35's reproduction, inverted at WP-52.** Until then the runner passed
+    // `structuredOutput` through untouched and the stage executor stored it verbatim, so this line
+    // read `expect(JSON.stringify(artifact)).toContain(PLANTED_MODEL_KEY)` and passed — a
+    // credential the platform had injected into the run, in plain text in the `artifacts` row, on
+    // the production runner rather than the fake (standing rule 82). `redactArtifactData` now runs
+    // before `store.artifacts.insert`, so the same document carries the placeholder instead. The
+    // two `storedDelta`/`committed` pairs below **did not move**: they are about the redactor the
+    // curation composes, which was already right.
+    const artifactJson = JSON.stringify(artifact);
+    expect(artifactJson).not.toContain(PLANTED_MODEL_KEY);
+    expect(artifactJson).toContain(PLANTED_MODEL_KEY_PLACEHOLDER);
+    // …and the row says how many replacements it took, which is the only signal a redactor that
+    // stopped working would leave (migration 0038). Both directions: `> 0` here, and `0` for a
+    // run with nothing to redact is the contract suite's case.
+    expect(await pipeline.artifactRedactionCount('LibrarianProposals')).toBeGreaterThan(0);
     const storedDelta = byPath.get(AUTO_APPLIED_PATH)?.delta ?? '';
     expect(storedDelta).not.toContain(PLANTED_MODEL_KEY);
     expect(storedDelta).toContain(PLANTED_MODEL_KEY_PLACEHOLDER);

@@ -96,10 +96,17 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * row nothing ever picks up (standing rule 31 — an optional collaborator is an absent one).
    */
   readonly ask: AskRuntimeOptions;
-  /** Everything the stage executor needs that the saga does not. */
+  /**
+   * Everything the stage executor needs that the saga does not.
+   *
+   * `redactor` is omitted alongside `store` and `settings` because **this runtime supplies it**
+   * (WP-52 round 2): it is the same {@link PipelineRuntimeOptions.redactor} the epic split and the
+   * ask executor get, and a composition root that could pass a different one — or none — is a
+   * deployment where one writer applies TD-012 step 2 and another does not.
+   */
   readonly execution: Omit<
     StageExecutorOptions,
-    'unitOfWork' | 'store' | 'settings' | 'logger' | 'context'
+    'unitOfWork' | 'store' | 'settings' | 'logger' | 'context' | 'redactor'
   > &
     Pick<StageExecutorOptions, 'context'>;
   /** How many stages this process runs at once. @default 1 */
@@ -184,6 +191,10 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     unitOfWork,
     store: options.store,
     settings: async (projectId) => options.settings.forProject(projectId),
+    // WP-52: TD-012 step 2 over the artifact this executor stores — the **same** redactor the epic
+    // split and the ask executor get, supplied here rather than through `execution:` so a
+    // composition root cannot give one writer the pattern rules and another writer none.
+    redactor: options.redactor,
     // WP-34: the separate shadow budget and the comparison base. Supplied here rather than left to
     // the composition root's `execution` block, because the same store is what makes a shadow task
     // exist at all — see `StageExecutorOptions.shadow`.

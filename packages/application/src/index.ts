@@ -25,6 +25,8 @@
  */
 
 // The cost ledger, its budgets projection and the task estimate (WP-19, BD-010, BD-011)
+// The TD-012 artifact write: the per-field policy applied, and its refusal (WP-52)
+export * from './artifacts/redaction.js';
 // Ask-the-task: the thread, the run with no stage and the ticket mirror (WP-31)
 export * from './ask/commands.js';
 export * from './ask/executor.js';
@@ -110,6 +112,7 @@ export * from './pipeline/lease.js';
 export * from './pipeline/live-runs.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
+export * from './pipeline/run-redaction.js';
 export * from './pipeline/runtime.js';
 export * from './pipeline/saga.js';
 export * from './pipeline/settings.js';

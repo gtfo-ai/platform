@@ -286,6 +286,25 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  it('serves the artifact body WP-52 added, and the client calls it', async () => {
+    // PROGRESS backlog 85: the task projection published `url: null` as a literal and no route
+    // served a body, so every artifact on every task screen was a row a reader could see and not
+    // open. Named positively **and** matched against the client's own sweep (standing rule 10), and
+    // asked for its 401 like every other guarded read — `artifact.read` had been in
+    // `PERMISSION_REQUIREMENTS` since WP-04 with no user until this route.
+    const probed = await probe('/api/artifacts/{}');
+    expect(probed.served).toBe(true);
+    expect(probed.status).toBe(401);
+    expect(probed.code).toBe('unauthenticated');
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+      })),
+    );
+    expect(paths).toContain('/api/artifacts/{}');
+  });
+
   it('serves the four knowledge endpoints WP-18b took off the gap list', async () => {
     for (const path of [
       '/api/projects/{}/kb/tree',

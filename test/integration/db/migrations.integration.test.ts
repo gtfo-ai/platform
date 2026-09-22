@@ -362,6 +362,69 @@ describe('migrate on an empty PostgreSQL 18', () => {
     });
   });
 
+  /**
+   * Migration 0038's `NOT VALID` check, measured rather than assumed (WP-52, standing rule 3).
+   *
+   * The whole shape of `artifacts.redaction_count` rests on a claim about PostgreSQL: that a check
+   * constraint added `NOT VALID` exempts the **existing** rows and is still enforced on every
+   * subsequent insert. That is what lets a pre-WP-52 artifact keep `null` — "no redactor ran" —
+   * while a writer that omits the column is refused rather than recorded as a null. It is a claim
+   * about the database, so it is asked of the database.
+   */
+  it('lets a pre-0038 artifact keep a null redaction count and refuses a new row without one', async () => {
+    await withClient(database.connectionString, async (client) => {
+      const runId = await seedRun(client);
+      const { rows } = await client.query<{ task_id: string }>(
+        'select task_id from runs where id = $1',
+        [runId],
+      );
+      const taskId = rows[0]?.task_id;
+
+      // The pre-migration row, planted the only way it can be: by disabling the constraint the way
+      // `NOT VALID` already does for the rows that were there first.
+      await client.query(
+        'alter table artifacts drop constraint artifacts_redaction_count_recorded',
+      );
+      await client.query(
+        `insert into artifacts (task_id, type, version, data, schema_version)
+         values ($1, 'RefinedSpec', 1, '{}'::jsonb, '1')`,
+        [taskId],
+      );
+      await client.query(
+        `alter table artifacts add constraint artifacts_redaction_count_recorded
+         check (redaction_count is not null and redaction_count >= 0) not valid`,
+      );
+
+      // It survives, with its null: the constraint is not validated against it.
+      const legacy = await client.query<{ redaction_count: number | null }>(
+        'select redaction_count from artifacts where task_id = $1',
+        [taskId],
+      );
+      expect(legacy.rows[0]?.redaction_count).toBeNull();
+
+      // …and a new row that does not name the column is refused rather than stored as a null.
+      await expect(
+        client.query(
+          `insert into artifacts (task_id, type, version, data, schema_version)
+           values ($1, 'RefinedSpec', 2, '{}'::jsonb, '1')`,
+          [taskId],
+        ),
+      ).rejects.toThrow(/artifacts_redaction_count_recorded/);
+
+      // The other direction: naming it works, and 0 is a value.
+      await client.query(
+        `insert into artifacts (task_id, type, version, data, schema_version, redaction_count)
+         values ($1, 'RefinedSpec', 2, '{}'::jsonb, '1', 0)`,
+        [taskId],
+      );
+      const written = await client.query<{ redaction_count: number | null }>(
+        'select redaction_count from artifacts where task_id = $1 and version = 2',
+        [taskId],
+      );
+      expect(written.rows[0]?.redaction_count).toBe(0);
+    });
+  });
+
   it('reports a migration this build does not know about (TD-019 downgrade guard)', async () => {
     await withClient(database.connectionString, async (client) => {
       await client.query(
