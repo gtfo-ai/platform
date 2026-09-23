@@ -182,7 +182,30 @@ export const buildQueryOptions = (spec: RunSpec, parts: QueryOptionParts): Optio
   if (spec.artifactType !== null) {
     options.outputFormat = { type: 'json_schema', schema: artifactJsonSchema(spec.artifactType) };
   }
-  if (spec.providerMode === 'local' && spec.claudeCodePath !== null) {
+  /**
+   * `pathToClaudeCodeExecutable` — set when the spec names a path **and** the platform is not the
+   * thing that would resolve one (PROGRESS backlog **34**).
+   *
+   * Two cases, and until WP-53 only the first was honoured:
+   *
+   *  - **`local` provider mode**, BD-004: the operator's own binary, named by `APP_CLAUDE_BINARY`.
+   *    Unchanged.
+   *  - **A run spawned through a transport** (`parts.spawnClaudeCodeProcess`), which is every
+   *    containerised run. Left `undefined`, the SDK resolves its **own bundled**
+   *    `@anthropic-ai/claude-agent-sdk-linux-*` binary and passes that path as the spawn command —
+   *    a path on the *platform's* filesystem, which the run shim then `exec`s **in the container**,
+   *    where it is not. The `existsSync` check that would have caught it is on the branch that
+   *    spawns locally (`if (spawnClaudeCodeProcess) … else spawnLocalProcess`), so the override path
+   *    does not validate the path at all, and the failure arrives as an exec error inside a
+   *    container rather than as a statement about configuration. The path a containerised run gets
+   *    comes from the launcher, which is the only process that knows the run image
+   *    (`ProvisionedRunWorkspace.claudeCodePath`).
+   *
+   * `providerMode` is deliberately **not** the gate any more: it answers *"whose credential"*, and
+   * *"which filesystem holds the binary"* is a different question that only the transport answers.
+   */
+  const spawnsThroughTransport = parts.spawnClaudeCodeProcess !== undefined;
+  if (spec.claudeCodePath !== null && (spec.providerMode === 'local' || spawnsThroughTransport)) {
     options.pathToClaudeCodeExecutable = spec.claudeCodePath;
   }
   if (spec.resumeSessionId !== null) {

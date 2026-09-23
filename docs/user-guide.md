@@ -325,8 +325,14 @@ In one place, so it is not spread across thirteen sections:
 | Nine of the thirteen merge-readiness checks | task detail |
 | Creating an integration from the browser — any screen at all | integrations, onboarding step 1 |
 
-And one that is about the deployment rather than a screen: on a stock instance **no agent stage
-runs**, because there is no transport between the API process and the launcher container yet. A stage
-that needs an agent fails its run and escalates the task to needing a human; everything around it —
-intake from a webhook, the board, the commands, the knowledge base, the audit and the cost ledger —
-works. The [operator guide](operator-guide.md) §10 says the same thing from the other side.
+And one that is about the deployment rather than a screen: an agent stage runs only on an instance
+whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`
+container WP-53 added. Without them a stage that needs an agent **queues** rather than failing —
+nothing is lost and nothing is escalated, but nothing moves either. The platform gates are on the
+same queue and stop with it, which on such an instance you only meet through a human path: a
+hand-back to a gate stage, or a merge you make by hand.
+Everything around it — intake from a webhook, the board, the commands, the knowledge base, the audit
+and the cost ledger — works either way. What is still missing on *every* instance is the git write
+credential: the launcher has no git provider wired to it, so a read-only stage runs end to end and a
+stage that needs to push fails at start with that refusal by name. The
+[operator guide](operator-guide.md) §1 and §10 say the same thing from the other side.

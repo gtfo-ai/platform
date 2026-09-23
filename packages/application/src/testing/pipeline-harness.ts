@@ -219,6 +219,15 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun): RunOutcome => ({
 
 export interface HarnessOptions {
   readonly projectId?: Id;
+  /**
+   * Whether this composition subscribes `stage.execute` (TD-028 decision 5, WP-53).
+   *
+   * Defaults to `true`, which is what every case in this tier needs and what a process that
+   * composes a runner does. `false` is the shipped `app` service: no launcher configuration, so it
+   * takes no agent job it could not perform — and, as the decision's own consequence section
+   * states, leaves them queued.
+   */
+  readonly runsAgents?: boolean;
   readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
   /**
    * One scripted run per key; a run with no script fails the test loudly.
@@ -861,6 +870,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     },
     settings: staticProjectSettings(() => settings),
     jobs,
+    ...(options.runsAgents === undefined ? {} : { runsAgents: options.runsAgents }),
     notifications,
     timezone: options.timezone ?? 'UTC',
     // One composed set for the harness's one project. Production reads the `bindings` table

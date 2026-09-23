@@ -52,3 +52,87 @@ Per-queue subscription by configuration is not a new idea here; it is the rule `
 - **A deployment with no runner container leaves `stage.execute` jobs queued.** That is the honest consequence of decision 5 and it must be visible rather than silent: the queue depth is a metric, `/readyz` reports the runner as absent, and the operator guide states that a compose instance without the runner service runs everything except agent stages. Recorded here so the next reader meets the trade rather than the symptom.
 - `.env.example`, `compose.yml` and `docs/operator-guide.md` gain the second service, its token and its network; `technical/01` § Containers and `technical/05` § 2 gain the control plane beside the data plane.
 - **To verify** (none of it run here): the launcher's HTTP surface against the real images on both architectures; that the runner container's `ctl` mount sees a socket created by the launcher's `volume-subpath` mount (WP-13 measured `volume-subpath` on Docker Engine 29.7.2 and this is the same mechanism from the other side); and the start-up refusal when the token is absent.
+
+## Amendment (WP-53, 2026-09-23) — decision 5's queue carries the platform gates too
+
+Recorded by the orchestrator from an architect's ruling taken during WP-53, because the
+implementation measured a consequence this record did not state. **Decision 5 stands**; what follows
+is the trade it makes, written down rather than discovered by the next operator.
+
+**The queue is not agent-runs-only.** Gate evaluation — `ci_gate`, `rebase_gate` and `merged_gate`
+(`packages/application/src/pipeline/gates.ts`) — is a *branch of the same `stage.execute` handler*,
+on the same queue, registered at the same place. So a process that does not subscribe the queue,
+which is exactly what decision 5 makes configurable, also stops evaluating the platform gates, which
+are not agent runs and need no runner.
+
+**Why it is not given a queue of its own.** `stage.execute` is `stately` with
+`singletonKey: task:<id>`, which is what enforces *a task never runs two stages at once*. A second
+queue forfeits that: a gate and a stage for the same task would run concurrently and both write the
+task through `settle`. That is a correctness regression bought for the convenience of a degraded
+deployment, and the trade is refused in that direction.
+
+**What an operator actually loses, stated narrowly.** Every shipped template puts the gates *behind*
+agent stages, so on a runner-less instance no task reaches a gate by the pipeline's own motion. The
+reachable paths are **human**: a hand-back to an enabled gate stage, and a `merged_gate` after a human
+merge — plus a gate already `pending` when the runner stopped, whose recheck never fires, so
+`MAX_GATE_CHECKS` never escalates it.
+
+**Nothing is lost, only delayed.** The jobs are durable and are taken when a runner starts. The bound
+is pg-boss's default retention — 14 days, since no `retentionSeconds` is set — and **beyond it the
+job is dropped and the task is stranded with no escalation.** No row owns a sweep for that; it is
+filed in the backlog rather than implied here.
+
+**So the sentence WP-53's criterion (8) puts in the operator guide reads "everything except agent
+stages *and the platform gates*"**, and the bullet above about queued `stage.execute` jobs is to be
+read as covering both.
+
+**And the visibility this consequence leans on does not exist, in either half.** The Consequences
+bullet above says *"the queue depth is a metric, `/readyz` reports the runner as absent"*. Both
+clauses were false when they were written and are still false: `apps/server/src/metrics.ts` registers
+five metrics and every one of them is HTTP, SSE or event-dispatch — there is **no** job-queue metric
+at all — and `/readyz` does not report the runner. So this decision's stated mitigation for its own
+stated consequence is unbuilt, which is worse than an unmitigated consequence because it reads as
+handled.
+
+This correction is recorded here rather than by rewriting that bullet, because a decision record is
+amended and not edited. It is **standing rule 78** — *a residual's named mitigation is a claim about
+code that exists; grep for it before you write the sentence* — and the amendment above repeated the
+same error one paragraph after inheriting it, which is why the rule is cited rather than merely
+obeyed. The gap is filed as PROGRESS backlog **135** and owned by WP-72; until it is built, the
+honest statement of decision 5's consequence is that a runner-less deployment stalls agent stages and
+the platform gates **silently**.
+
+## Amendment (WP-53, 2026-09-23, second) — decision 4's idempotency is scoped to a launcher's lifetime
+
+Recorded by the orchestrator from WP-53's review, because decision 4 reads as unqualified and the
+implementation cannot meet it as written.
+
+**Decision 4 says "every control-plane operation is idempotent on the run id".** The shipped
+idempotency is **in-process memory**, which is the right choice and not a shortcut: a durable store
+needs a database connection this decision's own topology denies the launcher container
+(`compose.yml`'s launcher service joins neither the default network nor `db`, which is the same
+argument that rejected pg-boss as the transport). So the guarantee is real **within one launcher
+process** and is **not preserved across a launcher restart**.
+
+**What that costs is not settled here, and an earlier draft of this amendment wrongly settled it.**
+A `create` replayed after a restart does not find the stored handle. What happens next is **PROGRESS
+backlog 136's open question**, and this record must not close it — the three candidates are a name
+collision that leaves the first run's container orphaned, a rollback, or a second container, and
+which one occurs is **unmeasured**.
+
+The draft this replaces asserted that no second container starts *"because the container name is
+derived from the run id, so the daemon refuses the duplicate"*. That mechanism is **wrong on this
+tree** and the correction matters more than the claim did: the first name-derived object `create`
+makes is the **network** (`packages/infrastructure/src/workspace/provider.ts:630`), `createVolume` is
+idempotent, and `#prepare` — which **rewrites `/ctl/<runId>/token`** — runs *before* any container
+name is used. `DockerEngine.createNetwork` sends no `CheckDuplicate`, so whether the daemon refuses
+at all is version-dependent and unmeasured. So the collision, if it happens, reads as the **network
+or the sidecar**, and the realistic bad case is **not** fail-closed: a replayed create can overwrite
+the live run's shim token and *then* fail, orphaning the container it did not know about.
+
+The residual therefore stays **`needs measurement`**, owned by backlog **136**, which is cited two
+lines below and which exists precisely to leave this open.
+
+The scope is written here because this is the document a reader goes to first. It was already stated
+at `apps/launcher/src/control-plane.ts`, in `PROGRESS.md` and in `CLAUDE.md` — three places that are
+all downstream of the decision that makes the promise.

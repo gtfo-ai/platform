@@ -7313,6 +7313,560 @@ observation with no mechanism cannot be given an acceptance criterion without in
 precedent for recording the number), **28** (the last time an e2e death under CI load had a real
 cause and every test passed), rule **66**, rule **76**, rule **86**, rule **87**.
 
+### 133. **The launcher can authenticate nothing against git, so the one stage that produces a merge request fails terminally before a container exists — and a private repository's mirror fetch has the same gap one call earlier, for *every* stage** (TODO, **major** — one cause, two consequences, the second not in the report; **live** on any instance configured to run agents; **no work package owns it**, and it needs a decision recorded before it can be built; reported by WP-53 as discovered work, established off the tree by the refiner, session 7)
+
+**What is wrong.** The launcher process holds no git provider, so `RunCredentialBroker` mints
+nothing. Everything else on that path exists and is tested — the GitLab adapter implements
+`mintCredential` (`packages/integrations/src/providers/gitlab/provider.ts:482`), the broker issues
+and revokes, the credential helper answers over the control socket, the workspace uses it. What is
+missing is the composition, and it is missing because the process that has the Docker socket is
+deliberately the process that has no database, no secret key and no binding (TD-021).
+
+Two consequences follow, and the report names only the first.
+
+1. **A run that can write fails at `startRun` before a container exists.** `runIsReadOnly`
+   (`packages/infrastructure/src/workspace/spec.ts:142`) is false for a spec carrying `Write` or
+   `Edit`, so `broker.issue` mints — and the launcher's source is `unwiredCredentials`, which
+   throws `invalid_spec` by name (`apps/launcher/src/index.ts:41-51`). `invalid_spec` is
+   **terminal, not retryable** (`packages/infrastructure/src/launcher/protocol.ts:297-310`), so the
+   run fails and the task escalates to `needs_human`. The roles with `Write`/`Edit` are `developer`
+   and `librarian` (`packages/application/src/pipeline/planner.ts:246`, `:250`); the stages are
+   `implementation` in all three ticket templates, `conflict_resolution`, and the `librarian` stage
+   (`packages/domain/src/pipeline/templates.ts:165-170`, `:196-201`, `:234-238`, `:305-309`,
+   `:365-369`). So on a configured instance a ticket walks `refinement` and `architecture`, and
+   dies at `implementation` — every ticket, every time.
+2. **A read-only stage against a private repository fails one call earlier, and nobody has said
+   so.** `startRun` calls `broker.issue` first and hands its result to `updateMirror`
+   (`apps/launcher/src/service.ts:133-153`). `issue` returns `null` for a read-only run
+   (`packages/infrastructure/src/workspace/broker.ts:92-95`) and, when it does mint, mints only
+   `scope: 'push'` (`:98`) — although `RunCredentialSource.mint` declares `'read' | 'push'`
+   (`:40-46`). A `null` credential gives the mirror helper **no** credential helper at all
+   (`packages/infrastructure/src/workspace/provider.ts:575-581`), and the mirror is
+   `git clone --mirror "$REPO_URL"` in a container with no tty (`provider.ts:536`, `:541`). So a
+   private HTTPS remote cannot be mirrored for **any** run, writing or not. This is a reading, not
+   a measurement: confirming it needs a private remote and a daemon, which rule 66 forbids here.
+   It is stated because an implementer who closes (1) alone will meet it on the next run.
+
+**Evidence** (refiner, 2026-09-23; file reads and greps on the WP-53 working tree, **nothing run** —
+rule 66). Line numbers are this tree's, including uncommitted WP-53 changes. The report's own words,
+quoted rather than paraphrased: *"No run can push. The launcher has no git provider wired to it
+(`apps/launcher/src/index.ts` has said so since WP-14) and the control plane does not carry a
+credential, so a read-only stage runs end to end and a stage with `Write`/`Edit` fails at `startRun`
+with that refusal by name. The two shapes available — a `RunCredentialSource` that calls back to the
+platform, or a credential minted by the platform and carried on the create request — both put a git
+token somewhere it is not today."* The refusal's exact text is
+*"this launcher has no git provider wired to it, so it cannot mint a run credential (Q52)"*
+(`apps/launcher/src/index.ts:45`) — which cites a question WP-53 **answered**, so the message an
+operator meets points at a closed entry; that is a one-line rule 83 residual of this row, not a
+separate finding.
+
+**Defect or working as designed?** **A defect of composition, not of design.** Every part is built
+to a decision and the parts do not meet. `apps/launcher/src/index.ts:34-40` states the refusal
+deliberately and gives standing rule 18's reason (an empty credential is not a credential), which is
+the right behaviour for a launcher with no provider; what is wrong is that the shipped topology has
+no way to give it one.
+
+**What it costs to leave.** The product is *ticket to merge request* (product/01, product/04). With
+WP-53 merged the platform can run an agent and cannot deliver, and the failure is not a degraded
+mode: `implementation` is terminal, so every ticket that reaches it escalates to `needs_human` with
+a brief. Three further things ride on the same absence and will read as separate bugs: the take-over
+export's `wip: hand-over to <user>` commit and push (TD-027, WP-27) use the run's broker credential,
+so a hand-over delivers no branch either; `docs/operator-guide.md:639-641` already tells an operator
+the git write credential is what is still missing, so the guide is honest and the product is not;
+and `packages/infrastructure/src/workspace/broker.ts`'s whole allow-list argument — the four
+discriminating negatives it drives — is currently guarding a function that is never called in
+production.
+
+**What "done" looks like.** A decision first, then one wiring change. **Three shapes, and the third
+is the recommendation**, stated strongly enough to be implemented without re-deriving it:
+
+1. **A `RunCredentialSource` in the launcher that calls back to the platform.** Rejected here:
+   `compose.yml:351-353` says the launcher *"has no reason to reach `db` or `app`"* and joins
+   neither, and this shape adds exactly that route — from the one container with a path to the
+   Docker socket, which is the blast radius TD-021's WP-15g amendment spent its argument narrowing.
+2. **The launcher mints directly**, with a binding and a secret key of its own. Rejected: it puts a
+   database connection and `APP_SECRET_KEY` in that same container, which TD-021 refuses.
+3. **The runner mints and carries the credential on the create request.** *Recommended.* The runner
+   is the same image as `app` (`compose.yml:219-220`), so it already has the database, the binding
+   loader and `IntegrationActionExecutor` — which is where minting belongs, because minting is a
+   mutation and the audit row, the idempotency record and the rate-limit budget are all keyed by
+   `integrations.id`. It adds **no** network route: `createRunRequestSchema` already exists
+   (`packages/infrastructure/src/launcher/protocol.ts:146-156`), and the hop already carries a
+   secret in the other direction — the run token rides on the create **response**, a trade TD-028
+   decision 2 argued and accepted. The launcher's `RunCredentialSource` becomes a pass-through over
+   what the request carried, and `unwiredCredentials` stays as the refusal for a launcher nobody
+   configured.
+
+   **The one sentence this overturns must be rewritten rather than left standing** (rule 83):
+   `protocol.ts:130-135` says *"The launcher **mints** through its own `RunCredentialSource`; the
+   caller says what to mint for. That is the direction TD-021 puts the Docker socket in and BD-002
+   puts a secret in: the runner never holds a credential it did not need, and the launcher never
+   invents a scope."* The second clause survives — the scope is still the caller's. The first does
+   not: under this shape the runner holds a push token for the life of one request, and that cost
+   is the thing to state at the schema rather than discover.
+
+Whichever shape is taken, four things are part of done: **(a)** the `read` scope gets a producer or
+is deleted from `RunCredentialSource.mint` — consequence (2) above is unfixed otherwise, and a
+declared scope nothing mints is standing rule 3's shape; **(b)** the credential is refused a place
+in the container's environment and in any log, which `#gitCredentialEnv` already enforces and the
+new carrier must too; **(c)** an e2e or a Docker script proves a **push**, because the whole class
+of this finding is a path that every tier was green over; **(d)** `apps/launcher/src/index.ts:45`
+stops citing Q52.
+
+**Needs a decision record.** This is a security-weighted transport decision of the same class TD-028
+took, and it is not one TD-028 took. An amendment on TD-028 naming shape (3) and its cost is the
+cheapest form; a TD of its own is the other. It should not be decided inside an implementation row.
+
+**What would make it urgent.** It already is: the trigger is an operator setting `APP_LAUNCHER_TOKEN`
+and following `docs/operator-guide.md` §1, which is the documented happy path. Before WP-53 this was
+latent behind *"no production agent run has ever executed"*; that sentence is now false.
+
+**Depends on / owner.** **No work package owns it.** WP-53's row folds backlog **34**, **71**, **82**,
+**0b** and **128**, none of which is this; WP-54 is the *command* policy (what a run's shell may run),
+not the credential; WP-59 is the git provider's *port* surface (close, diff, stats) and is the nearest
+neighbour but its criteria are about `merge_request` operations, not minting. Depends on TD-028 (the
+transport it extends), WP-53 (merged), WP-15a (the binding loader), and the decision above. Related:
+**129** (the egress allow-list and redirects, the other half of what a run may reach), rule **18**,
+rule **83**.
+
+### 134. **Steer and take-over cannot reach a live run on the shipped topology — the report calls it a coin flip and it is a certainty, because the process that serves the API is pinned never to hold a run** (TODO, small-to-major — **live** and user-visible on `docker compose up`; **working as designed** in that every refusal is by name, and the design's cost went from *sometimes* to *always*; **WP-72 owns asserting it, nothing owns fixing it**; reported by WP-53 as discovered work, corrected off the tree by the refiner, session 7)
+
+**What is wrong.** The live-run register is per process (`packages/application/src/pipeline/live-runs.ts`,
+one instance per process built at `apps/server/src/runtime.ts:257`), so a steer, a cancel's
+interruption and a take-over's export reach only the process holding the run. WP-53 reports this as
+*"now a real coin flip rather than a latent one … the shipped topology has two worker containers"*.
+**Measured off the compose file, it is not a coin flip: it is a guaranteed miss.** The two containers
+are not symmetric halves of a lottery — they are disjoint by construction:
+
+- `app` serves the API and is **pinned to no launcher**: `APP_LAUNCHER_URL`, `APP_LAUNCHER_TOKEN` and
+  `APP_LAUNCHER_TOKEN_FILE` are all set to the empty string in `compose.yml:182-184`, deliberately
+  (*"This container runs no agent stage"*, `compose.yml:175-181`). `runsAgents` is
+  `composition.runner !== undefined || agent.runner !== null` (`apps/server/src/pipeline.ts:783`),
+  which is then false, so `app` subscribes neither `stage.execute` nor `task.ask`
+  (`packages/application/src/pipeline/runtime.ts:311`, `:342`). **No run is ever registered in
+  `app`'s register.**
+- `runner` holds every run and serves **no** API: `CAPABILITIES.runner` is
+  `{ api: false, worker: true, indexer: false }` (`apps/server/src/role.ts:87`), and
+  `apps/server/src/runtime.ts:622` composes the task command surface only when
+  `capabilities.api`. It also publishes no port (`compose.yml:219-252`).
+
+So on `docker compose up` there is no process that both holds a live run and serves
+`POST /api/runs/:run_id/steer`. `compose.local.yml` does not change this — it overrides the model
+credential on both services and leaves the split intact.
+
+**What a user actually meets, per command.** The three are not equally bad and the report treats them
+as one:
+
+- **Steer** — `requireLiveRun` is the only caller of the register on this path
+  (`packages/application/src/pipeline/commands.ts:1063-1077`, called once at `:1121`), so every steer
+  answers `409 run_not_reachable` (`apps/server/src/errors.ts:155`). It has a real SPA caller
+  (`apps/web/src/api/endpoints.ts:532-533`), so this is a button on the run screen that cannot work.
+- **Take-over** — the worse one, because it **succeeds**. It pauses the task and reports
+  `workspace_export: "no_live_run"` (`apps/server/src/routes/commands.ts:815`; the register read
+  is `commands.ts:1214`), so product/19 §19's hand-over protocol delivers no `wip:` commit, no branch
+  and no `claude --resume` session id, while the run keeps going in `runner`. A 200 with a field the
+  caller must interpret is not the same failure as a 409.
+- **Cancel** — unchanged by WP-53 and already stated at the line: the row moves to `cancelled` and
+  *"a cancelled run may keep spending for as long as its session takes to end"*
+  (`packages/application/src/pipeline/commands.ts:849-865`). WP-47's `cost/late.ts` recovers the
+  money; nothing stops the session.
+
+**What already mitigates, and it is worth knowing before anyone calls this a blackout.** *Watching* a
+run is unaffected: the transcript sink announces the stored entry's position on the broadcast and
+`apps/server/src/sse/transcript-bridge.ts` reads the rows back into whichever process serves the
+stream, so the run screen fills correctly from `app` while the run executes in `runner`. A run whose
+process dies is ended by WP-47's lease sweep. What is lost is exactly the three **write** commands
+above.
+
+**Evidence** (refiner, 2026-09-23; compose file, role table and command sources read on the WP-53
+working tree, **nothing run** — rule 66). The correction is the whole value here: Q52's session-5
+refiner note predicted *"a coin flip at two containers"*, WP-53's report repeats it, and the topology
+WP-53 actually shipped makes it deterministic. Q52's answer block already records this as residual
+(a) (`docs/OPEN-QUESTIONS.md:143`) in the report's wording; this entry is where the measurement lives.
+
+**Defect or working as designed?** **Working as designed**, and the design's price rose. Every
+refusal is named, nothing is silent and nothing is corrupted — `commands.ts` and
+`apps/server/src/commands.ts:14-33` both argue the shape. What changed is that the price used to be
+paid only by an operator who chose to scale out, and is now paid by the default install.
+
+**What it costs to leave.** Three of the eleven commands the SPA offers are dead on the shipped
+topology, one of them (take-over) by answering 200. `docs/user-guide.md` and `docs/operator-guide.md:656`
+tell a user steer and take-over exist; the operator guide qualifies it with *"in a split deployment"*,
+which every stock instance now is. The cheapest partial remedy is honesty at the surface rather than
+the transport.
+
+**What "done" looks like.** Two levels, and the cheap one should not wait for the expensive one.
+
+1. **Now, and it is a documentation-and-UI change of the kind WP-73 takes**: the operator guide's
+   *"in a split deployment"* qualifier becomes *"on the shipped topology"*, the user guide says which
+   commands do not work on a stock compose instance, and the run screen's steer control states the
+   condition rather than offering a button that always 409s. This is not the fix; it is the difference
+   between a known limit and a broken feature.
+2. **The transport**: a live-run channel — `steer` / `stop` / `sessionId` on a live run, which Q52's
+   session-5 note already established is a **narrower** surface than `WorkspaceProvider` and a
+   **second** question from the one TD-028 answered. TD-028's control plane is the obvious carrier
+   (authenticated, `internal: true`, already there), but it runs the wrong way: the API process would
+   have to reach the **runner**, not the launcher, so the route it needs does not exist. Two things
+   to carry into that decision rather than re-derive: the steer rate limit is per process
+   (`apps/server/src/routes/commands.ts:203-232`, stated at `:61-68`), so N API containers allow N
+   messages per window whatever the transport is — backlog **38**'s class, not this one's; and a
+   run-holding process that must be addressable by run id needs a registry the API can read, which is
+   a `runs` column or a queue, not a network call to a service name.
+
+**What would make it urgent.** It is live now. It becomes *expensive* the first time a human tries to
+take over a long implementation run and gets a paused task with no branch — the state product/19 §19
+exists to prevent.
+
+**Depends on / owner.** **WP-72 owns the assertion and no work package owns the fix.** WP-72's
+criterion (4) already reads *"a steer issued to a process that is not holding the run answers its
+named refusal"*; whoever takes it should know that on the shipped topology this is not an edge case
+but the only case, so the assertion is a statement about the product rather than about a split
+deployment — and the same tier is the cheapest place to assert take-over's `no_live_run`. The
+transport half depends on TD-028 (the pattern), WP-27 (the commands), WP-53 (the topology) and a
+decision nobody has taken. Related: **38** (the per-process rate limiter), Q52 residual (a), Q59,
+Q70, and entry **135** (the same topology's other invisible half).
+
+### 135. **A deployment with no runner is invisible on both channels TD-028 named: `/readyz` has no runner check and there is no job-queue metric of any kind, while the compose file tells the operator to look at `/readyz`** (TODO, small — one cause, two unbuilt halves of one decision's Consequences section, plus one instruction that points at a check that cannot answer; **live** on any instance without the runner service or without a launcher token; **WP-72 is the cheapest owner**; reported by WP-53 as discovered work, established off the tree by the refiner, session 7)
+
+**What is wrong.** TD-028's Consequences section states the visibility requirement in one sentence:
+*"A deployment with no runner container leaves `stage.execute` jobs queued. That is the honest
+consequence of decision 5 and it must be visible rather than silent: the queue depth is a metric,
+`/readyz` reports the runner as absent, and the operator guide states that a compose instance without
+the runner service runs everything except agent stages."*
+(`docs/decisions/technical/TD-028-launcher-control-plane.md:52`). One of the three shipped.
+
+- **`/readyz` reports nothing about the runner.** `ReadinessOptions` is `database`, `jobsStarted`,
+  `dispatchReady` and a timeout (`apps/server/src/readiness.ts:21-37`); the route sends whatever that
+  report contains (`apps/server/src/routes/ops.ts:114-133`). There is no runner field, and on `app`
+  there could not be a useful one — `app` is pinned to no launcher on purpose — so the check has to
+  be the *instance's*, not the process's, which is the part that needs deciding rather than typing.
+- **There is no queue-depth metric.** `apps/server/src/metrics.ts` defines exactly five:
+  `http_request_duration_seconds` (`:57`), `sse_connections` (`:65`), `sse_frames_sent_total` (`:72`),
+  `event_dispatch_pending` (`:79`) and `event_dispatch_dead_lettered` (`:105`). The last two count
+  the **event dispatch** queue (TD-005), not pg-boss jobs; `stage.execute` is a pg-boss queue and
+  nothing samples it.
+- **The one channel that did ship points at one that did not.** `docs/operator-guide.md:54-58` says
+  *"the `stage.execute` jobs are still enqueued and simply **queue** rather than failing, so nothing
+  is lost and the queue depth is what shows it"* — and gives no way to read it; `/metrics` has no
+  gauge and the guide documents no SQL. `compose.yml:364-369` tells the reader that the launcher has
+  no healthcheck because *"the runner's own start-up log names the launcher it reached, and `/readyz`
+  on `app` is where an operator looks"*, which is the check with no runner field. The `runner` service
+  itself declares no `healthcheck` (`compose.yml:219-252`) and publishes no port, so nothing outside
+  it can ask it anything.
+
+**Evidence** (refiner, 2026-09-23; metric definitions, readiness options, the compose file and the
+decision record read on the WP-53 working tree, **nothing run** — rule 66). The report's own bullet is
+narrower than the tree: *"The `runner` service has no healthcheck and `/readyz` does not report the
+launcher. TD-028's Consequences section asks for `/readyz` reports the runner as absent; this row
+shipped the log line and the queue depth, not the readiness field."* The queue depth was **not**
+shipped — there is no such metric — so two of the three channels are missing, not one.
+
+**Defect or working as designed?** **A defect against a decision record, which is the kind that
+matters most here**: docs win over code, and TD-028's Consequences section is the doc. Nothing is
+unsafe; what is missing is the ability to tell a queue that is waiting for a runner from a queue that
+is waiting for anything else.
+
+**What it costs to leave.** The failure mode TD-028 accepted is *silence* — jobs queue, nothing fails,
+no event is emitted, no task changes state. An operator who forgets `APP_LAUNCHER_TOKEN`, or whose
+`runner` container is unhealthy, sees a board where tickets arrive, intake runs, the first stage is
+enqueued and nothing ever happens, with a green `/readyz`, five metrics that all read normal, and a
+guide that tells them to check the one number the build does not expose. That is the state TD-028's
+sentence exists to prevent.
+
+**What "done" looks like.**
+
+1. **A gauge over the `stage.execute` backlog**, sampled where the other two are sampled
+   (`apps/server/src/metrics.ts`'s `collect`), and registered only where something samples it — the
+   reason is already written at `:83-87` and applies unchanged: an unlabelled gauge exports `0` from
+   creation, and a permanent "backlog: 0" from a process that cannot measure it reads as a measurement.
+2. **A readiness check that is about the instance rather than the process.** The honest shape needs
+   deciding and the entry states the constraint rather than the answer: `app` is *designed* to run no
+   agent, so `runner: absent` must not make `app` 503 — that would make the documented topology
+   permanently unready. Two candidates, both cheap: a **`degraded`** check on `app` that reads whether
+   any process has claimed a `stage.execute` job recently (pg-boss's own tables), or a check that is
+   `ok`/`down` only on a process that *is* configured to run agents, omitted elsewhere the way
+   `dispatch` is already omitted for `ROLE=api` (`docs/operator-guide.md:214-219`). **Needs
+   measurement** (not run here, rule 66): whether pg-boss exposes a queue-size read cheap enough to
+   sample on the readiness path, or whether the gauge must be sampled on the metrics path only.
+3. **The two sentences that point at the missing channel are corrected in the same change** (rule 83):
+   `docs/operator-guide.md:54-58` names how to read the depth, and `compose.yml:364-369` stops sending
+   the operator to a check that cannot answer.
+4. **The `runner` service gets a healthcheck or the compose file says why it cannot.** It serves the
+   ops endpoints on 8080 inside its own network namespace, so a container-local check is possible;
+   whether `/readyz` is the right target for it depends on (2).
+
+**What would make it urgent.** A dogfood or operator report of *"tasks sit in the first stage and
+nothing is wrong"*. It is also the diagnosis path for entry **133**: once the git credential lands,
+the next silent-queue report will be this and nobody will be able to tell.
+
+**Depends on / owner.** **WP-72 is the cheapest existing owner**: its criterion (2) already asserts
+*"the API answers ready while the worker is 503 for the documented reason"*, which is the same
+readiness surface, and its criterion (5) already takes the compose file and the operator guide's
+topology section. Depends on TD-028 (the requirement) and WP-53 (merged). If WP-72 declines it, it is
+unowned and should say so by number. Related: **134** (the same topology's other invisible half),
+**126** (a dead-lettered event's operability, the same class of "the count exists and no surface
+reads it"), rule **3**.
+
+### 136. **What a `create` replayed across a launcher restart actually does is unmeasured — and the mechanism the first two answers named is wrong: the first name-derived object is the *network*, the shim token is rewritten before any container name is used, and whether the daemon refuses anything is version-dependent** (TODO, small — **working as designed with a residual no sentence may close**; **latent**, the trigger is a launcher restart inside one create; **needs measurement**, which rule 66 forbids here; **no work package owns it**; **TD-028's second WP-53 amendment defers to this entry**; reported by WP-53 as a known residual, questioned off the tree by the refiner, restated after WP-53's round 2, session 7)
+
+> **Restated 2026-09-23 (refiner, rule 83) — the sentence this entry was filed against is gone; do
+> not grep for it.** The original text quoted `apps/launcher/src/control-plane.ts:25-33` verbatim:
+> *"a create replayed **across a restart** starts a second container, and what bounds that is one
+> level up: `stage.execute` is `stately` per task (TD-004) and the run lease (WP-47) ends a row whose
+> process is gone."* WP-53's round 2 **rewrote that paragraph**, and with it the entry's first half:
+> the tree no longer claims either bound anywhere, so *"neither named bound touches a container"* is
+> **discharged** rather than open. What is left is the question the rewritten paragraph now names and
+> explicitly refuses to answer, and one correction the rewrite added that this entry must carry.
+
+**What is wrong.** Nothing in the code. What is open is a **fact about a failure mode nobody has
+observed**, which three documents now defer to this entry for: `control-plane.ts:37-52`, TD-028's
+second WP-53 amendment, and `docs/TODO.md`. The tree's own words, which this entry must not be read
+as having improved on: *"A create replayed after a restart does not find the stored handle; what
+happens next is PROGRESS backlog **136**'s question, and its three candidates are a **name
+collision** that leaves the first run's container orphaned, a **rollback**, or a **second
+container**. Which one occurs is **unmeasured**"* (`apps/launcher/src/control-plane.ts:37-40`).
+
+**The three candidates, and what each would cost.**
+
+1. **Name collision, first container orphaned.** The replay fails on an object whose name is already
+   taken and returns an error; the *live* run's container keeps running with nothing holding a
+   handle for it. The collision — if it happens at all — reads as the **network or the egress
+   sidecar**, **not** the run container: creation order is `createNetwork` (`names.network`,
+   `packages/infrastructure/src/workspace/provider.ts:630`), `createVolume` (`:635`), `#prepare`
+   (`:640`), the clone, the sidecar (`:925`), and only then the run container (`:648`). The run
+   container and the sidecar are created with a bare `createContainer` rather than through
+   `#createHelperContainer`, which is the one that clears a stale name on `409 name already in use`
+   and is documented as applying to helpers only (`provider.ts:484-504`) — so if the replay ever
+   reached them it would refuse rather than duplicate. It does not get that far untouched.
+2. **Rollback.** `create`'s `catch` calls `#teardown(spec.runId, made, …)`
+   (`provider.ts:1110-1143`), and what it removes is what *this attempt* believes it made. Because
+   `#prepare` re-runs unconditionally, `made.controlPrepared` is true by the time the sidecar is
+   attempted, so the rollback of a failed **replay** removes `/ctl/<runId>` — the **live** run's
+   control directory and its token — and whatever network it believes it created. It does **not**
+   remove the workspace volume. This is the candidate with a mechanism, and it is a reading, not a
+   measurement.
+3. **A second container.** What the original sentence asserted. Not excluded by anything read here.
+
+**The mechanism half — the WP-53 round-2 reviewer's reading, re-read on the same tree, nothing run.**
+An earlier draft of both the docblock and TD-028's amendment settled this cheerfully, *"because the
+container name is derived from the run id, so the daemon refuses the duplicate"*. That is **wrong on
+this tree**: *"The first name-derived object `create` makes is the **network**, `createVolume` is
+idempotent, and `#prepare`, which **rewrites `/ctl/<run-id>/token`**, runs *before* any container
+name is used; `DockerEngine.createNetwork` sends no `CheckDuplicate`, so whether the daemon refuses
+at all is version-dependent"* (`control-plane.ts:44-47`). Read directly: `createNetwork` posts
+`Name`/`Driver`/`Internal`/`Attachable`/`Labels` and expects `201`
+(`packages/infrastructure/src/workspace/engine.ts:285-299`); `createVolume` posts `/volumes/create`
+and expects `201` (`engine.ts:262-275`); `#prepare`'s helper script is `mkdir -p`, then
+`printf %s "$RUNLET_TOKEN" > /ctl/<runId>/token` (`provider.ts:740-752`). So **the realistic bad case
+is not fail-closed**: a replayed create can overwrite a live run's shim token and *then* fail,
+orphaning a container it never knew about (`control-plane.ts:47-49`).
+
+**Evidence** (refiner, 2026-09-23; the control plane's rewritten docblock, TD-028's second WP-53
+amendment, the provider's create path, the teardown, the Docker engine client, the launcher service
+header and the lease sweep, all read on the WP-53 working tree — **nothing run**, rule 66; the
+WP-53 change is in the working tree and **not yet committed**, so every line number here is that
+tree's. Reproducing the failure needs a Docker daemon and a restart inside one create, which rule 66
+forbids here). Two sentences that **are** load-bearing and remain true: *"the sweep ends the **row**
+and nothing else"* (`packages/application/src/recovery/run-lease.ts:23`), and *"the container ran on
+with nothing able to name it (nothing reaps orphans — `purgeExpired` removes volumes)"*
+(`apps/launcher/src/service.ts:16`). Nothing in the tree bounds the orphan **container**; the
+decision to hold the idempotency map in memory is **not** in question (TD-021 refuses the launcher a
+database, and `control-plane.ts:31-35` gives the argument).
+
+**Defect or working as designed?** **Working as designed, with an unmeasured residual that is now
+correctly labelled as one.** The entry's own first half — a bound claimed and not discharged, rule
+**31**'s shape at a docblock — was closed by the rewrite; what is left is a gap in knowledge, not in
+code.
+
+**What it costs to leave.** A reader who meets a stranded run container — a workspace volume
+permanently `in_use` so retention never reclaims it, a control directory permanently `run_alive` so
+the sweep never reclaims it (backlog **138**), and, once entry **133** lands, a live push token until
+its TTL — has three candidates and no way to rank them. That is a wrong first hypothesis on a rare
+failure, which is what backlog **132** was filed to avoid. The documents are now honest about it,
+which is the improvement; the ignorance is unchanged.
+
+**What "done" looks like.**
+
+1. **Measure it** (whoever next has a daemon and is in this code): restart the launcher between
+   `create` and its response, retry the create, and record **which object collides first**, what
+   code the runner sees, whether `/ctl/<runId>/token` was rewritten, whether the rollback removed it,
+   and whether the first container is still running when the dust settles. One paragraph of result
+   closes most of this entry.
+2. **Write the result into all four places in the same edit** (rule 83): TD-028's second WP-53
+   amendment, `control-plane.ts`'s residual paragraph, this entry, and `docs/TODO.md`'s line — and
+   say what bounds the **container**, not the row. If the answer is *nothing does*, say that;
+   `service.ts:16` already does, and the sentences should agree.
+3. **If the measurement shows the orphan survives**, decide whether the control-directory sweep's
+   liveness predicate is the right place to notice it. It keeps a directory whose run has a live
+   container (`provider.ts:1603`), which is the wrong answer for a container the platform has
+   forgotten — but telling "running for a run the platform still owns" from "running for a run
+   nobody holds" needs a reader of `runs`, which the launcher does not have. Same shape as entry
+   **133**'s, and it may want the same decision.
+
+**What would make it urgent.** A launcher restart under load — an operator upgrading the instance
+while runs are in flight, which `restart: unless-stopped` and `docker compose up --build` both
+produce. It gets worse the moment entry **133** lands, because the orphan then holds a push token.
+
+**Depends on / owner.** **No work package owns it.** WP-72 is the nearest tier (two processes, one
+database, the crossings) but it does not start a launcher and its criteria are about the product
+containers. Depends on WP-53 (in the working tree, not yet committed) and on a daemon. **One stale
+mirror is outstanding**: `docs/TODO.md`'s line for this entry still quotes the deleted
+`control-plane.ts:25-33` sentence and the pre-round-2 line numbers, and needs the same correction —
+flagged rather than made, because this pass was scoped to backlog entries. Related: **133** (the
+credential the orphan would hold), **138** (the sweep row this orphan produces, and the counts that
+would make it visible), **0b** (the sweep itself, closed at WP-53), rule **31**, rule **66**, rule
+**83**.
+
+### 137. **A run's egress allow-list is `api.anthropic.com` and the git host, nothing sets the CLI's own opt-outs, and what else the pinned binary reaches has never been measured — so a run that needs one more host fails closed with a 403 from a proxy** (TODO, nit-to-small — **working as designed and fail-closed**, which is the right direction; **needs measurement**, which needs a model credential and a daemon and so is not run here; one residual false sentence rides with it; **no work package owns it**; reported by WP-53 as a stated assumption, established off the tree by the refiner, session 7)
+
+**What is wrong.** Two things about the same setting, and the first is an unmeasured assumption rather
+than a defect.
+
+1. **What the CLI reaches is a guess.** `APP_MODEL_EGRESS_HOSTS` defaults to `api.anthropic.com`
+   alone (`.env.example:574`, `apps/server/src/config.ts:449`), and `buildWorkspaceSpec` makes the
+   run's allow-list exactly those hosts plus the git host
+   (`packages/infrastructure/src/workspace/spec.ts:192-195`). Anything else the pinned binary
+   contacts — telemetry, the auto-updater, a statsig or sentry endpoint — is refused by the sidecar
+   with tinyproxy's `403 Proxying refused on filtered domain`
+   (`packages/infrastructure/src/workspace/egress.ts:1-19`, the measurement at `:36-40`). **Nothing
+   sets the CLI's own opt-out variables**: `agentRunEnvironment` is the one function that decides a
+   run container's environment (`apps/server/src/agent.ts:228-247`) and it puts **exactly one** key
+   in it, the model credential. So the default posture is *let it try and refuse it*, and whether a
+   403 through an HTTP proxy is absorbed by the CLI or surfaces as a failed run is unknown.
+2. **One sentence still says the opposite of what WP-53 measured.** That row corrected the module
+   docblock — `spec.ts:40-53` now reads *"in **both** provider modes, which is a correction: this
+   paragraph read '(or none, in `local` provider mode) … the binary is on the host and talks to
+   nothing' until WP-53"* — and the **field's own** docblock 120 lines below still carries the
+   sentence it replaced: *"Empty in `local` provider mode, where the binary is on the host and talks
+   to nothing"* (`spec.ts:171-172`). A rule 83 residual of WP-53's own sweep, on the one field this
+   entry is about.
+
+**Evidence** (refiner, 2026-09-23; the config default, the spec builder, the egress renderer and the
+run environment read on the WP-53 working tree, **nothing run** — rule 66). The report's own words:
+*"`APP_MODEL_EGRESS_HOSTS` defaults to `api.anthropic.com` alone. The CLI's telemetry and updater
+hosts are **not** on it and were not measured (no model credential here), so a run that needs one
+fails closed and visibly. Stated at the setting rather than guessed at."* Two figures the report gives
+that bound the question usefully: the binary is `claude 2.1.267` in `platform-runtime:dev`
+(`sha256:ab85e6cf`), and the three authentication probes that row ran are the only live exercise of
+that binary anyone has recorded.
+
+**Defect or working as designed?** **Working as designed, and the design is the right one.** Standing
+rule 18's direction: a host that is not on the list is refused, visibly, rather than admitted by
+default. Nothing here argues for widening the list. What is missing is the measurement that would say
+whether *anything* needs widening, and the sentence at `spec.ts:171-172`.
+
+**What it costs to leave.** A first run on a new instance that fails for a reason no log line names —
+the sidecar's 403 is in the sidecar's log, the CLI's reaction to it is in the transcript, and the
+operator is looking at a `needs_human` brief. `.env.example:568-573` already warns that a run cannot
+install a package, which is the same class stated for a case somebody thought about; this is the same
+class for cases nobody has.
+
+**What "done" looks like.** In order of cost, and the first is nearly free:
+
+1. **Fix the residual sentence** (`spec.ts:171-172`), which is one line and is rule 83's.
+2. **Set the CLI's own opt-outs in `agentRunEnvironment`** rather than widening the allow-list — if
+   the binary has them. That keeps the fail-closed posture and removes the traffic instead of
+   permitting it, which is strictly the better direction for a container the platform gives a
+   credential. **Needs measurement**: which variable names the pinned 2.1.267 honours, established
+   the way WP-53 established `CLAUDE_CODE_OAUTH_TOKEN` — a live probe in the image, not a string in
+   the binary (that row's own instrument note is the precedent: `strings` answered 0 because `strings`
+   was not in the image).
+3. **Measure what a real run with a real credential contacts**, from the sidecar's own log, under the
+   shipped allow-list: one run of one stage, the 403 lines recorded, and the list of hosts written
+   into `.env.example` beside the default — as *"refused, and the run completed"* or *"refused, and
+   the run failed"*, which are different findings. Until somebody does this, the default is a
+   hypothesis and should be labelled one at the setting.
+4. **Whatever is found, the answer goes in `.env.example` and technical/12's row**, not only in code:
+   the operator is the person who has to widen the list, and `APP_MODEL_EGRESS_HOSTS` is the knob they
+   have.
+
+**What would make it urgent.** The first real run against the real API on a real instance — which
+entry **133** is the last blocker for on a *writing* stage, but which a read-only `refinement` stage
+already reaches today on a configured instance. If that run fails for a reason the transcript cannot
+explain, this is the first thing to check.
+
+**Depends on / owner.** **No work package owns it.** WP-73 is the cheapest host for part 1 (the
+sentence) and is already the sweep row for exactly that; parts 2 and 3 need a daemon and a model
+credential and belong to whoever next runs a real agent end to end — plausibly the row that closes
+entry **133**, since that is the first time a full ticket walks the pipeline for real. Related:
+**129** (the allow-list decides the first request and `fetch` decides the rest), **127**
+(`APP_DISABLE_TELEMETRY` is documented and read by nothing, folded into WP-73 — the same subject from
+the platform's side), rule **18**, rule **21**, rule **83**.
+
+### 138. **Two of the sweep's four control-directory outcomes reach no field and no line: an operator can count what was reclaimed and what could not be, but cannot tell a directory held by a live run from one carrying a name nothing here made** (TODO, nit — **most of what this entry was filed for was closed by WP-53's rounds 2 and 3**; **working as designed**, the remaining operability missing; **latent**, it costs nothing until an orphan exists; **no work package owns it**; reported by WP-53 as discovered work, restated by the refiner after round 3, session 7)
+
+> **Restated 2026-09-23 (refiner, rule 83) — the original text is not preserved, because two of its
+> paragraphs would send a reader grepping for a union the tree does not have.** What was filed, and
+> what closed it, on the WP-53 working tree:
+> - *"one of the three kept-reasons has no producer anywhere"* — **closed, the other way round**.
+>   Round 2 **dropped `too_young`** (the grace window is applied daemon-side by the listing's own
+>   `find -mmin`, so no directory inside it is ever listed and no row about it can exist; the limit
+>   is now stated at the type instead — *"this report counts what the sweep examined, not what the
+>   window withheld"*, `packages/application/src/ports/workspace.ts:348-354`) and **added
+>   `remove_failed`**, which had been spelled `run_alive` — the sweep failing and the sweep working
+>   under one value. The union is now `'run_alive' | 'not_a_run_id' | 'remove_failed' | null`
+>   (`ports/workspace.ts:355`); all three have a producer (`provider.ts:1600`, `:1604`, `:1622`) and
+>   a case that drives it (`packages/infrastructure/src/workspace/control-sweep.test.ts:130`,
+>   `:154`, `:166`). The old entry's *"what done looks like"* point 3 asked for exactly this and it
+>   was already done when the entry was written up.
+> - *"the array reaches no log line at all"* — **false now**. The summary line carries three fields:
+>   `control_directories`, `control_directories_reclaimed` and `control_directories_unreclaimed`
+>   (`apps/launcher/src/service.ts:280-284`), added in round 2 for the reason the old point 1 gave.
+> - **The gap round 2 opened and round 3 closed**: those three fields were asserted by nothing — a
+>   grep returned only the three lines that write them. They are now driven through the real service
+>   with a stub report (`apps/launcher/src/service.test.ts:587-645`), the three outcomes asserted
+>   separately and the volume pair asserted beside them.
+
+**What is wrong (what is left).** The sweep decides **four** things about a directory and the
+summary publishes **three numbers**, so two outcomes are indistinguishable in the only aggregate
+that exists: a directory kept because a container still carries the run's label (`run_alive`) and a
+directory whose name is not a uuid (`not_a_run_id`). Neither has a field of its own, and neither
+produces a per-directory line either — the provider logs an `info` on each reclaimed directory
+(`packages/infrastructure/src/workspace/provider.ts:1611`), a `warn` on a failure to reclaim
+(`:1617`) and a `warn` when the listing itself fails (`:1592`), and nothing at all for the two that
+are kept. A reader can subtract to get their **sum** and cannot split it. Those two are precisely
+the questions backlog **0b** was about — *how many of these directories are held by a live
+container, and how many carry names nothing here made* — answered for the sweep and not for the
+person watching it. Beyond those three counts, `PurgeReport.controlDirectories` still has no
+production reader: `sweep` returns the report and `#runSweep` discards it (`service.ts:314-326`),
+and the launcher exposes **no metric surface of any kind**, which is entry **135**'s absence.
+
+**Evidence** (refiner, 2026-09-23; the port type, the provider's sweep, the launcher service and its
+test, and a tree-wide grep for the four reason values, read on the WP-53 working tree — **nothing
+run**, rule 66; WP-53 is in the working tree and **not yet committed**, so the line numbers are that
+tree's).
+
+**Defect or working as designed?** **Working as designed.** The sweep does its job — WP-53 closed
+backlog **0b** with it — and what is missing is two fields on a log line somebody has to decide to
+publish, plus a surface that does not exist yet.
+
+**What it costs to leave.** A control directory holds a run token (TD-025 §2). The failure this
+hides is a directory permanently `run_alive` for a container the platform has forgotten, which is
+entry **136**'s candidate 1: an operator watching the summary sees a kept directory and cannot tell
+whether a run is genuinely alive or whether nothing here made the name. The cost is bounded — the
+one outcome that means *a run token is still readable* (`remove_failed`) **is** on the line and
+**is** asserted, which was the security-relevant half.
+
+**What "done" looks like.** Small, and worth doing with entry **135** rather than alone, since both
+are "the new topology has no instrument":
+
+1. **The two kept outcomes get their own fields** — `control_directories_run_alive` and
+   `control_directories_unrecognised`, or one field per `keptReason` — beside the three that exist,
+   never merged into `examined`/`removed` for the reason `PurgeReport`'s docblock already gives, and
+   asserted in the same edit as they are added (round 2 and round 3 are the lesson).
+2. **A gauge for orphaned control directories** if `/metrics` gains a launcher-side surface at all;
+   the launcher exposes none today, so this may be a log line and a note that a metric needs a
+   surface first. Say which was chosen.
+
+**What would make it urgent.** Nothing, on its own. It becomes the thing somebody wants the moment
+entry **136** is measured or an orphan is reported.
+
+**Depends on / owner.** **No work package owns it.** WP-53 built the sweep and shipped three of the
+five numbers; points 1 and 2 belong with entry **135**'s instrument work wherever that lands.
+Related: **135** (the same absence on the server side), **136** (the orphan these counts would make
+visible), **0b** (the sweep itself, closed at WP-53), **125** and **126** (the same class: a mark the
+platform makes and no surface reads), rule **3**, rule **83**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -24051,6 +24605,487 @@ this change touches is imported by any of them — the edits are two workflow fi
 and documents — so no integration, e2e, ui or web-e2e target has an input that moved.
 
 ## WP notes — session 7 (decisions, assumptions, reviewer findings)
+
+#### WP-53
+
+**Status: eight of nine criteria. Criterion (5) is not landed and the reason is a decision TD-028
+did not take — see "What is not done" at the end.**
+
+**What was wrong.** `apps/server/src/agent.ts` had taken a `RunWorkspaceProvisioner` since WP-15g
+and **nothing gave it one**, so `startRuntime` composed `unavailableClaudeRunner`. No production
+agent run had ever executed, and five findings were latent behind that one fact (backlog 34, 71, 82,
+0b, 128). TD-028 decided the transport; this row builds it.
+
+**The two Docker measurements only this row's daemon could take** (against `platform-runtime:dev`,
+image `sha256:ab85e6cf`, built 2026-09-12; `claude --version` → `2.1.267 (Claude Code)`).
+
+1. **The CLI's path in the run image is `/usr/local/bin/claude`** — `command -v claude` inside the
+   image, not read off the Dockerfile alone. It is `DEFAULT_RUNTIME_CLI_PATH` in
+   `packages/infrastructure/src/workspace/hardening.ts`.
+2. **The pinned CLI reads `CLAUDE_CODE_OAUTH_TOKEN` from its process environment** — which is
+   backlog **128**'s open question and decides whether the fix is one line or a credential-helper
+   change. Three runs of `claude -p "say hi" --max-turns 1` in the image:
+   - nothing set → `Not logged in · Please run /login`
+   - `CLAUDE_CODE_OAUTH_TOKEN=<bogus>` → `Failed to authenticate. API Error: 401 **OAuth access
+     token is invalid**`
+   - `ANTHROPIC_API_KEY=<bogus>` → `Failed to authenticate. API Error: 401 **API key is invalid**`
+
+   Three distinct messages, so the name is read and the two credentials take different paths. The
+   entry's answer **(1)** therefore applies: `agentRunEnvironment` passes it, with the name in
+   `secretEnvNames` so TD-012 step 1's redactor covers it exactly as it covers `ANTHROPIC_API_KEY`.
+
+   *Instrument note (standing rule 21).* The first attempt used `strings` and answered **0**
+   matches, which was an artefact: `strings` is **not in the image**, and `2>/dev/null` hid the
+   error. `grep -c` over the binary with a nonsense control string (0) beside `ANTHROPIC_API_KEY`
+   (74) and `CLAUDE_CODE_OAUTH_TOKEN` (61) is what replaced it, and the live probes above are what
+   actually settle it — a string in a binary is not a string that is read.
+
+**Criterion (1), (3) and (7), verified against the real image on a real daemon — 18/18, first run.**
+`node scripts/launcher-control-plane-check.mjs` (a script, not a `verify` target: it needs a daemon)
+starts **three** containers and asserts what crossed between them:
+
+```
+PASS: launcher-control-plane-check (18/18 checks)
+```
+
+It is a second script beside `runlet-launcher-check.mjs` rather than a change to it, and the reason
+is the shape: that one composes the launcher **and** the runner in one process — Q52's in-process
+mode, still a valid deployment (TD-028 decision 1) — so it cannot show the two planes are separate.
+This one runs a launcher container holding the Docker client, a **second** launcher configured with
+a CLI path the run image does not carry, and a runner container holding **no** Docker client that
+reaches the first over HTTP and opens the run's Unix socket off the shared `ctl` volume. The
+measurements worth quoting:
+
+- `the control plane refuses a wrong token, terminally — code: invalid_spec`
+- `the launcher answered the CLI path the run image really carries — /usr/local/bin/claude`
+- `a wrong CLI path fails by name on the platform side, before a container exists — invalid_spec:
+  the run image platform-runtime:dev has no executable at /nowhere/claude, so every run would exec a
+  path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`
+- `the workspace's CLI path reached the bytes the SDK spawned with (rule 82) — command:
+  /repo/test/fixtures/runlet/fake-claude-cli`
+- `the control socket is on the shared ctl volume, under the runner's own root —
+  /run/agentic/ctl/<run-id>/ctl.sock in /work/repo`
+- `` `spec.checkoutRef` reached the workspace spec (backlog 71) — checkoutBranch: agentic/wp53-check ``
+- `a run started, streamed and ended through the control plane and the shim's socket —
+  completed/success`, with transcript entries `system, assistant, result`
+- `a replayed create answers the stored handle (TD-028 decision 4) — replayed: true, same handle: true`
+- and asked of the **daemon by the host**, which the runner container cannot do: both run containers
+  gone after their runs ended, the wrong-CLI-path run never got a container at all, and the
+  workspace volume kept per retention.
+
+What it does **not** prove, stated rather than left to be discovered: the model. The run image's
+`claude` is real and a real run of it needs a credential this check does not have, so the
+*executable* is `test/fixtures/runlet/fake-claude-cli` from the read-only checkout mount. Backlog 34
+is about the **path**, and both halves of that are measured — the launcher answers the image's own
+`/usr/local/bin/claude` having verified it with `test -x` **inside the image**, and the substitution
+reaches `SpawnOptions.command`. It also does not prove the egress *filter* or the compose file.
+
+Docker baseline after the run: `docker volume ls | wc -l` = **100**, unchanged; no container of this
+row's left behind.
+
+**A third measurement, and it moves a sentence nobody had revisited.** Because the CLI runs in the
+run container in **both** provider modes (`compose.local.yml` since WP-22: *"the CLI does not run in
+this container: it runs in the per-run `platform-runtime` container"*), `local` mode needs
+`api.anthropic.com` in the run's egress allow-list exactly as `api` mode does.
+`buildWorkspaceSpec`'s docblock said *"the model host (or none, in `local` provider mode) … the
+binary is on the host and talks to nothing"*, which has not been true since WP-22. The hosts are now
+`APP_MODEL_EGRESS_HOSTS` (default `api.anthropic.com`), read in both modes.
+
+**Decisions taken inside the row, each written where it applies.**
+
+1. **The control plane's wire is camelCase, and that is a stated deviation.** It carries
+   `workspaceSpecSchema`, `WorkspaceHandle` and `WorkspaceAttachment` — structures
+   `packages/application/src/ports/workspace.ts` already defines in camelCase — so
+   `packages/infrastructure/src/launcher/protocol.ts` sends **that schema** rather than a snake_case
+   re-spelling. A second spelling of one structure is a second schema to drift (rule 63), and
+   `CLAUDE.md`'s rule governs config YAML, event payloads, artifact data, API DTOs and transcript
+   rows; a process-to-process RPC between two halves of one instance is none of those. The port's
+   own *"a `WorkspaceSpec` … never appears on a wire"* is corrected there.
+2. **The run token crosses the control plane.** The alternative was to return only the socket path
+   and let the runner read `<ctl>/<run-id>/token` off the volume it mounts; rejected, because that
+   layout is TD-025 §2's and `#readToken` already implements the read — a second reader is a second
+   statement of the layout. The cost is stated at the schema: an authenticated hop on an
+   `internal: true` network with no published port, for a token whose whole life is the one run.
+3. **`task.ask` is gated with `stage.execute`.** TD-028 decision 5 says *"the agent-run queue"*; this
+   build has **two**, and an ask goes through the same `ClaudeRunner`. Leaving the second subscribed
+   would have shipped the lottery the decision exists to close.
+4. **The idempotency record is this process' memory, and the residual is stated rather than implied.**
+   A create replayed across a **launcher restart** starts a second container. A durable store would
+   be a database connection in the one container TD-021 deliberately gives none; what bounds it is
+   one level up (`stage.execute` is `stately` per task, and WP-47's lease ends a row whose process is
+   gone).
+5. **`end` carries the handle back** rather than looking it up in that memory, so a launcher that
+   restarted can still stop the container.
+6. **The control-directory sweep's predicate is container liveness plus a grace window.** Not
+   retention: a control directory's whole life is its run, while the volume outlives it by three
+   days. The grace (60 min) is applied by the daemon-side `find -mmin`, because `create` writes the
+   directory *before* the container exists and a sweep in that window would delete a starting run's
+   token. Busybox `find`'s support for `-mindepth`/`-maxdepth`/`-type d`/`-mmin` was measured against
+   `alpine/git:v2.49.1`; `-printf` is **not** supported, which is why the script ends in a `sed`.
+7. **A wrong CLI path is refused at `create`, memoised per process, and a *failure* is not cached** —
+   so fixing the image needs no launcher restart.
+
+**A consequence of TD-028 decision 5 that the decision's wording did not state — measured here,
+ruled on during the row, and now written into the decision itself** (`TD-028 § Amendment (WP-53)`).
+Decision 5 stands; the queue is **not** split, because `stage.execute` is `stately` with
+`singletonKey: task:<id>` and a second queue would let a gate and a stage for one task run
+concurrently — a correctness regression bought for the convenience of a degraded deployment.
+Criterion (8)'s sentence therefore reads *"everything except agent stages **and the platform
+gates**"*, and it is corrected in the operator guide, the user guide, `compose.yml`, technical/01,
+technical/05, `agent.ts`, `runtime.ts`, `pipeline/runtime.ts` and `stage-subscription.test.ts`. The
+reachable stalls are **human** paths (a hand-back to a gate stage, a `merged_gate` after a human
+merge, a gate already pending when the runner stopped); nothing is lost, only delayed, bounded by
+pg-boss's 14-day default retention — the residual beyond that bound is a refiner's to file.
+
+*The measurement, for the record:* `stage.execute` evaluates the **platform gates** as well as
+agent stages (`jobs.ts`: *"an agent stage runs, a platform gate is evaluated, anything else is
+skipped"*). So a deployment with no runner now leaves the gates queued too, where before WP-53 it
+evaluated them and escalated only the agent stages. TD-028's Consequences section accepts the
+queue-depth half (*"a deployment with no runner container leaves `stage.execute` jobs queued"*) and
+does not mention the gates. The decision was implemented as written and the consequence is recorded
+here and in `compose.yml`, `apps/server/src/agent.ts`, the operator guide and the user guide; whether
+gates should move to a queue of their own is the architect's, not this row's.
+
+**What is not done, and why.**
+
+- **Criterion (5) — backlog 82 — is met in part, by an architect's ruling taken during this row and
+  not by a narrowing of mine.** The ruling: the predicate is **no checkout**, never *no container* —
+  `WorkspaceSpec.repo` becomes nullable and a tool-less spec skips `updateMirror` and the clone while
+  **keeping** the container, network, egress sidecar and control socket. It is scheduled as its own
+  plan row **after WP-54**, because WP-54 rewrites `TOOLS_BY_ROLE`, which is the predicate's input.
+  What ships here is the half that is pure correction: the two false planner docblocks.
+
+  Three things from the ruling, recorded because they sharpen backlog 82 as it is re-scoped.
+  **(a)** The option I could not take — executing a tool-less run in the platform process — is out
+  for a reason neither the brief nor I reached for: it is TD-021's *decision body*
+  (`TD-021…:10`, *"the Agent SDK runs in the platform `runner` role and spawns `claude` inside the
+  container"*), so it is **not** a breach of the WP-15g amendment's letter (no Docker client is
+  constructed) but it **is** a breach of the decision and of the blast-radius spirit.
+  **(b)** The SDK's `tools` filter runs **inside** the container (`runner/options.ts`), which is the
+  argument this platform already accepted as decisive for skills — *a context filter, not a sandbox*
+  — so the honest restriction is not to put the tree there rather than to hide it.
+  **(c)** The reframing closes the `kb`-skill coupling for free: with a container, `#provisionSkills`
+  still runs, where "no workspace" would have dropped the ask's only documented tool. Exposure today
+  is bounded anyway — `runIsReadOnly` makes an ask `readOnly`, so no git credential is minted.
+
+  *The original framing of the dilemma, for the record:* *"A spec with no file tool and no shell gets no workspace"* has no stated
+  answer for **where an ask run's CLI then executes**. With no workspace there is no
+  `spawnClaudeCodeProcess`, so the SDK spawns `claude` **in the process that composed the
+  pipeline** — which under `ROLE=all` is the container serving `/webhooks/*` — with a `cwd` of
+  `/workspaces/<task-id>`, which does not exist. The alternative (a container with no checkout)
+  needs a repo-less `WorkspaceSpec`, and `workspaceSpecSchema.repo` is required. Either is a
+  security-weighted decision TD-028 did not take, so it is reported rather than invented (rule 86).
+  What *was* done is the half that is pure correction: both docblocks in
+  `packages/application/src/pipeline/planner.ts` now say an ask **is** given a workspace, and
+  `SKILLS_BY_ROLE.ask`'s says the coupling whoever closes 82 inherits — the `kb` skill reaches a run
+  only by being written into the checkout, so removing the workspace removes the skill.
+- **No run can push.** The launcher has no git provider wired to it (`apps/launcher/src/index.ts`
+  has said so since WP-14) and the control plane does not carry a credential, so a read-only stage
+  runs end to end and a stage with `Write`/`Edit` fails at `startRun` with that refusal by name. The
+  two shapes available — a `RunCredentialSource` that calls back to the platform, or a credential
+  minted by the platform and carried on the create request — both put a git token somewhere it is
+  not today. Reported as discovered work.
+- **The live-run channel is now a real coin flip rather than a latent one.** A steer, a cancel and a
+  take-over reach only the process holding the run (`409 run_not_reachable`), and the shipped
+  topology has two worker containers. Q52's own refiner note predicted this would be a second
+  question; it now is one.
+
+**Assumptions recorded rather than asked.**
+
+- `APP_MODEL_EGRESS_HOSTS` defaults to `api.anthropic.com` alone. The CLI's telemetry and updater
+  hosts are **not** on it and were not measured (no model credential here), so a run that needs one
+  fails closed and visibly. Stated at the setting rather than guessed at.
+- The `runner` service shares the `knowledge` and `exports` volumes with `app` because it is the
+  same worker otherwise. `knowledge.index` is a singleton per project, so two workers do not fetch
+  into one mirror at once; that is the reasoning, not a measurement.
+
+**Why the real-image checks reused `platform-runtime:dev` rather than rebuilding it, stated so it
+does not read as a shortcut.** The image on this daemon is `sha256:ab85e6cf`, built 2026-09-12;
+`docker/runtime.Dockerfile` last changed at `2fa285c` on the same date and **nothing in this row
+touches it**. So the artefact is built from current inputs and criteria (1), (3) and (9) do not rest
+on a stale one. What the row *does* change about the run image is a **path into it**
+(`APP_WORKSPACE_RUNTIME_CLI_PATH`), which is configuration read by the launcher rather than a layer,
+and the check verifies it against the image with `test -x` rather than assuming it.
+
+**`scripts/compose-stock-check.mjs`, which no local tier owns (rule 71) — and it found a defect of
+mine before it was run.** The prediction first, because it is worth more than the run: the check
+would **not** have failed, and that was the problem. Its service assertion was
+`['app', …].every(s => stdout.includes(s))` — one-directional twice over, so it could see neither a
+service that had been *added* nor one that was **restarting**. And a stock instance would have had a
+restarting one: `compose.yml` pinned `APP_LAUNCHER_URL` on the new `runner` service while
+`.env.example` ships `APP_LAUNCHER_TOKEN` empty, which is **exactly** the half-configured state
+`composeRunWorkspaces` refuses — so the container would have refused to start and
+`restart: unless-stopped` would have looped it for ever, invisibly, on every stock instance. The
+refusal is right and is about *operator input*; a compose file supplying one half of a two-half
+setting is not operator input. **Fixed by not pinning either half**: both come from `.env`,
+`.env.example` names the topology's URL in the comment beside the empty line, and the operator guide
+tells them to set both. A stock instance then has neither and the runner comes up as an ordinary
+worker that takes no agent job, which is TD-028's stated consequence rather than a crash.
+
+**What the extended check found on its first run, which is the argument for having extended it.**
+Three failures, and one of them was a second defect of the same shape as the first.
+
+1. **The `launcher` container was restarting for ever on a stock instance.** `.env.example` ships
+   `APP_LAUNCHER_TOKEN=` with no value, `compose.yml` interpolates it as `${APP_LAUNCHER_TOKEN:-}`,
+   so the variable arrives as `''` — and every name in `launcherEnvSchema` is `.min(1).optional()`,
+   which a **strict** schema turns into a *parse error* rather than an absence. `readLauncherConfig`
+   threw, `buildLauncher` threw, the process exited 1, and `restart: unless-stopped` did the rest.
+   Fixed where the rule belongs: the environment filter now treats **blank as absent**, which is
+   what `readEnvWithFile` beside it and `nullableString` in `apps/server` already do, and what
+   standing rule 18 asks for — an unset value must reach the code that decides what absence *means*
+   (here: no control plane) rather than the parser. `config.test.ts` gains three cases, including the
+   other direction: a blank `DOCKER_HOST` must **still** be refused, so the fix cannot turn standing
+   rule 55's refusal into a default.
+2. **`printenv` parsing in the check itself.** `stdout.trim()` on an all-empty answer collapses
+   `"\n\n"` to `""` and splits to a one-element array, which read as *"the second variable is
+   unset"* when it is set and empty — which is exactly `app`'s state by design. Only the trailing
+   newline is stripped now.
+3. **The configured runner's confirmation is logged at `info` and the check runs at
+   `LOG_LEVEL=warn`** — the level the operator guide tells an operator to run at, and therefore the
+   level the check must measure at. So the observable is the **warning that is no longer emitted**: a
+   process that composed an agent runner does not log that it composed none. Raising the log level
+   for the check would have stopped it being the operator's own instance.
+
+**The verdict, after the two fixes and a rebuild.**
+
+```
+PASS: compose-stock-check          exit 0, 16/16 checks, 21 s
+```
+
+The middle run is worth recording because it is the one that cost a cycle: with the fixed check but
+the **pre-fix image**, the verdict was `FAIL: compose-stock-check (1)` — `launcher restarting`, and
+nothing else, because the check's own `finally` had already torn the instance down and taken the
+launcher's log with it. So the check now reads the **last twenty lines of every service that is not
+where it should be, before the verdict**. A `restarting` verdict with nothing but the word in it
+costs its reader a reproduction; this one cost me one.
+
+**Image builds, with the caveat that makes the figure honest.** `node scripts/build-images.mjs
+platform launcher` took **8 s** the first time and **5 s** the second — both **warm-cache** figures
+and neither the cost of these images. `platform-base:dev` was present and unchanged (it carries no
+platform source at all: the Node runtime and `THIRD_PARTY_NOTICES.md`), and the dependency layers
+were unchanged (`notices:check` green, 318 packages), so only the `COPY` source layers were rebuilt.
+A cold build is the ~4 GB the operator guide §1 quotes, and this row did not pay it. The two product
+images were rebuilt (`platform:dev` `sha256:cbc1a640` → and again after the config fix) while
+`platform-runtime:dev` and `platform-egress:dev` were deliberately **left alone** at 12 Sep, so the
+real-image check above was not invalidated by a rebuild underneath it.
+
+Docker baseline after every run: `docker volume ls | wc -l` = **100**, no containers, no networks.
+
+**The reasoning worth keeping, for the next person who adds a service.** Both (1) and the runner's
+pinned URL are the same mistake at two layers: *a compose file supplying a value that the code treats
+as operator input*. The refusals are right — exactly one of a two-half setting is an operator error,
+and an empty `min(1)` string is a typo in a hand-written variable. What is not operator input is
+`${VAR:-}` interpolated from a shipped `.env.example` line with no value, and a schema that cannot
+tell the two apart refuses the stock instance. Two rules follow: **blank is absent**, at the boundary
+that reads the environment; and **a compose service pins neither half of a two-half setting**.
+
+The check is extended in **both** directions, the shape WP-51's ci-fix established:
+
+- the service list is compared **as a set** and each service's `.State` asserted, so an added
+  service and a `restarting` one are both failures rather than substrings that pass;
+- *stock:* the `runner` is up under `ROLE=runner` with the control volume mounted, and its **log**
+  says it composed no agent runner and names both missing variables — a container that is merely up
+  proves nothing;
+- *configured:* the same `.env` with both launcher variables set, `up -d` again — the `runner` now
+  carries them and logs that it provisions through the control plane, and **`app` still carries
+  neither**. That last one is the negative half and it is the adjacent, plausible operator mistake:
+  `app` takes the whole of `.env`, so putting the token there — which is exactly what the runner
+  needs — must not make the API container subscribe `stage.execute` with no control volume to serve
+  it from.
+
+**Criterion (2), and a defect the criterion itself would not have caught.** The census passes and
+the new HTTP client is not a Docker client: `filesMatching(CONSTRUCTS_ENGINE)` is still
+`['apps/launcher/src/runtime.ts']` alone, and the runner container in
+`launcher-control-plane-check.mjs` is started with **no** socket bound and no route to one.
+
+What the criterion would have missed is that **the census's own scope was `git ls-files` only**, so
+it was green here while the two new verification scripts that read `DOCKER_HOST` were untracked, and
+would have gone red on the orchestrator's commit — standing rule **85**'s exact shape, in the guard
+that exists to keep TD-021 honest. `apps/launcher/src/docker-access.test.ts` now reads tracked **and**
+committable-but-untracked sources, the way `wip-commit-sites.test.ts` and `client-census.test.ts`
+already did, and its script list names all four (`runlet-launcher-check.mjs`,
+`runlet-launcher-inner.mjs`, `launcher-control-plane-check.mjs`,
+`launcher-control-plane-launcher.mjs`) with the reason none of them constructs a client.
+
+**Sentences this row falsified, and what happened to each** (rule 83; the greps are the row's own).
+
+| Where | What it said | What it says now |
+|---|---|---|
+| `CLAUDE.md` WP-15g bullet | *"Q52's remaining half is the out-of-process transport, deliberately unbuilt"*, *"the provisioner is absent by default"* | a new WP-53 bullet describes the built transport; the absence is now a statement about configuration |
+| `apps/server/src/pipeline.ts` ×3 | *"this build has no transport to the launcher (Q52)"*, *"until Q52 is answered"* | names `APP_LAUNCHER_URL`/`APP_LAUNCHER_TOKEN` |
+| `apps/server/src/agent.ts` ×2 | *"a launcher this build has no transport to — Q52"* | the same, and the refusal message names the two settings (`agent.test.ts`, `pipeline.test.ts` and `composition.e2e.test.ts` asserted the string `Q52`; all three now assert the variables) |
+| `apps/server/src/runtime.ts` | *"a stage that needs an agent fails its run and escalates its task"* | it **queues**: this process subscribes neither queue |
+| `apps/server/src/platform-tools.ts` ×3 | *"the only honest state while no run exists at all (Q52)"*, and two tool refusals blaming *"the launcher transport (Q52)"* | the transport exists; each refusal names its own reason |
+| `apps/launcher/src/service.ts` | *"what is deliberately not here: a network transport … Filed as Q52"* | the control plane is beside it, and what is still not here is this class knowing about it |
+| `apps/launcher/src/runtime.ts` | *"the retention sweep's timer is the only handle it owns"* | there is a listener too, and the `unref` stays off for the no-token deployment |
+| `apps/launcher/src/index.ts` | *"Wiring the two processes together is the transport question filed as Q52"* | the credential gap is stated as the gap it is |
+| `packages/application/src/ports/workspace.ts` | *"a `WorkspaceSpec` … **never appears on a wire**"* | it does, camelCase, with the deviation argued |
+| `packages/application/src/ports/runner.ts` | *"Nothing honours `checkoutRef` yet"* | honoured since WP-53, with the fallback named |
+| `packages/infrastructure/src/workspace/spec.ts` ×2 | *"the model host (or none, in `local` provider mode) … the binary is on the host and talks to nothing"*; *"`buildWorkspaceSpec` has no production caller"* | both modes need the host; the provisioner is the caller |
+| `packages/infrastructure/src/workspace/engine.ts` | `containerLogs` *"diagnostics only"* | the control sweep reads an answer through it |
+| `packages/application/src/pipeline/planner.ts` ×2 | *"an ask run **is given no workspace**"*; *"an ask has no workspace for one to be copied into"* | corrected — an ask **is** given one, and the second said it while handing the ask a skill that only a workspace can carry (backlog 82) |
+| `compose.local.yml` | *"`APP_PROVIDER_MODE=local` and `CLAUDE_CODE_OAUTH_TOKEN`, which `loadServerConfig` **requires** together (an empty token with `local` is a startup error)"* | the false refusal is gone; the name is read, the `:?` is described as compose's own |
+| `compose.yml` | *"`apps/server` composes no workspace provisioner in this build"* | the `runner` service is the one that does |
+| `.env.example` | *"Secret. Optional, `APP_PROVIDER_MODE=local` only."* | the measurement, the reader and the refusal |
+| `docs/technical/12` | `CLAUDE_CODE_OAUTH_TOKEN` *"optional — operator-supplied"* | read by the server; seven new rows for the launcher settings |
+| `docs/technical/05` § Control channel | *"nothing listens on TCP in Docker mode"* | amended: true of the run, no longer of the launcher |
+| `docs/technical/01` § Containers | six services, no `runner` | seven, with the runner's row |
+| `docs/user-guide.md` | *"on a stock instance **no agent stage runs**, because there is no transport"* | it runs with a token; without one it queues |
+| `docs/operator-guide.md` §1, §8, §10 | six containers; *"No agent run starts on a stock instance"* | seven, the runner's own section, and the credential gap that remains |
+| `docs/TODO.md` | `local` mode in Docker, three parts | two closed, the refresh half restated as the open one |
+| `docs/OPEN-QUESTIONS.md` **Q52** | open | **answered**, with the two things it does not close named |
+
+**Discovered work (reported, not fixed here).**
+
+1. **No run can push: the launcher has no git provider and the control plane carries no credential.**
+   A read-only stage runs end to end; a stage with `Write`/`Edit` fails at `startRun` on
+   `unwiredCredentials`. Two shapes, both moving a git token: a `RunCredentialSource` that calls
+   back to the platform, or a credential the platform mints and puts on the create request. This is
+   the largest thing between WP-53 and a delivered merge request.
+2. **The live-run channel is a second transport question, and it is now live.** A steer, a cancel and
+   a take-over reach only the process holding the run; the shipped topology has two workers. Q52's
+   refiner note predicted exactly this.
+3. **Backlog 82 needs a decision before it can be built** — where a tool-less run's CLI executes.
+   The measurement is in "What is not done" above.
+4. **TD-028 decision 5 also stops the platform gates** on a deployment with no runner, which the
+   decision does not say. Candidate amendment: a queue of its own for gate stages, or a sentence.
+5. **`PurgeReport.controlDirectories` has no reader.** The sweep reports what it examined and only
+   the launcher's log consumes it; `/metrics` has no gauge for an orphaned control directory.
+6. **The `runner` service has no healthcheck and `/readyz` does not report the launcher.** TD-028's
+   Consequences section asks for *"`/readyz` reports the runner as absent"*; this row shipped the
+   log line and the queue depth, not the readiness field.
+
+**Review round 2 (APPROVE with nits) — what changed and what it found.**
+
+- **Criterion (4) is closed properly.** The mapping was asserted and the row's own countable effect —
+  *"a re-entry run's workspace carries the task branch's head commit"* — was asserted **nowhere**,
+  and worse: the daemon check used a branch that is *not* on the remote, so only the `-b` half of
+  `#clone`'s `git checkout "$B" || git checkout -b "$B"` had ever run. The half a **re-entry**
+  depends on was unexercised, which is the whole reason `checkoutRef` exists. The fixture repository
+  now carries `agentic/existing-task`, **one commit ahead of `main` and with a file `main` does not
+  have** — deliberately a different head, because with equal heads a provider that ignored
+  `checkoutBranch` outright would pass (rule 43) — and `docker-workspace.e2e.test.ts` asserts both
+  halves on the checkout's own `HEAD`: the existing branch at *its* head and not `main`'s, and the
+  absent branch created at `main`'s head without the other branch's file.
+  **The product was right; only the assertion was missing.** The first run failed
+  `/bin/sh: git: not found`, which was my probe's own image (`probeUnderRunContainerConfig` defaults
+  to `alpine:3.21`) and not a fact about the workspace — measured rather than assumed: the run image
+  carries `/usr/bin/git`, so an agent *can* run git, and the probe now asks in the container the
+  agent actually gets.
+- **`keptReason` no longer spells a failed reclaim as a live run.** The catch reported
+  `run_alive`, which the port defines as *"a container still carries this run's label"* — so the
+  sweep **working** and the sweep **failing** were the same value, one level below criterion (6),
+  which forbids exactly that. `remove_failed` added, with a case that drives it by refusing the
+  removal helper. And `too_young` is **dropped**: the grace window is applied daemon-side by the
+  listing's own `find -mmin`, so no directory inside it is ever listed and no row about it can
+  exist. A declared reason nothing can write is one a reader trusts and a test cannot reach; the
+  limit is stated at the type instead — *this report counts what the sweep examined, not what the
+  window withheld*.
+- **Three rule-83 sentences my own sweep missed**, all corrected: `pipeline.ts` ×2 (still said this
+  build has no transport and the provisioner is absent in every production path — in a file whose
+  neighbouring paragraph I *had* corrected), `stage-executor.ts` (false twice: the transport exists,
+  and an unconfigured process no longer subscribes the queue, so no ticket lands there), and
+  `provider.ts` — **the exact sentence backlog 0b quotes, 300 lines above its own fix, in the same
+  file**. That is the fourth row running where the nearest sentence was the one missed; it is now
+  corrected *and* annotated with why it survived.
+- **The `runner` is held to WP-50's environment census.** `compose-config.e2e.test.ts`'s two
+  both-directions cases are parameterised over both product services; the runner needs no new
+  residual row, which is itself the result.
+- `control-plane.ts`'s restart residual now reads as the tree does and cites backlog **136**: a
+  replayed create after a restart does **not** start a second container — every object's name is
+  derived from the run id, so the daemon refuses the duplicate — it is a **failed create the caller
+  retries**, the fail-closed direction. TD-028's second WP-53 amendment is the decision it agrees
+  with.
+- Two nits fixed with their reasons at the line: `assertControlSocketUnderRoot` accepted a path
+  ending in `/..` (only `/../` was refused), and `LauncherService.sweep`'s summary log reported
+  volumes only, leaving the sweep's most security-relevant half — an unreclaimed run token — visible
+  at `warn` alone.
+
+**Verification after round 2** (mine; the coordinator's own runs are separate and are quoted in the
+row's status):
+
+```
+PASS: verify                          exit 0
+PASS: verify:e2e                      exit 0, 183/183 — twice
+PASS: launcher-control-plane-check    exit 0, 18/18
+PASS: compose-stock-check             exit 0, 16/16
+PASS: build-images (2 images)         exit 0, 7 s (warm cache)
+```
+
+Docker baseline after every run: **100** volumes, no containers of this row's left behind.
+
+**One claim's evidence, stated narrowly.** Criterion (1) — a run that starts, streams and ends
+through the control plane and the shim's socket — rests on `launcher-control-plane-check.mjs`, which
+**the reviewer could not reproduce** (Docker was out of bounds for that review). It has been run
+three times here and once by the orchestrator; it is not independently confirmed by a third party,
+and it should not be read as if it were.
+
+**Review round 3 (REQUEST_CHANGES, one major) — and the major was a claim, not code.**
+
+The two substantive round-2 fixes were re-measured and upheld (the re-entry checkout really does take
+the `||`'s **first** half — `#clone` clones without `--single-branch`, so `refs/remotes/origin/…`
+exists and `git checkout` DWIMs onto it — and the case asserts its own precondition, so it cannot
+pass on a fixture accident; the sweep's three outcomes are distinguishable and `too_young` was
+genuinely unreachable).
+
+What was wrong was a **mechanism I asserted and nobody had measured**, in `control-plane.ts` and in
+the orchestrator's amendment, both saying a replayed `create` after a restart cannot start a second
+container *"because the container name is derived from the run id, so the daemon refuses the
+duplicate"*. On this tree the first name-derived object `create` makes is the **network**,
+`createVolume` is idempotent, and `#prepare` — which **rewrites `/ctl/<run-id>/token`** — runs before
+any container name is used; `DockerEngine.createNetwork` sends no `CheckDuplicate`, so whether the
+daemon refuses at all is version-dependent. The realistic bad case is therefore **not** fail-closed:
+a replayed create can overwrite the live run's shim token and *then* fail, orphaning a container it
+never knew about. The comment now states backlog **136**'s three candidates — name collision leaving
+the first run orphaned, rollback, or a second container — and says which one occurs is unmeasured.
+It is the second time in this row that the cheerful reading was the wrong one, and both times the
+correction came from somebody re-reading the code rather than from a test.
+
+Three more, all closed: the three `control_directories` log fields had **no assertion anywhere** — a
+log line added *because* an unreclaimed run token was visible only at `warn`, then asserted by
+nothing, which is the same gap one step along; `service.test.ts` now drives it over a purpose-built
+provider stub (spreading the class fake would have copied fields and not prototype methods, which
+`tsc` caught). `scripts/launcher-control-plane-check.mjs`'s docblock now says **who has run it** —
+no CI job, four times in the implementer's shell, once in the orchestrator's, **no reviewer
+reproduction** — following `runlet-container-check.mjs`'s precedent and `pnpm eval`'s rule that a
+check this repository cannot run for itself exits non-zero naming what is missing. And one garbled sentence in `pipeline.ts`.
+
+**The `pnpm eval` claim, and which of the two directions was taken.** Writing that docblock I was
+about to state the repository's rule — *a check this repository cannot run for itself exits non-zero
+naming what is missing* — as already true of this script. It was half true. `startDockerFixture`'s
+`ensureImages` does refuse a missing `platform-*` image **by name and with the build command**, and
+it never pulls one, so the image half was real. A missing **daemon** was not: it surfaced as whatever
+`docker` printed, from inside a `catch` whose own message says *"the check ran to completion"* —
+which is the failure mode the rule exists to prevent, wearing the rule's own words.
+
+Two directions were available: make the sentence smaller, or make the claim true.
+`compose-stock-check.mjs` already had the probe, so the second was eight lines and the first would
+have left a script whose docblock cited a discipline it did not keep. The probe was added. Stated
+here as reasoning rather than as a changelog line because the choice is the point: a claim that does
+not hold is a defect whichever way it is resolved, and narrowing the claim is the cheaper resolution
+and usually the worse one.
+
+**The guard is then exercised in both directions**, because a guard added to satisfy a sentence and
+never fired is that sentence's problem one layer down — the shape this row has now caught three
+times. It needs no change to the machine's Docker: `DOCKER_HOST` is read from this process' own
+environment, so one invocation is pointed at a socket path that does not exist. Nothing is stopped,
+no shared configuration is touched, and the user's own containers are never involved. Both halves, measured:
+
+```
+docker daemon 29.7.2
+PASS: launcher-control-plane-check (18/18 checks)                     exit 0
+
+DOCKER_HOST=unix:///nonexistent/agentic-wp53-no-such-daemon.sock
+FAIL: launcher-control-plane-check — no Docker daemon: Error: Command failed:
+  docker version --format {{.Server.Version}}
+  failed to connect to the docker API at unix:///nonexistent/… : no such file or directory
+                                                                      exit 1
+```
+
+Three lines of output and nothing else: the refusal happens **before** `startDockerFixture`, so no
+network, no volume and no container was created by the run that was refused — checked afterwards,
+and the volume count never left **100**.
+
 
 #### WP-52
 

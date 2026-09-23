@@ -18,7 +18,8 @@
 | `db` | `postgres:18` | system of record, event log, transcripts, jobs, KB index | TD-006 |
 | `migrate` | `platform` | one-shot migrations (advisory lock) | TD-019 |
 | `app` | `platform` (`ROLE=all` or split `api`/`worker`/`runner`/`indexer`) | HTTP API + SPA + SSE, event dispatcher, pipeline interpreter, pg-boss workers, Agent SDK runner, Slack Socket Mode, indexer | TD-001/002/003/004 |
-| `launcher` | `platform-launcher` (tiny) | creates run containers/networks/volumes via `docker-socket-proxy`; git credential broker | TD-021 |
+| `launcher` | `platform-launcher` (tiny) | creates run containers/networks/volumes via `docker-socket-proxy`; git credential broker; **exposes TD-028's control plane** on an `internal: true` network with no published port, authenticated with `APP_LAUNCHER_TOKEN` on every request | TD-021, TD-028 |
+| `runner` | `platform` (`ROLE=runner`) | the worker that runs agent stages: it carries TD-025 §2's static `ctl` mount and the launcher URL and token, and holds **no** Docker client. A process runs agent stages only when it has both settings — never because of its `ROLE` — and a deployment without them leaves `stage.execute` and `task.ask` **queued**, which stops the platform gates too (they are a branch of the same handler on the same queue; TD-028's WP-53 amendment) | TD-028 |
 | `docker-socket-proxy` | Tecnativa | filtered Docker API for the launcher only | TD-021 |
 | `caddy` (optional) | caddy | TLS + HTTP/2 termination | TD-014 |
 | `db-backup` | postgres-backup-local | `pg_dump` rotation | TD-006 |

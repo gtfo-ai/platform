@@ -333,20 +333,33 @@ describe('the production runner, over a scripted CLI', () => {
 });
 
 /**
- * **Q59(b), decided on WP-15g: the refusal stays, and it is conditional on configuration.**
+ * **Q59(b) and TD-028 decision 5: what an instance with no launcher configuration does.**
  *
- * This is what every production process is today — no launcher, therefore no workspace provisioner
- * (Q52), therefore no agent runner — and the decision is that such a process still *runs*. The
- * alternative considered was refusing to compose the pipeline at all, which would be louder and would
- * also stop the intake, the status mapping, the workpad and every outbound provider call, i.e. the
- * part of the loop that works without an agent.
+ * Such a process still *runs*. The alternative considered at WP-15g was refusing to compose the
+ * pipeline at all, which would be louder and would also stop the intake, the status mapping, the
+ * workpad and every outbound provider call — the part of the loop that works without an agent.
+ *
+ * ## What WP-53 changed here, and it is the honest half of TD-028 decision 5
+ *
+ * This case used to be called *"…and escalates the stage that needs an agent"* and asserted
+ * `needs_human`, `run.failed` and `task.escalated`. That was WP-15c's ending, reached because the
+ * process **subscribed** `stage.execute` and then could not perform the job it won. TD-028 decides
+ * the opposite — *"a worker composition subscribes the agent-run queue only when it is configured to
+ * run agents"*, because pg-boss hands a job to **any** subscribed worker and a deployment with
+ * `ROLE=worker` beside `ROLE=runner` would otherwise fail half its stages — so the job is now
+ * **enqueued and left queued**, the task stays where it is, and nothing is escalated.
+ *
+ * The decision's Consequences section states that trade (*"a deployment with no runner container
+ * leaves `stage.execute` jobs queued … the queue depth is a metric"*). What it does not state, and
+ * what this case measures, is that **the platform gates are on the same queue**, so they are not
+ * evaluated either. That is reported for the architect rather than smoothed over here.
  *
  * The log line that names the missing pieces is asserted by `composition.e2e.test.ts` against an
  * instance started exactly as `main.ts` starts one; this file asserts the **behaviour**, which no log
  * line can.
  */
 describe('an instance with no launcher configuration', () => {
-  it('stays ready, does the non-agent work, and escalates the stage that needs an agent', async () => {
+  it('stays ready, does the non-agent work, and leaves the agent stage queued', async () => {
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'no-agent',
@@ -358,16 +371,32 @@ describe('an instance with no launcher configuration', () => {
 
     await pipeline.publish([ticketMatched(pipeline)]);
 
-    // The agent stage fails its run and the task is parked for a human — WP-15c's ending, reached
-    // here by configuration rather than by a build.
-    const parked = await pipeline.settle('needs_human', (task) => task.state === 'needs_human');
-    expect(parked.current_stage).toBe('refinement');
+    // The task reaches its first agent stage and **stops there**, with the job waiting: this
+    // process did not subscribe the queue (TD-028 decision 5), so nothing won a job it could not
+    // perform.
+    const parked = await pipeline.settle(
+      'the first agent stage',
+      (task) => task.current_stage === 'refinement',
+    );
+    expect(parked.state).toBe('active');
     const types = (await pipeline.events()).map((event) => event.type);
-    expect(types).toContain('run.failed');
-    expect(types).toContain('task.escalated');
+    // No run was ever created, so there is nothing to fail and nobody to escalate to. This is the
+    // assertion that changed at WP-53: it read `run.failed` / `task.escalated` before.
+    expect(types).not.toContain('run.created');
+    expect(types).not.toContain('run.failed');
+    expect(types).not.toContain('task.escalated');
     // Nothing ran, so nothing was spent, and no artifact was invented for a run that never happened.
     expect(Number(parked.cost_actual)).toBe(0);
     expect(types).not.toContain('artifact.created');
+
+    // **The countable effect, asked of pg-boss rather than inferred from an absence** (rule 42): a
+    // queued job and a job nobody enqueued are the same silence from the task's side. The queue is
+    // still *declared* either way, which is what makes its depth the metric TD-028 points at.
+    const queued = await pipeline.query<{ name: string }>(
+      `select name from pgboss.job where name = $1 and state in ('created', 'retry')`,
+      ['stage.execute'],
+    );
+    expect(queued.length).toBeGreaterThan(0);
 
     // **The non-agent half of the loop ran anyway**, which is the whole argument for keeping the
     // refusal conditional: the task exists, the ticket's own words were read and stored, the board

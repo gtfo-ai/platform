@@ -59,7 +59,12 @@ const SOURCE_VARIABLE: Record<string, string> = {
   integrationHosts: 'APP_INTEGRATION_HOSTS',
   dependencyRegistryHosts: 'APP_DEPENDENCY_REGISTRY_HOSTS',
   modelApiKey: 'ANTHROPIC_API_KEY',
+  modelOauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
   claudeBinary: 'APP_CLAUDE_BINARY',
+  launcherUrl: 'APP_LAUNCHER_URL',
+  launcherToken: 'APP_LAUNCHER_TOKEN',
+  workspaceControlRoot: 'APP_WORKSPACE_CONTROL_ROOT',
+  modelEgressHosts: 'APP_MODEL_EGRESS_HOSTS',
 };
 
 /**
@@ -196,8 +201,81 @@ const serverConfigFields = z.strictObject({
     .string()
     .min(8, 'must be a real API key; an empty value is not a credential (standing rule 18)')
     .nullable(),
+  /**
+   * `CLAUDE_CODE_OAUTH_TOKEN` — BD-004 `local` mode's model credential (PROGRESS backlog **128**).
+   *
+   * Until WP-53 **no server source read this name at all** while `compose.local.yml` claimed
+   * *"`loadServerConfig` requires [it]"* and made compose refuse to resolve without one. Two things
+   * were wrong at once: the refusal did not exist, and `agentRunEnvironment` answered `local` with
+   * an **empty** environment — so an operator who did everything the file asked started a run
+   * container with no credential of any kind.
+   *
+   * Measured at WP-53 against `platform-runtime:dev` (`claude` 2.1.267), which is what decided that
+   * this is one line rather than a credential-helper change: with nothing set the CLI answers *"Not
+   * logged in · Please run /login"*; with this name set to a bogus value it answers *"Failed to
+   * authenticate. API Error: 401 OAuth access token is invalid"* — a different message from the
+   * bogus-`ANTHROPIC_API_KEY` case (*"401 API key is invalid"*). So the pinned CLI reads it from the
+   * process environment, and `agentRunEnvironment` puts it in the run's `env` with its name in
+   * `secretEnvNames`, which is what builds TD-012 step 1's redactor for the run.
+   *
+   * Optional here and refused *empty* for the same reason `modelApiKey` is: `api` mode does not use
+   * it, most processes run no agent, and an empty string would produce a redactor over `''`.
+   */
+  modelOauthToken: z
+    .string()
+    .min(8, 'must be a real token; an empty value is not a credential (standing rule 18)')
+    .nullable(),
   /** `pathToClaudeCodeExecutable` in `local` mode (BD-004); null uses the bundled binary. */
   claudeBinary: z.string().min(1).nullable(),
+
+  /**
+   * `APP_LAUNCHER_URL` — TD-028's control plane, and **the one setting that decides whether this
+   * process runs agents at all**.
+   *
+   * `http://launcher:7780` on the shipped compose topology. Absent is the shipped default for the
+   * `app` service and means *this container takes no `stage.execute` job* (TD-028 decision 5): it
+   * still runs the API, the dispatcher, the outbound calls, the knowledge index and the digests.
+   * The container that carries it is the `runner` service, which is the same image with the `ctl`
+   * volume mounted.
+   */
+  launcherUrl: z.string().min(1).nullable(),
+  /**
+   * `APP_LAUNCHER_TOKEN` — the shared secret in front of a surface that creates containers.
+   *
+   * Refused below 32 characters rather than merely non-empty: TD-028 decision 3 puts this check
+   * *beside* the network isolation precisely because a compose file is a deployment property, and a
+   * two-character token would make the code property worthless. The launcher refuses the same
+   * length on its own side (`MIN_LAUNCHER_TOKEN_LENGTH`), so the two halves of the instance fail
+   * the same way rather than one starting and the other refusing every request.
+   */
+  launcherToken: z
+    .string()
+    .min(32, 'must be at least 32 characters: it guards a surface that creates containers')
+    .nullable(),
+  /**
+   * `APP_WORKSPACE_CONTROL_ROOT` — where **this** process mounts TD-025 §2's `ctl` volume.
+   *
+   * Read here as well as by the launcher because the two mount the same volume and the socket path
+   * the launcher answers with is computed from *its* root. A mismatch is a compose mistake whose
+   * only symptom would otherwise be `ECONNREFUSED` thirty seconds into a run;
+   * `assertControlSocketUnderRoot` turns it into a named refusal before the run starts.
+   */
+  workspaceControlRoot: z.string().min(1),
+  /**
+   * `APP_MODEL_EGRESS_HOSTS` — the hosts a run container may reach besides its git host.
+   *
+   * technical/05 § "Network policy" lists four sources for the allow-list and two of them do not
+   * exist in this build (no discovery-derived registries, no per-stage observability hosts). This
+   * is the first: the model provider, or a proxy in front of it. It is configuration rather than a
+   * constant because an instance behind an egress proxy names a different host, and because
+   * `local` mode needs it **too** — WP-53 measured that the pinned CLI authenticates against the
+   * same API with `CLAUDE_CODE_OAUTH_TOKEN`, which is not what `buildWorkspaceSpec`'s docblock
+   * assumed when it wrote *"or none, in `local` provider mode"*.
+   *
+   * Empty is legal and **fails closed**: the run reaches only its git host and the CLI's first
+   * request is refused by the egress sidecar.
+   */
+  modelEgressHosts: z.array(z.string().min(1)).readonly(),
 
   /**
    * `APP_KNOWLEDGE_MIRROR_ROOT` — where the knowledge indexer keeps one bare mirror per project,
@@ -365,6 +443,10 @@ export const SERVER_CONFIG_DEFAULTS = {
   bodyLimitBytes: 1_048_576,
   trustProxy: false,
   providerMode: 'api',
+  // TD-025 §2's layout, and the path `compose.yml` mounts the `ctl` volume at in both containers.
+  workspaceControlRoot: '/run/agentic/ctl',
+  // The Anthropic API, which is what both provider modes authenticate against (measured, WP-53).
+  modelEgressHosts: ['api.anthropic.com'],
   intakeReconcileIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
@@ -731,7 +813,16 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     trustProxy: booleanFromEnv(env.APP_TRUST_PROXY, SERVER_CONFIG_DEFAULTS.trustProxy),
     providerMode: env.APP_PROVIDER_MODE?.trim() || SERVER_CONFIG_DEFAULTS.providerMode,
     modelApiKey: nullableString(readSecret('ANTHROPIC_API_KEY', env)),
+    modelOauthToken: nullableString(readSecret('CLAUDE_CODE_OAUTH_TOKEN', env)),
     claudeBinary: nullableString(env.APP_CLAUDE_BINARY),
+    launcherUrl: nullableString(env.APP_LAUNCHER_URL),
+    launcherToken: nullableString(readSecret('APP_LAUNCHER_TOKEN', env)),
+    workspaceControlRoot:
+      env.APP_WORKSPACE_CONTROL_ROOT?.trim() || SERVER_CONFIG_DEFAULTS.workspaceControlRoot,
+    modelEgressHosts:
+      env.APP_MODEL_EGRESS_HOSTS === undefined
+        ? SERVER_CONFIG_DEFAULTS.modelEgressHosts
+        : hostListFromEnv(env.APP_MODEL_EGRESS_HOSTS),
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
     webRoot: nullableString(env.APP_WEB_ROOT),
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),

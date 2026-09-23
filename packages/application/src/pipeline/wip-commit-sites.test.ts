@@ -63,18 +63,33 @@ const EXPECTED_WIP_SITES: ReadonlyMap<string, number> = new Map([
 /**
  * The files that name a `commitMessage` **key**, and what each does with it.
  *
- * Two declarations, one writer, one forwarder. `ports/workspace.ts` is the boundary schema
- * (`workspaceExportRequestSchema`) and `ports/runner.ts` the field on `RunTakeOverExport` that
- * carries it to the process holding the workspace; `pipeline/commands.ts` is the only thing that
- * decides a value; `apps/launcher/src/service.ts` passes the value it was given to
- * `WorkspaceProvider.export` without choosing one. `workspace/provider.ts` is deliberately absent:
- * it *reads* `request.commitMessage` into a `COMMIT_MESSAGE` environment variable for the helper
- * container's `git commit -m "$COMMIT_MESSAGE"`, and reading is not deciding.
+ * **Three declarations, one writer, three forwarders** — it was two, one and one until WP-53 put
+ * TD-028's control plane between the process that decides the message and the process that holds
+ * the workspace, which adds one hop and therefore one forwarder at each end plus the wire schema in
+ * the middle.
+ *
+ * *Declarations.* `ports/workspace.ts` is the boundary schema (`workspaceExportRequestSchema`),
+ * `ports/runner.ts` the field on `RunTakeOverExport` that carries it to the process holding the
+ * workspace, and `infrastructure/launcher/protocol.ts` the control plane's `endRunRequestSchema`.
+ *
+ * *Writer.* `pipeline/commands.ts`, and only it: `takeOverTaskCommand` is the one thing that
+ * decides a value.
+ *
+ * *Forwarders.* `infrastructure/launcher/provisioner.ts` puts the value it was handed on the end
+ * request, `apps/launcher/src/control-plane.ts` reads it back off one, and
+ * `apps/launcher/src/service.ts` passes it to `WorkspaceProvider.export`. None chooses one.
+ *
+ * `workspace/provider.ts` is deliberately absent: it *reads* `request.commitMessage` into a
+ * `COMMIT_MESSAGE` environment variable for the helper container's `git commit -m
+ * "$COMMIT_MESSAGE"`, and reading is not deciding.
  */
 const EXPECTED_COMMIT_MESSAGE_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/ports/workspace.ts', 1],
   ['packages/application/src/ports/runner.ts', 1],
+  ['packages/infrastructure/src/launcher/protocol.ts', 1],
   ['packages/application/src/pipeline/commands.ts', 1],
+  ['packages/infrastructure/src/launcher/provisioner.ts', 1],
+  ['apps/launcher/src/control-plane.ts', 1],
   ['apps/launcher/src/service.ts', 1],
 ]);
 
@@ -153,10 +168,10 @@ describe('product/19:84 — the take-over export is the only `wip:` commit (WP-2
 
   it('has one production site that decides a commit message, and it is the take-over', () => {
     expect(asObject(census(COMMIT_MESSAGE_KEY))).toEqual(asObject(EXPECTED_COMMIT_MESSAGE_SITES));
-    // Stated as the number the rule rests on, rather than left to be counted off the map: two
-    // declarations and a forwarder are not writers, so the writers are the total minus three.
+    // Stated as the number the rule rests on, rather than left to be counted off the map: three
+    // declarations and three forwarders are not writers, so the writers are the total minus six.
     const sites = [...census(COMMIT_MESSAGE_KEY).values()].reduce((sum, count) => sum + count, 0);
-    expect(sites - 3).toBe(1);
+    expect(sites - 6).toBe(1);
   });
 
   it('reads a tree that includes untracked sources, so a planted writer is seen (rule 85)', () => {

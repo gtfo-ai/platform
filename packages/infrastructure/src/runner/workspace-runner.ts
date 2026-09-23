@@ -85,6 +85,21 @@ export type RunWorkspaceEnding =
 export interface ProvisionedRunWorkspace {
   /** The `cwd` the CLI is spawned in, as the *container* sees it (`/work/repo`, TD-021). */
   readonly workdir: string;
+  /**
+   * Where the `claude` binary is **in the workspace**, or `null` to leave the spec's own value.
+   *
+   * PROGRESS backlog **34**: the SDK computes `pathToClaudeCodeExecutable` on the *platform* side
+   * (it resolves its own bundled `@anthropic-ai/claude-agent-sdk-linux-*` binary) and the shim
+   * `exec`s that path **inside the container**, where it does not exist. The two are different
+   * paths on different filesystems and nothing compared them, so the first real run in the real
+   * image would have failed as an exec error inside a container rather than as a statement about
+   * configuration.
+   *
+   * The provisioner answers it because the provisioner is the only thing that knows which image the
+   * run was created from, and it is substituted into the spec here — beside `workspacePath`, at the
+   * one place that knows both the planned value and the workspace's.
+   */
+  readonly claudeCodePath?: string | null;
   /** `Options.spawnClaudeCodeProcess` for this run — the runlet transport, or a test's fake CLI. */
   readonly spawn: (options: SpawnOptions) => SpawnedProcess;
   /** Called exactly once, whichever way the run ended. Must tolerate being called after a failure. */
@@ -216,9 +231,29 @@ export const createWorkspaceClaudeRunner = (
               'the run runs in the workspace’s own working directory, not the planned path',
             );
           }
+          // `workspacePath` and `claudeCodePath` are both the workspace's to answer and neither can
+          // be known before there is one: the planner writes a task-derived placeholder for the
+          // first and the SDK would resolve a **platform-side** path for the second (backlog 34).
+          const provisioned: RunSpec = {
+            ...spec,
+            workspacePath: workspace.workdir,
+            ...(workspace.claudeCodePath === undefined || workspace.claudeCodePath === null
+              ? {}
+              : { claudeCodePath: workspace.claudeCodePath }),
+          };
+          if (provisioned.claudeCodePath !== spec.claudeCodePath) {
+            logger.debug(
+              {
+                run_id: spec.runId,
+                planned: spec.claudeCodePath,
+                claude_code_path: provisioned.claudeCodePath,
+              },
+              'the run execs the CLI the workspace image carries, not the path the platform would resolve',
+            );
+          }
           handle = options
             .build({ spawn: workspace.spawn, workdir: workspace.workdir })
-            .start({ ...spec, workspacePath: workspace.workdir });
+            .start(provisioned);
           for (const message of pendingSteers.splice(0)) {
             await handle.steer(message);
           }

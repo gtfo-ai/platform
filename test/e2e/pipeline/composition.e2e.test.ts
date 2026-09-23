@@ -119,7 +119,11 @@ describe('an instance started the way main.ts starts one', () => {
     // with no caller would log that it is missing one, and the second half of this would fail.
     const missing = logged.find((line) => line.includes('composed without an agent runner'));
     expect(missing).toBeDefined();
-    expect(missing).toContain('Q52');
+    // The two settings that switch the process on, not an open-question number: Q52 is answered
+    // (TD-028) and the transport exists since WP-53, so what an operator has to read about is
+    // configuration.
+    expect(missing).toContain('APP_LAUNCHER_URL');
+    expect(missing).toContain('APP_LAUNCHER_TOKEN');
     expect(logged.join('\n')).not.toContain('IntegrationAuditLog');
     expect(logged.join('\n')).not.toContain('the pipeline is not composed');
   });

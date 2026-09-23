@@ -12,6 +12,7 @@
  * `runletEnvSchema`): a launcher that silently fell back to `platform-runtime:latest` because
  * `APP_WORKSPACE_RUNTME_IMAGE` was misspelt would start every run on the wrong image.
  */
+import { db, workspace } from '@platform/infrastructure';
 import * as z from 'zod';
 
 const positiveInt = z.coerce.number().int().positive();
@@ -30,6 +31,10 @@ export const launcherEnvSchema = z.strictObject({
   APP_WORKSPACE_EXPORT_DIR: z.string().min(1).optional(),
   APP_WORKSPACE_RETENTION_SWEEP_MS: positiveInt.optional(),
   APP_WORKSPACE_MAX_EXPORT_BYTES: positiveInt.optional(),
+  APP_WORKSPACE_RUNTIME_CLI_PATH: z.string().min(1).optional(),
+  APP_LAUNCHER_TOKEN: z.string().min(1).optional(),
+  APP_LAUNCHER_HOST: z.string().min(1).optional(),
+  APP_LAUNCHER_PORT: positiveInt.max(65_535).optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).optional(),
 });
 
@@ -49,7 +54,23 @@ export interface LauncherConfig {
     readonly egress: string;
     readonly git: string;
     readonly runtimeSourceDir: string | null;
+    /** Where the `claude` binary is inside the run image (PROGRESS backlog 34). */
+    readonly runtimeCliPath: string;
   };
+  /**
+   * TD-028's control plane, or `null` for a launcher that exposes none.
+   *
+   * **`null` is the fail-closed answer to a missing `APP_LAUNCHER_TOKEN`**, not a default that
+   * opens the surface: a control plane that creates containers must never come into existence
+   * because a variable was forgotten (standing rules 18 and 55, and the same shape `DOCKER_HOST`'s
+   * refusal has). A launcher started this way runs its retention sweep and nothing can talk to it,
+   * which the start-up log says in as many words.
+   */
+  readonly controlPlane: {
+    readonly token: string;
+    readonly host: string;
+    readonly port: number;
+  } | null;
   readonly helperNetwork: string;
   readonly egressNetwork: string;
   readonly exportDir: string;
@@ -120,16 +141,62 @@ export const parseDockerHost = (value: string | undefined): EngineAddressConfig 
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/** TD-028 decision 2's port. Never published; only the runner container joins the network. */
+export const DEFAULT_CONTROL_PLANE_PORT = 7780;
+
+/**
+ * The shortest `APP_LAUNCHER_TOKEN` this launcher will start with.
+ *
+ * It is instance configuration rather than a credential the launcher mints (TD-028 decision 3), so
+ * nothing here can generate it — which makes the only protection against a two-character one a
+ * refusal. Thirty-two characters is what `.env.example` tells an operator to generate and what
+ * `APP_SECRET_KEY` already demands.
+ */
+export const MIN_LAUNCHER_TOKEN_LENGTH = 32;
+
 export const readLauncherConfig = (env: Record<string, string | undefined>): LauncherConfig => {
   const present = Object.fromEntries(
     Object.entries(env).filter(
       ([key, value]) =>
+        /*
+         * **Blank is absent, not present-and-empty** — WP-53, found by `compose-stock-check.mjs`.
+         *
+         * Every name below is declared `.min(1).optional()`, so an empty string reaching this strict
+         * schema is a *parse error* rather than a default: `readLauncherConfig` threw,
+         * `buildLauncher` threw, the process exited 1 and `restart: unless-stopped` looped the
+         * launcher container for ever. And an empty value is exactly what a stock instance has,
+         * because `.env.example` ships `APP_LAUNCHER_TOKEN=` with no value and `compose.yml`
+         * interpolates it as `${APP_LAUNCHER_TOKEN:-}` — so the shipped file and the shipped schema
+         * disagreed, invisibly to every tier without a daemon.
+         *
+         * It is the same rule `readEnvWithFile` below and `nullableString` in `apps/server` already
+         * apply, and the same direction standing rule 18 asks for: an unset value must reach the
+         * code that decides what absence *means* (here: no control plane) rather than the parser.
+         */
         value !== undefined &&
-        (key === 'DOCKER_HOST' || key === 'LOG_LEVEL' || key.startsWith('APP_WORKSPACE_')),
+        value.trim() !== '' &&
+        (key === 'DOCKER_HOST' ||
+          key === 'LOG_LEVEL' ||
+          key.startsWith('APP_WORKSPACE_') ||
+          // `APP_LAUNCHER_TOKEN_FILE` is read by `readEnvWithFile` below and must not reach the
+          // strict schema, which is why the filter names the three exactly rather than the prefix.
+          key === 'APP_LAUNCHER_HOST' ||
+          key === 'APP_LAUNCHER_PORT' ||
+          key === 'APP_LAUNCHER_TOKEN'),
     ),
   );
-  const parsed = launcherEnvSchema.parse(present);
+  // TD-020's `_FILE` convention, resolved before the schema sees the name it shadows.
+  const token = db.readEnvWithFile('APP_LAUNCHER_TOKEN', env);
+  const parsed = launcherEnvSchema.parse(
+    token === undefined ? present : { ...present, APP_LAUNCHER_TOKEN: token },
+  );
   const sourceDir = parsed.APP_WORKSPACE_RUNTIME_SOURCE_DIR ?? '';
+  const launcherToken = parsed.APP_LAUNCHER_TOKEN?.trim() ?? '';
+  if (launcherToken.length > 0 && launcherToken.length < MIN_LAUNCHER_TOKEN_LENGTH) {
+    throw new LauncherConfigError(
+      `APP_LAUNCHER_TOKEN must be at least ${String(MIN_LAUNCHER_TOKEN_LENGTH)} characters: it is the only credential in front of a surface that creates containers`,
+    );
+  }
   return {
     engine: parseDockerHost(parsed.DOCKER_HOST),
     controlVolume: parsed.APP_WORKSPACE_CONTROL_VOLUME ?? 'agentic-ctl',
@@ -142,7 +209,19 @@ export const readLauncherConfig = (env: Record<string, string | undefined>): Lau
       // replaces it with a digest in the compose file.
       git: parsed.APP_WORKSPACE_GIT_IMAGE ?? 'alpine/git:v2.49.1',
       runtimeSourceDir: sourceDir.length === 0 ? null : sourceDir,
+      runtimeCliPath: parsed.APP_WORKSPACE_RUNTIME_CLI_PATH ?? workspace.DEFAULT_RUNTIME_CLI_PATH,
     },
+    controlPlane:
+      launcherToken.length === 0
+        ? null
+        : {
+            token: launcherToken,
+            // `0.0.0.0` because the only network this container joins for it is `internal: true`
+            // with no published port (TD-028 decision 2). Binding the loopback instead would make
+            // the surface unreachable from the runner container, which is its only caller.
+            host: parsed.APP_LAUNCHER_HOST ?? '0.0.0.0',
+            port: parsed.APP_LAUNCHER_PORT ?? DEFAULT_CONTROL_PLANE_PORT,
+          },
     helperNetwork: parsed.APP_WORKSPACE_HELPER_NETWORK ?? 'bridge',
     egressNetwork: parsed.APP_WORKSPACE_EGRESS_NETWORK ?? 'bridge',
     exportDir: parsed.APP_WORKSPACE_EXPORT_DIR ?? '/var/lib/app/exports',

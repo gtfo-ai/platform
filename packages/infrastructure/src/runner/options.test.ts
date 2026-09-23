@@ -79,18 +79,42 @@ describe('buildQueryOptions', () => {
     ).toBeUndefined();
   });
 
-  it('sets `pathToClaudeCodeExecutable` only in local provider mode (BD-004)', () => {
+  /**
+   * PROGRESS backlog **34**, at the one line that decides it.
+   *
+   * This case read *"only in local provider mode (BD-004)"* until WP-53, and that rule is what left
+   * every containerised `api`-mode run execing a path on the **platform's** filesystem: with the
+   * option unset the SDK resolves its own bundled binary, and the run shim then `exec`s that path
+   * inside the container. `providerMode` answers *whose credential*; *which filesystem holds the
+   * binary* is the transport's question, so the transport is the second condition.
+   */
+  it('sets `pathToClaudeCodeExecutable` in local mode, or whenever a transport spawns the CLI', () => {
+    const spawned = { ...parts(), spawnClaudeCodeProcess: () => ({}) as never };
+    // BD-004's own case, unchanged: the operator's binary on the operator's host.
     expect(
       buildQueryOptions(
         runSpecFixture({ providerMode: 'local', claudeCodePath: '/usr/local/bin/claude' }),
         parts(),
       ).pathToClaudeCodeExecutable,
     ).toBe('/usr/local/bin/claude');
+    // The defect: `api` mode through a transport used to leave this undefined.
+    expect(
+      buildQueryOptions(
+        runSpecFixture({ providerMode: 'api', claudeCodePath: '/usr/local/bin/claude' }),
+        spawned,
+      ).pathToClaudeCodeExecutable,
+    ).toBe('/usr/local/bin/claude');
+    // Both directions (rule 42): no transport and no local binary leaves the SDK's own resolution
+    // alone, which is what an in-process developer run depends on.
     expect(
       buildQueryOptions(
         runSpecFixture({ providerMode: 'api', claudeCodePath: '/usr/local/bin/claude' }),
         parts(),
       ).pathToClaudeCodeExecutable,
+    ).toBeUndefined();
+    expect(
+      buildQueryOptions(runSpecFixture({ providerMode: 'api', claudeCodePath: null }), spawned)
+        .pathToClaudeCodeExecutable,
     ).toBeUndefined();
   });
 

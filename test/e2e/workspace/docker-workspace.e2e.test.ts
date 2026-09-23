@@ -42,6 +42,9 @@ import {
   type DockerFixture,
   docker,
   exportPath,
+  FIXTURE_TASK_BRANCH,
+  FIXTURE_TASK_BRANCH_FILE,
+  FIXTURE_TASK_BRANCH_MARKER,
   GIT_IMAGE,
   PROJECT_SKILL_FILE,
   plantInWorkspace,
@@ -102,6 +105,90 @@ describe('the workspace lifecycle against a real daemon', () => {
       // technical/05 §1: the clone's objects come from the shared mirror, which is why gc is
       // disabled on it while a workspace references it.
       expect(probe.output).toContain('/cache/acme.git/objects');
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 180_000);
+
+  /**
+   * **PROGRESS backlog 71's countable effect** — WP-53 criterion (4), closed at review.
+   *
+   * The row asks for *"a re-entry run's workspace carries the task branch's head commit"*, and until
+   * the review nothing asserted it at any tier: the mapping `checkoutRef → repo.checkoutBranch` was
+   * covered, and `#clone`'s `git checkout "$B" || git checkout -b "$B"` was not. Worse, the one
+   * daemon check that set a branch used one that is **not** on the remote, so only the `-b` half had
+   * ever run — the half a *first* run takes, not the half a re-entry depends on.
+   *
+   * Both halves are here, and the assertion is on the checkout's own `HEAD` rather than on the spec
+   * (standing rule 82). The fixture's task branch is deliberately **one commit ahead** of `main` and
+   * carries a file `main` does not: with equal heads, a provider that ignored `checkoutBranch`
+   * outright would pass (rule 43).
+   */
+  it('checks out a task branch that is on the remote, at that branch’s head (backlog 71)', async () => {
+    const spec = specFor({ repo: { checkoutBranch: FIXTURE_TASK_BRANCH } });
+    await fixture.provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: null,
+    });
+    const handle = await fixture.provider.create(spec);
+    try {
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        'git -C /work/repo rev-parse --abbrev-ref HEAD; ' +
+          `git -C /work/repo rev-parse HEAD; git -C /work/repo rev-parse ${FIXTURE_TASK_BRANCH}; ` +
+          'git -C /work/repo rev-parse main; ' +
+          `cat /work/repo/${FIXTURE_TASK_BRANCH_FILE}`,
+        // **The run image, not the default `alpine:3.21`**, because this probe needs `git` and only
+        // the run image has it (`/usr/bin/git`, measured — the first draft of this case answered
+        // `/bin/sh: git: not found`, which is the probe's own image and not a fact about the
+        // workspace). It is also the honest container to ask in: it is what the agent gets.
+        { image: RUNTIME_IMAGE },
+      );
+      expect(probe.exitCode).toBe(0);
+      const [branch = '', head = '', taskHead = '', mainHead = '', ...rest] = probe.output
+        .trim()
+        .split('\n');
+      expect(branch).toBe(FIXTURE_TASK_BRANCH);
+      // The countable effect the row names, in one line.
+      expect(head).toBe(taskHead);
+      // …and it is a *different* commit from the default branch's, so the assertion above has a
+      // subject that could have differed.
+      expect(head).not.toBe(mainHead);
+      expect(rest.join('\n')).toContain(FIXTURE_TASK_BRANCH_MARKER);
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 180_000);
+
+  it('creates a task branch that is not on the remote, at the default branch’s head', async () => {
+    // The `||`'s second half, which is what a task's **first** run takes: the branch does not exist
+    // yet, so the clone creates it rather than failing — the behaviour backlog 71 asks the change to
+    // answer "in the same commit".
+    const spec = specFor({ repo: { checkoutBranch: 'agentic/never-pushed' } });
+    await fixture.provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: null,
+    });
+    const handle = await fixture.provider.create(spec);
+    try {
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        'git -C /work/repo rev-parse --abbrev-ref HEAD; ' +
+          'git -C /work/repo rev-parse HEAD; git -C /work/repo rev-parse main; ' +
+          `test -e /work/repo/${FIXTURE_TASK_BRANCH_FILE} && echo PRESENT || echo ABSENT`,
+        { image: RUNTIME_IMAGE },
+      );
+      expect(probe.exitCode).toBe(0);
+      const [branch = '', head = '', mainHead = '', marker = ''] = probe.output.trim().split('\n');
+      expect(branch).toBe('agentic/never-pushed');
+      expect(head).toBe(mainHead);
+      // And it did **not** silently land on the other branch, which is the mistake a `checkout -b`
+      // over a stale working tree would make.
+      expect(marker).toBe('ABSENT');
     } finally {
       await fixture.provider.destroy(handle);
     }

@@ -124,13 +124,27 @@ const config = (
   return JSON.parse(raw) as ComposeConfig;
 };
 
-/** The `app` service's resolved environment, which is the subject of the WP-50 cases. */
-const appEnvironment = (projectDirectory: string): Record<string, string> =>
+/** One service's resolved environment. */
+const serviceEnvironment = (service: string, projectDirectory: string): Record<string, string> =>
   (
     config(['compose.yml'], {}, projectDirectory) as unknown as {
       services: Record<string, { environment: Record<string, string> }>;
     }
-  ).services['app']?.environment ?? {};
+  ).services[service]?.environment ?? {};
+
+/** The `app` service's resolved environment, which is the subject of the WP-50 cases. */
+const appEnvironment = (projectDirectory: string): Record<string, string> =>
+  serviceEnvironment('app', projectDirectory);
+
+/**
+ * The **product services** — both of them since WP-53.
+ *
+ * WP-50's census exists because a service's environment drifting from what the server reads is
+ * invisible otherwise, and `runner` is the same image running the same `loadServerConfig`. Covering
+ * `app` alone would have left the second product container asserted for four launcher names and
+ * nothing else, which is the shape the census was written against.
+ */
+const PRODUCT_SERVICES = ['app', 'runner'] as const;
 
 /**
  * Every environment variable name `loadServerConfig` reads, asked of the code itself.
@@ -174,10 +188,15 @@ const publishers = (result: ComposeConfig): string[] =>
     .map(([name, service]) => `${name} ${(service.ports ?? []).map((p) => p.published).join(',')}`)
     .sort();
 
-const BASE_SERVICES = ['app', 'db', 'docker-socket-proxy', 'launcher', 'migrate'];
+/**
+ * Six since WP-53: `runner` is the second product container, and TD-028 decision 6 is what put it
+ * there — `app` keeps **no** `ctl` mount and **no** launcher token, and the service that gains
+ * both is the only one that runs agent stages.
+ */
+const BASE_SERVICES = ['app', 'db', 'docker-socket-proxy', 'launcher', 'migrate', 'runner'];
 
 describe('compose.yml', () => {
-  it('starts one instance: five services, one of them publishing a port', () => {
+  it('starts one instance: six services, one of them publishing a port', () => {
     const result = config(['compose.yml']);
     expect(services(result)).toEqual(BASE_SERVICES);
     expect(publishers(result)).toEqual(['app 8080']);
@@ -203,6 +222,13 @@ describe('compose.yml', () => {
     };
     expect(local.services['app']?.environment['APP_PROVIDER_MODE']).toBe('local');
     expect(local.services['app']?.environment['CLAUDE_CODE_OAUTH_TOKEN']).toBe(
+      'compose-config-test-not-a-real-token',
+    );
+    // **Both** product services, since WP-53: `runner` is the one that runs an agent, and an
+    // instance whose two containers disagreed about the mode would index under one credential and
+    // run under another.
+    expect(local.services['runner']?.environment['APP_PROVIDER_MODE']).toBe('local');
+    expect(local.services['runner']?.environment['CLAUDE_CODE_OAUTH_TOKEN']).toBe(
       'compose-config-test-not-a-real-token',
     );
     // `api` is `.env`'s since WP-50 (and `SERVER_CONFIG_DEFAULTS`' when there is no `.env`) rather
@@ -321,6 +347,14 @@ describe('compose.yml', () => {
       .sort();
     expect(onProxyNetwork).toEqual(['docker-socket-proxy', 'launcher']);
     expect(onProxyNetwork).not.toContain('app');
+    // TD-028's own network, and the same claim one level out: the container that talks to the
+    // launcher is **not** the container that talks to the daemon, and neither is `app`.
+    const onLauncherNetwork = Object.entries(result.services)
+      .filter(([, service]) => Object.keys(service.networks ?? {}).includes('launcher-api'))
+      .map(([name]) => name)
+      .sort();
+    expect(onLauncherNetwork).toEqual(['launcher', 'runner']);
+    expect(onProxyNetwork).not.toContain('runner');
 
     // The residual, measured rather than claimed: the variable *is* in the app container on a
     // stock instance, and it is an address to a daemon this service can reach by neither route.
@@ -345,7 +379,11 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
     // Inert here: this service binds no socket and joins no network that reaches the proxy, and no
     // source outside `apps/launcher/src/` constructs a Docker client (docker-access.test.ts).
     reason: 'read by `readLauncherConfig`, in the one container with a route to the daemon',
-    matches: (name) => name === 'DOCKER_HOST' || name.startsWith('APP_WORKSPACE_'),
+    // `APP_LAUNCHER_PORT` joined this group at WP-53: it is the port the *launcher* listens on and
+    // the `runner` service interpolates it into its own `APP_LAUNCHER_URL`; no server source reads
+    // it. `APP_LAUNCHER_URL`/`APP_LAUNCHER_TOKEN` are **not** here — the server does read those.
+    matches: (name) =>
+      name === 'DOCKER_HOST' || name === 'APP_LAUNCHER_PORT' || name.startsWith('APP_WORKSPACE_'),
   },
   {
     group: 'the run shim’s',
@@ -360,10 +398,10 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
     // The reason a curated passthrough list cannot be complete: which of these the server reads is
     // decided by the operator's `APP_INTEGRATION_SECRET_ENV`, so the set is unknowable here.
     reason: 'read by name at run time through the operator-declared allow-list (TD-020, WP-21)',
+    // `CLAUDE_CODE_OAUTH_TOKEN` **left this group at WP-53**: the server reads it now (PROGRESS
+    // backlog 128), so it is in `namesServerReads()` and a row for it here would be a dead one.
     matches: (name) =>
-      ['GITLAB_', 'JIRA_', 'SLACK_', 'SENTRY_', 'LOKI_', 'CLAUDE_CODE_OAUTH_TOKEN'].some((prefix) =>
-        name.startsWith(prefix),
-      ),
+      ['GITLAB_', 'JIRA_', 'SLACK_', 'SENTRY_', 'LOKI_'].some((prefix) => name.startsWith(prefix)),
   },
   {
     group: 'compose’s own',
@@ -412,8 +450,8 @@ describe('compose.yml gives the app service the environment the server reads (WP
     }
   });
 
-  it('delivers every variable the server reads, from a stock `.env`', () => {
-    const delivered = new Set(Object.keys(appEnvironment(projectWith(STOCK_ENV))));
+  it.each(PRODUCT_SERVICES)('delivers every variable the server reads to `%s`', (service) => {
+    const delivered = new Set(Object.keys(serviceEnvironment(service, projectWith(STOCK_ENV))));
     const missing = [...namesServerReads()].filter((name) => !delivered.has(name)).sort();
     // **No deliberate omission**: every one of the names `loadServerConfig` reads is declared in
     // `.env.example`, so a stock instance delivers all of them. Before WP-50 this list was twenty
@@ -422,27 +460,30 @@ describe('compose.yml gives the app service the environment the server reads (WP
     expect(missing).toEqual([]);
   });
 
-  it('names every variable it delivers that the server does not read', () => {
-    const reads = namesServerReads();
-    const delivered = Object.keys(appEnvironment(projectWith(STOCK_ENV)));
-    const residual = delivered.filter((name) => !reads.has(name));
+  it.each(PRODUCT_SERVICES)(
+    'names every variable `%s` delivers that the server does not read',
+    (service) => {
+      const reads = namesServerReads();
+      const delivered = Object.keys(serviceEnvironment(service, projectWith(STOCK_ENV)));
+      const residual = delivered.filter((name) => !reads.has(name));
 
-    const unclassified = residual
-      .filter((name) => !RESIDUAL.some((entry) => entry.matches(name)))
-      .sort();
-    expect(unclassified).toEqual([]);
+      const unclassified = residual
+        .filter((name) => !RESIDUAL.some((entry) => entry.matches(name)))
+        .sort();
+      expect(unclassified).toEqual([]);
 
-    // The other direction: a group that matches nothing is a row about a variable that has gone.
-    const empty = RESIDUAL.filter((entry) => !residual.some((name) => entry.matches(name))).map(
-      (entry) => entry.group,
-    );
-    expect(empty).toEqual([]);
+      // The other direction: a group that matches nothing is a row about a variable that has gone.
+      const empty = RESIDUAL.filter((entry) => !residual.some((name) => entry.matches(name))).map(
+        (entry) => entry.group,
+      );
+      expect(empty).toEqual([]);
 
-    // And the three the backlog entry named, so the trade is measured rather than described.
-    expect(residual).toContain('POSTGRES_PASSWORD');
-    expect(residual).toContain('DOCKER_HOST');
-    expect(residual.some((name) => name.startsWith('RUNLET_'))).toBe(true);
-  });
+      // And the three the backlog entry named, so the trade is measured rather than described.
+      expect(residual).toContain('POSTGRES_PASSWORD');
+      expect(residual).toContain('DOCKER_HOST');
+      expect(residual.some((name) => name.startsWith('RUNLET_'))).toBe(true);
+    },
+  );
 
   it('keeps the image’s own build metadata out of the container', () => {
     // `docker/app.Dockerfile` bakes `ENV APP_VERSION=…`, and an `env_file` line set to the empty
@@ -554,10 +595,42 @@ describe('compose.yml gives the app service the environment the server reads (WP
     const app = appEnvironment(NO_ENV_PROJECT);
     expect(Object.keys(app).sort()).toEqual([
       'APP_KNOWLEDGE_MIRROR_ROOT',
+      // The three WP-53 pins **empty** on this service, which is what keeps the API container out
+      // of the `stage.execute` queue even when `.env` carries a launcher token (TD-028 decision 5).
+      // All three, because `loadServerConfig` reads the `_FILE` variant first (TD-020): blanking
+      // only the plain name would leave `APP_LAUNCHER_TOKEN_FILE` switching this container on.
+      'APP_LAUNCHER_TOKEN',
+      'APP_LAUNCHER_TOKEN_FILE',
+      'APP_LAUNCHER_URL',
       'APP_WORKSPACE_EXPORT_DIR',
       'DATABASE_URL',
       'HOST',
       'PORT',
     ]);
+    // And they are empty, which is the property the pin exists for rather than their presence.
+    expect(app['APP_LAUNCHER_URL']).toBe('');
+    expect(app['APP_LAUNCHER_TOKEN']).toBe('');
+    expect(app['APP_LAUNCHER_TOKEN_FILE']).toBe('');
+  });
+
+  /**
+   * WP-53: the pin does its job against the environment it exists for.
+   *
+   * `app` takes the whole of `.env` (WP-50), so an operator who put the launcher's token there —
+   * which is exactly what the `runner` service needs them to do — would otherwise make the API
+   * container compose a provisioner and subscribe `stage.execute`, with no `ctl` mount to serve it
+   * from. Asserted from a `.env` that *has* the token, because a stock one does not.
+   */
+  it('keeps the launcher out of the app container even when `.env` carries the token', () => {
+    const withToken = `${STOCK_ENV}\nAPP_LAUNCHER_URL=http://launcher:7780\nAPP_LAUNCHER_TOKEN=${'t'.repeat(40)}\n`;
+    const result = config(['compose.yml'], {}, projectWith(withToken)) as unknown as {
+      services: Record<string, { environment: Record<string, string> }>;
+    };
+    expect(result.services['app']?.environment['APP_LAUNCHER_URL']).toBe('');
+    expect(result.services['app']?.environment['APP_LAUNCHER_TOKEN']).toBe('');
+    // The other direction: the service that is supposed to have it, does.
+    expect(result.services['runner']?.environment['APP_LAUNCHER_URL']).toBe('http://launcher:7780');
+    expect(result.services['runner']?.environment['APP_LAUNCHER_TOKEN']).toBe('t'.repeat(40));
+    expect(result.services['launcher']?.environment['APP_LAUNCHER_TOKEN']).toBe('t'.repeat(40));
   });
 });

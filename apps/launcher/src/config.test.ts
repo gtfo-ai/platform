@@ -101,3 +101,106 @@ describe('launcher configuration', () => {
     ).toBe(60_000);
   });
 });
+
+describe('the control plane (TD-028)', () => {
+  const base = { DOCKER_HOST: 'tcp://docker-socket-proxy:2375' };
+
+  /**
+   * **Absent is `null`, and `null` is closed** (standing rules 18 and 55).
+   *
+   * The failure direction a default would have here is the worst one this repository knows: a
+   * control plane that creates containers, listening because somebody forgot a variable. So an
+   * unset `APP_LAUNCHER_TOKEN` is *no surface at all* rather than an unauthenticated one, and
+   * `startLauncher` says so in the start-up log.
+   */
+  it('exposes no control plane when no token is set', () => {
+    expect(readLauncherConfig(base).controlPlane).toBeNull();
+  });
+
+  it('refuses a token too short to be one, rather than guarding a container factory with it', () => {
+    expect(() => readLauncherConfig({ ...base, APP_LAUNCHER_TOKEN: 'short' })).toThrow(
+      /at least 32 characters/,
+    );
+  });
+
+  it('listens on every interface by default, because the network is the isolation', () => {
+    // TD-028 decision 2: an `internal: true` compose network with no published port that only the
+    // runner joins. Binding the loopback would make the surface unreachable from its only caller.
+    expect(
+      readLauncherConfig({ ...base, APP_LAUNCHER_TOKEN: 'a'.repeat(32) }).controlPlane,
+    ).toEqual({ token: 'a'.repeat(32), host: '0.0.0.0', port: 7780 });
+  });
+
+  it('honours TD-020’s `_FILE` variant for the token', async () => {
+    const { mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const pathMod = await import('node:path');
+    const dir = await mkdtemp(pathMod.join(tmpdir(), 'agentic-launcher-token-'));
+    const file = pathMod.join(dir, 'token');
+    // A trailing newline is what `echo > secret` writes and what a Docker secret usually carries.
+    await writeFile(file, `${'b'.repeat(32)}\n`, 'utf8');
+    expect(readLauncherConfig({ ...base, APP_LAUNCHER_TOKEN_FILE: file }).controlPlane?.token).toBe(
+      'b'.repeat(32),
+    );
+  });
+});
+
+describe('the run image’s CLI path (PROGRESS backlog 34)', () => {
+  it('defaults to where `docker/runtime.Dockerfile` installs it', () => {
+    expect(readLauncherConfig({ DOCKER_HOST: 'tcp://proxy:2375' }).images.runtimeCliPath).toBe(
+      '/usr/local/bin/claude',
+    );
+  });
+
+  it('is configurable, for an image an operator built themselves', () => {
+    expect(
+      readLauncherConfig({
+        DOCKER_HOST: 'tcp://proxy:2375',
+        APP_WORKSPACE_RUNTIME_CLI_PATH: '/opt/claude/claude',
+      }).images.runtimeCliPath,
+    ).toBe('/opt/claude/claude');
+  });
+});
+
+describe('a blank value is absent, not present-and-empty (WP-53)', () => {
+  /**
+   * The defect `scripts/compose-stock-check.mjs` caught on its first extended run, and the reason
+   * that check exists: the launcher container was **restarting for ever** on a stock instance.
+   *
+   * `.env.example` ships `APP_LAUNCHER_TOKEN=` with no value and `compose.yml` interpolates it as
+   * `${APP_LAUNCHER_TOKEN:-}`, so the variable arrives as `''`. Every name in `launcherEnvSchema` is
+   * `.min(1).optional()`, and `''` fails `.min(1)` — so a **strict** schema turned "the operator did
+   * not set it" into a parse error, `buildLauncher` threw, the process exited 1, and
+   * `restart: unless-stopped` did the rest. No tier without a daemon could see it.
+   */
+  it('does not refuse a stock instance whose launcher variables are empty', () => {
+    const config = readLauncherConfig({
+      DOCKER_HOST: 'tcp://docker-socket-proxy:2375',
+      APP_LAUNCHER_TOKEN: '',
+      APP_LAUNCHER_TOKEN_FILE: '',
+      APP_LAUNCHER_PORT: '7780',
+    });
+    // Absence means *no control plane* — the fail-closed answer decided in `LauncherConfig` — and
+    // that decision has to be reached rather than pre-empted by the parser.
+    expect(config.controlPlane).toBeNull();
+  });
+
+  it('still refuses a blank DOCKER_HOST, which is the one absence that must not default', () => {
+    // The other direction (rule 42): treating blank as absent must not turn standing rule 55's
+    // refusal into a default. `parseDockerHost(undefined)` throws exactly as `('   ')` did.
+    expect(() => readLauncherConfig({ DOCKER_HOST: '   ', APP_LAUNCHER_TOKEN: '' })).toThrow(
+      LauncherConfigError,
+    );
+  });
+
+  it('falls back to the defaults for the other blank names rather than failing the parse', () => {
+    const config = readLauncherConfig({
+      DOCKER_HOST: 'tcp://proxy:2375',
+      APP_WORKSPACE_RUNTIME_IMAGE: '',
+      APP_WORKSPACE_CONTROL_ROOT: '',
+      APP_LAUNCHER_HOST: '',
+    });
+    expect(config.images.runtime).toBe('platform-runtime:latest');
+    expect(config.controlRoot).toBe('/run/agentic/ctl');
+  });
+});

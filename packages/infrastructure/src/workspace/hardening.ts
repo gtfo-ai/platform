@@ -77,7 +77,32 @@ export interface WorkspaceImages {
    * every test tier since WP-22; see the docblock's "one hole".
    */
   readonly runtimeSourceDir: string | null;
+  /**
+   * Where the `claude` binary is **inside {@link WorkspaceImages.runtime}** — PROGRESS backlog
+   * **34**, and the reason it is configuration rather than a constant at the call site.
+   *
+   * The SDK resolves `pathToClaudeCodeExecutable` on the *platform* side and the run shim `exec`s
+   * that path **in the container**, so a run whose path came from the platform execs something that
+   * is not there — and the failure arrives as `exit code: null` from a shim, with no diagnosis. The
+   * launcher is the one process that knows which image a run is created from, so the path travels
+   * with the image and is **verified against it** before the first run
+   * (`DockerWorkspaceProvider#assertRuntimeCli`).
+   *
+   * Absent is {@link DEFAULT_RUNTIME_CLI_PATH}, which is where `docker/runtime.Dockerfile` installs
+   * it. A default is safe here in a way standing rule 55 would not allow for a *permission*: it
+   * grants nothing, and a wrong value is refused by the verification rather than accepted.
+   */
+  readonly runtimeCliPath?: string;
 }
+
+/**
+ * `docker/runtime.Dockerfile`: `COPY --from=shim /out-claude /usr/local/bin/claude`.
+ *
+ * Measured against `platform-runtime:dev` at WP-53 rather than read off the Dockerfile alone:
+ * `command -v claude` answers `/usr/local/bin/claude` and `claude --version` answers
+ * `2.1.267 (Claude Code)`.
+ */
+export const DEFAULT_RUNTIME_CLI_PATH = '/usr/local/bin/claude';
 
 export interface DockerMount {
   readonly Type: 'volume' | 'bind' | 'tmpfs';

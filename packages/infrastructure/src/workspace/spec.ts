@@ -4,7 +4,9 @@
  * ## Nothing built one before this file
  *
  * `workspaceSpecSchema` has existed since WP-14 and the only producer in the tree was the test
- * fixture `packages/infrastructure/src/workspace/fixtures.ts`. So every green result about a
+ * fixture `packages/infrastructure/src/workspace/fixtures.ts`. Its first **production** caller
+ * arrived at WP-53: `launcher/provisioner.ts` builds one per run and sends it over TD-028's control
+ * plane. So every green result about a
  * workspace was a result about a spec a test wrote, and the fields that decide what a run container
  * may *do* — its limits, its egress allow-list, its runtime, whether it is read-only, how long its
  * volume is kept — had no production derivation at all. This is that derivation, as a pure function
@@ -40,7 +42,11 @@
  * registries for the project's ecosystems (from discovery)" and read-only observability hosts for
  * stages that may use them. **Two of those four do not exist in this build.** Discovery has not been
  * written, so no registry host can be derived, and no stage carries observability hosts yet. So the
- * allow-list this produces is *the model host (or none, in `local` provider mode) plus the git host*,
+ * allow-list this produces is *the model host plus the git host* — in **both** provider modes, which
+ * is a correction: this paragraph read "(or none, in `local` provider mode) … the binary is on the
+ * host and talks to nothing" until WP-53, and that has not been true since WP-22 put the CLI in the
+ * run container in every mode. WP-53 measured the pinned binary authenticating against the same API
+ * with `CLAUDE_CODE_OAUTH_TOKEN`. The hosts are `APP_MODEL_EGRESS_HOSTS`, read in both modes;
  * and the consequence is stated rather than discovered: **a run cannot install a package.** A stage
  * whose work needs `npm install` fails inside the container rather than reaching a registry, which is
  * the fail-closed direction and is visibly wrong rather than silently permissive. Widening it is

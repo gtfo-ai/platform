@@ -19,8 +19,14 @@ import {
 
 describe('unavailableClaudeRunner', () => {
   /**
-   * The runner every production process gets until Q52 is answered, and the reason it is a
+   * The runner a process that is **configured to run no agent** gets, and the reason it is a
    * *refusal* rather than a null object.
+   *
+   * Since WP-53 that is a narrower set than "every production process": a worker with
+   * `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN` composes the real one. It is also a set that should
+   * not reach this throw at all — such a process no longer subscribes `stage.execute` (TD-028
+   * decision 5) — and the refusal stays for the paths that bypass the queue and for the
+   * half-configured instance a future edit could produce.
    *
    * A runner that returned a handle whose outcome resolved to a failed `RunOutcome` would be
    * kinder and much worse: the stage executor would record `run.failed` and the interpreter would
@@ -28,7 +34,7 @@ describe('unavailableClaudeRunner', () => {
    * fail-open direction of standing rule 20. Throwing keeps the failure inside the
    * `stage.execute` job that asked for it.
    */
-  it('throws, naming the stage and the open question, instead of faking an outcome', () => {
+  it('throws, naming the stage and the missing configuration, instead of faking an outcome', () => {
     const runner = unavailableClaudeRunner();
     let thrown: unknown;
     try {
@@ -38,7 +44,7 @@ describe('unavailableClaudeRunner', () => {
     }
     expect(thrown).toBeInstanceOf(RunnerUnavailableError);
     expect((thrown as Error).message).toContain('implementation');
-    expect((thrown as Error).message).toContain('Q52');
+    expect((thrown as Error).message).toContain('APP_LAUNCHER_URL');
   });
 
   it('still names the failure when the spec has no stage', () => {

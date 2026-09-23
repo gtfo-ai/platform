@@ -21,10 +21,20 @@
  * launcher side of that boundary, in the `platform-launcher` container. The check that keeps this
  * honest is `apps/launcher/src/docker-access.test.ts`, which reads the repository off disk.
  *
- * **The provisioner is absent by default**, which is Q59(b)'s answer: a process with no launcher
- * configuration composes no agent runner, logs which piece is missing, and still runs the gates, the
- * status mapping, the workpad and every outbound provider call. Refusing to compose the pipeline at
- * all would be louder and would stop the part of the loop that works without an agent.
+ * **A process with no launcher configuration composes no agent runner**, which is Q59(b)'s answer:
+ * it logs which piece is missing, and still runs the status mapping, the workpad and every outbound
+ * provider call. Refusing to compose the pipeline at all would be louder and would stop the part of
+ * the loop that works without an agent. Since WP-53 that process also does not **subscribe**
+ * `stage.execute` or `task.ask` (TD-028 decision 5), so those jobs queue rather than failing.
+ *
+ * That costs the platform **gates** as well, and TD-028's WP-53 amendment is where the trade is
+ * written down: `ci_gate`, `rebase_gate` and `merged_gate` are a *branch of the same handler on the
+ * same queue*, and the queue is not split because `stage.execute` is `stately` per task — a second
+ * queue would let a gate and a stage for one task run at once.
+ *
+ * The provisioner is no longer absent in a shipped instance: `compose.yml`'s `runner` service is
+ * the same image with `APP_LAUNCHER_URL`, `APP_LAUNCHER_TOKEN` and the `ctl` mount, and
+ * `apps/server/src/workspaces.ts` composes `createLauncherRunWorkspaceProvisioner` from them.
  *
  * ## The three collaborators that did not exist
  *
@@ -115,9 +125,19 @@ export interface AgentRunnerOptions {
   readonly provisioner: runnerAdapters.RunWorkspaceProvisioner | undefined;
   /** The nine in-process MCP tools this process composed (`platform-tools.ts`). */
   readonly tools: PlatformToolPort;
-  /** `api` needs a model credential; `local` runs the operator's own binary (BD-004). */
+  /**
+   * BD-004's two modes, and what each one authenticates a run with.
+   *
+   * *"`local` runs the operator's own binary"* is how this line read until WP-53 and it has not
+   * been true since WP-22: `compose.local.yml` says *"the CLI does not run in this container: it
+   * runs in the per-run `platform-runtime` container"*, so both modes run the **same pinned
+   * binary** in the run image and differ only in the credential — `ANTHROPIC_API_KEY` for `api`,
+   * `CLAUDE_CODE_OAUTH_TOKEN` (a Claude Code subscription) for `local`.
+   */
   readonly providerMode: 'api' | 'local';
   readonly modelApiKey: string | null;
+  /** `CLAUDE_CODE_OAUTH_TOKEN` — `local` mode's credential (PROGRESS backlog 128). */
+  readonly modelOauthToken?: string | null;
   readonly logger: Logger;
 }
 
@@ -133,19 +153,25 @@ export type ComposedAgentRunner = { readonly runner: ClaudeRunner } | AgentRunne
  * Composes the agent runner, or explains why it did not.
  *
  * Two conditions, and both are *configuration* rather than build state: a workspace provisioner
- * (which needs a launcher this build has no transport to — Q52), and, in `api` provider mode, a model
- * credential. Each absence is returned by name so the composition root can log it, which is the shape
- * `startRuntime` already uses for the runner and the audit log.
+ * (which needs `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN` — TD-028's control plane, built at
+ * WP-53), and the provider mode's own model credential. Each absence is returned by name so the
+ * composition root can log it, which is the shape `startRuntime` already uses for the runner and the
+ * audit log.
  */
 export const composeAgentRunner = (options: AgentRunnerOptions): ComposedAgentRunner => {
   const missing: string[] = [];
   if (options.provisioner === undefined) {
     missing.push(
-      'a run workspace provisioner (Q52: this build has no transport to the platform-launcher container, and TD-021 forbids this process from holding a Docker client)',
+      "a run workspace provisioner (set APP_LAUNCHER_URL and APP_LAUNCHER_TOKEN to reach the platform-launcher container over TD-028's control plane; TD-021 forbids this process from holding a Docker client of its own)",
     );
   }
   if (options.providerMode === 'api' && options.modelApiKey === null) {
     missing.push('ANTHROPIC_API_KEY (APP_PROVIDER_MODE=api needs a model credential)');
+  }
+  if (options.providerMode === 'local' && (options.modelOauthToken ?? null) === null) {
+    missing.push(
+      'CLAUDE_CODE_OAUTH_TOKEN (APP_PROVIDER_MODE=local runs the pinned CLI in the run container and it authenticates with a Claude Code subscription token)',
+    );
   }
   if (options.provisioner === undefined || missing.length > 0) {
     return { runner: null, missing };
@@ -180,17 +206,41 @@ export const composeAgentRunner = (options: AgentRunnerOptions): ComposedAgentRu
 };
 
 /**
- * The run environment a spec carries in `api` mode — TD-021 phase 1's "the Anthropic key is in env,
- * documented".
+ * The run environment a spec carries — TD-021 phase 1's "the model credential is in env,
+ * documented", and **the one place that decides what a run container is given**.
  *
  * Returned as the pair the planner needs (`env` and `secretEnvNames`) so the two cannot drift: a key
  * in `env` that is not named in `secretEnvNames` is a credential no redactor knows about, which is
  * the defect TD-012 step 1 exists to prevent.
+ *
+ * ## `local` mode used to be given nothing at all, and a test pinned it (PROGRESS backlog **128**)
+ *
+ * This function returned `{ env: {}, secretEnvNames: [] }` for anything that was not `api` mode,
+ * and `agent.test.ts` asserted it by name. So BD-004's `local` mode — which Q14 records as
+ * *"first-class"* and which `compose.local.yml` makes compose refuse to resolve without
+ * `CLAUDE_CODE_OAUTH_TOKEN` — started a run container with **no credential of any kind**, while
+ * *no server source read that variable*. It was latent only because nothing composed a workspace
+ * provisioner; WP-53 is the row that does.
+ *
+ * The answer is (1) of the entry's two, and it is a measurement rather than a preference: against
+ * `platform-runtime:dev` (`claude` 2.1.267) the pinned CLI reads `CLAUDE_CODE_OAUTH_TOKEN` from
+ * its process environment and authenticates with it — *"401 OAuth access token is invalid"* for a
+ * bogus one, against *"Not logged in · Please run /login"* for none. One name, in the one place,
+ * with the name in `secretEnvNames`.
  */
 export const agentRunEnvironment = (
-  options: Pick<AgentRunnerOptions, 'providerMode' | 'modelApiKey'>,
+  options: Pick<AgentRunnerOptions, 'providerMode' | 'modelApiKey' | 'modelOauthToken'>,
 ): { readonly env: Record<string, string>; readonly secretEnvNames: string[] } => {
-  if (options.providerMode !== 'api' || options.modelApiKey === null) {
+  if (options.providerMode === 'local') {
+    const token = options.modelOauthToken ?? null;
+    // Absent is an empty environment and **not** an error here: this function has no way to fail,
+    // and the refusal that matters already exists one level up — `composeAgentRunner` names the
+    // missing credential and composes no runner at all.
+    return token === null
+      ? { env: {}, secretEnvNames: [] }
+      : { env: { CLAUDE_CODE_OAUTH_TOKEN: token }, secretEnvNames: ['CLAUDE_CODE_OAUTH_TOKEN'] };
+  }
+  if (options.modelApiKey === null) {
     return { env: {}, secretEnvNames: [] };
   }
   return {

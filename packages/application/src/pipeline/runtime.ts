@@ -112,6 +112,31 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
   /** How many stages this process runs at once. @default 1 */
   readonly stageConcurrency?: number;
   /**
+   * Whether this process subscribes the `stage.execute` queue — **TD-028 decision 5**, and the
+   * close of the per-queue-subscription gap `apps/server/src/role.ts` has named since WP-15g.
+   *
+   * *"A worker composition subscribes the agent-run queue **only when it is configured to run
+   * agents**."* The alternative was measured in that file and rejected as a lottery: pg-boss hands
+   * a `stage.execute` job to **any** subscribed worker, so a deployment with `ROLE=worker` beside
+   * `ROLE=runner` would give half its agent stages to the process that composes no runner, and each
+   * of those would fail its run and escalate its task. What decides it is configuration — a launcher
+   * URL and token, or an in-process provisioner — never `ROLE`.
+   *
+   * **The consequence is wider than "agent stages", and TD-028's WP-53 amendment is where it is
+   * written down.** `stage.execute` also evaluates the **platform gates** — `ci_gate`,
+   * `rebase_gate`, `merged_gate`, a branch of `stageExecuteHandler` itself — so a deployment with no
+   * configured runner leaves those queued too. The queue is deliberately **not** split: it is
+   * `stately` with `singletonKey: task:<id>`, which is what enforces *a task never runs two stages
+   * at once*, and a second queue would let a gate and a stage for one task run concurrently and both
+   * write the task through `settle`. A correctness regression bought for the convenience of a
+   * degraded deployment is refused in that direction. Nothing is lost, only delayed — the jobs are
+   * durable and are taken when a runner starts.
+   *
+   * Defaults to **`true`**, which keeps every existing composition (the e2e tiers, `pipeline.test.ts`
+   * and the census) exactly as it was: those processes do compose a runner.
+   */
+  readonly runsAgents?: boolean;
+  /**
    * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
    *
    * Optional, and the only optional collaborator here that is **not** standing rule 31's absent
@@ -278,15 +303,20 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ],
     executor,
     start: async () => {
+      // Declared whatever this process subscribes: a queue that exists is a queue whose depth is a
+      // metric, and TD-028's honest consequence — "a deployment with no runner leaves
+      // `stage.execute` jobs queued" — is only visible if the queue is there to hold them.
       await declarePipelineQueues(options.jobs);
       await ask.declareQueue();
-      workers.push(
-        await options.jobs.work<StageExecuteData>({
-          queue: JOB_QUEUES.stageExecute,
-          handler: stageExecuteHandler(jobOptions),
-          concurrency: options.stageConcurrency ?? 1,
-        }),
-      );
+      if (options.runsAgents ?? true) {
+        workers.push(
+          await options.jobs.work<StageExecuteData>({
+            queue: JOB_QUEUES.stageExecute,
+            handler: stageExecuteHandler(jobOptions),
+            concurrency: options.stageConcurrency ?? 1,
+          }),
+        );
+      }
       workers.push(
         await options.jobs.work<ReviewWindowData>({
           queue: JOB_QUEUES.mrCommentDebounce,
@@ -299,8 +329,19 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // job" is written down, and a composition root that started it separately would be a second
       // copy of that decision. One more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
       workers.push(await startDigestRuntime(outboundOptions));
-      // WP-31: one ask at a time, one more pooled connection (`POOL_RESERVATIONS.pipeline`).
-      workers.push(await ask.startWorker());
+      /**
+       * WP-31: one ask at a time, one more pooled connection (`POOL_RESERVATIONS.pipeline`).
+       *
+       * Gated on the same condition as `stage.execute`, and for the same reason TD-028 decision 5
+       * gives: **an ask is a run**. It goes through the same `ClaudeRunner` this process either
+       * composed or did not, so a worker with no provisioner that took a `task.ask` job would fail
+       * it exactly as it would fail a stage. The decision's wording says "the agent-run queue"; this
+       * build has two of them, and leaving the second subscribed would have shipped the lottery the
+       * decision exists to close.
+       */
+      if (options.runsAgents ?? true) {
+        workers.push(await ask.startWorker());
+      }
       workers.push(
         await options.jobs.work<PipelineOutboundData>({
           queue: JOB_QUEUES.pipelineOutbound,

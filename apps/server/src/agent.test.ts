@@ -90,9 +90,11 @@ describe('composing the agent runner', () => {
       logger,
     });
     expect(composed.runner).toBeNull();
-    // The name, not "unavailable": Q52 is what an operator has to read about, and TD-021 is why this
-    // process may not simply build a Docker client instead.
-    expect(missingOf(composed).join(' ')).toContain('Q52');
+    // The **variables**, not "unavailable" and no longer an open-question number: since WP-53 the
+    // transport exists, so what an operator has to read about is the two settings that switch this
+    // process on — and TD-021 is still why it may not simply build a Docker client instead.
+    expect(missingOf(composed).join(' ')).toContain('APP_LAUNCHER_URL');
+    expect(missingOf(composed).join(' ')).toContain('APP_LAUNCHER_TOKEN');
     expect(missingOf(composed).join(' ')).toContain('TD-021');
   });
 
@@ -111,7 +113,33 @@ describe('composing the agent runner', () => {
     expect(missingOf(composed)).toEqual([expect.stringContaining('ANTHROPIC_API_KEY')]);
   });
 
-  it('needs no model credential in local mode, where the binary is the operator’s', () => {
+  /**
+   * PROGRESS backlog **128**, in the one case that used to pin the defect.
+   *
+   * This read *"needs no model credential in local mode, where the binary is the operator's"* and
+   * asserted a composed runner with **no credential at all**. That sentence was true when BD-004's
+   * `local` mode meant an operator's own `claude` on the host; since WP-22 `compose.local.yml`
+   * states the opposite — *"the CLI does not run in this container: it runs in the per-run
+   * `platform-runtime` container"* — so the mode runs the same pinned binary and differs only in
+   * which credential it authenticates with. WP-53 measured the binary reading
+   * `CLAUDE_CODE_OAUTH_TOKEN` out of its process environment.
+   */
+  it('needs the subscription token in local mode, because the run container gets the same CLI', () => {
+    const { logger } = recordingLogger();
+    const composed = composeAgentRunner({
+      pool,
+      broadcast,
+      provisioner,
+      tools,
+      providerMode: 'local',
+      modelApiKey: null,
+      modelOauthToken: 'FAKE-oat-0000000000',
+      logger,
+    });
+    expect(composed.runner).not.toBeNull();
+  });
+
+  it('refuses local mode with no subscription token, and names it', () => {
     const { logger } = recordingLogger();
     const composed = composeAgentRunner({
       pool,
@@ -122,7 +150,8 @@ describe('composing the agent runner', () => {
       modelApiKey: null,
       logger,
     });
-    expect(composed.runner).not.toBeNull();
+    expect(composed.runner).toBeNull();
+    expect(missingOf(composed)).toEqual([expect.stringContaining('CLAUDE_CODE_OAUTH_TOKEN')]);
   });
 
   it('lists both absences at once, so one fix does not reveal the next', () => {
@@ -150,8 +179,44 @@ describe('the run environment', () => {
     });
   });
 
-  it('injects nothing in local mode or with no key', () => {
-    expect(agentRunEnvironment({ providerMode: 'local', modelApiKey: 'FAKE-key-000000' })).toEqual({
+  /**
+   * The other half of backlog **128**: `local` mode was given an **empty** environment and this
+   * case asserted it by name, which is why the gap survived five work packages.
+   */
+  it('injects the subscription token in local mode, named the same way', () => {
+    expect(
+      agentRunEnvironment({
+        providerMode: 'local',
+        modelApiKey: null,
+        modelOauthToken: 'FAKE-oat-0000000000',
+      }),
+    ).toEqual({
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'FAKE-oat-0000000000' },
+      secretEnvNames: ['CLAUDE_CODE_OAUTH_TOKEN'],
+    });
+  });
+
+  it('never carries the other mode’s credential into a run', () => {
+    // `api` mode's key is meaningless to a subscription CLI and would be a second secret in the
+    // container for nothing — the reasoning `compose.local.yml` already gives for blanking it.
+    expect(
+      agentRunEnvironment({
+        providerMode: 'local',
+        modelApiKey: 'FAKE-key-000000',
+        modelOauthToken: 'FAKE-oat-0000000000',
+      }).env,
+    ).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'FAKE-oat-0000000000' });
+    expect(
+      agentRunEnvironment({
+        providerMode: 'api',
+        modelApiKey: 'FAKE-key-000000',
+        modelOauthToken: 'FAKE-oat-0000000000',
+      }).env,
+    ).toEqual({ ANTHROPIC_API_KEY: 'FAKE-key-000000' });
+  });
+
+  it('injects nothing when the mode’s own credential is absent', () => {
+    expect(agentRunEnvironment({ providerMode: 'local', modelApiKey: null })).toEqual({
       env: {},
       secretEnvNames: [],
     });

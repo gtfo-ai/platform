@@ -9,6 +9,7 @@ import type { Logger, RunnerClock } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import { type LauncherConfig, readLauncherConfig } from './config.js';
+import { type ControlPlane, startControlPlane } from './control-plane.js';
 import { asLoggerPort, createLauncherLogger } from './logging.js';
 import { LauncherService } from './service.js';
 
@@ -52,10 +53,16 @@ export interface BuildLauncherOptions {
  *
  * `runner.systemClock` unrefs every timer it arms, deliberately: in `apps/server` the deadlines are
  * a run's stall detector and its wall clock, and a pending one must never be the reason a process
- * that is otherwise finished stays up. The launcher is the opposite shape. It has **no** server, no
- * socket and no queue worker — Q52's transport is unbuilt — so the retention sweep's timer is the
- * only handle it owns, and with that timer unrefed `main()` returns, the event loop empties, and the
- * process exits 0 having done nothing.
+ * that is otherwise finished stays up. The launcher is the opposite shape. Until WP-53 it had **no**
+ * server, no socket and no queue worker — Q52's transport was unbuilt — so the retention sweep's
+ * timer was the *only* handle it owned, and with that timer unrefed `main()` returned, the event
+ * loop emptied, and the process exited 0 having done nothing.
+ *
+ * TD-028's control plane is now a second handle, and a launcher configured with a token would stay
+ * up on the listener alone. The `unref` stays off anyway: a launcher **without** a token
+ * (`controlPlane: null`, the fail-closed answer to a forgotten variable) has exactly the old shape,
+ * and a process whose liveness depends on which variables an operator set is a crash-loop waiting
+ * for the one deployment that omits one.
  *
  * Measured at WP-22 against the composed container, which is the only place it can be seen: the
  * launcher logged `launcher started` and exited, and `restart: unless-stopped` looped it about once
@@ -123,5 +130,53 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
     provider,
     logger,
     stop: () => service.stop(),
+  };
+};
+
+/** {@link buildLauncher}'s result plus TD-028's control plane, when one is configured. */
+export interface StartedLauncher extends LauncherRuntime {
+  /** `null` when `APP_LAUNCHER_TOKEN` is unset — see {@link LauncherConfig.controlPlane}. */
+  readonly controlPlane: ControlPlane | null;
+  /** Stops the sweep **and** waits for the listener's in-flight requests (standing rule 51). */
+  close(): Promise<void>;
+}
+
+/**
+ * The whole launcher: {@link buildLauncher} plus the control plane, if one is configured.
+ *
+ * Separate from `buildLauncher` because starting a listener is asynchronous and building a provider
+ * is not, and because two callers want only the first half — `scripts/runlet-launcher-inner.mjs`
+ * composes the launcher and the runner in **one** process (TD-028 decision 1's "the in-process
+ * composition remains valid for the single-process developer mode"), where a network hop between
+ * two halves of the same process would prove nothing.
+ */
+export const startLauncher = async (options: BuildLauncherOptions): Promise<StartedLauncher> => {
+  const runtime = buildLauncher(options);
+  const controlPlane =
+    runtime.config.controlPlane === null
+      ? null
+      : await startControlPlane({
+          service: runtime.service,
+          token: runtime.config.controlPlane.token,
+          host: runtime.config.controlPlane.host,
+          port: runtime.config.controlPlane.port,
+          controlRoot: runtime.config.controlRoot,
+          runtimeImage: runtime.config.images.runtime,
+          claudeCodePath: runtime.config.images.runtimeCliPath,
+          logger: runtime.logger,
+        });
+  if (controlPlane === null) {
+    runtime.logger.warn(
+      {},
+      'APP_LAUNCHER_TOKEN is not set, so this launcher exposes no control plane and nothing can ask it for a workspace: it will run its retention sweep and nothing else (TD-028)',
+    );
+  }
+  return {
+    ...runtime,
+    controlPlane,
+    close: async () => {
+      runtime.stop();
+      await controlPlane?.close();
+    },
   };
 };

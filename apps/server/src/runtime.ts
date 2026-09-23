@@ -90,6 +90,7 @@ import { createShadowCommands } from './shadow.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
+import { composeRunWorkspaces } from './workspaces.js';
 
 export interface ServerRuntime {
   readonly config: ServerConfig;
@@ -372,8 +373,29 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           'this process was started with the pipeline disabled: no ticket will advance, and the outbox sweep below will refuse to start because the bus is an incomplete consumer',
         );
       } else {
+        /**
+         * WP-53: the production `RunWorkspaceProvisioner`, or `undefined`.
+         *
+         * `options.pipeline.workspaces` wins, and that ordering is deliberate: it is the e2e tier's
+         * seam (`PipelineComposition.workspaces`), whose whole value is that everything *except* the
+         * CLI stays production code. A test that supplied one and then got the launcher client
+         * instead would be a test of nothing.
+         */
+        const workspaces =
+          options.pipeline?.workspaces ??
+          composeRunWorkspaces({
+            pool: database.pool,
+            launcherUrl: config.launcherUrl,
+            launcherToken: config.launcherToken,
+            controlRoot: config.workspaceControlRoot,
+            modelEgressHosts: config.modelEgressHosts,
+            logger: loggerPort,
+          });
         const pipeline = await composePipeline({
-          composition: options.pipeline ?? {},
+          composition: {
+            ...(options.pipeline ?? {}),
+            ...(workspaces === undefined ? {} : { workspaces }),
+          },
           pool: database.pool,
           eventing,
           // Already wrapped above, which is why `composePipeline` no longer applies the seam.
@@ -388,6 +410,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           agent: {
             providerMode: config.providerMode,
             modelApiKey: config.modelApiKey,
+            modelOauthToken: config.modelOauthToken,
             claudeBinary: config.claudeBinary,
           },
           // The organisation's zone (Q38): the digest tick's cron is read in it, and so is every
@@ -407,14 +430,20 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
          *
          * `composePipeline` answers with a list rather than a boolean, so this warning names the
          * thing an operator has to supply instead of restating that something is absent. A process
-         * with no launcher configuration is a legitimate deployment — it runs the gates, the status
-         * mapping, the workpad and every outbound provider call — so it warns rather than refusing to
-         * start, and an agent stage that reaches it fails in its own job and escalates the task.
+         * with no launcher configuration is a legitimate deployment — it runs the status mapping,
+         * the workpad and every outbound provider call — so it warns rather than refusing to start.
+         *
+         * **Since WP-53 an agent stage does not reach it at all**: such a process does not subscribe
+         * `stage.execute` or `task.ask` (TD-028 decision 5), so those jobs wait for a process that
+         * can perform them. The sentence this replaced said the stage "fails in its own job and
+         * escalates the task", which is what the old, always-subscribed shape did. The cost, written
+         * down in TD-028's WP-53 amendment rather than left here, is that the **platform gates** are
+         * a branch of the same handler on the same queue and stop with it.
          */
         if (pipeline.agentMissing.length > 0) {
           logger.warn(
             { missing: pipeline.agentMissing },
-            'the pipeline is composed without an agent runner: everything except an agent stage runs and is audited, and a stage that needs an agent fails its run and escalates its task',
+            'the pipeline is composed without an agent runner: this process subscribes neither stage.execute nor task.ask, so agent runs **and the platform gates, which are a branch of the same handler on the same queue** wait for a process that can perform them (TD-028, amended) rather than failing here. Everything else runs and is audited',
           );
         }
 
@@ -442,6 +471,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           runEnvironment: agentRunEnvironment({
             providerMode: config.providerMode,
             modelApiKey: config.modelApiKey,
+            modelOauthToken: config.modelOauthToken,
           }),
           timezone: config.timezone,
           secretKey: config.secretKey,
@@ -472,6 +502,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           runEnvironment: agentRunEnvironment({
             providerMode: config.providerMode,
             modelApiKey: config.modelApiKey,
+            modelOauthToken: config.modelOauthToken,
           }),
           logger: loggerPort,
         });
@@ -497,6 +528,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           runEnvironment: agentRunEnvironment({
             providerMode: config.providerMode,
             modelApiKey: config.modelApiKey,
+            modelOauthToken: config.modelOauthToken,
           }),
           baseUrl: config.baseUrl,
           logger: loggerPort,
@@ -688,6 +720,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           runEnvironment: agentRunEnvironment({
             providerMode: config.providerMode,
             modelApiKey: config.modelApiKey,
+            modelOauthToken: config.modelOauthToken,
           }),
           logger: loggerPort,
         })

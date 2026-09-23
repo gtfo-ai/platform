@@ -630,6 +630,9 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     // And the scope claim, checkable: these are the container-creating paths this provider has.
     const roles = new Set(daemon.history.map((container) => container.name.split('-')[0]));
     expect([...roles].sort()).toEqual([
+      // WP-53: `test -x <claude>` in the **run image**, once per process, so a wrong CLI path fails
+      // by name on the platform side instead of as an exec error inside a container (backlog 34).
+      'clicheck',
       'clone',
       'ctlempty',
       'ctlrm',

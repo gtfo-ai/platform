@@ -18,6 +18,16 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
 
 `schemas/` holds the JSON Schemas generated from `packages/contracts` (`pnpm schemas`). It is generated output: edit the zod schema, regenerate, commit both. **`THIRD_PARTY_NOTICES.md` is the second generated artefact of that shape** (`pnpm notices`, WP-23): its package set is walked out of `pnpm-lock.yaml` — every importer's `dependencies`/`optionalDependencies`, transitively, which is what the images ship — its licences are read from the pnpm store, and its non-npm half (the pinned CLIs, the base images, the compose images) is scanned off `docker/*.Dockerfile` and `compose.yml` and compared **in both directions** with a declared table, so a new pinned binary fails the generator until somebody reads its terms. A package whose `license` is not an SPDX expression is refused the same way; `@anthropic-ai/claude-agent-sdk` and `acli` are recorded there as **`[unverified]`**, which is TD-018's open item stated rather than resolved. `docker/base.Dockerfile` and `docker/egress.Dockerfile` copy it into every image.
 
+**The `claude` binary a containerised run execs is the launcher's answer, never the SDK's**: the SDK
+resolves `pathToClaudeCodeExecutable` on the *platform* side and the shim execs it **in the container**, so
+`ProvisionedRunWorkspace.claudeCodePath` carries the run image's own `/usr/local/bin/claude` and
+`DockerWorkspaceProvider` verifies it with `test -x` **inside the image** before the first `create` — a wrong
+path is then `invalid_spec` naming the image and the path, rather than `exit code: null` from a shim with no
+diagnosis (PROGRESS backlog 34). **Both** provider modes need `api.anthropic.com` in a run's egress list and
+a credential in its environment: `api` gets `ANTHROPIC_API_KEY`, `local` gets `CLAUDE_CODE_OAUTH_TOKEN` —
+which the server read **nowhere** until WP-53 while `compose.local.yml` claimed it required it (backlog 128;
+the pinned CLI reading it was measured, not assumed).
+
 `packages/infrastructure/src/db/migrations/*.sql` is the authoritative database schema (TD-011): forward-only, applied under an advisory lock, never edited once applied — add a new numbered file. The Drizzle definitions beside them type the queries and are held to the SQL by an integration parity test.
 
 ## Commands
@@ -150,11 +160,29 @@ Workspace packages are published under the neutral scope `@platform/*` (BD-014).
   transcript sink and a per-run TD-012 redactor, and it takes a `RunWorkspaceProvisioner` — **never a Docker
   client**, because TD-021's amendment forbids one in any process that composes the pipeline or serves
   `/webhooks/*`, and `apps/launcher/src/docker-access.test.ts` holds that as a census over `git ls-files`.
-  The provisioner is **absent by default**, and when it is absent `startRuntime` composes
+  A process with no launcher configuration composes
   `unavailableClaudeRunner`, which **throws** and names the missing piece; that throw has an ending
   (`stage-executor.ts` fails the run it created and escalates to `needs_human` — **no new task state**, Q59),
-  and a start failure is **retryable or terminal** rather than a state of its own (Q59a). Q52's remaining half
-  is the out-of-process **transport**, deliberately unbuilt.
+  and a start failure is **retryable or terminal** rather than a state of its own (Q59a). Since WP-53 it is
+  also a throw that process should not reach: it no longer **subscribes** `stage.execute` (below).
+- **The transport, and the first production run** (WP-53, TD-028, closing Q52). The launcher exposes an
+  **authenticated HTTP control plane** — `apps/launcher/src/control-plane.ts`, `node:http`, five verbs on a
+  run id — on a compose network with `internal: true` and no published port that only it and a second
+  product container (`runner`, the same image) join; the **data plane is unchanged**, so the run's stdio
+  stays on TD-025 §2's Unix socket and the runner opens it off the `ctl` volume it mounts. The wire format is
+  one module both ends import (`packages/infrastructure/src/launcher/protocol.ts`), and it carries
+  `workspaceSpecSchema` **camelCase** rather than a snake_case re-spelling, which is a stated deviation from
+  the wire-format rule: a second spelling of one structure is a second schema to drift. The client is
+  `launcher/client.ts` (a `fetch` with `redirect: 'error'`, because the request carries the launcher token)
+  and the provisioner `launcher/provisioner.ts`; `apps/server/src/workspaces.ts` composes them from
+  `APP_LAUNCHER_URL` + `APP_LAUNCHER_TOKEN`, and **exactly one of the two is a startup refusal naming the
+  other**. **`stage.execute` and `task.ask` are subscribed by configuration, never by `ROLE`** (TD-028
+  decision 5, because pg-boss hands a job to any subscribed worker), so a process that runs no agent leaves
+  those jobs **queued** — which also queues the platform **gates**, a consequence TD-028's wording does not
+  state and WP-53 measured. Every create is **idempotent on the run id** in the launcher's own memory; a
+  create replayed across a launcher restart would start a second container, and what bounds that is one
+  level up. `node scripts/launcher-control-plane-check.mjs` is the Docker verification — three containers,
+  18/18 — and it is not a `verify` target for the reason none of the Docker checks are.
 - **Production starts a ticket** (WP-15c): `POST /webhooks/:provider/:integrationId`
   (`apps/server/src/routes/webhooks.ts`) is the door, and it is the platform's only **unauthenticated**
   endpoint — the credential is the signature over the body, so the body reaches the handler *unparsed*

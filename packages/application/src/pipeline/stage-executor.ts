@@ -939,9 +939,12 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       // for ever, a task sitting at a stage nothing would move, and a `stage.execute` job that
       // exhausted its retries into pg-boss where no screen shows it. Nothing told a human.
       //
-      // It is not hypothetical from the day a webhook can reach the pipeline: this build composes
-      // `unavailableClaudeRunner`, whose `start` **throws** because there is no transport to the
-      // launcher (Q52), so the first real ticket to reach an agent stage lands here.
+      // It was not hypothetical from the day a webhook could reach the pipeline, and WP-53 narrowed
+      // it twice: the transport exists now (TD-028), and a process that is *not* configured to run
+      // agents no longer subscribes this queue at all — so a ticket does not land here on an
+      // unconfigured instance, it waits for a process that can perform the job. What still reaches
+      // this branch is a start that fails on a configured one: the launcher unreachable, a spec it
+      // refuses, or a run image with no CLI at the path the platform named.
       //
       // The ending is the one the executor already has for "the run produced no usable result":
       // the run is failed and the task is **escalated to `needs_human`**, an existing state whose

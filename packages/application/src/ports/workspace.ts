@@ -21,10 +21,13 @@
  *
  * ## Naming
  *
- * camelCase, like `RunSpec` in `ports/runner.ts` and for the same reason: a `WorkspaceSpec` is
- * built inside the process from effective config and never appears on a wire. `CLAUDE.md`'s
- * snake_case rule governs config YAML, event payloads, artifact data, API DTOs and transcript
- * rows, and this is none of those. The one place snake_case *does* appear here is
+ * camelCase, like `RunSpec` in `ports/runner.ts`. It **does** appear on a wire since WP-53 — TD-028's
+ * control plane carries a `WorkspaceSpec` from the runner to the launcher — and it stays camelCase
+ * there: `packages/infrastructure/src/launcher/protocol.ts` sends this very schema rather than a
+ * snake_case re-spelling of it, because a second spelling of one structure is a second schema to
+ * drift. `CLAUDE.md`'s snake_case rule governs config YAML, event payloads, artifact data, API DTOs
+ * and transcript rows, and a process-to-process RPC between two halves of one instance is none of
+ * those; the deviation is stated in that module's docblock. The one place snake_case *does* appear here is
  * {@link WorkspaceLabels}, because those strings go onto Docker objects and are read back by
  * `docker inspect` — an external system's wire.
  *
@@ -315,10 +318,55 @@ export interface PurgedWorkspace {
   readonly keptReason: 'not_expired' | 'in_use' | 'unlabelled' | null;
 }
 
+/**
+ * One of TD-025 §2's per-run control directories the sweep looked at — PROGRESS backlog **0b**.
+ *
+ * The control volume is shared and its *directories* are not Docker objects, so the label sweep
+ * that finds volumes cannot see one (standing rule **60**, one level down): a `destroy` whose
+ * two-step removal did not finish leaves either a **live run token** or an empty directory behind,
+ * for ever, in a volume nothing enumerates. This is what makes the sweep's answer countable —
+ * *a sweep that found nothing and a sweep that looked at nothing are spelled the same* — which is
+ * why a provider with no control volume reports an empty list rather than omitting the field.
+ */
+export interface PurgedControlDirectory {
+  /** The directory's name. A run id when it parses as one; the raw name otherwise. */
+  readonly runId: string;
+  readonly removed: boolean;
+  /**
+   * Why a directory was kept. `null` when it was removed.
+   *
+   * `run_alive` — a container still carries this run's label, so the token is in use.
+   * `not_a_run_id` — the name is not a uuid, so nothing here made it and nothing here removes it.
+   * `remove_failed` — the sweep tried and could not; the token may still be readable.
+   *
+   * **`remove_failed` is separate from `run_alive` and that is the point.** They were spelled the
+   * same until WP-53's review, which is the confusion `PurgeReport`'s own contract forbids one level
+   * up — *a sweep that found nothing and a sweep that looked at nothing are spelled the same* — and
+   * the two mean opposite things to an operator: `run_alive` is the sweep working, `remove_failed`
+   * is an orphaned run token that is still there.
+   *
+   * There is deliberately **no `too_young`**. The grace window that stops the sweep deleting the
+   * control directory of a run that is *being created* is applied on the **daemon's** side, by the
+   * listing's own `find -mmin`, so a directory inside it is never listed and can produce no row
+   * here. A declared reason nothing can write is a reason a reader trusts and a test cannot reach;
+   * the limit is stated instead — **this report counts what the sweep examined, not what the window
+   * withheld**.
+   */
+  readonly keptReason: 'run_alive' | 'not_a_run_id' | 'remove_failed' | null;
+}
+
 export interface PurgeReport {
   readonly examined: number;
   readonly removed: number;
   readonly volumes: readonly PurgedWorkspace[];
+  /**
+   * The control directories this sweep examined (backlog **0b**).
+   *
+   * Reported separately from `examined`/`removed`, which count **volumes**: an operator counting
+   * workspaces must not count a control directory as one, and the two have different lifetimes —
+   * a volume outlives its run by three days and a control directory should not outlive it at all.
+   */
+  readonly controlDirectories: readonly PurgedControlDirectory[];
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────

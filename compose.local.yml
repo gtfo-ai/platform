@@ -12,21 +12,45 @@
 # ## What local mode is here, and what it is not
 #
 # It is the **platform** authenticating as a Claude Code subscription instead of with an API key:
-# `APP_PROVIDER_MODE=local` and `CLAUDE_CODE_OAUTH_TOKEN`, which `loadServerConfig` requires
-# together (an empty token with `local` is a startup error, not an anonymous run).
+# `APP_PROVIDER_MODE=local` and `CLAUDE_CODE_OAUTH_TOKEN`.
+#
+# **The sentence that used to be here was false and WP-53 removed it.** It read *"…which
+# `loadServerConfig` requires together (an empty token with `local` is a startup error, not an
+# anonymous run)"*, and no server source read the name at all: the refusal it described did not
+# exist, and `agentRunEnvironment` answered `local` with an **empty** run environment, so an
+# operator who did exactly what this file asked started a run container with no credential of any
+# kind (PROGRESS backlog **128**). Both halves are closed: the name is read (`ServerConfig
+# .modelOauthToken`), it reaches the run container through the one function that decides a run's
+# environment, and a `local`-mode process without it **composes no agent runner and names the
+# missing credential** — which is a refusal at composition rather than the start-up error the old
+# sentence claimed, because the same process legitimately serves the API without running agents.
+#
+# The `:?` below stays, and it is compose's own check rather than the server's: `docker compose` will
+# not resolve this file without a token. That is the honest description of what it does.
 #
 # It deliberately does **not** mount `${CLAUDE_BINARY}` and `${CLAUDE_CONFIG_DIR}` from the host, as
 # technical/11's sketch of this file imagined. The CLI does not run in this container: it runs in
 # the per-run `platform-runtime` container, which technical/05 forbids giving any host mount, and
 # the launcher has no variable that would add one. So the binary stays the run image's, pinned to
 # the SDK version the platform runs, and what changes here is only the credential the platform uses.
+#
+# **Both product services are overridden**, because since WP-53 they are two: `runner` is the one
+# that actually runs an agent, and `app` is where the knowledge indexer's run environment is built
+# from the same pair. An instance whose two containers disagreed about the mode would index under
+# one credential and run under another.
+
+x-local-model: &local-model
+  APP_PROVIDER_MODE: local
+  CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN for local mode}
+  # `api` mode's credential is meaningless here and would be a second secret in the container
+  # for nothing; blanking it is what makes "which mode is this instance in" answerable from the
+  # environment rather than from two variables that disagree.
+  ANTHROPIC_API_KEY: ''
 
 services:
   app:
     environment:
-      APP_PROVIDER_MODE: local
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN for local mode}
-      # `api` mode's credential is meaningless here and would be a second secret in the container
-      # for nothing; blanking it is what makes "which mode is this instance in" answerable from the
-      # environment rather than from two variables that disagree.
-      ANTHROPIC_API_KEY: ''
+      <<: *local-model
+  runner:
+    environment:
+      <<: *local-model

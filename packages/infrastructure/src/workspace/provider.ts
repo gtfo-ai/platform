@@ -65,6 +65,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   Logger,
+  PurgedControlDirectory,
   PurgedWorkspace,
   PurgeReport,
   WorkspaceAttachment,
@@ -88,6 +89,7 @@ import {
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
 import type { DockerEngine, EngineVolume } from './engine.js';
 import {
+  DEFAULT_RUNTIME_CLI_PATH,
   type DockerMount,
   RUNTIME_SOURCE_MOUNT,
   runContainerCreateBody,
@@ -219,9 +221,45 @@ interface HelperRun {
   readonly labels: Readonly<Record<string, string>>;
   /** Keep the container so its filesystem can be read with `getArchive`. */
   readonly keep?: boolean;
+  /**
+   * How many log lines to read back. Defaults to `containerLogs`' own 100.
+   *
+   * It is a parameter because one helper's output **is** its answer rather than a diagnostic: the
+   * control-directory listing below returns one line per directory, and a hundred is a number that
+   * silently truncates a real instance's sweep into a partial one.
+   */
+  readonly logTail?: number;
 }
 
 const MIB = 1024 * 1024;
+
+/**
+ * How old a control directory must be before the sweep will consider it an orphan.
+ *
+ * `create` writes the directory **before** the run container exists, so a younger one may belong to
+ * a run that is still being provisioned. Sixty minutes is an hour of slack against a create whose
+ * measured cost is seconds — a mirror fetch, a clone and three helpers — which is the right
+ * direction for a bound whose failure mode on one side is *deleting a live run's token* and on the
+ * other is *sweeping it an hour later*.
+ *
+ * It is applied by the daemon-side `find -mmin`, so it is read against the volume's own clock
+ * rather than this process'.
+ */
+const CONTROL_SWEEP_GRACE_MIN = 60;
+
+/**
+ * The most control directories one sweep examines.
+ *
+ * The listing comes back as container logs, which are bounded by `tail`; the cap is stated here
+ * rather than left to `containerLogs`' default of 100, which would silently turn a real instance's
+ * sweep into a partial one. A sweep that hits the cap examines the rest on its next pass — the
+ * directories are not going anywhere, and an unbounded read of a shared volume's listing into this
+ * process' memory is the thing a cap exists to prevent.
+ */
+const MAX_CONTROL_DIRECTORIES_PER_SWEEP = 500;
+
+/** A uuid, the only shape `#prepare` ever creates a control directory under. */
+const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Q51, asserted at construction.
@@ -257,6 +295,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #maxExportBytes: number;
   /** One mirror is one directory; two fetches into it race. Serialised per project. */
   readonly #mirrorLocks = new Map<string, Promise<unknown>>();
+  /** The memoised verdict of {@link assertRuntimeCli}; one helper container per process. */
+  #runtimeCliVerified: Promise<void> | null = null;
 
   constructor(options: DockerWorkspaceProviderOptions) {
     assertRunnerUid(options.runnerUid);
@@ -274,6 +314,75 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#controlSocketTimeoutMs = options.controlSocketTimeoutMs ?? CONTROL_SOCKET_TIMEOUT_MS;
     this.#now = options.now ?? (() => new Date());
     this.#maxExportBytes = options.maxExportBytes ?? 128 * MIB;
+  }
+
+  /** Where the run image keeps its `claude` binary (PROGRESS backlog 34). */
+  get runtimeCliPath(): string {
+    return this.#images.runtimeCliPath ?? DEFAULT_RUNTIME_CLI_PATH;
+  }
+
+  /**
+   * **PROGRESS backlog 34's diagnosis half**: a wrong CLI path fails here, by name, on the platform
+   * side — not as an exec error inside a container.
+   *
+   * Without it the failure is: the shim calls `spawn` with a path that does not exist, the child
+   * emits `error`, the shim reports `exit { code: null, signal: null }`, and the run ends with no
+   * exit code and nothing naming the path (`shim.ts` § spawn). That is the most expensive shape a
+   * configuration mistake can take, which is why the entry says *"the whole cost of this finding is
+   * the diagnosis rather than the fix"*.
+   *
+   * One helper container in the **run image** per launcher process, memoised: `create` awaits it
+   * before it makes anything, so a launcher pointed at an image without the CLI refuses its first
+   * run instead of leaking a container per attempt. `invalid_spec`, which
+   * `classifyProvisionFailure` treats as **terminal** — a path that is absent now is absent on the
+   * next attempt, and retrying would hide it.
+   *
+   * A **failed verification is not cached**: the field is cleared on rejection, so an operator who
+   * fixes the image (or the daemon that was unreachable) does not have to restart the launcher.
+   */
+  async assertRuntimeCli(): Promise<void> {
+    this.#runtimeCliVerified ??= this.#verifyRuntimeCli().catch((error: unknown) => {
+      this.#runtimeCliVerified = null;
+      throw error;
+    });
+    await this.#runtimeCliVerified;
+  }
+
+  async #verifyRuntimeCli(): Promise<void> {
+    const cliPath = this.runtimeCliPath;
+    if (!cliPath.startsWith('/') || /[^\w./-]/.test(cliPath)) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        `APP_WORKSPACE_RUNTIME_CLI_PATH must be an absolute path of word characters, dots, dashes and slashes (got ${JSON.stringify(cliPath)})`,
+      );
+    }
+    try {
+      await this.#helper({
+        name: `clicheck-${Math.random().toString(36).slice(2, 10)}`,
+        image: this.#images.runtime,
+        // `test -x` and nothing else: the binary is 216 MB and running `--version` would pay for
+        // a Node start-up on every launcher boot for an answer `test -x` already gives.
+        script: `test -x ${cliPath}`,
+        mounts: [],
+        user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
+        secrets: [],
+        network: 'none',
+        labels: { [WORKSPACE_LABELS.role]: 'cli-check' },
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceError && error.code === 'workspace_failed') {
+        throw new WorkspaceError(
+          'invalid_spec',
+          `the run image ${this.#images.runtime} has no executable at ${cliPath}, so every run would exec a path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`,
+          { ...(error.detail === null ? {} : { detail: error.detail }), cause: error },
+        );
+      }
+      throw error;
+    }
+    this.#logger.info(
+      { image: this.#images.runtime, claude_code_path: cliPath },
+      'the run image carries the CLI the platform will ask the shim to exec',
+    );
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -351,7 +460,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     try {
       await this.#engine.startContainer(id);
       const exitCode = await this.#engine.waitContainer(id);
-      output = this.#redact(await this.#engine.containerLogs(id), run.secrets);
+      output = this.#redact(await this.#engine.containerLogs(id, run.logTail ?? 100), run.secrets);
       if (exitCode !== 0) {
         // Logged as well as thrown: the caller decides what to do with a `WorkspaceError`, and
         // more than one of them drops the `detail` on the way out. The helper's own words are the
@@ -499,6 +608,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const spec = parsed.data;
     assertRunId(spec.runId);
     assertProjectEnv(spec.env);
+    // Before anything is created, so a launcher pointed at an image with no CLI refuses rather
+    // than leaking a network, a volume and three helpers per attempt (backlog 34).
+    await this.assertRuntimeCli();
 
     const names = runObjectNames(spec.runId);
     const token = this.#mintToken();
@@ -1116,10 +1228,17 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    *  - step 1 succeeds and step 2 fails → the token is gone and an **empty `0755` directory**
    *    stays, which is a name and a timestamp rather than a credential.
    *
-   * Neither is collected later: `purgeExpired` lists *volumes* by `role=workspace` and never looks
-   * inside this one (standing rule 60, one level down). The two are distinguishable in the log by
+   * **Both are collected later since WP-53**, which is PROGRESS backlog **0b**'s fix and is in this
+   * same file: `purgeExpired` lists the `ctl` volume's own directories beside the volumes it already
+   * lists (`#sweepControlDirectories`) and reclaims one whose run has no container, through this very
+   * pair of helpers. The sentence that stood here — *"neither is collected later: `purgeExpired`
+   * lists volumes by `role=workspace` and never looks inside this one"* — was the exact wording the
+   * backlog entry quoted, and it survived 300 lines above its own fix until the review caught it
+   * (standing rule 83: the nearest sentence is the one that gets missed).
+   *
+   * What is unchanged is the *within-run* picture: the two failures are distinguishable in the log by
    * which helper is named, and `docker-workspace.e2e.test.ts` asserts the `control-dir` step is not
-   * among the failed ones — which is the only way either becomes visible from outside.
+   * among the failed ones. The sweep is the backstop, not the first line.
    */
   async #removeControlDirectory(runId: string): Promise<void> {
     const id = assertRunId(runId);
@@ -1420,7 +1539,129 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       examined: results.length,
       removed: results.filter((result) => result.removed).length,
       volumes: results,
+      controlDirectories: await this.#sweepControlDirectories(),
     };
+  }
+
+  /**
+   * PROGRESS backlog **0b**, the half WP-22 left open: *"`purgeExpired` lists **volumes** by
+   * `role=workspace` and never looks inside `ctl`, so a run whose `destroy` left step 1 or step 2 of
+   * `#removeControlDirectory` unfinished leaves either a live run token or an empty `0700`
+   * directory behind for ever."*
+   *
+   * ## The predicate is container liveness, not retention
+   *
+   * A control directory is **not** a workspace volume and must not be swept on the same rule. Its
+   * whole life is the run: `#prepare` creates it and `destroy` removes it, while the volume
+   * deliberately outlives the run by three days. So the question is *"is anything still running
+   * under this run id"*, asked of the daemon — the same listing `#volumesInUse` makes — and the
+   * answer is a **positive** statement about a live container rather than an absence of a label
+   * (standing rule 60: "keep when unlabelled" makes a sweep a no-op).
+   *
+   * ## The grace window is what stops it eating a run that is starting
+   *
+   * `create` writes the control directory **before** the run container exists, so between
+   * `#prepare` and `createContainer` a directory has no live container and is not an orphan. A
+   * sweep firing in that window would delete a starting run's token. {@link CONTROL_SWEEP_GRACE_MIN}
+   * is the window, applied by the daemon-side `find -mmin` rather than by a clock this process
+   * reads: the mtime lives on the volume, and a launcher whose clock differs from the daemon's
+   * would otherwise sweep by a number that means something else.
+   *
+   * ## Two passes, never one (standing rule 72)
+   *
+   * The listing is one helper container and the removals are the **existing** two-helper removal,
+   * one run at a time. A single pass that deleted while it walked would leave the rest of the
+   * listing unexamined the first time one removal failed, and `#removeControlDirectory` already
+   * owns the locked-directory case.
+   *
+   * ## What it cannot see
+   *
+   * A directory whose *name* is not a uuid: it is reported `not_a_run_id` and left alone, because
+   * nothing here created it and a sweep that removes names it does not recognise is a sweep an
+   * operator cannot safely point at a shared volume.
+   */
+  async #sweepControlDirectories(): Promise<PurgedControlDirectory[]> {
+    let names: readonly string[];
+    try {
+      names = await this.#listControlDirectories();
+    } catch (error) {
+      // A sweep that could not list is **not** a sweep that found nothing, and the two must not be
+      // spelled the same way. It is reported and the volume half of the report stands.
+      this.#logger.warn(
+        { err: error },
+        'the retention sweep could not list the control volume; an orphaned run token may remain',
+      );
+      return [];
+    }
+    const live = await this.#liveRunIds();
+    const results: PurgedControlDirectory[] = [];
+    for (const name of names) {
+      if (!RUN_ID_PATTERN.test(name)) {
+        results.push({ runId: name, removed: false, keptReason: 'not_a_run_id' });
+        continue;
+      }
+      if (live.has(name)) {
+        results.push({ runId: name, removed: false, keptReason: 'run_alive' });
+        continue;
+      }
+      try {
+        await this.#removeControlDirectory(name);
+        this.#logger.info(
+          { run_id: name },
+          'the retention sweep reclaimed the control directory of a run that is gone',
+        );
+        results.push({ runId: name, removed: true, keptReason: null });
+      } catch (error) {
+        this.#logger.warn(
+          { run_id: name, err: error },
+          'the retention sweep could not reclaim a control directory; its run token may still be readable',
+        );
+        // `remove_failed`, **not** `run_alive`: the log line said the right thing and the structured
+        // field said the opposite — that a container still holds this run — which is the sweep
+        // working rather than the sweep failing. Caught in WP-53's review.
+        results.push({ runId: name, removed: false, keptReason: 'remove_failed' });
+      }
+    }
+    return results;
+  }
+
+  /** The control volume's own directories, older than the grace window, one per line. */
+  async #listControlDirectories(): Promise<readonly string[]> {
+    const { output } = await this.#helper({
+      name: `ctlls-${this.#mintSuffix()}`,
+      image: this.#images.git,
+      // `-mmin` and `-maxdepth` are busybox `find`'s (measured against `alpine/git:v2.49.1`); the
+      // `sed` is what turns a path into a name, because busybox has no `-printf`.
+      script: `find /ctl -mindepth 1 -maxdepth 1 -type d -mmin +${String(CONTROL_SWEEP_GRACE_MIN)} 2>/dev/null | sed 's|.*/||'`,
+      mounts: [this.#volumeMount(this.#controlVolume, '/ctl', true)],
+      user: '0:0',
+      secrets: [],
+      network: 'none',
+      labels: { [WORKSPACE_LABELS.role]: 'control-sweep' },
+      logTail: MAX_CONTROL_DIRECTORIES_PER_SWEEP,
+    });
+    return output
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(0, MAX_CONTROL_DIRECTORIES_PER_SWEEP);
+  }
+
+  /** Run ids the daemon still has a container for, whatever that container's role is. */
+  async #liveRunIds(): Promise<Set<string>> {
+    const containers = await this.#engine.listContainers({ label: [WORKSPACE_LABELS.run] });
+    const ids = new Set<string>();
+    for (const container of containers) {
+      const runId = container.Labels?.[WORKSPACE_LABELS.run];
+      if (runId !== undefined && runId.length > 0) {
+        ids.add(runId);
+      }
+    }
+    return ids;
+  }
+
+  #mintSuffix(): string {
+    return this.#now().getTime().toString(36);
   }
 
   async #volumesInUse(): Promise<Set<string>> {

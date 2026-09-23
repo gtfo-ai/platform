@@ -14,19 +14,68 @@
 
 ## 1. What you are installing
 
-Six containers, from `compose.yml`:
+Seven containers, from `compose.yml`:
 
 | Service | What it is | Notes |
 |---|---|---|
 | `db` | PostgreSQL 18 | the only stateful service; volume `db-data` |
 | `migrate` | one-shot schema migration | runs to completion before `app` starts |
 | `app` | the API, the SSE stream, the webhook endpoint **and the browser application** | publishes `${APP_PORT:-8080}` |
+| `runner` | the worker that **runs agent stages** | same image as `app`; no published port |
 | `docker-socket-proxy` | a filtered Docker API | the **only** container with the socket |
 | `launcher` | creates a container per agent run | reaches the daemon only through the proxy |
 | `db-backup` | scheduled `pg_dump` | profile `backup`, off unless asked for |
 
 Two more images exist that no service starts — `platform-runtime` (the container an agent run
 happens in) and `platform-egress` (its outbound proxy). The launcher creates them per run.
+
+### The runner, and why it is a container of its own
+
+`runner` is the same image and the same code as `app`; what makes it the runner is one mount and two
+variables. It carries the control volume TD-025 gives the runner a static mount of, and
+`APP_LAUNCHER_URL` + `APP_LAUNCHER_TOKEN`, which point it at the launcher's control plane on an
+`internal: true` network with no published port. Only `runner` and `launcher` join that network, and
+`runner` has **no** route to the Docker proxy.
+
+**A process runs agent stages only when it has both variables**, never because of its `ROLE`
+([TD-028](decisions/technical/TD-028-launcher-control-plane.md) decision 5). pg-boss hands a job to
+any subscribed worker, so gating on a role name would give half a split deployment's agent stages to
+a process that composes no runner and fail each of them. `app` is therefore pinned to *no* launcher
+even when `.env` carries the token.
+
+**Set both lines or the instance runs no agent**, in `.env`:
+
+```bash
+APP_LAUNCHER_URL=http://launcher:7780          # must match APP_LAUNCHER_PORT
+APP_LAUNCHER_TOKEN=$(openssl rand -hex 32)     # at least 32 characters
+```
+
+Exactly one of the two is a **startup refusal naming the other**, which is why compose pins neither
+on the service: a pinned URL beside an empty token would put a stock instance in the very state the
+refusal exists for. The token is instance configuration rather than a credential the platform mints,
+both halves refuse anything shorter than 32 characters, and the launcher with no token exposes **no
+control plane at all** rather than an unauthenticated one. It is compared in constant time on every
+request in addition to the network isolation, because a control plane that is safe only because of a
+compose file is safe until somebody writes a different compose file — and this one creates
+containers.
+
+**A compose instance without a configured runner runs everything except agent stages *and the
+platform gates*.** That is the honest consequence of the rule above
+([TD-028](decisions/technical/TD-028-launcher-control-plane.md), amended 2026-09-23) and it is worth
+knowing before you meet it. The `stage.execute` jobs are still enqueued and simply **queue** rather
+than failing, so nothing is lost and the queue depth is what shows it.
+
+Gate evaluation — `ci_gate`, `rebase_gate`, `merged_gate` — is a *branch of the same handler on the
+same queue*, so it stops with them. It is not given a queue of its own because `stage.execute` is
+`stately` with one job per task, which is what stops a task running two stages at once; a second
+queue would let a gate and a stage for one task run concurrently. Every shipped template puts the
+gates *behind* agent stages, so no task reaches one by the pipeline's own motion on such an
+instance; the reachable paths are **human** — a hand-back to a gate stage, a `merged_gate` after you
+merge by hand, and a gate already waiting when the runner stopped. The jobs are durable and are
+taken when a runner starts, bounded by pg-boss's 14-day default retention.
+
+Everything else — intake, the board, the knowledge index, every outbound provider call, the cost
+ledger, the audit — runs in `app`.
 
 ### Requirements
 
@@ -571,11 +620,20 @@ subscription, and it is an **override file, not a profile**:
 docker compose -f compose.yml -f compose.local.yml up -d
 ```
 
-with `CLAUDE_CODE_OAUTH_TOKEN` set. The override changes the `app` service that already exists;
-`COMPOSE_PROFILES=local` would start a *second* app on the same port, because a compose service
-without `profiles` always runs. Local mode changes only which credential the platform authenticates
-with — it does **not** mount your Claude binary or config into a run, because a run container is
-given no host mount at all.
+with `CLAUDE_CODE_OAUTH_TOKEN` set. The override changes the `app` **and `runner`** services that
+already exist; `COMPOSE_PROFILES=local` would start a *second* app on the same port, because a
+compose service without `profiles` always runs. Local mode changes only which credential the platform
+authenticates with — it does **not** mount your Claude binary or config into a run, because a run
+container is given no host mount at all.
+
+Both modes run the **same** pinned `claude` binary, inside the per-run `platform-runtime` container;
+what differs is the credential the run's environment carries. Measured against that image at WP-53:
+with no credential the CLI answers *"Not logged in · Please run /login"*, and with
+`CLAUDE_CODE_OAUTH_TOKEN` set it authenticates with it (a bogus one answers *"401 OAuth access token
+is invalid"*, which is a different message from a bogus `ANTHROPIC_API_KEY`). A process in `local`
+mode without the token composes no agent runner and names the missing credential in its start-up log
+— which is the same shape every other absent collaborator gets, rather than a start-up failure that
+would also stop the API.
 
 ## 9. Day-to-day
 
@@ -596,11 +654,12 @@ are off when unset.
 
 Stated here so an operator meets them in a document rather than in production:
 
-- **No agent run starts on a stock instance.** The `app` process composes the pipeline, the ledger,
-  the knowledge indexer and the integrations, and logs which piece it lacks — there is no transport
-  between it and the `launcher` container yet, so a stage that needs an agent fails its run and
-  escalates the task to `needs_human`. Everything else — intake, the board, the knowledge base, the
-  commands, the cost ledger, the audit — runs.
+- **An agent run needs `APP_LAUNCHER_TOKEN`, and without it nothing runs one.** WP-53 built the
+  transport (§1, "the runner"), so a stock instance *with* a token in `.env` runs agent stages in the
+  `runner` container; one without a token queues them. What is still missing is the **git write
+  credential**: the launcher has no git provider wired to it, so a read-only stage runs end to end
+  and a stage that needs to push fails at start with that refusal by name. Everything else — intake,
+  the board, the knowledge base, the commands, the cost ledger, the audit — runs either way.
 - **`docker compose up` cannot pull the published images** without the retagging step in §2, because
   `compose.yml` names them without a registry.
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's

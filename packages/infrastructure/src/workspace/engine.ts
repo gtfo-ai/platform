@@ -381,8 +381,11 @@ export class DockerEngine {
   /**
    * The container's log tail, demultiplexed.
    *
-   * Diagnostics only, and bounded: a helper that failed is worth a hundred lines in the launcher's
-   * log, and the agent's own output never comes through here — it travels the control socket.
+   * Bounded by `tail`, and the agent's own output never comes through here — it travels the control
+   * socket. It was *"diagnostics only"* until WP-53: the control-directory sweep (PROGRESS backlog
+   * **0b**) reads a helper's listing back through it, so `tail` is now a caller's decision rather
+   * than a courtesy, and a default of a hundred would silently truncate that sweep into a partial
+   * one. `HelperRun.logTail` is where the caller states it.
    */
   async containerLogs(id: string, tail = 100): Promise<string> {
     const response = await this.#expect(

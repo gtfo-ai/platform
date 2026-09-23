@@ -206,6 +206,23 @@ const WORKSPACE_VOLUME = /^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
  * daemon is anonymous, so the *push* this e2e demonstrates is unauthenticated, and the run-scoped
  * credential's own behaviour is `broker.test.ts`'s.
  */
+/**
+ * A branch that **exists on the remote**, one commit ahead of `main` — PROGRESS backlog **71**.
+ *
+ * `DockerWorkspaceProvider#clone` runs `git checkout "$B" || git checkout -b "$B"`, and until WP-53's
+ * review only the `-b` half had ever run anywhere: the daemon check used a branch that was *not* on
+ * the remote, so the first half of the `||` — the one a **re-entry** run depends on, and the whole
+ * reason `checkoutRef` exists — was unexercised. This branch is what exercises it.
+ *
+ * It carries a file `main` does not, and its head is deliberately a **different commit**: if the two
+ * heads were equal, a provider that ignored `checkoutBranch` entirely would pass (standing rule 43 —
+ * an assertion whose subject cannot differ is not one).
+ */
+export const FIXTURE_TASK_BRANCH = 'agentic/existing-task';
+/** Present on {@link FIXTURE_TASK_BRANCH} and on no other ref. */
+export const FIXTURE_TASK_BRANCH_FILE = 'task-branch-only.md';
+export const FIXTURE_TASK_BRANCH_MARKER = 'committed on the task branch, not on main';
+
 /** The project's own skill, as the fixture repository commits it. Asserted byte for byte. */
 export const PROJECT_SKILL_DESCRIPTION =
   'The project ships this one and the platform never touches it.';
@@ -232,6 +249,13 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
     `${VCS} add -A`,
     `${VCS} commit -q -m "fixture"`,
     `${VCS} push -q /srv/acme.git main`,
+    // The task branch, one commit **ahead** of main and carrying a file main does not.
+    `${VCS} checkout -q -b ${FIXTURE_TASK_BRANCH}`,
+    `printf "${FIXTURE_TASK_BRANCH_MARKER}\\n" > ${FIXTURE_TASK_BRANCH_FILE}`,
+    `${VCS} add -A`,
+    `${VCS} commit -q -m "work in progress on the task branch"`,
+    `${VCS} push -q /srv/acme.git ${FIXTURE_TASK_BRANCH}`,
+    `${VCS} checkout -q main`,
     `${VCS} daemon --verbose --export-all --enable=receive-pack --enable=upload-pack ` +
       '--base-path=/srv --reuseaddr --listen=0.0.0.0 /srv',
   ].join('\n');

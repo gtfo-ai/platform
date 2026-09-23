@@ -24,9 +24,11 @@
  * a `report_progress` row is a `TranscriptEvent` kind the contract does not have. That is a decision
  * for whoever gives the progress feed a shape, not a missing adapter.
  *
- * A refusal is also the only honest state to be in while **no run exists at all** (Q52). When the
- * launcher transport lands, each of these becomes an implementation in the same place, and the
- * thing that will not have to change is the wiring.
+ * **The "no run exists at all" half of this paragraph is gone** (standing rule 83, the second time
+ * in this file): WP-53 built TD-028's control plane, so a configured instance does run agents and
+ * these tools are refused *to a live run*. Each refusal below now names its own reason, and none of
+ * them is the transport any more. When one becomes an implementation it lands in the same place,
+ * and the thing that will not have to change is the wiring.
  *
  * ## Why the port and not the MCP server
  *
@@ -68,9 +70,9 @@ export class PlatformToolUnavailableError extends Error {
  */
 const MISSING: Readonly<Record<Exclude<PlatformToolName, 'kb_search'>, string>> = {
   ask_human:
-    'asking a human needs the Question aggregate bound to a run that can wait for the answer, which needs the launcher transport (Q52)',
+    'asking a human needs the Question aggregate bound to a run that can wait for the answer; nothing suspends a run on a question and nothing resumes it on an answer (BD-025’s unattended default is deny, which `agent.ts` composes)',
   notify_human:
-    'notifications need the SSE hub bound to a live run, which needs the launcher transport (Q52)',
+    'notifications need a channel bound to a live run; the SSE hub carries the transcript a run produces and has no path back into one',
   report_progress:
     'progress reporting writes a transcript row, and the run transcript sink now exists (WP-15g) — what is missing is a shape for it: the sink is the runner’s, it writes what the SDK produced, and `TranscriptEvent` has no kind for a tool-reported progress line',
   get_task_context:

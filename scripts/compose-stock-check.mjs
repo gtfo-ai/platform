@@ -34,7 +34,14 @@
  *      unauthenticated and could not be made otherwise;
  *   4. an instance configured with only `APP_SECRET_KEY_FILE` **starts**. Until WP-50 compose
  *      refused it outright: `${APP_SECRET_KEY:?…}` fails on unset *or empty*, so doing what TD-020
- *      says with Docker secrets gave compose's own error instead of an instance.
+ *      says with Docker secrets gave compose's own error instead of an instance;
+ *   5. **the `runner` service is up on a stock `.env` and running no agent, and the `app` service
+ *      is running no agent even when `.env` says otherwise** (WP-53, TD-028). Both halves are here
+ *      for the reason WP-51's host case is: the *policy* is exercised by the unit tier, and the only
+ *      thing that can say it reached the **process** is an instance. The negative half is the pin —
+ *      `app` is pinned to no launcher, so an operator who puts the token in `.env` (which is exactly
+ *      what the runner needs them to do) must not thereby make the API container subscribe
+ *      `stage.execute` with no control volume to serve it from.
  *
  * ## Why here and not in the e2e tier
  *
@@ -106,6 +113,11 @@ const PROVIDER_TOKEN = 'wp50-not-a-real-sentry-token';
  * **refused**. Two of the three drifting apart is how this check would go quietly one-sided.
  */
 const PROVIDER_HOST = 'sentry.example.test';
+/**
+ * TD-028's shared secret for the configured phase (WP-53). Obviously fake, and past the 32-character
+ * floor both halves of the instance refuse below.
+ */
+const LAUNCHER_TOKEN = 'wp53-compose-stock-check-not-a-real-launcher-token';
 const TIMEOUT_MS = 15 * 60 * 1000;
 
 const failures = [];
@@ -292,13 +304,59 @@ const main = async () => {
     await compose(['up', '-d', '--no-build']);
     await waitForHealth();
 
+    /*
+     * The service list, **in both directions and with each one's state** — WP-53.
+     *
+     * It was `['app', …].every(s => stdout.includes(s))`, which is one-directional twice over: it
+     * could not see a service that had been *added* (WP-53 added `runner`, and this line stayed
+     * green), and it could not see one that was **restarting**. Both matter here: a `runner` that
+     * crash-loops on a stock `.env` is exactly the shape of defect this script exists for, and a
+     * substring test over a service list is precisely how it would hide.
+     */
     const services = await compose(['ps', '-a', '--format', '{{.Service}} {{.State}}']);
+    const state = new Map(
+      services.stdout
+        .trim()
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map((line) => {
+          const [service = '', ...rest] = line.trim().split(/\s+/);
+          return [service, rest.join(' ')];
+        }),
+    );
     check(
-      'one `docker compose up` brings the instance up',
-      ['app', 'db', 'launcher', 'migrate', 'docker-socket-proxy'].every((service) =>
-        services.stdout.includes(service),
-      ),
+      'one `docker compose up` brings up exactly the services `compose.yml` ships',
+      [...state.keys()].sort().join(' ') === 'app db docker-socket-proxy launcher migrate runner',
       services.stdout.trim().replace(/\n/g, ' | '),
+    );
+    /*
+     * A `restarting` verdict with nothing but the word in it costs whoever reads it a reproduction:
+     * the container is gone by the time the check's `finally` has run, so its log is gone with it.
+     * Measured — WP-53's first extended run reported `launcher restarting` and the reason (a blank
+     * `APP_LAUNCHER_TOKEN` failing a `.min(1)` schema) had to be derived by hand. So the last lines
+     * of every service that is not where it should be are read **before** the verdict.
+     */
+    const unhealthy = [...state]
+      .filter(([service, value]) =>
+        service === 'migrate' ? !value.startsWith('exited') : value !== 'running',
+      )
+      .map(([service]) => service);
+    for (const service of unhealthy) {
+      const { stdout } = await compose(['logs', '--tail', '20', '--no-log-prefix', service]).catch(
+        () => ({ stdout: '(no log)' }),
+      );
+      console.error(`--- ${service} is not running; its last 20 lines ---\n${stdout}`);
+    }
+    check(
+      'every long-lived service is running, and none is restarting',
+      ['app', 'db', 'launcher', 'runner', 'docker-socket-proxy'].every(
+        (service) => state.get(service) === 'running',
+      ) &&
+        // Prefix-matched, because a one-shot service's `.State` is `exited` on some daemon versions
+        // and `exited (0)` on others; the long-lived ones are matched exactly, which is what makes
+        // `restarting` a failure rather than a substring of something that passes.
+        state.get('migrate')?.startsWith('exited') === true,
+      [...state].map(([service, value]) => `${service} ${value}`).join(' | '),
     );
 
     // 2. The environment inside the container — the measurement WP-23's dogfood run took by hand.
@@ -445,6 +503,117 @@ const main = async () => {
       'an instance configured with only APP_SECRET_KEY_FILE starts and signs a session',
       stillSignedIn.status === 200 && secretInEnv.stdout.trim() === '',
       `status ${stillSignedIn.status}, APP_SECRET_KEY in env: ${secretInEnv.stdout.trim() === '' ? 'no' : 'yes'}`,
+    );
+
+    /*
+     * 5. **TD-028 decision 5 against the image** (WP-53), in both directions.
+     *
+     * *Stock:* `.env.example` ships both launcher variables empty and `compose.yml` pins neither on
+     * the `runner` service, so a stock instance has no launcher on either container. The property
+     * that matters is not "the variable is empty" — it is that the process **said so**: a worker
+     * that composes no agent runner logs which piece is missing and subscribes neither
+     * `stage.execute` nor `task.ask`. A container that is merely up proves nothing.
+     *
+     * *Configured:* the same `.env` with both variables set. The `runner` must now carry them, and
+     * `app` must **still not** — that pin is the negative half, and it is the one an operator can
+     * break by doing exactly what the guide tells them (putting the token in `.env`). It is the same
+     * shape as the `evil-<host>` case above: the adjacent, plausible mistake, refused live.
+     */
+    const runnerStock = await compose([
+      'exec',
+      '-T',
+      'runner',
+      'printenv',
+      'ROLE',
+      'APP_WORKSPACE_CONTROL_ROOT',
+    ]).catch((error) => ({ stdout: String(error) }));
+    const runnerStockLines = runnerStock.stdout.trim().split('\n');
+    check(
+      'the runner service is the same image under ROLE=runner, with the control volume mounted',
+      runnerStockLines[0] === 'runner' && runnerStockLines[1] === '/run/agentic/ctl',
+      runnerStock.stdout.trim().replace(/\n/g, ' | '),
+    );
+    const runnerStockLog = await compose(['logs', '--no-log-prefix', 'runner']).catch(() => ({
+      stdout: '',
+    }));
+    check(
+      'on a stock `.env` the runner composes no agent runner and names what is missing',
+      runnerStockLog.stdout.includes('composed without an agent runner') &&
+        runnerStockLog.stdout.includes('APP_LAUNCHER_URL') &&
+        runnerStockLog.stdout.includes('APP_LAUNCHER_TOKEN'),
+      runnerStockLog.stdout
+        .split('\n')
+        .filter((line) => line.includes('agent runner'))
+        .join(' | ')
+        .slice(0, 240) || '(no such line)',
+    );
+
+    let configured = withValue(fileEnv, 'APP_LAUNCHER_URL', 'http://launcher:7780');
+    configured = withValue(configured, 'APP_LAUNCHER_TOKEN', LAUNCHER_TOKEN);
+    await writeFile(path.join(projectDirectory, '.env'), configured, 'utf8');
+    await compose(['up', '-d', '--no-build']);
+    await waitForHealth();
+    /*
+     * `printenv NAME…` answers one line per name, **and the lines may be empty** — which is exactly
+     * the case `app` is in, because WP-53 pins both names to the empty string there. So the trailing
+     * newline is removed and nothing else is trimmed: `stdout.trim()` on an all-empty answer
+     * collapses `"\n\n"` to `""` and splits to a **one**-element array, which read as "the second
+     * variable is unset" when it is set and empty. Measured on the first run of this extension.
+     */
+    const printedLines = (stdout) => stdout.replace(/\n$/, '').split('\n');
+    const configuredEnv = await Promise.all(
+      ['runner', 'app'].map(async (service) =>
+        compose(['exec', '-T', service, 'printenv', 'APP_LAUNCHER_URL', 'APP_LAUNCHER_TOKEN'])
+          .then((result) => printedLines(result.stdout))
+          // `printenv` exits non-zero only when a name is **unset**; both are set on both services.
+          .catch(() => ['<unset>', '<unset>']),
+      ),
+    );
+    const [runnerEnv = [], appEnv = []] = configuredEnv;
+    check(
+      'the runner carries the launcher URL and token `.env` set',
+      runnerEnv[0] === 'http://launcher:7780' && runnerEnv[1] === LAUNCHER_TOKEN,
+      `url ${runnerEnv[0] ?? '?'}, token ${runnerEnv[1] === LAUNCHER_TOKEN ? 'set' : (runnerEnv[1] ?? '?')}`,
+    );
+    check(
+      'the app service still carries neither, so the API container takes no agent job',
+      appEnv[0] === '' && appEnv[1] === '',
+      `url ${JSON.stringify(appEnv[0] ?? null)}, token ${JSON.stringify(appEnv[1] ?? null)}`,
+    );
+    /*
+     * The configured runner's own statement, **asserted as the absence of the refusal** rather than
+     * as the presence of the confirmation.
+     *
+     * `composeRunWorkspaces` logs *"it provisions run workspaces through the launcher control
+     * plane"* at **info**, and this instance runs at `LOG_LEVEL=warn` — the level the operator guide
+     * tells an operator to run at, and therefore the level this check must measure at. So the
+     * observable at warn is the **warning that is no longer emitted**: a process that composed an
+     * agent runner does not log that it composed none. Paired with the environment assertion above
+     * (which is the positive half), that is a statement about the process rather than about a
+     * variable. Asserting the info line would have meant raising the log level for the check, which
+     * would stop it being the operator's own instance.
+     */
+    const runnerLog = await compose(['logs', '--no-log-prefix', 'runner']).catch(() => ({
+      stdout: '',
+    }));
+    check(
+      'the configured runner no longer says it composed no agent runner',
+      !runnerLog.stdout.includes('composed without an agent runner'),
+      runnerLog.stdout
+        .split('\n')
+        .filter((line) => line.includes('agent runner'))
+        .join(' | ')
+        .slice(0, 240) || '(no such line, which is the assertion)',
+    );
+    const appLog = await compose(['logs', '--no-log-prefix', 'app']).catch(() => ({ stdout: '' }));
+    check(
+      'and the app service still says it composes none, with `.env` carrying the token',
+      appLog.stdout.includes('composed without an agent runner'),
+      appLog.stdout
+        .split('\n')
+        .filter((line) => line.includes('agent runner'))
+        .join(' | ')
+        .slice(0, 240) || '(no such line)',
     );
   } catch (error) {
     check('the instance came up and answered', false, String(error));

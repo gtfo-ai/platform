@@ -177,12 +177,12 @@ export const runSpecSchema = z.strictObject({
    * diff written against today's tree and a human diff written against the tree six months ago
    * measure drift rather than similarity.
    *
-   * **Nothing honours it yet, and that is stated rather than implied.** `WorkspaceSpec.repo
-   * .checkoutBranch` exists and the Docker provider obeys it, but no production
-   * `RunWorkspaceProvisioner` is composed on this build (WP-15g: `startRuntime` installs
-   * `unavailableClaudeRunner`), so the value travels and is asserted and is not yet acted on. It is
-   * carried now rather than later for the reason backlog 71 gives: it is cheapest to fix *before*
-   * the provisioner exists, because afterwards every run silently starts from the default branch.
+   * **It is honoured since WP-53**, which is the mapping backlog 71 was filed for:
+   * `runWorkspaceSpecFor` (`packages/infrastructure/src/launcher/provisioner.ts`) writes it to
+   * `WorkspaceSpec.repo.checkoutBranch`, and the Docker provider's clone runs
+   * `git checkout "$B" || git checkout -b "$B"` — so a task's first run, whose branch is not on the
+   * remote, clones the default branch and creates it rather than failing. Measured end to end
+   * against a real daemon by `scripts/launcher-control-plane-check.mjs`.
    */
   checkoutRef: nonEmptyStringSchema.nullable(),
   contextPack: z.array(runContextDocumentSchema),

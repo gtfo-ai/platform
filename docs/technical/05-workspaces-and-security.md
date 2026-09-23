@@ -42,6 +42,16 @@ Secrets exfiltration, data exfiltration, protected-branch tampering, container e
 ## Control channel (TD-025)
 One Unix socket per run on the `ctl` volume: runner ↔ shim frames for spawn/stdio/signals/exit and `cred.get`; single authenticated connection; shim kills the child on disconnect; nothing listens on TCP in Docker mode. Kubernetes: same frames over TCP with mTLS.
 
+### Amendment (WP-53, 2026-09-23) — the control plane beside the data plane
+
+*"Nothing listens on TCP in Docker mode"* is no longer true of the **launcher**, and the sentence stands for the run: TD-028 splits the transport in two, and only the control half is new.
+
+- **Data plane, unchanged.** The runner keeps the static mount of the whole `ctl` volume and opens `<ctl>/<run-id>/ctl.sock` itself. No stdio, no `stdin`/`stdout`, and no `cred.get` round trip crosses HTTP.
+- **Control plane, new.** The launcher exposes an HTTP surface for the operations that are request/response — create a workspace, end a run, report health — on a compose network with `internal: true` and no published port that **only** the launcher and the runner container join. It is authenticated on every request with a constant-time comparison of `APP_LAUNCHER_TOKEN`, *in addition to* the network isolation, because a compose file is a deployment property and an authentication check is a code property — and this surface creates containers.
+- Every operation is **idempotent on the run id**: a create for a run that already has a handle answers the stored handle rather than starting a second container. The record is this process' memory, so a launcher that restarted has forgotten and a create replayed across a restart would start a second container; what bounds that is one level up (`stage.execute` is `stately` per task, and the run lease ends a row whose process is gone).
+- The run container still reaches **nothing but its egress sidecar**: it is on a per-run `internal: true` network and joins neither the control-plane network nor the daemon's.
+- **Which process may run an agent is configuration, never `ROLE`** (TD-028 decision 5): a worker subscribes `stage.execute` and `task.ask` only when it has a launcher URL and token. The consequence the decision's WP-53 amendment writes down is that gate evaluation is a branch of the same handler on the same queue, so a deployment with no configured runner also stops evaluating `ci_gate`, `rebase_gate` and `merged_gate`. Nothing is lost — the jobs are durable and are taken when a runner starts — and the queue depth is the visibility that trade rests on.
+
 ## Kubernetes later
 `WorkspaceProvider` implemented with Jobs or `agent-sandbox` claims, NetworkPolicy + Cilium FQDN policies, exec/attach WebSocket for the spawn hook, session store adapter for cross-node resume.
 

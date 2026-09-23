@@ -12,16 +12,24 @@
  * this file is excluded from coverage the way `apps/runlet/src/index.ts` and
  * `apps/server/src/migrate.ts` are.
  *
- * It has no credential source yet, and says so rather than inventing one: minting a run-scoped git
- * token is `GitProviderPort.mintCredential`, which the server composes through
- * `IntegrationActionExecutor` (shadow mode, idempotency, audit). Wiring the two processes together
- * is the transport question filed as **Q52**; until it is answered, a launcher started on its own
- * refuses to mint rather than pretending a run is credentialled.
+ * It has no credential source, and says so rather than inventing one: minting a run-scoped git token
+ * is `GitProviderPort.mintCredential`, which the **server** composes through
+ * `IntegrationActionExecutor` (shadow mode, idempotency, audit), and this process holds no
+ * integration binding, no secret key and no database connection to read one with. So a launcher
+ * started on its own refuses to mint rather than pretending a run is credentialled, and a run that
+ * needs a git write credential fails at `startRun` with that refusal by name.
+ *
+ * **That is a real gap and WP-53 states it rather than closing it** (TD-028 answered the transport,
+ * not the credential): a read-only stage runs end to end here, and a writing stage cannot push. The
+ * shapes available are a `RunCredentialSource` that calls **back** to the platform over the control
+ * plane, or a credential minted by the platform and carried on the create request; both put a git
+ * token somewhere it is not today, which is a decision above this file. It is reported as discovered
+ * work rather than chosen here.
  */
 import process from 'node:process';
 import { WorkspaceError } from '@platform/application';
 import type { workspace } from '@platform/infrastructure';
-import { buildLauncher } from './runtime.js';
+import { startLauncher } from './runtime.js';
 
 /**
  * The credential source of a launcher with no git provider wired to it.
@@ -43,19 +51,42 @@ const unwiredCredentials: workspace.RunCredentialSource = {
 };
 
 const main = async (): Promise<void> => {
-  const runtime = buildLauncher({
+  const runtime = await startLauncher({
     env: process.env,
     credentials: unwiredCredentials,
     uid: process.getuid?.() ?? -1,
   });
   runtime.logger.info(
-    { control_root: runtime.config.controlRoot, runtime_image: runtime.config.images.runtime },
+    {
+      control_root: runtime.config.controlRoot,
+      runtime_image: runtime.config.images.runtime,
+      claude_code_path: runtime.config.images.runtimeCliPath,
+      control_plane_port: runtime.controlPlane?.port ?? null,
+    },
     'launcher started',
   );
+  /**
+   * SIGTERM **awaits** the close, which is the whole of standing rule 51 in this file.
+   *
+   * Until WP-53 there was nothing to await: the only handle was a timer, so `process.exit(0)` owed
+   * nothing. There is a listener now, and `process.exit()` abandons a socket mid-response — a
+   * `create` that had already started a container would be answered by a closed connection, which
+   * the runner reads as `engine_unavailable` and retries, leaving the first container behind.
+   * `stopping` guards a second signal from re-entering while the first close is in flight.
+   */
+  let stopping = false;
   const stop = (signal: string): void => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
     runtime.logger.info({ signal }, 'launcher stopping');
-    runtime.stop();
-    process.exit(0);
+    void runtime
+      .close()
+      .catch((error: unknown) => {
+        runtime.logger.warn({ err: error }, 'the launcher did not shut down cleanly');
+      })
+      .finally(() => process.exit(0));
   };
   process.on('SIGTERM', () => stop('SIGTERM'));
   process.on('SIGINT', () => stop('SIGINT'));

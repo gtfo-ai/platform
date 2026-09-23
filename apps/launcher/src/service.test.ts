@@ -569,4 +569,78 @@ describe('retention sweep', () => {
     service.startRetentionSweep();
     expect(clock.pending).toBe(1);
   });
+
+  /**
+   * The summary line carries the **control-directory** half too — PROGRESS backlog **0b**, and the
+   * assertion is the point rather than the field.
+   *
+   * WP-53 added those three fields *because* an unreclaimed run token — a directory the sweep tried
+   * and failed to remove, whose token is still readable — was visible only in a per-directory `warn`
+   * and reached no summary. A log line added for that reason and asserted by nothing is the same gap
+   * one step along, which is what WP-53's round-2 review found: a grep for the field names returned
+   * only the three lines that write them.
+   *
+   * The three outcomes are asserted **separately**, because a single count would let the two that
+   * matter collapse into each other: `reclaimed` is the sweep working and `unreclaimed` is a
+   * credential still on a shared volume, and `run_alive` is neither.
+   */
+  it('reports the control directories it examined, reclaimed and could not reclaim', async () => {
+    const lines: { fields: LogFields; message: string }[] = [];
+    /**
+     * Built rather than spread from {@link provider}: `FakeWorkspaceProvider` is a class, so
+     * `{...instance}` copies its fields and **not** its prototype methods — the object would satisfy
+     * nothing and `tsc` says so. Every method but the one under test throws, which is the scope of
+     * this case written down: `sweep` calls `purgeExpired` and nothing else, and it fails loudly if
+     * that ever stops being true.
+     */
+    const unused = (name: string) => (): never => {
+      throw new Error(`this case drives sweep only; ${name} was not expected`);
+    };
+    const reporting: WorkspaceProvider = {
+      updateMirror: unused('updateMirror'),
+      create: unused('create'),
+      attach: unused('attach'),
+      kill: unused('kill'),
+      export: unused('export'),
+      destroy: unused('destroy'),
+      extendRetention: unused('extendRetention'),
+      purgeExpired: async () => ({
+        examined: 0,
+        removed: 0,
+        volumes: [],
+        controlDirectories: [
+          { runId: randomUUID(), removed: true, keptReason: null },
+          { runId: randomUUID(), removed: false, keptReason: 'remove_failed' },
+          { runId: randomUUID(), removed: false, keptReason: 'run_alive' },
+        ],
+      }),
+    };
+    const sweeper = new LauncherService({
+      provider: reporting,
+      broker,
+      clock,
+      logger: {
+        ...silentLogger,
+        info: (fields, message) => {
+          lines.push({ fields, message });
+        },
+      },
+      exportDir: path.join(dir, 'exports'),
+      retentionSweepMs: 60_000,
+    });
+
+    await sweeper.sweep(new Date(0));
+
+    const summary = lines.find((line) => line.message === 'workspace retention sweep');
+    expect(summary).toBeDefined();
+    expect(summary?.fields).toMatchObject({
+      control_directories: 3,
+      control_directories_reclaimed: 1,
+      // The one an operator has to act on: a run token that is still there.
+      control_directories_unreclaimed: 1,
+    });
+    // And the volume half is still its own pair of numbers, so a reader counting workspaces cannot
+    // count a control directory as one.
+    expect(summary?.fields).toMatchObject({ examined: 0, removed: 0 });
+  });
 });

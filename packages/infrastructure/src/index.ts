@@ -31,6 +31,7 @@ export * as humanTime from './human-time/index.js';
 export * as integrations from './integrations/index.js';
 export * as jobs from './jobs/index.js';
 export * as knowledge from './knowledge/index.js';
+export * as launcher from './launcher/index.js';
 export * as maintenance from './maintenance/index.js';
 export * as notify from './notify/index.js';
 export * as pipeline from './pipeline/index.js';

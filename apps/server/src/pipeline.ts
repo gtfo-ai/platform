@@ -23,13 +23,16 @@
  * Q59(b)). `composeAgentRunner` (`./agent.ts`) builds the real `createClaudeRunner` — the adapter
  * over the SDK's own `query()` — with the production transcript sink, the unattended approvals port
  * and a per-run injected-secret redactor, over a {@link PipelineComposition.workspaces} provisioner.
- * That provisioner is **absent by default**, because reaching a run container needs the
- * `platform-launcher` container and this build has no transport to it (Q52) — and TD-021's WP-15g
- * amendment forbids *this* process from holding a Docker client, so it may not simply build one.
+ * That provisioner is **absent unless this process is configured to reach the launcher** —
+ * `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, TD-028's control plane, built at WP-53
+ * (`apps/server/src/workspaces.ts`). TD-021's WP-15g amendment forbids *this* process from holding a
+ * Docker client, so it may not simply build one instead.
  *
  * When it is absent the process gets {@link unavailableClaudeRunner}, which is a **refusal**, not a
- * default: `start()` throws {@link RunnerUnavailableError}, so an agent stage fails loudly in its own
- * job and `stage-executor.ts` escalates the task. It deliberately does not fabricate a failed
+ * default: `start()` throws {@link RunnerUnavailableError}. Since WP-53 it is also a throw that such
+ * a process should not reach, because it no longer subscribes `stage.execute` or `task.ask` (TD-028
+ * decision 5) and those jobs queue for a process that can perform them. The refusal stays for the
+ * paths that bypass the queue. It deliberately does not fabricate a failed
  * `RunOutcome` — that would make the pipeline record `run.failed` and transition on a verdict for a
  * run that never happened, which is the fail-*open* direction (standing rule 20).
  *
@@ -133,13 +136,13 @@ export const RUN_LEASE_OWNER = `${hostname()}:${randomUUID().slice(0, 8)}`;
 /** `Actor.component` on everything the run-lease sweep writes; it appears in the run's own log. */
 export const RUN_LEASE_SWEEP_COMPONENT = 'pipeline.run-lease.sweep';
 
-/** Thrown by {@link unavailableClaudeRunner}: this build has no transport to the launcher (Q52). */
+/** Thrown by {@link unavailableClaudeRunner}: this process is configured to run no agent (TD-028). */
 export class RunnerUnavailableError extends Error {
   override readonly name = 'RunnerUnavailableError';
 
   constructor(stage: string | null) {
     super(
-      `no ClaudeRunner is composed in this process, so stage ${JSON.stringify(stage ?? 'unknown')} cannot run an agent. It is a configuration state, not a missing feature: a run needs a workspace provisioner, which needs the platform-launcher container (Q52's transport), and TD-021 forbids this process from holding a Docker client of its own. The startup log names which piece is missing. Every other part of the pipeline runs and is audited.`,
+      `no ClaudeRunner is composed in this process, so stage ${JSON.stringify(stage ?? 'unknown')} cannot run an agent. It is a configuration state, not a missing feature: a run needs a workspace provisioner, which needs APP_LAUNCHER_URL and APP_LAUNCHER_TOKEN pointing at the platform-launcher container (TD-028), because TD-021 forbids this process from holding a Docker client of its own. The startup log names which piece is missing. Every other part of the pipeline runs and is audited.`,
     );
   }
 }
@@ -182,8 +185,9 @@ export const unavailableClaudeRunner = (): ClaudeRunner => ({
  */
 export interface PipelineComposition {
   /**
-   * Replaces {@link unavailableClaudeRunner}. Absent is the state `main.ts` and `pnpm dev` are in
-   * until Q52 is answered.
+   * Replaces {@link unavailableClaudeRunner}. Absent is the state `pnpm dev` is in unless an
+   * operator points it at a launcher; since WP-53 `startRuntime` composes a real one from
+   * `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN` (`apps/server/src/workspaces.ts`).
    *
    * A **factory over the platform tools**, not a runner, since WP-17: `createClaudeRunner` takes a
    * `PlatformToolPort`, so the only way `kb_search` reaches a run is for whoever builds the runner
@@ -195,11 +199,13 @@ export interface PipelineComposition {
    * The run workspace provisioner (WP-15g): what turns a `RunSpec` into a process the SDK can spawn
    * and a workspace that is freed on every ending.
    *
-   * **This is the seam that decides whether a process runs agents at all**, and it is absent in every
-   * production path today: provisioning needs the `platform-launcher` container, the transport to it
-   * is Q52, and TD-021's WP-15g amendment forbids this process from constructing a Docker client
-   * instead. Absent therefore composes {@link unavailableClaudeRunner} and logs which piece is
-   * missing (Q59(b)).
+   * **This is the seam that decides whether a process runs agents at all.** Since WP-53 a production
+   * path fills it: `composeRunWorkspaces` builds one over TD-028's control plane when
+   * `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN` are both set, which in the shipped compose topology
+   * is the `runner` service and deliberately not `app`. TD-021's WP-15g amendment is why it is a
+   * provisioner and not a `WorkspaceProvider`: this process may not construct a Docker client.
+   * Absent composes {@link unavailableClaudeRunner}, logs which piece is missing (Q59(b)) and
+   * subscribes neither agent-run queue.
    *
    * It is also the seam the e2e tier uses, and that is the point rather than a convenience: a
    * provisioner whose `spawn` is WP-12's fake CLI leaves **everything else** — the real
@@ -295,6 +301,8 @@ export interface ComposePipelineOptions {
   readonly agent: {
     readonly providerMode: 'api' | 'local';
     readonly modelApiKey: string | null;
+    /** `CLAUDE_CODE_OAUTH_TOKEN` — `local` mode's credential (PROGRESS backlog 128, WP-53). */
+    readonly modelOauthToken: string | null;
     readonly claudeBinary: string | null;
   };
   /**
@@ -769,6 +777,15 @@ export const composePipeline = async (
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
+    /**
+     * TD-028 decision 5: this process takes `stage.execute` jobs **only if it can perform one**.
+     *
+     * The condition is exactly the one `composeAgentRunner` already answers — a workspace
+     * provisioner, and in `api` mode a model credential — so there is one definition of "runs
+     * agents" rather than two. `composition.runner` (the e2e tiers' `FakeClaudeRunner` seam) counts
+     * as a runner for the same reason it counts everywhere else in this file: it *is* one.
+     */
+    runsAgents: composition.runner !== undefined || agent.runner !== null,
     baseUrl: options.baseUrl,
     /**
      * The registry client, composed **only** when an operator declared a host (WP-38, Q84).

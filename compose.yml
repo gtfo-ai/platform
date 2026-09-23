@@ -49,12 +49,26 @@
 # **`migrate` runs the same entrypoint `pnpm db:migrate` does** (TD-011: forward-only SQL under an
 # advisory lock). It is a one-shot service, and `app` waits for it to exit 0.
 #
-# **The control volume is not mounted into `app`.** TD-025 §2 gives the *runner* a static mount of
-# the whole `ctl` volume, and that volume holds every live run's token. `apps/server` composes no
-# workspace provisioner in this build (Q59(b): it logs which piece is missing and runs everything
-# except an agent stage), so mounting it here would hand the container with the HTTP surface a
-# credential it has no code to use. The service that gains the mount is the one that gains the
-# transport (Q52).
+# **The control volume is not mounted into `app`, and since WP-53 there is a service that has it.**
+# TD-025 §2 gives the *runner* a static mount of the whole `ctl` volume, and that volume holds every
+# live run's token; mounting it into the container with the HTTP surface would hand it a credential
+# it has no code to use. Q52 is answered by TD-028, so the service that gains the mount is the
+# `runner` below — the same image, `ROLE=runner`, joined to an `internal: true` network with the
+# `launcher`, and **the only product container that runs agent stages**.
+#
+# **An instance without a configured runner runs everything except agent stages and the platform
+# gates** (TD-028 decision 5 and its WP-53 amendment). `stage.execute` is subscribed by
+# *configuration* — a launcher URL and token — never by `ROLE`, because pg-boss hands a job to any
+# subscribed worker and a process that composed no runner would fail every stage it won. So `app`
+# is pinned to *no* launcher below, even when `.env` carries the token, and the jobs it does not
+# take **queue** rather than failing.
+#
+# The cost the amendment writes down: gate evaluation (`ci_gate`, `rebase_gate`, `merged_gate`) is a
+# **branch of the same handler on the same queue**, so those stop too. It is not given a queue of
+# its own because `stage.execute` is `stately` with `singletonKey: task:<id>`, which is what enforces
+# *a task never runs two stages at once*; a second queue would let a gate and a stage for one task
+# run concurrently. Nothing is lost, only delayed — the jobs are durable and are taken when a runner
+# starts — and the queue depth is the metric that shows it.
 
 name: agentic
 
@@ -158,11 +172,89 @@ services:
       # it names a path inside this container, on the volume mounted below.
       APP_KNOWLEDGE_MIRROR_ROOT: /var/lib/app/knowledge
       APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      # **This container runs no agent stage** (TD-028 decision 5). Pinned empty rather than merely
+      # absent, because `env_file` above hands this service the whole of `.env` and an operator who
+      # set the launcher's token there would otherwise make the API container subscribe
+      # `stage.execute` — with no `ctl` mount, so every run it won would fail on a control socket
+      # that is not in its filesystem. All three names are pinned: `loadServerConfig` reads the
+      # `_FILE` variant *first* (TD-020), so blanking only the plain one would leave a
+      # `APP_LAUNCHER_TOKEN_FILE` in `.env` still switching this container on.
+      APP_LAUNCHER_URL: ''
+      APP_LAUNCHER_TOKEN: ''
+      APP_LAUNCHER_TOKEN_FILE: ''
     volumes:
       - knowledge:/var/lib/app/knowledge
       - exports:/var/lib/app/exports
     ports:
       - '${APP_PORT:-8080}:8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # **The one product container that runs agent stages** (TD-028, WP-53).
+  #
+  # The same image and the same code as `app`; what makes it the runner is three pieces of
+  # configuration and one mount:
+  #
+  #  * `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN` — with both, `composeRunWorkspaces` builds a
+  #    `RunWorkspaceProvisioner` over TD-028's control plane and the process subscribes
+  #    `stage.execute` and `task.ask`. With neither it builds none and subscribes neither, so those
+  #    jobs **queue** for a process that can perform them. With **one** it refuses to start and
+  #    names the missing half, because half a two-half setting is an instance that looks as if it
+  #    would run agents and cannot. Both come from `.env`; neither is pinned on this service.
+  #  * the `ctl` mount — TD-025 §2's *static* mount of the whole control volume. The run's stdio
+  #    never crosses HTTP: the launcher answers `create` with a socket path on this volume and this
+  #    process connects to it directly.
+  #  * `launcher-api` — an `internal: true` network with no published port that only this service
+  #    and `launcher` join. It is **not** a route to the daemon: `docker-proxy` is a different
+  #    network and this service does not join it.
+  #
+  # `ROLE=runner` is a *worker* that says what it is deployed for (`apps/server/src/role.ts`); it is
+  # not what decides whether agents run here, and that file measures why a role could not be.
+  #
+  # It shares `knowledge` and `exports` with `app` because it is the same workload otherwise: a
+  # worker, running the same job queues. `knowledge.index` is a singleton per project, so two
+  # workers do not fetch into one mirror at once.
+  runner:
+    <<: *platform-image
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      ROLE: runner
+      # No HTTP surface is published for this container; the ops endpoints every role serves stay
+      # reachable from inside it.
+      HOST: 0.0.0.0
+      PORT: 8080
+      APP_KNOWLEDGE_MIRROR_ROOT: /var/lib/app/knowledge
+      APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      # **Both halves come from `.env`, and neither is pinned here** — which is a correction, not a
+      # simplification. Pinning the URL while `.env.example` ships the token empty put a **stock**
+      # instance in exactly the half-configured state `composeRunWorkspaces` refuses, so this
+      # container would refuse to start and `restart: unless-stopped` would loop it for ever. The
+      # refusal is right and is about *operator input*; a compose file supplying one half of a
+      # two-half setting is not operator input.
+      #
+      # So a stock instance has neither, this process composes no provisioner, and it runs as an
+      # ordinary worker that takes no agent job (TD-028 decision 5). `.env.example` names the value
+      # for this topology — `http://launcher:7780`, matching `APP_LAUNCHER_PORT` below — and the
+      # operator sets it beside the token. `${…:-}` rather than nothing at all, because a service
+      # that names the variable it needs is a service an operator can read.
+      APP_LAUNCHER_URL: ${APP_LAUNCHER_URL:-}
+      # Where *this* process mounts the control volume. It must equal the launcher's
+      # `APP_WORKSPACE_CONTROL_ROOT`: the socket path the launcher answers with is computed from its
+      # own root, and a mismatch is refused by name before a run starts rather than becoming an
+      # `ECONNREFUSED` thirty seconds in.
+      APP_WORKSPACE_CONTROL_ROOT: /run/agentic/ctl
+    volumes:
+      - ctl:/run/agentic/ctl
+      - knowledge:/var/lib/app/knowledge
+      - exports:/var/lib/app/exports
+    networks:
+      - default
+      - launcher-api
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -242,6 +334,13 @@ services:
       APP_WORKSPACE_HELPER_NETWORK: agentic-run-egress
       APP_WORKSPACE_EGRESS_NETWORK: agentic-run-egress
       APP_WORKSPACE_EXPORT_DIR: /var/lib/app/exports
+      # TD-028's control plane. **Absent exposes none** — the fail-closed answer to a forgotten
+      # variable, since this surface creates containers — and the launcher says so at start-up.
+      # Listed here (rather than through an `env_file` this service deliberately does not have) so
+      # that the one credential it holds is the one it needs.
+      APP_LAUNCHER_TOKEN: ${APP_LAUNCHER_TOKEN:-}
+      APP_LAUNCHER_TOKEN_FILE: ${APP_LAUNCHER_TOKEN_FILE:-}
+      APP_LAUNCHER_PORT: ${APP_LAUNCHER_PORT:-7780}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       # TD-025 §2: one `ctl` volume for the instance, one sub-directory per run. The launcher
@@ -257,11 +356,16 @@ services:
     networks:
       - docker-proxy
       - run-egress
+      # TD-028 decision 2: the control plane, reachable **only** from the `runner` service. No
+      # published port, no route from `app`, and no route from any run's network.
+      - launcher-api
     depends_on:
       - docker-socket-proxy
-    # No healthcheck: this process has no HTTP surface at all (`apps/launcher/src/index.ts` is a
-    # composition root and a signal handler), so the only thing a check could assert is that pid 1
-    # is alive, which is what the container's own state already says. A check that cannot fail is
+    # No healthcheck, still. Since WP-53 this process *does* have an HTTP surface, but only when
+    # `APP_LAUNCHER_TOKEN` is set — and `GET /v1/health` is authenticated, so a check would have to
+    # carry the token and would report "unhealthy" for the legitimate no-token deployment. The
+    # runner's own start-up log names the launcher it reached, and `/readyz` on `app` is where an
+    # operator looks. A check that cannot fail, or that fails for a supported configuration, is
     # worse than none (standing rule 3).
     restart: unless-stopped
 
@@ -325,4 +429,10 @@ networks:
     name: agentic-run-egress
   # Only `launcher` and `docker-socket-proxy` join this, and it has no route anywhere else.
   docker-proxy:
+    internal: true
+  # TD-028 decision 2: only `launcher` and `runner` join this, and it has no published port. The
+  # control plane is authenticated **as well** (decision 3) — a surface that creates containers must
+  # not be safe only because of a compose file, since a compose file is a deployment property and an
+  # authentication check is a code property.
+  launcher-api:
     internal: true

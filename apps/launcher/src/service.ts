@@ -28,13 +28,18 @@
  * export's failure is reported *after* both. `service.test.ts` drives each of those failures and
  * asserts the container was stopped anyway.
  *
- * ## What is deliberately not here
+ * ## The network transport is beside this file, not in it (WP-53)
  *
- * A network transport. TD-021 deploys this as its own container, which implies an RPC surface
- * between the runner and the launcher, and there is no second process to talk to until WP-22 has
- * a compose file — building an unexercised, security-critical HTTP surface now would be code
- * whose only test is the one written beside it. Filed as **Q52** with a recommendation; the
- * service is a plain object so either deployment can compose it.
+ * This paragraph used to read *"what is deliberately not here: a network transport … there is no
+ * second process to talk to until WP-22 has a compose file"*. WP-22 shipped that file and TD-028
+ * decided the transport, so `control-plane.ts` is now the HTTP surface in front of **this** object:
+ * five verbs on a run id, authenticated on every request, idempotent on the run id.
+ *
+ * What is still deliberately not here is any knowledge of it. This class takes a
+ * `WorkspaceProvider` and a broker and knows nothing about a listener, which is what keeps Q52's
+ * *other* answer — the in-process composition of `scripts/runlet-launcher-inner.mjs`, and TD-028
+ * decision 1's "the in-process composition remains valid for the single-process developer mode" —
+ * a composition rather than a second implementation.
  */
 import path from 'node:path';
 import type {
@@ -262,8 +267,22 @@ export class LauncherService {
   /** One retention pass. */
   async sweep(now: Date = new Date(this.#options.clock.now())): Promise<PurgeReport> {
     const report = await this.#options.provider.purgeExpired(now);
+    const directories = report.controlDirectories;
     this.#options.logger.info(
-      { examined: report.examined, removed: report.removed },
+      {
+        examined: report.examined,
+        removed: report.removed,
+        // The control-directory half (PROGRESS backlog **0b**) reaches the summary line too, and
+        // separately: an operator counting workspaces must not count a control directory as one,
+        // and `reclaimed` and `unreclaimed` are the two facts worth waking up for — the second is
+        // an orphaned run token that is still readable. It was absent from this line until WP-53's
+        // review, which made the sweep's most security-relevant half visible only at `warn`.
+        control_directories: directories.length,
+        control_directories_reclaimed: directories.filter((entry) => entry.removed).length,
+        control_directories_unreclaimed: directories.filter(
+          (entry) => entry.keptReason === 'remove_failed',
+        ).length,
+      },
       'workspace retention sweep',
     );
     return report;

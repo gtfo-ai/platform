@@ -411,6 +411,15 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       examined: results.length,
       removed: results.filter((result) => result.removed).length,
       volumes: results,
+      /**
+       * Empty, and that is the honest answer rather than an omission (backlog **0b**).
+       *
+       * This fake has no control **volume**: `attach` answers a socket path it made up and nothing
+       * writes a directory anywhere. So there is nothing for a sweep to examine — which is a
+       * different fact from "this provider does not sweep", and the field being present is what
+       * lets the shared contract suite ask both providers the same question.
+       */
+      controlDirectories: [],
     };
   }
 

@@ -50,15 +50,30 @@ import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = process.cwd();
 
-/** Every tracked source git knows about — the scope, asked of git rather than carried (rule 7). */
-const trackedSources = (): string[] =>
-  execFileSync('git', ['ls-files', '-z', '--', '*.ts', '*.tsx', '*.mjs', '*.js'], {
+const gitSources = (args: readonly string[]): string[] =>
+  execFileSync('git', [...args, '-z', '--', '*.ts', '*.tsx', '*.mjs', '*.js'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   })
     .split('\0')
     .filter((file) => file.length > 0);
+
+/**
+ * Every source git knows about — the scope, asked of git rather than carried (rule 7).
+ *
+ * **Tracked *and* committable-but-untracked** (standing rule 85), which is a WP-53 correction and
+ * was not free: a census that reads only `ls-files` is green on the machine that wrote the new file
+ * and red on the push. WP-53 added two verification scripts that read `DOCKER_HOST`, and with the
+ * old scope this file passed while they were untracked and would have failed on the commit. The
+ * same widening is already in `wip-commit-sites.test.ts` and `client-census.test.ts`.
+ */
+const trackedSources = (): string[] => [
+  ...new Set([
+    ...gitSources(['ls-files']),
+    ...gitSources(['ls-files', '--others', '--exclude-standard']),
+  ]),
+];
 
 /**
  * A test-tier file, which is allowed to construct an engine because that is how the adapter is
@@ -115,11 +130,13 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
    * **In the rings that ship, `DOCKER_HOST` is read in exactly one file.**
    *
    * The scope is narrower than the claim above and the difference is stated rather than convenient: a
-   * `scripts/*.mjs` is a verification tool a human runs, not a process a compose file starts, and two
-   * of them legitimately name the variable (`runlet-launcher-check.mjs` bind-mounts the socket it
-   * names into the container it starts; `runlet-launcher-inner.mjs` hands it to `buildLauncher`).
-   * Neither *constructs* a client, which is the property that survives an RCE and is asserted above
-   * with no exceptions at all.
+   * `scripts/*.mjs` is a verification tool a human runs, not a process a compose file starts, and
+   * four of them legitimately name the variable — `runlet-launcher-check.mjs` and
+   * `launcher-control-plane-check.mjs` bind-mount the socket they name into the container they
+   * start; `runlet-launcher-inner.mjs` and `launcher-control-plane-launcher.mjs` hand it to
+   * `buildLauncher`/`startLauncher`. **None of the four constructs a client**, which is the property
+   * that survives an RCE and is asserted above with no exceptions at all: each composes
+   * `apps/launcher`'s own root rather than assembling a provider of its own.
    *
    * The second expectation is a **census, not an allow-list**: it fails when the set changes in either
    * direction, so a new script that reads the daemon's address is a visible diff rather than a
@@ -129,6 +146,10 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     const readers = filesMatching(READS_DOCKER_HOST);
     expect(readers.filter(isShippedRing)).toEqual(['apps/launcher/src/config.ts']);
     expect(readers.filter((file) => !isShippedRing(file))).toEqual([
+      // WP-53's two, beside WP-15g's two. Both start a launcher container; neither is a process a
+      // compose file starts.
+      'scripts/launcher-control-plane-check.mjs',
+      'scripts/launcher-control-plane-launcher.mjs',
       'scripts/runlet-launcher-check.mjs',
       'scripts/runlet-launcher-inner.mjs',
     ]);
@@ -165,5 +186,13 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     const sources = trackedSources();
     expect(sources.length).toBeGreaterThan(400);
     expect(sources.filter((file) => !isTestTier(file)).length).toBeGreaterThan(300);
+    // And the widened half is real rather than decorative: every untracked source git would let you
+    // commit is in the scope. On a clean checkout that set is empty and this says nothing; on the
+    // machine that just wrote a new file it is the difference between green here and red on the
+    // push, which is the failure rule 85 names.
+    const untracked = gitSources(['ls-files', '--others', '--exclude-standard']);
+    for (const file of untracked) {
+      expect(sources).toContain(file);
+    }
   });
 });
