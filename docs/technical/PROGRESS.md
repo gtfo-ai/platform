@@ -4079,8 +4079,9 @@ it. Cheapest is whoever next touches `apps/server/src/metrics.ts`; the same chan
 queue-depth alerting on `event_dispatch_pending`, which `docs/TODO.md` already records as open with no
 work package, so one row could take both.
 
-### 82. **An ask run is provisioned a container and a checkout it holds no tool to open, and two docblocks in the planner say it is not** (TODO, small, **latent** — no production path composes a provisioner today; **no work package owns it**; found by WP-31, session 5)
+### 82. **An ask run is provisioned a container and a checkout it holds no tool to open, and two docblocks in the planner say it is not** (TODO, small — **no longer latent**: WP-53 composed the first production provisioner at `565e84c`; **re-scoped from "no workspace" to "no checkout" and owned by WP-74**; found by WP-31, session 5)
 > **M4 (architect, session 6): folded into WP-53.**
+> **Re-scoped and re-owned (refiner, session 7): WP-53 shipped only the half that is pure correction — the two false planner docblocks — and its criterion (5) was met in part by an architect's ruling rather than by a narrowing. The remainder is `13-implementation-plan.md`'s **WP-74**, scheduled after WP-54 because WP-54 rewrites `TOOLS_BY_ROLE`, this predicate's input.** The ruling narrows what "done" means below, and is not WP-74's to re-open: **the predicate is no *checkout*, never no *container*** — `WorkspaceSpec.repo` becomes nullable, a tool-less spec skips `updateMirror` and the clone and **keeps** the container, the network, the egress sidecar and the control socket. Executing a tool-less run's CLI in the platform process is **out**, and the binding objection is TD-021's **decision body** (`docs/decisions/technical/TD-021-workspace-isolation.md:10`, *"the Agent SDK runs in the platform `runner` role and spawns `claude` inside the container"*) rather than the WP-15g amendment's Docker-client clause, which that path does not breach — the distinction is recorded because it is what a future reader will re-litigate. Two corrections to this entry's own text follow from the reframing and are left in place beside it rather than rewritten over it: the `kb`-skill coupling below **stops being a cost**, because with a container `#provisionSkills` still runs; and the paragraph headed *"Depends on / owner"* is superseded by this line.
 
 **What is wrong.** `createWorkspaceClaudeRunner` provisions a workspace for **every** `RunSpec`, with
 no predicate of any kind — `workspace = await options.provisioner.provision(spec)`
@@ -4140,6 +4141,9 @@ consequences for two other run kinds, which is why WP-31 filed it rather than sp
 Cheapest owner is whoever first composes a `RunWorkspaceProvisioner` in a production path — the
 launcher deployment behind **Q52**'s transport — because that is the commit on which the cost becomes
 real and the docblocks become false.
+*Superseded (refiner, session 7): that commit was WP-53 at `565e84c`, which corrected the docblocks
+and left the predicate. **WP-74 owns the remainder**, and the disposition line at the top of this
+entry carries the ruling it is built to.*
 
 ### 83. **`get_task_context` refuses for all ten roles that hold it, and its `include` vocabulary has no value for the two things an ask is about** (TODO — **no work package owns it**; the refusal has been recorded since WP-17 as *another entry's evidence* and never given a number; measured again by WP-31, session 5)
 > **M4 (architect, session 6): folded into WP-54.**
