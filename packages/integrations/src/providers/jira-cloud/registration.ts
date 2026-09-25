@@ -31,14 +31,26 @@ export interface JiraCloudRegistrationDeps {
 }
 
 /**
- * What an agent may be handed inside a run: **nothing**, for now.
+ * What an agent may be handed inside a run: **the `jira-ticket` recipes, and no CLI, server or
+ * credential** (WP-54).
  *
  * technical/06 is explicit that "mutating ticket/MR actions are exposed to agents only via the
  * platform MCP", and a read-only Jira CLI spec would have to state the environment variable names
  * a real CLI reads. Nobody here has run one, and a tooling spec is a promise the runner keeps
- * (it mounts what the spec names), so `null` is the honest answer until someone verifies it.
+ * (it mounts what the spec names), so `cli`, `mcp` and `env` stay empty — the shape
+ * `SENTRY_AGENT_TOOLING` already has.
+ *
+ * The **skill** is named because since WP-54 a skill is provisioned by *binding* as well as by
+ * role (PROGRESS backlog 40): the stage planner hands a run a provider skill only when one of the
+ * project's bindings names it here. Leaving this `null` would have withheld `jira-ticket` from
+ * every project, Jira-bound or not; the skill itself says the two CLIs are unauthenticated.
  */
-export const JIRA_CLOUD_AGENT_TOOLING: AgentTooling | null = null;
+export const JIRA_CLOUD_AGENT_TOOLING: AgentTooling | null = {
+  cli: null,
+  mcp: null,
+  skill: { id: 'jira-ticket', path: 'packages/prompts/skills/jira-ticket' },
+  env: { variables: [] },
+};
 
 /**
  * Everything about this provider that is true before an executor exists.

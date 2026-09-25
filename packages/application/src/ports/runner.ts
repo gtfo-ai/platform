@@ -370,8 +370,24 @@ export const reportProgressInputSchema = z.strictObject({
   percent_complete: z.int().min(0).max(100).optional(),
 });
 
+/**
+ * What `get_task_context` may be asked for. `runs` and `audit` joined at WP-54 (PROGRESS backlog
+ * 83): they are the two things an ask is asked about, and the platform holds both. The tool's input
+ * names **no task and no project** — the run's own come from `PlatformToolContext`, so a model
+ * cannot read another task's record by naming it.
+ */
+export const TASK_CONTEXT_INCLUDES = [
+  'ticket',
+  'artifacts',
+  'feedback',
+  'mr',
+  'ci',
+  'runs',
+  'audit',
+] as const;
+
 export const getTaskContextInputSchema = z.strictObject({
-  include: z.array(z.enum(['ticket', 'artifacts', 'feedback', 'mr', 'ci'])).min(1),
+  include: z.array(z.enum(TASK_CONTEXT_INCLUDES)).min(1),
 });
 
 export const kbSearchInputSchema = z.strictObject({

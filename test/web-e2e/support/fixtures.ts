@@ -774,6 +774,8 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
   sources: { version: 'default' },
   hash: 'fakehash1',
   computed_at: now,
+  // WP-54: the project declares no `commands.allow`, so nothing is ignored.
+  ignored_allow_commands: [],
   // WP-37: the platform's own suggestion, because no discovery run has proposed one here. The
   // project's `policies.risk_classes` is absent above — proposed is not applied.
   risk_class_proposal: {

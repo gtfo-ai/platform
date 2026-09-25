@@ -98,6 +98,19 @@ const SESSION = 'fake-session-e2e';
  * recorded cost is unchanged and no other test's arithmetic moves.
  */
 
+/**
+ * Shell commands a scripted run makes, and the host directory they run in (WP-54).
+ *
+ * The directory stands in for the container's `/work/repo` — a fixture repository the test wrote —
+ * and each command goes through the production `PreToolUse(Bash)` hook and, on `ask`, the production
+ * `canUseTool`; it is executed only if the platform allowed it (`fake-spawn.ts`, divergence 4 and 7).
+ * So what a test asserts is what the **command** produced, never a verdict string.
+ */
+export interface ScenarioBash {
+  readonly commands: readonly string[];
+  readonly workdir: string;
+}
+
 /** The model a sub-agent uses in the scripted result; cheap and different from the run's own. */
 export const SUBAGENT_MODEL = 'claude-haiku-4-5';
 
@@ -118,6 +131,8 @@ export const fakeCliScriptFor = (
      * assertion that matters (standing rule 82).
      */
     readonly awaitSteers?: number;
+    /** Bash tool calls this run makes after reading its prompt (WP-54) — see {@link ScenarioBash}. */
+    readonly bash?: ScenarioBash;
   },
 ): runnerAdapters.FakeCliScript => {
   const stage = spec.stage ?? 'stage';
@@ -146,6 +161,12 @@ export const fakeCliScriptFor = (
     // Until the SDK has written the prompt, nothing below runs — which is what makes the stdin
     // assertion an assertion about a real exchange rather than about a buffer.
     { step: 'await_user' },
+    // WP-54: the Bash calls, each through the real hook and — when allowed — really executed.
+    ...(scenario.bash?.commands ?? []).map((command, index) => ({
+      step: 'bash' as const,
+      command,
+      tool_use_id: `toolu_${stage}_${String(index + 1)}`,
+    })),
     {
       step: 'emit',
       message: {
@@ -241,6 +262,7 @@ export const scriptedWorkspaces = (
     readonly structuredOutput: unknown;
     readonly costUsd?: number;
     readonly awaitSteers?: number;
+    readonly bash?: ScenarioBash;
   },
   /**
    * Called — and **awaited** — inside `provision`, before the CLI exists.
@@ -260,8 +282,10 @@ export const scriptedWorkspaces = (
       provision: async (spec) => {
         const stage = spec.stage ?? '';
         await onSpec?.(spec);
+        const scenario = scenarioFor(stage);
         const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
-          fakeCliScriptFor(spec, scenarioFor(stage)),
+          fakeCliScriptFor(spec, scenario),
+          scenario.bash === undefined ? {} : { workdir: scenario.bash.workdir },
         );
         runs.push({ stage, spec, cli });
         return {

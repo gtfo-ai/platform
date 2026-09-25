@@ -924,6 +924,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         workspacePath: (taskId: Id) => `/workspaces/${taskId}`,
         prompts: harnessRolePrompts(),
         skills: harnessSkills(),
+        // The harness's integrations are fakes whose registrations declare no agent tooling, so no
+        // binding names a provider skill — which is what production answers for them too (WP-54).
+        boundSkills: async () => [],
         // Deterministic and distinct per run: a constant would make the delimiter predictable, and
         // the executor's own ids are already the harness's one source of "unique".
         nonce: { next: () => nonceFor(ids.next()) },

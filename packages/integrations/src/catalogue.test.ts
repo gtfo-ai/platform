@@ -150,6 +150,7 @@ describe('the shipped provider catalogue', () => {
         secretFields: [],
         setupGuidePath: 'packages/integrations/src/providers/nope/setup-guide.md',
         inboundWebhook: false,
+        agentTooling: null,
       }),
     ).rejects.toThrow();
   });

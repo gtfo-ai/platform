@@ -80,8 +80,10 @@ produces two things:
 - **drafted knowledge pages**, which arrive as proposals rather than as commits.
 
 Three of the criteria are the platform's own answer and are never taken from what the model claims,
-and the "what this unlocks" text is the platform's, never the agent's. The discovery agent's shell is
-read-only.
+and the "what this unlocks" text is the platform's, never the agent's. The discovery agent's shell
+reads the repository and runs the project's own declared commands — its test, lint and setup
+commands, and the lockfile install they need — so R1, R2 and R6 are answered by running them. It
+cannot commit, push or add a dependency, and nothing it writes is kept.
 
 Readiness is evaluated **once, here**. Nothing re-checks it after a task merges yet.
 

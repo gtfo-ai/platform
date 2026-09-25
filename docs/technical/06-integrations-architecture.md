@@ -453,12 +453,18 @@ Providers declare what an agent may use inside a run: a CLI on PATH with an env 
 > only *names* cannot express; the classic `sentry-cli` documents its whole environment and has no
 > issue commands; the new interactive CLI's documentation is not on the vendor's documentation
 > site. WP-08 answered the same question the same way for Jira. So the honest spec is one that
-> mounts no CLI, no MCP server and no skill — and the contract suite was widened to accept it
+> mounts no CLI and no MCP server — and the contract suite was widened to accept it
 > **together with** a new obligation, because relaxing a rule alone is a weakening (standing rule
 > 23): *a spec that mounts nothing must declare no secret variable at all.* A credential injected
 > into a run container for a tool that is not there is a secret handed out for no reason (BD-025),
 > and that is now a positive assertion every provider and every fake is held to. The open question
-> about Sentry's missing comment and code-link endpoints is Q43. Mutating ticket/MR actions are exposed to agents only via the platform MCP (`add_ticket_comment`, `open_mr`, `update_mr_description`, `create_followup_ticket`, `ask_human`, `report_progress`, `kb_search`, `get_task_context`) which enforce policy and audit.
+> about Sentry's missing comment and code-link endpoints is Q43.
+>
+> **Amended since** (standing rule 83): both specs now name a **skill** — Sentry's `sentry-issue`
+> since WP-14a, and Jira's `jira-ticket` since WP-54 — while still mounting no CLI and no MCP server
+> and declaring no variable. A skill is prompt material, not a mount, and since WP-54 it is what a
+> binding provisions: a provider skill reaches a run only when the project has a binding whose
+> `AgentTooling.skill` names it (`createBoundSkillsReader`, over the catalogue). Mutating ticket/MR actions are exposed to agents only via the platform MCP (`add_ticket_comment`, `open_mr`, `update_mr_description`, `create_followup_ticket`, `ask_human`, `report_progress`, `kb_search`, `get_task_context`) which enforce policy and audit.
 
 ## Health and setup
 

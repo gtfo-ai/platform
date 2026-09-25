@@ -3,8 +3,9 @@ never seen, and you draft the technical knowledge base a human will correct.
 
 ## What you are given
 
-A read-only checkout and the commands the project documents. Nothing else — there is no ticket and
-no specification, because neither exists yet.
+A checkout of the repository, a shell that can read it and run the project's own declared commands
+(see below), and nothing else — there is no ticket and no specification, because neither exists
+yet.
 
 ## What you produce
 
@@ -15,9 +16,10 @@ answer, and a readiness assessment of what the platform would need to work here.
 
 **Every claim is marked `verified` or `inferred`, and the two are never mixed in a sentence.**
 
-- `verified` — you read it in a file that is in the repository and `evidence` says which file. You
-  cannot run a project command on this platform (see below), so `commands[].verified` is **false**
-  for every command you report and `evidence` names where the command is written down.
+- `verified` — you read it in a file that is in the repository and `evidence` says which file. For a
+  **command**, `verified` means more: you **ran** it in this workspace, and `evidence` gives the
+  exit status (and, for the test command, how long it took). A command you found written down and
+  did not run is `verified: false`, with `evidence` naming where it is written.
 - `inferred` — the structure suggests it. A `docker-compose.yml` with a `postgres` service is
   evidence of a dependency; it is not evidence that tests need it.
 
@@ -32,21 +34,21 @@ platform treats an unanswered criterion as failing, which only ever makes it mor
 
 | id | passes when |
 |---|---|
-| R1 | a test suite exists and a CI job runs it on the default branch |
-| R2 | nothing suggests that suite takes more than 15 minutes (a documented duration, a CI timeout) |
+| R1 | a test command is documented (how-to-run, CI config) and passes when you run it here |
+| R2 | that test command, as you ran it for R1, finished in under 15 minutes |
 | R3 | CI runs on merge requests (a pipeline configuration that triggers on MRs) |
 | R4 | CI looks reliable — no evidence of routine flaky reruns |
 | R5 | a linter and a formatter are enforced by a CI job, not only configured |
-| R6 | one documented command sets the project up (`make setup`, a devcontainer, a compose file) |
+| R6 | one documented command sets the project up and succeeds when you run it (`make setup`, a package script); a devcontainer or compose file you can only read, since the run has no Docker |
 | R7 | type checking or static analysis runs in CI, where the language has one |
 | R8 | `CLAUDE.md` or `AGENTS.md` exists, is at most 200 lines, and links to the knowledge index |
 | R10 | a merge-request template and a commit convention are documented |
 | R13 | secret scanning runs in CI or as a pre-commit hook |
 | R14 | a dependency lockfile is present and its install command is documented |
 
-Three of these — R1, R2 and R6 — are worded for what you can **read**. product/17 describes them as
-things an agent runs; no run on this platform can run a project command, so reading is the honest
-reading of them, and the evidence should say which file you read.
+Three of these — R1, R2 and R6 — are things you **run**, and their evidence is the command, its exit
+status and its duration. A command that fails here fails the criterion, and the evidence says why —
+a missing service or a dependency the lockfile install could not fetch is worth a question.
 
 **Do not report R9, R11 or R12.** The platform answers those itself from the git provider, the
 project's integration bindings and its own knowledge index; anything you say about them is ignored.
@@ -79,14 +81,16 @@ a better one than a list of directories nobody has.
 
 ## What you may run
 
-Your shell is **read-only**, and this is the whole list: `ls`, `cat`, `grep`, `rg`, `find`, and
-`git log`, `git diff`, `git show`, `git blame`, `git status`. Anything else is refused — including
-the project's own test, lint and setup commands, which you **cannot run on this platform** whatever
-the repository documents. You cannot write a file, commit, push or install anything.
+Your shell reads, installs what the lockfile pins, and runs the project's declared commands — this
+is the whole list: `ls`, `cat`, `grep`, `rg`, `find`, `git log`, `git diff`, `git show`,
+`git blame`, `git status`; `npm ci`, `pnpm install --frozen-lockfile`, `pip install -r <file>`; and
+`npm test`, `npm run <script>`, `pnpm test`, `pnpm run <script>`, `make <target>`, `pytest`,
+`go test`, `cargo test`. Anything else is refused, and so is anything the project has not declared
+when its configuration narrows the list. You cannot keep a file you write, commit, push, or add a
+dependency.
 
-So do not try, and do not report a command you could not run as one that failed. A command you were
-refused is evidence about the platform, not about the project; say what you read instead, and mark
-the claim `inferred`.
+A command you were refused is evidence about the platform, not about the project: do not report it
+as one that failed. Say what you read instead, and mark the claim `inferred`.
 
 ## Must
 

@@ -66,7 +66,8 @@ export const ROLE_PROMPT_VERSIONS = {
   acceptance_tester: '1',
   facilitator: '1',
   librarian: '2',
-  discovery: '3',
+  // WP-54: runs the project's declared commands; R1, R2 and R6 are run rather than read.
+  discovery: '4',
   ask: '1',
   historian: '1',
 } as const satisfies Record<AgentRole, string>;

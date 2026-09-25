@@ -28,12 +28,12 @@
  *  - **`flaky`** — refused. product/04:65 says it in the platform's own words: *"The tamper check,
  *    the reproduction gate and flaky detection are not implemented"*, so no signal exists to brief a
  *    run on.
- *  - **`lint`** — refused. PROGRESS backlog **49**: no run of any role may execute a project
- *    command on this build — `DEFAULT_IMPLEMENTATION_ALLOW` grants no test, lint, format or build
- *    command, a project may only *narrow* the maximum (BD-025 §2), and an unmatched command falls to
- *    `ask`, which an unattended run denies. Q69 is the product half. A lint-debt chore is exactly a
- *    task whose whole content is running the project's linter, so this one is refused rather than
- *    started to produce a list of refusals.
+ *  - **`lint`** — refused. It was refused for PROGRESS backlog **49** — no run of any role could
+ *    execute a project command, so a lint-debt run could not run the linter it exists for — and
+ *    **WP-54 closed that** (Q69 (ii): the implementation baseline carries the project's declared
+ *    commands). Turning the chore on is a change to what a scheduled chore *does* — its brief, its
+ *    finding and its budget — and is recorded as discovered work rather than switched on in the
+ *    change that made it possible, so the refusal stands and its reason says why.
  *
  * A refusal here is **not** a silent skip anywhere: the scheduler logs it by name, reports it, and
  * the wizard's own feature card names which chore types this build performs.
@@ -104,7 +104,7 @@ export const MAINTENANCE_CHORES = {
     does: 'pay down lint debt',
     refusal: 'no_project_command',
     detail:
-      'no run of any role may execute a project command on this build (PROGRESS backlog 49, Q69): the shipped command maximum grants no lint, test, format or build command and a project may only narrow it, so a lint-debt run could not run the linter it exists for',
+      'this build schedules no lint-debt chore: it was refused because no run could execute a project command (PROGRESS backlog 49), which WP-54 closed, and turning the chore on is recorded as a change of its own rather than made silently',
   },
   kb: {
     does: 'clear the knowledge-base findings the nightly hygiene pass recorded',

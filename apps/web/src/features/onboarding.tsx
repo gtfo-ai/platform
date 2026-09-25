@@ -365,11 +365,13 @@ export const OnboardingScreen = (): ReactElement => {
             </p>
             <OperatingMode projectId={project.id} />
             <p className="text-xs text-fg-muted">
-              The command policy is <strong>not</strong> editable here, and that is a limit of the
-              platform rather than of this screen: a project may only <em>narrow</em> the
-              organisation maximum (BD-025), so an entry it adds that the maximum does not grant is
-              ignored. Running a project&rsquo;s own test command therefore needs the organisation
-              maximum widened, which nothing in this build exposes.
+              The command policy is <strong>not</strong> editable here. Each role&rsquo;s runs start
+              from a shipped baseline that already carries the project&rsquo;s own test, lint and
+              build commands (<code>npm test</code>, <code>npm run &hellip;</code>,{' '}
+              <code>make &hellip;</code> and the like) for the roles that run them, and a project
+              may only <em>narrow</em> that baseline (BD-025) through <code>commands</code> in{' '}
+              <code>.agentic/config.yml</code>. An entry no role is granted is ignored and listed on
+              the project&rsquo;s configuration rather than dropped in silence.
             </p>
           </>
         )}

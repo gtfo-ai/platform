@@ -10,13 +10,13 @@
  * at one of the same directories — so standing rule 23 puts the obligation in a shared suite rather
  * than in one side's own tests.
  *
- * **This is the only thing that reads a provider's `skill` ref.** Said plainly, because until
- * WP-14a nothing read it at all (`skillRefSchema` was declared and unused, and GitLab's ref named a
- * directory that did not exist). Provisioning is **role-driven**: a run gets the skills its role's
- * row lists, whether or not the project has a binding for the provider that also names one.
- * Narrowing it to a project's actual bindings is in the ledger's discovered work; until then, a
- * ref's job is to tell an operator reading the provider which recipes an agent has, and this file's
- * job is to keep that statement true.
+ * **A provider's `skill` ref provisions the skill since WP-54** (PROGRESS backlog 40). Until WP-14a
+ * nothing read it at all (`skillRefSchema` was declared and unused, and GitLab's ref named a
+ * directory that did not exist), and from WP-14a to WP-54 only this file did while provisioning was
+ * by role alone. Now a provider skill reaches a run only when a binding of the project names it
+ * (`createBoundSkillsReader` → the planner's `skillsFor`), so the ref is load-bearing — and this
+ * file holds the planner's own list of provider skills ({@link PROVIDER_SKILLS}) equal to the
+ * union of the refs, in both directions.
  *
  * **And what a skill *claims* is tied to what the platform actually does** (review of WP-14a, rules
  * 44 and 86). A skill is prompt material a model acts on, and four of the ten said a CLI was
@@ -63,13 +63,23 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { AgentTooling } from '@platform/application';
-import { PLATFORM_TOOLS_BY_ROLE, SKILLS_BY_ROLE } from '@platform/application';
+import {
+  COMMAND_ALLOW_BY_SKILL,
+  commandBaselineFor,
+  PLATFORM_TOOLS_BY_ROLE,
+  PROVIDER_SKILLS,
+  SKILLS_BY_ROLE,
+  skillsFor,
+  TOOLS_BY_ROLE,
+} from '@platform/application';
 import { agentRoleSchema } from '@platform/contracts';
+import { evaluateCommand } from '@platform/domain';
 import {
   gitlabAgentTooling,
   JIRA_CLOUD_AGENT_TOOLING,
   LOKI_AGENT_TOOLING,
   SENTRY_AGENT_TOOLING,
+  SHIPPED_PROVIDERS,
   slackAgentTooling,
 } from '@platform/integrations';
 import { PLATFORM_SKILL_NAMES, PLATFORM_SKILLS, platformSkillPath } from '@platform/prompts';
@@ -323,6 +333,113 @@ describe('the role table, continued', () => {
       if (tool !== undefined) {
         expect(tools, `${role} has ${name} but not ${tool}`).toContain(tool);
       }
+    }
+  });
+});
+
+/**
+ * **The SDK half of the role table** (WP-54, PROGRESS backlog 39 — criterion 5).
+ *
+ * The census above maps five skills onto **platform** tools, so no skill mapped onto an **SDK**
+ * tool and the investigator's missing `Bash` could not fail it: `loki-logs` and `sentry-issue`,
+ * whose whole content is command recipes, were handed to a role that could run no command. Two
+ * properties, over every member of the role schema:
+ *
+ *  1. a skill whose recipes are shell commands — read off the file's own `bash` fences, not off a
+ *     list here — goes only to a role holding `Bash`;
+ *  2. every recipe line in those fences is **allowed** by the policy of every role that holds the
+ *     skill (with every provider bound, the widest the skill set can be), at the fallback a run
+ *     really uses. A recipe the policy denies is text the run cannot act on.
+ *
+ * Recipe lines are normalised the way a model would type them: a trailing `# comment` is dropped
+ * and a `<placeholder>` becomes a value. What this cannot see: a recipe written in prose rather than
+ * in a fence (`gitlab-mr`'s `grep` pipe is in a sentence), and whether the binary is on the run
+ * image's path (`IMAGE_CLIS` above answers that for the provider CLIs).
+ */
+const recipeLinesOf = (text: string): readonly string[] =>
+  [...text.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)]
+    .flatMap((match) => (match[1] as string).split('\n'))
+    .map((line) =>
+      line
+        .replace(/\s+#.*$/, '')
+        .replace(/<[a-z-]+>/g, '1')
+        .trim(),
+    )
+    .filter((line) => line.length > 0);
+
+const SHELL_SKILLS: readonly string[] = PLATFORM_SKILL_NAMES.filter(
+  (name) => recipeLinesOf(PLATFORM_SKILLS[name]?.text ?? '').length > 0,
+);
+
+describe('the role table, the SDK half', () => {
+  it('reads which skills are shell recipes off the files', () => {
+    // Measured, not declared: the five whose SKILL.md carries a `bash` fence today.
+    expect([...SHELL_SKILLS].sort()).toEqual([
+      'gitlab-mr',
+      'jira-ticket',
+      'loki-logs',
+      'sentry-issue',
+      'verify-work',
+    ]);
+  });
+
+  it.each([...agentRoleSchema.options])(
+    '%s: is handed a shell-recipe skill only if it holds Bash, and can run every recipe in it',
+    (role) => {
+      const skills = skillsFor(role, PROVIDER_SKILLS);
+      const policy = commandBaselineFor(role, 'implementation', skills);
+      for (const name of skills.filter((skill) => SHELL_SKILLS.includes(skill))) {
+        expect(TOOLS_BY_ROLE[role], `${role} has ${name} but no Bash`).toContain('Bash');
+        for (const line of recipeLinesOf(PLATFORM_SKILLS[name]?.text ?? '')) {
+          expect(
+            evaluateCommand({ command: line }, policy, 'ask').verdict,
+            `${role} / ${name}: ${line}`,
+          ).toBe('allow');
+        }
+      }
+    },
+  );
+
+  /**
+   * The other direction (rules 12 and 43): the property above is worth having only if it can fail,
+   * and the payload must be one only *this* rule rejects. The investigator's `logcli` recipe is
+   * allowed with the skill's patterns and denied without them — so a table that forgot the skill
+   * layer fails the case above by name.
+   */
+  it('fails a recipe the role policy does not grant', () => {
+    const recipe = recipeLinesOf(PLATFORM_SKILLS['loki-logs']?.text ?? '')[0] as string;
+    expect(recipe).toMatch(/^logcli query /);
+    expect(
+      evaluateCommand(
+        { command: recipe },
+        commandBaselineFor('investigator', 'investigation', ['loki-logs']),
+        'ask',
+      ).verdict,
+    ).toBe('allow');
+    expect(
+      evaluateCommand(
+        { command: recipe },
+        commandBaselineFor('investigator', 'investigation', []),
+        'ask',
+      ).verdict,
+    ).toBe('ask');
+  });
+
+  it('names as provider skills exactly the skills the providers’ tooling names', () => {
+    const named = Object.values(TOOLING)
+      .map((tooling) => tooling?.skill?.id ?? null)
+      .filter((id): id is string => id !== null)
+      .sort();
+    expect([...PROVIDER_SKILLS].sort()).toEqual(named);
+    // …and the catalogue — what `createBoundSkillsReader` actually reads — carries each provider's
+    // own tooling, so the skill a binding provisions is the one its registration names.
+    for (const entry of SHIPPED_PROVIDERS) {
+      expect(entry.agentTooling, entry.id).toEqual(TOOLING[entry.id] ?? null);
+    }
+    // …and every skill that brings command patterns is one of them, so a grant always follows a
+    // binding.
+    for (const skill of Object.keys(COMMAND_ALLOW_BY_SKILL)) {
+      expect(PROVIDER_SKILLS, skill).toContain(skill);
     }
   });
 });

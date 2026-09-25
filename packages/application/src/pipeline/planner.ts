@@ -32,6 +32,7 @@
 import type {
   AgentRole,
   ArtifactType,
+  CommandPolicy,
   CommunicationLanguage,
   ContextPackRecord,
   Id,
@@ -45,7 +46,9 @@ import {
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
+  DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
+  DEFAULT_VERIFICATION_ALLOW,
   DISCOVERY_TEMPLATE_ID,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isPromptExcludedArtifact,
@@ -161,8 +164,8 @@ export const PLATFORM_TOOLS_DENIED_BY_STAGE: Readonly<Record<string, readonly Pl
  * structural rather than a convention. Every entry must be a literal spelling **product/19 §3 lists
  * for that stage**: a stage layer is where a documented default is put, not where one is invented
  * (the allow-side twin of `DECLINED_BLOCK_VARIANTS`' standing rule). And it is applied *before*
- * `narrowCommandPolicy`, so a project's own `commands.allow` still drops what it does not list and
- * reports it in `ignoredAllow`.
+ * `narrowCommandPolicy` — which since Q97 (WP-54 review round 1) narrows only the project-command
+ * class, so a project's `commands.allow` no longer drops a stage's addition; `block` removes one.
  *
  * The only entry is the rebase gate's conflict resolution (WP-26, BD-030), whose four merge
  * spellings and their argument are {@link CONFLICT_RESOLUTION_EXTRA_ALLOW}.
@@ -172,83 +175,179 @@ export const COMMAND_ALLOW_BY_STAGE: Readonly<Record<string, readonly string[]>>
 };
 
 /**
+ * The three shipped command baselines a role's run can start from (BD-025 §2, Q69 (ii), WP-54).
+ *
+ * A baseline is the **per-role default below the organisation maximum** that BD-025 §2's *"Defaults
+ * ship per stage; the organisation sets the maximum; projects can only narrow it"* describes, and
+ * a project's `commands.allow` narrows it (`narrowCommandPolicy`). Each is product/19 §3's list for
+ * the kind of stage the role runs:
+ *
+ *  - `read_only` — the read-only stages' exploration verbs (`DEFAULT_READ_ONLY_ALLOW`);
+ *  - `verification` — the same, plus the project's declared commands and the lockfile installs they
+ *    need (`DEFAULT_VERIFICATION_ALLOW`): product/19 §3's *"the project's test/lint commands (review
+ *    stages only)"* and product/13's *"tests only"* / *"tests/app cmds"*;
+ *  - `implementation` — `DEFAULT_IMPLEMENTATION_ALLOW`, which since WP-54 carries the project's
+ *    declared commands as well (`PROJECT_COMMAND_ALLOW`).
+ *
+ * `ask` and `block` are the shipped lists in all three: a baseline chooses what is **allowed**, and
+ * an entry that is not allowed falls to `ask`, which an unattended run denies.
+ */
+export type CommandBaseline = 'read_only' | 'verification' | 'implementation';
+
+const BASELINE_ALLOW: Readonly<Record<CommandBaseline, readonly string[]>> = {
+  read_only: DEFAULT_READ_ONLY_ALLOW,
+  verification: DEFAULT_VERIFICATION_ALLOW,
+  implementation: DEFAULT_IMPLEMENTATION_ALLOW,
+};
+
+/**
  * Which **command baseline** a role's run starts from, before the project narrows it (BD-025).
  *
  * A third least-privilege table beside {@link TOOLS_BY_ROLE} and {@link PLATFORM_TOOLS_BY_ROLE},
- * added at WP-21's review round 2, and a **table rather than a derived rule** on purpose. The
- * obvious derivation — "a role with no `Write`/`Edit` gets the read-only list" — would also narrow
- * the **acceptance tester**, whose product/13 row is "tests/app cmds" and which installs to boot the
- * app; silently changing another role's policy inside a review round is not a narrowing anybody
- * decided. So the roles are listed, and `planner.test.ts` enumerates them.
+ * added at WP-21's review round 2 and made **per role** by WP-54 (Q69 (ii)): before it the table
+ * chose between two lists, neither of which named a single project command, so no run of any role
+ * could execute one (PROGRESS backlog 49). It is a **table rather than a derived rule** on purpose —
+ * "a role with no `Write` gets the read-only list" would give the acceptance tester, whose product/13
+ * row is "tests/app cmds", no test command at all — and `planner.test.ts` enumerates it against
+ * product/13's Shell column for every member of the role schema.
+ *
+ * **An entry for a role with no `Bash` decides nothing that can happen**, so every such entry is
+ * `read_only`: a table whose unreachable entry is the permissive one becomes wrong the day somebody
+ * adds `Bash` to that role's row (standing rule 20's direction, applied to a default).
  */
-export const COMMAND_BASELINE_BY_ROLE: Readonly<Record<AgentRole, 'read_only' | 'implementation'>> =
-  {
-    triager: 'implementation',
-    product_manager: 'implementation',
-    investigator: 'implementation',
-    architect: 'implementation',
-    developer: 'implementation',
-    reviewer: 'implementation',
-    acceptance_tester: 'implementation',
-    facilitator: 'implementation',
-    librarian: 'implementation',
-    // The one role that reads a repository nobody has reviewed yet, at first contact.
-    discovery: 'read_only',
-    /**
-     * The ask has **no shell at all** (`TOOLS_BY_ROLE.ask` is empty), so this entry decides nothing
-     * that can happen — and it is `read_only` rather than `implementation` because a table whose
-     * unreachable entry is the permissive one is a table that becomes wrong the day somebody adds
-     * `Bash` to the row above (standing rule 20's direction, applied to a default).
-     */
-    ask: 'read_only',
-    /**
-     * The miner has **no shell** (`TOOLS_BY_ROLE.historian` has no `Bash`), so this entry decides
-     * nothing that can happen today — and it is `read_only` for the reason `ask`'s is: the
-     * unreachable entry must be the conservative one, or the table becomes wrong the day somebody
-     * adds `Bash` to the row above.
-     */
-    historian: 'read_only',
-  };
+export const COMMAND_BASELINE_BY_ROLE: Readonly<Record<AgentRole, CommandBaseline>> = {
+  // No SDK tool at all.
+  triager: 'read_only',
+  // product/13: Shell "–"; no `Bash`.
+  product_manager: 'read_only',
+  // product/13: "read-only cmds" — `Bash` since WP-54 (PROGRESS backlog 39, docs win).
+  investigator: 'read_only',
+  // product/13: "read-only cmds" — `Bash` since WP-54, for the same reason.
+  architect: 'read_only',
+  // product/13: "✔ (allow-listed)".
+  developer: 'implementation',
+  // product/13: "tests only" — `Bash` since WP-54.
+  reviewer: 'verification',
+  // product/13: "tests/app cmds". Narrowed from `implementation` at WP-54: the role has no git
+  // write in product/13 (Git push "–"), and `implementation` let it `git add|commit|rebase` and
+  // push to `agentic/*` — stopped only by a read-only run minting no git credential.
+  acceptance_tester: 'verification',
+  // product/13: Retrospective Shell "–"; no `Bash`.
+  facilitator: 'read_only',
+  // product/13: Shell "–"; `Edit`/`Write` inside the knowledge directory, no `Bash`.
+  librarian: 'read_only',
+  /**
+   * `verification` since WP-54, so product/17's R1, R2 and R6 are detected the way product/17 and
+   * product/19 §5 word them — *"discovery finds a test command and runs it in the workspace"* —
+   * rather than by reading CI configuration. It was `read_only` because nothing else could run a
+   * project command either; the role still has no `Write`, no `Edit`, no mutating platform tool and
+   * no git credential (`runIsReadOnly`), so what the shell produces cannot be kept.
+   */
+  discovery: 'verification',
+  // No shell at all (`TOOLS_BY_ROLE.ask` is empty).
+  ask: 'read_only',
+  // No shell at all (`TOOLS_BY_ROLE.historian` is empty).
+  historian: 'read_only',
+};
 
 /**
- * SDK tools per role: only the developer writes to the workspace, and two roles run a command
+ * Command patterns a **platform skill** brings with it — the read verbs its own recipes use
+ * (WP-54, PROGRESS backlog 39).
+ *
+ * product/13 gives the investigator and the developer *observability*, and `SKILLS_BY_ROLE` hands
+ * them `loki-logs` and `sentry-issue`, whose whole content is `logcli` and `sentry-cli` recipes. No
+ * baseline names either binary, so until this table a role holding the skill and `Bash` still had
+ * every recipe denied. The grant follows the **skill**, which follows the **binding** (a project
+ * with no Loki binding provisions no `loki-logs`, {@link PROVIDER_SKILLS}), so a project that has no
+ * Loki grants no `logcli` either.
+ *
+ * Every entry is a **read** that a recipe in the skill's own `SKILL.md` spells, and the contract
+ * test `test/contract/prompts/platform-skills.contract.test.ts` runs every recipe line of every
+ * shell skill through the policy of every role that holds it. It adds to `allow` only, before the
+ * project narrows, like {@link COMMAND_ALLOW_BY_STAGE}. What bounds these binaries beyond the name
+ * is the run's egress allow-list, which names the model host and the git host and nothing else
+ * (`packages/infrastructure/src/workspace/spec.ts`), and a credential no run is given.
+ */
+export const COMMAND_ALLOW_BY_SKILL: Readonly<Record<string, readonly string[]>> = {
+  'loki-logs': ['logcli query *'],
+  'sentry-issue': [
+    'sentry-cli issues list *',
+    'sentry-cli events list *',
+    'sentry-cli issues --help',
+  ],
+  'jira-ticket': ['acli jira workitem view *', 'jira issue view *', 'jira issue list *'],
+  'gitlab-mr': [
+    'glab mr view *',
+    'glab mr diff *',
+    'glab mr note list *',
+    'glab ci status',
+    'glab ci trace *',
+  ],
+};
+
+/**
+ * The platform skills that describe a **provider** — provisioned only when the project has a
+ * binding whose provider's `AgentTooling.skill` names it (WP-54, PROGRESS backlog 40).
+ *
+ * Before WP-54 a skill was provisioned by role alone, so an investigator run of a project with no
+ * Loki binding was handed `loki-logs` — recipes for a system the project does not have — and
+ * `AgentTooling.skill` was read by nothing but a contract test. The set is written here rather
+ * than read off the registry because this ring cannot import the registrations; the contract test
+ * holds it equal, in both directions, to the union of the shipped providers' `AgentTooling.skill`.
+ */
+export const PROVIDER_SKILLS: readonly string[] = [
+  'gitlab-mr',
+  'jira-ticket',
+  'loki-logs',
+  'sentry-issue',
+];
+
+/**
+ * The skills a run of `role` is provisioned with, given the provider skills its project's bindings
+ * name: the role's row, minus every provider skill no binding names.
+ *
+ * A subtraction from {@link SKILLS_BY_ROLE}, never a union — a binding cannot hand a role a skill
+ * the role's row does not list.
+ */
+export const skillsFor = (role: AgentRole, boundSkills: readonly string[]): readonly string[] =>
+  (SKILLS_BY_ROLE[role] ?? []).filter(
+    (name) => !PROVIDER_SKILLS.includes(name) || boundSkills.includes(name),
+  );
+
+/**
+ * SDK tools per role: only the developer writes to the workspace, and six roles run a command
  * (BD-021).
  *
- * **`discovery` has `Bash`, on the read-only command baseline** (WP-21, narrowed at its review
- * round 2). {@link COMMAND_BASELINE_BY_ROLE} gives it `DEFAULT_READ_ONLY_ALLOW` — `ls`, `cat`,
- * `grep`, `rg`, `find` and `git log|diff|show|blame|status` — so the shell reads a repository and
- * writes nothing. Round 1 left it on the implementation baseline, which also allows
- * `git add|commit|fetch|rebase`, `git push origin agentic/*`, `npm ci` and `pip install -r *`; the
- * push was stopped only by a read-only run minting no git credential, which is a second mechanism
- * doing a first mechanism's job. What it gains over `Read`/`Glob`/`Grep` is the git history — the
- * commit convention R10 is about, and the activity a newcomer reads first.
+ * **`Bash` follows product/13's Shell column, for every role** (WP-54, PROGRESS backlog 39: the
+ * docs win). The investigator and the architect ("read-only cmds") and the reviewer ("tests only")
+ * had no `Bash` until WP-54 while product/13 gave them one; `planner.test.ts` now enumerates every
+ * member of the role schema against a transcription of that column, so the two tables cannot
+ * disagree again without a test failing. What each shell may run is the role's command baseline —
+ * {@link COMMAND_BASELINE_BY_ROLE} — narrowed by the project, and what it can keep is decided here:
+ * only the developer and the librarian have `Edit`/`Write`, and a run with neither mints no git
+ * credential (`runIsReadOnly`).
  *
- * **What no run of any role can do on this build, stated because product/17 assumes otherwise.**
- * Run the project's test, lint or setup command. The **org maximum** is `DEFAULT_COMMAND_POLICY`
- * and a project may only *narrow* it (`narrowCommandPolicy`: an `allow` entry the maximum does not
- * grant is dropped and reported in `ignoredAllow`), the maximum contains no test command —
- * `npm test` is technical/12's *example* `.agentic/config.yml`, not a platform default — and
- * nothing in this build lets an operator widen the maximum. product/17 detects R1 and R6 "executed
- * in the workspace" and R2 "measured"; none of the three is possible. `READINESS_CRITERIA` says at
- * each of them what a run can establish instead, and the gap between that reading and product/17's
- * wording is `PROGRESS.md`'s discovered work rather than a sentence smoothed over here.
+ * **`discovery` has `Bash` on the `verification` baseline** (WP-21, widened at WP-54): the read
+ * verbs — `ls`, `cat`, `grep`, `rg`, `find`, `git log|diff|show|blame|status` — plus the project's
+ * declared commands and the lockfile installs, so product/17's R1, R2 and R6 are detected by running
+ * the project's own commands, as product/17 words them. It writes nothing it can keep: no `Edit`,
+ * no `Write`, no mutating platform tool, no git credential.
  *
- * **product/13's least-privilege table had no Discovery row** when this was written — the role is
- * described in § "Discovery agent (onboarding, Step 2)" and was missing from § "Tools per role".
- * The orchestrator owns that amendment; the row is `Read`/`Glob`/`Grep` plus a **read-only** shell,
- * no write, no push, no observability, no KB write, no `ask_human`.
+ * **product/13's least-privilege table had no Discovery row** when WP-21 wrote the role; the
+ * orchestrator added one naming the read-only list, and WP-54's widening needs that row amended
+ * (named in the WP-54 notes in `PROGRESS.md`).
  */
 export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   triager: [],
   product_manager: ['Read', 'Glob', 'Grep'],
-  investigator: ['Read', 'Glob', 'Grep'],
-  architect: ['Read', 'Glob', 'Grep'],
+  investigator: ['Read', 'Glob', 'Grep', 'Bash'],
+  architect: ['Read', 'Glob', 'Grep', 'Bash'],
   developer: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
-  reviewer: ['Read', 'Glob', 'Grep'],
+  reviewer: ['Read', 'Glob', 'Grep', 'Bash'],
   acceptance_tester: ['Read', 'Glob', 'Grep', 'Bash'],
   facilitator: ['Read', 'Glob', 'Grep'],
   librarian: ['Read', 'Glob', 'Grep', 'Edit', 'Write'],
-  // `Bash` under BD-025's command policy — see the docblock. It writes nothing: no `Edit`, no
+  // `Bash` under BD-025's command policy — see the docblock. It keeps nothing: no `Edit`, no
   // `Write`, and `PLATFORM_TOOLS_BY_ROLE.discovery` carries no mutating platform tool.
   discovery: ['Read', 'Glob', 'Grep', 'Bash'],
   /**
@@ -293,7 +392,7 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
  * decided by what provisioning **copies** — `WorkspaceSpec.skills` — and the option is the second
  * lane, not the first.
  *
- * Two rules were applied, and both are visible in the rows:
+ * Three rules were applied, and all three are visible in the rows:
  *
  *  1. **A skill never describes a mutation the role cannot make.** `gitlab-mr`,
  *     `file-followup-ticket`, `mr-description` and `verify-work` carry the writing half of the
@@ -306,28 +405,26 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
  * `test/contract/prompts/platform-skills.contract.test.ts` asserts: a skill provisioned for nobody
  * is ten files nobody reads, which is the defect PROGRESS backlog entry 24 exists to have avoided.
  *
- * **The rows follow product/13, and three mismatches with the *shipped* tables follow from that.**
- * Recorded here in full rather than smoothed over, because a docblock that named one of them would
- * read as if the other two did not exist (PROGRESS backlog **39** owns the reconciliation):
+ *  3. **A skill whose recipes are shell commands goes only to a role holding `Bash`** (WP-54,
+ *     PROGRESS backlog 39) — and the recipes it names are allowed by that role's policy
+ *     ({@link COMMAND_ALLOW_BY_SKILL}). `jira-ticket`, `gitlab-mr`, `loki-logs`, `sentry-issue` and
+ *     `verify-work` are those skills; the contract test reads which ones they are off the files'
+ *     own `bash` fences rather than off this sentence.
  *
- *  - **No `Bash` for the investigator or the product manager.** product/13 gives the Investigator
- *    "read-only cmds" and observability and the Product Manager Shell "–"; {@link TOOLS_BY_ROLE}
- *    gives *neither* a `Bash` tool. So `loki-logs`, `sentry-issue` and `jira-ticket` name commands
- *    those two roles cannot currently run at all.
- *  - **Neither holds `add_ticket_comment` or `create_followup_ticket`**, which `jira-ticket` names
- *    as the way to write back. The skill says "you do not [write], and here is the tool that would"
- *    — true for them, but the tool is not in their list.
- *  - The skills are handed out by **role**, not by the project's bindings, so a project with no
- *    Loki integration still gets `loki-logs` in its investigator runs.
+ * **Two things decide a run's skills, not one** (WP-54, PROGRESS backlog 40): this row, and the
+ * project's bindings — a {@link PROVIDER_SKILLS provider skill} is provisioned only when a binding's
+ * `AgentTooling.skill` names it ({@link skillsFor}). The row is the ceiling; a binding never adds.
  *
- * They are left standing rather than papered over because the fix belongs to whichever table is
- * wrong — and product/13 is the spec, so it is probably {@link TOOLS_BY_ROLE}. What is *not* left
- * to judgement is the pair of rules above: `test/contract/prompts/platform-skills.contract.test.ts`
- * enforces them for the five skills whose platform tool is unambiguous.
+ * **What WP-54 changed in the rows, and why.** The product manager lost `jira-ticket`: product/13
+ * gives it no shell, and the skill is `acli`/`jira` recipes. The investigator kept `loki-logs`,
+ * `sentry-issue` and `jira-ticket` and gained the `Bash` they need. What is still true and stated:
+ * neither the investigator nor the product manager holds `add_ticket_comment` or
+ * `create_followup_ticket`, which `jira-ticket` names as the way to write back — the skill says so
+ * itself (*"when your tool list has them; most stages do not"*).
  */
 export const SKILLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   triager: [],
-  product_manager: ['ask-human', 'jira-ticket', 'kb'],
+  product_manager: ['ask-human', 'kb'],
   investigator: ['ask-human', 'jira-ticket', 'kb', 'loki-logs', 'sentry-issue'],
   architect: ['ask-human', 'kb'],
   developer: [
@@ -398,6 +495,16 @@ export interface StageRunPlannerOptions {
    */
   readonly skills: Readonly<Record<string, SkillDefinition>>;
   /**
+   * The {@link PROVIDER_SKILLS provider skills} this project's bindings name — every binding's
+   * provider, looked up in the registry, and its `AgentTooling.skill` (WP-54, PROGRESS backlog 40).
+   *
+   * **Required**: an absent collaborator here would either provision every provider skill (the
+   * defect) or none (a silent narrowing nobody decided), and standing rule 31 says a collaborator a
+   * composition root may omit is one production omits. Read between the executor's two
+   * transactions like the pack's queries.
+   */
+  readonly boundSkills: (projectId: Id) => Promise<readonly string[]>;
+  /**
    * Where the data-block nonce comes from. **Required, never defaulted** — a default would make the
    * marker predictable, which is the one property the delimiter contract rests on (standing rule
    * 31: an optional security dependency is an absent one).
@@ -448,25 +555,60 @@ export const platformToolsFor = (role: AgentRole, stage: string): readonly Platf
 };
 
 /**
- * The organisation maximum this run starts from: the role's baseline plus what its stage adds.
+ * The maximum this run starts from, before the project narrows it: the role's baseline, plus what
+ * its stage adds, plus what the skills it is provisioned with add.
  *
- * `read_only` keeps the shipped `ask` and `block` lists and replaces only `allow`: an entry that
- * moves out of `allow` becomes unmatched, falls to the `ask` fallback and is **denied** unattended,
- * which is the direction a narrowing has to fail in.
+ * Every baseline keeps the shipped `ask` and `block` lists and chooses only `allow`: an entry that
+ * is not allowed is unmatched, falls to the `ask` fallback and is **denied** unattended, which is
+ * the direction a narrowing has to fail in.
  *
- * The `stage` argument is required rather than optional (TD-027): a caller that forgot it would
- * silently plan a run on the role baseline, and a conflict-resolution run planned that way spends
- * its attempt on a denied merge. `ask` and `block` come through byte-identical — the layer appends
- * to `allow` and touches nothing else.
+ * `stage` and `skills` are required rather than optional (TD-027): a caller that forgot the stage
+ * would silently plan a conflict-resolution run on the role baseline and spend its attempt on a
+ * denied merge, and one that forgot the skills would plan an investigator whose `logcli` recipes
+ * are all denied. Both layers append to `allow` and touch nothing else, so `ask` and `block` come
+ * through byte-identical.
  */
-export const commandBaselineFor = (role: AgentRole, stage: string): ResolvedCommandPolicy => {
-  const base: ResolvedCommandPolicy =
-    COMMAND_BASELINE_BY_ROLE[role] === 'read_only'
-      ? { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_READ_ONLY_ALLOW }
-      : DEFAULT_COMMAND_POLICY;
-  const extra = COMMAND_ALLOW_BY_STAGE[stage];
-  return extra === undefined ? base : { ...base, allow: [...base.allow, ...extra] };
+export const commandBaselineFor = (
+  role: AgentRole,
+  stage: string,
+  skills: readonly string[],
+): ResolvedCommandPolicy => {
+  const extra = [
+    ...(COMMAND_ALLOW_BY_STAGE[stage] ?? []),
+    ...skills.flatMap((name) => COMMAND_ALLOW_BY_SKILL[name] ?? []),
+  ];
+  const allow = BASELINE_ALLOW[COMMAND_BASELINE_BY_ROLE[role] ?? 'read_only'];
+  return { ...DEFAULT_COMMAND_POLICY, allow: [...new Set([...allow, ...extra])] };
 };
+
+/**
+ * The widest policy any run of this build can start from: the implementation baseline plus every
+ * stage's and every skill's additions. What a project's `allow` entry is judged against when the
+ * question is "will **any** run be granted this?" ({@link ignoredProjectAllow}).
+ */
+const widestShippedPolicy = (): ResolvedCommandPolicy => ({
+  ...DEFAULT_COMMAND_POLICY,
+  allow: [
+    ...new Set([
+      ...BASELINE_ALLOW.implementation,
+      ...Object.values(COMMAND_ALLOW_BY_STAGE).flat(),
+      ...Object.values(COMMAND_ALLOW_BY_SKILL).flat(),
+    ]),
+  ],
+});
+
+/**
+ * The project's declared `allow` entries that **no** run of **any** role would be granted — the
+ * effective-configuration DTO's `ignored_allow_commands` (WP-54, PROGRESS backlog 49).
+ *
+ * A project that writes `commands.allow: ["curl https://example.test"]` has asked for something the
+ * platform will drop for every run, and until WP-54 the drop was silent: `ignoredAllow` had no
+ * reader outside its own unit tests. An entry granted to *some* role is not listed here — the
+ * investigator not getting `npm test` is the read-only baseline working, not a declaration being
+ * ignored — and the per-run answer, which is role-specific, is the planner's log line.
+ */
+export const ignoredProjectAllow = (commands: CommandPolicy | undefined): readonly string[] =>
+  narrowCommandPolicy(widestShippedPolicy(), commands).ignoredAllow;
 
 /**
  * The language the project's agents write to humans in — `project.communication_language`.
@@ -727,12 +869,31 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const role = stage.role ?? 'developer';
       const defaults = stageAgentDefaults(stage.id);
       const configured = settings.config.stages?.[stage.id];
-      // Role baseline, then the stage's extra `allow` patterns, then the project's narrowing — in
-      // that order, so a project still narrows what the stage added (TD-027).
+      // Which skills this run is provisioned with: the role's row, minus every provider skill the
+      // project's bindings do not name (WP-54). Read first, because the skills also bring their
+      // own command patterns.
+      const skillNames = skillsFor(role, await options.boundSkills(task.task.projectId));
+      // Role baseline, then the stage's and the skills' extra `allow` patterns, then the project's
+      // narrowing — in that order, so a project still narrows what the layers added (TD-027).
       const policy = narrowCommandPolicy(
-        commandBaselineFor(role, stage.id),
+        commandBaselineFor(role, stage.id, skillNames),
         settings.config.commands,
       );
+      if (policy.ignoredAllow.length > 0) {
+        // The reader `ignoredAllow` never had (PROGRESS backlog 49): a declaration the platform
+        // drops is reported, per run, with the role whose baseline did not grant it.
+        logger.warn(
+          {
+            project_id: task.task.projectId,
+            task_id: task.task.id,
+            run_id: request.runId,
+            role,
+            stage: stage.id,
+            ignored_allow: policy.ignoredAllow,
+          },
+          "the project's commands.allow names entries this run's role baseline does not grant; they were dropped, never widened (BD-025)",
+        );
+      }
       const protectedPaths =
         settings.config.policies?.protected_paths ??
         PLATFORM_DEFAULT_CONFIG.policies?.protected_paths ??
@@ -743,9 +904,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       // Resolved rather than named: the digest below is over the bytes, so the same list must
       // produce the same entries the workspace is given. `createStageRunPlanner` already refused a
       // catalogue that cannot answer every name in the table.
-      const skills = (SKILLS_BY_ROLE[role] ?? []).map(
-        (name) => options.skills[name] as SkillDefinition,
-      );
+      const skills = skillNames.map((name) => options.skills[name] as SkillDefinition);
 
       const pack = await resolvePack(request, stage.id, budgetTokens);
       const prompt = assemblePrompt({

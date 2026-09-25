@@ -185,7 +185,91 @@ export const DEFAULT_READ_ONLY_ALLOW: readonly string[] = [
   'find *',
 ];
 
-/** product/19 §3, Implementation: the project's own commands plus safe git and lockfile installs. */
+/**
+ * product/19 §3's install-from-lockfile clause — `npm ci`, `pnpm install --frozen-lockfile`,
+ * `pip install -r` — which the Implementation list has always carried and which WP-54 also gives
+ * the two roles that verify rather than write (`DEFAULT_VERIFICATION_ALLOW`): a test command in a
+ * fresh workspace runs against no dependencies until one of these has.
+ */
+export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
+  'npm ci',
+  'pnpm install --frozen-lockfile',
+  'pip install -r *',
+];
+
+/**
+ * product/19 §3's *"allow the project's declared commands (`how-to-run.md`: test, lint, format,
+ * build, typecheck) … `make *` targets"* — as the **named verb set** Q69 (ii) ruled on (WP-54,
+ * PROGRESS backlog 49).
+ *
+ * Until WP-54 no shipped list carried this clause at all, so a project's `commands.allow:
+ * ["npm test"]` was dropped by the narrowing and fell to the `ask` fallback, which an unattended
+ * run denies: no run of any role could run a project's own tests. The clause now reaches a run as
+ * **patterns in the per-role baseline** that a project's `commands.allow` narrows, and never as a
+ * `*` allow — anything not named here keeps falling to `ask`.
+ *
+ * The set is Q69's recommendation verbatim (`npm test`, `npm run *`, `pnpm test`, `pnpm run *`,
+ * `make *`, `pytest *`, `go test *`, `cargo test *`) plus the **same verbs' other spelling**, the
+ * two-entries-per-verb convention of `DEFAULT_READ_ONLY_ALLOW`: a bare `pytest`, `go test`,
+ * `cargo test` and `make`, and `npm test`/`pnpm test` with arguments. No verb is added that Q69
+ * does not name.
+ *
+ * **What a name does not bound, said where the names are.** `npm run *` and `make *` run whatever
+ * the repository's own `package.json` or `Makefile` says, and a task branch can change that: the
+ * *body* of these commands is repository content, bounded by the run container, its non-root user,
+ * its workspace-only writable mount and its egress allow-list (BD-021, TD-021) — never by this
+ * list. Some spellings that hand one of these verbs a command string **the model** wrote rather
+ * than the repository are floored at `ask` by {@link HAZARDOUS_ARGUMENTS}: a `make` variable
+ * assignment, `make --eval` (and the getopt prefixes `--ev`/`--eva`) and `-E` in a short-option
+ * cluster, `go -exec`/`-toolexec`/`-ldflags … -extld` in either dash form, `cargo --config`, and
+ * npm's and pnpm's `--script-shell`, `--node-options` and pnpm's `--config.<key>`.
+ *
+ * **That is an enumeration of known spellings and can be incomplete** — WP-54's review found seven
+ * the first list missed in round 1 and five more in round 2. npm and pnpm accept any unique prefix
+ * of a long option, and those are floored from the **shortest prefix that is unique today**
+ * (`--scr`, `--node`): that is knowledge of the CLIs' current option sets, not a measurement, and a
+ * later option sharing the prefix moves it. The floors narrow what a model can author on the
+ * command line; the boundary for what these commands *do* is the sandbox above.
+ *
+ * **What the floors do not cover, stated (WP-54 review round 3).** Flags that point one of these
+ * verbs at a **path the model chose** stay `allow`: `pytest --basetemp=<dir>` (pytest deletes that
+ * directory), `pytest --junitxml=<path>` and `go test -c -o <path>` write one, and
+ * `npm --userconfig=<file>`, `make -f <file>` and `go test -overlay=<file>` read configuration or a
+ * makefile from one — which can set a script shell or node options without any floored flag. The
+ * first three are contained by the workspace-only writable mount; the last three are the same class
+ * as the model editing the `Makefile` or `package.json`, which BD-025 already accepts. `make -e`
+ * (`--environment-overrides`) is `allow` in its short spelling although the long one is floored:
+ * nothing model-written reaches the environment, because a leading assignment is not peeled for
+ * `allow`.
+ *
+ * **One over-block, stated**: every `make` argument with `=` that is not a flag is floored,
+ * including an ordinary `make test V=1` — a command-line variable overrides the makefile's, and
+ * `CC=`/`SHELL=` are exactly the ones a recipe runs, so the harmless spelling is not told apart.
+ */
+export const PROJECT_COMMAND_ALLOW: readonly string[] = [
+  'npm test',
+  'npm test *',
+  'npm run *',
+  'pnpm test',
+  'pnpm test *',
+  'pnpm run *',
+  'make',
+  'make *',
+  'pytest',
+  'pytest *',
+  'go test',
+  'go test *',
+  'cargo test',
+  'cargo test *',
+];
+
+/**
+ * product/19 §3, Implementation: the project's declared commands, safe git, and lockfile installs.
+ *
+ * The first clause — *"the project's declared commands"* — is {@link PROJECT_COMMAND_ALLOW} since
+ * WP-54; before it this docblock claimed the sentence in full while the list implemented every
+ * clause of it except that one (PROGRESS backlog 49).
+ */
 export const DEFAULT_IMPLEMENTATION_ALLOW: readonly string[] = [
   ...DEFAULT_READ_ONLY_ALLOW,
   'git add *',
@@ -200,9 +284,24 @@ export const DEFAULT_IMPLEMENTATION_ALLOW: readonly string[] = [
   // literal spellings onto the stage that needs them — {@link CONFLICT_RESOLUTION_EXTRA_ALLOW}.
   'git fetch',
   'git fetch *',
-  'npm ci',
-  'pnpm install --frozen-lockfile',
-  'pip install -r *',
+  ...LOCKFILE_INSTALL_ALLOW,
+  ...PROJECT_COMMAND_ALLOW,
+];
+
+/**
+ * The baseline of the two roles that **check** work rather than write it — the Reviewer (product/13
+ * *"tests only"*) and the Acceptance Tester (*"tests/app cmds"*) — and of Discovery, whose
+ * readiness criteria R1, R2 and R6 product/17 detects by running the project's commands (WP-54).
+ *
+ * product/19 §3's read-only list plus *"the project's test/lint commands (review stages only)"*,
+ * plus the lockfile installs those commands cannot run without. No git write, no push, no
+ * dependency addition: a role on this list reads, installs what the lockfile pins, and runs what
+ * the project declares.
+ */
+export const DEFAULT_VERIFICATION_ALLOW: readonly string[] = [
+  ...DEFAULT_READ_ONLY_ALLOW,
+  ...LOCKFILE_INSTALL_ALLOW,
+  ...PROJECT_COMMAND_ALLOW,
 ];
 
 /**
@@ -275,10 +374,25 @@ export const DEFAULT_IMPLEMENTATION_ASK: readonly string[] = [
 ];
 
 export interface HazardousArgument {
-  /** Matched exactly like a block pattern: tokens (flag anywhere) or the whole line as a glob. */
+  /**
+   * Matched exactly like a block pattern: tokens (flag anywhere) or the whole line as a glob —
+   * unless {@link tokens} is given, when this is the entry's **name** and only that predicate
+   * decides.
+   */
   readonly pattern: string;
   /** What the argument hands the verb that the policy has not read. */
   readonly hazard: string;
+  /**
+   * A token-scoped match, for a floor a glob cannot scope (WP-54 review round 2): called with the
+   * command's argv0 (basename) and its dequoted flags and positionals, for every argv0 candidate
+   * the block matcher would try. The whole-line glob is **not** consulted for such an entry, which
+   * is the point — `make* -*E*` as a glob matched a capital E in any later word.
+   */
+  readonly tokens?: (argv: {
+    readonly name: string;
+    readonly flags: readonly string[];
+    readonly positional: readonly string[];
+  }) => boolean;
 }
 
 /**
@@ -416,6 +530,80 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
   {
     pattern: 'pip install* --find-links*',
     hazard: 'adds a package source nobody has read (BD-030)',
+  },
+  // ── hands a project-command verb a command string the model chose (WP-54) ──
+  //
+  // PROJECT_COMMAND_ALLOW runs repository content, which only the sandbox bounds. These floors are
+  // an **enumeration of known spellings** that run text written on the command line instead — each
+  // listed one measured through `evaluateCommand` in `command-policy.test.ts` § "the project-command
+  // floors" — and an enumeration can be incomplete: a tool's next flag, or a spelling nobody listed,
+  // is not covered. They narrow what the model can author; they are not the boundary.
+  {
+    pattern: 'make VAR=value (a positional containing `=`)',
+    hazard:
+      'a make argument with `=` that is not a flag is a command-line variable assignment — `X:=$(shell …)`, `SHELL=`, `.SHELLFLAGS=`, or an ordinary `V=1`, which can equally override a recipe variable such as `CC` — so every one is floored, while `--jobs=4` (a flag) is not',
+    tokens: ({ name, positional }) =>
+      name === 'make' && positional.some((token) => token.includes('=')),
+  },
+  {
+    pattern: 'make* --e*',
+    hazard:
+      'make --eval, spelled in full or by the prefixes GNU getopt accepts (`--ev`, `--eva`), evaluates the text as makefile source; `--environment-overrides` lets the environment replace the makefile’s variables',
+  },
+  {
+    pattern: 'make -…E… (a single-dash short-option cluster containing E)',
+    hazard: 'the short spelling of make --eval, alone (`-E`) or inside a clustered flag (`-sE`)',
+    tokens: ({ name, flags }) => name === 'make' && flags.some((flag) => /^-[^-]*E/.test(flag)),
+  },
+  {
+    pattern: 'go* -exec*',
+    hazard: 'go test -exec runs the test binary under an arbitrary program',
+  },
+  { pattern: 'go* --exec*', hazard: 'the double-dash spelling of go -exec' },
+  {
+    pattern: 'go* -toolexec*',
+    hazard: 'go -toolexec runs an arbitrary program in front of every toolchain invocation',
+  },
+  { pattern: 'go* --toolexec*', hazard: 'the double-dash spelling of go -toolexec' },
+  {
+    pattern: 'go* -ldflags*extld*',
+    hazard:
+      '`-ldflags=-extld=…` names the external linker, which is a program the command line chose',
+  },
+  { pattern: 'go* --ldflags*extld*', hazard: 'the double-dash spelling of go -ldflags … -extld' },
+  {
+    pattern: 'cargo* --config*',
+    hazard: 'cargo --config can set a target runner, which is an arbitrary command',
+  },
+  {
+    pattern: '* --script-shell*',
+    hazard: 'npm and pnpm run the package script under the --script-shell binary instead of sh',
+  },
+  {
+    pattern: 'npm* --scr*',
+    hazard:
+      'npm accepts any unique prefix of a long option; `--scr` is the shortest unique to --script-shell in the option set this is written against',
+  },
+  { pattern: 'pnpm* --scr*', hazard: 'the same prefixes of --script-shell, for pnpm' },
+  {
+    pattern: '* --node-options*',
+    hazard:
+      'npm turns --node-options into NODE_OPTIONS, so `--import=data:…` runs model-written code',
+  },
+  {
+    pattern: 'npm* --node*',
+    hazard: 'the prefixes of --node-options npm accepts (`--node-o…`), floored from `--node`',
+  },
+  { pattern: 'pnpm* --node*', hazard: 'the same prefixes of --node-options, for pnpm' },
+  {
+    pattern: 'pnpm* --config.*',
+    hazard:
+      'pnpm `--config.<key>=` sets any configuration key, including `node-options` and `script-shell`',
+  },
+  {
+    pattern: 'npm* --config.*',
+    hazard:
+      'the pnpm spelling on npm — floored as a precaution; whether npm accepts it is not measured',
   },
   {
     pattern: 'pip install -r http*',
@@ -755,7 +943,22 @@ export const matchesBlockPattern = (pattern: string, command: string): boolean =
  * effect is to floor the verdict at `ask` (see `evaluateCommand`).
  */
 export const hazardousArgument = (command: string): HazardousArgument | undefined =>
-  HAZARDOUS_ARGUMENTS.find((entry) => matchesBlockPattern(entry.pattern, command));
+  HAZARDOUS_ARGUMENTS.find((entry) =>
+    entry.tokens === undefined
+      ? matchesBlockPattern(entry.pattern, command)
+      : argv0Candidates(tokenise(command)).some((candidate) => {
+          const [name, ...rest] = candidate;
+          if (name === undefined) {
+            return false;
+          }
+          const { flags, positional } = splitFlags(rest);
+          return (entry.tokens as NonNullable<HazardousArgument['tokens']>)({
+            name,
+            flags,
+            positional,
+          });
+        }),
+  );
 
 /**
  * Block patterns that ban a binary outright — `docker *`, `sudo *`, `kubectl *` — as opposed to
@@ -1340,18 +1543,66 @@ export const assertCommandAllowed = (
 
 export interface NarrowedCommandPolicy {
   readonly policy: ResolvedCommandPolicy;
-  /** Allow entries the layer asked for that the organisation maximum does not grant. */
+  /**
+   * Allow entries the layer asked for that the maximum does not grant — dropped from the policy
+   * and **reported** here. Since WP-54 this has readers: the stage planner logs it per run and the
+   * effective-configuration DTO publishes what no role would be granted (PROGRESS backlog 49).
+   */
   readonly ignoredAllow: readonly string[];
 }
 
 const unique = (values: readonly string[]): readonly string[] => [...new Set(values)];
 
+/** An allow entry with no glob metacharacter names exactly one command line. */
+const isLiteralCommand = (entry: string): boolean => !/[*?]/.test(entry);
+
 /**
- * Applies a lower-precedence layer (project settings, then `.agentic/config.yml`) to the
- * organisation maximum.
+ * Whether the maximum grants a layer's allow entry.
  *
- * - `allow` may only shrink: an entry the maximum does not grant is reported in `ignoredAllow`
- *   and dropped ("entries added to `allow` that the org does not allow are ignored by the merge").
+ * Two ways, and the second is WP-54's. An entry the maximum lists **verbatim** is granted, as it
+ * always was. A **literal** entry — no `*`, no `?` — is granted when the maximum itself evaluates
+ * that exact line to `allow`, so a project's `npm run lint` narrows the baseline's `npm run *`
+ * rather than being dropped for not being spelled the same way. That is narrowing and never
+ * widening: a literal matches one line, and the maximum has already allowed that line — including
+ * its fragments, its redirection floor and its hazardous-argument floor, because it is
+ * `evaluateCommand` that says so.
+ *
+ * **A glob entry is granted only verbatim, deliberately.** Coverage between two globs is not the
+ * same question: an entry can be *covered* by an allow pattern and still be more specific than an
+ * ask pattern the maximum uses to carve that allow pattern up — `git rebase -x *` is covered by
+ * `git rebase *` and pins more literal characters than `git rebase* -x*`, so granting it would
+ * turn the maximum's `ask` into the project's `allow`. The literal case cannot do that: its one
+ * line was judged by the maximum's own lists.
+ */
+const grantsAllowEntry = (maximum: ResolvedCommandPolicy, entry: string): boolean =>
+  maximum.allow.includes(entry) ||
+  (isLiteralCommand(entry) && evaluateCommand({ command: entry }, maximum).verdict === 'allow');
+
+/**
+ * Whether an allow entry of the maximum belongs to the **project-command class** — the class a
+ * layer's `allow` narrows (Q97, WP-54 review round 1).
+ *
+ * An entry is in the class when a {@link PROJECT_COMMAND_ALLOW} pattern covers it: the pattern
+ * matches the entry's own spelling, a `*` in the entry being matched like any other character. That
+ * is coverage in the safe direction — a pattern that matches a glob's spelling matches every line
+ * the glob does — so `npm run lint` and `make test` an organisation wrote are in the class, and
+ * `git commit *`, `cat *` and a stage's `git merge origin/*` are not.
+ */
+export const isProjectCommandEntry = (entry: string): boolean =>
+  PROJECT_COMMAND_ALLOW.some((pattern) => matchesCommandPattern(pattern, entry));
+
+/**
+ * Applies a lower-precedence layer (project settings, then `.agentic/config.yml`) to the maximum a
+ * run starts from.
+ *
+ * - `allow` may only shrink, and **a declared `allow` narrows the project-command class only**
+ *   (Q97, answered at WP-54's review round 1). The maximum's other entries — the read verbs, the
+ *   git verbs, the lockfile installs, a stage's or a skill's additions — are untouched, because
+ *   product/19 §3 reads `commands.allow` as *"the project's declared commands"*, and treating it as
+ *   the whole list meant technical/12's own example stripped the developer of `git commit` and every
+ *   role of `git log`. A project that wants one of those gone writes it into `ask` or `block`.
+ *   Within the class the result is what the layer lists and the maximum grants; an entry the
+ *   maximum does not grant is reported in `ignoredAllow` and dropped.
  * - `ask` and `block` may only grow; `block` always wins over both other lists.
  */
 export const narrowCommandPolicy = (
@@ -1360,7 +1611,7 @@ export const narrowCommandPolicy = (
 ): NarrowedCommandPolicy => {
   const layerAllow = layer?.allow;
   const ignoredAllow =
-    layerAllow === undefined ? [] : layerAllow.filter((entry) => !maximum.allow.includes(entry));
+    layerAllow === undefined ? [] : layerAllow.filter((entry) => !grantsAllowEntry(maximum, entry));
   const block = unique([...maximum.block, ...(layer?.block ?? [])]);
   const ask = unique([...maximum.ask, ...(layer?.ask ?? [])]).filter(
     (entry) => !block.includes(entry),
@@ -1368,7 +1619,14 @@ export const narrowCommandPolicy = (
   const allow = (
     layerAllow === undefined
       ? maximum.allow
-      : maximum.allow.filter((entry) => layerAllow.includes(entry))
+      : [
+          ...maximum.allow.filter(
+            (entry) => !isProjectCommandEntry(entry) || layerAllow.includes(entry),
+          ),
+          ...layerAllow.filter(
+            (entry) => !maximum.allow.includes(entry) && grantsAllowEntry(maximum, entry),
+          ),
+        ]
   ).filter((entry) => !ask.includes(entry) && !block.includes(entry));
 
   return { policy: { allow: unique(allow), ask, block }, ignoredAllow };

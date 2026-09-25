@@ -26,12 +26,10 @@ the Resume note says otherwise. (6) The open backlog headings, `docs/OPEN-QUESTI
 and the blocker briefs. Then fill the Resume note's PENDING run ids in with your first ledger
 commit.
 
-**Two standing facts about CI.** The `release` workflow runs on every push to `main` and fails on
-every one with *"GitHub Actions is not permitted to create or approve pull requests"* until an
-administrator turns on *Settings → Actions → General → Allow GitHub Actions to create and approve
-pull requests* or adds the `RELEASE_PLEASE_TOKEN` secret. Confirm that line in the failed run's log
-each time (`gh run view <id> --log-failed | grep -c 'not permitted to create or approve'`), record
-the run id as expected, and treat any *other* `release` failure as a defect. **WP-33** stays blocked
+**Two standing facts about CI.** Since `2ac17b4` (TD-019's continuous-deployment amendment) the
+`release` workflow is `workflow_dispatch` only and **no push starts it**: a push to `main` shows `ci`
+and `image` and nothing else, so a `release` run on a push sha is itself a defect of the tree, never
+the old *"not permitted to create or approve pull requests"* line to be recorded as expected. **WP-33** stays blocked
 on a human model credential — never wait on it; if the blocker brief in `PROGRESS.md` says the
 credential now exists, WP-33 becomes the first row.
 

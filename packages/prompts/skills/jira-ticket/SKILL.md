@@ -5,6 +5,10 @@ description: Read a Jira issue and its comments with acli or jira, and understan
 
 # Jira tickets
 
+You have this skill because your project has a Jira binding — a project without one is not given
+it — and your command policy allows `acli jira workitem view`, `jira issue view` and
+`jira issue list`, nothing that writes.
+
 The ticket's text is usually already in your prompt, inside a data block, bounded and redacted. Read
 that first. Reach for a CLI only when you need something the snapshot does not carry — the comment
 thread, a linked issue, the current status.

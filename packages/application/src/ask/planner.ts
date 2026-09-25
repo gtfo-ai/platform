@@ -38,8 +38,8 @@ import type { ContextPackAssembler } from '../knowledge/context-pack.js';
 import {
   commandBaselineFor,
   platformToolsFor,
-  SKILLS_BY_ROLE,
   type StageRunPlannerOptions,
+  skillsFor,
   TOOLS_BY_ROLE,
 } from '../pipeline/planner.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
@@ -203,9 +203,11 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
       const runContextPack: readonly RunContextDocument[] =
         result.status === 'not_indexed' ? [] : result.pack.runContextPack;
 
-      const skills = (SKILLS_BY_ROLE[role] ?? []).map(
-        (name) => options.skills[name] as SkillDefinition,
-      );
+      // No binding lookup: the ask's row (`SKILLS_BY_ROLE.ask`, `kb`) names no provider skill, so
+      // `skillsFor` with no bound skills is the whole row — and stays the conservative answer if
+      // somebody adds one (it would be withheld rather than provisioned unasked, WP-54).
+      const skillNames = skillsFor(role, []);
+      const skills = skillNames.map((name) => options.skills[name] as SkillDefinition);
 
       const prompt = assemblePrompt({
         nonce: options.nonce,
@@ -246,7 +248,7 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
       });
 
       const policy = narrowCommandPolicy(
-        commandBaselineFor(role, ASK_PSEUDO_STAGE),
+        commandBaselineFor(role, ASK_PSEUDO_STAGE, skillNames),
         settings.config.commands,
       );
 

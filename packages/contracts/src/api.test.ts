@@ -120,6 +120,8 @@ describe('response DTOs', () => {
       sources: { 'policies.autonomy': 'repo' as const, version: 'default' as const },
       hash: 'sha256:abc',
       computed_at: AT,
+      // WP-54: a declared `allow` entry no role's baseline grants, published rather than dropped.
+      ignored_allow_commands: ['curl https://example.test'],
       // WP-37: what the wizard is offered for `policies.risk_classes`, which is **not** what the
       // project has — the field above is empty and this one is not, which is the whole shape of
       // "proposed, not applied" (product/18:52).

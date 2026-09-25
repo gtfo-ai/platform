@@ -28,17 +28,18 @@
  * agent's. And `unlocks` is platform text in every row — it is never copied out of an artifact —
  * so nothing a model writes can change what a criterion claims to buy.
  *
- * ## Three criteria are read for what a run can establish, not for what product/17 says
+ * ## R1, R2 and R6 are detected by running the project's commands, as product/17 words them
  *
- * product/17 detects R1 and R6 "executed in the workspace" and R2 "measured". **No run on this
- * platform can execute a project command**: the organisation command maximum is
- * `DEFAULT_COMMAND_POLICY`, it contains no test, lint or setup command, a project may only *narrow*
- * it (`narrowCommandPolicy` drops an `allow` entry the maximum does not grant), and nothing in this
- * build lets an operator widen the maximum. Read literally, R1 — a **level 1** requirement — would
- * be unreachable for every repository and the whole ladder would be decorative. So the three are
- * detected by reading the CI configuration, and each says so at its own `detection` line. Closing
- * the gap is a product decision (widen the maximum, or reword product/17) and is recorded in
- * `PROGRESS.md` under Discovered work rather than taken here.
+ * product/17 detects R1 and R6 "executed in the workspace" and R2 "measured". From WP-21 to WP-54
+ * no run could execute a project command at all — the shipped command baseline named none and a
+ * project may only narrow it — so the three were read off the CI configuration and each said so at
+ * its own `detection` line. WP-54 implemented Q69 (ii): the discovery role runs on the
+ * `verification` baseline, which carries the project's declared commands (`PROJECT_COMMAND_ALLOW`)
+ * and the lockfile installs they need, so the three are detected the way product/17 words them.
+ *
+ * **One residual, stated at R6**: a devcontainer or a compose file cannot be *executed* by a run —
+ * `docker *` is blocked for every stage (product/19 §3) and the run container has no daemon — so for
+ * those two forms of R6 the detection is still a read, and the line says so.
  *
  * ## A criterion nobody answered is `false`
  *
@@ -69,11 +70,9 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
   {
     id: 'R1',
     title: 'Test suite exists and runs green on default branch',
-    // product/17 says "executed in the workspace". **No run on this platform can execute a project
-    // command**: the org command maximum (`DEFAULT_COMMAND_POLICY`) has none, and a project may
-    // only narrow it (`narrowCommandPolicy`), so the criterion is detected by reading the CI
-    // configuration instead. The gap is `PROGRESS.md`'s discovered work, not a silent reinterpretation.
-    detection: 'test command found in how-to-run.md/CI config, and a CI job that runs it',
+    // product/17's wording, restored at WP-54 (Q69 (ii)): discovery's `verification` baseline runs
+    // the project's declared test command. It read the CI configuration from WP-21 to WP-54.
+    detection: 'test command found in how-to-run.md/CI config and executed in the workspace',
     unlocks:
       'Implementation self-check; acceptance evidence; test tamper gate has something to protect',
     detectedBy: 'agent',
@@ -81,9 +80,9 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
   {
     id: 'R2',
     title: 'Tests finish in < 15 minutes',
-    // product/17 says "measured". See R1: nothing can run the suite, so this is the documented
-    // duration or a CI timeout below the threshold.
-    detection: 'a documented duration or a CI timeout below 15 minutes',
+    // product/17 says "measured": the duration of the test command the discovery run executed for
+    // R1 (WP-54). A documented duration or a CI timeout was the stand-in until then.
+    detection: 'measured: the duration of the test command executed for R1',
     unlocks: 'Fast inner loop; fewer per-run timeouts',
     detectedBy: 'agent',
   },
@@ -111,8 +110,11 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
   {
     id: 'R6',
     title: 'One-command dev setup (make setup, devcontainer, compose)',
-    // product/17 says "executed in the workspace". See R1.
-    detection: 'a documented one-command setup (make setup, a devcontainer, a compose file)',
+    // product/17 says "executed in the workspace", and since WP-54 a `make` target or a package
+    // script is. A devcontainer or compose file is **read**: `docker *` is blocked for every stage
+    // and a run has no daemon (the module docblock's residual).
+    detection:
+      'a one-command setup executed in the workspace (make setup, a package script); a devcontainer or compose file is read, since a run has no Docker',
     unlocks: 'Reproducible workspaces; app can be booted for business review',
     detectedBy: 'agent',
   },

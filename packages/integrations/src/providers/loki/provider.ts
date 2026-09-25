@@ -195,11 +195,12 @@ export type LokiProvider = ObservabilityLogsPort;
  *
  * `skill` names `packages/prompts/skills/loki-logs`, which **exists** since WP-14a: the ten platform
  * skills are shipped and `WorkspaceProvider.create` copies a run's own into the workspace, so a
- * `SkillRef` is no longer a promise nothing keeps. Two limits, stated rather than implied: the path
- * is resolved against disk by `test/contract/prompts/platform-skills.contract.test.ts` and by
- * nothing else, and **provisioning is role-driven rather than binding-driven** — a run of the
- * investigator role gets `loki-logs` whether or not this project has a Loki binding. Narrowing it
- * to the bindings a project actually has is in the ledger's discovered work.
+ * `SkillRef` is no longer a promise nothing keeps. The path is resolved against disk by
+ * `test/contract/prompts/platform-skills.contract.test.ts`, and **since WP-54 this ref is what
+ * provisions the skill**: the stage planner hands a run `loki-logs` — and the `logcli query *`
+ * pattern the skill brings — only when the project has a binding whose provider names it here
+ * (`createBoundSkillsReader`, PROGRESS backlog 40). The `env` names above are still read by nothing
+ * that builds a run's environment, which the skill itself says.
  */
 export const LOKI_AGENT_TOOLING: AgentTooling = {
   cli: {

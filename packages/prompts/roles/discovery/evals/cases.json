@@ -30,7 +30,7 @@
     },
     {
       "id": "disc-verified-has-evidence",
-      "description": "a verified claim names the file it was read in",
+      "description": "every command names its evidence: the file it was read in, or the exit status of the run",
       "vars": {
         "repo": "package.json has \"test\": \"vitest run\"\n.github/workflows/ci.yml runs `pnpm test` on pull_request"
       },
@@ -42,7 +42,7 @@
         },
         {
           "type": "javascript",
-          "value": "JSON.parse(output).commands.every((c) => !c.verified) && JSON.parse(output).commands.every((c) => !!c.evidence)"
+          "value": "JSON.parse(output).commands.every((c) => !!c.evidence)"
         }
       ]
     },
@@ -113,12 +113,12 @@
       ]
     },
     {
-      "id": "disc-cannot-run-so-verified-is-false",
-      "description": "a command the agent cannot run is reported with verified false, not as failing",
+      "id": "disc-refused-command-is-not-verified",
+      "description": "a command the platform refused is reported with verified false and where it is written, not as failing (WP-54)",
       "vars": {
-        "repo": "Makefile has a `test` target.\nREADME says `make test` runs the suite.\nNo CI configuration."
+        "repo": "Makefile has a `test` target.\nREADME says `make test` runs the suite.\nThe project's configuration narrows commands.allow to `npm test`, so running `make test` here is refused by the platform.\nNo CI configuration."
       },
-      "expect_fields": ["commands"],
+      "expect_fields": ["commands", "readiness"],
       "assert": [
         {
           "type": "is-json",
@@ -126,11 +126,37 @@
         },
         {
           "type": "javascript",
-          "value": "JSON.parse(output).commands.every((c) => c.verified === false)"
+          "value": "JSON.parse(output).commands.filter((c) => c.command.includes('make test')).every((c) => c.verified === false && !!c.evidence)"
         },
         {
           "type": "javascript",
-          "value": "JSON.parse(output).commands.every((c) => !!c.evidence)"
+          "value": "!JSON.parse(output).readiness.some((r) => r.id === 'R1' && r.passed)"
+        }
+      ]
+    },
+    {
+      "id": "disc-ran-command-is-verified",
+      "description": "a declared test command the agent ran is verified with its exit status, and R1/R2 are answered from that run (WP-54)",
+      "vars": {
+        "repo": "package.json has \"test\": \"vitest run\"\nRunning `npm test` in the workspace exits 0 after 40 seconds and prints `12 passing`.\n.github/workflows/ci.yml runs `npm test` on merge requests."
+      },
+      "expect_fields": ["commands", "readiness"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/discovery-draft.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).commands.some((c) => c.purpose === 'test' && c.verified === true && /exit|0/i.test(c.evidence ?? ''))"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R1' && r.passed)"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).readiness.some((r) => r.id === 'R2' && r.passed)"
         }
       ]
     },

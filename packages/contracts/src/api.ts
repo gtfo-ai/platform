@@ -201,6 +201,17 @@ export const effectiveConfigResponseSchema = z.strictObject({
   hash: nonEmptyStringSchema,
   computed_at: isoDateTimeSchema,
   /**
+   * `commands.allow` entries this project declares that **no run of any role** is granted — the
+   * reader `ignoredAllow` did not have until WP-54 (PROGRESS backlog 49).
+   *
+   * BD-025 lets a project only narrow what a role's baseline grants, so an entry outside every
+   * baseline is dropped rather than widening anything; before WP-54 it was dropped in silence. An
+   * entry granted to *some* role is not listed (a read-only role not getting `npm test` is the
+   * baseline working); the per-run, per-role answer is the stage planner's log line. Empty when
+   * nothing is ignored, and when the project declares no `allow` at all.
+   */
+  ignored_allow_commands: z.array(nonEmptyStringSchema),
+  /**
    * Risk classes **proposed** for this project and not applied — product/18:52, WP-37.
    *
    * product/18 makes risk classes a wizard step rather than a default, so `policies.risk_classes`

@@ -156,6 +156,8 @@ const fetchFor = (
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',
+        // WP-54: nothing the project declared is outside every role's command baseline.
+        ignored_allow_commands: [],
       });
     }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });

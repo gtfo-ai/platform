@@ -63,8 +63,19 @@ describe('createJiraCloudRegistration', () => {
     }
   });
 
-  it('exposes no agent tooling, because no ticket write is an agent’s to make directly', () => {
-    expect(createJiraCloudRegistration(deps()).agentTooling).toBeNull();
+  /**
+   * WP-54 (PROGRESS backlog 40): the tooling names the `jira-ticket` **skill**, because a provider
+   * skill is now provisioned only when a binding's `AgentTooling.skill` names it — and still no CLI,
+   * no MCP server and no environment variable, because no ticket write is an agent's to make
+   * directly and nobody here has verified a Jira CLI's credential contract.
+   */
+  it('exposes the recipes and no CLI, server or credential — no ticket write is an agent’s to make', () => {
+    expect(createJiraCloudRegistration(deps()).agentTooling).toEqual({
+      cli: null,
+      mcp: null,
+      skill: { id: 'jira-ticket', path: 'packages/prompts/skills/jira-ticket' },
+      env: { variables: [] },
+    });
   });
 
   it('builds a port from the binding’s config merged with its resolved secrets', () => {

@@ -213,18 +213,21 @@ describe('BD-025 — the command policy only narrows', () => {
       layer('repo', { commands: { allow: ['make test', 'curl *'] } }),
     ]);
     expect(effective.commands.allow).toEqual(['make test']);
-    expect(effective.ignoredAllowCommands).toEqual(['curl *']);
+    // What was ignored is reported by `ignoredProjectAllow` (one definition, WP-54 round 1); here
+    // the evidence is that the entry did not reach the policy.
+    expect(effective.commands.allow).not.toContain('curl *');
     expect(commandVerdictFor(effective, 'make test')).toBe('allow');
     expect(commandVerdictFor(effective, 'curl https://example.invalid')).toBe('ask');
   });
 
   it('lets a project narrow and the repository narrow again', () => {
     const effective = mergeProjectConfig([
-      layer('org', { commands: { allow: ['a', 'b', 'c'], ask: [], block: [] } }),
-      layer('project', { commands: { allow: ['a', 'b'] } }),
-      layer('repo', { commands: { allow: ['a'] } }),
+      // Project-command entries: since Q97 a declared `allow` narrows that class only (WP-54).
+      layer('org', { commands: { allow: ['make a', 'make b', 'make c'], ask: [], block: [] } }),
+      layer('project', { commands: { allow: ['make a', 'make b'] } }),
+      layer('repo', { commands: { allow: ['make a'] } }),
     ]);
-    expect(effective.commands.allow).toEqual(['a']);
+    expect(effective.commands.allow).toEqual(['make a']);
   });
 
   it('keeps every block from every layer', () => {

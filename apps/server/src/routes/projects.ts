@@ -22,6 +22,7 @@
  */
 
 import type { SecretRedactor } from '@platform/application';
+import { ignoredProjectAllow } from '@platform/application';
 import {
   agenticConfigSchema,
   apiErrorSchema,
@@ -273,6 +274,9 @@ export const registerProjectRoutes = async (
         sources: row.configSource as Record<string, 'default' | 'org' | 'project' | 'repo'>,
         hash: row.configHash ?? 'unconfigured',
         computed_at: row.updatedAt.toISOString(),
+        // WP-54: what the project declared and no role's baseline grants — dropped, never widened
+        // (BD-025), and published here rather than dropped in silence.
+        ignored_allow_commands: [...ignoredProjectAllow(parsed.data.commands)],
         risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses),
       };
     },

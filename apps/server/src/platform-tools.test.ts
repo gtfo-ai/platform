@@ -2,8 +2,8 @@
  * The production `PlatformToolPort`, over **every** name in `PLATFORM_TOOL_NAMES`.
  *
  * Parameterised over the set rather than over the tools somebody remembered (standing rule 68), and
- * asserted in **both** directions (rule 42): the eight that are not composed must refuse by name,
- * and the one that is must not — a port that threw for everything would pass the first half.
+ * asserted in **both** directions (rule 42): the seven that are not composed must refuse by name,
+ * and the two that are must not — a port that threw for everything would pass the first half.
  *
  * It also keeps {@link IMPLEMENTED_PLATFORM_TOOLS} honest, which matters because that constant is a
  * *claim about this file* and standing rule 11 is about justifications that name something which
@@ -76,28 +76,44 @@ describe('the production platform tools', () => {
   const tools = composePlatformTools({ pool: refusingPool, logger: silentLogger });
 
   it('implements exactly what it claims to implement', () => {
-    expect([...IMPLEMENTED_PLATFORM_TOOLS]).toEqual(['kb_search']);
+    expect([...IMPLEMENTED_PLATFORM_TOOLS]).toEqual(['kb_search', 'get_task_context']);
     expect(PLATFORM_TOOL_NAMES).toContain('kb_search');
+    expect(PLATFORM_TOOL_NAMES).toContain('get_task_context');
   });
 
-  it.each(PLATFORM_TOOL_NAMES.filter((name) => !IMPLEMENTED_PLATFORM_TOOLS.includes(name)))(
-    'refuses %s by name rather than returning an empty answer',
-    async (name) => {
-      await expect(CALL[name](tools)).rejects.toThrow(PlatformToolUnavailableError);
-      await expect(CALL[name](tools)).rejects.toThrow(JSON.stringify(name));
-    },
-  );
+  it.each(
+    PLATFORM_TOOL_NAMES.filter(
+      (name) => !(IMPLEMENTED_PLATFORM_TOOLS as readonly PlatformToolName[]).includes(name),
+    ),
+  )('refuses %s by name rather than returning an empty answer', async (name) => {
+    await expect(CALL[name](tools)).rejects.toThrow(PlatformToolUnavailableError);
+    await expect(CALL[name](tools)).rejects.toThrow(JSON.stringify(name));
+  });
 
   it('does not refuse kb_search — it reaches the store, which is what fails here', async () => {
     // The other direction of the boundary: this call gets past the refusal and dies in the pool
-    // double, so "every tool throws" cannot masquerade as "eight tools refuse".
+    // double, so "every tool throws" cannot masquerade as "seven tools refuse".
     await expect(CALL.kb_search(tools)).rejects.toThrow('must not query at wiring time');
     await expect(CALL.kb_search(tools)).rejects.not.toThrow(PlatformToolUnavailableError);
   });
 
+  /**
+   * WP-54 (PROGRESS backlog 83): `get_task_context` is no longer a refusal. Like `kb_search`, it
+   * gets past the refusal and dies in the pool double — its SQL, and that it answers **this**
+   * task's rows and not another's, is `test/integration/server/task-context.integration.test.ts`.
+   */
+  it('does not refuse get_task_context — it reaches the projections', async () => {
+    // drizzle wraps the pool's error: the message names the projection's own query on `tasks`, and
+    // the cause is the pool double's refusal.
+    const failure = await CALL.get_task_context(tools).catch((error: unknown) => error);
+    expect(String((failure as Error).message)).toMatch(/^Failed query: select .* from "tasks"/);
+    expect(((failure as Error).cause as Error).message).toContain('must not query at wiring time');
+    await expect(CALL.get_task_context(tools)).rejects.not.toThrow(PlatformToolUnavailableError);
+  });
+
   it('refuses every mutating tool, so a run cannot reach a provider through this build', () => {
     for (const name of MUTATING_PLATFORM_TOOLS) {
-      expect(IMPLEMENTED_PLATFORM_TOOLS).not.toContain(name);
+      expect(IMPLEMENTED_PLATFORM_TOOLS as readonly PlatformToolName[]).not.toContain(name);
     }
   });
 });

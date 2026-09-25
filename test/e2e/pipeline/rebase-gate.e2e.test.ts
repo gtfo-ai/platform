@@ -196,7 +196,7 @@ describe('the rebase gate, before Ready and when the default branch moves', () =
     expect(waiting.stage_attempts.conflict_resolution).toBe(1);
     // **CI was re-run through the gate the platform already has** (product/04 S6b), which is what
     // putting the stage before `ci_gate` buys: the CI gate ran twice, and the second time on the
-    // provider's pipeline rather than on a local command no run may execute (PROGRESS backlog 49).
+    // provider's pipeline rather than on a local command (the gate runs none; PROGRESS backlog 49).
     expect(waiting.stage_attempts.ci_gate).toBe(2);
     const statusReads = (await pipeline.auditRows()).filter(
       (row) => row.action === 'get_pipeline_status',

@@ -87,7 +87,7 @@ policies:
   risk_classes:
     auth: { paths: ["**/auth/**", "**/session/**"], require: [plan_approval, reviewer:@security] }
     migrations: { paths: ["**/migrations/**"], require: [plan_approval] }
-commands:                        # BD-025 three-list policy (project may only narrow the org maximum)
+commands:                        # BD-025 three-list policy: `allow` narrows the role baseline's project commands only (Q97); ask/block only grow
   allow: ["npm test", "npm run lint", "make test", "pytest *"]
   ask: ["npm install *", "pip install *"]
   block: ["rm -rf /", "git push --force*", "docker *"]

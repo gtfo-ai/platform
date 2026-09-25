@@ -113,6 +113,7 @@ import {
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import {
+  createBoundSkillsReader,
   createInboundIntegrationLoader,
   createPipelineIntegrationsLoader,
   createPipelineProviderRegistry,
@@ -599,8 +600,8 @@ export interface ComposedPipeline {
   readonly agentMissing: readonly string[];
   /**
    * The nine in-process MCP tools this process composed, exposed so a caller can see what a run
-   * would be given. `kb_search` is real; the other eight refuse and say why
-   * (`./platform-tools.ts`).
+   * would be given. `kb_search` and `get_task_context` (WP-54) are real; the other seven refuse
+   * and say why (`./platform-tools.ts`).
    */
   readonly platformTools: PlatformToolPort;
   stop(): Promise<void>;
@@ -870,6 +871,16 @@ export const composePipeline = async (
         // the audit — while the bytes reach the workspace from the launcher's own copy of this same
         // package.
         skills: PLATFORM_SKILLS,
+        /**
+         * Which provider skills this project's bindings name (WP-54, PROGRESS backlog 40): the
+         * binding rows and each shipped provider's `AgentTooling.skill`, from the catalogue —
+         * nothing decrypted, nothing built. A provider skill no binding names is not provisioned, and neither are the
+         * command patterns it brings.
+         */
+        boundSkills: createBoundSkillsReader({
+          repository: secretAdapters.createPostgresBindingRepository(options.pool),
+          logger: options.logger,
+        }),
         /**
          * The data-block nonce (BD-022). `randomUUID` is a CSPRNG — 122 bits — rendered as the 32
          * hex characters `NONCE_PATTERN` requires; the delimiter contract rests on a document's

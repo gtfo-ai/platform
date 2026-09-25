@@ -8,12 +8,14 @@
  * so `kb_search` had no home and the retrieval layer was reachable by nothing a run sees. This file
  * is the home.
  *
- * ## One tool is real and eight are refusals, and that is deliberate
+ * ## Two tools are real and seven are refusals, and that is deliberate
  *
- * `kb_search` is wired to the PostgreSQL knowledge store. The other eight need collaborators this
- * build does not have — the Question aggregate's HTTP surface and a waiter for the human's answer,
- * the task read model, and `IntegrationActionExecutor` reached from inside a live run rather than from
- * the `pipeline.outbound` job (WP-15d). Each is therefore a **named refusal**, exactly like
+ * `kb_search` is wired to the PostgreSQL knowledge store, and **`get_task_context`** — since WP-54
+ * (PROGRESS backlog 83) — to the read projections (`queries/task-context-queries.ts`), scoped to the
+ * run's own task and refusing, value by value, what the projections cannot answer. The other seven
+ * need collaborators this build does not have — the Question aggregate's HTTP surface and a waiter
+ * for the human's answer, and `IntegrationActionExecutor` reached from inside a live run rather than
+ * from the `pipeline.outbound` job (WP-15d). Each is therefore a **named refusal**, exactly like
  * `unavailableClaudeRunner` beside it in `pipeline.ts`, and for the same reason: a null object that
  * returns `{}` is a tool the model believes it used.
  *
@@ -38,6 +40,7 @@
  * answers for whichever ones a run was given.
  */
 import type {
+  GetTaskContextInput,
   KbSearchInput,
   Logger,
   PlatformToolContext,
@@ -46,8 +49,10 @@ import type {
 } from '@platform/application';
 import { createKbSearchTool } from '@platform/application';
 import type { JsonValue } from '@platform/contracts';
-import { knowledge as knowledgeAdapters } from '@platform/infrastructure';
+import { db as dbAdapters, knowledge as knowledgeAdapters } from '@platform/infrastructure';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
+import { readTaskContext } from './queries/task-context-queries.js';
 
 /** Thrown by every platform tool this build cannot perform. Names the tool and what is missing. */
 export class PlatformToolUnavailableError extends Error {
@@ -68,15 +73,13 @@ export class PlatformToolUnavailableError extends Error {
  * Written out per tool rather than as one message, because "not implemented" tells a human nothing
  * and this string reaches both the run log and the model's own context.
  */
-const MISSING: Readonly<Record<Exclude<PlatformToolName, 'kb_search'>, string>> = {
+const MISSING: Readonly<Record<Exclude<PlatformToolName, ImplementedTool>, string>> = {
   ask_human:
     'asking a human needs the Question aggregate bound to a run that can wait for the answer; nothing suspends a run on a question and nothing resumes it on an answer (BD-025’s unattended default is deny, which `agent.ts` composes)',
   notify_human:
     'notifications need a channel bound to a live run; the SSE hub carries the transcript a run produces and has no path back into one',
   report_progress:
     'progress reporting writes a transcript row, and the run transcript sink now exists (WP-15g) — what is missing is a shape for it: the sink is the runner’s, it writes what the SDK produced, and `TranscriptEvent` has no kind for a tool-reported progress line',
-  get_task_context:
-    'the task read model is not exposed to a run yet; the prompt already carries the ticket, the artifacts and the return feedback as delimited data — and, for an ask-the-task run, the task’s runs and its human actions as well (WP-31)',
   add_ticket_comment:
     'every outbound provider call goes through IntegrationActionExecutor, which the pipeline reaches from its `pipeline.outbound` job (WP-15d); reaching it from inside a run is unbuilt',
   open_mr:
@@ -88,9 +91,11 @@ const MISSING: Readonly<Record<Exclude<PlatformToolName, 'kb_search'>, string>> 
 };
 
 /** The tools this build actually performs. Read by the composition test, not by the runtime. */
-export const IMPLEMENTED_PLATFORM_TOOLS: readonly PlatformToolName[] = ['kb_search'];
+export const IMPLEMENTED_PLATFORM_TOOLS = ['kb_search', 'get_task_context'] as const;
 
-const refuse = (tool: Exclude<PlatformToolName, 'kb_search'>, logger: Logger) => {
+type ImplementedTool = (typeof IMPLEMENTED_PLATFORM_TOOLS)[number];
+
+const refuse = (tool: Exclude<PlatformToolName, ImplementedTool>, logger: Logger) => {
   logger.warn(
     { tool, reason: MISSING[tool] },
     'an agent called a platform tool this build does not compose',
@@ -104,6 +109,8 @@ export interface PlatformToolsOptions {
 }
 
 export const composePlatformTools = (options: PlatformToolsOptions): PlatformToolPort => {
+  // Built, not connected: drizzle issues nothing until a query runs, so wiring stays query-free.
+  const database = drizzle(options.pool, { schema: dbAdapters.schema });
   const kbSearch = createKbSearchTool({
     store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
     logger: options.logger,
@@ -117,7 +124,18 @@ export const composePlatformTools = (options: PlatformToolsOptions): PlatformToo
     askHuman: async () => refuse('ask_human', options.logger),
     notifyHuman: async () => refuse('notify_human', options.logger),
     reportProgress: async () => refuse('report_progress', options.logger),
-    getTaskContext: async () => refuse('get_task_context', options.logger),
+    /**
+     * The run's own task and project, never ones the model named (WP-54): `PlatformToolContext`
+     * is built by the runner from the `RunSpec` and the tool's input schema has neither field.
+     */
+    getTaskContext: async (
+      input: GetTaskContextInput,
+      context: PlatformToolContext,
+    ): Promise<JsonValue> =>
+      (await readTaskContext(database, input.include, {
+        taskId: context.taskId,
+        projectId: context.projectId,
+      })) as unknown as JsonValue,
     addTicketComment: async () => refuse('add_ticket_comment', options.logger),
     openMergeRequest: async () => refuse('open_mr', options.logger),
     updateMrDescription: async () => refuse('update_mr_description', options.logger),

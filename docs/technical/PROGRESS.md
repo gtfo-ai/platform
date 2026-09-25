@@ -7888,6 +7888,381 @@ Related: **135** (the same absence on the server side), **136** (the orphan thes
 visible), **0b** (the sweep itself, closed at WP-53), **125** and **126** (the same class: a mark the
 platform makes and no surface reads), rule **3**, rule **83**.
 
+### 139. **A project that declares `commands.allow` loses every baseline verb it did not repeat, so technical/12's own example leaves a developer run unable to commit or push — and, read off the code, leaves every role without `git log`, `cat` or `grep` as well** (TODO, small-to-major — **working as the code's docblock says, and the product question of what "narrow" means was never asked**; **live** since WP-54, which gave a project its first reason to declare `allow`; **no work package owns it**, the product half is **Q97**; found by WP-54, session 8)
+
+**What is wrong.** `narrowCommandPolicy` treats a declared `allow` as a statement **in full**: the
+result is the baseline entries the layer lists, plus the layer's literals the baseline grants, and
+nothing the layer omits (`packages/domain/src/policies/command-policy.ts:1485-1486`, the code at
+`:1500-1508`). technical/12's example configuration declares exactly four entries —
+`allow: ["npm test", "npm run lint", "make test", "pytest *"]`
+(`docs/technical/12-configuration-and-schemas.md:91`) — so a project that copies it keeps those four
+and drops everything else the role's baseline granted. For the developer that is `git add *`,
+`git commit *`, `git push origin agentic/*`, `git rebase`, `git fetch` and the lockfile installs
+(`DEFAULT_IMPLEMENTATION_ALLOW`, `command-policy.ts:249-265`): the implementation stage cannot
+deliver. Every dropped verb falls to `ask`, which an unattended run denies.
+
+**Evidence.** The report's words: *"A layer that declares `allow` states it in full
+(`narrowCommandPolicy`, unchanged by WP-54), so technical/12's own example … leaves an
+implementation run with those four and **no** `git add`/`commit`/`push origin agentic/*`: the stage
+cannot deliver. Measured with `narrowCommandPolicy` over the developer baseline; pre-existing, but
+live now that a project has a reason to declare `allow`."* **The refiner's extension is read, not
+run** (rule 66): `DEFAULT_READ_ONLY_ALLOW` (`command-policy.ts:164-186`) is spread into every
+baseline, and the same filter drops `git log`, `git diff`, `git status`, `ls *`, `cat *`, `grep *`,
+`rg *` and `find *` from **every** role — reviewer, investigator and discovery included — under the
+same four-line configuration. Needs one unit case to become a measurement. The operator cannot see
+it: `ignored_allow_commands` (`apps/server/src/routes/projects.ts:279`,
+`packages/contracts/src/api.ts:213`) reports the **declared** entries that were discarded, never
+the **baseline** entries that were removed, so this configuration publishes an empty list and reads
+as fully honoured.
+
+**Defect or working as designed?** Both halves are documented and they disagree in spirit only.
+BD-025 §2 says *"projects can only narrow it"* and its WP-54 amendment says a project's
+`commands.allow` *"narrows whichever of the two applies"*
+(`docs/decisions/business/BD-025-config-trust-and-command-policy.md:9`, `:22`); product/19 §3
+calls the Implementation clause *"allow the project's declared commands"*
+(`docs/product/19-operating-definitions.md:36`), which reads `commands.allow` as the **declaration of
+the project's commands**, not as a replacement for the git verbs. Neither says which, so it is Q97.
+
+**What it costs to leave.** The first project that follows the configuration reference's example
+has every developer run end at `needs_human` with a denied `git commit`, and a reviewer that cannot
+`git diff`. Nothing warns: the configuration parses, the DTO reports nothing ignored, and the run's
+warning line names only the discarded declared entries.
+
+**What "done" looks like.** Q97 answered; then, whichever answer: (1) a unit case over each of the
+three baselines with technical/12's example as the layer, asserting the resulting `allow` exactly;
+(2) the effective-configuration DTO publishes what a declared `allow` **removed** from each baseline
+(or the answer makes that set empty by construction), asserted in the e2e that already reads
+`GET /api/projects/:id/config`; (3) technical/12's example and its comment say what the list means;
+(4) if the answer is Q97's recommendation, `narrowCommandPolicy`'s docblock sentence
+*"states it in full"* is rewritten in the same change (rule 83).
+
+**Depends on / owner.** **Q97** first (product). **No work package owns it**; WP-54, which made it
+live, is DONE. It is one function, one DTO field and one example — a small row of its own, or the
+next row that touches `command-policy.ts`. Related: **49** (closed at WP-54), **Q69**, BD-025.
+
+### 140. **The lockfile installs every command-running baseline allows have no registry to reach: the run's egress list is the model host and the git host, so a test command that needs dependencies fails in a real run** (TODO, small — **working as designed and fail-closed**, the allow-list and the egress list now disagree about what a run may do; **latent** until a real run executes a project command, which WP-53 plus WP-54 make possible; **needs measurement**; **no work package owns it**; found by WP-54, session 8)
+
+**What is wrong.** WP-54 put `LOCKFILE_INSTALL_ALLOW` — `npm ci`, `pnpm install --frozen-lockfile`,
+`pip install -r *` (`packages/domain/src/policies/command-policy.ts:194-198`) — into the
+implementation **and** verification baselines, because *"a test command in a fresh workspace runs
+against no dependencies until one has"* (the WP-54 decision note). The run's egress is
+`APP_MODEL_EGRESS_HOSTS` plus the git host and nothing else
+(`packages/infrastructure/src/workspace/spec.ts:192-195`), so the command the policy allows cannot
+fetch what it is allowed to fetch. technical/05 § "Network policy" names the missing source —
+*"package registries for the project's ecosystems (from discovery)"* — and nothing derives one.
+
+**Evidence.** Read off the tree by the implementer, **not run in a container**: *"the lockfile
+installs have nowhere to fetch from … so `npm ci`/`pip install -r` — in every baseline that runs
+project commands — cannot reach a registry, and a test command that needs dependencies fails in a
+real run. Needs a Docker measurement and an egress decision."* The refiner adds one residual
+sentence, read not run: `spec.ts:43-44` still says *"Discovery has not been written, so no registry
+host can be derived"* and `:52` *"Widening it is discovery's job (WP-21's row)"* — discovery exists
+since WP-21 and derives no host, so the first clause is false and the second names a row that is
+DONE (rule 83). `.env.example:566-569` states the same limit correctly (*"a run cannot install a
+package and fails closed if it tries"*), which now contradicts the policy that allows `npm ci`.
+
+**What it costs to leave.** R1/R2 in discovery and every reviewer or developer test run on a
+repository whose tests need dependencies (most of them) fails at the install, with the proxy's 403
+in the sidecar's log and a failed command in the transcript. The fail-closed direction is right;
+the cost is that WP-54's headline capability works only for dependency-free test commands.
+
+**What "done" looks like.** (1) **Needs measurement**: one real run in `platform-runtime` running
+`npm ci` against a fixture lockfile, the sidecar's refusal recorded — the Docker half rule 66 keeps
+out of this session. (2) An **egress decision** recorded in technical/05: an operator-declared
+registry list (the shape of `APP_DEPENDENCY_REGISTRY_HOSTS`, empty = closed) joined to the run's
+egress for stages whose baseline carries the lockfile installs, or discovery-derived hosts as
+technical/05 says, or a registry mirror; **not** a default that opens the public registries. (3)
+Whatever is chosen, `spec.ts`'s docblock, `.env.example` and the user guide say the same thing.
+
+**Depends on / owner.** **No work package owns it.** The same subject from the CLI's side is
+**137** (also unowned), and a row that closes one should take both, since each is "what one more
+host does a real run need". Related: **49**, **133** (a writing stage's first real run), **143**
+(the observability hosts, technical/05's fourth source), WP-38's `APP_DEPENDENCY_REGISTRY_HOSTS`.
+
+### 141. **The lint-debt maintenance chore is still refused, and the reason it was refused for is closed** (TODO, nit — **working as designed**: the refusal stands deliberately and says why; **no defect**, a feature left off; owner **WP-65**; found by WP-54, session 8)
+
+**What is wrong.** `MAINTENANCE_CHORES.lint` refuses with `no_project_command`
+(`packages/domain/src/maintenance/chores.ts:103-108`); the docblock (`:31-36`) records that backlog
+**49** — the refusal's reason — was closed at WP-54, and that switching the chore on *"is a change
+to what a scheduled chore does — its brief, its finding and its budget"*, so it was left refused.
+The refusal code `no_project_command` now names a condition that is false.
+
+**Evidence.** The report: *"Its refusal's reason (backlog 49) is closed; the refusal stands,
+restated (`chores.ts`)."* Read at the lines above; nothing measured.
+
+**What it costs to leave.** A maintenance chore product/18:31 promises (*"dependency bumps, flaky-test
+hunting, docs drift, lint debt, KB hygiene"*) stays off, and the nightly pass keeps logging a refusal whose code
+misstates the build — the repeat-refusal noise backlog **107** is about.
+
+**What "done" looks like.** A lint chore with a brief, a finding source (the project's own lint
+command, run under the implementation baseline) and the chore budget, and its refusal entry
+removed; **or** the refusal code renamed to what is actually missing (a decision, not a capability)
+if the answer is to keep it off.
+
+**Depends on / owner.** **WP-65** (it owns the maintenance pass's reporting and backlog 107's
+repeated refusals, and this removes one of them). Depends on **139** in practice: a project that
+declares `commands.allow` without its lint command cannot run the chore.
+
+### 142. **The triager's prompt says it reads the project's type mapping through `get_task_context`, which serves no configuration — and no shipped template has a triager stage, so the sentence has no reader yet** (TODO, nit — **latent**, no producer: nothing runs the role; owner **WP-73**; found by WP-54, session 8, the latency read off the tree by the refiner)
+
+**What is wrong.** `packages/prompts/roles/triager/prompt.md:5-6` says the triager is given *"the
+project's configured type mapping through `get_task_context`"*. The tool's `include` vocabulary is
+`TASK_CONTEXT_INCLUDES` (`packages/application/src/ports/runner.ts:379`) — ticket, artifacts,
+feedback, mr, ci, runs, audit — and none of them is configuration.
+
+**Evidence.** The report: *"no `include` value serves configuration. Either the prompt or the
+vocabulary (a prompt change needs eval cases and a bump)."* The refiner adds, read not run: the
+role is granted the tool (`packages/application/src/pipeline/planner.ts:86`), but a grep of
+`packages/domain/src/pipeline/` finds **no stage with `role: 'triager'`** — template choice is made
+from configuration without a model — so no run of this prompt exists on this build.
+
+**What it costs to leave.** Nothing until a template gains a triage stage; then the model is told
+to look for a mapping the tool cannot return and falls back to reading ticket text.
+
+**What "done" looks like.** Either the prompt sentence says the mapping arrives in a data block the
+planner writes (and the planner writes it), or `include` gains a `config` value; the prompt change
+carries eval cases and a `ROLE_PROMPT_VERSIONS` bump (`packages/prompts/src/index.ts:58`). If the
+role is not going to be used, saying so at the role's directory is also an answer.
+
+**Depends on / owner.** **WP-73** (the sweep of sentences no row owns). Related: **83** (closed at
+WP-54, `get_task_context` implemented).
+
+### 143. **The bug template's observability pre-fetch was never built, WP-11's plan row claims it, and no backlog entry said so — found only because a new reader asked the pipeline registry for Loki and Sentry and they are not in it** (TODO, small-to-major — the registry absence is **working as designed and stated at its docblock**; the missing **feature** is the finding; **live** for every bug task on a project with an observability binding; **no work package owns it**; found by WP-54, session 8, established as not a duplicate by the refiner)
+
+**Not a duplicate.** Searched before numbering: `createPipelineProviderRegistry` appears in this file
+only in the WP-15a and WP-15h notes (the WP-15h note, point 8, records that the catalogue is
+separate from the registry by design); the words "pre-fetch" and "prefetch" appear in no backlog
+entry, plan row after WP-11, `docs/TODO.md` or open question except **Q16**'s decision-log line
+(*"Agent tooling + bug pre-fetch only"*, `docs/OPEN-QUESTIONS.md:237`). So this is new, and it is
+the pre-fetch the implementer suspected.
+
+**What is wrong.** product/08 promises that for bug tasks *"the platform pre-fetches the linked
+issue's latest event (stack trace, breadcrumbs, release, frequency, first/last seen) into the
+Investigation context"* and *"optional pre-fetch of a small excerpt around the Sentry event
+timestamp"* from Loki (`docs/product/08-integrations.md:50`, `:56`); technical/04 lists the
+excerpts in the user prompt (`docs/technical/04-agent-runtime.md:29`, `:131`). The plan's WP-11 row
+reads *"Sentry + Loki providers: thin clients, pre-fetch for bug tasks, …"*
+(`docs/technical/13-implementation-plan.md:31`) and is DONE at `d066708` — and WP-11 built the
+clients and **not** the pre-fetch. The registry says so itself:
+`packages/integrations/src/bindings/shipped-registry.ts:19-21` — *"Sentry and Loki are still absent
+for the original reason: nothing constructs them. The bug task's observability pre-fetch has no
+owner"*. A project's Loki or Sentry binding is therefore never loaded by the pipeline; since WP-54
+its only effect on a run is which skill the investigator is provisioned with.
+
+**Evidence.** The report: *"`createPipelineProviderRegistry` registers GitLab, Jira and Slack; a
+project's observability binding is never loaded by the pipeline. Found when
+`createBoundSkillsReader` first read that registry"* — its unit test failed, which is why
+`packages/integrations/src/bindings/bound-skills.ts` reads the catalogue instead. The registry's
+entries are at `shipped-registry.ts:59-86`. Two residuals the refiner read, not run:
+`packages/integrations/src/catalogue.ts:13` still says the registry *"registers **two**
+providers"* (three since WP-32, rule 83); and the investigator's `logcli`/`sentry-cli` recipes are
+now `allow` through `COMMAND_ALLOW_BY_SKILL` while the run's egress has no observability host and no
+credential (technical/05's fourth source, see **140**), so the one path an agent has to that data is
+also closed — **needs measurement** in a real run before it is stated as a fact.
+
+**What it costs to leave.** The investigation stage of every bug ticket starts without the stack
+trace or the log excerpt the product names as the reason Sentry and Loki are in the MVP at all
+(Q16). The agent is told the credential is absent (the four provider skills' hedge), so the gap is
+visible to the model, not to the operator.
+
+**What "done" looks like.** A work package that (1) registers Sentry and Loki where a consumer
+constructs them — the pipeline registry or a pre-fetch-scoped one — with the tests parameterised
+over them (the docblock's rule-68 argument); (2) pre-fetches in a `pipeline.outbound`-shaped call,
+never inside a transaction, bounded and redacted the way `ticket_snapshot` is, stored where the
+planner puts it into a data block for the investigator; (3) an e2e on the bug template with a fake
+Sentry binding that asserts the event text in the assembled prompt; (4) WP-11's row gets a
+one-line note that its pre-fetch clause was not delivered, rather than silently re-scoped; (5)
+`catalogue.ts:13` corrected.
+
+**Depends on / owner.** **No work package owns it** — the finding nobody's row owned: WP-11 is
+DONE and claims it. Depends on WP-11 (the clients), WP-15d (the outbound shape), WP-17 (the
+planner's data blocks). Related: **140** (the observability egress hosts), **Q16**, **Q43**.
+
+### 144. **R6's `.agentic/workspace/setup` form has no named verb, so discovery reads that script instead of running it** (TODO, nit — **working as designed and now stated in product/19 §5 and at R6's detection line**; one form of one criterion; owner **WP-64**; found by WP-54, session 8)
+
+**What is wrong.** product/17's R6 is detected by a one-command setup *"executed in the
+workspace"*. Since WP-54 a `make` target or package script is executed; a
+`.agentic/workspace/setup` script is **read**, because no entry of `PROJECT_COMMAND_ALLOW`
+(`packages/domain/src/policies/command-policy.ts:225-240`) covers a script path, and a devcontainer
+or compose target is read because `docker *` is blocked.
+
+**Evidence.** The report: *"a script path is not in `PROJECT_COMMAND_ALLOW`, so that form of R6
+cannot be executed by discovery."* Already stated on the tree: `docs/product/19-operating-definitions.md:60`
+(the R6 row, amended in the WP-54 working tree) and `packages/domain/src/readiness/criteria.ts:111-118`.
+
+**What it costs to leave.** A project whose one-command setup is the platform's own documented
+`.agentic/workspace/setup` path is credited on a read rather than a run — the weaker evidence R6
+was reworded to avoid.
+
+**What "done" looks like.** Either a named verb for exactly that path (`./.agentic/workspace/setup`,
+literal, in the verification baseline — the body is repository content, bounded as BD-025's WP-54
+amendment states for `make *`), with a discovery eval case, or product/19 drops that form from R6.
+
+**Depends on / owner.** **WP-64** (readiness re-check; its criterion (2) already has to state which
+criteria are answerable how). Depends on **139** if a project's declared `allow` would remove it.
+
+### 145. **`get_task_context`'s `mr` and `ci` answer from stored references only: no merge-request state, diff or pipeline list** (TODO, nit — **working as designed and stated at the module's own table**; filed so a prompt author does not assume more; **no work package owns it**, WP-59 is the nearest neighbour; found by WP-54, session 8)
+
+**What is wrong.** `mr` serves `tasks.mr_ref` and `tasks.branch`, and `ci` serves `tasks.coverage`
+(`apps/server/src/queries/task-context-queries.ts:26-32`); the merge request's state, its diff and
+its pipelines are provider reads the tool does not make, and pipelines are not projected per task
+because `ci.pipeline.finished` is on the project stream with an often-absent `task_id` (`:36-38`).
+
+**Evidence.** The report: *"the merge request's state, diff and pipelines are provider reads the
+tool does not make, and CI pipelines are not projected per task (the reason is at
+`task-context-queries.ts`)."* Read at the lines above.
+
+**What it costs to leave.** Nothing today: no role prompt asks the tool for MR state (the only
+prompt naming `get_task_context` is the triager's, **142**), and agents read MRs through the `glab`
+recipes product/08:22 describes. It becomes a gap when a prompt is written against the tool's name
+rather than its table.
+
+**What "done" looks like.** Nothing, unless a role needs it; then a provider read through
+`IntegrationActionExecutor`, outside any transaction, sharing WP-59's coalesced `(merge request,
+head sha)` read rather than adding a fifth.
+
+**Depends on / owner.** **No work package owns it**; WP-59 (the coalesced diff read) is where it
+would land. Related: **83** (closed at WP-54), **64**.
+
+### 146. **No organisation command layer is composed in production, so an admin cannot set a stricter command maximum — and composing one under Q97's narrowing would hand back a git verb the organisation removed** (TODO, small — latent; found by WP-54's review round 2, session 8)
+
+**What is wrong.** Two halves of one cause: the `org` layer of technical/12:170's
+`merge(defaults, org, project, repo)` has no production producer.
+- **No surface.** BD-025 §2 (*"the organisation sets the maximum autonomy"*) has nothing an admin
+  can write for commands. `organisationCommandMaximum`
+  (`packages/domain/src/config/effective-config.ts:224-230`) is called only from
+  `mergeProjectConfig` (`:263`), and `mergeProjectConfig` has **no production caller** — every
+  call site is `effective-config.test.ts`, `packages/domain/src/index.test.ts` and a docblock
+  (`apps/server/src/routes/projects.ts:21`). The stage planner starts from
+  `commandBaselineFor`, which spreads `DEFAULT_COMMAND_POLICY`
+  (`packages/application/src/pipeline/planner.ts:581`), and narrows it with
+  `settings.config.commands` (`:878-881`); the ask planner does the same
+  (`packages/application/src/ask/planner.ts:250-253`). `settings.config` is the raw
+  `projects.config` column (`apps/server/src/pipeline.ts:549`). `organizations.settings`
+  (`packages/infrastructure/src/db/migrations/0003_identity.sql:7`) has no reader in `apps/` or
+  `packages/`.
+- **Latent danger in the narrowing.** Since Q97 (WP-54 round 1, uncommitted in this tree) a declared
+  `allow` narrows only the project-command class: `narrowCommandPolicy` keeps every maximum entry
+  for which `isProjectCommandEntry` is false
+  (`packages/domain/src/policies/command-policy.ts:1613`). That is right against a role baseline.
+  Against an **organisation** maximum it is wrong in one direction: if a future org layer is
+  composed *under* the role baseline without changing the narrowing, a baseline git or read verb
+  the organisation had dropped is still in the input, and nothing downstream removes it. WP-54's
+  own notes already record the mirror case (an organisation-written entry outside the class is no
+  longer narrowable by a project).
+
+**Evidence.** Read, not run, by the WP-54 round-2 reviewer; the call-site claims re-checked by
+grep over `apps/` and `packages/` by the refiner (rule 78), the line numbers against the working
+tree of this session. BD-025's WP-54 amendment states both halves
+(`docs/decisions/business/BD-025-config-trust-and-command-policy.md:24-29`, *"not composed on
+this build"*). No test drives an org layer through a planner: needs measurement only in the sense
+that the fix's test must be written, not that the defect is uncertain.
+
+**What it costs to leave.** Today nothing is wrong at runtime: the organisation maximum *is*
+`DEFAULT_COMMAND_POLICY`, the role baselines sit under it, and no operator is told they can set
+one. The cost is a documented product promise (BD-025 §2) with no surface. **Trigger:** the change
+that first composes an `org` layer — most likely WP-63's call to `mergeProjectConfig` for the
+`repo` layer, or any admin settings screen that writes `organizations.settings.commands`. At that
+moment Q97's rule silently widens past the organisation's choice.
+
+**What "done" looks like.** (1) A run's policy is judged against the organisation maximum for
+**every** verb, not only the project-command class: a baseline entry the organisation maximum does
+not grant is absent from the run's `allow` (intersect the baseline with the org maximum before
+the project narrows, or equivalent), asserted at the planner with an org maximum that drops
+`git push *` and a developer run that keeps nothing it did not grant. (2) An admin-only write
+surface for the organisation's `commands` (and a reader that feeds it into the settings port),
+audited with a `human_actions` row. (1) must land **with or before** (2); (1) alone is harmless.
+
+**Depends on / owner.** **WP-63** (its half (2) is the first production call of
+`mergeProjectConfig`, which is where the org layer would be composed) — assigned by the refiner,
+session 8; the admin write surface is not named in any row and rides with it. WP-30 (the settings
+mirror) is DONE and cannot take it. Related: **139** / **Q97** (the narrowing), **49** / **Q69**
+(the per-role baselines), **Q77** / TD-027 (stage additions sit above the baseline and are subject
+to the same intersection).
+
+### 147. **On this Mac, `destroy` no longer reclaims a control directory the agent locked: step 1 of `#removeControlDirectory` reports it empty and step 2 finds it is not, deterministically, on a clean `main` — and nothing that changed between the green run and the red one has been identified** (TODO, small-to-major — **a live e2e failure with no diagnosed mechanism**; pre-existing, **not WP-54's**; **needs measurement**, which rule 66 forbids here; the production exposure is **unestablished**, see below; owner **WP-74**, assigned by the refiner; measured by the orchestrator, session 8, 2026-09-25)
+
+**What is wrong.** The case at `test/e2e/workspace/docker-workspace.e2e.test.ts:499`
+(`test/e2e/workspace/docker-workspace.e2e.test.ts` › "destroy reclaims the control directory even after the agent locks it")
+fails at its first assertion after `destroy`, line 514 —
+`expect(await controlVolumeListing()).not.toContain(handle.runId)` — so the run's control
+directory survives teardown. The launcher log shows the two-helper removal
+(`packages/infrastructure/src/workspace/provider.ts:1243-1291`) half-working: the first helper
+`ctlempty-<id>` (uid 1000; `chmod -R`, the bounded `rm -rf` loop, and the emptiness test as its
+**last line**, so exit 0 means it saw the directory empty or absent) **succeeds**; the second,
+`ctlrm-<id>` (uid 0, `CapDrop: ALL`, `rm -rf /ctl/<id>`), **exits 1** with
+`rm: can't remove '/ctl/<id>': Directory not empty`, followed by
+`workspace teardown step failed {"step":"control-dir"}` from `#teardown`'s `step()`
+(`provider.ts:1111-1118`, `:1131`). The two helpers disagree about the same directory seconds apart.
+The docblock's table (`provider.ts:1171-1175`) claims the locked case measured *rc 0/0, empty* on
+both volume shapes; on this machine, today, that row is false for the bind-backed shape.
+
+**Evidence** (the orchestrator's, quoted; nothing re-run by the refiner — rule 66).
+- **Three failures, same assertion**: a full `verify:e2e` on the WP-54 working tree (17:57, load
+  ~12–19); the case alone on that tree (18:08, load 11.2); the case alone on a **clean worktree of
+  `main` at `c1cc951`** (18:14, load 11.6). The third is what makes it pre-existing.
+- **Green elsewhere**: CI's Linux `e2e-fake-claude` job was green on `c1cc951` (run `35881716630`),
+  and WP-53's orchestrator ran `verify:e2e` twice green **on this machine** on 2026-09-23.
+- **Environment, unchanged since 2026-09-04**: Docker Desktop 4.90.0, engine 29.7.2, kernel
+  7.0.12-linuxkit, overlayfs; `platform-runtime:dev` 13 days old.
+- **The shape under test is the bind-backed one, not production's**: the fixture's control volume
+  is a `local`-driver volume with `type=none,o=bind` onto a host temp directory loosened to `0777`
+  (`test/e2e/support/docker-workspace.ts:343,366,379-393`), i.e. a macOS host directory reached
+  through Docker Desktop's file share; production's `APP_WORKSPACE_CONTROL_VOLUME` is a plain named
+  volume inside the VM (`docker-workspace.e2e.test.ts:324-329` states the difference). Read off the
+  tree by the refiner.
+- **Not reported**: whether the two sibling cases on the same volume (`:479`, the benign destroy,
+  and `:539`, the ARG_MAX flood) passed in the same runs, and what `/ctl/<id>` contained after the
+  failure. Both are the first two things to measure.
+
+**Hypotheses — labelled as such, none measured.** Something changed between 09-23 and 09-25 that is
+neither the Docker version nor the code; what it was is **unknown**.
+1. **Something repopulates `/ctl/<id>` between the helpers** — the shim or the run container still
+   alive when `control-dir` runs (`#teardown` stops and removes it first, `provider.ts:1120-1123`,
+   but a failed `stop`/`rm` step only logs and carries on), or the test's own `hostile` probe
+   container, which writes through the run's `volume-subpath` mount as uid 1000 (`:500-506`).
+2. **The file share's caching**: step 1's `[ -e ]`/`ls -A` answered from a stale view (absent, or
+   empty) while entries exist on the host, and step 2 — a new container, a fresh lookup — sees them.
+   The docblock already records this share misbehaving under deletion (`provider.ts:1197-1201`,
+   `find -exec` leaving 3 944 of 8 002 entries on virtiofs and none on a named volume).
+3. **An entry `ls -A` does not show** to uid 1000 but `rm` as root trips over.
+4. **(refiner's addition)** A **host-side** writer into the bind-backed host directory — a macOS
+   indexer or metadata file (`.DS_Store`, `._*`) — which is the one kind of change that would move
+   between 09-23 and 09-25 with Docker and the code both fixed. Distinguishable by listing the
+   directory from the host after a failure.
+
+**What it costs to leave.** `verify:e2e` is **red on this machine for every row** until it is fixed
+or explained, so every row's verification here must carry this as a **named exception** — and a
+named exception is what an unrelated regression in the same file would hide behind. On the product
+side the cost depends on which hypothesis is true, and **is not established**: if it is (2) or (4),
+it is a property of the bind-backed test shape and production's named volume is not exposed; if it
+is (1) or (3), a macOS install can keep a directory past `destroy`, possibly with the run token
+(step 1's success says the token was gone *as that helper saw it*; what step 2 saw is unrecorded).
+**The sweep is no backstop for this failure**: `#sweepControlDirectories` reclaims through the very
+same pair (`provider.ts:1608`), so a directory in a deterministic ctlempty-yes/ctlrm-no state would
+be reported `remove_failed` on every sweep for ever (`:1622`), logged at `warn` and never reclaimed.
+
+**What "done" looks like.** (1) **Measure first**: on this machine, after a failure, list
+`/ctl/<id>` from a container *and* from the host (names, owners, modes), and run the two sibling
+cases in the same session — this decides which hypothesis holds. (2) Then either **fix the removal**
+so step 1's verdict and step 2's precondition cannot disagree (e.g. step 2's refusal becomes a
+bounded retry of step 1, still one argument and still the emptiness test as the verdict), asserted
+by this case going green on macOS and staying green on Linux — **or**, if the cause is the
+bind-backed shape alone, say so in the docblock's table and in the fixture with the measurement, and
+make the case assert the production named-volume shape (the `controlVolumeBind: false` option
+already exists, `docker-workspace.ts:316`). Either way the docblock's *rc 0/0* row is corrected in
+the same change (rule 83). (3) A sweep case: an orphan in this state is counted `remove_failed`,
+not silently skipped — asserted, not assumed.
+
+**Depends on / owner.** **WP-74** — assigned by the refiner, session 8: it rewrites this provider's
+`create` and teardown paths, its criterion (3) keeps the control socket for a repo-less run — so
+this code is exercised by that row's e2e — and it cannot be verified green on this machine while
+this case is red. Nothing else
+blocks it; step (1) needs Docker and belongs to whichever session holds the e2e tier. Related:
+**0b** (the sweep, closed at WP-53 — its backstop is the same helper pair), **138** (the sweep's
+`remove_failed` outcome, which is where this would surface), **136** (the other unmeasured launcher
+residual), rule **69** (green on one platform is not green on another — here in the other direction), rule **66**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -25459,3 +25834,326 @@ rejecting every INSERT and UPDATE, which is true and pinned by
 `PASS: verify:integration` (exit 0), `PASS: verify:e2e` **twice** (exit 0 both times, at one-minute
 loads of 11.48 and 10.66 — the closest yet to the 9.45 the failure appeared at), `PASS: verify:ui`
 (exit 0), `PASS: verify:web-e2e` (exit 0). `docker volume ls | wc -l` back at **100**.
+
+## WP notes — session 8 (decisions, assumptions, reviewer findings)
+
+#### WP-54
+
+**What the row closes, criterion by criterion.** Backlog **49** (no run could execute a project
+command), **39** (the investigator's shell), **40** (skills by role, never by binding), **83**
+(`get_task_context` refused for every role) and Q69 (ii).
+
+1. **A stage run executes a fixture repository's test command, in the e2e tier.**
+   `test/e2e/pipeline/project-commands.e2e.test.ts` writes a fixture repository whose
+   `package.json` has a declared `test` script and an undeclared `build` script, each writing a
+   file. The instance composes the production runner over a scripted CLI; the implementation
+   stage's CLI makes two Bash calls. The fake CLI gained a `bash` step
+   (`packages/infrastructure/src/runner/fake-spawn.ts`, divergence rows 4 and 7): it fires the
+   production `PreToolUse(Bash)` hook, on `ask` the production `canUseTool` (which unattended
+   denies), and **executes the command only when the platform allowed it**, with `/bin/sh -c` in
+   the fixture directory. The assertions are on what the command produced — the file `npm test`
+   wrote, `exit code 0` and `3 passing` in the stored `run_messages` rows, and the **absence** of
+   the file `npm run build` would have written — and the wait binds the transcript row, the last
+   thing the platform writes about the call (rule 87).
+2. **`ignoredAllow` has two readers.** The stage planner logs a warning per run naming the role,
+   the stage and the dropped entries (`planner.test.ts`, the case that refuses by name also
+   asserts the log line, and asserts no line when nothing is dropped). The effective-configuration
+   DTO gained `ignored_allow_commands` — what **no** run of any role is granted
+   (`ignoredProjectAllow`), asserted in the e2e above through `GET /api/projects/:id/config`.
+3. **Narrow-never-widen, with a refusal by name.** An investigator run of a project whose
+   `commands.allow` lists `git log`, `npm test` and a `curl` gets `allow: ['git log']`; `npm test`
+   and the `curl` evaluate to `ask` and are named in the warning. Rule 43: the same `npm test` is
+   `allow` under the developer's baseline in the same case, so the refusal is the role's and not
+   the evaluator's. In the e2e, `npm run build` — inside the developer's baseline, outside the
+   project's narrowing — is refused and does not run.
+4. **R1, R2 and R6 read as product/17 words them.** `criteria.ts`'s detection lines are product/17's
+   again (R1 verbatim; R2 "measured: the duration of the test command executed for R1"; R6
+   "executed in the workspace", with one stated residual: a devcontainer or compose file is read,
+   because `docker *` is blocked for every stage and a run has no daemon). The discovery role moved
+   to the `verification` baseline, so the run that answers them can run them, and its prompt went
+   to version **4** with two eval cases changed and one added (`disc-ran-command-is-verified`,
+   `disc-refused-command-is-not-verified`). **The readiness gap note is closed**: the WP-21 note in
+   this file ("R1, R2 and R6 are read for what a run can establish …", backlog 49's point 3) is no
+   longer the state of the build; it is left where it is as history, and this paragraph is the
+   restatement.
+5. **Every member of the role schema, enumerated against product/13's Shell column.**
+   `planner.test.ts` transcribes the column per role (`PRODUCT_13_SHELL`) and asserts `Bash` and
+   the baseline for all twelve; the SDK half is `test/contract/prompts/platform-skills.contract.test.ts`
+   § "the role table, the SDK half": the shell-recipe skills are read off the files' own `bash`
+   fences (five today), a role holding one must hold `Bash`, and **every recipe line in every such
+   skill is `allow` under the policy of every role that holds it** — with a planted-direction case
+   (the `logcli` recipe is `ask` without the skill layer).
+6. **No Loki binding, no `loki-logs`.** `PROVIDER_SKILLS` (`gitlab-mr`, `jira-ticket`, `loki-logs`,
+   `sentry-issue`) are provisioned only when a binding's `AgentTooling.skill` names them —
+   `createBoundSkillsReader` (`packages/integrations/src/bindings/bound-skills.ts`) is the first
+   production reader of that field, composed in `apps/server/src/pipeline.ts`. **It reads the
+   catalogue, not the pipeline's registry, and that is a measurement**: the first version read the
+   registry and its own unit test failed — `createPipelineProviderRegistry` registers GitLab, Jira
+   and Slack only, so a Loki or Sentry binding would never have provisioned its skill. The
+   catalogue entry (`SHIPPED_PROVIDERS`) gained `agentTooling`, held equal to each registration's
+   by the contract test. Asserted in
+   `planner.test.ts` (an investigator with a Sentry binding and no Loki binding has no
+   `agentic:loki-logs` and no `logcli query *`), and the contract test holds `PROVIDER_SKILLS` equal
+   to the union of the shipped registrations' `skill` ids in both directions.
+7. **The four provider skills.** Measured first (rule 27): the sentences backlog 40 quoted had
+   **already** been hedged at WP-14a's review round 2 — each of the four says the credential is
+   absent and carries the `stop and say so` hedge the contract test enforces. So the choice was the
+   second of the two, and what changed is the one sentence that is newly true: each skill now says
+   it is provisioned because the project has the binding, and which of its recipes the policy
+   allows. `PLATFORM_SKILL_VERSIONS` bumped to `2` for the four; the audit showing it is asserted
+   as the investigator's `promptVersion` differing between a run with and without the Loki binding
+   (the skill-set digest is over the set the workspace is given).
+8. **`get_task_context` is implemented** over the read projections
+   (`apps/server/src/queries/task-context-queries.ts`, composed in `platform-tools.ts`). `include`
+   gained `runs` and `audit`. Each value answers `ok` or `refused` with a reason — `ticket` when no
+   snapshot is stored, `mr` when there is no merge request, `ci` when no coverage was recorded,
+   and an individual artifact stored before redaction existed — never an invented `null`.
+   `test/integration/server/task-context.integration.test.ts` seeds the run's task, a sibling task
+   in the same project and a task in another project, each tagged in every place a value is read
+   from, and asserts every one of the seven values returns the run's own rows and neither other
+   task's; a task outside the run's project refuses the whole call.
+
+**Decisions and assumptions.**
+- **Q69 (ii) as three named baselines, not a table of lists.** `COMMAND_BASELINE_BY_ROLE` chooses
+  `read_only`, `verification` or `implementation`. `verification` (reviewer, acceptance tester,
+  discovery) is the read-only list plus the lockfile installs plus `PROJECT_COMMAND_ALLOW`; the
+  lockfile installs are **an assumption beyond product/19 §3's read-only bullet**, which names the
+  test/lint commands and no install: a test command in a fresh workspace runs against no
+  dependencies until one has. `PROJECT_COMMAND_ALLOW` is Q69's eight patterns plus the same verbs'
+  other spelling (bare `pytest`, `go test`, `cargo test`, `make`; `npm test *`, `pnpm test *`), the
+  two-entries-per-verb convention of `DEFAULT_READ_ONLY_ALLOW`.
+- **`Bash` for the architect and the reviewer as well as the investigator.** The ruling named the
+  investigator; the criterion-5 test enumerates every role against product/13's Shell column, and
+  the architect ("read-only cmds") and the reviewer ("tests only") had the same mismatch. Docs win,
+  so the code follows. None of the three has `Write`/`Edit`, so none mints a git credential
+  (`runIsReadOnly` reads those two).
+- **The acceptance tester was narrowed** from `implementation` to `verification`: product/13 gives
+  it no git push, and `implementation` let it `git add|commit|rebase` and push to `agentic/*`.
+- **The product manager lost `jira-ticket`**: product/13 gives it no shell and the skill is
+  `acli`/`jira` recipes (the SDK-half rule).
+- **A skill layer of command patterns** (`COMMAND_ALLOW_BY_SKILL`). The brief said the
+  investigator's read-only baseline would make its `loki-logs`/`sentry-issue` recipes runnable;
+  measured, it does not — `DEFAULT_READ_ONLY_ALLOW` names no `logcli` or `sentry-cli`, so every
+  recipe was `ask`. The recipes' own read verbs are added for a run provisioned with the skill,
+  which is only a run whose project has the binding. They add to `allow` only, before the project
+  narrows, like TD-027's stage layer.
+- **The narrowing grants a literal entry a pattern covers** (`grantsAllowEntry`), so technical/12's
+  own example `npm run lint` narrows `npm run *` rather than landing in `ignoredAllow`. A glob entry
+  is still granted only verbatim: glob-to-glob coverage can turn the maximum's `ask` into the
+  project's `allow` (`git rebase -x *` under `git rebase *`, which pins more literal characters
+  than the ask entry `git rebase* -x*`) — measured with `evaluateCommand` before deciding.
+- **Hazard floors for the new verbs**: `make --eval`/`-E`, `go … -exec`, `go … -toolexec`,
+  `cargo … --config`, `--script-shell` — the spellings that hand a project verb a command the
+  *model* wrote rather than the repository.
+- **Jira's `AgentTooling` names the skill** (`cli`, `mcp`, `env` still empty): with provisioning by
+  binding, `null` would have withheld `jira-ticket` from every project, Jira-bound or not.
+- **`get_task_context`'s `ci` is narrow on purpose**: it serves `tasks.coverage`, the one per-task
+  CI figure stored; `ci.pipeline.finished` is on the project stream with a `task_id` the provider
+  often cannot fill, and a per-task pipeline list would be a second resolution of the gate's join.
+  `AskAnswer` artifacts are excluded from `artifacts`, the planner's `isPromptExcludedArtifact`.
+- **The lint maintenance chore stays refused**, with its reason restated: backlog 49 is closed, and
+  turning the chore on changes what a scheduled chore does — filed below rather than done here.
+- **The wizard's step-4 sentence** (`apps/web/src/features/onboarding.tsx`) said running a
+  project's test command needed a widening nothing exposes; false after this row, rewritten, and
+  its UI test asserts the old sentence is gone. A contracts **and** web change: the orchestrator's
+  `verify:ui` and `verify:web-e2e` apply (rule 80).
+
+**For the orchestrator — documents that are not mine to edit.**
+- **BD-025 §2 / TD-027 — the sentence Q69's reason (4) asks for**: *"The per-role baselines carry
+  the project's declared commands as named verbs (`npm test`, `npm run *`, `make *`, …). The body of
+  `npm run *` and `make *` is repository content — a task or merge-request branch can change it —
+  and it is bounded by the run container, its non-root user, its workspace-only writable mount and
+  its egress allow-list (BD-021, TD-021), never by the command's name; the flags that hand one of
+  these verbs a model-written command are floored at `ask`."* TD-027 also needs: *"a skill may add
+  the read verbs its own recipes use, for a run provisioned with it (`COMMAND_ALLOW_BY_SKILL`); like
+  the stage layer it adds to `allow` only and runs before the project narrows."*
+- **product/13** § "Tools per role": the Discovery row's Shell becomes *"read-only cmds + the
+  project's declared commands and lockfile installs"*, and the italic note under the table
+  (*"no run of any role can execute one today … both ways out"*) is false and should say Q69 (ii)
+  was taken at WP-54. The Product Manager row is unchanged; the skills paragraph that lists
+  `jira-ticket` for the PM, if any, loses it.
+- **product/19 §3**: the read-only bullet's *"the project's test/lint commands (review stages
+  only)"* — this build grants them to the reviewer, the acceptance tester and discovery, plus the
+  lockfile installs; and §5's R6 row names `.agentic/workspace/setup` and compose targets, which a
+  run cannot execute (no named verb for a script path; `docker *` blocked).
+- **product/17**: no change needed for R1/R2; R6's "executed in the workspace" holds for `make` and
+  package scripts and not for a devcontainer or compose file.
+- **CLAUDE.md**: the Onboarding bullet's *"no run of any role can execute a project command on this
+  build: a project may only narrow the organisation command maximum and the maximum has no test
+  command, so R1, R2 and R6 are read for what a run can establish"*, and the "A run's prompt and its
+  tools" bullet's *"`kb_search` is real and the other eight **refuse by name**"* — both false.
+
+**Sentences falsified — changed.** `planner.ts` (the `TOOLS_BY_ROLE`, `SKILLS_BY_ROLE` and
+`COMMAND_BASELINE_BY_ROLE` docblocks, including *"the tools table is the half that is wrong"* and
+*"What no run of any role can do on this build"*); `command-policy.ts` (`DEFAULT_IMPLEMENTATION_ALLOW`'s
+docblock, `NarrowedCommandPolicy.ignoredAllow`); `criteria.ts` (module docblock and three detection
+lines); `platform-tools.ts` (module docblock, `MISSING.get_task_context` removed) and its test's
+counts; `pipeline.ts` (*"the other eight refuse"*); `common.ts` (`skillRefSchema`, "Who reads it");
+`loki/provider.ts` (*"provisioning is role-driven rather than binding-driven"*);
+`jira-cloud/registration.ts`; `platform-skills.contract.test.ts` (*"Provisioning is role-driven"*);
+`integrations.ts` (`TOOLS_BY_ROLE.reviewer is ['Read','Glob','Grep']`) and `spec.test.ts`;
+`chores.ts` (the `lint` refusal's reason, docblock and detail) and `contracts/config.ts` (the
+maintenance docblock and `commandPolicySchema`'s); `discovery/prompt.md` (*"no run on this platform
+can run a project command"*, *"which you cannot run on this platform"*); `onboarding.tsx` and its
+test; `wizard.e2e.test.ts` (two comments and the assertion that the discovery policy has no
+`npm test`); `rebase-gate.e2e.test.ts` (*"a local command no run may execute"*);
+`docs/technical/04-agent-runtime.md` (the TD-027 amendment's two-baseline sentence, plus a WP-54
+amendment); `docs/user-guide.md` (*"The discovery agent's shell is read-only"*);
+`docs/OPEN-QUESTIONS.md` Q69 (answered, two sentences corrected in the answer).
+**Left, with why.** `docs/technical/13-implementation-plan.md:122` and this file's backlog entries
+39, 40, 49, 83 and the WP-21/WP-14a notes — history, and the orchestrator's to mark resolved;
+`CLAUDE.md` and `docs/product/13`, `docs/product/19` — named above; `docs/technical/12`'s
+*"project may only narrow the org maximum"* — still true of the mechanism; the
+`narrowCommandPolicy (a project may only narrow)` describe title in `command-policy.test.ts` — true.
+
+**Rule 71**: no `.env.example`, `compose*.yml`, `loadServerConfig` or operator-guide change, so
+`compose-stock-check.mjs` does not apply.
+
+**Verification, and the one deviation from the machine discipline, stated.** The one-minute load
+stayed between 20 and 175 from 10:07 to 16:26 (another project's containers, `mediaanalysisd`,
+Spotlight); I waited six hours polling it and it never fell below 12. So the **full** tiers were not
+run by me. What was run, each at `nice -n 19` with **one** worker, gated on its exit status:
+`verify:static` PASS, `verify:types` PASS, `verify:bundle` PASS; every unit and contract file under
+`packages/*`, `apps/server`, `apps/launcher`, `apps/runlet`, `scripts` and `test/contract` (the
+whole of the unit and contract tiers' include globs, in four batches) green after two fixes
+(`api.test.ts`'s DTO fixture, the Jira registration's tooling case); the ui files touched
+(`onboarding.test.tsx`, `project-settings.test.tsx`, `no-html.test.ts`); the new integration file;
+and the e2e files `project-commands`, `wizard` and `agent-run`. **Not run by me: the rest of
+`verify:integration` and `verify:e2e`, `verify:web-e2e`, and coverage thresholds** (the batches ran
+without `--coverage`). The e2e criterion was **mutation-calibrated**: with `PROJECT_COMMAND_ALLOW`
+removed from the implementation baseline (the pre-WP-54 state, applied and reverted with the same
+script, md5 identical after), `project-commands.e2e.test.ts` fails by name — *"the pipeline never
+reached the test command's output in the stored transcript"*.
+**Addendum:** the load fell to 11.8 at 16:57 and **`pnpm run -s verify` ran in full: `PASS: verify`
+(exit 0, coverage thresholds included)**. The load was back above 40 straight after, so the rest of
+`verify:integration`/`verify:e2e` and `verify:web-e2e` are still not run by me.
+
+**Discovered work** (for the refiner; numbers from **139**, none fixed in place).
+- **139 — declaring `commands.allow` takes the developer's git verbs away.** A layer that declares
+  `allow` states it in full (`narrowCommandPolicy`, unchanged by WP-54), so technical/12's own
+  example `allow: ["npm test", "npm run lint", "make test", "pytest *"]` leaves an implementation run
+  with those four and **no** `git add`/`commit`/`push origin agentic/*`: the stage cannot deliver.
+  Measured with `narrowCommandPolicy` over the developer baseline; pre-existing, but live now that
+  a project has a reason to declare `allow`. A product question (does a project's `allow` narrow
+  only the project-command verbs?) before it is a code change.
+- **140 — the lockfile installs have nowhere to fetch from (read off the tree, not run in a
+  container).** The run's egress allow-list is the model host and the git host
+  (`packages/infrastructure/src/workspace/spec.ts`), so `npm ci`/`pip install -r` — in every
+  baseline that runs project commands — cannot reach a registry, and a test command that needs
+  dependencies fails in a real run. Needs a Docker measurement and an egress decision.
+- **141 — the lint-debt maintenance chore can be turned on.** Its refusal's reason (backlog 49) is
+  closed; the refusal stands, restated (`chores.ts`).
+- **142 — the triager's prompt says it gets the project's type mapping "through
+  `get_task_context`"** (`packages/prompts/roles/triager/prompt.md:6`); no `include` value serves
+  configuration. Either the prompt or the vocabulary (a prompt change needs eval cases and a bump).
+- **143 — Loki and Sentry are in no pipeline registry.** `createPipelineProviderRegistry` registers
+  GitLab, Jira and Slack; a project's observability binding is never loaded by the pipeline. Found
+  when `createBoundSkillsReader` first read that registry. May be the known unbuilt bug pre-fetch;
+  the refiner should check before numbering it.
+- **144 — R6's `.agentic/workspace/setup` has no named verb** (product/19 §5): a script path is not
+  in `PROJECT_COMMAND_ALLOW`, so that form of R6 cannot be executed by discovery.
+- **145 — `get_task_context`'s `mr` and `ci` are the stored refs only**: the merge request's state,
+  diff and pipelines are provider reads the tool does not make, and CI pipelines are not projected
+  per task (the reason is at `task-context-queries.ts`).
+
+**Review round 1 (REQUEST_CHANGES), addressed.**
+- **The floors were bypassable** (reviewer's spellings, their knowledge of make/go/npm parsing and
+  not a measurement of those tools). The floor list is now, in full:
+  `make* *=*` (a command-line variable assignment — `X:=$(shell …)`, `SHELL=`, `.SHELLFLAGS=`),
+  `make* --e*` (`--eval` and its getopt abbreviations, and `--environment-overrides`),
+  `make* -*E*` (`-E` alone or clustered, `-sE`), `go* -exec*`, `go* --exec*`, `go* -toolexec*`,
+  `go* --toolexec*`, `cargo* --config*`, `* --script-shell*`, `npm* --script*`, `pnpm* --script*`
+  (abbreviations of `--script-shell`), `* --node-options*`, `npm* --node*`, `pnpm* --node*`
+  (npm turns `--node-options` into `NODE_OPTIONS`). `command-policy.test.ts` § "the
+  project-command floors" runs all eighteen listed spellings through all three baselines expecting
+  `ask`, and the ordinary spellings (`make -j4 test`, `make test-e2e`, `npm test -- --coverage`)
+  expecting `allow`. A bare `make -e` floor was tried and **dropped**: its whole-line glob
+  `make* -*e*` also floored `make -j4 test`. The claim is weakened where it is written
+  (`PROJECT_COMMAND_ALLOW`'s docblock, the floors' comment, technical/04): the floors are an
+  enumeration of known spellings and can be incomplete; the boundary for the body is the sandbox.
+  Canary (round 1): with `make* *=*` disabled, six cases fail. *That pattern was replaced in round 2
+  by the token-scoped assignment floor; round 3's canary on it kills eight tests.*
+- **Criterion 3 at the mechanism.** The old property ("never widens") asserted `allow ⊆
+  maximum.allow` and never reached the literal path; it is replaced by a property on **verdicts** —
+  for any layer of literals and globs and any command, `allow` under the narrowed policy implies
+  `allow` under the maximum. Calibrated with canary b (a glob granted by coverage): the property
+  fails, counterexample `[{"allow":["git rebase -x *"]},"git rebase -x *"]`, and so does the
+  by-name case. **The by-name case was corrected in the process**: `git rebase -x *` alone *ties*
+  the ask entry `git rebase* -x*` on specificity and would not have widened `git rebase -x make`;
+  the real widening is `git rebase -x make *` (19 literal characters against 13), which the case
+  now names. Both reverts md5-identical.
+- **Q97 implemented, backlog 139 folded.** A declared `allow` narrows only the project-command
+  class (`isProjectCommandEntry`: an entry a `PROJECT_COMMAND_ALLOW` pattern covers) and keeps the
+  maximum's read, git and lockfile verbs and the stage and skill additions. Measured before
+  building: the recommendation holds, with one consequence stated — a project's `allow` no longer
+  drops TD-027's `git merge origin/*` at `conflict_resolution` (`block` does), and an
+  organisation-written entry outside the class (an org replacing the maximum with `a`, `b`, `c`) is
+  no longer narrowable by a project either; `effective-config.test.ts`'s narrowing case now uses
+  project commands. Asserted: over all three baselines with technical/12's example as the layer;
+  the developer with `allow: ["npm test"]` keeps `git commit -m x`, `git push origin agentic/x`,
+  `git log -5`, `npm ci` and does not get `npm run build` (unit, planner and e2e).
+- **The task context is bounded**: `TASK_CONTEXT_MAX_CHARS` (160 000 characters of JSON) shared
+  equally between the requested values; a list keeps its first items with `truncated`/`omitted`,
+  an artifact larger than half a share is refused by name with its URL, a single-document value is
+  refused rather than cut. Asserted in the integration test with forty 8 kB `params` documents and a
+  200 kB artifact.
+- **One definition of "ignored"**: `EffectiveConfig.ignoredAllowCommands` (org-maximum reading, no
+  production reader) is deleted; `ignoredProjectAllow` is the definition.
+- **Rule 83**: technical/06's Sentry paragraph (*"mounts no CLI, no MCP server and no skill"*) and
+  the Jira sentence beside it amended; technical/12's *"project may only narrow the org maximum"*
+  comment; technical/04's TD-027 sentence (*"a project's own `commands.allow` still drops it"*);
+  `COMMAND_ALLOW_BY_STAGE`'s docblock; `commandPolicySchema`'s docblock; Q97 marked implemented with
+  three of its sentences corrected.
+- **Stated residual (for BD-025, the orchestrator's)**: discovery now runs an unreviewed
+  repository's `make`/`npm run` at first contact, with the model credential in its environment.
+  Egress to the git host is an exfiltration path (a Makefile can carry its own push credentials),
+  and `npm run env` / `make -p` print the environment; the transcript is redacted through
+  `secretEnvNames`, which covers the credential's value in what is stored, not what the command
+  sends. The discovery grant is unchanged.
+- **Machine discipline, a finding against this row**: my load waits were unbounded `until` loops,
+  and every tool timeout left one running — the orchestrator killed 25. From here a load check is
+  bounded and no background shell is left behind.
+- **Round 1 verification** (one worker, `nice -n 19`, each gated on its exit status): the touched
+  unit and contract files — `apps/server`, `packages/{integrations,contracts,application,domain}`,
+  `test/contract`, 302 files, 5874 passed — plus `verify:static` PASS, `verify:types` PASS,
+  `scripts/citations.test.ts` green, `task-context.integration.test.ts` 12 passed and
+  `project-commands.e2e.test.ts` passed. The full `pnpm run -s verify` was **not** rerun: a bounded
+  check (five readings a minute apart: 16, 16, 38, 37, 32) never fell below 12. The last full
+  `verify` PASS was before this round's changes.
+
+**Review round 2 (REQUEST_CHANGES), addressed.**
+- **Five more bypasses floored** (the reviewer's knowledge of the tools, not run): npm's
+  `--scr`/`--scri` (any unique prefix of `--script-shell`), pnpm's `--config.node-options=` and
+  `--config.script-shell=`, and `go test -ldflags=-extld=…`. The floor list is now, in full:
+  a `make` positional containing `=` (token-scoped), `make* --e*`, `-E` inside a single-dash
+  short-option cluster of `make` (token-scoped), `go* -exec*`, `go* --exec*`, `go* -toolexec*`,
+  `go* --toolexec*`, `go* -ldflags*extld*`, `go* --ldflags*extld*`, `cargo* --config*`,
+  `* --script-shell*`, `npm* --scr*`, `pnpm* --scr*`, `* --node-options*`, `npm* --node*`,
+  `pnpm* --node*`, `pnpm* --config.*`, `npm* --config.*` (precautionary; whether npm accepts the
+  spelling is not measured). The docblock now says npm/pnpm long options are floored from the
+  **shortest prefix unique today**, which is knowledge of the CLIs' current option sets and not a
+  measurement, and "and their abbreviations" is gone from every place it claimed completeness
+  (`command-policy.ts`, technical/04). **Round 1's count is seven, not six**, counted off the
+  finding: `make 'X:=$(shell id)'`, `make --ev=`, `make -sE`, `go test --exec=`, `--toolexec=`,
+  `npm test --node-options=`, `npm test --script-s=`; the docblock says seven, and five in round 2.
+- **The over-blocks were measured and are fixed by scoping, not by loosening.** `HazardousArgument`
+  gained an optional token predicate, evaluated over the same argv0 candidates and dequoted flag and
+  positional split the block matcher uses, and the whole-line glob is not consulted for such an
+  entry. The assignment floor looks at positionals only (so `make --jobs=4 test` is `allow`) and
+  the `-E` floor at single-dash flags only (so `make -j4 TEST` and `make -k RELEASE` are `allow`).
+  `make test V=1` stays `ask`, by design and stated: a command-line variable overrides the
+  makefile's, and `CC`/`SHELL` are the ones a recipe runs. The table's `allow` side gained
+  `make -j4 TEST`, `make -k RELEASE`, `make --jobs=4 test`, `npm run lint -- --fix`,
+  `pnpm test --filter x`, `pytest -k 'a and b'` and `go test -ldflags=-X=main.v=1 ./...`.
+- **The task-context bound**: artifacts **skip and continue** (an oversize one becomes a refusal
+  naming it and its URL; the ones after it are still served), while runs, audit rows and returns
+  **stop** at the first that does not fit and report `omitted` — they are ordered lists, and a gapped
+  one would read as "the newest" while not being so. The ticket is guaranteed a 48 000-character
+  share (a full-size snapshot is about 43 000 and seven equal shares refused it), the rest split
+  equally. The docblock says the budget is measured **before** `platform-mcp` redacts, so a
+  redaction marker may push the answer slightly over. `task-context-queries.test.ts` tests the bound
+  without a database (skip-and-continue, contiguous stop, single-document refusal, the ticket share).
+- **Round 2 verification** (one worker, `nice -n 19`): `command-policy.test.ts`, `planner.test.ts`,
+  the prompts contract, `platform-tools.test.ts` (804 passed), the new unit file (4), the integration
+  file (12), `verify:types` PASS.
+- **`pnpm run -s verify`: PASS** (exit 0, coverage included), after a bounded reading of 7.

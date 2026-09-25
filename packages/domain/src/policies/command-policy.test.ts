@@ -12,15 +12,18 @@ import {
   DEFAULT_COMMAND_POLICY,
   DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
+  DEFAULT_VERIFICATION_ALLOW,
   dequoteCommand,
   evaluateCommand,
   HAZARDOUS_ARGUMENTS,
   hasOutputRedirection,
   hazardousArgument,
+  isProjectCommandEntry,
   matchesBlockPattern,
   matchesCommandPattern,
   narrowCommandPolicy,
   normaliseCommand,
+  PROJECT_COMMAND_ALLOW,
   type ResolvedCommandPolicy,
   splitCommandSegments,
   UNCERTAINTY,
@@ -834,35 +837,91 @@ describe('narrowCommandPolicy (a project may only narrow)', () => {
     expect(narrowed.policy.block).toContain('npm install *');
   });
 
+  /**
+   * Narrow-never-widen **on verdicts** (WP-54 review round 1). The earlier property asserted
+   * `allow ⊆ maximum.allow` over entries already in the maximum, so it never reached the path that
+   * grants a literal a pattern covers; this one asks the question the rule is about — for any layer
+   * of literals and globs and any command, a command the narrowed policy allows is one the maximum
+   * allows. Calibrated: granting a glob entry by coverage (the `git rebase -x *` hole below) fails
+   * it.
+   */
   it(
-    'never widens, for any layer',
+    'never widens, for any layer: what the narrowed policy allows, the maximum allows',
     () => {
-      const entry = fc.constantFrom('npm test', 'npm run lint', 'make test', 'curl *', 'rm -rf /*');
+      const shipped: ResolvedCommandPolicy = {
+        ...DEFAULT_COMMAND_POLICY,
+        allow: DEFAULT_IMPLEMENTATION_ALLOW,
+      };
+      const words = fc.constantFrom(
+        'npm test',
+        'npm run lint',
+        'npm run build',
+        'make test',
+        'make *',
+        'git rebase',
+        'git rebase -x make',
+        'git rebase -x *',
+        'git rebase -x make *',
+        'git rebase -x make test',
+        'git rebase *',
+        'git commit -m x',
+        'git push origin agentic/x',
+        'git push origin main',
+        'curl https://example.test',
+        'cat *',
+        'rm -rf /*',
+        'pytest *',
+        'find . -exec id ;',
+        'find *',
+        'npm install *',
+      );
       fc.assert(
         fc.property(
           fc.record(
-            {
-              allow: fc.array(entry),
-              ask: fc.array(entry),
-              block: fc.array(entry),
-            },
+            { allow: fc.array(words), ask: fc.array(words), block: fc.array(words) },
             { requiredKeys: [] },
           ),
-          (layer) => {
-            const narrowed = narrowCommandPolicy(maximum, layer);
-            for (const allowed of narrowed.policy.allow) {
-              expect(maximum.allow).toContain(allowed);
+          words,
+          (layer, command) => {
+            const narrowed = narrowCommandPolicy(shipped, layer).policy;
+            if (evaluateCommand({ command }, narrowed).verdict === 'allow') {
+              expect(evaluateCommand({ command }, shipped).verdict, command).toBe('allow');
             }
-            for (const blocked of maximum.block) {
-              expect(narrowed.policy.block).toContain(blocked);
+            for (const blocked of shipped.block) {
+              expect(narrowed.block).toContain(blocked);
             }
-            expect(new Set(narrowed.policy.allow).size).toBe(narrowed.policy.allow.length);
+            expect(new Set(narrowed.allow).size).toBe(narrowed.allow.length);
           },
         ),
       );
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+
+  /**
+   * The case by name. `git rebase -x make *` is *covered* by the maximum's `git rebase *` and pins
+   * more literal characters than the ask entry `git rebase* -x*` that carves `-x` out of it — so
+   * granting it by coverage would turn the maximum's `ask` for `git rebase -x make test` into
+   * `allow`. (`git rebase -x *` alone ties the ask entry on specificity and would not widen; it is
+   * refused all the same, because the rule is "verbatim", not "verbatim unless it happens to tie".)
+   */
+  it('grants a glob entry only verbatim — `git rebase -x make *` is not granted by `git rebase *`', () => {
+    const shipped: ResolvedCommandPolicy = {
+      ...DEFAULT_COMMAND_POLICY,
+      allow: DEFAULT_IMPLEMENTATION_ALLOW,
+    };
+    expect(verdict('git rebase -x make test', shipped)).toBe('ask');
+    const narrowed = narrowCommandPolicy(shipped, {
+      allow: ['git rebase -x make *', 'git rebase -x *'],
+    });
+    expect(narrowed.ignoredAllow).toEqual(['git rebase -x make *', 'git rebase -x *']);
+    expect(narrowed.policy.allow).not.toContain('git rebase -x make *');
+    expect(verdict('git rebase -x make test', narrowed.policy)).toBe('ask');
+    // …while a literal the maximum allows is granted, which is the other branch (rule 42).
+    expect(narrowCommandPolicy(shipped, { allow: ['npm run lint'] }).policy.allow).toContain(
+      'npm run lint',
+    );
+  });
 });
 
 describe('the two block items no pattern can express (product/19 §3)', () => {
@@ -991,11 +1050,15 @@ describe('the conflict-resolution stage layer (TD-027, product/19 §3)', () => {
     expect(stagePolicy.ask).toEqual(DEFAULT_COMMAND_POLICY.ask);
     expect(stagePolicy.block).toEqual(DEFAULT_COMMAND_POLICY.block);
 
-    // A project that declares its own allow-list without the merge loses it — TD-027's stated
-    // consequence, and the reason the layer is applied *before* the narrowing.
-    const narrowed = narrowCommandPolicy(stagePolicy, { allow: ['git status', 'git status *'] });
-    expect(narrowed.policy.allow).toEqual(['git status', 'git status *']);
-    expect(verdict('git merge --no-edit origin/main', narrowed.policy)).toBe('ask');
+    // Since Q97 (WP-54 review round 1) a declared `allow` narrows the **project-command class**
+    // only, so a project that lists its test command keeps the stage's merge — TD-027's earlier
+    // consequence ("a project that declares its own allow-list without the merge loses it") no
+    // longer holds. What removes it is `block`, which only grows.
+    const narrowed = narrowCommandPolicy(stagePolicy, { allow: ['npm test'] });
+    expect(verdict('git merge --no-edit origin/main', narrowed.policy)).toBe('allow');
+    expect(verdict('npm run build', narrowed.policy)).toBe('ask');
+    const blocked = narrowCommandPolicy(stagePolicy, { block: ['git merge*'] });
+    expect(verdict('git merge --no-edit origin/main', blocked.policy)).toBe('block');
     // A project cannot reach the merge by *asking* for it either, unless it spells it the same way.
     expect(narrowCommandPolicy(stagePolicy, { allow: ['git merge *'] }).ignoredAllow).toEqual([
       'git merge *',
@@ -1009,5 +1072,147 @@ describe('the shipped defaults', () => {
       expect(DEFAULT_IMPLEMENTATION_ALLOW).toContain(pattern);
     }
     expect(DEFAULT_COMMAND_POLICY.block).toBe(DEFAULT_BLOCKED_COMMANDS);
+  });
+});
+
+/**
+ * The floors on the project-command verbs (WP-54, and its review round 1 found six spellings the
+ * first list missed). Every listed spelling, through every shipped baseline, is `ask` — never
+ * `allow`. The spellings are the reviewer's knowledge of make/go/npm option parsing, not a
+ * measurement of those tools; what is measured here is the policy's answer to each.
+ */
+describe('the project-command floors', () => {
+  const SPELLINGS = [
+    // make: a command-line variable assignment runs text the line wrote.
+    "make 'X:=$(shell id)'",
+    'make SHELL=/bin/sh test',
+    'make .SHELLFLAGS=-c test',
+    // make --eval, abbreviated by getopt, and clustered.
+    "make --eval='x:;id' x",
+    "make --ev='x:;id' x",
+    "make -E 'x:;id' x",
+    "make -sE 'x:;id' x",
+    // go: both dash forms.
+    'go test -exec /bin/sh ./...',
+    'go test --exec=/bin/sh ./...',
+    'go test -toolexec=/bin/sh ./...',
+    'go test --toolexec=/bin/sh ./...',
+    // cargo's runner.
+    'cargo test --config \'target.x.runner="sh"\'',
+    // npm/pnpm: the script shell and NODE_OPTIONS, whole and abbreviated.
+    'npm run build --script-shell=/bin/x',
+    'npm test --script-s=/bin/x',
+    'pnpm test --script-sh=/bin/x',
+    'npm test --node-options=--import=data:text/javascript,1',
+    'npm test --node-o=x',
+    'pnpm test --node-options=x',
+    // Round 2: npm's shortest unique prefixes, pnpm's `--config.<key>`, go's external linker.
+    'npm test --scr=/bin/x',
+    'npm test --scri=x',
+    'pnpm test --config.node-options=--import=data:text/javascript,1',
+    'pnpm test --config.script-shell=x',
+    'go test -ldflags=-extld=/bin/id ./...',
+    "go test --ldflags '-extld /bin/id' ./...",
+    // A command-line variable can override a recipe variable (`CC`, `SHELL`), so the ordinary
+    // spelling is floored too — the stated over-block.
+    'make test V=1',
+  ];
+  const BASELINES: Readonly<Record<string, readonly string[]>> = {
+    read_only: DEFAULT_READ_ONLY_ALLOW,
+    verification: DEFAULT_VERIFICATION_ALLOW,
+    implementation: DEFAULT_IMPLEMENTATION_ALLOW,
+  };
+
+  for (const [name, allow] of Object.entries(BASELINES)) {
+    it.each(SPELLINGS)(`${name}: %s is ask`, (command) => {
+      expect(verdict(command, { ...DEFAULT_COMMAND_POLICY, allow })).toBe('ask');
+    });
+  }
+
+  it('still allows the ordinary spellings of the same verbs (rule 42)', () => {
+    const policy = { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW };
+    for (const command of [
+      'npm test',
+      'npm test -- --coverage',
+      'npm run lint',
+      'npm run lint -- --fix',
+      'pnpm test --filter x',
+      'make test',
+      'make -j4 test',
+      // Round 2's measured over-blocks, now token-scoped: a capital E in a later word, and `=`
+      // inside a flag, are not the hazards.
+      'make -j4 TEST',
+      'make -k RELEASE',
+      'make --jobs=4 test',
+      'make test-e2e',
+      'go test ./...',
+      'go test -ldflags=-X=main.v=1 ./...',
+      'cargo test',
+      'pytest -q',
+      "pytest -k 'a and b'",
+    ]) {
+      expect(verdict(command, policy), command).toBe('allow');
+    }
+  });
+});
+
+/**
+ * Q97, answered at WP-54 review round 1 (PROGRESS backlog 139): a declared `allow` narrows the
+ * project-command class only, over each of the three baselines, with technical/12's own example as
+ * the layer.
+ */
+describe('a declared `allow` narrows the project commands and leaves the baseline verbs', () => {
+  const EXAMPLE = { allow: ['npm test', 'npm run lint', 'make test', 'pytest *'] };
+  const baseline = (allow: readonly string[]): ResolvedCommandPolicy => ({
+    ...DEFAULT_COMMAND_POLICY,
+    allow,
+  });
+
+  it('keeps the developer’s git verbs and drops the project commands it did not list', () => {
+    const narrowed = narrowCommandPolicy(baseline(DEFAULT_IMPLEMENTATION_ALLOW), {
+      allow: ['npm test'],
+    }).policy;
+    for (const command of [
+      'git commit -m x',
+      'git push origin agentic/x',
+      'git log -5',
+      'npm ci',
+    ]) {
+      expect(verdict(command, narrowed), command).toBe('allow');
+    }
+    expect(verdict('npm test', narrowed)).toBe('allow');
+    for (const command of ['npm run build', 'make test', 'pytest -q']) {
+      expect(verdict(command, narrowed), command).toBe('ask');
+    }
+  });
+
+  it.each([
+    ['read_only', DEFAULT_READ_ONLY_ALLOW],
+    ['verification', DEFAULT_VERIFICATION_ALLOW],
+    ['implementation', DEFAULT_IMPLEMENTATION_ALLOW],
+  ] as const)('%s: technical/12’s example keeps every non-project verb', (_name, allow) => {
+    const narrowed = narrowCommandPolicy(baseline(allow), EXAMPLE).policy;
+    for (const entry of allow.filter((candidate) => !isProjectCommandEntry(candidate))) {
+      expect(narrowed.allow, entry).toContain(entry);
+    }
+    for (const entry of narrowed.allow.filter(isProjectCommandEntry)) {
+      expect(EXAMPLE.allow, entry).toContain(entry);
+    }
+  });
+
+  it('classifies the shipped lists: project verbs in, git, read and lockfile verbs out', () => {
+    expect(DEFAULT_IMPLEMENTATION_ALLOW.filter(isProjectCommandEntry)).toEqual(
+      PROJECT_COMMAND_ALLOW,
+    );
+    expect(isProjectCommandEntry('npm run lint')).toBe(true);
+    expect(isProjectCommandEntry('git merge origin/*')).toBe(false);
+  });
+
+  it('takes a baseline verb away through `block`, which only grows', () => {
+    const narrowed = narrowCommandPolicy(baseline(DEFAULT_IMPLEMENTATION_ALLOW), {
+      allow: ['npm test'],
+      block: ['git push*'],
+    }).policy;
+    expect(verdict('git push origin agentic/x', narrowed)).toBe('block');
   });
 });

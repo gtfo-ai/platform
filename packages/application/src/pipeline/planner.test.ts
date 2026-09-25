@@ -20,10 +20,14 @@ import {
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
   DATA_BLOCK_TAG,
   DEFAULT_COMMAND_POLICY,
+  DEFAULT_IMPLEMENTATION_ALLOW,
   DEFAULT_READ_ONLY_ALLOW,
+  DEFAULT_VERIFICATION_ALLOW,
   evaluateCommand,
   extractQueryTerms,
   HOSTILE_CONSTRUCTS,
+  isProjectCommandEntry,
+  PROJECT_COMMAND_ALLOW,
   type RolePromptDefinition,
   readDataBlocks,
   SANITISED_MARKER,
@@ -36,15 +40,19 @@ import { silentLogger } from '../ports/logger.js';
 import { FIXTURE_HOSTILE_PATH, FIXTURE_ZERO_WIDTH } from '../testing/fixture-vault.js';
 import { indexedFixtureVault } from '../testing/memory-knowledge.js';
 import {
+  COMMAND_ALLOW_BY_SKILL,
   COMMAND_ALLOW_BY_STAGE,
   COMMAND_BASELINE_BY_ROLE,
   commandBaselineFor,
   createStageRunPlanner,
+  ignoredProjectAllow,
   PLATFORM_TOOLS_BY_ROLE,
+  PROVIDER_SKILLS,
   platformToolsFor,
   RUN_MODE_BY_STAGE,
   RUN_MODE_BY_TEMPLATE,
   SKILLS_BY_ROLE,
+  skillsFor,
   TOOLS_BY_ROLE,
   taskTextOf,
 } from './planner.js';
@@ -113,6 +121,7 @@ const planWith = async (taskText: string, ticketSnapshot: TicketSnapshot | null 
     workspacePath: (taskId) => `/workspaces/${taskId}`,
     prompts: prompts as never,
     skills: testSkills,
+    boundSkills: async () => [],
     nonce: { next: () => NONCE },
     contextPacks: createContextPackAssembler({
       store: (await indexedFixtureVault()).store,
@@ -412,78 +421,122 @@ describe('the platform skills a stage is planned with', () => {
   });
 
   /**
-   * The three roles that may run a command, named — and the three that may write, named beside them
-   * (standing rule 68: enumerate what you branch on).
+   * product/13 § "Tools per role", the **Shell** column, transcribed per member of the role schema
+   * (WP-54, PROGRESS backlog 39 — criterion 5). `null` is a role product/13 has no row for; its
+   * shell is the table's to decide and it has none.
    *
-   * `discovery` gained `Bash` at WP-21 because product/17 R1/R2/R6 are detected by *executing*
-   * something and R1 is a level-1 requirement, so without it no repository could exceed readiness 0.
-   * It is the widest change in that work package, so it is asserted rather than left to a docblock:
-   * a role added to either list has to come through this case.
+   * The transcription is the spec side of the comparison, and `TOOLS_BY_ROLE` and
+   * `COMMAND_BASELINE_BY_ROLE` are the code side: a role gains or loses `Bash`, or moves between
+   * baselines, only by changing both — which is what backlog 39 found had not happened for the
+   * investigator, the architect and the reviewer.
    */
-  it('starts each role from the command baseline its table names', () => {
-    // The third least-privilege table, enumerated (standing rule 68). `discovery` is the only
-    // read-only row, and the assertion is on the **list it resolves to**, not on the word: a table
-    // entry that stopped selecting `DEFAULT_READ_ONLY_ALLOW` would pass a word comparison.
-    expect(
-      Object.entries(COMMAND_BASELINE_BY_ROLE)
-        .filter(([, baseline]) => baseline === 'read_only')
-        .map(([role]) => role),
-      // `ask` joined `discovery` at WP-31: an ask has **no shell at all** (`TOOLS_BY_ROLE.ask` is
-      // empty), so the entry decides nothing that can happen — and it is the read-only one rather
-      // than the permissive one, because a table whose unreachable entry is permissive becomes
-      // wrong the day somebody adds `Bash` to the row above. `historian` joined them at WP-35 for
-      // exactly that reason: its whole input is its prompt, so it has no shell either.
-    ).toEqual(['discovery', 'ask', 'historian']);
-    expect(commandBaselineFor('discovery', 'discovery').allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
-    expect(commandBaselineFor('developer', 'implementation').allow).toEqual(
-      DEFAULT_COMMAND_POLICY.allow,
-    );
+  const PRODUCT_13_SHELL: Readonly<
+    Record<string, 'none' | 'read_only' | 'verification' | 'implementation' | null>
+  > = {
+    triager: null,
+    product_manager: 'none', // "–"
+    investigator: 'read_only', // "read-only cmds"
+    architect: 'read_only', // "read-only cmds"
+    developer: 'implementation', // "✔ (allow-listed)"
+    reviewer: 'verification', // "tests only"
+    acceptance_tester: 'verification', // "tests/app cmds"
+    facilitator: 'none', // Retrospective "–"
+    librarian: 'none', // "–"
+    // The row the orchestrator added at WP-21 says "read-only cmds"; WP-54 widens it to run the
+    // project's declared commands (product/17 R1/R2/R6, product/19 §5), and the row's amendment is
+    // named in the WP-54 notes. Transcribed as what the code and product/17 now agree on.
+    discovery: 'verification',
+    ask: 'none', // "–"
+    historian: null,
+  };
 
-    // What the narrowing actually removes, named rather than implied: the round-1 baseline gave
-    // discovery these, and a read-only run is not stopped from pushing by having no credential.
-    for (const entry of ['git add *', 'git commit *', 'git push origin agentic/*', 'npm ci']) {
-      expect(DEFAULT_COMMAND_POLICY.allow, entry).toContain(entry);
-      expect(commandBaselineFor('discovery', 'discovery').allow, entry).not.toContain(entry);
-    }
-    // …and the refusals are untouched: a narrowing must not drop an `ask` or a `block`.
-    expect(commandBaselineFor('discovery', 'discovery').ask).toEqual(DEFAULT_COMMAND_POLICY.ask);
-    expect(commandBaselineFor('discovery', 'discovery').block).toEqual(
-      DEFAULT_COMMAND_POLICY.block,
+  it.each([...agentRoleSchema.options])(
+    '%s: holds `Bash` exactly when product/13 gives it a shell, on the baseline that shell names',
+    (role) => {
+      const shell = PRODUCT_13_SHELL[role];
+      expect(Object.keys(PRODUCT_13_SHELL).sort()).toEqual([...agentRoleSchema.options].sort());
+      const hasBash = TOOLS_BY_ROLE[role].includes('Bash');
+      expect(hasBash, `${role} Bash`).toBe(shell !== null && shell !== 'none');
+      // A role with no shell sits on the conservative baseline, so the unreachable entry is never
+      // the permissive one (standing rule 20's direction).
+      expect(COMMAND_BASELINE_BY_ROLE[role]).toBe(hasBash ? shell : 'read_only');
+    },
+  );
+
+  it('starts each baseline from the list product/19 §3 names for it', () => {
+    // The assertion is on the **list each resolves to**, not on the word (rule 10).
+    expect(commandBaselineFor('investigator', 'investigation', []).allow).toEqual(
+      DEFAULT_READ_ONLY_ALLOW,
     );
+    expect(commandBaselineFor('reviewer', 'code_review', []).allow).toEqual(
+      DEFAULT_VERIFICATION_ALLOW,
+    );
+    expect(commandBaselineFor('developer', 'implementation', []).allow).toEqual(
+      DEFAULT_IMPLEMENTATION_ALLOW,
+    );
+    expect(DEFAULT_COMMAND_POLICY.allow).toEqual(DEFAULT_IMPLEMENTATION_ALLOW);
+    // Backlog 49: the project's declared commands are **in** the two baselines that run them and
+    // nowhere else.
+    for (const entry of PROJECT_COMMAND_ALLOW) {
+      expect(DEFAULT_IMPLEMENTATION_ALLOW, entry).toContain(entry);
+      expect(DEFAULT_VERIFICATION_ALLOW, entry).toContain(entry);
+      expect(DEFAULT_READ_ONLY_ALLOW, entry).not.toContain(entry);
+    }
+    // No baseline ever carries a `*` allow (Q69 reason 5).
+    for (const baseline of [
+      DEFAULT_READ_ONLY_ALLOW,
+      DEFAULT_VERIFICATION_ALLOW,
+      DEFAULT_IMPLEMENTATION_ALLOW,
+    ]) {
+      expect(baseline).not.toContain('*');
+    }
+    // …and every baseline keeps the shipped refusals: a baseline chooses `allow` only.
+    for (const role of agentRoleSchema.options) {
+      expect(commandBaselineFor(role, 'implementation', []).ask, role).toEqual(
+        DEFAULT_COMMAND_POLICY.ask,
+      );
+      expect(commandBaselineFor(role, 'implementation', []).block, role).toEqual(
+        DEFAULT_COMMAND_POLICY.block,
+      );
+    }
   });
 
-  it('refuses a write command under the discovery policy, at the fallback a run really uses', () => {
+  it('refuses a write under the verification baseline and allows the project’s test command', () => {
     /**
-     * The list is not the guarantee — the **evaluation** is (standing rule 10). A baseline asserted
-     * only as an array would still pass if the evaluator read it differently, and the fallback is
-     * the part that decides what an *unmatched* command becomes: a run's is `ask`, and an
-     * unattended `ask` denies (`questionTimeoutMs`), which is what makes "not on the allow list"
-     * equivalent to "refused" for a discovery run nobody is watching.
-     *
-     * `command-policy.test.ts` already has a read-only case, with fallback `block`; this one uses
-     * the fallback a run actually passes, so it measures the arrangement that ships.
+     * The evaluation rather than the list (standing rule 10), at the fallback a run really uses:
+     * a run's is `ask`, and an unattended `ask` denies, so "not allowed" is "refused" for a run
+     * nobody is watching.
      */
-    const policy = commandBaselineFor('discovery', 'discovery');
-    expect(evaluateCommand({ command: 'git log -5' }, policy, 'ask').verdict).toBe('allow');
-    expect(evaluateCommand({ command: 'cat package.json' }, policy, 'ask').verdict).toBe('allow');
+    const policy = commandBaselineFor('discovery', 'discovery', ['kb']);
+    for (const command of ['git log -5', 'cat package.json', 'npm ci', 'npm test', 'make setup']) {
+      expect(evaluateCommand({ command }, policy, 'ask').verdict, command).toBe('allow');
+    }
     for (const command of [
       'git push origin agentic/x',
       'git commit -m x',
-      'npm ci',
-      'npm test',
-      'pip install -r requirements.txt',
+      'git add .',
+      'npm install left-pad',
+      'curl https://example.test',
     ]) {
       expect(evaluateCommand({ command }, policy, 'ask').verdict, command).not.toBe('allow');
     }
-    // The same commands on the implementation baseline *are* allowed, so the case above is about
-    // this role's narrowing rather than about the evaluator refusing everything (rule 42).
-    for (const command of ['git push origin agentic/x', 'git commit -m x', 'npm ci']) {
+    // The same write verbs on the implementation baseline *are* allowed, so the refusals above are
+    // this baseline's narrowing and not the evaluator refusing everything (rule 42).
+    for (const command of ['git push origin agentic/x', 'git commit -m x', 'npm ci', 'npm test']) {
       expect(
-        evaluateCommand({ command }, commandBaselineFor('developer', 'implementation'), 'ask')
+        evaluateCommand({ command }, commandBaselineFor('developer', 'implementation', []), 'ask')
           .verdict,
         command,
       ).toBe('allow');
     }
+    // …and the read-only baseline runs no project command at all.
+    expect(
+      evaluateCommand(
+        { command: 'npm test' },
+        commandBaselineFor('architect', 'architecture', []),
+        'ask',
+      ).verdict,
+    ).toBe('ask');
   });
 
   /**
@@ -505,14 +558,14 @@ describe('the platform skills a stage is planned with', () => {
     }
     expect(COMMAND_ALLOW_BY_STAGE[CONFLICT_RESOLUTION_STAGE]).toBe(CONFLICT_RESOLUTION_EXTRA_ALLOW);
 
-    const base = commandBaselineFor('developer', 'implementation');
-    const layered = commandBaselineFor('developer', CONFLICT_RESOLUTION_STAGE);
+    const base = commandBaselineFor('developer', 'implementation', []);
+    const layered = commandBaselineFor('developer', CONFLICT_RESOLUTION_STAGE, []);
     expect(layered.ask).toEqual(base.ask);
     expect(layered.block).toEqual(base.block);
     expect(layered.allow).toEqual([...base.allow, ...CONFLICT_RESOLUTION_EXTRA_ALLOW]);
     // The role's own baseline is unchanged by the table: a read-only role at this stage gains the
     // patterns and still has no write verb (the layer adds, the role still decides the rest).
-    expect(commandBaselineFor('discovery', CONFLICT_RESOLUTION_STAGE).allow).toEqual([
+    expect(commandBaselineFor('investigator', CONFLICT_RESOLUTION_STAGE, []).allow).toEqual([
       ...DEFAULT_READ_ONLY_ALLOW,
       ...CONFLICT_RESOLUTION_EXTRA_ALLOW,
     ]);
@@ -521,7 +574,7 @@ describe('the platform skills a stage is planned with', () => {
   it('grants the merge at the conflict resolution and at no other stage', () => {
     // The evaluation rather than the list (rule 10), at the fallback a run really uses.
     const at = (stage: string, command: string) =>
-      evaluateCommand({ command }, commandBaselineFor('developer', stage), 'ask').verdict;
+      evaluateCommand({ command }, commandBaselineFor('developer', stage, []), 'ask').verdict;
 
     expect(at(CONFLICT_RESOLUTION_STAGE, 'git merge --no-edit origin/main')).toBe('allow');
     expect(at(CONFLICT_RESOLUTION_STAGE, 'git merge --abort')).toBe('allow');
@@ -554,13 +607,46 @@ describe('the platform skills a stage is planned with', () => {
         .filter(([, tools]) => tools.includes(tool))
         .map(([role]) => role)
         .sort();
-    expect(withTool('Bash')).toEqual(['acceptance_tester', 'developer', 'discovery']);
+    expect(withTool('Bash')).toEqual([
+      'acceptance_tester',
+      'architect',
+      'developer',
+      'discovery',
+      'investigator',
+      'reviewer',
+    ]);
     expect(withTool('Write')).toEqual(['developer', 'librarian']);
-    // …and the shell does not come with a way to keep what it produced: discovery writes nothing
-    // to the workspace and holds no mutating platform tool.
-    expect(TOOLS_BY_ROLE.discovery).not.toContain('Write');
-    expect(TOOLS_BY_ROLE.discovery).not.toContain('Edit');
+    // …and the shell does not come with a way to keep what it produced: of the six, only the
+    // developer can write, and discovery holds no mutating platform tool.
+    for (const role of [
+      'acceptance_tester',
+      'architect',
+      'discovery',
+      'investigator',
+      'reviewer',
+    ] as const) {
+      expect(TOOLS_BY_ROLE[role], role).not.toContain('Write');
+      expect(TOOLS_BY_ROLE[role], role).not.toContain('Edit');
+    }
     expect(PLATFORM_TOOLS_BY_ROLE.discovery).toEqual(['report_progress', 'kb_search']);
+  });
+
+  /**
+   * The skill-scoped command layer (WP-54): what a skill adds reaches only a run that is
+   * provisioned with the skill, which is only a run whose project has the binding.
+   */
+  it('adds a skill’s recipes to `allow` only for a run provisioned with that skill', () => {
+    const withLoki = commandBaselineFor('investigator', 'investigation', ['loki-logs']);
+    const without = commandBaselineFor('investigator', 'investigation', []);
+    const recipe = 'logcli query \'{app="checkout"}\' --since=6h --limit=200';
+    expect(evaluateCommand({ command: recipe }, withLoki, 'ask').verdict).toBe('allow');
+    expect(evaluateCommand({ command: recipe }, without, 'ask').verdict).toBe('ask');
+    expect(withLoki.ask).toEqual(without.ask);
+    expect(withLoki.block).toEqual(without.block);
+    // Every key is a provider skill some role holds, so no entry is a grant nobody can reach.
+    for (const skill of Object.keys(COMMAND_ALLOW_BY_SKILL)) {
+      expect(PROVIDER_SKILLS, skill).toContain(skill);
+    }
   });
 
   /**
@@ -616,6 +702,7 @@ describe('the platform skills a stage is planned with', () => {
       workspacePath: (taskId) => `/workspaces/${taskId}`,
       prompts: prompts as never,
       skills: testSkills,
+      boundSkills: async () => [],
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
         store: (await indexedFixtureVault()).store,
@@ -698,6 +785,7 @@ describe('the platform skills a stage is planned with', () => {
       workspacePath: (taskId) => `/workspaces/${taskId}`,
       prompts: prompts as never,
       skills: testSkills,
+      boundSkills: async () => [],
       nonce: { next: () => NONCE },
       contextPacks: createContextPackAssembler({
         store: (await indexedFixtureVault()).store,
@@ -763,10 +851,172 @@ describe('the platform skills a stage is planned with', () => {
         workspacePath: (taskId) => `/workspaces/${taskId}`,
         prompts: prompts as never,
         skills: { kb: testSkills['kb'] as SkillDefinition },
+        boundSkills: async () => [],
         nonce: { next: () => NONCE },
         contextPacks: { assemble: async () => ({}) as never },
         clock: { now: () => NOW },
       }),
     ).toThrow(/missing ask-human/);
+  });
+});
+
+/**
+ * WP-54: which skills and which commands reach a run, decided by the role **and** the project —
+ * PROGRESS backlog 40 (skills by binding) and 49 (the project's declared commands, and the drop
+ * that used to be silent).
+ */
+describe('what the project decides about a run, within what the role allows', () => {
+  const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+  const recordingLogger = {
+    ...silentLogger,
+    warn: (fields: Record<string, unknown>, message: string) => {
+      warnings.push({ fields, message });
+    },
+  };
+
+  const investigatorStage = {
+    id: 'investigation',
+    kind: 'agent',
+    role: 'investigator',
+    produces: 'RootCauseAnalysis',
+  };
+  const developerStage = {
+    id: 'implementation',
+    kind: 'agent',
+    role: 'developer',
+    produces: 'ImplementationNotes',
+  };
+
+  const planFor = async (
+    stage: Record<string, unknown>,
+    bound: readonly string[],
+    config: Record<string, unknown> = {},
+  ) => {
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async (projectId) => {
+        // The project asked about is the run's own, never another one's.
+        expect(projectId).toBe(PROJECT);
+        return bound;
+      },
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({
+        store: (await indexedFixtureVault()).store,
+        logger: silentLogger,
+      }),
+      clock: { now: () => NOW },
+      logger: recordingLogger,
+    });
+    const request = requestWith('a ticket about refunds');
+    return (
+      await planner.plan({
+        ...request,
+        stage: stage as never,
+        settings: { projectId: PROJECT, config },
+      } as unknown as StageRunRequest)
+    ).spec;
+  };
+
+  it('provisions no `loki-logs` for a project with no Loki binding, and does for one with it', async () => {
+    const without = await planFor(investigatorStage, ['sentry-issue']);
+    expect(without.skills).not.toContain('agentic:loki-logs');
+    expect(without.skills).toContain('agentic:sentry-issue');
+    const withLoki = await planFor(investigatorStage, ['loki-logs', 'sentry-issue']);
+    expect(withLoki.skills).toContain('agentic:loki-logs');
+    // The skill's recipe verb travels with it, and only with it.
+    expect(without.commandPolicy.allow).not.toContain('logcli query *');
+    expect(withLoki.commandPolicy.allow).toContain('logcli query *');
+    // The audit shows it: the skill-set digest in `prompt_version` differs between the two runs
+    // (criterion 7), because the digest is over the set the workspace is actually given.
+    expect(without.promptVersion).not.toBe(withLoki.promptVersion);
+  });
+
+  it('never hands a role a skill its row does not list, whatever the bindings name', async () => {
+    // The architect's row has no provider skill; every binding in the world adds nothing.
+    const spec = await planFor(
+      { id: 'architecture', kind: 'agent', role: 'architect', produces: 'ImplementationPlan' },
+      [...PROVIDER_SKILLS],
+    );
+    expect(spec.skills).toEqual(SKILLS_BY_ROLE.architect.map((name) => `agentic:${name}`));
+    // …and a role-only skill needs no binding at all.
+    for (const role of agentRoleSchema.options) {
+      expect(skillsFor(role, [])).toEqual(
+        SKILLS_BY_ROLE[role].filter((name) => !PROVIDER_SKILLS.includes(name)),
+      );
+    }
+  });
+
+  it("grants the project's declared test command to the developer, narrowed to what it lists", async () => {
+    const spec = await planFor(developerStage, [], {
+      commands: { allow: ['npm test', 'npm run lint'] },
+    });
+    // A literal entry narrows the baseline's pattern rather than being dropped for not being
+    // spelled the same way (`npm run lint` is granted by `npm run *`).
+    expect(spec.commandPolicy.allow.filter(isProjectCommandEntry)).toEqual([
+      'npm test',
+      'npm run lint',
+    ]);
+    const at = (command: string) => evaluateCommand({ command }, spec.commandPolicy, 'ask').verdict;
+    expect(at('npm test')).toBe('allow');
+    // Q97 (WP-54 review round 1, backlog 139): the declaration narrows the project commands only,
+    // so the developer can still deliver — both directions asserted.
+    expect(at('git commit -m x')).toBe('allow');
+    expect(at('git push origin agentic/x')).toBe('allow');
+    expect(at('git log -5')).toBe('allow');
+    // …and what the project did **not** list among its commands is gone.
+    expect(at('npm run build')).toBe('ask');
+  });
+
+  /**
+   * Criterion 3 — narrow-never-widen, with the refusal **by name** — and criterion 2's log line.
+   *
+   * The investigator's baseline is read-only; a project that lists `npm test` and a `curl` cannot
+   * reach either through that role. Both entries are dropped, both are named in the warning, and
+   * the evaluation of each is not `allow` (rule 43: the payload is one the *developer's* baseline
+   * would grant, so the refusal is this role's, not the evaluator's).
+   */
+  it('refuses, by name, a declared command the role baseline does not grant — and says so', async () => {
+    warnings.length = 0;
+    const spec = await planFor(investigatorStage, [], {
+      commands: { allow: ['git log', 'npm test', 'curl https://example.test'] },
+    });
+    // The read-only verbs stay (Q97: a declared `allow` narrows the project commands only).
+    expect(spec.commandPolicy.allow).toEqual(DEFAULT_READ_ONLY_ALLOW);
+    for (const command of ['npm test', 'curl https://example.test']) {
+      expect(evaluateCommand({ command }, spec.commandPolicy, 'ask').verdict, command).toBe('ask');
+    }
+    expect(
+      evaluateCommand(
+        { command: 'npm test' },
+        commandBaselineFor('developer', 'implementation', []),
+        'ask',
+      ).verdict,
+    ).toBe('allow');
+
+    const dropped = warnings.find((entry) => 'ignored_allow' in entry.fields);
+    expect(dropped?.fields).toMatchObject({
+      role: 'investigator',
+      stage: 'investigation',
+      run_id: RUN,
+      ignored_allow: ['npm test', 'curl https://example.test'],
+    });
+    expect(dropped?.message).toMatch(/dropped, never widened/);
+
+    // No warning when nothing is dropped (rule 42).
+    warnings.length = 0;
+    await planFor(investigatorStage, [], { commands: { allow: ['git log'] } });
+    expect(warnings.filter((entry) => 'ignored_allow' in entry.fields)).toEqual([]);
+  });
+
+  it('publishes what no role would be granted, and not what some role is', () => {
+    expect(
+      ignoredProjectAllow({
+        allow: ['npm test', 'make test', 'git merge origin/main', 'curl https://example.test'],
+      }),
+    ).toEqual(['curl https://example.test']);
+    expect(ignoredProjectAllow(undefined)).toEqual([]);
+    expect(ignoredProjectAllow({ ask: ['npm test'] })).toEqual([]);
   });
 });

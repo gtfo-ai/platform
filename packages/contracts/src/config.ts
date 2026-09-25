@@ -349,8 +349,12 @@ export const policiesConfigSchema = z.strictObject({
 // ── commands (BD-025) ────────────────────────────────────────────────────────
 
 /**
- * The three-list command policy. A project may only *narrow* the org maximum: entries added to
- * `allow` that the org does not allow are ignored by the merge, and `block` always wins.
+ * The three-list command policy. A project may only *narrow* what its runs start from — each role's
+ * shipped baseline (WP-54, Q69 (ii)). A declared `allow` narrows the baseline's **project
+ * commands** only and leaves its read, git and lockfile verbs alone (Q97); entries it adds that the
+ * baseline does not grant are ignored by the merge **and reported** (`ignored_allow_commands` on the
+ * effective configuration, and a log line per run); `ask` and `block` only grow, and `block` always
+ * wins.
  */
 export const commandPolicySchema = z.strictObject({
   allow: z.array(nonEmptyStringSchema).optional(),
@@ -489,9 +493,9 @@ export const featuresConfigSchema = z.strictObject({
    *    task and budget caps like any other task.
    *  - `chores` is *"allowed chore types"*. **All five parse and three refuse by name** at schedule
    *    time (`MAINTENANCE_CHORES`): this build detects no flaky test (product/04:65), no
-   *    documentation drift (`policies.drift_without_direction` has no reader), and no run of any
-   *    role may execute a project command (PROGRESS backlog 49 / Q69), so `flaky`, `docs` and
-   *    `lint` produce a named refusal rather than a task. They are refused **here rather than at
+   *    documentation drift (`policies.drift_without_direction` has no reader), and it schedules no
+   *    lint-debt chore (refused for PROGRESS backlog 49, which WP-54 closed; enabling it is its own
+   *    change), so `flaky`, `docs` and `lint` produce a named refusal rather than a task. They are refused **here rather than at
    *    the schema** deliberately: a value that has parsed since the key existed must not start
    *    failing a project's whole `.agentic/config.yml`, which every stage of every task reads.
    *    An **explicitly empty** list means *"no chore type"*, the fail-closed reading of "the types

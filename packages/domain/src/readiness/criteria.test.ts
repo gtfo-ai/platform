@@ -68,6 +68,28 @@ describe('the criteria table', () => {
     }
   });
 
+  /**
+   * WP-54 (Q69 (ii), PROGRESS backlog 49 criterion 4): R1, R2 and R6 are detected the way
+   * product/17 words them — **run**, not read — because the discovery role's baseline now carries
+   * the project's declared commands. From WP-21 to WP-54 all three read the CI configuration.
+   */
+  it('detects R1, R2 and R6 by running the project’s commands, as product/17 words them', () => {
+    const detection = (id: string) =>
+      READINESS_CRITERIA.find((criterion) => criterion.id === id)?.detection ?? '';
+    // product/17:15, verbatim.
+    expect(detection('R1')).toBe(
+      'test command found in how-to-run.md/CI config and executed in the workspace',
+    );
+    // product/17:16 is one word, "measured"; the line says what is measured.
+    expect(detection('R2')).toMatch(/^measured: /);
+    // product/17:20, with the one residual named: a run has no Docker.
+    expect(detection('R6')).toContain('executed in the workspace');
+    expect(detection('R6')).toContain('a run has no Docker');
+    for (const id of ['R1', 'R2', 'R6']) {
+      expect(detection(id), id).not.toMatch(/CI timeout|a documented duration/);
+    }
+  });
+
   it('uses every criterion in exactly one rung of the ladder', () => {
     const used = READINESS_LEVEL_REQUIREMENTS.flat();
     expect([...used].sort()).toEqual([...READINESS_CRITERION_IDS].sort());

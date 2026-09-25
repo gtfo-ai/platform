@@ -56,8 +56,6 @@ export interface EffectiveConfig {
   readonly sources: ConfigProvenance;
   /** The three-list command policy after narrowing, with all three lists present. */
   readonly commands: ResolvedCommandPolicy;
-  /** Allow entries a lower layer asked for that the organisation maximum does not grant. */
-  readonly ignoredAllowCommands: readonly string[];
   /** Set when a layer asked for more autonomy than the organisation permits (BD-027). */
   readonly cappedAutonomy: {
     readonly requested: AutonomyLevel;
@@ -263,12 +261,13 @@ export const mergeProjectConfig = (layers: readonly ConfigLayer[]): EffectiveCon
 
   // ── BD-025: the command policy narrows below the organisation maximum ──
   const maximum = organisationCommandMaximum(bySource.get('org')?.commands);
-  const ignoredAllowCommands: string[] = [];
+  // What a declared `allow` entry *ignored* means has one definition since WP-54's review round 1:
+  // `ignoredProjectAllow` (`@platform/application`, beside the role baselines it is judged
+  // against), which the effective-configuration DTO publishes. The org-maximum reading this merge
+  // used to report beside it had no production reader and disagreed with it, so it is gone.
   let commands = maximum;
   for (const source of ['project', 'repo'] as const) {
-    const narrowed = narrowCommandPolicy(commands, bySource.get(source)?.commands);
-    commands = narrowed.policy;
-    ignoredAllowCommands.push(...narrowed.ignoredAllow);
+    commands = narrowCommandPolicy(commands, bySource.get(source)?.commands).policy;
   }
   values.commands = {
     allow: [...commands.allow],
@@ -312,7 +311,6 @@ export const mergeProjectConfig = (layers: readonly ConfigLayer[]): EffectiveCon
     values: values as ConfigValues,
     sources,
     commands,
-    ignoredAllowCommands,
     cappedAutonomy,
   };
 };

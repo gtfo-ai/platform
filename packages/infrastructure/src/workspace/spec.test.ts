@@ -110,7 +110,9 @@ describe('the credential a run gets', () => {
     expect(role).toBe('reviewer');
     const tools = TOOLS_BY_ROLE.reviewer;
     // Positively, not "does not contain Write": a list that grew an `Edit` is the thing to catch.
-    expect(tools).toEqual(['Read', 'Glob', 'Grep']);
+    // `Bash` since WP-54 (product/13's "tests only", PROGRESS backlog 39): a shell changes what the
+    // run may *execute*, never whether the broker mints a credential — that is `Write`/`Edit`.
+    expect(tools).toEqual(['Read', 'Glob', 'Grep', 'Bash']);
 
     const spec = runSpecFixture({
       stage: 'code_review',

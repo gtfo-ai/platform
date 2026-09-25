@@ -57,13 +57,15 @@ import { fileURLToPath } from 'node:url';
 export const PLATFORM_SKILL_VERSIONS = {
   'ask-human': '1',
   'file-followup-ticket': '1',
-  'gitlab-mr': '1',
-  'jira-ticket': '1',
+  // WP-54, the four provider skills: each now says it is provisioned because the project has the
+  // binding (backlog 40) and which of its recipes the run's command policy allows (backlog 39).
+  'gitlab-mr': '2',
+  'jira-ticket': '2',
   kb: '1',
-  'loki-logs': '1',
+  'loki-logs': '2',
   'mr-description': '1',
   retro: '1',
-  'sentry-issue': '1',
+  'sentry-issue': '2',
   'verify-work': '1',
 } as const;
 

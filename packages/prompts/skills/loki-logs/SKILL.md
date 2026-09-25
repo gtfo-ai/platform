@@ -5,6 +5,9 @@ description: LogQL recipes for Grafana Loki with time and limit hygiene, using l
 
 # Loki logs
 
+You have this skill because your project has a Loki binding — a project without one is not
+given it — and your command policy allows `logcli query`, nothing else of `logcli`.
+
 `logcli` is on the PATH. It reads `LOKI_ADDR`, `LOKI_BEARER_TOKEN` and `LOKI_ORG_ID` from the
 environment — names the platform's Loki binding declares but does **not** inject into a run today —
 so check with one bounded query before planning around it, and if it is refused for want of a

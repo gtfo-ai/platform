@@ -64,6 +64,7 @@ import { createTestPool } from '../../integration/support/postgres.js';
 import {
   type AgentRunCapture,
   PLANTED_MODEL_KEY,
+  type ScenarioBash,
   scriptedWorkspaces,
   type WorkspaceRelease,
 } from './agent-workspace.js';
@@ -99,6 +100,12 @@ export interface ScenarioSpec {
    * the turn. `FakeClaudeRunner` ignores it, because a fake runner has no input queue at all.
    */
   readonly awaitSteers?: number;
+  /**
+   * Bash tool calls the scripted CLI makes, and the fixture repository they run in (WP-54). Only
+   * meaningful in `real-over-fake-cli` mode: the fake runner runs nothing, which is how PROGRESS
+   * backlog 49 survived every tier.
+   */
+  readonly bash?: ScenarioBash;
 }
 
 const transcriptFor = (runId: Id, at: string, text: string): TranscriptEvent[] => [

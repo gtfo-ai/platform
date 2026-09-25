@@ -37,9 +37,13 @@
  */
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import type { AgentTooling } from '@platform/application';
 import type { IntegrationType } from '@platform/contracts';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
-import { JIRA_CLOUD_PROVIDER_METADATA } from './providers/jira-cloud/registration.js';
+import {
+  JIRA_CLOUD_AGENT_TOOLING,
+  JIRA_CLOUD_PROVIDER_METADATA,
+} from './providers/jira-cloud/registration.js';
 import { lokiProviderRegistration } from './providers/loki/index.js';
 import { sentryProviderRegistration } from './providers/sentry/index.js';
 import { slackProviderRegistration } from './providers/slack/index.js';
@@ -63,6 +67,14 @@ export interface ProviderCatalogueEntry {
   readonly setupGuidePath: string;
   /** Whether the adapter this provider builds carries an `inbound` normaliser. */
   readonly inboundWebhook: boolean;
+  /**
+   * What an agent may be handed inside a run — the registration's own value, which is metadata and
+   * true without an adapter (WP-54). Its `skill` is what provisions a provider skill for a project
+   * that binds this provider (`createBoundSkillsReader`), and it is read **here** rather than off the
+   * pipeline's registry because that registry builds only the three types the pipeline calls: a
+   * Loki or Sentry binding is not in it, and its skill would never be provisioned.
+   */
+  readonly agentTooling: AgentTooling | null;
 }
 
 /** The metadata half of a registration, plus the one fact a registration does not carry. */
@@ -73,6 +85,7 @@ const entryOf = (
     readonly displayName: string;
     readonly secretFields: readonly string[];
     readonly setupGuidePath: string;
+    readonly agentTooling: AgentTooling | null;
   },
   inboundWebhook: boolean,
 ): ProviderCatalogueEntry => ({
@@ -82,6 +95,7 @@ const entryOf = (
   secretFields: [...registration.secretFields],
   setupGuidePath: registration.setupGuidePath,
   inboundWebhook,
+  agentTooling: registration.agentTooling,
 });
 
 /**
@@ -91,7 +105,7 @@ const entryOf = (
  */
 export const SHIPPED_PROVIDERS: readonly ProviderCatalogueEntry[] = [
   entryOf(gitlabProviderRegistration, true),
-  entryOf(JIRA_CLOUD_PROVIDER_METADATA, true),
+  entryOf({ ...JIRA_CLOUD_PROVIDER_METADATA, agentTooling: JIRA_CLOUD_AGENT_TOOLING }, true),
   entryOf(lokiProviderRegistration, false),
   entryOf(sentryProviderRegistration, false),
   entryOf(slackProviderRegistration, true),

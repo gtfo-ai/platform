@@ -78,9 +78,9 @@ const DISCOVERY_DRAFT: DiscoveryDraftData = {
       markdown: '# How to run\n\n`npm test` runs the suite.\n',
     },
   ],
-  // `verified: false` on both, because **no run on this platform can execute a project command**:
-  // the org command maximum has none and a project may only narrow it. The evidence names the file
-  // the command was read in, which is what the prompt asks for.
+  // `verified: false` on both: this scripted draft reports commands it *read* and did not run, and
+  // the prompt asks exactly that of a command it did not run — the evidence names the file. (Since
+  // WP-54 a discovery run *can* run them; `verified: true` is for one it ran, with the exit status.)
   commands: [
     {
       purpose: 'test',
@@ -93,9 +93,10 @@ const DISCOVERY_DRAFT: DiscoveryDraftData = {
   linked_documents: [{ path: 'README.md', reason: 'the project documents itself here' }],
   questions: [{ id: 'q1', text: 'Is the legacy/ folder still maintained?', blocking: false }],
   /**
-   * R1, R2 and R6 are read for what a run can **establish** rather than execute — `criteria.ts`
-   * carries the argument — so this draft claims them from files, which is what the shipped prompt
-   * asks for and what the role's read-only shell can actually do.
+   * This scripted draft answers R1, R2 and R6 from files. Since WP-54 the shipped prompt asks for them
+   * to be **run** (`criteria.ts` carries the argument) and the role's shell can; what this e2e holds
+   * is the platform's handling of a draft, not the model's diligence, so the scripted answer is
+   * unchanged.
    */
   readiness: [
     { id: 'R1', passed: true, evidence: '.github/workflows/ci.yml runs `npm test` on main' },
@@ -466,19 +467,22 @@ describe('the onboarding wizard', () => {
     /**
      * The role's least privilege, both halves (BD-021).
      *
-     * `Bash` is there because product/17 R1/R2/R6 are detected by *executing* something and R1 is a
-     * level-1 requirement (`TOOLS_BY_ROLE`'s docblock carries the argument), and what bounds it is
-     * BD-025's command policy, which reaches the run on the same spec. What is **not** there is any
-     * way to keep what the shell produced: no `Write`, no `Edit`, and no mutating platform tool.
+     * `Bash` is there because product/17 R1/R2/R6 are detected by *executing* the project's own
+     * commands and R1 is a level-1 requirement (`TOOLS_BY_ROLE`'s docblock carries the argument),
+     * and what bounds it is BD-025's command policy, which reaches the run on the same spec. What is
+     * **not** there is any way to keep what the shell produced: no `Write`, no `Edit`, and no
+     * mutating platform tool.
      */
     expect(run?.spec.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash']);
     expect(run?.spec.tools).not.toContain('Write');
     expect(run?.spec.platformTools).not.toContain('open_mr');
-    // The policy that bounds the shell, as the platform **ships** it: read-only verbs, and no test
-    // command — `npm test` is technical/12's example config, which a project writes. Asserted in
-    // both directions so neither half can be read as the other (`TOOLS_BY_ROLE`'s docblock).
+    // The policy that bounds the shell, as the platform ships it since WP-54 (Q69 (ii)): the read
+    // verbs **and** the project's declared test command, so R1 can be run rather than read — and
+    // no git write. Asserted in both directions so neither half can be read as the other.
     expect(run?.spec.commandPolicy.allow).toContain('git log');
-    expect(run?.spec.commandPolicy.allow).not.toContain('npm test');
+    expect(run?.spec.commandPolicy.allow).toContain('npm test');
+    expect(run?.spec.commandPolicy.allow).not.toContain('git commit *');
+    expect(run?.spec.commandPolicy.allow).not.toContain('git push origin agentic/*');
     // Everything the SDK wrote to the process, as one string — the shape `agent-run.e2e.test.ts`
     // uses, because `cli.stdin` is the parsed frames rather than the bytes.
     const written = JSON.stringify(run?.cli.stdin ?? []);

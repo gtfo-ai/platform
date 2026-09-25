@@ -1096,8 +1096,9 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
  *
  * **On this build that set is empty for a review, so there is nothing to leak.** The chain is
  * `packages/infrastructure/src/workspace/spec.test.ts` § "is none for a review-only run":
- * `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's, `TOOLS_BY_ROLE.reviewer` is
- * `['Read','Glob','Grep']`, so `runIsReadOnly` is true, the workspace is read-only, and
+ * `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's, `TOOLS_BY_ROLE.reviewer` has neither
+ * `Write` nor `Edit` (it gained `Bash` at WP-54, which `runIsReadOnly` does not read), so
+ * `runIsReadOnly` is true, the workspace is read-only, and
  * `RunCredentialBroker.issue` answers `null` **without calling the credential source** (BD-021) —
  * and `apps/launcher` has no other source to mint from (Q52). The residual is therefore narrower
  * than round 1 stated: it is not "a review's threads can carry the run's token", it is "the day a

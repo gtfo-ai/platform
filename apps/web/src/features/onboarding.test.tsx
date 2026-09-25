@@ -178,6 +178,8 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',
+        // WP-54: nothing the project declared is outside every role's command baseline.
+        ignored_allow_commands: [],
         // WP-37: what the server offers for `policies.risk_classes`. The project has **none** and
         // the offer is not empty, which is the whole shape of "proposed, not applied".
         risk_class_proposal: {
@@ -425,8 +427,8 @@ describe('the wizard’s step 4', () => {
   });
 
   it('says why the command policy is not editable here', async () => {
-    // A project may only narrow the organisation maximum (BD-025), so a `commands.allow` editor
-    // would be an affordance that cannot do the thing an operator would expect of it.
+    // A project may only narrow each role's shipped baseline (BD-025, WP-54), so a `commands.allow`
+    // editor would be an affordance that can only take commands away.
     const { container } = render(
       createApp({ fetchImpl: fetchFor('recorded'), realtime: false }).element,
     );
@@ -435,6 +437,9 @@ describe('the wizard’s step 4', () => {
     await screen.findByText('Autonomy dial');
     // The sentence spans an `<em>`, so it is read off the rendered text rather than matched against
     // one element.
-    expect(container.textContent).toContain('may only narrow the organisation maximum');
+    expect(container.textContent).toContain('may only narrow that baseline');
+    // The sentence it replaced said a project's test command needed a widening nothing exposed —
+    // false since WP-54, and asserted gone so it cannot come back with a copy-paste.
+    expect(container.textContent).not.toContain('nothing in this build exposes');
   });
 });

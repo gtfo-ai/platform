@@ -5,6 +5,10 @@ description: How to read a Sentry issue and its latest event as evidence — the
 
 # Sentry issues
 
+You have this skill because your project has a Sentry binding — a project without one is not
+given it — and your command policy allows `sentry-cli issues list`, `sentry-cli events list` and
+`sentry-cli issues --help`, nothing else of `sentry-cli`.
+
 Sentry is read-only from a run, and there is no recipe here for resolving, assigning or muting an
 issue — those are a human's decisions.
 

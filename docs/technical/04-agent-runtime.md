@@ -192,8 +192,9 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > **Amended by TD-027 (ruling on Q77) — where the policy a run is given comes from, and the per-stage
 > layer BD-025 always had.** The run's `ResolvedCommandPolicy` is built in the planner, at one call
 > site, in three steps: the **role** picks a baseline (`COMMAND_BASELINE_BY_ROLE` — `read_only` or
-> `implementation`, product/19 §3's two groups); the **stage** may add allow patterns
-> (`COMMAND_ALLOW_BY_STAGE`, consulted by `commandBaselineFor(role, stage)`); then the project
+> `implementation`, product/19 §3's two groups, and a third, `verification`, since WP-54 — see the
+> amendment below); the **stage** may add allow patterns
+> (`COMMAND_ALLOW_BY_STAGE`, consulted by `commandBaselineFor(role, stage, skills)`); then the project
 > narrows what is left (`narrowCommandPolicy`, whose `allow` may only shrink and whose `ask`/`block`
 > may only grow). BD-025 §2's words are *"defaults ship per stage"* and product/19 §3 is titled per
 > stage; the role table was the approximation, and the stage layer is the missing half rather than a
@@ -205,7 +206,9 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > replacement list, so the direction is structural. Every entry must be a literal spelling
 > **product/19 §3 lists for that stage**: a stage layer is where a documented default is put, not
 > where one is invented (the allow-side twin of `DECLINED_BLOCK_VARIANTS`' standing rule). And it is
-> applied *before* the project's narrowing, so a project's own `commands.allow` still drops it.
+> applied *before* the project's narrowing. (Since WP-54's review round 1, Q97, a project's
+> `commands.allow` narrows only the project-command class and no longer drops a stage's addition;
+> a project removes one through `block`.)
 >
 > The only entry is `conflict_resolution` (WP-26, BD-030): `git merge origin/*`,
 > `git merge --no-edit origin/*`, `git merge --abort`, `git merge --continue`. Nothing sits between
@@ -227,6 +230,41 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > for what `git` is asked to do inside a workspace this policy is the layer, with the container's
 > mounts, the egress proxy and the credential caps around it and the provider's branch protection
 > (Q40) behind it.
+
+> **Amended at WP-54 (Q69 (ii), PROGRESS backlogs 39, 40 and 49) — the project's own commands, and
+> the skills that bring commands with them.** Until WP-54 no baseline named a single project command,
+> so a project's `commands.allow: ["npm test"]` was dropped by the narrowing and no run of any role
+> could run a project's tests. Now:
+>
+> - **Three baselines**, chosen per role: `read_only` (`DEFAULT_READ_ONLY_ALLOW`), `verification`
+>   (read-only + the lockfile installs + `PROJECT_COMMAND_ALLOW`, for the reviewer, the acceptance
+>   tester and discovery) and `implementation` (which now also carries `PROJECT_COMMAND_ALLOW`, for
+>   the developer). `PROJECT_COMMAND_ALLOW` is Q69's named verb set — `npm test`, `npm run *`,
+>   `pnpm test`, `pnpm run *`, `make *`, `pytest *`, `go test *`, `cargo test *` and their other
+>   spelling — never a `*` allow. `Bash` follows product/13's Shell column for every role, which gave
+>   the investigator, the architect and the reviewer a shell they did not have.
+> - **A fourth layer, per skill** (`COMMAND_ALLOW_BY_SKILL`): the read verbs a provider skill's own
+>   recipes use (`logcli query *`, `sentry-cli issues list *`, `glab mr view *`, …), added only for a
+>   run provisioned with that skill — and a provider skill is provisioned only when the project has
+>   a binding whose `AgentTooling.skill` names it. So a project with no Loki grants no `logcli`.
+> - **A declared `allow` narrows the project commands only** (Q97, WP-54 review round 1): the
+>   baseline's read, git and lockfile verbs and the stage and skill additions stay; a project takes
+>   one of those away through `ask`/`block`. Before this, a project that declared its test command
+>   (technical/12's own example) stripped the developer of `git commit`.
+> - **The narrowing grants a literal entry a pattern covers**: a project's `npm run lint` narrows
+>   `npm run *` instead of being dropped for not being spelled the same; a glob entry is granted
+>   only verbatim (`grantsAllowEntry` has the reason). An entry the baseline does not grant is
+>   **reported** — a warning per run naming the role, and `ignored_allow_commands` on
+>   `GET /api/projects/:id/config` for what no role is granted — never dropped in silence.
+> - The body of `npm run *` and `make *` is **repository content**, bounded by the run container and
+>   its egress, not by this policy; the flags that hand one of these verbs a model-written command
+>   (a `make` variable assignment, `make --eval` and `-E` in a short-option cluster,
+>   `go -exec`/`-toolexec`/`-ldflags … -extld` in either dash form, `cargo --config`, npm/pnpm
+>   `--script-shell`, `--node-options` and pnpm's `--config.<key>`, the npm/pnpm long options
+>   floored from the shortest prefix unique today) are `HAZARDOUS_ARGUMENTS` floors — **an
+>   enumeration of known spellings, which can be incomplete**; the boundary for the body is the
+>   sandbox. Two are token-scoped (the `make` assignment and the `-E` cluster), so `--jobs=4` and a
+>   capital E in a later word are not floored; `make test V=1` is, deliberately.
 
 ## Streaming and steering
 

@@ -226,3 +226,42 @@ merge; rule 4's fallback still carries every spelling written before the ref. Th
 were corrected with this amendment: the Rationale bullet above, technical/04's *"Hooks and policies"*
 amendment, and product/19 §3's fourth bullet, whose *"therefore"* was true of the pre-ref position and
 of the shipped behaviour but not of the closed set alone.
+
+## Amendment (WP-54 — two more add-only layers, and the baselines they sit on)
+
+**The baselines are three named lists, chosen per role.** `COMMAND_BASELINE_BY_ROLE` selects
+`read_only`, `verification` (the read-only list, the lockfile installs and the project's declared
+commands — reviewer, acceptance tester, discovery) or `implementation` (the verification verbs plus
+`git add`, `git commit`, `git rebase`, `git fetch` and the push to `agentic/*`). BD-025's WP-54 amendment carries why the project's declared
+commands sit in the baseline rather than at the maximum (Q69 answer (ii)). The lockfile installs in
+`verification` are an assumption beyond product/19 §3's read-only bullet, stated: a test command in a
+fresh workspace runs against no dependencies until one has.
+
+**A skill layer, the same shape as the stage layer.** A run provisioned with a skill may run the read
+verbs that skill's own recipes use (`COMMAND_ALLOW_BY_SKILL`), and a provider skill is provisioned only
+for a project with that provider's binding. Like this decision's stage layer it **adds to `allow`
+only**, runs **before** the project narrows, and never touches `ask` or `block` — so the floors above
+still tighten a skill verb carrying a hazardous flag.
+
+**The narrowing grants a literal a pattern covers, never a pattern a pattern covers.** A project entry
+`npm run lint` narrows the baseline's `npm run *` (technical/12's own example) instead of landing in
+`ignoredAllow`; a **glob** entry is granted only verbatim, because glob-to-glob coverage can turn the
+maximum's `ask` into the project's `allow` (`git rebase -x *` under `git rebase *` pins more literal
+characters than the ask entry `git rebase* -x*` — measured with `evaluateCommand` before it was
+decided). New floors for the new verbs, as shipped after WP-54's review round 2 (the list is
+`HAZARDOUS_ARGUMENTS` in `packages/domain/src/policies/command-policy.ts`, held by a table test that
+runs every spelling through every baseline): for `make`, a positional argument containing `=` and
+`-E` inside a single-dash short-option cluster — both **token-scoped**, so `make --jobs=4 test` and
+`make -j4 TEST` stay `allow` while `make test V=1` is `ask` on purpose (a command-line variable can
+override `CC` or `SHELL`) — and `make* --e*`; for `go`, `-exec`, `-toolexec` and `-ldflags…extld` in
+both dash forms; `cargo* --config*`; for npm and pnpm, `--script-shell` and `--node-options`, each from the shortest prefix that is unique
+today, and `--config.<key>`. That last clause is knowledge of
+the CLIs' current option sets, **not a measurement**. Review found **seven** bypasses of the first
+list and **five** of the second (long-option abbreviation, a clustered short flag, a command-line
+variable assignment, the double-dash form, pnpm's `--config.<key>`, Go's external linker), which is
+this amendment's version of the WP-26 lesson above: a floor list is an enumeration and can be
+incomplete, and the sandbox is the boundary.
+
+**A project's `allow` narrows only the project-command verbs** (Q97, PROGRESS backlog 139): the
+baseline's git, read-only and lockfile verbs and a stage layer's entries are not dropped by a project
+that declares its test commands; a project removes one of those with `ask` or `block`.
