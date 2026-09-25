@@ -67,6 +67,9 @@ const build = async (): Promise<void> => {
     },
   });
   const socketPath = await daemon.start();
+  // The fixture project's mirror, as an earlier `updateMirror` left it (WP-75: the run container
+  // mounts it by sub-path, and the double refuses a sub-path nobody made).
+  daemon.seedSubpath('repo-cache', 'acme.git');
   daemon.networks.set('net-platform', { name: 'platform', internal: false });
   provider = new DockerWorkspaceProvider({
     engine: new DockerEngine({ socketPath }),

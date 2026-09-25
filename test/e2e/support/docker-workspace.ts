@@ -105,9 +105,15 @@ export class RecordingDockerEngine extends workspace.DockerEngine {
    * about requests that reached the daemon, and only a record of those requests can refute it.
    */
   readonly createdNames: string[] = [];
+  /**
+   * The create body of every container, by name, last one wins (WP-75): a helper is removed as
+   * soon as it exits, so what the export helper was *given* can only be read off the request.
+   */
+  readonly createdBodies = new Map<string, unknown>();
 
   override async createContainer(name: string, body: unknown): Promise<string> {
     this.createdNames.push(name);
+    this.createdBodies.set(name, body);
     return super.createContainer(name, body);
   }
 

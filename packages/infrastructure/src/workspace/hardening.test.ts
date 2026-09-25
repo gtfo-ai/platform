@@ -15,6 +15,7 @@ import {
   sidecarCreateBody,
   type WorkspaceImages,
 } from './hardening.js';
+import { CONTAINER_CACHE_MOUNT, mirrorPath } from './names.js';
 
 const images: WorkspaceImages = {
   runtime: 'platform-runtime:test',
@@ -107,13 +108,50 @@ describe('run container hardening (technical/05)', () => {
       ReadOnly: false,
       VolumeOptions: { Subpath: spec.runId },
     });
-    expect(mounts[2]).toMatchObject({ Source: 'repo-cache', Target: '/cache', ReadOnly: true });
+    expect(mounts[2]).toEqual({
+      Type: 'volume',
+      Source: 'repo-cache',
+      Target: '/cache/acme.git',
+      ReadOnly: true,
+      VolumeOptions: { Subpath: 'acme.git' },
+    });
+  });
+
+  /**
+   * WP-75 criterion (1), both directions (standing rule 42): the run's `repo-cache` mount carries the
+   * spec's own key — at the path its clone's alternates name — and neither another project's key nor
+   * the volume's root. Two specs with different keys, so a constant `acme` would fail the second.
+   */
+  it.each(['acme', 'other-project'])(
+    'mounts only the %s mirror of the repo-cache volume, never its root or another key',
+    (cacheKey) => {
+      const other = cacheKey === 'acme' ? 'other-project' : 'acme';
+      const spec = workspaceSpecFixture({ repo: { cacheKey } });
+      const cache = build({ spec }).HostConfig.Mounts.filter(
+        (mount) => mount.Source === 'repo-cache',
+      );
+      expect(cache).toHaveLength(1);
+      expect(cache[0]?.VolumeOptions?.Subpath).toBe(`${cacheKey}.git`);
+      expect(cache[0]?.Target).toBe(mirrorPath(CONTAINER_CACHE_MOUNT, cacheKey));
+      expect(cache[0]?.ReadOnly).toBe(true);
+      // Absent: the bare root (no sub-path, or a target of `/cache`) and the other key.
+      expect(cache.some((mount) => mount.VolumeOptions === undefined)).toBe(false);
+      expect(cache.some((mount) => mount.Target === CONTAINER_CACHE_MOUNT)).toBe(false);
+      expect(JSON.stringify(cache)).not.toContain(`${other}.git`);
+    },
+  );
+
+  it('refuses a cache key that would sub-path outside its own mirror', () => {
+    for (const cacheKey of ['..', 'a/../b', '../acme', 'Acme', '', '/x', 'a\0b']) {
+      expect(() => build({ spec: workspaceSpecFixture({ repo: { cacheKey } }) })).toThrow(
+        /mirror cache key is not a safe path component/,
+      );
+    }
   });
 
   /**
    * WP-74 criterion (6): a run with no checkout has no `--shared` clone whose alternates point into
-   * the mirror, so it gets no read-only view of the `repo-cache` volume either — which is every
-   * project's mirror, not only its own.
+   * the mirror, so it gets no read-only view of the `repo-cache` volume at all.
    */
   it('mounts no repo-cache for a spec with no checkout, and the other two exactly as before', () => {
     const spec = repoLessWorkspaceSpecFixture();

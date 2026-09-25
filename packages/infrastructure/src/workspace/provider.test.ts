@@ -73,6 +73,7 @@ const providerWithSocketTimeout = (controlSocketTimeoutMs: number): DockerWorksp
 
 const startDaemon = async (
   script?: (container: { name: string }) => { exitCode: number; logs: string },
+  { seedMirror = true }: { readonly seedMirror?: boolean } = {},
 ): Promise<void> => {
   archives = new Map();
   daemon = new FakeDockerDaemon({
@@ -80,6 +81,12 @@ const startDaemon = async (
     ...(script === undefined ? {} : { script }),
   });
   const socketPath = await daemon.start();
+  // The fixture project's mirror, as an earlier `updateMirror` left it on the shared volume: the run
+  // container mounts it by sub-path (WP-75) and the double refuses a sub-path nobody made. The
+  // cases about the mirror itself start from a daemon without it (the WP-75 `describe` below).
+  if (seedMirror) {
+    daemon.seedSubpath('repo-cache', 'acme.git');
+  }
   // The launcher's own network, which the sidecar is connected to as its route out. It exists
   // before any run does (compose creates it), so the double is given it up front.
   daemon.networks.set('net-platform', { name: 'platform', internal: false });
@@ -892,5 +899,248 @@ describe('mirror', () => {
     expect(
       daemon.requests.filter((recorded) => recorded.path === '/containers/create'),
     ).toHaveLength(2);
+  });
+});
+
+/**
+ * WP-75 (PROGRESS backlog 148): the run container and the export helper mount **one** project's
+ * mirror by sub-path, and the sub-path's existence is an ordering — `updateMirror` makes it, the
+ * clone helper checks it by name before any container carrying the mount is asked for. These start
+ * from a daemon with **no** mirror on the volume, so the double's sub-path model is what is tested
+ * rather than a seed. That the real daemon agrees is `docker-workspace.e2e.test.ts`'s to say.
+ */
+describe('one mirror, not the volume (WP-75)', () => {
+  const noMirrorYet = (): boolean => !(daemon.subpaths.get('repo-cache')?.has('acme.git') ?? false);
+  const runContainerCreates = (): number =>
+    daemon.history.filter((container) => container.name === `ws-${FIXTURE_RUN_ID}`).length;
+
+  it('mounts the mirror `updateMirror` made, at the path the clone’s alternates name', async () => {
+    await daemon.stop();
+    await startDaemon(undefined, { seedMirror: false });
+    const spec = workspaceSpecFixture();
+    expect(noMirrorYet()).toBe(true);
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    // The double read the sub-path off the mirror helper's own `git clone --mirror` line — so a
+    // change to that line that moved the mirror would fail here, not in production.
+    expect(noMirrorYet()).toBe(false);
+    const handle = await provider.create(spec);
+    const cache = (daemon.containers.get(handle.containerId)?.body.HostConfig?.Mounts ?? []).filter(
+      (mount) => mount.Source === 'repo-cache',
+    );
+    expect(cache).toEqual([
+      {
+        Type: 'volume',
+        Source: 'repo-cache',
+        Target: '/cache/acme.git',
+        ReadOnly: true,
+        VolumeOptions: { Subpath: 'acme.git' },
+      },
+    ]);
+    // …the path the `--shared` clone was made from, which is what its alternates will name.
+    expect((daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n')).toContain(
+      '--shared --branch "$DEFAULT_BRANCH" "/cache/acme.git" /work/repo',
+    );
+  });
+
+  it('fails a create whose mirror was never made at the clone, by name, before the run container', async () => {
+    await daemon.stop();
+    // The clone helper's first line, modelled: `[ -d <mirror> ] || { echo <sentinel>; exit 3; }`.
+    await startDaemon(
+      (container) =>
+        container.name.startsWith('clone-') && noMirrorYet()
+          ? { exitCode: 3, logs: 'AGENTIC_NO_MIRROR\n' }
+          : { exitCode: 0, logs: '' },
+      { seedMirror: false },
+    );
+    await expect(provider.create(workspaceSpecFixture())).rejects.toMatchObject({
+      code: 'workspace_failed',
+      message: /the project has no mirror to clone from \(\/cache\/acme\.git\)/,
+    });
+    expect(runContainerCreates()).toBe(0);
+    const script = (daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+    expect(script.indexOf('if [ ! -d "/cache/acme.git" ]')).toBeGreaterThan(-1);
+    expect(script.indexOf('if [ ! -d "/cache/acme.git" ]')).toBeLessThan(
+      script.indexOf('git clone'),
+    );
+  });
+
+  it('is refused by the daemon at the run container when nothing checked first — the order is load-bearing', async () => {
+    // The other direction (rule 42): with a clone helper that does not check (the double's default
+    // exits 0), the only thing left to refuse the missing sub-path is the daemon, at the run
+    // container — the error an operator would get without the clone's check.
+    await daemon.stop();
+    await startDaemon(undefined, { seedMirror: false });
+    await expect(provider.create(workspaceSpecFixture())).rejects.toThrow(
+      /cannot access path .*repo-cache\/_data\/acme\.git/,
+    );
+    expect(runContainerCreates()).toBe(1);
+  });
+
+  it('gives the export helper the same one mirror, and reads only the platform’s git configuration', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc1234def\nPUSHED=yes\n' }));
+    const handle = await created();
+    await provider.export(
+      handle,
+      { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+      { host: 'git.example.com', username: 'agentic', password: SECRET },
+    );
+    const helper = daemon.byName(`export-${FIXTURE_RUN_ID}`);
+    const cache = (helper?.body.HostConfig?.Mounts ?? []).filter(
+      (mount) => mount.Source === 'repo-cache',
+    );
+    expect(cache).toEqual([
+      {
+        Type: 'volume',
+        Source: 'repo-cache',
+        Target: '/cache/acme.git',
+        ReadOnly: true,
+        VolumeOptions: { Subpath: 'acme.git' },
+      },
+    ]);
+    const script = (helper?.body.Cmd ?? []).join('\n');
+    const env = helper?.body.Env ?? [];
+    expect(env).toContain('GIT_CONFIG_NOSYSTEM=1');
+    expect(env).toContain('GIT_CONFIG_GLOBAL=/tmp/agentic-export.gitconfig');
+    // Every git invocation is the `g` wrapper — the only bare `git` is the wrapper's own body.
+    const lines = script.split('\n');
+    const bare = lines.filter((line) => /(^|[\s;(|&$])git\s/.test(line));
+    expect(bare).toEqual(['g() { git -c core.hooksPath=/dev/null "$@"; }']);
+    // The refusal comes before the first git command, and the run's config is replaced before
+    // the first command that reads the repository.
+    // Every line located before it is compared: `findIndex` answers -1 for a deleted line, and -1
+    // is "before" everything (review round 2 killed two canaries on exactly that).
+    const at = (needle: string): number => {
+      const index = lines.findIndex((line) => line.includes(needle));
+      expect(index, needle).toBeGreaterThan(-1);
+      return index;
+    };
+    expect(at('[ -L .git ]')).toBeLessThan(at('g config'));
+    expect(at('rm -rf /work/repo/.git/config')).toBeLessThan(at('g status'));
+    expect(at('rm -rf /work/repo/.git/hooks')).toBeLessThan(at('g status'));
+    // The nested-repository refusal, after the config is replaced and before anything walks the tree.
+    expect(at('rm -rf /work/repo/.git/config')).toBeLessThan(
+      at('find . -path ./.git -prune -o -name .git -print'),
+    );
+    expect(at('find . -path ./.git -prune -o -name .git -print')).toBeLessThan(at('g status'));
+    // The ruling: a gitlink alone is not refused, so nothing reads the index's modes for it.
+    expect(script).not.toContain('160000');
+    // Review round 3: the walk is normalised first, and its exit status **and** its stderr are read
+    // — a `$(find …)` whose failure and errors vanished once let an unreadable directory pass.
+    expect(at('chmod -R u+rwX /work/repo')).toBeLessThan(at('find . -path'));
+    expect(script).toContain(
+      'if ! NESTED="$(find . -path ./.git -prune -o -name .git -print 2>/tmp/agentic-export-walk.err)" || ' +
+        '[ -s /tmp/agentic-export-walk.err ]; then echo "AGENTIC_UNREADABLE_TREE"; exit 6; fi',
+    );
+    expect(at('AGENTIC_UNREADABLE_TREE')).toBeLessThan(at('AGENTIC_NESTED_REPOSITORY'));
+    expect(at('AGENTIC_NESTED_REPOSITORY')).toBeLessThan(at('g status'));
+    expect(script).toContain('g push "$ORIGIN_URL" "HEAD:refs/heads/$BRANCH"');
+    expect(script).not.toMatch(/push origin/);
+  });
+
+  it('stops the run container before the export helper is created', async () => {
+    await daemon.stop();
+    await startDaemon(() => ({ exitCode: 0, logs: 'SHA=abc1234def\nPUSHED=yes\n' }));
+    const handle = await created();
+    const from = daemon.requests.length;
+    await provider.export(
+      handle,
+      { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+      null,
+    );
+    const sent = daemon.requests.slice(from);
+    const stop = sent.findIndex(
+      (request) =>
+        request.method === 'POST' && request.path === `/containers/${handle.containerId}/stop`,
+    );
+    const create = sent.findIndex(
+      (request) =>
+        request.path === '/containers/create' &&
+        new URLSearchParams(request.query).get('name') === `export-${FIXTURE_RUN_ID}`,
+    );
+    expect(stop).toBeGreaterThan(-1);
+    expect(create).toBeGreaterThan(-1);
+    expect(stop).toBeLessThan(create);
+  });
+
+  it('names a checkout it could not walk completely, rather than exporting through it', async () => {
+    await daemon.stop();
+    await startDaemon((container) =>
+      container.name.startsWith('export-')
+        ? { exitCode: 6, logs: 'AGENTIC_UNREADABLE_TREE\n' }
+        : { exitCode: 0, logs: '' },
+    );
+    const handle = await created();
+    await expect(
+      provider.export(
+        handle,
+        { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+        null,
+      ),
+    ).rejects.toMatchObject({
+      code: 'workspace_failed',
+      message: /refusing to export: part of the checkout could not be read/,
+    });
+  });
+
+  it('names a checkout holding a nested repository, rather than exporting through it', async () => {
+    await daemon.stop();
+    await startDaemon((container) =>
+      container.name.startsWith('export-')
+        ? { exitCode: 5, logs: 'AGENTIC_NESTED_REPOSITORY\n' }
+        : { exitCode: 0, logs: '' },
+    );
+    const handle = await created();
+    await expect(
+      provider.export(
+        handle,
+        { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+        null,
+      ),
+    ).rejects.toMatchObject({
+      code: 'workspace_failed',
+      message: /refusing to export: the checkout holds a nested repository/,
+    });
+  });
+
+  it('names a checkout whose .git is not a plain directory, rather than exporting through it', async () => {
+    await daemon.stop();
+    await startDaemon((container) =>
+      container.name.startsWith('export-')
+        ? { exitCode: 4, logs: 'AGENTIC_UNSAFE_GITDIR\n' }
+        : { exitCode: 0, logs: '' },
+    );
+    const handle = await created();
+    await expect(
+      provider.export(
+        handle,
+        { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+        null,
+      ),
+    ).rejects.toMatchObject({
+      code: 'workspace_failed',
+      message: /refusing to export: the checkout’s \.git is not the directory the platform cloned/,
+    });
+  });
+
+  it('records no mirror sub-path when the mirror helper fails', async () => {
+    await daemon.stop();
+    await startDaemon(
+      (container) =>
+        container.name.startsWith('mirror-')
+          ? { exitCode: 128, logs: 'fatal: could not read from remote repository\n' }
+          : { exitCode: 0, logs: '' },
+      { seedMirror: false },
+    );
+    const spec = workspaceSpecFixture();
+    await expect(
+      provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null }),
+    ).rejects.toMatchObject({ code: 'workspace_failed' });
+    expect(noMirrorYet()).toBe(true);
+    // …and the positive, so the assertion above has a subject: the same helper exiting 0 records it.
+    await daemon.stop();
+    await startDaemon(undefined, { seedMirror: false });
+    await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
+    expect(noMirrorYet()).toBe(false);
   });
 });

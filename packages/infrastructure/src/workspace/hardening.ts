@@ -39,6 +39,8 @@ import {
   CONTAINER_CACHE_MOUNT,
   CONTAINER_CONTROL_MOUNT,
   egressContainerName,
+  mirrorPath,
+  mirrorSubpath,
   runContainerName,
   runNetworkName,
   WORKSPACE_WORKDIR,
@@ -112,6 +114,41 @@ export interface DockerMount {
   readonly VolumeOptions?: { readonly Subpath: string };
   readonly BindOptions?: { readonly Propagation: 'rprivate' };
 }
+
+/**
+ * **One project's mirror, read-only, and nothing else of the `repo-cache` volume** (WP-75, PROGRESS
+ * backlog 148): TD-021's *"per-project bare mirror ro at `/cache`"*, as a mount.
+ *
+ * The volume holds one bare mirror per project (`/cache/<key>.git`), so a mount of the volume's
+ * root — which is what every container that read a mirror had until WP-75 — lets a run steered by
+ * one project's ticket list every project on the instance and read any of their mirrors. This mounts
+ * {@link mirrorSubpath} **at {@link mirrorPath}**, the same absolute path a `--shared` clone writes
+ * into its `objects/info/alternates`, so the clone is unchanged and every object older than the run
+ * still resolves; `/cache` itself is then a directory the daemon makes on the container's own
+ * filesystem, holding that one mount point.
+ *
+ * **Its existence is an ordering, not a check here.** The daemon refuses to start a container whose
+ * `Subpath` does not exist (WP-13's measurement, for the control volume; WP-75's, for this one). The
+ * sub-path is made by `updateMirror`, which `LauncherService.startRun` calls before `create`, and
+ * inside `create` the clone helper — which mounts the whole volume for exactly this reason — reads
+ * the mirror before any container carrying this mount is created, and fails **by name** when it is
+ * not there (`DockerWorkspaceProvider.#clone`). What remains is a mirror removed *between* the clone
+ * and the run container's create, which nothing on this build does: there is no mirror GC and no
+ * code path that removes one (`gc.auto 0`, `remote update --prune` prunes refs, not the directory);
+ * the only removal is the operator's, of the whole volume (the operator guide's backup section). The
+ * day a GC exists, that race surfaces as the daemon's sub-path refusal on the run container.
+ */
+export const projectMirrorMount = (
+  cacheVolume: string,
+  cacheMount: string,
+  cacheKey: string,
+): DockerMount => ({
+  Type: 'volume',
+  Source: cacheVolume,
+  Target: mirrorPath(cacheMount, cacheKey),
+  ReadOnly: true,
+  VolumeOptions: { Subpath: mirrorSubpath(cacheKey) },
+});
 
 export interface DockerHostConfig {
   readonly CapDrop: readonly string[];
@@ -277,17 +314,13 @@ export const runContainerCreateBody = (input: RunContainerInput): DockerCreateBo
       VolumeOptions: { Subpath: spec.runId },
     },
   ];
-  // The mirror, read-only, only for a run that has a checkout to read objects through: the clone is
-  // `--shared`, so its alternates point here. A run with no checkout (`spec.repo === null`, WP-74)
-  // gets **no** `repo-cache` mount — one fewer read-only view of every project's mirror, since the
-  // volume is shared by all of them and the mount is the whole volume, not this project's key.
+  // The **project's own** mirror, read-only, only for a run that has a checkout to read objects
+  // through: the clone is `--shared`, so its alternates point at `/cache/<key>.git/objects`. Sub-
+  // pathed to that one mirror (WP-75), so the run sees no other project's — `projectMirrorMount`
+  // carries the ordering that guarantees the sub-path exists. A run with no checkout (`spec.repo ===
+  // null`, WP-74) gets no `repo-cache` mount at all.
   if (spec.repo !== null) {
-    mounts.push({
-      Type: 'volume',
-      Source: input.cacheVolume,
-      Target: CONTAINER_CACHE_MOUNT,
-      ReadOnly: true,
-    });
+    mounts.push(projectMirrorMount(input.cacheVolume, CONTAINER_CACHE_MOUNT, spec.repo.cacheKey));
   }
   if (images.runtimeSourceDir !== null) {
     mounts.push({

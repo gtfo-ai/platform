@@ -117,15 +117,30 @@ export const controlSocketPath = (controlRoot: string, runId: string): string =>
   return socket;
 };
 
-/** The bare mirror of one project on the shared `repo-cache` volume, as a container sees it. */
-export const mirrorPath = (cacheMount: string, cacheKey: string): string => {
+/**
+ * The bare mirror of one project **relative to the root of the `repo-cache` volume** — the
+ * `VolumeOptions.Subpath` a container mounts when it may see that project's mirror and no other
+ * (WP-75, TD-021's *"per-project bare mirror ro at `/cache`"*).
+ */
+export const mirrorSubpath = (cacheKey: string): string => {
   if (!/^[a-z0-9][a-z0-9._-]{0,62}$/.test(cacheKey) || cacheKey.includes('..')) {
     throw new WorkspaceError('invalid_spec', 'mirror cache key is not a safe path component', {
       detail: `length ${cacheKey.length}`,
     });
   }
-  return `${cacheMount}/${cacheKey}.git`;
+  return `${cacheKey}.git`;
 };
+
+/**
+ * The bare mirror of one project on the shared `repo-cache` volume, as a container sees it.
+ *
+ * A container that mounts only this project's mirror mounts {@link mirrorSubpath} **at this path**,
+ * so the absolute path a `--shared` clone writes into `objects/info/alternates` is the same whether
+ * the container that reads it holds the whole volume (the clone helper) or one mirror of it (the run
+ * container, the export helper).
+ */
+export const mirrorPath = (cacheMount: string, cacheKey: string): string =>
+  `${cacheMount}/${mirrorSubpath(cacheKey)}`;
 
 /** Where the workspace's clone lives inside the run container. TD-025 §2's `cwd`. */
 export const WORKSPACE_WORKDIR = '/work/repo';

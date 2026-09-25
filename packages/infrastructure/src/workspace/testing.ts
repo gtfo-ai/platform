@@ -18,8 +18,11 @@
  * WP-13 measured that the daemon refuses to start a container whose `volume-subpath` does not
  * exist — the reason WP-14 must create `<ctl>/<run-id>/` first. Reproducing that here needs the
  * double to know which sub-directories exist, and it cannot run the prepare helper's shell. So it
- * reads the helper's script for `mkdir -p /ctl/<uuid>` and records the directory. That is a model
- * of one line of shell, and it is enough to make the *ordering* mistake fail in the unit tier;
+ * reads the helper's script for `mkdir -p /ctl/<uuid>` and records the directory — when that helper
+ * starts and exits 0, never merely when it is created. That is a model
+ * of one line of shell (and, since WP-75, of the mirror helper's `git clone --mirror` line, for the
+ * one-mirror sub-path the run container and the export helper mount), and it is enough to make the
+ * *ordering* mistake fail in the unit tier;
  * whether the real daemon still behaves this way is `docker-workspace.e2e.test.ts`'s to say, and
  * it asserts exactly that.
  */
@@ -111,6 +114,8 @@ export class FakeDockerDaemon {
   readonly history: FakeContainer[] = [];
   readonly requests: RecordedRequest[] = [];
   readonly controlSubpaths = new Set<string>();
+  /** Every sub-path the model believes exists, by the volume it exists on (WP-75). */
+  readonly subpaths = new Map<string, Set<string>>();
   #server: Server | null = null;
   #dir = '';
   #socketPath = '';
@@ -300,7 +305,6 @@ export class FakeDockerDaemon {
       };
       this.containers.set(id, container);
       this.history.push(container);
-      this.#noteMkdir(create);
       send(201, { Id: id });
       return;
     }
@@ -320,6 +324,12 @@ export class FakeDockerDaemon {
       container.state = outcome.exited === true ? 'exited' : 'running';
       container.exitCode = outcome.exitCode;
       container.logs = outcome.logs;
+      // Only a helper that **succeeded** made its directory (WP-75 review): a `git clone --mirror`
+      // that exits 128 leaves no mirror, and a model that recorded it at create would be kinder
+      // than the daemon (standing rule 1).
+      if (outcome.exitCode === 0) {
+        this.#noteMkdir(container.body);
+      }
       send(204, undefined);
       return;
     }
@@ -445,19 +455,52 @@ export class FakeDockerDaemon {
     return this.containers.get(key) ?? this.created.find((container) => container.name === key);
   }
 
-  /** See the docblock: a model of one line of the prepare helper's shell. */
+  /**
+   * See the docblock: a model of one line of the prepare helper's shell — and, since WP-75, of one
+   * line of the mirror helper's (`git clone --mirror … "<cache>/<key>.git"`), because the run
+   * container and the export helper now mount one mirror by sub-path and the daemon refuses a
+   * sub-path that does not exist. A sub-path is recorded **against the volume the helper mounted
+   * at that directory**, so a mirror key cannot satisfy a control-volume mount or the reverse.
+   */
   #noteMkdir(body: FakeCreateBody): void {
+    const mounts = body.HostConfig?.Mounts ?? [];
+    const volumeAt = (target: string): string | undefined =>
+      mounts.find((mount) => mount.Target === target)?.Source;
     for (const line of body.Cmd ?? []) {
       for (const match of line.matchAll(/mkdir -p \/ctl\/([0-9a-f-]{36})/g)) {
         this.controlSubpaths.add(match[1] ?? '');
+        this.#noteSubpath(volumeAt('/ctl'), match[1] ?? '');
+      }
+      for (const match of line.matchAll(
+        /clone --mirror "[^"]*" "(\/[^"]+)\/([a-z0-9._-]+\.git)"/g,
+      )) {
+        this.#noteSubpath(volumeAt(match[1] ?? ''), match[2] ?? '');
       }
     }
+  }
+
+  /**
+   * A sub-path that exists before this double started — a project's mirror an earlier
+   * `updateMirror` left on the `repo-cache` volume, which outlives every run. For the cases that are
+   * not about the mirror; the ones that are drive `updateMirror` itself.
+   */
+  seedSubpath(volume: string, subpath: string): void {
+    this.#noteSubpath(volume, subpath);
+  }
+
+  #noteSubpath(volume: string | undefined, subpath: string): void {
+    if (volume === undefined) {
+      return;
+    }
+    const known = this.subpaths.get(volume) ?? new Set<string>();
+    known.add(subpath);
+    this.subpaths.set(volume, known);
   }
 
   #missingSubpath(container: FakeContainer): string | null {
     for (const mount of container.body.HostConfig?.Mounts ?? []) {
       const subpath = mount.VolumeOptions?.Subpath;
-      if (subpath !== undefined && !this.controlSubpaths.has(subpath)) {
+      if (subpath !== undefined && !(this.subpaths.get(mount.Source)?.has(subpath) ?? false)) {
         return `${mount.Source}/_data/${subpath}`;
       }
     }

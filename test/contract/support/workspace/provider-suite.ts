@@ -128,7 +128,15 @@ export const runWorkspaceProviderContractSuite = (
     it('refuses to create a workspace before the mirror exists', async () => {
       const harness = await context.provider();
       try {
-        await expect(harness.provider.create(harness.spec)).rejects.toBeInstanceOf(WorkspaceError);
+        // Named, in both implementations (WP-75): the Docker provider's clone helper checks the
+        // mirror before any container that mounts it by sub-path is asked for, so this is the
+        // provider's own words and never the daemon's refusal of a missing sub-path.
+        const refused = harness.provider.create(harness.spec);
+        await expect(refused).rejects.toBeInstanceOf(WorkspaceError);
+        await expect(refused).rejects.toMatchObject({
+          code: 'workspace_failed',
+          message: /no mirror to clone from/,
+        });
       } finally {
         await harness.cleanup();
       }

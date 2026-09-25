@@ -177,7 +177,9 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     }
     // Refused for a repo-ful spec whose mirror was never updated, exactly as before; a spec with
     // **no** repository (WP-74) clones nothing and needs no mirror, so it is the one create this
-    // check admits without one. The suite asks both directions of both implementations.
+    // check admits without one. The suite asks both directions of both implementations — and, since
+    // WP-75, the **words**: the Docker provider's clone helper refuses a missing mirror with this
+    // same sentence before any container that mounts the mirror by sub-path is asked for.
     if (spec.repo !== null && !this.#mirrors.has(spec.repo.cacheKey)) {
       throw new WorkspaceError('workspace_failed', 'the project has no mirror to clone from', {
         runId: spec.runId,

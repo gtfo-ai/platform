@@ -91,6 +91,7 @@ import type { DockerEngine, EngineVolume } from './engine.js';
 import {
   DEFAULT_RUNTIME_CLI_PATH,
   type DockerMount,
+  projectMirrorMount,
   RUNTIME_SOURCE_MOUNT,
   runContainerCreateBody,
   runObjectNames,
@@ -140,6 +141,146 @@ const RESERVED_ENV_PREFIXES = [
   'LD_LIBRARY_PATH',
   'NODE_OPTIONS',
 ];
+
+/**
+ * What the clone helper prints when the project's mirror is not on the volume (WP-75). A fixed
+ * token rather than git's own wording, so the provider can name the failure without parsing git.
+ */
+const NO_MIRROR_SENTINEL = 'AGENTIC_NO_MIRROR';
+
+/** What the export helper prints when the checkout's `.git` is not a plain directory (WP-75). */
+const UNSAFE_GITDIR_SENTINEL = 'AGENTIC_UNSAFE_GITDIR';
+
+/** What the export helper prints when the checkout holds a nested repository (WP-75, review 2). */
+const NESTED_REPOSITORY_SENTINEL = 'AGENTIC_NESTED_REPOSITORY';
+
+/** What the export helper prints when it cannot walk the whole checkout (WP-75, review 3). */
+const UNREADABLE_TREE_SENTINEL = 'AGENTIC_UNREADABLE_TREE';
+
+/** Where the export helper's walk writes its errors, on the helper's own `/tmp`. */
+const EXPORT_WALK_ERRORS = '/tmp/agentic-export-walk.err';
+
+/** The export helper's global git configuration, written by its own script onto its `/tmp`. */
+const EXPORT_GLOBAL_CONFIG = '/tmp/agentic-export.gitconfig';
+
+/**
+ * The export helper's script (WP-75, PROGRESS backlogs 148 and 152).
+ *
+ * **The checkout is the agent's, and so is everything under `.git/`** — hooks, `config`,
+ * `.gitattributes` in the tree. Measured before this function existed, on Docker 29.7.2 with
+ * `alpine/git:v2.49.1`: six run-planted hooks fired here (in `.git/hooks/` and behind a
+ * `core.hooksPath` the run set), and a repository-level `core.fsmonitor` and `filter.<x>.clean`
+ * ran under `git status`/`git add`; the review measured `commit.gpgSign` + `gpg.program`, a
+ * `pushurl`/`url.*.insteadOf` redirect and a repository `credential.helper` the same way. This
+ * container holds the push credential and a route to the git host.
+ *
+ * So the answer is structural rather than a list of `-c` overrides, which would be an enumeration of
+ * what git executes today:
+ *
+ *  1. `.git` must be a plain directory with no `commondir` — a symlink, a gitfile or a linked
+ *     worktree names a configuration this script would not replace, and is refused **by name**
+ *     before any git command runs;
+ *  2. git reads **only** the platform's configuration: `GIT_CONFIG_NOSYSTEM`, a
+ *     `GIT_CONFIG_GLOBAL` this script writes, and a `.git/config` it **replaces** — the run's is
+ *     deleted, and the new one holds the repository format (read off the platform-written mirror's
+ *     own config) and `remote.origin.url` (likewise). An attribute in the tree that names a filter
+ *     driver no configuration defines runs nothing; the e2e plants one and measures that;
+ *  3. every git invocation goes through `g`, which adds `-c core.hooksPath=/dev/null`, and
+ *     `.git/hooks` is removed — the override is the guarantee, the removal is tidiness;
+ *  4. the push names the mirror's URL explicitly rather than a remote, so no remote configuration
+ *     is consulted for where the credential goes;
+ *  5. a **nested repository** — a `.git` directory or gitfile anywhere below the top level — is
+ *     refused by name before the first git command that reads the work tree: its own
+ *     `.git/config` is one step 2 does not replace, and the review measured `git add -A` running a
+ *     nested repository's `core.fsmonitor`. The walk that looks for one is made complete (the tree
+ *     is normalised to the owner's `u+rwX` first) and **checked**: a non-zero `find` or any stderr
+ *     from it refuses by a name of its own, because an unreadable directory once hid a nested
+ *     repository from the walk while git reached it through the index. The match is case-sensitive,
+ *     as the ext4 workspace volume is. A gitlink with no `.git` behind it has no configuration to
+ *     read, so it is **not** refused: a project whose default branch carries submodules exports;
+ *  6. `export` stops the run container before this script's container exists, so nothing the run
+ *     left running can change the tree between the checks and the push.
+ *
+ * What is true is therefore *git reads no configuration the run wrote*, which is narrower than
+ * "nothing the run wrote executes": the platform's own `git` still reads the run's index, objects
+ * and attributes, and an attribute naming an undefined driver is inert (measured, not assumed).
+ *
+ * The objects are unaffected: a `--shared` clone's alternates are `objects/info/alternates`, a file
+ * rather than configuration (the e2e decodes a pre-run object after the replacement).
+ */
+export const exportScript = (input: {
+  readonly mirror: string;
+  readonly push: boolean;
+  readonly tarball: boolean;
+}): string =>
+  [
+    'set -e',
+    'g() { git -c core.hooksPath=/dev/null "$@"; }',
+    'cd /work/repo',
+    `if [ -L .git ] || [ ! -d .git ] || [ -e .git/commondir ]; then echo "${UNSAFE_GITDIR_SENTINEL}"; exit 4; fi`,
+    // Outside the checkout, so writing and reading these files discovers no repository.
+    'cd /',
+    `MIRROR="${input.mirror}"`,
+    'g config --file "$GIT_CONFIG_GLOBAL" --add safe.directory /work/repo',
+    // The clone is `--shared`: its alternates point into the mirror, which is root-owned. Without
+    // this every object older than the run is unreadable and the push fails with `remote unpack
+    // failed`, which reads like a network fault.
+    'g config --file "$GIT_CONFIG_GLOBAL" --add safe.directory "$MIRROR"',
+    'g config --file "$GIT_CONFIG_GLOBAL" core.hooksPath /dev/null',
+    'g config --file "$GIT_CONFIG_GLOBAL" user.email agentic@localhost',
+    'g config --file "$GIT_CONFIG_GLOBAL" user.name agentic',
+    'ORIGIN_URL="$(g config --file "$MIRROR/config" --get remote.origin.url)"',
+    'OBJECT_FORMAT="$(g config --file "$MIRROR/config" --get extensions.objectformat || true)"',
+    'chmod u+rwx /work/repo/.git',
+    'rm -rf /work/repo/.git/config',
+    'rm -rf /work/repo/.git/hooks || true',
+    'g config --file /work/repo/.git/config core.bare false',
+    'g config --file /work/repo/.git/config core.filemode true',
+    'if [ -n "$OBJECT_FORMAT" ]; then',
+    '  g config --file /work/repo/.git/config core.repositoryformatversion 1',
+    '  g config --file /work/repo/.git/config extensions.objectformat "$OBJECT_FORMAT"',
+    'else',
+    '  g config --file /work/repo/.git/config core.repositoryformatversion 0',
+    'fi',
+    'g config --file /work/repo/.git/config remote.origin.url "$ORIGIN_URL"',
+    'g config --file /work/repo/.git/config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"',
+    'cd /work/repo',
+    // A nested repository carries its **own** `.git/config`, which none of the above replaces, and
+    // `git add -A` reads it: measured at review, a gitlink whose repository set `core.fsmonitor`
+    // ran that program from the export's `add` with `GIT_PASS` in its environment. So any `.git`
+    // (directory, or a gitfile such as a submodule's pointing into `.git/modules/<name>`) below the
+    // top level is refused by name, before the first git command that reads the work tree. A
+    // gitlink with no `.git` behind it has no configuration to execute, so a project with
+    // submodules still exports (the orchestrator's ruling). `find` does not follow symlinks by
+    // default, the top-level `.git` is pruned rather than searched, and `-name .git` is
+    // case-sensitive — which matches the filesystem: the workspace volume is ext4 inside the
+    // daemon's VM, where `.GIT` is a different name from `.git`.
+    //
+    // **The walk must be complete, or it is a refusal** (review round 3, measured): this helper runs
+    // as uid 1000, the run's own uid, so a directory the run left at mode 0111 is one `find` cannot
+    // list — it printed nothing on stdout and its failure vanished inside `$(…)` — while git, which
+    // reads paths off the index, walked straight into the nested repository. Two layers: first the
+    // tree is normalised (`chmod -R u+rwX` as the owner — everything under `/work/repo` was
+    // created by uid 1000, so this restores what the run took away, and it is best-effort because a
+    // symlink into the read-only mirror answers it with an error); then `find`'s exit status **and**
+    // its stderr are both read, and either one refuses by a name of its own. The cost: a file the run
+    // left with only a group or other execute bit gains the owner's, which git records as
+    // executable.
+    'chmod -R u+rwX /work/repo 2>/dev/null || true',
+    `if ! NESTED="$(find . -path ./.git -prune -o -name .git -print 2>${EXPORT_WALK_ERRORS})" || ` +
+      `[ -s ${EXPORT_WALK_ERRORS} ]; then echo "${UNREADABLE_TREE_SENTINEL}"; exit 6; fi`,
+    `if [ -n "$NESTED" ]; then echo "${NESTED_REPOSITORY_SENTINEL}"; exit 5; fi`,
+    'if [ -n "$(g status --porcelain)" ]; then g add -A; g commit -q -m "$COMMIT_MESSAGE"; fi',
+    'echo "SHA=$(g rev-parse HEAD)"',
+    input.push
+      ? 'if g push "$ORIGIN_URL" "HEAD:refs/heads/$BRANCH"; then echo "PUSHED=yes"; else echo "PUSHED=no"; fi'
+      : 'echo "PUSHED=no"',
+    input.tarball
+      ? 'tar -cf /work/export.tar --exclude=.git --exclude=node_modules -C /work repo'
+      : '',
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n');
 
 /**
  * How long `attach` waits for the shim to create its control socket, and how often it looks.
@@ -539,6 +680,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
             `git -C "${cachePath}" rev-parse --is-bare-repository`,
           ].join('\n'),
           ...this.#gitCredentialEnv(input.credential, { REPO_URL: input.repo.url }),
+          // **The whole volume, read-write, and it has to be** (WP-75): this helper *creates*
+          // `<key>.git` on a first update, so a sub-path mount of it cannot exist yet — the daemon
+          // refuses a `Subpath` that does not. What runs in it is platform content only: this
+          // script, the platform's `git`, and a fetch that executes nothing it receives (no hook,
+          // no filter and no config travels with a fetch). No agent code reaches this container.
           mounts: [this.#volumeMount(this.#cacheVolume, this.#cacheMount, false)],
           // Root, and it stays root: the mirror is written into a volume whose root is
           // `root:root`, and a helper with `cap-drop ALL` has no `DAC_OVERRIDE`, so root writing
@@ -815,6 +961,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       image: this.#images.git,
       script: [
         'set -e',
+        // First, and by name (WP-75): this is the step that guarantees the run container's
+        // one-mirror `Subpath` exists before the daemon is asked for it (`projectMirrorMount`).
+        `if [ ! -d "${cachePath}" ]; then echo "${NO_MIRROR_SENTINEL}"; exit 3; fi`,
         // The mirror is written by a root helper and read here as uid 1000; git refuses a
         // repository owned by another user unless it is told the ownership is expected.
         `git config --global --add safe.directory "${cachePath}"`,
@@ -832,6 +981,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         DEFAULT_BRANCH: repo.defaultBranch,
         ...(repo.checkoutBranch === null ? {} : { CHECKOUT_BRANCH: repo.checkoutBranch }),
       },
+      // **The whole volume, read-only, on purpose** (WP-75): this helper is the existence check
+      // above, and a sub-path mount of a mirror that is not there would turn "no mirror" into the
+      // daemon's refusal of the mount — an error naming a path under `/var/lib/docker`, not the
+      // project. Nothing the agent wrote exists yet: the script is the platform's, the tree it
+      // makes is a fresh `--shared` clone (a clone runs no hook and no filter it did not bring),
+      // and the container has no network. The run container and the export helper, which **do**
+      // hold agent content, mount one mirror each.
       mounts: [
         this.#volumeMount(workspaceVolumeName(spec.runId), '/work', false),
         this.#volumeMount(this.#cacheVolume, this.#cacheMount, true),
@@ -840,6 +996,15 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       secrets: [],
       network: 'none',
       labels: this.#labels(spec, 'clone', spec.keepUntil),
+    }).catch((error: unknown) => {
+      if (error instanceof WorkspaceError && (error.detail ?? '').includes(NO_MIRROR_SENTINEL)) {
+        throw new WorkspaceError(
+          'workspace_failed',
+          `the project has no mirror to clone from (${cachePath}); updateMirror runs before create`,
+          { runId: spec.runId },
+        );
+      }
+      throw error;
     });
   }
 
@@ -1356,47 +1521,77 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const name = `export-${assertRunId(handle.runId)}`;
     const cacheKey = assertHasCheckout(handle);
     const wantsTarball = request.tarballPath !== null;
+    const mirror = mirrorPath(this.#cacheMount, cacheKey);
+    // **The run container is stopped before the helper exists** (WP-75, review round 3): the
+    // checks below are about the tree *at the moment they run*, and a process still alive in the
+    // run container could rewrite `.git/config` after the replacement or create a nested `.git`
+    // after the walk. Idempotent — a stop of an exited or already-removed container is not an error
+    // — and `destroy`, which `LauncherService.endRun` calls after this, stops it again. Nothing the
+    // export does needs the run container: the helper mounts the workspace volume itself.
+    await this.#stopContainer(handle.containerId, 20);
     const helper = await this.#helper({
       name,
       image: this.#images.git,
-      script: [
-        'set -e',
-        'git config --global --add safe.directory /work/repo',
-        // The clone is `--shared`: its `objects/info/alternates` points into the mirror, which is
-        // root-owned. Without this line every object older than the run is unreadable and the push
-        // fails with `remote unpack failed`, which reads like a network fault.
-        `git config --global --add safe.directory "${mirrorPath(this.#cacheMount, cacheKey)}"`,
-        'cd /work/repo',
-        'git config user.email "agentic@localhost"',
-        'git config user.name "agentic"',
-        'if [ -n "$(git status --porcelain)" ]; then git add -A; git commit -q -m "$COMMIT_MESSAGE"; fi',
-        'echo "SHA=$(git rev-parse HEAD)"',
-        credential === null
-          ? 'echo "PUSHED=no"'
-          : 'if git push origin "HEAD:refs/heads/$BRANCH"; then echo "PUSHED=yes"; else echo "PUSHED=no"; fi',
-        wantsTarball
-          ? 'tar -cf /work/export.tar --exclude=.git --exclude=node_modules -C /work repo'
-          : '',
-      ]
-        .filter((line) => line.length > 0)
-        .join('\n'),
+      script: exportScript({ mirror, push: credential !== null, tarball: wantsTarball }),
       ...this.#gitCredentialEnv(credential, {
         BRANCH: request.branch,
         COMMIT_MESSAGE: request.commitMessage,
+        // Nothing but the platform's configuration is read (WP-75): no system file, and a global
+        // file the script writes itself. The credential helper travels as `GIT_CONFIG_COUNT`
+        // (command scope), which neither variable touches.
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: EXPORT_GLOBAL_CONFIG,
       }),
-      // The cache, read-only, at the same path the run container sees it: the clone is `--shared`,
-      // so `.git/objects/info/alternates` points at `/cache/<key>.git/objects` and **every** object
-      // older than this run lives there. Without it `git rev-parse HEAD` still answers — the ref
-      // file is local — and the push fails with `remote unpack failed: eof before pack header was
-      // fully read`, which reads like a network fault. Found by the e2e; no unit tier could.
+      // The project's own mirror, read-only, at the same path the run container sees it: the clone
+      // is `--shared`, so `.git/objects/info/alternates` points at `/cache/<key>.git/objects` and
+      // **every** object older than this run lives there. Without it `git rev-parse HEAD` still
+      // answers — the ref file is local — and the push fails with `remote unpack failed: eof
+      // before pack header was fully read`, which reads like a network fault. Found by the e2e; no
+      // unit tier could. **One mirror, not the volume** (WP-75): this container runs `git` in a
+      // tree the agent wrote, so it gets the run container's view of the cache and no wider one.
       mounts: [
         this.#volumeMount(handle.volumeName, '/work', false),
-        this.#volumeMount(this.#cacheVolume, this.#cacheMount, true),
+        projectMirrorMount(this.#cacheVolume, this.#cacheMount, cacheKey),
       ],
       user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
       network: credential === null ? 'none' : this.#helperNetwork,
       labels: { [WORKSPACE_LABELS.run]: handle.runId, [WORKSPACE_LABELS.role]: 'export' },
       keep: wantsTarball,
+    }).catch((error: unknown) => {
+      if (
+        error instanceof WorkspaceError &&
+        (error.detail ?? '').includes(UNSAFE_GITDIR_SENTINEL)
+      ) {
+        throw new WorkspaceError(
+          'workspace_failed',
+          'refusing to export: the checkout’s .git is not the directory the platform cloned ' +
+            '(a symlink, a gitfile or a linked worktree), so its configuration cannot be replaced',
+          { runId: handle.runId },
+        );
+      }
+      if (
+        error instanceof WorkspaceError &&
+        (error.detail ?? '').includes(UNREADABLE_TREE_SENTINEL)
+      ) {
+        throw new WorkspaceError(
+          'workspace_failed',
+          'refusing to export: part of the checkout could not be read, so it cannot be shown to ' +
+            'hold no nested repository',
+          { runId: handle.runId },
+        );
+      }
+      if (
+        error instanceof WorkspaceError &&
+        (error.detail ?? '').includes(NESTED_REPOSITORY_SENTINEL)
+      ) {
+        throw new WorkspaceError(
+          'workspace_failed',
+          'refusing to export: the checkout holds a nested repository (a .git below the top ' +
+            'level), whose own configuration git would read',
+          { runId: handle.runId },
+        );
+      }
+      throw error;
     });
 
     const commitSha = /SHA=([0-9a-f]{7,64})/.exec(helper.output)?.[1] ?? null;

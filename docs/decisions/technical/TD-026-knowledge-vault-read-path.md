@@ -15,7 +15,8 @@ triggered at task start and after every merge.
 
 **The platform process has no checkout to give it.** TD-021 puts a run's tree on `ws-<run>` at `/work`
 inside the run container and the project's bare mirror on the `repo-cache` volume, mounted read-only at
-`/cache` in the run container. The launcher does not mount either into its own filesystem: it runs git
+`/cache` in the run container (since WP-75, only the project's own mirror, as a sub-path mount at
+`/cache/<cacheKey>.git`). The launcher does not mount either into its own filesystem: it runs git
 in helper containers as root, with the cache volume mounted into the helper
 (`packages/infrastructure/src/workspace/provider.ts:389-443`). And TD-021's WP-15g amendment states that
 no process which composes the pipeline or serves `/webhooks/*` may construct a Docker client, held by
