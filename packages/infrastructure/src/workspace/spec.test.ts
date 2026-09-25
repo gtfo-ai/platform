@@ -17,6 +17,9 @@ import {
   mirrorCacheKeyFor,
   PLATFORM_WORKSPACE_LIMITS,
   runIsReadOnly,
+  runNeedsCheckout,
+  TOOLS_THAT_NEED_NO_CHECKOUT,
+  TOOLS_THAT_OPEN_THE_CHECKOUT,
 } from './spec.js';
 
 const NOW = new Date('2026-09-12T10:00:00.000Z');
@@ -74,6 +77,70 @@ describe('the egress allow-list', () => {
     expect(
       build({ platformEgressHosts: ['git.example.com', 'api.anthropic.com'] }).egress.hosts,
     ).toEqual(['git.example.com', 'api.anthropic.com']);
+  });
+});
+
+/**
+ * WP-74, PROGRESS backlog 82: **no checkout** for a run with no file tool and no shell — never no
+ * container. The rows are the planner's own, not a literal: `TOOLS_BY_ROLE` is this predicate's
+ * input, and WP-54 rewrote it once already.
+ */
+describe('the checkout a run gets', () => {
+  const specOf = (role: 'ask' | 'historian' | 'developer' | 'discovery') =>
+    build({
+      spec: runSpecFixture({ role, tools: [...TOOLS_BY_ROLE[role]] }),
+      platformEgressHosts: ['api.anthropic.com'],
+    });
+
+  it('is none for an ask and for a history miner, whose tool rows are empty', () => {
+    expect(TOOLS_BY_ROLE.ask).toEqual([]);
+    expect(TOOLS_BY_ROLE.historian).toEqual([]);
+    expect(specOf('ask').repo).toBeNull();
+    expect(specOf('historian').repo).toBeNull();
+  });
+
+  /**
+   * The other direction (rule 42), and discovery is the case that matters: it is stage-less like
+   * the ask, and it reads its tree — a predicate keyed on "no stage" would have taken it away.
+   */
+  it('is kept for a developer and for discovery, which read their tree', () => {
+    expect(specOf('developer').repo).toMatchObject({ url: 'https://git.example.com/acme/api.git' });
+    expect(specOf('discovery').repo).toMatchObject({
+      defaultBranch: 'main',
+      cacheKey: mirrorCacheKeyFor(specOf('discovery').projectId),
+    });
+  });
+
+  it('is decided by the tools, never the role: one shell is enough, and no tool at all is none', () => {
+    expect(runNeedsCheckout(runSpecFixture({ role: 'ask', tools: ['Bash'] }))).toBe(true);
+    expect(runNeedsCheckout(runSpecFixture({ role: 'developer', tools: [] }))).toBe(false);
+    expect(runNeedsCheckout(runSpecFixture({ tools: ['Grep'] }))).toBe(true);
+  });
+
+  /**
+   * Every tool any role holds is classified, on one side or the other. An unrecognised name counts
+   * as *not* opening the checkout (the fail-closed direction), so without this a tool added to a
+   * role's row would silently run on an empty directory.
+   */
+  it('classifies every tool a role holds, so a new one cannot fall through', () => {
+    const held = [...new Set(Object.values(TOOLS_BY_ROLE).flat())].sort();
+    const classified = [...TOOLS_THAT_OPEN_THE_CHECKOUT, ...TOOLS_THAT_NEED_NO_CHECKOUT];
+    expect(held.filter((tool) => !classified.includes(tool))).toEqual([]);
+    expect(
+      TOOLS_THAT_OPEN_THE_CHECKOUT.filter((tool) => TOOLS_THAT_NEED_NO_CHECKOUT.includes(tool)),
+    ).toEqual([]);
+  });
+
+  /** WP-74 criterion (8): the narrowing is a decision, asserted as the whole list. */
+  it('narrows a run with no checkout to the model hosts alone: no git host on its egress list', () => {
+    expect(specOf('ask').egress).toEqual({ hosts: ['api.anthropic.com'], connectPorts: [443] });
+    expect(specOf('developer').egress.hosts).toEqual(['api.anthropic.com', 'git.example.com']);
+  });
+
+  it('does not read the repository URL for a run that will not clone it', () => {
+    const ask = runSpecFixture({ role: 'ask', tools: [] });
+    expect(build({ spec: ask, repoUrl: 'https:///acme/api.git' }).repo).toBeNull();
+    expect(() => build({ repoUrl: 'https:///acme/api.git' })).toThrow(/names no host/);
   });
 });
 
@@ -167,15 +234,15 @@ describe('the rest of the spec', () => {
 
   it('names the mirror by the project rather than by the repository', () => {
     const spec = build();
-    expect(spec.repo.cacheKey).toBe(mirrorCacheKeyFor(spec.projectId));
+    expect(spec.repo?.cacheKey).toBe(mirrorCacheKeyFor(spec.projectId));
     // A directory name on a shared volume: the schema's own pattern, asserted here because the
     // consequence of breaking it is a mount path rather than a validation error.
-    expect(spec.repo.cacheKey).toMatch(/^[a-z0-9][a-z0-9._-]{0,62}$/);
+    expect(spec.repo?.cacheKey).toMatch(/^[a-z0-9][a-z0-9._-]{0,62}$/);
   });
 
   it('checks out the default branch unless a re-entry names the task branch', () => {
-    expect(build().repo.checkoutBranch).toBeNull();
-    expect(build({ checkoutBranch: 'agentic/acme-1' }).repo.checkoutBranch).toBe('agentic/acme-1');
+    expect(build().repo?.checkoutBranch).toBeNull();
+    expect(build({ checkoutBranch: 'agentic/acme-1' }).repo?.checkoutBranch).toBe('agentic/acme-1');
   });
 
   it('puts no secret in the container’s environment', () => {

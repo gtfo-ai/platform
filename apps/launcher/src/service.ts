@@ -54,6 +54,7 @@ import type {
   WorkspaceProvider,
   WorkspaceSpec,
 } from '@platform/application';
+import { WorkspaceError } from '@platform/application';
 import type { workspace } from '@platform/infrastructure';
 
 /** What the run needs from the git provider, beyond the spec. */
@@ -127,17 +128,36 @@ export class LauncherService {
    * The mirror comes first because the clone reads from it with no network of its own; the
    * credential comes before the workspace because a run that cannot get one should not have a
    * container.
+   *
+   * **A spec with no repository skips both** (WP-74): there is no clone to feed, so no mirror
+   * fetch — the one call a read-only run of a private repository has no credential for (backlog
+   * 133) — and nothing to push, so the broker is never asked and `credential` must be `null`. The
+   * container, the socket and the skills are created as for any run. A repo-ful spec with a `null`
+   * credential request is refused rather than run without one.
    */
-  async startRun(spec: WorkspaceSpec, credential: RunCredentialRequest): Promise<StartedRun> {
+  async startRun(
+    spec: WorkspaceSpec,
+    credential: RunCredentialRequest | null,
+  ): Promise<StartedRun> {
     const { provider, broker, logger } = this.#options;
-    const issued = await broker.issue({
-      runId: spec.runId,
-      project: credential.project,
-      host: credential.host,
-      readOnly: spec.readOnly,
-      branchPatterns: credential.branchPatterns,
-      ttlSeconds: credential.ttlSeconds,
-    });
+    if ((spec.repo === null) !== (credential === null)) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        'a credential request must accompany a spec with a repository, and only such a spec',
+        { runId: spec.runId },
+      );
+    }
+    const issued =
+      spec.repo === null || credential === null
+        ? null
+        : await broker.issue({
+            runId: spec.runId,
+            project: credential.project,
+            host: credential.host,
+            readOnly: spec.readOnly,
+            branchPatterns: credential.branchPatterns,
+            ttlSeconds: credential.ttlSeconds,
+          });
     // The handle lives outside the `try` because a step *after* `create` can fail with the
     // container already up: `attach` reads the control volume and throws `not_found` on a
     // mis-mounted one, and it builds a socket path that a long control root makes too long for
@@ -145,11 +165,13 @@ export class LauncherService {
     // a running agent anywhere in the process.
     let handle: WorkspaceHandle | null = null;
     try {
-      await provider.updateMirror({
-        projectId: spec.projectId,
-        repo: spec.repo,
-        credential: issued,
-      });
+      if (spec.repo !== null) {
+        await provider.updateMirror({
+          projectId: spec.projectId,
+          repo: spec.repo,
+          credential: issued,
+        });
+      }
       handle = await provider.create(spec);
       const attachment = await provider.attach(handle);
       logger.info({ run_id: spec.runId, project_id: spec.projectId }, 'workspace started');

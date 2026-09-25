@@ -354,19 +354,21 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
    * **Empty, and that is the point** (WP-31, Q72 (b)). An ask explains the platform's own record;
    * it never inspects the code. Everything it may do is in `PLATFORM_TOOLS_BY_ROLE.ask`.
    *
-   * **This docblock used to say "an ask run is given no workspace", and that is false** — PROGRESS
-   * backlog **82**, corrected here at WP-53 rather than left standing.
-   * `createWorkspaceClaudeRunner` provisions a workspace for **every** `RunSpec` with no predicate
-   * of any kind, so on a deployment configured to run agents an ask costs a container, a mirror
-   * update and a checkout it holds no tool to open — while product/18 sells it as *"cheaper than
-   * reading transcripts"*.
+   * **An ask run is given a container and no checkout** (WP-74, PROGRESS backlog **82**). Because
+   * this row holds no file tool and no shell, `buildWorkspaceSpec` gives the run `repo: null`
+   * (`runNeedsCheckout`, `packages/infrastructure/src/workspace/spec.ts`): no mirror update, no
+   * clone, no `repo-cache` mount, no git host on its egress list and no git credential asked for.
+   * It **keeps** the container, the network, the volume, the egress sidecar and the control socket,
+   * because the CLI runs inside that container and a run has no other transport — running it in
+   * the platform's own process is ruled out by TD-021's decision body, not only by its WP-15g
+   * amendment. The predicate reads the **tools**, so the day this row gains `Read` the ask gets
+   * its checkout back without a line changing here.
    *
-   * **WP-53 corrected the sentence and did not close the gap**, deliberately: skipping the
-   * workspace leaves the CLI with no transport, so the SDK would spawn `claude` in the *platform's*
-   * own process — which in `ROLE=all` is the container serving `/webhooks/*` — with a `cwd` that
-   * does not exist. Where a tool-less run executes is a decision TD-028 did not take and it has
-   * security weight, so it is reported rather than invented (see `SKILLS_BY_ROLE.ask` for the half
-   * that decision also has to answer).
+   * So product/18's *"cheaper than reading transcripts"* is **partly** true: an ask no longer pays
+   * a mirror fetch and a clone, and it still pays a network, a volume, a sidecar and three helper
+   * containers (`prep-`, `skills-`, `egresscfg-`). What one provision costs in seconds has not been
+   * measured. This docblock said *"an ask run is given no workspace"* until WP-53, which was false;
+   * WP-53's correction said the opposite, which WP-74 made conditional.
    */
   ask: [],
   /**
@@ -447,13 +449,15 @@ export const SKILLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
    * `kb`, because the ask holds `kb_search` and rule 2 of this table says a skill goes to a role
    * that has the tool it is about. Nothing else: every other skill describes work in a repository.
    *
-   * **The old wording — "an ask has no workspace for one to be copied into" — was false twice
-   * over** (PROGRESS backlog **82**, corrected at WP-53). An ask *is* given a workspace today, and
-   * the sentence contradicted its own list: a skill reaches a run **only** by being written into
-   * the checkout (`<checkout>/.agentic-run/plugins/agentic/skills/<name>/SKILL.md`), so if an ask
-   * had no workspace it would have no `kb` skill either. That is the coupling whoever closes 82
-   * inherits: removing the ask's workspace removes the one skill documenting the one platform tool
-   * it holds, and the skill has to move or be dropped **deliberately**.
+   * **It reaches the run although the ask has no checkout** (WP-74, PROGRESS backlog **82**). A
+   * skill is written under the run's working directory
+   * (`/work/repo/.agentic-run/plugins/agentic/skills/<name>/SKILL.md`), and a run with no checkout
+   * still has a container, a workspace volume and that directory — `#prepare` makes it empty
+   * rather than the clone making it full — so the `skills-<run-id>` helper still runs and
+   * `agentic:kb` is still there. The old wording, *"an ask has no workspace for one to be copied
+   * into"*, was false twice over and was corrected at WP-53; the coupling it hid — removing the
+   * ask's *workspace* would have removed its only documented tool — is why WP-74 withheld the
+   * checkout and never the container.
    */
   ask: ['kb'],
   /** `kb`, because the miner holds `kb_search` and rule 2 of this table says the skill follows the tool. */

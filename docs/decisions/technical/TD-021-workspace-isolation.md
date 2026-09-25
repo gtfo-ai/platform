@@ -115,3 +115,16 @@ merging them means either giving the platform process a Docker client (forbidden
 launcher a vault-read API (blocked on Q52's transport, and it widens the smallest privileged component
 in the system). A future session that wants one mirror should read TD-026 § Alternatives before
 starting.
+
+## Amendment (WP-74 — a run with no file tool and no shell gets a container and no checkout)
+
+The decision body's *"per-project bare mirror ro at /cache"* and *"mirror updated before each run"*
+now hold for a run **with a checkout** only. `WorkspaceSpec.repo` is nullable, and a spec whose tools
+include no file tool and no shell (`runNeedsCheckout` in `packages/infrastructure/src/workspace/spec.ts`
+— today the `ask` and `historian` roles) gets `repo: null`: the launcher skips the mirror update and asks
+the broker for no credential, the provider skips the clone and the `repo-cache` mount, and the run's
+egress allow-list is the model hosts alone. It **keeps** the container, the network, the egress sidecar,
+the control socket and its skills — the ruling on WP-53's criterion (5): a tool-less run's CLI is never
+run in the platform process, because this decision's body puts the SDK in the `runner` role spawning
+`claude` inside the container, which is a stronger objection than the WP-15g amendment's Docker-client
+clause. The workspace such a run exports is refused by name (`invalid_spec`).

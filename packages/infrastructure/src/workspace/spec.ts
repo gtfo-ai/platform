@@ -42,7 +42,8 @@
  * registries for the project's ecosystems (from discovery)" and read-only observability hosts for
  * stages that may use them. **Two of those four do not exist in this build.** Discovery has not been
  * written, so no registry host can be derived, and no stage carries observability hosts yet. So the
- * allow-list this produces is *the model host plus the git host* — in **both** provider modes, which
+ * allow-list this produces is *the model host plus the git host* — the model host **alone** for a run
+ * with no checkout (WP-74, {@link runNeedsCheckout}) — in **both** provider modes, which
  * is a correction: this paragraph read "(or none, in `local` provider mode) … the binary is on the
  * host and talks to nothing" until WP-53, and that has not been true since WP-22 put the CLI in the
  * run container in every mode. WP-53 measured the pinned binary authenticating against the same API
@@ -143,6 +144,60 @@ export const runIsReadOnly = (spec: RunSpec): boolean =>
   !spec.tools.includes('Write') && !spec.tools.includes('Edit');
 
 /**
+ * The SDK tools that open the checkout: the four file tools, the two that write, and the shell.
+ *
+ * A **positive** list, and `spec.test.ts` holds it to every tool name in `TOOLS_BY_ROLE` — a tool a
+ * role holds that is in neither this list nor {@link TOOLS_THAT_NEED_NO_CHECKOUT} fails that test,
+ * so a new tool is classified by somebody rather than defaulting into one answer.
+ */
+export const TOOLS_THAT_OPEN_THE_CHECKOUT: readonly string[] = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'Bash',
+];
+
+/**
+ * SDK tools a run may hold that never read the tree. Empty on this build: no role holds one.
+ * Declared so the classification in `spec.test.ts` has two sides rather than one.
+ */
+export const TOOLS_THAT_NEED_NO_CHECKOUT: readonly string[] = [];
+
+/**
+ * Does this run get a checkout? — WP-74, PROGRESS backlog **82**.
+ *
+ * Read off the run's **own tools**, like {@link runIsReadOnly}, and never off its role or stage: a
+ * run with no file tool and no shell has nothing to do with a tree, whatever it is called. On this
+ * build that is the ask (`TOOLS_BY_ROLE.ask`) and the history miner (`TOOLS_BY_ROLE.historian`);
+ * the triager's row is empty too, and no shipped template runs it. Discovery is the case that
+ * matters in the other direction — stage-less like the ask, and it reads its tree — and it holds
+ * `Read` and `Bash`, so it keeps its checkout.
+ *
+ * **The predicate withholds the checkout, never the container.** The SDK's `tools` option is a
+ * filter the CLI applies *inside* the run container, which is the argument this platform already
+ * accepted for skills (*"a context filter, not a sandbox"*): the only honest restriction for a run
+ * that may not read the tree is not to put the tree there. Running a tool-less CLI in the platform
+ * process instead is ruled out by TD-021's **decision body** (*"the Agent SDK runs in the platform
+ * `runner` role and spawns `claude` inside the container"*,
+ * `docs/decisions/technical/TD-021-workspace-isolation.md:10`) — not by the WP-15g amendment's
+ * Docker-client clause, which that path would not breach, and which is why the distinction is
+ * written here where the predicate is.
+ *
+ * An unrecognised tool name counts as **not** opening the checkout. That is the fail-closed
+ * direction (a run whose tool needed a tree fails visibly rather than being handed one), and the
+ * classification test is what stops it being reached by accident.
+ *
+ * It reads `spec.tools` only, never `spec.agents[*].tools`: a subagent runs in the same container
+ * as its parent, and every shipped spec's `agents` is `{}` today. A planner that starts giving a
+ * subagent a file tool its parent lacks must widen this predicate in the same change.
+ */
+export const runNeedsCheckout = (spec: RunSpec): boolean =>
+  spec.tools.some((tool) => TOOLS_THAT_OPEN_THE_CHECKOUT.includes(tool));
+
+/**
  * The platform skills to provision, read off the run's own `skills` list.
  *
  * `RunSpec.skills` is plugin-qualified (`agentic:kb`) because that is what the SDK's filter takes;
@@ -169,7 +224,8 @@ export interface BuildWorkspaceSpecInput {
   readonly checkoutBranch?: string | null;
   /**
    * Hosts the platform itself needs the run to reach: the model provider, or a proxy in front of it.
-   * Empty in `local` provider mode, where the binary is on the host and talks to nothing.
+   * The same list in both provider modes, because the CLI runs in the run container in both (the
+   * module docblock has the correction). For a run with no checkout it is the **whole** list.
    */
   readonly platformEgressHosts: readonly string[];
   /** Non-secret project variables for the *container's* environment (BD-025 §3 keeps secrets out). */
@@ -183,15 +239,26 @@ export interface BuildWorkspaceSpecInput {
 /**
  * Builds the spec, and validates it here rather than trusting the caller.
  *
+ * **Two things depend on {@link runNeedsCheckout}** (WP-74): `repo` is `null` for a run with no file
+ * tool and no shell, and that run's egress allow-list is `platformEgressHosts` **alone** — the git
+ * host is added only for a run that has a checkout to fetch, clone and push. `repoUrl` is then not
+ * read at all, so a project whose URL names no host still gets an ask answered.
+ *
  * `workspaceSpecSchema.parse` at the end is not ceremony: the adapter validates again before it
  * reaches the daemon (the port's docblock says so), and this is the parse that turns a bad
  * `repo_url` or a host that is not a DNS name into an error an operator can read at the point the
  * *platform* made the decision, rather than into a container argument.
  */
 export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpec => {
-  const gitHost = egressHostOfRepoUrl(input.repoUrl);
+  const checkout = runNeedsCheckout(input.spec);
+  // **The egress narrowing for a run with no checkout is a decision, not a side effect** (WP-74).
+  // The git host is on the list *because* the mirror, the clone and the push need it; a run with no
+  // checkout makes none of those calls and holds no credential for them, so its list is the model
+  // hosts alone. Leaving the git host on would hand a run that cannot open a tree a route to the one
+  // host that serves the tree.
+  const gitHosts = checkout ? [egressHostOfRepoUrl(input.repoUrl)] : [];
   const hosts = [
-    ...new Set([...input.platformEgressHosts.map((host) => host.toLowerCase()), gitHost]),
+    ...new Set([...input.platformEgressHosts.map((host) => host.toLowerCase()), ...gitHosts]),
   ];
   const keepUntil = new Date(
     input.now.getTime() + (input.keepDays ?? DEFAULT_WORKSPACE_KEEP_DAYS) * 24 * 60 * 60 * 1_000,
@@ -199,12 +266,14 @@ export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpe
   return workspaceSpecSchema.parse({
     runId: input.spec.runId,
     projectId: input.spec.projectId,
-    repo: {
-      url: input.repoUrl,
-      defaultBranch: input.defaultBranch,
-      checkoutBranch: input.checkoutBranch ?? null,
-      cacheKey: mirrorCacheKeyFor(input.spec.projectId),
-    },
+    repo: checkout
+      ? {
+          url: input.repoUrl,
+          defaultBranch: input.defaultBranch,
+          checkoutBranch: input.checkoutBranch ?? null,
+          cacheKey: mirrorCacheKeyFor(input.spec.projectId),
+        }
+      : null,
     limits: input.limits ?? PLATFORM_WORKSPACE_LIMITS,
     egress: { hosts, connectPorts: DEFAULT_CONNECT_PORTS },
     // `runc` unless an operator asks for gVisor; TD-021 makes `runsc` opt-in and Linux-only.

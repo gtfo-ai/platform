@@ -6,11 +6,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DockerEngine } from './engine.js';
 import {
   FIXTURE_RUN_ID,
+  repoLessWorkspaceSpecFixture,
   SKILL_CATALOGUE_FIXTURE,
   shortTempDir,
   workspaceSpecFixture,
 } from './fixtures.js';
-import { assertProjectEnv, assertRunnerUid, DockerWorkspaceProvider } from './provider.js';
+import {
+  assertHasCheckout,
+  assertProjectEnv,
+  assertRunnerUid,
+  DockerWorkspaceProvider,
+} from './provider.js';
 import { parseTar, writeTar } from './tar.js';
 import { FakeDockerDaemon } from './testing.js';
 
@@ -541,8 +547,8 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     // is an ordinary non-owner — it cannot descend, cannot `chmod`, cannot even `chown -R`. The
     // way out is the uid, not a capability: everything under the directory is owned by 1000 and
     // the agent has no `CAP_CHOWN` to change that, so uid 1000 is the owner of every mode it can
-    // set. Measured on a named volume *and* on a bind-backed one, benign / locked / already gone:
-    // rc 0 and the volume empty in all six.
+    // set. The measurements, and the one cell that turned out to be false on macOS (PROGRESS
+    // backlog 147), are in `#removeControlDirectory`'s docblock rather than restated here.
     expect(empty?.body.User).toBe('1000:1000');
     expect(remove?.body.User).toBe('0:0');
     const unlock = (empty?.body.Cmd ?? []).join('\n');
@@ -572,7 +578,12 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     // and `#helper` throws on a non-zero exit, which is what keeps step 2 from running against a
     // directory step 1 did not empty (standing rule 67: a step that cannot fail has a failure
     // branch nobody executes).
-    expect(unlock).toContain(`test -z "$(ls -A /ctl/${FIXTURE_RUN_ID} | head -c 1)"`);
+    expect(unlock).toContain(`test -z "$(ls -A /ctl/${FIXTURE_RUN_ID} 2>&1 | head -c 1)"`);
+    // **With stderr, in both questions** (backlog 147, measured): an entry `readdir` returns and
+    // `lstat` cannot — two Unix sockets left on a macOS bind share — is printed by busybox `ls` on
+    // stderr only, so a stdout-only test called that directory empty and step 2 then refused it.
+    expect(unlock).toContain(`[ -n "$(ls -A /ctl/${FIXTURE_RUN_ID} 2>&1 | head -c 1)" ]`);
+    expect(unlock).not.toMatch(/ls -A \S+ \|/);
     expect(unlock.trimEnd().endsWith('fi')).toBe(true);
     expect((remove?.body.Cmd ?? []).join('\n')).toBe(`rm -rf /ctl/${FIXTURE_RUN_ID}`);
   });
@@ -657,6 +668,70 @@ describe('kill and destroy (WP-13 obligation 3)', () => {
     expect([...daemon.networks.values()].filter((entry) => entry.name.startsWith('run-'))).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * WP-74: a spec with no repository — a run with no file tool and no shell — gets **no checkout and
+ * the whole container**. Read off what the double was asked to create, by name (standing rule 82),
+ * never off the spec. The Docker e2e asks the same questions of a real daemon.
+ */
+describe('a spec with no checkout (WP-74)', () => {
+  const helperRoles = (): string[] =>
+    daemon.history
+      .map((container) => container.name.split('-')[0] as string)
+      .filter((role) => role !== 'clicheck');
+
+  it('runs no clone helper, and every other create step it would have run', async () => {
+    const handle = await provider.create(repoLessWorkspaceSpecFixture());
+    expect(helperRoles()).toEqual(['prep', 'skills', 'egresscfg', 'egress', 'ws']);
+    expect(handle.cacheKey).toBeNull();
+    // The other direction (rule 42): a spec with a repository still clones, in its place.
+    await daemon.stop();
+    await startDaemon();
+    await provider.create(workspaceSpecFixture());
+    expect(helperRoles()).toEqual(['prep', 'clone', 'skills', 'egresscfg', 'egress', 'ws']);
+  });
+
+  it('makes the working directory the runner will spawn in, owned by the shim’s uid', async () => {
+    await provider.create(repoLessWorkspaceSpecFixture({ skills: [] }));
+    const script = (daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+    expect(script).toContain('mkdir -p /work/repo');
+    expect(script).toContain('chown 1000:1000 /work/repo');
+    // With an empty skills list nothing else would have made it: no skills helper runs at all.
+    expect(daemon.byName(`skills-${FIXTURE_RUN_ID}`)).toBeUndefined();
+    await daemon.stop();
+    await startDaemon();
+    await provider.create(workspaceSpecFixture());
+    const cloned = (daemon.byName(`prep-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+    // `git clone` refuses a target that exists with content, so a repo-ful prep leaves it alone.
+    expect(cloned).not.toContain('/work/repo');
+  });
+
+  it('still writes the platform skills, and no `.git/info/exclude` into a tree with no `.git`', async () => {
+    await provider.create(repoLessWorkspaceSpecFixture());
+    const script = (daemon.byName(`skills-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+    expect(script).toContain('/work/repo/.agentic-run/plugins/agentic/skills/kb/SKILL.md');
+    expect(script).not.toContain('.git');
+  });
+
+  it('mounts no repo-cache into the run container', async () => {
+    const handle = await provider.create(repoLessWorkspaceSpecFixture());
+    const mounts = daemon.containers.get(handle.containerId)?.body.HostConfig?.Mounts ?? [];
+    expect(mounts.map((mount) => mount.Target)).toEqual(['/work', '/ctl']);
+  });
+
+  it('refuses to export by name, before any helper starts', async () => {
+    const handle = await provider.create(repoLessWorkspaceSpecFixture());
+    await expect(
+      provider.export(
+        handle,
+        { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_spec', message: /no checkout to export/ });
+    expect(daemon.byName(`export-${FIXTURE_RUN_ID}`)).toBeUndefined();
+    expect(() => assertHasCheckout({ ...handle, cacheKey: 'acme' })).not.toThrow();
   });
 });
 

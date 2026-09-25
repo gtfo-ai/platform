@@ -276,8 +276,19 @@ export const runContainerCreateBody = (input: RunContainerInput): DockerCreateBo
       ReadOnly: false,
       VolumeOptions: { Subpath: spec.runId },
     },
-    { Type: 'volume', Source: input.cacheVolume, Target: CONTAINER_CACHE_MOUNT, ReadOnly: true },
   ];
+  // The mirror, read-only, only for a run that has a checkout to read objects through: the clone is
+  // `--shared`, so its alternates point here. A run with no checkout (`spec.repo === null`, WP-74)
+  // gets **no** `repo-cache` mount — one fewer read-only view of every project's mirror, since the
+  // volume is shared by all of them and the mount is the whole volume, not this project's key.
+  if (spec.repo !== null) {
+    mounts.push({
+      Type: 'volume',
+      Source: input.cacheVolume,
+      Target: CONTAINER_CACHE_MOUNT,
+      ReadOnly: true,
+    });
+  }
   if (images.runtimeSourceDir !== null) {
     mounts.push({
       Type: 'bind',

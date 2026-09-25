@@ -8,7 +8,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { WorkspaceSpec } from '@platform/application';
+import type { WorkspaceRepo, WorkspaceSpec } from '@platform/application';
 import type { PlatformSkillCatalogue } from './skills.js';
 
 /**
@@ -59,9 +59,17 @@ type DeepPartial<T> = {
       : T[K];
 };
 
+/** A spec that has a checkout — what every run with a file tool or a shell is given. */
+export type WorkspaceSpecWithRepo = WorkspaceSpec & { readonly repo: WorkspaceRepo };
+
+/** The overrides {@link workspaceSpecFixture} takes: `repo` is merged field by field. */
+export type WorkspaceSpecOverrides = Omit<DeepPartial<WorkspaceSpec>, 'repo'> & {
+  readonly repo?: Partial<WorkspaceRepo>;
+};
+
 export const workspaceSpecFixture = (
-  overrides: DeepPartial<WorkspaceSpec> = {},
-): WorkspaceSpec => ({
+  overrides: WorkspaceSpecOverrides = {},
+): WorkspaceSpecWithRepo => ({
   runId: FIXTURE_RUN_ID,
   projectId: FIXTURE_PROJECT_ID,
   ...overrides,
@@ -92,4 +100,21 @@ export const workspaceSpecFixture = (
   readOnly: overrides.readOnly ?? false,
   env: (overrides.env as Record<string, string> | undefined) ?? { CI: 'true' },
   keepUntil: overrides.keepUntil ?? '2026-09-13T00:00:00.000Z',
+});
+
+/**
+ * A spec with **no checkout** (WP-74): what `buildWorkspaceSpec` produces for a run with no file
+ * tool and no shell — `repo: null`, and an egress list without a git host. Everything else is
+ * {@link workspaceSpecFixture}'s, so a case comparing the two differs in exactly those fields.
+ */
+export const repoLessWorkspaceSpecFixture = (
+  overrides: Omit<WorkspaceSpecOverrides, 'repo'> = {},
+): WorkspaceSpec => ({
+  ...workspaceSpecFixture({
+    egress: { hosts: ['api.anthropic.com'], connectPorts: [443] },
+    skills: ['kb'],
+    readOnly: true,
+    ...overrides,
+  }),
+  repo: null,
 });

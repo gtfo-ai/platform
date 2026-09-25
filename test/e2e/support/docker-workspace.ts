@@ -96,6 +96,20 @@ export const docker = async (
  */
 export class RecordingDockerEngine extends workspace.DockerEngine {
   readonly containerOps: { readonly op: 'stop' | 'remove'; readonly id: string }[] = [];
+  /**
+   * The name of every container the daemon was asked to **create**, in order — helpers, run
+   * containers, sidecars and this file's own probes alike (WP-74).
+   *
+   * What a create *did* is read off this rather than off the spec or the port's return value
+   * (standing rule 82): "a spec with no repository runs no `clone-<run-id>` helper" is a statement
+   * about requests that reached the daemon, and only a record of those requests can refute it.
+   */
+  readonly createdNames: string[] = [];
+
+  override async createContainer(name: string, body: unknown): Promise<string> {
+    this.createdNames.push(name);
+    return super.createContainer(name, body);
+  }
 
   override async stopContainer(id: string, timeoutSeconds: number): Promise<void> {
     this.containerOps.push({ op: 'stop', id });

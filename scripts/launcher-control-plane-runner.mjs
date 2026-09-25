@@ -203,7 +203,7 @@ try {
 
   const created = creates.find((entry) => entry.spec.runId === RUN_ID);
   report.socketPath = created?.response.attachment.socketPath ?? null;
-  report.checkoutBranch = created?.spec.repo.checkoutBranch ?? null;
+  report.checkoutBranch = created?.spec.repo?.checkoutBranch ?? null;
   report.egressHosts = created?.spec.egress.hosts ?? null;
   report.credentialMinted = created?.response.credentialMinted ?? null;
 

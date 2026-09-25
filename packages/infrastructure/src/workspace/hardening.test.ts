@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WORKSPACE_LABELS } from '@platform/application';
 import { describe, expect, it } from 'vitest';
-import { shortTempDir, workspaceSpecFixture } from './fixtures.js';
+import { repoLessWorkspaceSpecFixture, shortTempDir, workspaceSpecFixture } from './fixtures.js';
 import {
   assertSafeBindSource,
   type DockerCreateBody,
@@ -108,6 +108,21 @@ describe('run container hardening (technical/05)', () => {
       VolumeOptions: { Subpath: spec.runId },
     });
     expect(mounts[2]).toMatchObject({ Source: 'repo-cache', Target: '/cache', ReadOnly: true });
+  });
+
+  /**
+   * WP-74 criterion (6): a run with no checkout has no `--shared` clone whose alternates point into
+   * the mirror, so it gets no read-only view of the `repo-cache` volume either — which is every
+   * project's mirror, not only its own.
+   */
+  it('mounts no repo-cache for a spec with no checkout, and the other two exactly as before', () => {
+    const spec = repoLessWorkspaceSpecFixture();
+    const mounts = build({ spec }).HostConfig.Mounts;
+    expect(mounts.map((mount) => [mount.Source, mount.Target])).toEqual([
+      [`ws-${spec.runId}`, '/work'],
+      ['ctl', '/ctl'],
+    ]);
+    expect(mounts.some((mount) => mount.Source === 'repo-cache')).toBe(false);
   });
 
   it('adds the repository bind, read-only, only when the image substitute is configured', () => {

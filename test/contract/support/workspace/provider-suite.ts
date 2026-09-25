@@ -101,11 +101,13 @@ export const runWorkspaceProviderContractSuite = (
     ): Promise<void> => {
       const harness = await context.provider();
       try {
-        await harness.provider.updateMirror({
-          projectId: harness.spec.projectId,
-          repo: harness.spec.repo,
-          credential: null,
-        });
+        if (harness.spec.repo !== null) {
+          await harness.provider.updateMirror({
+            projectId: harness.spec.projectId,
+            repo: harness.spec.repo,
+            credential: null,
+          });
+        }
         const handle = await harness.provider.create(harness.spec);
         await body({ ...harness, handle });
       } finally {
@@ -127,6 +129,52 @@ export const runWorkspaceProviderContractSuite = (
       const harness = await context.provider();
       try {
         await expect(harness.provider.create(harness.spec)).rejects.toBeInstanceOf(WorkspaceError);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    /**
+     * WP-74 criteria (3), (4) and (7), asked of **both** implementations: a spec with no repository
+     * is created with **no** mirror — the one create the refusal above admits without one — and it
+     * still gets its container (a socket to attach to, a token), its working directory and its
+     * platform skills. The skill is read back as a **file**, not off `spec.skills`, because the list
+     * and the delivery are two different facts (PROGRESS backlog 82).
+     */
+    it('creates a workspace with no checkout and no mirror, and keeps its container, socket and skills', async () => {
+      const harness = await context.provider();
+      try {
+        const spec: WorkspaceSpec = { ...harness.spec, repo: null, skills: ['kb'] };
+        const handle = await harness.provider.create(spec);
+        expect(handle.cacheKey).toBeNull();
+        expect(handle.containerId.length).toBeGreaterThan(0);
+        const attachment = await harness.provider.attach(handle);
+        expect(attachment.workdir).toBe('/work/repo');
+        expect(attachment.token.length).toBeGreaterThanOrEqual(24);
+        expect(
+          await context.readWorkspaceFile(
+            handle,
+            `${PLATFORM_SKILLS_PLUGIN_DIRECTORY}/skills/kb/SKILL.md`,
+          ),
+        ).toContain('name: kb');
+        // Nothing of a clone: no `.git`, so no `.git/info/exclude` written into a directory git
+        // would read as a broken repository.
+        expect(await context.readWorkspaceFile(handle, '.git/info/exclude')).toBeNull();
+        await harness.provider.destroy(handle);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    /** WP-74 criterion (6): the path that reads the repository refuses by name, before any helper. */
+    it('refuses to export a workspace that has no checkout, by name', async () => {
+      const harness = await context.provider();
+      try {
+        const handle = await harness.provider.create({ ...harness.spec, repo: null });
+        await expect(
+          harness.provider.export(handle, exportRequest(harness.tarballPath), null),
+        ).rejects.toMatchObject({ code: 'invalid_spec', message: /no checkout to export/ });
+        await harness.provider.destroy(handle);
       } finally {
         await harness.cleanup();
       }

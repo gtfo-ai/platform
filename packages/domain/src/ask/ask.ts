@@ -11,7 +11,9 @@
  *    technical/03:40-42 names ask-the-task as one of the three run kinds that use it), so the
  *    admission guard, the cost ledger, the transcript sink, the budget cap and the escalation are
  *    the ones every run gets;
- *  - its tools are read-only over **platform** data — no workspace, no shell, no git;
+ *  - its tools are read-only over **platform** data — no file tool, no shell, no git. Since WP-74
+ *    that also means **no checkout**: the run gets a container (the CLI has no other transport)
+ *    with an empty working directory, never the repository;
  *  - the per-question budget is a low cap charged to the task's own spend;
  *  - the ticket mirror is **off by default**.
  *

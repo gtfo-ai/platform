@@ -4081,7 +4081,7 @@ it. Cheapest is whoever next touches `apps/server/src/metrics.ts`; the same chan
 queue-depth alerting on `event_dispatch_pending`, which `docs/TODO.md` already records as open with no
 work package, so one row could take both.
 
-### 82. **An ask run is provisioned a container and a checkout it holds no tool to open, and two docblocks in the planner say it is not** (TODO, small — **no longer latent**: WP-53 composed the first production provisioner at `565e84c`; **re-scoped from "no workspace" to "no checkout" and owned by WP-74**; found by WP-31, session 5)
+### 82. **An ask run is provisioned a container and a checkout it holds no tool to open, and two docblocks in the planner say it is not** (**RESOLVED** by WP-74, session 8 — closed **as re-scoped**: a run with no file tool and no shell gets **no checkout**, never *no workspace*; it keeps its container, network, sidecar, control socket and `agentic:kb`, per the architect's ruling in WP-53's notes; `runNeedsCheckout` in `packages/infrastructure/src/workspace/spec.ts`, the evidence in WP-74's notes. The residual the ruling named — a network, a volume, a sidecar and three helpers per ask, and the provision's cost in seconds unmeasured — is stated there and at `TOOLS_BY_ROLE.ask`. Earlier disposition kept below: TODO, small — **no longer latent**: WP-53 composed the first production provisioner at `565e84c`; **re-scoped from "no workspace" to "no checkout" and owned by WP-74**; found by WP-31, session 5)
 > **M4 (architect, session 6): folded into WP-53.**
 > **Re-scoped and re-owned (refiner, session 7): WP-53 shipped only the half that is pure correction — the two false planner docblocks — and its criterion (5) was met in part by an architect's ruling rather than by a narrowing. The remainder is `13-implementation-plan.md`'s **WP-74**, scheduled after WP-54 because WP-54 rewrites `TOOLS_BY_ROLE`, this predicate's input.** The ruling narrows what "done" means below, and is not WP-74's to re-open: **the predicate is no *checkout*, never no *container*** — `WorkspaceSpec.repo` becomes nullable, a tool-less spec skips `updateMirror` and the clone and **keeps** the container, the network, the egress sidecar and the control socket. Executing a tool-less run's CLI in the platform process is **out**, and the binding objection is TD-021's **decision body** (`docs/decisions/technical/TD-021-workspace-isolation.md:10`, *"the Agent SDK runs in the platform `runner` role and spawns `claude` inside the container"*) rather than the WP-15g amendment's Docker-client clause, which that path does not breach — the distinction is recorded because it is what a future reader will re-litigate. Two corrections to this entry's own text follow from the reframing and are left in place beside it rather than rewritten over it: the `kb`-skill coupling below **stops being a cost**, because with a container `#provisionSkills` still runs; and the paragraph headed *"Depends on / owner"* is superseded by this line.
 
@@ -7336,7 +7336,7 @@ observation with no mechanism cannot be given an acceptance criterion without in
 precedent for recording the number), **28** (the last time an e2e death under CI load had a real
 cause and every test passed), rule **66**, rule **76**, rule **86**, rule **87**.
 
-### 133. **The launcher can authenticate nothing against git, so the one stage that produces a merge request fails terminally before a container exists — and a private repository's mirror fetch has the same gap one call earlier, for *every* stage** (TODO, **major** — one cause, two consequences, the second not in the report; **live** on any instance configured to run agents; **no work package owns it**, and it needs a decision recorded before it can be built; reported by WP-53 as discovered work, established off the tree by the refiner, session 7)
+### 133. **The launcher can authenticate nothing against git, so the one stage that produces a merge request fails terminally before a container exists — and a private repository's mirror fetch has the same gap one call earlier, for *every* stage** (TODO, **major** — one cause, two consequences, the second not in the report; **live** on any instance configured to run agents; **owned by WP-76** (refiner, session 8; after WP-75), and it needs a decision recorded before that row starts; reported by WP-53 as discovered work, established off the tree by the refiner, session 7)
 
 **What is wrong.** The launcher process holds no git provider, so `RunCredentialBroker` mints
 nothing. Everything else on that path exists and is tested — the GitLab adapter implements
@@ -7444,7 +7444,7 @@ cheapest form; a TD of its own is the other. It should not be decided inside an 
 and following `docs/operator-guide.md` §1, which is the documented happy path. Before WP-53 this was
 latent behind *"no production agent run has ever executed"*; that sentence is now false.
 
-**Depends on / owner.** **No work package owns it.** WP-53's row folds backlog **34**, **71**, **82**,
+**Depends on / owner.** **Owned by WP-76 (refiner, session 8), which runs after WP-75 and after the decision record below; the rest of this paragraph is the session-7 reading that led there.** No work package owned it. WP-53's row folds backlog **34**, **71**, **82**,
 **0b** and **128**, none of which is this; WP-54 is the *command* policy (what a run's shell may run),
 not the credential; WP-59 is the git provider's *port* surface (close, diff, stats) and is the nearest
 neighbour but its criteria are about `merge_request` operations, not minting. Depends on TD-028 (the
@@ -8182,7 +8182,7 @@ mirror) is DONE and cannot take it. Related: **139** / **Q97** (the narrowing), 
 (the per-role baselines), **Q77** / TD-027 (stage additions sit above the baseline and are subject
 to the same intersection).
 
-### 147. **On this Mac, `destroy` no longer reclaims a control directory the agent locked: step 1 of `#removeControlDirectory` reports it empty and step 2 finds it is not, deterministically, on a clean `main` — and nothing that changed between the green run and the red one has been identified** (TODO, small-to-major — **a live e2e failure with no diagnosed mechanism**; pre-existing, **not WP-54's**; **needs measurement**, which rule 66 forbids here; the production exposure is **unestablished**, see below; owner **WP-74**, assigned by the refiner; measured by the orchestrator, session 8, 2026-09-25)
+### 147. **On this Mac, `destroy` no longer reclaims a control directory the agent locked: step 1 of `#removeControlDirectory` reports it empty and step 2 finds it is not, deterministically, on a clean `main` — and nothing that changed between the green run and the red one has been identified** (**RESOLVED** by WP-74, session 8 — **measured**: the survivors are the shim's two Unix sockets, which on the bind-backed macOS share `readdir` lists and `lstat`/`unlink` answer `ENOENT` for, so busybox `ls -A` named them on **stderr only** and step 1's stdout-only test read the directory as empty (hypothesis **3**; 2 of 2 in isolation, 1 in the e2e). Step 1's emptiness tests now read stderr too, so the verdict is honest; the bind-backed case asserts the verdict agrees with the volume and the token never survives, the sweep reports `remove_failed`, and full reclamation is asserted on production's named-volume shape. What is **not** explained — why a host-side `ls` before teardown made the removal work, and what changed since 2026-09-23 — is in WP-74's notes. Earlier disposition kept below: TODO, small-to-major — **a live e2e failure with no diagnosed mechanism**; pre-existing, **not WP-54's**; **needs measurement**, which rule 66 forbids here; the production exposure is **unestablished**, see below; owner **WP-74**, assigned by the refiner; measured by the orchestrator, session 8, 2026-09-25)
 
 **What is wrong.** The case at `test/e2e/workspace/docker-workspace.e2e.test.ts:499`
 (`test/e2e/workspace/docker-workspace.e2e.test.ts` › "destroy reclaims the control directory even after the agent locks it")
@@ -8264,6 +8264,137 @@ blocks it; step (1) needs Docker and belongs to whichever session holds the e2e 
 **0b** (the sweep, closed at WP-53 — its backstop is the same helper pair), **138** (the sweep's
 `remove_failed` outcome, which is where this would surface), **136** (the other unmeasured launcher
 residual), rule **69** (green on one platform is not green on another — here in the other direction), rule **66**.
+
+### 148. **Every run that has a checkout mounts the whole `repo-cache` volume read-only at `/cache`, so a run steered by one project's ticket can list every project's mirror on the instance and read it — TD-021 decides a *per-project* mirror, the build mounts all of them** (TODO, **major** — a cross-project confidentiality breach against TD-021's decision text and BD-021's blast-radius rationale; **read off the tree, not measured**; **latent today, and the trigger is backlog 133**: on this build the mirror helper fetches with no credential, so the only mirrors that can exist are of repositories the git host serves anonymously — the day a fetch credential is minted, every private repository on the instance is readable from every other project's runs, so this must land **with or before** 133's fix; **owned by WP-75** (refiner, session 8), ordered before WP-76; found by WP-74, session 8, graded by the refiner)
+
+**What is wrong.** `runContainerCreateBody` pushes a `volume` mount of `input.cacheVolume` at
+`CONTAINER_CACHE_MOUNT` (`/cache`) with no `VolumeOptions.Subpath` for any spec whose `repo` is not
+null (`packages/infrastructure/src/workspace/hardening.ts:284-291`), while the control volume two
+entries above it *is* sub-pathed to the run (`:272-278`). The volume holds one bare mirror per
+project, `/cache/p<project-id-hex>.git` (`packages/infrastructure/src/workspace/names.ts:121-128`,
+key from `mirrorCacheKeyFor`, `packages/infrastructure/src/workspace/spec.ts:130-131`). WP-74's own
+comment at the mount states the defect (`hardening.ts:280-283`, *"the volume is shared by all of
+them and the mount is the whole volume, not this project's key"*). The export helper mounts the
+whole volume too (`packages/infrastructure/src/workspace/provider.ts:1392-1395`), as do the clone
+helper (`:837`, no agent content in it yet) and the mirror helper (`:542`, platform-only).
+
+**The contradicted decision.** TD-021's decision body:
+`docs/decisions/technical/TD-021-workspace-isolation.md:9` — *"Volumes: `ws-<id>` rw at `/work`,
+per-project bare mirror ro at `/cache`."* BD-021's rationale (`docs/decisions/business/BD-021-agent-workspace-isolation.md:11`):
+*"prompt injection and mistakes must have a small blast radius."* technical/05 §1
+(`docs/technical/05-workspaces-and-security.md:6`) describes the *layout* accurately (*"per
+project, a bare mirror on the `repo-cache` volume"*) and says nothing about the mount. Projects are
+an access boundary in this product: `project_members(project_id, user_id, role)`
+(`docs/technical/03-data-model.md:19`), enforced per project by `apps/server/src/auth/rbac.ts:13`.
+So this is a **defect against the docs**, not a documentation error: the code changes, TD-021 does not.
+
+**Evidence** (the report's reading, then the refiner's, both read off the tree, nothing run).
+- The report: *"every run holding `Read` or `Bash` can list and read **every other project's
+  mirror**. A reading, not a measurement."*
+- **Readable by the run's uid, by construction**: the volume root is `root:root 0755`
+  (`provider.ts:11-12`), and every mirror is written by the same root helper script
+  (`provider.ts:522-542`) and read by the clone helper **as uid 1000** (`provider.ts:806-842`) —
+  the clone could not work if a mirror's files were not readable by the uid the run container
+  also uses. Whether a *different* project's mirror has identical modes is the same script's
+  output; not listed on a daemon.
+- **What reaches it, per tool.** `Read` has **no** path hook: the hooks register `Bash` and the
+  write matcher only (`packages/infrastructure/src/runner/hooks.ts:244-245`), and the path guard is
+  `PreToolUse(Edit|Write)` (`packages/infrastructure/src/runner/path-guard.ts:1-8`). The read-only
+  baseline allows `ls *`, `cat *`, `grep *`, `rg *`, `find *`
+  (`packages/domain/src/policies/command-policy.ts:180-185`). So **every role holding `Read` or
+  `Bash`** — product manager, investigator, architect, developer, reviewer, acceptance tester,
+  facilitator, librarian, discovery (`packages/application/src/pipeline/planner.ts:340-384`) —
+  can enumerate every project id on the instance (`ls /cache`), read each other project's remote
+  URL (`/cache/<key>.git/config`) and every branch name (`packed-refs`). Source **content** is
+  zlib-deflated in packs and loose objects, so plaintext needs a decoder: `git --git-dir=…` /
+  `git -C …` are on no allow list, but the **implementation baseline runs the project's own
+  commands** since WP-54 (`npm test`, `make`, …) after a `Write` to the file they execute — i.e.
+  arbitrary code as uid 1000 — so a **developer** run can read any mirror in full.
+- **What an attacker needs.** BD-022 treats ticket text and MR comments as untrusted; whoever can
+  file or comment on a ticket in project A can steer project A's developer run to decode project B's
+  mirror and put it where project A's members see it: the stored transcript (redaction covers
+  secrets, not source), a file committed on `agentic/*` and pushed to project A's repository and
+  merge request (the run's egress includes project A's git host), or the model provider.
+- **Refiner's hypothesis, not measured — a second door the obvious fix leaves open.** The export
+  helper runs `git commit` (`provider.ts:1372`) and `git push` (`:1376`) inside the checkout the
+  agent wrote, with the whole cache mounted, and nothing under `packages/infrastructure/src/workspace/`
+  sets `core.hooksPath` (grep: no match); the path guard does not protect `.git/` (grep over
+  `path-guard.ts`/`hooks.ts`: no match). A `.git/hooks/pre-commit` the run made executable (its own
+  code can `chmod`) would then run in the export helper, with the whole cache. Whether the hook
+  fires depends on the file mode the run can leave behind — **needs a Docker measurement**.
+
+**What it costs to leave.** Today, little: a single-project instance is unaffected, and on a
+multi-project instance only anonymously served repositories can be mirrored (backlog **133**).
+The day 133 is fixed — which the first private-repository customer requires — an instance with two
+projects whose memberships differ has **no** confidentiality boundary between their source trees
+for any developer run, and a boundary of enumeration (project ids, remote URLs, branch names) for
+every other role with a file tool. That is the multi-project case BD-021 exists for.
+
+**What "done" looks like.** (1) The run container mounts `repo-cache` with
+`VolumeOptions.Subpath: "<cacheKey>.git"` at `mirrorPath(CONTAINER_CACHE_MOUNT, cacheKey)` —
+the **same absolute path** the clone's `objects/info/alternates` names, so nothing about the clone
+changes; sub-paths are already used for the control volume, so no new daemon requirement, and a
+repo-ful create already refuses before the mirror exists (so the sub-path's existence is
+guaranteed). (2) The **export** helper gets the same sub-path mount, and runs its commit and push
+with hooks disabled (`-c core.hooksPath=/dev/null`, or equivalent), with a stated reason. (3)
+Asserted: `hardening.test.ts` — the run body's `repo-cache` mount carries the spec's own key and no
+whole-volume mount exists; the e2e — with a **second project's mirror present on the volume**, the
+run container's `ls /cache` lists exactly its own mirror, and an object older than the run still
+resolves through the alternates (`git log -1 -p` of a pre-run commit), which is the regression the
+narrowing risks. (4) `hardening.ts:280-283`'s comment rewritten (rule 83); TD-021:9 becomes true
+without an amendment.
+
+**Depends on / owner.** **Owned by WP-75 (refiner, session 8)** — a row of its own rather than a fold into WP-74, ordered before WP-76; the rest of this paragraph is the reading that led there. No work package owned it. No open M4 row (WP-55…WP-73) touches the
+workspace provider's mounts; **WP-74** edited this very `if` and is uncommitted in this tree,
+so folding it there before the merge is the cheapest schedule — the orchestrator's call; otherwise
+it needs a row of its own, **ordered before whatever closes 133**. Related: **133** (the trigger),
+**137**/**140** (the run's egress list — the exfiltration channel is the git host already on it),
+**82** (WP-74 removed the mount only for runs with no checkout), BD-022, rule **66** (the e2e half
+needs Docker and is not run here).
+
+### 149. **Whether the SDK's `tools` base set removes the `Skill` tool is unmeasured — and no role lists `Skill` in its tools, so the question is every role's, not only the ask's and the history miner's** (TODO, small — **needs measurement**; if the answer is *removed*, it is **live** for every run on this build and the ten platform skills are unreachable through the tool; **no work package owns it**, WP-14a (DONE) is where it was built; found by WP-74, session 8, scope widened by the refiner)
+
+**What is wrong.** The report: *"the ask and the miner get `agentic:kb` on disk (asserted) and
+`tools: []`; the SDK says `skills` is 'the single place to turn skills on', which suggests the tool
+survives, but nothing here has observed a tool-less run invoke a skill. If it does not, both roles'
+only skill is unreachable."* The refiner's reading, read not run: `options.ts` passes the role's
+list as the **base set** (`packages/infrastructure/src/runner/options.ts:76`, `tools: [...spec.tools]`),
+and **no** row of `TOOLS_BY_ROLE` names `Skill` (`packages/application/src/pipeline/planner.ts:340-384`;
+a grep for `'Skill'` over non-test sources under `packages/application/src` and
+`packages/infrastructure/src` finds none). So if a base set without `Skill` removes the tool, it is
+removed for the developer as much as for the ask. Roles holding `Read` could still read a
+`SKILL.md` off disk (the planner's own docblock says the files are *"reachable via Read/Bash"*,
+`planner.ts:391`); the ask and the miner, with no file tool, could not reach theirs at all.
+
+**What it costs to leave.** Possibly nothing (the tool survives), possibly every skill the plugin
+ships (WP-14a's ten) being listed to no run that can invoke one. Unknown until measured.
+
+**What "done" looks like.** **Needs measurement**: the SDK's `system`/`init` message (its `tools`
+array) for a run built by `options.ts` with `tools: []` plus the plugin and `skills: ['agentic:kb']`,
+and for one with `tools: ['Read']`. Whether the init message arrives before any model call — i.e.
+whether this needs a model credential — is itself unverified. Then either nothing (tool survives;
+the answer recorded at `options.ts:76`) or `Skill` is added to every row whose `SKILLS_BY_ROLE`
+entry is non-empty, with a planner test holding the two tables together.
+
+**Depends on / owner.** **No work package owns it.** Related: **Q67** (the skills list as a
+restriction), WP-14a's notes (skill discovery was measured by listing, not by invocation).
+
+### 150. **`spec.test.ts` has a test name whose premise WP-53 falsified** (TODO, nit — the assertion is right, the name is wrong; owner **WP-73**; found by WP-74, session 8)
+
+The case
+`packages/infrastructure/src/workspace/spec.test.ts` › "is only the git host in local provider mode, where nothing talks to a model host"
+asserts only that an empty `platformEgressHosts` yields `['git.example.com']` (`spec.test.ts:55-57`);
+the model host is on the list in **both** provider modes since WP-53 (CLAUDE.md, *"Both provider
+modes need `api.anthropic.com` in a run's egress list"*). Done: the name describes an empty
+`platformEgressHosts`, not a provider mode; cited nowhere else (WP-74's notes). Owner **WP-73**.
+
+### 151. **The e2e fixture's `controlVolumeBind` docblock names one macOS divergence and not the one backlog 147 measured** (TODO, nit — **working as designed**, a missing sentence; owner **WP-73**; found by WP-74, session 8)
+
+`test/e2e/support/docker-workspace.ts:320-330` records the socket-`chmod` `EINVAL` divergence of a
+bind-backed control volume on Docker Desktop and not the second: after teardown the shim's
+`ctl.sock`/`cred.sock` can survive as entries `readdir` lists and `lstat`/`unlink` answer `ENOENT`
+for, which nothing in the guest can remove (backlog **147**'s measurement, WP-74's notes). Done: one
+sentence there, citing 147. Owner **WP-73**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -11828,6 +11959,8 @@ file, or the first work package that touches upgrade behaviour.
 | WP-52 | **Redaction at the artifact write, the two prompt columns, and the route that may then serve a body** | DONE | `9854549` | Depends on WP-15g, WP-15h, WP-19; ran **before** WP-57 as the plan required (shared `stage-executor.ts`). Folds backlog **35** (major, measured) and **85** — both RESOLVED — and **86**'s `artifact` third; implements **Q64**; **TD-012 amended in the same commit** (the orchestrator's, criterion 5: the two prompt columns join the enumeration, and over structured artifact data an **identifier** is *refused* rather than rewritten). Backlog 35's ruled answer **(b)** is `ARTIFACT_FIELD_POLICIES` over all fifteen types, with the identifier class drawn at **"a value the platform addresses something with"** — the implementer's own line, narrowed from a first draft that failed two WP-31 cases, because misclassifying prose as an identifier fails a whole run while misclassifying an identifier as prose costs a dead link *except* where the value reaches a provider. Completeness is derived from the schemas through `z.toJSONSchema`, **both directions per type**, so a new artifact type **fails** rather than defaulting to prose (rule 7); enum leaves are excluded *by being enums*, read off the derived document. Migration **0038** answers criterion (2) **differently on the two tables and argues both at the line**: `artifacts.redaction_count` nullable with no default behind a `NOT VALID` check (those rows' true count is *unknown*, not zero — a backfilled `0` would claim a redaction that never happened), `runs.redaction_count` keeping 0004's default (dropping it cannot repair the past; `system_prompt is null` is the stronger boundary, discriminating the **writer** rather than the value). A round trip established more than it set out to: `platform_app` **cannot drop** `artifacts_redaction_count_recorded` at runtime, because it owns no relations. One redactor construction serves the artifact, both prompt columns and the transcript, held as an identity (rule 63). **Criterion (9) measured, not quoted** (rule 66): an assembled production prompt is **7 062 / 7 577 / 6 830 / 8 891 / 7 362 B** across the five agent stages with an **empty** pack; **no truncation added**, the pack being already bounded before assembly. **Four review rounds.** R1 REQUEST_CHANGES: the fail-closed ending was untested — a fail-open mutant left **2167 tests in 148 files green** — criterion (2) was vacuous on `runs.redaction_count`, and TD-012 step 2 was composed at the ask write site and not the stage one, with the weaker copy served to the *lower* role. R2 REQUEST_CHANGES, all R1 items closed by re-applied mutants: the `409 artifact_not_redacted` refusal was itself untested (canary survived), and one of fifteen types made a read-surface sentence false. R3 APPROVE-with-nits, and it found the **fourth** copy of that sentence, in the authoritative `docs/technical/03-data-model.md`. R4 was not a review but a red tier of the orchestrator's: a new e2e assertion failed on pass 2, its mechanism **could not be measured**, and rather than guess it the route moved onto the `queries` seam so all three endings assert without a container — the observation filed **unexplained** as backlog **132**. **Canaries across the rounds**: identifier→prose and refusal→redaction dead by name; pin-count-to-zero and drop-`user_prompt` **survived** the cheap tier in R1 (which is what found the two majors); `target_path`→prose **survived** R2 and dies by name after it; drop-step-2 dead in five tests across two files; permission-check and untrusted-path dead by name; deleting the route's refusal branch **does not typecheck**, so the only expressible fail-open is at the query, and the integration/e2e pair covers **both** spellings where neither half alone does (rule 48). **The orchestrator prescribed one fix that was wrong and the implementer refused it with a measurement** (rule 27, this time against the orchestrator): `redaction_count` over an assembled prompt is honestly **0**, because `tasks.ticket_snapshot` was already redacted at its own write (WP-15f), so the instructed `> 0` would have pinned a falsehood; the exact `toBe(0)` is non-vacuous only beside the identity assertion that the stored column equals the bytes the CLI received. **Rule 3 fired four times in this one row** — a claim with an exception must be written with the exception the first time. **Orchestrator verification on the final tree**: `PASS: verify`, `PASS: verify:integration`, `PASS: verify:e2e` **twice**, `PASS: verify:ui`, `PASS: verify:web-e2e`, each exit 0; 387 test files, 7173 passed (baseline 384 / 7097); volumes back at 100. Discovered work: backlog **131** and **132**. |
 | WP-53 | **The launcher control plane and the first production `RunWorkspaceProvisioner`** | DONE | `565e84c` | Depends on **TD-028** (written in session 6), WP-14, WP-13, WP-15g, WP-22. Folds backlog **34** (major), **71** (major), **82**, **0b**; implements **Q52**. **Not blocked on WP-33** — verified against the real images with the scripted CLI. This is the row that makes eleven latent findings testable. **Refiner (session 6): also folds backlog 128** — in `local` mode `agentRunEnvironment` passes the run container **no** credential (pinned by a test) while `compose.local.yml:15` claims a `loadServerConfig` refusal no source implements; same trigger as 34, one decision and one assertion. **Eight of nine criteria met; (5) is met in part by an architect ruling and is not narrowed** — the predicate for a tool-less run is **no checkout**, never *no container* (TD-021's *decision body* forbids executing the CLI in the process that serves `/webhooks/*`, which is a stronger objection than the WP-15g amendment's Docker-client clause), so `WorkspaceSpec.repo` becomes nullable and the predicate is **a row of its own after WP-54**, which rewrites `TOOLS_BY_ROLE`, its input; only the two false planner docblocks shipped here, and backlog **82** is re-scoped rather than closed. **TD-028 amended twice, both the orchestrator's and both corrected after review**: decision 5's queue carries the **platform gates** as well as agent runs (gate evaluation is a branch of the same handler; it is not given its own queue because `stage.execute`'s per-task `stately` singleton is what stops one task running two stages at once), and decision 4's idempotency is scoped to **one launcher's lifetime**. **Both amendments shipped a false sentence that review caught** — the first named `/readyz` and a queue-depth metric as the mitigation when `apps/server/src/metrics.ts` has neither (rule 78, and the claim was inherited from the decision's own Consequences bullet and repeated one paragraph later without a grep); the second asserted that a replayed `create` cannot start a second container *because the name is derived from the run id*, which is wrong on this tree — the first name-derived object is the **network**, `createVolume` is idempotent, `#prepare` **rewrites the shim token** before any container name is used, and `createNetwork` sends no `CheckDuplicate`, so the realistic bad case is **not** fail-closed and the outcome stays **unmeasured** under backlog **136**, which the amendment had cited two lines below while closing what it exists to leave open. **Two defects were found by extending `scripts/compose-stock-check.mjs` and by nothing else** (rule 71, whose refinement WP-51 recorded and this row's brief failed to carry): `compose.yml` pinned `APP_LAUNCHER_URL` while `.env.example` shipped `APP_LAUNCHER_TOKEN` empty, and `launcherEnvSchema` declared every name `.min(1).optional()` so a **strict** schema turned *unset* into a parse error — each looped a container under `restart: unless-stopped` on **every stock instance**, invisible to every local tier, and they are **one mistake at two layers: a compose file supplying a value the code treats as operator input**. The fix is *blank is absent* at the boundary, with a blank `DOCKER_HOST` **still refused** so rule 55 is not demoted into a default (canaried). The check itself was extended in both directions and now prints the last twenty lines of every service that is not where it should be **before** the verdict, because its `finally` had destroyed the evidence. **Two review rounds**: R1 APPROVE-with-nits (five canaries dead by name; ten items, of which criterion (4)'s countable effect was unasserted and a failed reclaim was reported as `keptReason: 'run_alive'` — the sweep working and the sweep failing spelled identically, one level below the criterion forbidding it); R2 REQUEST_CHANGES on the amendment above. Criterion (4) is now asserted on the checkout's **own HEAD** against a fixture branch deliberately **one commit ahead of `main` with a file `main` lacks**, because with equal heads a provider ignoring `checkoutBranch` entirely would pass (rule 43), and the `||`'s **first** half — the existing-remote-branch path that had never run — is the one exercised. **Criterion (1) rests on a check no CI job runs and no reviewer reproduced**: `scripts/launcher-control-plane-check.mjs`, five runs, four in the implementer's shell and one in the orchestrator's, `PASS (18/18)` exit 0 against the real `platform-runtime:dev` — which is 10 days old and sound because `docker/runtime.Dockerfile` last changed at `2fa285c` the same day. Its missing-daemon refusal was **measured in both directions** after the implementer caught itself asserting `pnpm eval`'s rule before making it true. **Build wall-clock 8 s then 5 s, warm cache** — `platform-base` unchanged, only `COPY` layers rebuilt; a cold build is the ~4 GB the operator guide quotes and this row did not pay it. **Orchestrator verification on the final tree**: `PASS: verify` (394 files, 7264 passed), `PASS: verify:integration`, `PASS: verify:e2e` **twice**, `PASS: verify:ui`, each exit 0; `verify:web-e2e` out of scope by rule 80's own test (neither `apps/web` nor `@platform/contracts` changed). Volumes returned to **100** after every Docker tier. Discovered work: backlog **133**–**138** |
 | WP-54 | **What a run may do: the project's declared commands, the role tables, and `get_task_context`** | DONE | `3288496` | **Folded backlog 49 (blocker), 39, 40, 83 and 139 (the orchestrator folded 139 into round 1 because WP-54 made it live — the wizard writes `commands.allow`); implemented Q69 answer (ii) and Q97.** Three baselines per role (`read_only`, `verification`, `implementation`), the project narrows only the project-command verbs, a dropped entry reported (a warning per run and `ignored_allow_commands`), a literal a pattern covers granted and a glob only verbatim; `Bash` for investigator, architect and reviewer per product/13; provider skills by binding with a per-skill verb layer; `get_task_context` over the read projections, bounded; discovery on `verification`, so R1/R2/R6 read as product/17 words them. The e2e runs a fixture repository's `npm test` through the production hooks and asserts the file it wrote. **BD-025 and TD-027 amended by the orchestrator** (Q69's reading of §2, the floors as an enumeration not a boundary, the discovery residual, the organisation layer that is not composed), plus product/13, product/19 §3 and R6, CLAUDE.md and the orchestrator prompt's stale `release` fact. **Three review rounds**: R1 REQUEST_CHANGES — the new hazard floors had seven bypasses (getopt abbreviation, a clustered `-E`, a `make` variable assignment, Go's double dash, npm's `--node-options`) and narrow-never-widen was untested at the verdict level (canaries *globs granted by coverage* and *make floors dropped* survived); R2 REQUEST_CHANGES — five more (`npm --scr=`, pnpm `--config.<key>`, Go's external linker) and whole-line floors that denied `make -j4 TEST`, now token-scoped; R3 APPROVE-with-nits, **six canaries dead by name**, nits fixed by the orchestrator as stated residuals. **Rule 66 cost the row most of its wall clock**: the implementer waited six hours for a one-minute load under 12 that never came (20–175, Spotlight and the user's own containers) and left **25 unbounded `until` polling shells** behind, which the orchestrator killed — load checks are now bounded (five readings a minute apart, then report). **Orchestrator verification on the final tree**: `PASS: verify` (396 files, 7391 passed) twice, `PASS: verify:integration` (46 files, 504), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42), each exit 0; **`verify:e2e` FAIL twice with 183/184**, the one failure `test/e2e/workspace/docker-workspace.e2e.test.ts` › "destroy reclaims the control directory even after the agent locks it", reproduced alone on this tree and **alone on a clean worktree of `main` at `c1cc951`**, so pre-existing and filed as backlog **147** (owned by WP-74) rather than attributed to this row; CI's Linux e2e job is the other half of that reading. CI on `3288496`: `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success** — the push was delivered twice, same sha, both pairs green — zero `release` runs. Discovered work: backlog **140**–**147**, Q97 | Depends on WP-53 (same files), WP-17, WP-21, WP-14a, TD-027. Folds backlog **49** (**blocker**), **39**, **40**, **83**; implements **Q69** answer (ii). An e2e must run a fixture repository's test command — a fake that runs nothing is how this survived every row |
+| WP-75 | **A run's `/cache` mount is its own project's mirror, never the whole volume** | TODO | — | Depends on WP-74 (same mount in `hardening.ts`), WP-53, TD-021; **must land before WP-76**. Folds backlog **148** (major, latent until 133 is fixed). Sub-path mount onto the project's mirror with its existence guaranteed by `updateMirror` → clone → create ordering; two projects' mirrors on one volume in the Docker e2e, read off what the daemon was asked for; the export helper measured for the run-written hook and scoped the same way |
+| WP-76 | **The launcher authenticates to git: the mirror fetch and the push of a private repository** | TODO | — | Depends on **WP-75**, a decision record on the credential's carrier (TD-028 amendment, before the row starts), WP-53, WP-15a, BD-025 §3. Folds backlog **133** (major, live). Run-scoped mint through `IntegrationActionExecutor`, a `read` scope with a producer, nothing in the agent's environment; a credentialed git server in the Docker e2e that refuses anonymous access; `scripts/compose-stock-check.mjs` if compose/env changes (rule 71) |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | TODO | — | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
 | WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
@@ -26159,3 +26292,175 @@ reached the test command's output in the stored transcript"*.
   the prompts contract, `platform-tools.test.ts` (804 passed), the new unit file (4), the integration
   file (12), `verify:types` PASS.
 - **`pnpm run -s verify`: PASS** (exit 0, coverage included), after a bounded reading of 7.
+
+#### WP-74
+
+**What the row closes.** Backlog **82**, as re-scoped (*no checkout*, never *no workspace*), and
+backlog **147**, folded in by the refiner. The ruling in WP-53's notes was implemented, not
+re-opened: option (c) stays out on TD-021's **decision body**, and the distinction from the WP-15g
+amendment is written where the predicate is (`runNeedsCheckout`'s docblock and
+`workspaceSpecSchema.repo`'s).
+
+**Re-derived off the tree before writing a line (rule 27).** After WP-54, `TOOLS_BY_ROLE` is empty
+for `triager`, `ask` and `historian` only; `investigator`, `architect` and `reviewer` hold `Bash`
+and so keep a checkout. `triager` is in no shipped template, so the live populations are the ask
+and the history miner, as the row said. The six sites the row listed were all where it said, plus
+three it did not list: `#provisionSkills` writes `.git/info/exclude` (it would have made a `.git/`
+by `mkdir -p` in a tree with no clone), `LauncherService.startRun` takes the credential request
+unconditionally, and `scripts/launcher-control-plane-runner.mjs` dereferenced `spec.repo`.
+
+**Criterion by criterion.**
+1. `WorkspaceSpec.repo` is nullable; `buildWorkspaceSpec` sets it from `runNeedsCheckout(spec)`,
+   which reads the run's **tools** (`Read`, `Glob`, `Grep`, `Edit`, `Write`, `NotebookEdit`,
+   `Bash`). Both directions off the planner's own rows in `spec.test.ts`: ask and historian get
+   `null`, developer and **discovery** keep theirs; and a case that one `Bash` is enough and that a
+   `developer`-named run with no tools gets none, so the role never decides. Every tool any role
+   holds is classified by a test, because an unrecognised name counts as *not* opening the
+   checkout (the fail-closed direction) and must not be reached by accident.
+2. Read off what the daemon was asked for: `RecordingDockerEngine.createdNames` records every
+   `POST /containers/create`, and the e2e asserts the repo-less create's helpers are exactly
+   `prep, skills, egresscfg, egress, ws` with **no** `mirror-*`, and the repo-ful one's are
+   `prep, clone, skills, egresscfg, egress, ws` preceded by `mirror-acme`. The unit tier asserts
+   the same sequence against the fake daemon.
+3. The container stays: network, volume, sidecar (running), a control socket `attach` answers, and
+   a connection to it accepted from a container on the run's own mount as uid 1000. **Stated
+   narrowly**: the e2e shows the shim *accepts a connection*; the token handshake is not driven
+   there (it is WP-15g's and the runlet checks').
+4. `agentic:kb` asserted on the **file**, byte for byte against `PLATFORM_SKILLS.kb`, inside the
+   run's own configuration; the shared suite asks it of the fake too. `/work/repo` is created by
+   `#prepare` for a repo-less spec (owned by 1000), so the `cwd` exists even for a tool-less spec
+   with an empty skills list — the row's "one thing not to assume".
+5. `WorkspaceHandle.cacheKey` is `string | null`, the wire schema moved with it, and
+   `createRunRequestSchema.credential` is nullable **exactly when** `spec.repo` is null (refined; both
+   mixed shapes refused, also in `LauncherService.startRun`). The provisioner sends no credential
+   request for a repo-less spec; the launcher neither mirrors nor calls `broker.issue`
+   (`service.test.ts`, spied), and a repo-less handle crosses create-then-end over the real HTTP
+   control plane (`control-plane.test.ts`).
+6. `export` refuses a repo-less handle by name (`assertHasCheckout`, `invalid_spec`, before any
+   helper — the e2e asserts the daemon was asked for nothing), and the run container's create body
+   has no `repo-cache` mount (unit, and the daemon's own `inspect` in the e2e).
+7. The shared suite gained two cases, run against both implementations: a repo-less create with
+   **no mirror** is accepted, attaches, carries `kb` and no `.git/info/exclude`; its export refuses
+   by name. The existing "refuses to create a workspace before the mirror exists" still runs with a
+   repo-ful spec, and the fake's refusal is now conditional on `spec.repo !== null` — divergence
+   register row 5 says so.
+8. The egress narrowing is asserted as the whole list (`['api.anthropic.com']` for an ask,
+   `['api.anthropic.com', 'git.example.com']` for a developer), and `repoUrl` is not parsed for a
+   repo-less run (a URL naming no host still gets an ask a spec). `buildWorkspaceSpec`'s docblock
+   and the module docblock state it.
+9. Backlog **82** closed by number with its re-scoping named. Both planner docblocks rewritten
+   (`TOOLS_BY_ROLE.ask`, `SKILLS_BY_ROLE.ask`) — WP-53's "an ask *is* given a workspace today"
+   would have become false in the other direction.
+10. The residual is written at `TOOLS_BY_ROLE.ask` and in technical/05: an ask still costs a
+    network, a volume, an egress sidecar and **three** helper containers (`prep-`, `skills-`,
+    `egresscfg-`; counted off the create path and asserted in the e2e), the model credential still
+    enters the container, and what one provision costs in seconds is **not measured** — so
+    product/18:34's *"cheaper than reading transcripts"* is partly true, and this row cannot say by
+    how much.
+
+**Backlog 147 — measured, then fixed where the fix is honest.** On this Mac (Docker Desktop
+4.90.0, engine 29.7.2), with a scratch script driving the e2e fixture:
+- **The survivors are the shim's two Unix sockets**, `ctl.sock` and `cred.sock`. After the failure,
+  the host lists them (`srwxr-xr-x`); in the guest `readdir` returns both names and `lstat` and
+  `unlink` answer `ENOENT` — `ls -laR` prints `total 0` plus two *No such file or directory*
+  lines, a full-capability root container's `rm -rf` fails *Directory not empty*, `rmdir` likewise,
+  and a later host-side `ls` does not unblock it. No `.DS_Store`, no metadata file, no live writer:
+  hypothesis **4** and **1** are refuted, **3** holds, and **2** in the narrow form that the guest
+  and the host disagree about two entries.
+- **Why step 1 said "empty"**: busybox `ls -A` prints an entry it cannot `lstat` on **stderr only**,
+  so `$(ls -A dir | head -c 1)` was empty and the verdict passed. Measured directly: the stdout-only
+  form answered `[]`, the `2>&1` form named both sockets.
+- **Reproduced** 2 of 2 in the script's quiet mode and 1 of 1 in the e2e case alone at load ~8.
+  **Not reproduced** in two runs whose sequence differed (a host-side `ls -la` of the directory
+  before teardown, and a manual teardown with `docker rm -f`): both reclaimed fully. Why a host
+  lookup before teardown changes the outcome, and what changed since the green runs of 2026-09-23,
+  are **not established** — stated rather than guessed (rule 81).
+- **The fix**: both emptiness questions in step 1 read `2>&1`. On a normal filesystem stderr is
+  empty for a readable directory, so nothing changes where the removal works; where it cannot,
+  step 1 now fails and names what it could not remove, and step 2 is skipped. It does **not**
+  reclaim the ghost directory — nothing in the guest can.
+- **Production's exposure**: `APP_WORKSPACE_CONTROL_VOLUME` is a plain named volume inside the
+  daemon's storage, not a virtiofs share; the locked case on that shape is asserted to reclaim fully
+  in its own describe (`controlVolumeBind: false`), under the case's former name. What remains
+  exposed is an operator who points the control volume at a bind onto a macOS host directory: such
+  a directory keeps two dead socket entries (never the token — the token is a regular file and is
+  removed) and is reported `remove_failed` on every sweep, which the bind-backed case now asserts.
+- The docblock's table is **re-measured or re-labelled**, never copied forward (rule 86).
+
+**Sentences falsified, and what was done with each** (rules 3/83; grep over `docs/`, `CLAUDE.md`,
+docblocks, prompts and skills for *"is given a workspace"*, *"no workspace"*, `cacheKey`,
+*"rc 0/0, empty"*, *"control directory"*, *"cheaper than reading transcripts"*, *"model host and the
+git host"*).
+- **Changed**: `TOOLS_BY_ROLE.ask` and `SKILLS_BY_ROLE.ask` (planner.ts) — the two WP-53 corrected;
+  `packages/domain/src/ask/ask.ts`'s *"no workspace, no shell, no git"* (now *no file tool … and no
+  checkout*, with the container stated); `workspaceSpecSchema.repo`, `WorkspaceHandle.cacheKey`,
+  `create` and `export` on the port; `buildWorkspaceSpec`'s module paragraph (*"the model host plus
+  the git host"* now carries its exception) and the `platformEgressHosts` field doc, which still
+  said *"Empty in `local` provider mode, where the binary is on the host"* — false since WP-53's own
+  correction two paragraphs up; `#prepare`, `#provisionSkills` and `#removeControlDirectory`'s
+  table, its *"step 1 fails → the whole directory stays, run token included"* and its *"Both are
+  collected later"*; the e2e locked case's docblock, which still said *"`purgeExpired` … never looks
+  inside this one"* two work packages after the sweep was built; the fake's divergence row 5;
+  technical/05 §1 gained the WP-74 paragraph.
+- **Left, with why**:
+  - `packages/prompts/roles/ask/prompt.md:13`, *"You have no workspace, no shell, no git and no
+    repository checkout"* — true of everything the model can reach (no file tool, so the container
+    is invisible to it), and a prompt edit bumps `ROLE_PROMPT_VERSIONS` and needs eval cases for a
+    sentence that did not become false.
+  - `planner.ts` `COMMAND_ALLOW_BY_SKILL`'s *"the run's egress allow-list, which names the model
+    host and the git host"* — about shell skills, which go only to roles holding `Bash`, which
+    always have a checkout; still true where it is said.
+  - `spec.test.ts` › "is only the git host in local provider mode, where nothing talks to a model
+    host" — a test **name** whose premise WP-53 falsified; out of scope and cited nowhere, filed below.
+  - **For the orchestrator (not mine to edit)**: `docs/product/13-agents-prompts-skills.md:78`, the
+    Ask row's *"— no workspace"*, should read *no checkout* (the run has a container); and
+    `docs/product/18-adoption-and-operating-modes.md:34`'s *"cheaper than reading transcripts"* is
+    now partly true, the unmeasured part stated at `TOOLS_BY_ROLE.ask`. **`CLAUDE.md`** line 75,
+    *"`WorkspaceProvider.create` writes the stage role's skills into
+    `<checkout>/.agentic-run/plugins/agentic/skills/`"* — for a run with no checkout that directory
+    is an empty `/work/repo` the prepare helper makes; a parenthesis saying so would keep it true.
+
+**Decisions and assumptions.**
+- **`TOOLS_THAT_OPEN_THE_CHECKOUT` is a positive list and an unknown tool is fail-closed** (no
+  checkout). A classification test over every `TOOLS_BY_ROLE` entry is what stops a new tool
+  falling through silently.
+- **`invalid_spec` for an export of a repo-less workspace**, not `not_found`: the workspace exists;
+  the request cannot apply.
+- **A credential request is sent exactly when the spec has a repository**, refined at the wire and
+  re-checked in `LauncherService.startRun`: a repo-ful spec with no request is a caller that forgot,
+  a repo-less spec with one asks the launcher to mint a token nothing uses.
+- **`/work/repo` is made by `#prepare`, before `/work` is handed to uid 1000** — measured: after the
+  chown, root with `CapDrop: ALL` + `CHOWN` gets *Permission denied*.
+- **The bind-backed locked case was renamed and its old name moved to the named-volume case**, so
+  backlog 147's citation keeps resolving and now points at the shape the promise is made on.
+
+**Discovered work** (for the refiner; next free backlog number 148, none fixed here).
+- **The run container mounts the whole `repo-cache` volume read-only at `/cache`**
+  (`runContainerCreateBody`, no `Subpath`), so every run holding `Read` or `Bash` can list and read
+  **every other project's mirror**. A reading, not a measurement; the natural fix is a
+  `volume-subpath` of `<cacheKey>.git` mounted at the same path the alternates name. Security,
+  cross-project; WP-74 removed the mount only for runs with no checkout.
+- **Whether `tools: []` removes the SDK's `Skill` tool is unmeasured.** The ask and the miner get
+  `agentic:kb` on disk (asserted) and `tools: []`; the SDK says `skills` is *"the single place to
+  turn skills on"*, which suggests the tool survives, but nothing here has observed a tool-less run
+  invoke a skill. If it does not, both roles' only skill is unreachable.
+- `spec.test.ts` › "is only the git host in local provider mode, where nothing talks to a model
+  host" — the name asserts a premise WP-53 falsified (the model host is on the list in both modes);
+  the assertion itself is about an empty `platformEgressHosts`. Nit.
+- **The e2e's bind-backed control volume diverges from production on macOS in a new way**: the
+  shim's sockets can outlive teardown as entries nothing in the guest can remove (backlog 147's
+  mechanism). The fixture's `controlVolumeBind` docblock names one macOS divergence (socket
+  `chmod` → `EINVAL`) and not this one.
+
+**Verification** (every tier behind a bounded load reading — at most five, a minute apart, under
+12 — at `nice -n 19`; several gates came back NOGO under `mediaanalysisd` and were retried later
+rather than run over). `pnpm run -s verify`: **PASS** (7409 tests, 396 files).
+`pnpm run -s verify:e2e`: **PASS** (190 tests, 37 files — the whole tier, including the file's
+three new WP-74 cases, the two new shared-suite cases against the daemon, the renamed bind-backed
+locked case and the named-volume one). `pnpm run -s verify:integration`: **PASS** (504 tests).
+`node scripts/launcher-control-plane-check.mjs`: **PASS: launcher-control-plane-check (18/18
+checks)** — the protocol changed (criterion 5), and the check's launcher and runner run the
+working tree's sources off the checkout mount. `scripts/citations.test.ts`: 12/12. No
+`.env.example`, compose file, Dockerfile, server env schema or operator guide changed, so
+`compose-stock-check.mjs` was not owed. After every Docker tier: no container of this row's left,
+`docker volume ls | wc -l` = 102.

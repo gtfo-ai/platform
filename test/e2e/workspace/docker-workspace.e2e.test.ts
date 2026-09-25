@@ -488,15 +488,30 @@ describe('the workspace lifecycle against a real daemon', () => {
    * `<ctl>/<run-id>` is mounted into the run container read-write and chowned to uid 1000, so the
    * agent may `chmod 000` it — and root with `CapDrop: ALL` is an ordinary non-owner. Measured:
    * with `CAP_CHOWN` only, `chown -R` + `chmod -R` + `rm -rf` exits 1 and the directory survives
-   * holding the run token; with `CAP_DAC_OVERRIDE` a plain `rm -rf` exits 0. Nothing else would
-   * ever collect it — `purgeExpired` lists *volumes* by `role=workspace` and never looks inside
-   * this one — and `#teardown` only logs, so the leak is silent.
+   * holding the run token; with `CAP_DAC_OVERRIDE` a plain `rm -rf` exits 0. `#teardown` only logs
+   * a failed step, and the backstop — `purgeExpired`'s control-directory sweep since WP-53 — reclaims
+   * through the very same two helpers, so a removal that fails here fails there too.
    *
    * The write is done from a container on the run's own `volume-subpath` mount as uid 1000 rather
    * than through the agent, because the agent is a stand-in until WP-22; the *mount* and the *uid*
    * are the real ones, read back from the run container's own configuration.
+   *
+   * ## On this fixture's shape, the claim is the verdict's honesty — PROGRESS backlog 147
+   *
+   * This file's control volume is **bind-backed** onto a host directory, and on Docker Desktop for
+   * macOS the locked case does not reclaim: measured 2 of 2 on 2026-09-25, the shim's two Unix
+   * sockets (`ctl.sock`, `cred.sock`) survive the guest's `rm -rf` on the host side, and in the
+   * guest they are entries `readdir` returns and `lstat`/`unlink` answer `ENOENT` for — not even a
+   * full-capability root container removes them. Before WP-74 step 1 read that directory as empty
+   * (busybox `ls` names such an entry on stderr only) and step 2 then failed on it: two helpers
+   * disagreeing about one directory. So what this shape can assert on every platform is that the
+   * **verdict agrees with the volume** — a directory that survives is reported, by step 1, as a
+   * failed `control-dir` step — and that **the run token never survives**, which it does not on
+   * either platform. Full reclamation of a locked directory is asserted on production's shape, a
+   * plain named volume, in "on production's control-volume shape, a plain named volume" below,
+   * under this case's former name.
    */
-  it('destroy reclaims the control directory even after the agent locks it', async () => {
+  it('destroy reports a locked control directory it could not empty, and never leaves the token', async () => {
     const { handle } = await startRun();
     const hostile = await probeUnderRunContainerConfig(
       fixture.engine,
@@ -505,22 +520,70 @@ describe('the workspace lifecycle against a real daemon', () => {
       { user: '1000:1000' },
     );
     // The lock takes on both platforms — measured, `MODE=0 OWNER=1000` through the subpath mount
-    // on Docker Desktop as well as on Linux — so this is asserted, not hedged. An earlier revision
-    // of this case guessed the opposite and carried a `process.platform` escape hatch for a
-    // condition that never occurs.
+    // on Docker Desktop as well as on Linux — so this is asserted, not hedged.
     expect(hostile.output).toContain('MODE=0 ');
     const before = fixture.warnings.length;
     await fixture.provider.destroy(handle);
-    expect(await controlVolumeListing()).not.toContain(handle.runId);
-    // And it did not merely *appear* to work. `#teardown` logs a failed step and carries on, so
-    // the volume listing alone would also pass if the directory had never been created. The
-    // `control-dir` step specifically — `rm-network` partials are this fixture's own doing, since
-    // a probe container of this file can still be attached to the run network when it is removed.
-    const failed = fixture.warnings
-      .slice(before)
+    const warnings = fixture.warnings.slice(before);
+    const failed = warnings
       .filter((entry) => entry.message === 'workspace teardown step failed')
       .map((entry) => entry.fields['step']);
-    expect(failed).not.toContain('control-dir');
+    const survived = (await controlVolumeListing()).split('\n').includes(handle.runId);
+    // The verdict agrees with the volume, in both directions: a surviving directory is a reported
+    // failure, and a reported failure is a surviving directory.
+    expect(failed.includes('control-dir')).toBe(survived);
+    // On Linux — CI's shape — the bind-backed directory is reclaimed, as it was before WP-74; only
+    // Docker Desktop for macOS keeps the sockets. Without this a regression that leaves the directory
+    // behind *and* reports it would pass on CI (WP-74 review round 1).
+    if (process.platform === 'linux') expect(survived).toBe(false);
+    if (survived) {
+      // Reported by **step 1**, whose emptiness test now counts what it cannot stat — never by
+      // step 2 refusing a directory step 1 had called empty.
+      const helpers = warnings
+        .filter((entry) => entry.message === 'workspace helper container failed')
+        .map((entry) => entry.fields['helper']);
+      expect(helpers).toEqual([`ctlempty-${handle.runId}`]);
+      // What survives is never the credential.
+      const left = await docker(
+        [
+          'run',
+          '--rm',
+          '--network',
+          'none',
+          '-v',
+          `${fixture.controlVolume}:/ctl`,
+          ALPINE_IMAGE,
+          'sh',
+          '-c',
+          `ls -A /ctl/${handle.runId} 2>&1`,
+        ],
+        // `ls` exits 1 over an entry it cannot `lstat`, which is the state being inspected.
+        { allowFailure: true },
+      );
+      expect(left.stdout).not.toContain('token');
+      // And the sweep, which reclaims through the same two helpers, reports it rather than
+      // skipping it or counting it removed. Aged past the grace window first — the sweep's own
+      // `find -mmin` withholds a young directory by design.
+      await docker([
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '-v',
+        `${fixture.controlVolume}:/ctl`,
+        ALPINE_IMAGE,
+        'touch',
+        '-d',
+        '2000-01-01 00:00:00',
+        `/ctl/${handle.runId}`,
+      ]);
+      const report = await fixture.provider.purgeExpired(new Date());
+      expect(report.controlDirectories).toContainEqual({
+        runId: handle.runId,
+        removed: false,
+        keptReason: 'remove_failed',
+      });
+    }
   }, 180_000);
 
   /**
@@ -566,6 +629,130 @@ describe('the workspace lifecycle against a real daemon', () => {
       .filter((entry) => entry.message === 'workspace teardown step failed')
       .map((entry) => entry.fields['step']);
     expect(failed).not.toContain('control-dir');
+  }, 180_000);
+});
+
+/**
+ * WP-74, PROGRESS backlog 82: a run with no file tool and no shell gets **no checkout and the whole
+ * container**. Every assertion is read off the daemon — the names it was asked to create, its own
+ * `inspect`, and files and sockets reached from a container under the run's recorded configuration —
+ * never off the spec (standing rule 82).
+ */
+describe('a run with no checkout (WP-74)', () => {
+  /** The helper containers created for `runId` since `from`, by role (`prep-<id>` → `prep`). */
+  const helpersSince = (from: number, runId: string): string[] =>
+    fixture.engine.createdNames
+      .slice(from)
+      .filter((name) => name.endsWith(`-${runId}`))
+      .map((name) => name.slice(0, -`-${runId}`.length));
+
+  it('asks the daemon for no mirror and no clone helper, where a run with a checkout asks for both', async () => {
+    const from = fixture.engine.createdNames.length;
+    const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
+    const handle = await fixture.provider.create(spec);
+    try {
+      expect(helpersSince(from, spec.runId)).toEqual([
+        'prep',
+        'skills',
+        'egresscfg',
+        'egress',
+        'ws',
+      ]);
+      expect(
+        fixture.engine.createdNames.slice(from).filter((n) => n.startsWith('mirror-')),
+      ).toEqual([]);
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+    // The other direction (rule 42), through the same record: the mirror helper precedes the
+    // create, and the clone runs in its place in the sequence.
+    const again = fixture.engine.createdNames.length;
+    const ful = await startRun();
+    try {
+      expect(fixture.engine.createdNames.slice(again)).toContain('mirror-acme');
+      expect(helpersSince(again, ful.spec.runId)).toEqual([
+        'prep',
+        'clone',
+        'skills',
+        'egresscfg',
+        'egress',
+        'ws',
+      ]);
+    } finally {
+      await fixture.provider.destroy(ful.handle);
+    }
+  }, 240_000);
+
+  it('keeps its network, volume, sidecar and a control socket the shim accepts — and `agentic:kb` on disk', async () => {
+    const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
+    const handle = await fixture.provider.create(spec);
+    try {
+      await relaxControlDirectoryForHost(fixture, handle.runId);
+      const attachment = await fixture.provider.attach(handle);
+      expect(attachment.workdir).toBe('/work/repo');
+      expect(await controlSocketExists(fixture, handle.runId)).toBe(true);
+      expect(handle.sidecarContainerId).not.toBeNull();
+      const sidecar = await fixture.engine.inspectContainer(handle.sidecarContainerId as string);
+      expect(sidecar.State.Running).toBe(true);
+      await docker(['network', 'inspect', `run-${handle.runId}`]);
+      await docker(['volume', 'inspect', `ws-${handle.runId}`]);
+
+      // The shim accepts a connection on the socket `attach` answered, asked from a container on
+      // the run's own mount as the run's own uid — the connection a runner makes.
+      const connected = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        `node -e "require('net').connect('/ctl/ctl.sock').on('connect',()=>{console.log('CONNECTED');process.exit(0)}).on('error',(e)=>{console.log('REFUSED '+e.code);process.exit(1)})"`,
+        { image: RUNTIME_IMAGE },
+      );
+      expect(connected.output).toContain('CONNECTED');
+
+      // The skill is asserted on the **file** (criterion 4), byte for byte, and the tree around it
+      // is the empty working directory: no clone, so no `.git`.
+      const digest = createHash('sha256')
+        .update(PLATFORM_SKILLS['kb']?.text ?? '')
+        .digest('hex');
+      const tree = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        [
+          'cd /work/repo && sha256sum .agentic-run/plugins/agentic/skills/kb/SKILL.md',
+          'ls -A /work/repo',
+          'stat -c "OWNER=%u" /work/repo',
+        ].join(' && '),
+      );
+      expect(tree.exitCode).toBe(0);
+      expect(tree.output).toContain(`${digest}  .agentic-run/plugins/agentic/skills/kb/SKILL.md`);
+      expect(tree.output).not.toContain('.git');
+      expect(tree.output).toContain('OWNER=1000');
+
+      // Criterion (6): no `repo-cache` mount, in the daemon's own record — one fewer read-only view
+      // of every project's mirror.
+      const inspect = (await fixture.engine.inspectContainer(handle.containerId)) as unknown as {
+        Mounts: { Destination: string }[];
+      };
+      expect(inspect.Mounts.map((mount) => mount.Destination).sort()).toEqual(['/ctl', '/work']);
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 240_000);
+
+  it('refuses an export by name, before the daemon is asked for an export helper', async () => {
+    const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
+    const handle = await fixture.provider.create(spec);
+    try {
+      const from = fixture.engine.createdNames.length;
+      await expect(
+        fixture.provider.export(
+          handle,
+          { branch: 'agentic/task-1', tarballPath: null, commitMessage: 'wip' },
+          null,
+        ),
+      ).rejects.toMatchObject({ code: 'invalid_spec', message: /no checkout to export/ });
+      expect(fixture.engine.createdNames.slice(from)).toEqual([]);
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
   }, 180_000);
 });
 
@@ -1186,4 +1373,70 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
       },
     };
   },
+});
+
+/**
+ * The locked-directory case on **production's** control-volume shape — PROGRESS backlog 147.
+ *
+ * `compose.yml`'s `APP_WORKSPACE_CONTROL_VOLUME` is a plain named volume inside the daemon's own
+ * storage, not a bind onto a host directory, so the macOS file-share behaviour measured in the
+ * bind-backed case above — socket entries the guest can list and cannot `lstat` or unlink — does
+ * not arise on it. This fixture is that shape (`controlVolumeBind: false`); it cannot read the
+ * control root from this process, which none of these cases needs.
+ *
+ * **Last in the file on purpose**: a fixture's `cleanup` sweeps every container, network and volume
+ * labelled `com.agentic.run` on the daemon, so this one's `afterAll` must not run while the file's
+ * own fixture still has cases to serve.
+ */
+describe('on production’s control-volume shape, a plain named volume', () => {
+  let named: DockerFixture;
+
+  beforeAll(async () => {
+    named = await startDockerFixture({ controlVolumeBind: false });
+  }, 300_000);
+
+  afterAll(async () => {
+    await named?.cleanup();
+  }, 120_000);
+
+  it('destroy reclaims the control directory even after the agent locks it', async () => {
+    const spec = workspace.workspaceSpecFixture({
+      runId: randomUUID(),
+      repo: { url: named.repoUrl, cacheKey: 'acme' },
+    });
+    await named.provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: null,
+    });
+    const handle = await named.provider.create(spec);
+    const hostile = await probeUnderRunContainerConfig(
+      named.engine,
+      handle.containerId,
+      'chmod 000 /ctl; stat -c "MODE=%a OWNER=%u" /ctl',
+      { user: '1000:1000' },
+    );
+    expect(hostile.output).toContain('MODE=0 ');
+    const before = named.warnings.length;
+    await named.provider.destroy(handle);
+    const listing = await docker([
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '-v',
+      `${named.controlVolume}:/ctl`,
+      ALPINE_IMAGE,
+      'ls',
+      '-A',
+      '/ctl',
+    ]);
+    expect(listing.stdout.split('\n')).not.toContain(handle.runId);
+    // And not merely apparently: `#teardown` logs a failed step and carries on.
+    const failed = named.warnings
+      .slice(before)
+      .filter((entry) => entry.message === 'workspace teardown step failed')
+      .map((entry) => entry.fields['step']);
+    expect(failed).not.toContain('control-dir');
+  }, 180_000);
 });

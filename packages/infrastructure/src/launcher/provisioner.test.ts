@@ -14,7 +14,11 @@ import { manualClock } from '../runner/clock.js';
 import { runSpecFixture } from '../runner/fixtures.js';
 import type { RunWorkspaceEnding } from '../runner/workspace-runner.js';
 import type { LauncherControlClient } from './client.js';
-import type { CreateRunRequestPayload, EndRunRequestPayload } from './protocol.js';
+import {
+  type CreateRunRequestPayload,
+  createRunRequestSchema,
+  type EndRunRequestPayload,
+} from './protocol.js';
 import {
   assertControlSocketUnderRoot,
   createLauncherRunWorkspaceProvisioner,
@@ -109,7 +113,7 @@ describe('backlog 71 — `checkoutRef` reaches the workspace', () => {
       modelEgressHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
-    expect(spec.repo.checkoutBranch).toBe('agentic/task-7');
+    expect(spec.repo?.checkoutBranch).toBe('agentic/task-7');
   });
 
   it('checks out the default branch for a task’s first run, rather than failing on a branch that is not on the remote', () => {
@@ -122,15 +126,15 @@ describe('backlog 71 — `checkoutRef` reaches the workspace', () => {
       modelEgressHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
-    expect(spec.repo.checkoutBranch).toBeNull();
-    expect(spec.repo.defaultBranch).toBe('main');
+    expect(spec.repo?.checkoutBranch).toBeNull();
+    expect(spec.repo?.defaultBranch).toBe('main');
   });
 
   it('reaches the control plane’s create request, not only the builder', async () => {
     // Standing rule 82's shape: the case above would pass with the provisioner deleted.
     const { client, recorded } = clientWith();
     await provisionerWith(client).provision(runSpecFixture({ checkoutRef: 'agentic/task-9' }));
-    expect(recorded.creates[0]?.spec.repo.checkoutBranch).toBe('agentic/task-9');
+    expect(recorded.creates[0]?.spec.repo?.checkoutBranch).toBe('agentic/task-9');
   });
 });
 
@@ -155,6 +159,42 @@ describe('the workspace spec a run gets', () => {
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(spec.egress.hosts).toEqual(['git.example.com']);
+  });
+
+  /**
+   * WP-74 criterion (5), the runner's half: a run with no file tool and no shell sends a spec with
+   * no repository and **no credential request** — the launcher is never asked to mint — and the
+   * request it sends is one the wire schema accepts.
+   */
+  it('asks for no checkout and no credential for a run that holds no file tool and no shell', async () => {
+    const { client, recorded } = clientWith();
+    await provisionerWith(client).provision(runSpecFixture({ role: 'ask', tools: [] }));
+    const request = recorded.creates[0];
+    expect(request?.spec.repo).toBeNull();
+    expect(request?.credential).toBeNull();
+    expect(request?.spec.egress.hosts).toEqual(['api.anthropic.com']);
+    expect(createRunRequestSchema.safeParse(request).success).toBe(true);
+    // Both mixed shapes are refused at the boundary, rather than reconciled by the launcher.
+    expect(
+      createRunRequestSchema.safeParse({
+        ...request,
+        credential: {
+          project: 'acme/api',
+          host: 'git.example.com',
+          branchPatterns: [],
+          ttlSeconds: 60,
+        },
+      }).success,
+    ).toBe(false);
+    const repoFul = runWorkspaceSpecFor({
+      spec: runSpecFixture(),
+      project,
+      modelEgressHosts: [],
+      now: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    expect(createRunRequestSchema.safeParse({ spec: repoFul, credential: null }).success).toBe(
+      false,
+    );
   });
 
   it('asks the launcher to mint for the project path, the git host and the branch namespace', async () => {

@@ -194,7 +194,25 @@ export const platformSkillOfQualified = (qualified: string): string | null => {
 export const workspaceSpecSchema = z.strictObject({
   runId: runIdSchema,
   projectId: idSchema,
-  repo: workspaceRepoSchema,
+  /**
+   * The repository to check out, or **`null` for a run that holds no tool to open one** (WP-74,
+   * PROGRESS backlog 82).
+   *
+   * `null` means *no checkout*, and never *no container*: a repo-less spec skips the mirror update
+   * and the clone and **keeps** the network, the volume, the egress sidecar, the control socket and
+   * the platform skills, because the CLI is what the run shim execs inside that container and a run
+   * has no other transport. Executing a tool-less run's CLI in the platform process instead is ruled
+   * out by TD-021's **decision body** — *"the Agent SDK runs in the platform `runner` role and spawns
+   * `claude` inside the container"* (`docs/decisions/technical/TD-021-workspace-isolation.md:10`) —
+   * and **not** by the WP-15g amendment's Docker-client clause, which that path would not breach. A
+   * reader who checks only the amendment concludes the option is open; it is not.
+   *
+   * The predicate that decides it is on the run's **tools**, never its role or stage:
+   * `runNeedsCheckout` in `packages/infrastructure/src/workspace/spec.ts`. The SDK's tool filter runs
+   * inside the container, so it is a context filter and not a sandbox — the honest restriction for a
+   * run that may not read the tree is not to put the tree there.
+   */
+  repo: workspaceRepoSchema.nullable(),
   limits: workspaceLimitsSchema,
   egress: workspaceEgressSchema,
   runtime: workspaceRuntimeSchema,
@@ -252,13 +270,15 @@ export interface WorkspaceHandle {
   /** `ws-<run-id>`; outlives the container, per retention. */
   readonly volumeName: string;
   /**
-   * The project's mirror on the shared cache volume.
+   * The project's mirror on the shared cache volume, or `null` for a workspace with no checkout
+   * (`WorkspaceSpec.repo` was `null`, WP-74).
    *
    * On the handle rather than looked up again, because the clone is `--shared`: the workspace's
    * objects live in that mirror, so anything that reads the workspace later — the export, a
-   * future re-attach — needs to mount it and needs to know which one.
+   * future re-attach — needs to mount it and needs to know which one. A `null` here is what makes
+   * `export` refuse by name rather than mount a mirror for a tree that was never cloned.
    */
-  readonly cacheKey: string;
+  readonly cacheKey: string | null;
   /** The run's sub-directory of the shared control volume. */
   readonly controlSubPath: string;
   readonly keepUntil: string;
@@ -418,7 +438,8 @@ export interface WorkspaceProvider {
 
   /**
    * Creates the whole run: network, volume, control directory, egress sidecar, workspace
-   * container, clone.
+   * container, clone — the clone only when `spec.repo` is not `null`, and then only after
+   * {@link updateMirror} (a repo-ful create with no mirror is refused; a repo-less one needs none).
    *
    * **Either it returns a handle or it leaves nothing behind.** A create that fails half way
    * removes what it made before it throws, because the alternative is a container running an agent
@@ -443,6 +464,9 @@ export interface WorkspaceProvider {
   /**
    * Take-over export (technical/05 §6): commit and push the work-in-progress branch, and
    * optionally write a tarball of the workspace excluding `.git` and `node_modules`.
+   *
+   * @throws {WorkspaceError} `invalid_spec` for a handle whose `cacheKey` is `null`: a workspace
+   * with no checkout has no branch to push and no tree to archive (WP-74).
    */
   export(
     handle: WorkspaceHandle,

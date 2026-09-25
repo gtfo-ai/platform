@@ -109,6 +109,41 @@ describe('startRun', () => {
   });
 
   /**
+   * WP-74 criteria (2) and (5): a spec with no repository makes no mirror fetch — the call a
+   * read-only run of a private repository has no credential for (backlog 133) — and the broker is
+   * never **asked**, which is stronger than the read-only case above, where it is asked and answers
+   * `null`. The container and the socket are created as for any run.
+   */
+  it('neither mirrors nor asks the broker for a spec with no checkout, and still attaches', async () => {
+    const issue = vi.spyOn(broker, 'issue');
+    const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
+    const started = await service.startRun(spec, null);
+    expect(provider.events.map((event) => event.kind)).toEqual(['create', 'attach']);
+    expect(issue).not.toHaveBeenCalled();
+    expect(minted).toBe(0);
+    expect(started.credential).toBeNull();
+    expect(started.handle.cacheKey).toBeNull();
+    expect(started.attachment.workdir).toBe('/work/repo');
+  });
+
+  it('refuses a credential request that does not match whether the spec has a repository', async () => {
+    const request = {
+      project: 'acme/web',
+      host: 'vcs.example.com',
+      branchPatterns: ['agentic/*'],
+      ttlSeconds: 60,
+    } as const;
+    const repoLess = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
+    await expect(service.startRun(repoLess, request)).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
+    const repoFul = workspace.workspaceSpecFixture({ runId: randomUUID() });
+    await expect(service.startRun(repoFul, null)).rejects.toMatchObject({ code: 'invalid_spec' });
+    expect(minted).toBe(0);
+    expect(provider.events).toEqual([]);
+  });
+
+  /**
    * TD-021 mints with `expires_at` tomorrow, so a run that never started would otherwise leave a
    * live push token for a day. The revocation is in the failure path, and this is the assertion:
    * the second `startRun` for the same run id fails inside `create` — after the mint — and the

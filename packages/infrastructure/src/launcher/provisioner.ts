@@ -173,19 +173,25 @@ export const createLauncherRunWorkspaceProvisioner = (
       });
       const created = await options.client.createRun({
         spec: workspaceSpec,
-        credential: {
-          project: project.projectPath,
-          host: project.gitHost,
-          branchPatterns: [...project.branchPatterns],
-          ttlSeconds: options.credentialTtlSeconds,
-        },
+        // WP-74: a run with no checkout does not **ask** for a git credential — there is no mirror
+        // to fetch and nothing to push — so the launcher is never in a position to mint one.
+        credential:
+          workspaceSpec.repo === null
+            ? null
+            : {
+                project: project.projectPath,
+                host: project.gitHost,
+                branchPatterns: [...project.branchPatterns],
+                ttlSeconds: options.credentialTtlSeconds,
+              },
       });
       assertControlSocketUnderRoot(created.attachment.socketPath, options.controlRoot);
       logger.info(
         {
           run_id: spec.runId,
           project_id: spec.projectId,
-          checkout_branch: workspaceSpec.repo.checkoutBranch,
+          checkout: workspaceSpec.repo !== null,
+          checkout_branch: workspaceSpec.repo?.checkoutBranch ?? null,
           read_only: workspaceSpec.readOnly,
           credential: created.credentialMinted,
           replayed: created.replayed,

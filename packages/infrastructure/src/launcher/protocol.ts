@@ -88,7 +88,9 @@ export const workspaceHandleSchema: z.ZodType<WorkspaceHandle> = z.strictObject(
   sidecarContainerId: nonEmptyStringSchema.max(128).nullable(),
   networkId: nonEmptyStringSchema.max(128),
   volumeName: nonEmptyStringSchema.max(255),
-  cacheKey: nonEmptyStringSchema.max(64),
+  // `null` for a workspace with no checkout (WP-74); the interface moved with it, and the
+  // `z.ZodType<WorkspaceHandle>` annotation is what made the two move together.
+  cacheKey: nonEmptyStringSchema.max(64).nullable(),
   controlSubPath: nonEmptyStringSchema.max(255),
   keepUntil: isoDateTimeSchema,
 });
@@ -152,10 +154,23 @@ export type RunCredentialRequestPayload = z.infer<typeof runCredentialRequestSch
  * launcher has (`compose.yml`'s launcher service joins neither the default network nor `db`).
  * `buildWorkspaceSpec` is the derivation and this is its first production consumer.
  */
-export const createRunRequestSchema = z.strictObject({
-  spec: workspaceSpecSchema,
-  credential: runCredentialRequestSchema,
-});
+export const createRunRequestSchema = z
+  .strictObject({
+    spec: workspaceSpecSchema,
+    /**
+     * `null` exactly when `spec.repo` is `null` (WP-74): a run with no checkout makes no mirror
+     * fetch and no push, so the runner does not **ask** for a credential and the launcher does not
+     * mint one. Refused in both mixed shapes rather than reconciled — a repo-ful spec with no
+     * credential request is a caller that forgot, and a repo-less spec with one is a caller asking
+     * the launcher to mint a token nothing will use.
+     */
+    credential: runCredentialRequestSchema.nullable(),
+  })
+  .refine((request) => (request.spec.repo === null) === (request.credential === null), {
+    message:
+      'a credential request is sent exactly when the spec has a repository: null with null, an object with an object',
+    path: ['credential'],
+  });
 export type CreateRunRequestPayload = z.infer<typeof createRunRequestSchema>;
 
 /**

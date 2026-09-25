@@ -57,7 +57,7 @@ const clientFor = (token = TOKEN): launcherAdapters.LauncherControlClient =>
     token,
   });
 
-const specFor = (runId: string, overrides: Partial<WorkspaceSpec> = {}): WorkspaceSpec =>
+const specFor = (runId: string, overrides: workspace.WorkspaceSpecOverrides = {}): WorkspaceSpec =>
   workspace.workspaceSpecFixture({ runId, readOnly: false, ...overrides });
 
 /**
@@ -162,6 +162,33 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     expect(created.credentialMinted).toBe(true);
     expect(created.replayed).toBe(false);
     expect(createdRuns()).toEqual([runId]);
+  });
+
+  /**
+   * WP-74 criterion (5): a spec with no repository crosses the wire with no credential request,
+   * the launcher runs no mirror update and mints nothing, and the handle — `cacheKey: null` —
+   * survives the create-then-end round trip unchanged through both ends' schemas.
+   */
+  it('creates and ends a workspace with no checkout, and its handle crosses the wire unchanged', async () => {
+    const runId = randomUUID();
+    // Even a writable spec: what decides the credential here is the missing repository, not
+    // `readOnly` — a broker asked for this one would mint.
+    const spec = { ...workspace.repoLessWorkspaceSpecFixture({ runId }), readOnly: false };
+    mintFails = true;
+    const created = await clientFor().createRun({ spec, credential: null });
+    expect(created.handle.cacheKey).toBeNull();
+    expect(created.credentialMinted).toBe(false);
+    expect(provider.events.map((event) => event.kind)).toEqual(['create', 'attach']);
+    const ended = await clientFor().endRun(runId, { handle: created.handle, export: null });
+    expect(ended.failures).toEqual([]);
+    // The end request's handle passed `endRunRequestSchema` on the launcher's side — a schema
+    // that refused `cacheKey: null` would have answered `bad_request` — and reached `destroy`.
+    expect(provider.events.map((event) => event.kind)).toEqual([
+      'create',
+      'attach',
+      'stop',
+      'remove',
+    ]);
   });
 
   it('answers the stored handle on a replay rather than starting a second container', async () => {

@@ -29,7 +29,7 @@
  * | 2 | `attach` returns a socket path with nothing listening. | **Kinder** — a caller assuming a live control channel passes here | `workspace/fake.test.ts` › "attach returns a path that no server is listening on" connects and asserts `ENOENT`, so WP-15 must compose `runner/fake-spawn.ts` rather than `createRunletSpawn`. |
  * | 3 | No detached grandchild can exist, so "the container stop is what ends the pid namespace" cannot be shown. | **Kinder** — the whole point of WP-13's third obligation is invisible here | The *ordering* claim is checkable and is checked in both implementations: `events` records every stop and removal, and the shared suite reads them through its `containerOps` seam in `provider-suite.ts` › "stops the run container before it removes it". Until WP-14 round 2 the suite asserted only that `attach` rejects afterwards, which is true whichever order the two happened in (standing rule 10), and the ordering was pinned for Docker alone in `workspace/provider.test.ts` › "stops the container before removing anything". The property itself is `docker-workspace.e2e.test.ts` › "a detached grandchild does not survive destroy". |
  * | 4 | The tarball is built from an in-memory tree rather than from a clone. | Neither: same `filterTar` | `workspace/fake.test.ts` › "drops a symlink that escapes the workspace, through the same filter", and `provider-suite.ts` › "drops a symlink that points outside the workspace, and counts it", which both implementations run. |
- * | 5 | `updateMirror` performs no fetch, so a URL that does not resolve still "updates". | **Kinder** | The fake refuses a `create` whose project has no mirror (stricter than nothing, same as Docker's failing clone), asserted by `provider-suite.ts` › "refuses to create a workspace before the mirror exists". |
+ * | 5 | `updateMirror` performs no fetch, so a URL that does not resolve still "updates". | **Kinder** | The fake refuses a `create` whose project has no mirror (stricter than nothing, same as Docker's failing clone), asserted by `provider-suite.ts` › "refuses to create a workspace before the mirror exists". The refusal is for a spec **with** a repository only: a repo-less spec (WP-74) clones nothing in either implementation, and `provider-suite.ts` › "creates a workspace with no checkout and no mirror, and keeps its container, socket and skills" holds both to that. |
  * | 6 | No image pull, no daemon, so `engine_unavailable` never happens. | Kinder | Nothing pins it. Stated so no one reads the fake's reliability as the system's. |
  *
  * Three places the fake is deliberately **stricter**, which is always allowed: it refuses a second
@@ -65,7 +65,7 @@ import {
   WORKSPACE_WORKDIR,
   workspaceVolumeName,
 } from './names.js';
-import { assertProjectEnv, mintRunToken } from './provider.js';
+import { assertHasCheckout, assertProjectEnv, mintRunToken } from './provider.js';
 import { expiredHolds, type RetentionHold, retentionDecisions } from './retention.js';
 import {
   type PlatformSkillCatalogue,
@@ -175,7 +175,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         runId: spec.runId,
       });
     }
-    if (!this.#mirrors.has(spec.repo.cacheKey)) {
+    // Refused for a repo-ful spec whose mirror was never updated, exactly as before; a spec with
+    // **no** repository (WP-74) clones nothing and needs no mirror, so it is the one create this
+    // check admits without one. The suite asks both directions of both implementations.
+    if (spec.repo !== null && !this.#mirrors.has(spec.repo.cacheKey)) {
       throw new WorkspaceError('workspace_failed', 'the project has no mirror to clone from', {
         runId: spec.runId,
       });
@@ -192,7 +195,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       sidecarContainerId: spec.egress.hosts.length === 0 ? null : `fake-egress-${spec.runId}`,
       networkId: `fake-network-${spec.runId}`,
       volumeName: workspaceVolumeName(spec.runId),
-      cacheKey: spec.repo.cacheKey,
+      cacheKey: spec.repo === null ? null : spec.repo.cacheKey,
       controlSubPath: spec.runId,
       keepUntil: spec.keepUntil,
     };
@@ -226,12 +229,18 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       // they are absent is not vacuous (standing rule 42: a filter with nothing to filter passes).
       files: new Map<string, TarInput>([
         ['repo/', { name: 'repo/', type: 'directory' }],
-        ['repo/README.md', { name: 'repo/README.md', type: 'file', content: '# fixture\n' }],
-        ['repo/.git/config', { name: 'repo/.git/config', type: 'file', content: '[core]\n' }],
-        [
-          'repo/node_modules/left-pad/index.js',
-          { name: 'repo/node_modules/left-pad/index.js', type: 'file', content: 'x\n' },
-        ],
+        // The clone's stand-in — only when there is a clone (WP-74): a repo-less workspace is the
+        // empty working directory plus the skills, as the Docker provider leaves it.
+        ...(spec.repo === null
+          ? []
+          : ([
+              ['repo/README.md', { name: 'repo/README.md', type: 'file', content: '# fixture\n' }],
+              ['repo/.git/config', { name: 'repo/.git/config', type: 'file', content: '[core]\n' }],
+              [
+                'repo/node_modules/left-pad/index.js',
+                { name: 'repo/node_modules/left-pad/index.js', type: 'file', content: 'x\n' },
+              ],
+            ] as const)),
         // The platform skills, through the same function the Docker provider gives to its helper
         // container, so the two cannot disagree about which files a spec produces. What this
         // **cannot** show is that a CLI discovers them: that is the real container's tier and
@@ -246,7 +255,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         // Only when there is something to exclude — `#provisionSkills` returns before writing it
         // for a role with no skills, and a fake that wrote it anyway would be the more generous of
         // the two (standing rule 1). No divergence remains on this line.
-        ...(spec.skills.length === 0
+        ...(spec.skills.length === 0 || spec.repo === null
           ? []
           : [
               [
@@ -311,6 +320,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     credential: WorkspaceGitCredential | null,
   ): Promise<WorkspaceExport> {
     const run = this.#run(handle.runId);
+    assertHasCheckout(handle);
     if (run.volumeRemoved) {
       throw new WorkspaceError('not_found', 'the workspace volume has been purged', {
         runId: handle.runId,

@@ -72,7 +72,8 @@ the pinned CLI reading it was measured, not assumed).
   technical/04 used to specify — is **not discovered at all** (measured; the table is in that page's
   WP-14a amendment and in `packages/prompts/src/skills.ts`). They reach a run as a **plugin**:
   `WorkspaceProvider.create` writes the stage role's skills into
-  `<checkout>/.agentic-run/plugins/agentic/skills/`, from the **launcher's** own copy of
+  `<checkout>/.agentic-run/plugins/agentic/skills/` (for a run with no checkout — a spec with no file tool
+  and no shell, WP-74 — that is an empty `/work/repo` the prepare helper makes), from the **launcher's** own copy of
   `@platform/prompts` rather than from the run image, and `options.ts` passes that directory as
   `Options.plugins` so the names are namespaced (`agentic:kb`) and nothing of the project's
   `.claude/skills` is touched. The per-role table is `SKILLS_BY_ROLE` beside the other two

@@ -639,7 +639,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
       await this.#prepare(spec, token);
       made.controlPrepared = true;
-      await this.#clone(spec);
+      // WP-74: a spec with no repository — a run with no file tool and no shell — gets no clone,
+      // and therefore no `clone-<run-id>` helper; `#prepare` made its empty working directory.
+      if (spec.repo !== null) {
+        await this.#clone(spec, spec.repo);
+      }
       await this.#provisionSkills(spec);
 
       const sidecarHost = await this.#startSidecar(spec, made);
@@ -668,7 +672,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         sidecarContainerId: made.sidecar,
         networkId: made.network,
         volumeName: names.volume,
-        cacheKey: spec.repo.cacheKey,
+        cacheKey: spec.repo === null ? null : spec.repo.cacheKey,
         controlSubPath: spec.runId,
         keepUntil: spec.keepUntil,
       };
@@ -736,15 +740,32 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * WP-13's first obligation: the control sub-directory, owned by the uid the shim runs as, before
    * the run container starts. Also chowns the workspace volume's root, for the same reason — a
    * volume's root is `root:root` and the clone runs as 1000.
+   *
+   * **For a spec with no repository it also makes the working directory** (WP-74). `/work/repo` is
+   * the `cwd` the runner hands `spawn` (`WorkspaceAttachment.workdir`), and without a clone nothing
+   * else guarantees it exists: `#provisionSkills` happens to `mkdir -p` beneath it, which holds for
+   * the two tool-less roles shipped today (both hold `kb`) and not for a tool-less spec with an empty
+   * skills list. Created here, as uid 1000's, rather than left to that coincidence.
    */
   async #prepare(spec: WorkspaceSpec, token: string): Promise<void> {
     const dir = `/ctl/${spec.runId}`;
+    const emptyWorkdir =
+      spec.repo === null
+        ? [
+            `mkdir -p ${WORKSPACE_WORKDIR}`,
+            `chown ${WORKSPACE_UID}:${WORKSPACE_GID} ${WORKSPACE_WORKDIR}`,
+          ]
+        : [];
     await this.#helper({
       name: `prep-${spec.runId}`,
       image: this.#images.git,
       script: [
         'set -e',
         `mkdir -p ${dir} /work`,
+        // Before `/work` is handed to uid 1000: root here has no `DAC_OVERRIDE`, so it can create
+        // inside `/work` only while it still owns it (measured — after the chown, `mkdir` answers
+        // *Permission denied*).
+        ...emptyWorkdir,
         `printf %s "$RUNLET_TOKEN" > ${dir}/token`,
         `chmod 700 ${dir}`,
         `chmod 600 ${dir}/token`,
@@ -782,10 +803,10 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * it removes the network from the one step that handles repository content at create time. The
    * doc carries that sentence now.
    */
-  async #clone(spec: WorkspaceSpec): Promise<void> {
-    const cachePath = mirrorPath(this.#cacheMount, spec.repo.cacheKey);
+  async #clone(spec: WorkspaceSpec, repo: WorkspaceRepo): Promise<void> {
+    const cachePath = mirrorPath(this.#cacheMount, repo.cacheKey);
     const checkout =
-      spec.repo.checkoutBranch === null
+      repo.checkoutBranch === null
         ? ''
         : `git -C /work/repo checkout "$CHECKOUT_BRANCH" 2>/dev/null || ` +
           `git -C /work/repo checkout -b "$CHECKOUT_BRANCH"`;
@@ -807,9 +828,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         .join('\n'),
       env: {
         HOME: '/tmp',
-        REPO_URL: spec.repo.url,
-        DEFAULT_BRANCH: spec.repo.defaultBranch,
-        ...(spec.repo.checkoutBranch === null ? {} : { CHECKOUT_BRANCH: spec.repo.checkoutBranch }),
+        REPO_URL: repo.url,
+        DEFAULT_BRANCH: repo.defaultBranch,
+        ...(repo.checkoutBranch === null ? {} : { CHECKOUT_BRANCH: repo.checkoutBranch }),
       },
       mounts: [
         this.#volumeMount(workspaceVolumeName(spec.runId), '/work', false),
@@ -841,6 +862,12 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * A spec with no skills writes nothing and starts no container: a role with an empty list — the
    * triager, which has no tools at all — should not pay for a helper, and an empty plugin directory
    * would be a plugin the CLI loads and finds nothing in.
+   *
+   * **A spec with no repository still gets its skills** (WP-74): the helper writes under the empty
+   * working directory `#prepare` made, so an ask keeps `agentic:kb` — the one skill documenting the
+   * one platform tool it holds, which *"no workspace"* would have dropped (PROGRESS backlog 82). It
+   * does **not** write `.git/info/exclude` for such a spec: there is no clone to exclude anything
+   * from, and a `.git/` made by `mkdir -p` would be a directory git reads as a broken repository.
    */
   async #provisionSkills(spec: WorkspaceSpec): Promise<void> {
     const files = workspaceSkillFiles(spec, this.#skillCatalogue);
@@ -872,12 +899,14 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     }
     // Local to this clone, so the Developer's `git add -A` cannot sweep the platform's directory
     // into the project's merge request. Idempotent: a re-entry clones afresh, but a future caller
-    // that does not would otherwise append the line twice.
-    lines.push(
-      `mkdir -p "${WORKSPACE_WORKDIR}/.git/info"`,
-      `grep -qxF '${WORKSPACE_GIT_EXCLUDE_ENTRY}' "${WORKSPACE_WORKDIR}/.git/info/exclude" 2>/dev/null || ` +
-        `printf '%s\\n' '${WORKSPACE_GIT_EXCLUDE_ENTRY}' >> "${WORKSPACE_WORKDIR}/.git/info/exclude"`,
-    );
+    // that does not would otherwise append the line twice. Only when there is a clone (WP-74).
+    if (spec.repo !== null) {
+      lines.push(
+        `mkdir -p "${WORKSPACE_WORKDIR}/.git/info"`,
+        `grep -qxF '${WORKSPACE_GIT_EXCLUDE_ENTRY}' "${WORKSPACE_WORKDIR}/.git/info/exclude" 2>/dev/null || ` +
+          `printf '%s\\n' '${WORKSPACE_GIT_EXCLUDE_ENTRY}' >> "${WORKSPACE_WORKDIR}/.git/info/exclude"`,
+      );
+    }
     await this.#helper({
       name: `skills-${spec.runId}`,
       image: this.#images.git,
@@ -1166,13 +1195,34 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    *
    * Measured on **both** control-volume shapes — a plain named volume, and one bind-backed onto a
    * host filesystem, where a guest capability would not have helped anyway because virtiofs checks
-   * again on the host side — in all three states `destroy` can find:
+   * again on the host side — in all three states `destroy` can find. The table WP-53 left read
+   * *rc 0/0, empty* in all six cells; one of them was false on macOS by 2026-09-25 (PROGRESS
+   * backlog **147**), so every cell now says when it was last measured rather than being copied
+   * forward (standing rule 86). `rc a/b` is step 1's exit and step 2's; `–` is a step not run.
    *
    * ```
-   *                       benign            agent locked it     already gone
-   * named volume          rc 0/0, empty     rc 0/0, empty       rc 0/0, empty
-   * bind-backed           rc 0/0, empty     rc 0/0, empty       rc 0/0, empty
+   *                        benign                agent locked it                already gone
+   * named volume           rc 0/0, empty [53]    rc 0/0, empty [74]             rc 0/0, empty [53]
+   * bind-backed, Linux     empty [CI]            empty [CI]                     empty [CI]
+   * bind-backed, macOS     rc 0/0, empty [74]    rc 1/–, 2 sockets left [74]    rc 0/0, empty [74]
    * ```
+   *
+   * `[53]` is WP-53's measurement, not repeated since (its bind-backed row named no platform, so it
+   * is not carried into either row below). `[74]` was measured by WP-74's e2e on Docker Desktop
+   * 4.90.0 / engine 29.7.2 on 2026-09-25. `[CI]` is the e2e's assertion — directory gone, no
+   * `control-dir` step failed — on CI's Linux runner (run `35881716630`, on `c1cc951` — before the `2>&1` below), which implies both
+   * helpers exited 0 but logged neither code. **The macOS locked cell is a directory this
+   * helper cannot reclaim and now says so.** What survives there is the shim's two Unix sockets:
+   * `readdir` in the guest lists them and `lstat` and `unlink` answer `ENOENT` — even for a root
+   * container with every capability — while the host still holds them. Busybox `ls -A` prints such
+   * an entry on **stderr only**, so the emptiness test used to read stdout alone, called the
+   * directory empty, exited 0, and left step 2 to fail on it (`rc 0/1`, the two helpers disagreeing
+   * about one directory). Both emptiness questions now read `2>&1`: an entry that cannot be examined
+   * counts. The token is a regular file and is removed; the sockets are dead. Production's control
+   * volume is a named volume inside the daemon and is not a file share, so it is not exposed — the
+   * row above it was measured on the same machine the same day. What made the removal succeed in
+   * the two runs that did (a host-side listing before teardown, or a `docker rm -f` teardown) is
+   * **not established**.
    *
    * An earlier revision did this in one helper with `CAP_DAC_OVERRIDE`. That worked, and the
    * docblock claimed the alternative was "not a tighter capability, it is a leak" — which review
@@ -1223,12 +1273,16 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * **Both failures are silent to the caller, and they leave different things behind.** `#teardown`
    * runs this through `step()`, which logs and carries on, and nothing retries:
    *
-   *  - step 1 fails → the whole directory stays, **run token included**, which is the leak this
-   *    branch exists to close;
+   *  - step 1 fails → the directory stays with whatever step 1 could not remove — the **run
+   *    token included** when the cause is an unreadable tree, which is the leak this branch exists
+   *    to close; in the one step-1 failure measured on this build (the macOS bind share, backlog
+   *    147) the token had been removed and only two dead socket entries stayed;
    *  - step 1 succeeds and step 2 fails → the token is gone and an **empty `0755` directory**
    *    stays, which is a name and a timestamp rather than a credential.
    *
-   * **Both are collected later since WP-53**, which is PROGRESS backlog **0b**'s fix and is in this
+   * **Both are collected later since WP-53** — except a directory this helper pair cannot empty
+   * at all, which the sweep reports `remove_failed` on every pass rather than reclaiming (the macOS
+   * bind share's case, asserted in the e2e) — which is PROGRESS backlog **0b**'s fix and is in this
    * same file: `purgeExpired` lists the `ctl` volume's own directories beside the volumes it already
    * lists (`#sweepControlDirectories`) and reclaims one whose run has no container, through this very
    * pair of helpers. The sentence that stood here — *"neither is collected later: `purgeExpired`
@@ -1258,7 +1312,10 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         // skip the removal entirely.
         `  chmod -R u+rwX ${dir}`,
         '  n=0',
-        `  while [ -e ${dir} ] && [ -n "$(ls -A ${dir} | head -c 1)" ]; do`,
+        // `2>&1` in both emptiness questions (PROGRESS backlog 147): an entry `readdir` returns
+        // and `lstat` cannot is printed by busybox `ls` on **stderr only**, so a stdout-only test
+        // reads a directory holding it as empty.
+        `  while [ -e ${dir} ] && [ -n "$(ls -A ${dir} 2>&1 | head -c 1)" ]; do`,
         '    n=$((n+1))',
         '    if [ $n -gt 20 ]; then break; fi',
         `    chmod -R u+rwX ${dir}`,
@@ -1266,7 +1323,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         '  done',
         `  if [ -e ${dir} ]; then`,
         `    chmod 755 ${dir}`,
-        `    test -z "$(ls -A ${dir} | head -c 1)"`,
+        `    test -z "$(ls -A ${dir} 2>&1 | head -c 1)"`,
         '  fi',
         'fi',
       ].join('\n'),
@@ -1297,6 +1354,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     credential: WorkspaceGitCredential | null,
   ): Promise<WorkspaceExport> {
     const name = `export-${assertRunId(handle.runId)}`;
+    const cacheKey = assertHasCheckout(handle);
     const wantsTarball = request.tarballPath !== null;
     const helper = await this.#helper({
       name,
@@ -1307,7 +1365,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         // The clone is `--shared`: its `objects/info/alternates` points into the mirror, which is
         // root-owned. Without this line every object older than the run is unreadable and the push
         // fails with `remote unpack failed`, which reads like a network fault.
-        `git config --global --add safe.directory "${mirrorPath(this.#cacheMount, handle.cacheKey)}"`,
+        `git config --global --add safe.directory "${mirrorPath(this.#cacheMount, cacheKey)}"`,
         'cd /work/repo',
         'git config user.email "agentic@localhost"',
         'git config user.name "agentic"',
@@ -1683,6 +1741,25 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     return names;
   }
 }
+
+/**
+ * The handle's mirror key, or a named refusal for a workspace that has no checkout (WP-74).
+ *
+ * `invalid_spec` rather than `not_found`: the workspace exists, and asking it to push a branch it
+ * never cloned is a request that cannot apply rather than a run that is missing. Refused **before**
+ * any helper starts, so the export neither mounts the mirror for a tree that is not there nor
+ * reports a `git` error that reads like a network fault.
+ */
+export const assertHasCheckout = (handle: WorkspaceHandle): string => {
+  if (handle.cacheKey === null) {
+    throw new WorkspaceError(
+      'invalid_spec',
+      'this workspace has no checkout to export: its run held no file tool and no shell, so no repository was cloned into it',
+      { runId: handle.runId },
+    );
+  }
+  return handle.cacheKey;
+};
 
 /** Refuses a project variable that would redirect the run's proxy or its control channel. */
 export const assertProjectEnv = (env: Readonly<Record<string, string>>): void => {
