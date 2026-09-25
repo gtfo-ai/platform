@@ -49,3 +49,10 @@ Secrets → none in container, SDK-MCP on platform, proxy-injected key (phase 2)
 
 ## Spike list
 `spawnClaudeCodeProcess` over a hijacked attach (resume, stderr, exit codes, session store); embedded DNS on internal networks; `sandbox.credentials` via SDK; project access tokens on self-managed Free; `.credentials.json` refresh with parallel runs; runc `cgroup.kill` version; gVisor host cgroup enforcement.
+
+## Addendum (2026-09-25, for TD-028's WP-76 amendment) — who may mint a run credential, and with what
+Retrieved 2026-09-25; each line is the page's own wording, paraphrased only where marked.
+- Project access token **create** is `POST /projects/:id/access_tokens`; *"You must use a personal access token with this endpoint. You cannot authenticate with a project access token."* `expires_at` is an ISO date (`YYYY-MM-DD`); revoke is `DELETE projects/:id/access_tokens/:token_id`, `204 No content`, or `400`/`404`. A `rotate` endpoint exists (not used). https://docs.gitlab.com/api/project_access_tokens/
+- *"On GitLab.com, project access tokens require a Premium or Ultimate subscription … On GitLab Self-Managed and GitLab Dedicated, project access tokens are available with any license."* Tokens expire *"at midnight UTC on the expiry date"*; each token creates a bot user. This answers the spike list's "project access tokens on self-managed Free": available. https://docs.gitlab.com/user/project/settings/project_access_tokens/
+- `read_repository`: *"Grants read access (pull) to repositories … the repository in the project for a project access token."* `write_repository`: *"Grants read and write access (pull and push)"*. https://docs.gitlab.com/security/tokens/access_token_scopes/
+- Deploy tokens exist on every tier including GitLab.com Free, are created by `POST /projects/:id/deploy_tokens` (Maintainer or Owner, personal access token), take an ISO 8601 `expires_at`, and are deleted by `DELETE /projects/:id/deploy_tokens/:token_id`; their scopes are `read_repository` and registry/package scopes only — **no repository write**. https://docs.gitlab.com/api/deploy_tokens/ , https://docs.gitlab.com/user/project/deploy_tokens/

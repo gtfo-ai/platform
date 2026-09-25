@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **Next: WP-75**, then WP-76, then the M4 table's order; WP-76 needs a TD-028 amendment from the orchestrator before its implementer starts. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **Next: WP-76**, then the M4 table's order. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -8265,7 +8265,7 @@ blocks it; step (1) needs Docker and belongs to whichever session holds the e2e 
 `remove_failed` outcome, which is where this would surface), **136** (the other unmeasured launcher
 residual), rule **69** (green on one platform is not green on another — here in the other direction), rule **66**.
 
-### 148. **Every run that has a checkout mounts the whole `repo-cache` volume read-only at `/cache`, so a run steered by one project's ticket can list every project's mirror on the instance and read it — TD-021 decides a *per-project* mirror, the build mounts all of them** (TODO, **major** — a cross-project confidentiality breach against TD-021's decision text and BD-021's blast-radius rationale; **read off the tree, not measured**; **latent today, and the trigger is backlog 133**: on this build the mirror helper fetches with no credential, so the only mirrors that can exist are of repositories the git host serves anonymously — the day a fetch credential is minted, every private repository on the instance is readable from every other project's runs, so this must land **with or before** 133's fix; **owned by WP-75** (refiner, session 8), ordered before WP-76; found by WP-74, session 8, graded by the refiner)
+### 148. **Every run that has a checkout mounts the whole `repo-cache` volume read-only at `/cache`, so a run steered by one project's ticket can list every project's mirror on the instance and read it — TD-021 decides a *per-project* mirror, the build mounts all of them** (**RESOLVED** at `1b0af26`, WP-75, session 8 — TODO, **major** — a cross-project confidentiality breach against TD-021's decision text and BD-021's blast-radius rationale; **read off the tree, not measured**; **latent today, and the trigger is backlog 133**: on this build the mirror helper fetches with no credential, so the only mirrors that can exist are of repositories the git host serves anonymously — the day a fetch credential is minted, every private repository on the instance is readable from every other project's runs, so this must land **with or before** 133's fix; **owned by WP-75** (refiner, session 8), ordered before WP-76; found by WP-74, session 8, graded by the refiner)
 
 **What is wrong.** `runContainerCreateBody` pushes a `volume` mount of `input.cacheVolume` at
 `CONTAINER_CACHE_MOUNT` (`/cache`) with no `VolumeOptions.Subpath` for any spec whose `repo` is not
@@ -8395,6 +8395,95 @@ bind-backed control volume on Docker Desktop and not the second: after teardown 
 `ctl.sock`/`cred.sock` can survive as entries `readdir` lists and `lstat`/`unlink` answer `ENOENT`
 for, which nothing in the guest can remove (backlog **147**'s measurement, WP-74's notes). Done: one
 sentence there, citing 147. Owner **WP-73**.
+
+### 152. **The export helper runs `git status`, `add`, `commit` and `push` in the agent-written checkout under the agent-written `.git/config`, so every configuration key that names a program runs it — in a container whose environment holds the push password and whose network is unfiltered. WP-75 turned hooks off for two of the four commands and nothing else** (**RESOLVED** at `1b0af26`, WP-75, session 8 — TODO, **major** — **measured** for `core.fsmonitor` and a `clean` filter, **read** for the rest; **latent today, and the trigger is WP-76**: with no credential the helper runs `network: none` with no `GIT_PASS`, and on this build no credential is minted (backlog **133**) — the day WP-76 mints one, a developer run's own code reads the push credential and sends it anywhere; **owned by WP-76** (refiner, session 8), its criterion **(9)**; found by WP-75, session 8, graded by the refiner)
+
+**What is wrong.** One cause: the export trusts the repository configuration of a tree the agent
+wrote. The script (`packages/infrastructure/src/workspace/provider.ts:1392-1418`) runs `git status
+--porcelain` and `git add -A` bare, and `commit`/`push` with only `-c core.hooksPath=/dev/null`
+(`:1411`, `:1415`), all with `cd /work/repo`, i.e. with `/work/repo/.git/config` in scope.
+
+**Evidence.**
+- **The report's measurement** (WP-75's notes, *Discovered work*): *"Measured on `alpine/git:v2.49.1`
+  (Docker Desktop 4.90.0, a throwaway container, no volume): with `core.fsmonitor` and a clean filter
+  set in the repository config, `git status --porcelain` then `git -c core.hooksPath=/dev/null add -A`
+  ran **both** (`FSMONITOR-RAN`, `FILTER-RAN`)."* The same notes, *"Read, not measured: a
+  repository-local `credential.helper` is consulted beside the platform's and is sent the password on
+  `store`; `http.proxy` and `url.<x>.insteadOf` redirect the push."*
+- **What an executed program can reach, read off the tree.** `#gitCredentialEnv` puts the password in
+  the helper's **environment** as `GIT_PASS` (`provider.ts:595-603`), which every git child
+  inherits — an fsmonitor or filter program needs no credential-helper trick, it reads `$GIT_PASS`.
+  The helper's network is `this.#helperNetwork` whenever a credential exists (`provider.ts:1438`),
+  which is `APP_WORKSPACE_HELPER_NETWORK: agentic-run-egress` (`compose.yml:334`), a normal bridge:
+  the egress sidecar filters the run container, not this helper.
+- **Refiner's reading, not measured — the push can be redirected without executing anything.** The
+  platform's helper (`provider.ts:602`, *`!f() { echo "username=$GIT_USER"; echo "password=$GIT_PASS"; }; f`*)
+  answers for **any** host (it has no host check; the broker's exact-host comparison guards
+  `cred.get` in the run container, not this env-embedded helper), and `origin`'s URL is read from
+  the agent's config. So a planted `remote.origin.pushurl` or `url.<x>.pushInsteadOf` pointing at a
+  host that answers 401 would be sent the credential by git itself. **Needs measurement.**
+- **The key table** — read against git-config(1), https://git-scm.com/docs/git-config (retrieved
+  2026-09-25; the page is *"last updated in 2.55.0"*, the helper image pins **2.49.1**, so the set
+  the image honours may differ), and githooks(5), https://git-scm.com/docs/githooks (*"last updated
+  in 2.54.0"*). Which of the export's four commands reaches each is the refiner's reading except
+  where marked measured.
+
+  | Key (repository scope) | What it runs | Reached by the export? |
+  |---|---|---|
+  | `core.fsmonitor` | *"the pathname of the "fsmonitor" hook command"* | `status`, `add`, `commit` — **measured** |
+  | `filter.<driver>.clean` / `.process`, bound by a `.gitattributes` the agent also wrote | the checkin conversion | `add` — **measured** (`clean`); `smudge` needs a checkout, not reached |
+  | `post-index-change` hook | *"invoked when the index is written"* | `add` (and `status` when it refreshes the index) — **not** covered by WP-75's `-c core.hooksPath`, which is on `commit`/`push` only and whose e2e planted six other hooks; **needs measurement** |
+  | `commit.gpgSign` + `gpg.program` / `gpg.ssh.program` | the signing program | `commit` |
+  | `credential.helper` (multi-valued) | *"an external helper to be called when a username or password credential is needed"* | `push` over HTTPS |
+  | `core.sshCommand`, `core.gitProxy`, `ssh.variant`, `core.askPass` | transport / prompt programs | `push`, once `origin` points at an ssh/git URL (the agent's config decides that) |
+  | `remote.<name>.receivepack` | *"The default program to execute on the remote side when pushing"* — local for a path remote | `push` to a planted path URL; read, **needs measurement** |
+  | `include.path`, `includeIf.<cond>.path` | none itself — imports any file the agent placed | every command; multiplies the table rather than adding a row |
+  | `core.pager`, `core.editor`, `sequence.editor`, `diff.external`, `diff.<driver>.command`/`.textconv`, `merge.<driver>.driver`, `alias.*` | programs | not reached by these four invocations (`-m`, no tty, no diff/merge); an alias cannot shadow a built-in |
+  | `core.hooksPath` | the hooks directory | overridden on `commit`/`push` since WP-75 (measured); **not** on `status`/`add` |
+
+  git itself knows the class: *"certain options are only respected when they are specified in
+  protected configuration"* (system, global, command scopes; git-config(1), *Protected
+  configuration*) — `uploadpack.packObjectsHook` is one — but `core.fsmonitor` is not among them in
+  2.49.1, which the measurement shows.
+
+**What it costs to leave.** Nothing while no credential exists. After WP-76: a Developer run's
+code (arbitrary since WP-54) plants one line of `.git/config`; the export — which runs on **every**
+developer stage's release and on every take-over — hands the project's push credential to it over
+an unfiltered network. That is TD-028's WP-76 amendment's own guarantee — the credential never
+reaches the agent (WP-76 criterion (5)) — broken one container over, where (5)'s assertion over the
+run container's `Env` does not look.
+
+**What "done" looks like.** WP-76 criterion **(9)**: the export's git commands execute nothing the
+run's repository configuration names. **Structural, preferred**: do not read the agent's `.git/`
+configuration at all — `git --git-dir=<a directory the helper makes> --work-tree=/work/repo`, a
+platform-written config (the remote URL from the spec, never from `remote.origin.*`), the agent's
+objects and the mirror reached through `objects/info/alternates`, the agent's `HEAD` read as data,
+`GIT_CONFIG_NOSYSTEM=1` and a helper-written global. `.gitattributes` in the tree may still name a
+filter; with no driver defined in any config it names nothing. **If an enumeration of `-c key=`
+overrides is chosen**, its residual is stated at the line (git-version dependent; `include.path`
+imports files the list never sees; a key a later git adds is admitted silently — BD-025's lesson
+for command floors) and the list is held to this table by a test. **Asserted** in the Docker e2e
+(rule 42): planted `core.fsmonitor`, a `clean` filter behind a planted `.gitattributes`, a
+`post-index-change` hook and `commit.gpgSign` + `gpg.program`, each writing a marker — **no marker**
+after an export that **pushed** with a credential, and the same plants firing under a plain
+`git add`/`commit` in the same tree (the positive); a planted `remote.origin.pushurl` does not move
+the push off the spec's remote.
+
+**Depends on / owner.** **Owned by WP-76** (refiner, session 8), criterion (9) — it is the change
+that makes it live, so it cannot land after it. Read beside **TD-028's WP-76 amendment
+(2026-09-25)**, decisions 3–5 (the runner mints, the broker still gates the export push, the
+credential never reaches the agent). Related: **148**/WP-75 (the hooks half), **133** (the trigger),
+**137**/**140** (the run's own egress), BD-022, BD-025. The measurements need Docker (rule 66): not run here.
+
+### 153. **The run container mounts its mirror at `CONTAINER_CACHE_MOUNT` while the helpers use the provider's `cacheMount` option** (TODO, nit — **latent, no producer**: nothing sets the option, so both are `/cache`; owner **WP-73**; found by WP-75, session 8)
+
+`hardening.ts:323` passes the constant; the provider defaults `#cacheMount` to the same constant
+(`provider.ts:315`) and uses it for the mirror, clone and export helpers (`:524`, `:554`, `:819`,
+`:859`, `:1435`). The day something sets `cacheMount`, the clone's `objects/info/alternates` names a
+path the run container's mount is not at and every pre-run object is unreadable in the run. Done:
+remove the option or pass it into the run body, one or the other. Related, for the orchestrator:
+TD-026:17 said the mirror is mounted *"at `/cache`"*; the working tree already carries its WP-75
+correction (`/cache/<cacheKey>.git`, uncommitted, TD-026:17-18), so nothing is owed there beyond the commit.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -11960,7 +12049,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-53 | **The launcher control plane and the first production `RunWorkspaceProvisioner`** | DONE | `565e84c` | Depends on **TD-028** (written in session 6), WP-14, WP-13, WP-15g, WP-22. Folds backlog **34** (major), **71** (major), **82**, **0b**; implements **Q52**. **Not blocked on WP-33** — verified against the real images with the scripted CLI. This is the row that makes eleven latent findings testable. **Refiner (session 6): also folds backlog 128** — in `local` mode `agentRunEnvironment` passes the run container **no** credential (pinned by a test) while `compose.local.yml:15` claims a `loadServerConfig` refusal no source implements; same trigger as 34, one decision and one assertion. **Eight of nine criteria met; (5) is met in part by an architect ruling and is not narrowed** — the predicate for a tool-less run is **no checkout**, never *no container* (TD-021's *decision body* forbids executing the CLI in the process that serves `/webhooks/*`, which is a stronger objection than the WP-15g amendment's Docker-client clause), so `WorkspaceSpec.repo` becomes nullable and the predicate is **a row of its own after WP-54**, which rewrites `TOOLS_BY_ROLE`, its input; only the two false planner docblocks shipped here, and backlog **82** is re-scoped rather than closed. **TD-028 amended twice, both the orchestrator's and both corrected after review**: decision 5's queue carries the **platform gates** as well as agent runs (gate evaluation is a branch of the same handler; it is not given its own queue because `stage.execute`'s per-task `stately` singleton is what stops one task running two stages at once), and decision 4's idempotency is scoped to **one launcher's lifetime**. **Both amendments shipped a false sentence that review caught** — the first named `/readyz` and a queue-depth metric as the mitigation when `apps/server/src/metrics.ts` has neither (rule 78, and the claim was inherited from the decision's own Consequences bullet and repeated one paragraph later without a grep); the second asserted that a replayed `create` cannot start a second container *because the name is derived from the run id*, which is wrong on this tree — the first name-derived object is the **network**, `createVolume` is idempotent, `#prepare` **rewrites the shim token** before any container name is used, and `createNetwork` sends no `CheckDuplicate`, so the realistic bad case is **not** fail-closed and the outcome stays **unmeasured** under backlog **136**, which the amendment had cited two lines below while closing what it exists to leave open. **Two defects were found by extending `scripts/compose-stock-check.mjs` and by nothing else** (rule 71, whose refinement WP-51 recorded and this row's brief failed to carry): `compose.yml` pinned `APP_LAUNCHER_URL` while `.env.example` shipped `APP_LAUNCHER_TOKEN` empty, and `launcherEnvSchema` declared every name `.min(1).optional()` so a **strict** schema turned *unset* into a parse error — each looped a container under `restart: unless-stopped` on **every stock instance**, invisible to every local tier, and they are **one mistake at two layers: a compose file supplying a value the code treats as operator input**. The fix is *blank is absent* at the boundary, with a blank `DOCKER_HOST` **still refused** so rule 55 is not demoted into a default (canaried). The check itself was extended in both directions and now prints the last twenty lines of every service that is not where it should be **before** the verdict, because its `finally` had destroyed the evidence. **Two review rounds**: R1 APPROVE-with-nits (five canaries dead by name; ten items, of which criterion (4)'s countable effect was unasserted and a failed reclaim was reported as `keptReason: 'run_alive'` — the sweep working and the sweep failing spelled identically, one level below the criterion forbidding it); R2 REQUEST_CHANGES on the amendment above. Criterion (4) is now asserted on the checkout's **own HEAD** against a fixture branch deliberately **one commit ahead of `main` with a file `main` lacks**, because with equal heads a provider ignoring `checkoutBranch` entirely would pass (rule 43), and the `||`'s **first** half — the existing-remote-branch path that had never run — is the one exercised. **Criterion (1) rests on a check no CI job runs and no reviewer reproduced**: `scripts/launcher-control-plane-check.mjs`, five runs, four in the implementer's shell and one in the orchestrator's, `PASS (18/18)` exit 0 against the real `platform-runtime:dev` — which is 10 days old and sound because `docker/runtime.Dockerfile` last changed at `2fa285c` the same day. Its missing-daemon refusal was **measured in both directions** after the implementer caught itself asserting `pnpm eval`'s rule before making it true. **Build wall-clock 8 s then 5 s, warm cache** — `platform-base` unchanged, only `COPY` layers rebuilt; a cold build is the ~4 GB the operator guide quotes and this row did not pay it. **Orchestrator verification on the final tree**: `PASS: verify` (394 files, 7264 passed), `PASS: verify:integration`, `PASS: verify:e2e` **twice**, `PASS: verify:ui`, each exit 0; `verify:web-e2e` out of scope by rule 80's own test (neither `apps/web` nor `@platform/contracts` changed). Volumes returned to **100** after every Docker tier. Discovered work: backlog **133**–**138** |
 | WP-54 | **What a run may do: the project's declared commands, the role tables, and `get_task_context`** | DONE | `3288496` | **Folded backlog 49 (blocker), 39, 40, 83 and 139 (the orchestrator folded 139 into round 1 because WP-54 made it live — the wizard writes `commands.allow`); implemented Q69 answer (ii) and Q97.** Three baselines per role (`read_only`, `verification`, `implementation`), the project narrows only the project-command verbs, a dropped entry reported (a warning per run and `ignored_allow_commands`), a literal a pattern covers granted and a glob only verbatim; `Bash` for investigator, architect and reviewer per product/13; provider skills by binding with a per-skill verb layer; `get_task_context` over the read projections, bounded; discovery on `verification`, so R1/R2/R6 read as product/17 words them. The e2e runs a fixture repository's `npm test` through the production hooks and asserts the file it wrote. **BD-025 and TD-027 amended by the orchestrator** (Q69's reading of §2, the floors as an enumeration not a boundary, the discovery residual, the organisation layer that is not composed), plus product/13, product/19 §3 and R6, CLAUDE.md and the orchestrator prompt's stale `release` fact. **Three review rounds**: R1 REQUEST_CHANGES — the new hazard floors had seven bypasses (getopt abbreviation, a clustered `-E`, a `make` variable assignment, Go's double dash, npm's `--node-options`) and narrow-never-widen was untested at the verdict level (canaries *globs granted by coverage* and *make floors dropped* survived); R2 REQUEST_CHANGES — five more (`npm --scr=`, pnpm `--config.<key>`, Go's external linker) and whole-line floors that denied `make -j4 TEST`, now token-scoped; R3 APPROVE-with-nits, **six canaries dead by name**, nits fixed by the orchestrator as stated residuals. **Rule 66 cost the row most of its wall clock**: the implementer waited six hours for a one-minute load under 12 that never came (20–175, Spotlight and the user's own containers) and left **25 unbounded `until` polling shells** behind, which the orchestrator killed — load checks are now bounded (five readings a minute apart, then report). **Orchestrator verification on the final tree**: `PASS: verify` (396 files, 7391 passed) twice, `PASS: verify:integration` (46 files, 504), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42), each exit 0; **`verify:e2e` FAIL twice with 183/184**, the one failure `test/e2e/workspace/docker-workspace.e2e.test.ts` › "destroy reclaims the control directory even after the agent locks it", reproduced alone on this tree and **alone on a clean worktree of `main` at `c1cc951`**, so pre-existing and filed as backlog **147** (owned by WP-74) rather than attributed to this row; CI's Linux e2e job is the other half of that reading. CI on `3288496`: `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success** — the push was delivered twice, same sha, both pairs green — zero `release` runs. Discovered work: backlog **140**–**147**, Q97 | Depends on WP-53 (same files), WP-17, WP-21, WP-14a, TD-027. Folds backlog **49** (**blocker**), **39**, **40**, **83**; implements **Q69** answer (ii). An e2e must run a fixture repository's test command — a fake that runs nothing is how this survived every row |
 | WP-74 | **A tool-less run gets a container and no checkout** | DONE | `91e0140` | Depends on WP-54 (`TOOLS_BY_ROLE`), WP-53, TD-021, TD-028. Folds backlog **82** (re-scoped from *no workspace* to **no checkout**) and **147** (refiner, session 8). `WorkspaceSpec.repo` and `WorkspaceHandle.cacheKey` nullable end to end; `runNeedsCheckout` on the spec's tools (an unknown tool fails closed, every role's tools classified by a test); a repo-less spec skips `updateMirror` and the clone, asks the broker for nothing (enforced at the create request's boundary), mounts no `repo-cache`, egress narrowed to the model hosts, export refused by name; the container, network, sidecar, control socket and skills kept (the ruling: TD-021's decision body, amended by the orchestrator for its mirror sentences). **Backlog 147 measured, not guessed**: on Docker Desktop for macOS the shim's two Unix sockets survive the bind-backed control directory — `readdir` lists them, `lstat`/`unlink` answer `ENOENT` — so busybox `ls -A` named them on stderr only and step 1 read the directory as empty; the emptiness test now counts what it cannot stat, the token never survives, full reclamation is asserted on production's named-volume shape and, on Linux, on the bind-backed one. **One review round**, APPROVE-with-nits, **six canaries dead by name**; nits fixed by the orchestrator (a Linux-only reclamation assertion — the bind-backed case had been weakened to *the verdict agrees with the volume*, which a regression that leaks *and* reports would pass on CI — the subagent-tools note, technical/04's stale reason, TD-021's amendment, product/13, product/18 and CLAUDE.md). **Orchestrator verification**: `PASS: verify` (396 files, 7409 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (190/190 — the first all-green e2e on this machine this session), each exit 0; the implementer's `launcher-control-plane-check` PASS 18/18. CI on `91e0140`: `ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs — the Linux-only assertion's first run. Discovered work: backlog **148**–**151**; **148** (major: every run with a checkout mounts the whole `repo-cache` volume) and the unowned major **133** are scheduled as **WP-75** and **WP-76** |
-| WP-75 | **A run's `/cache` mount is its own project's mirror, never the whole volume** | TODO | — | Depends on WP-74 (same mount in `hardening.ts`), WP-53, TD-021; **must land before WP-76**. Folds backlog **148** (major, latent until 133 is fixed). Sub-path mount onto the project's mirror with its existence guaranteed by `updateMirror` → clone → create ordering; two projects' mirrors on one volume in the Docker e2e, read off what the daemon was asked for; the export helper measured for the run-written hook and scoped the same way |
+| WP-75 | **A run's `/cache` mount is its own project's mirror, never the whole volume** | DONE | `1b0af26` | **Folded backlog 148 (major) and 152 (major — the orchestrator took it off WP-76 at round 1, because it is the same container's hazard and this row's criterion (4) was its first half).** The run container and the export helper mount one sub-path, `<cacheKey>.git`, at the path the clone's alternates name; the key validated at the mount builder; a missing mirror refused by name at the clone before any run container exists; a two-project Docker e2e reads what the daemon mounted. **The export helper was measured executing what the run wrote** — all six planted hooks, then `core.fsmonitor`, a clean filter, `gpg.program`, a push redirect and a repo `credential.helper` — and now reads only the platform's git: `.git` symlink/gitfile/linked worktree refused, `GIT_CONFIG_NOSYSTEM` + a platform global config, `.git/config` replaced, hooks removed and `core.hooksPath=/dev/null` on every call, any nested `.git` below the top level refused (a gitlink with none behind it still exports — **the orchestrator's ruling**, because the prescribed index-gitlink refusal would have refused every submodule project), an unreadable tree refused, the run container stopped before the helper. **Three review rounds, and each found a way past the one before, two of them blockers measured on the real image with `GIT_PASS` in the marker**: R1 the run's `.git/config` vectors; R2 a nested repository's own fsmonitor in `git add -A`, plus ordering asserts that passed with the line deleted (`findIndex` → −1); R3 a directory at mode 0111 hiding the nested repository from `find` while git walked in through the index, and the run container never stopped before the export. **Canaries run by the orchestrator after R3** (the reviewer's never passed the load gate): config kept, hooks kept, the walk's stderr ignored, the stop dropped, `GIT_CONFIG_NOSYSTEM` dropped — unit; the nested refusal disabled and the config kept — the Docker e2e; **all dead by name**, calibrated with a planted throw, the file md5-restored each time. **Orchestrator verification on the final tree**: `PASS: verify` (396 files, 7421 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (202/202), each exit 0, volumes at baseline. CI on `1b0af26`: `ci` `36200943398` and `image` `36200943454` **completed success**, zero `release` runs. Discovered work: backlog **153** (nit, WP-73). **The load gate cost this row most of a night**: readings from 7 to 226, `mediaanalysisd` at ~280 % | Depends on WP-74 (same mount in `hardening.ts`), WP-53, TD-021; **must land before WP-76**. Folds backlog **148** (major, latent until 133 is fixed). Sub-path mount onto the project's mirror with its existence guaranteed by `updateMirror` → clone → create ordering; two projects' mirrors on one volume in the Docker e2e, read off what the daemon was asked for; the export helper measured for the run-written hook and scoped the same way |
 | WP-76 | **The launcher authenticates to git: the mirror fetch and the push of a private repository** | TODO | — | Depends on **WP-75**, a decision record on the credential's carrier (TD-028 amendment, before the row starts), WP-53, WP-15a, BD-025 §3. Folds backlog **133** (major, live). Run-scoped mint through `IntegrationActionExecutor`, a `read` scope with a producer, nothing in the agent's environment; a credentialed git server in the Docker e2e that refuses anonymous access; `scripts/compose-stock-check.mjs` if compose/env changes (rule 71) |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | TODO | — | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
 | WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
@@ -26465,3 +26554,213 @@ working tree's sources off the checkout mount. `scripts/citations.test.ts`: 12/1
 `.env.example`, compose file, Dockerfile, server env schema or operator guide changed, so
 `compose-stock-check.mjs` was not owed. After every Docker tier: no container of this row's left,
 `docker volume ls | wc -l` = 102.
+
+#### WP-75
+
+**What the row closes.** Backlog **148**: every container that read a mirror mounted the whole
+`repo-cache` volume, so a run steered by one project's ticket could list every project on the
+instance and read any mirror. The goal was TD-021:9 true **as written** (*"per-project bare mirror ro
+at `/cache`"*), and it now is: no amendment, and none is needed — `docs/decisions/**` untouched.
+
+**Criterion by criterion.**
+1. `projectMirrorMount` (`packages/infrastructure/src/workspace/hardening.ts`) is the one spelling:
+   `VolumeOptions.Subpath: "<key>.git"` at `mirrorPath(CONTAINER_CACHE_MOUNT, key)` =
+   `/cache/<key>.git`, read-only — the path the clone's `objects/info/alternates` already names, so
+   `#clone` is unchanged. `mirrorSubpath` (`names.ts`) carries the key check `mirrorPath` had, so a
+   `..`/`/`-bearing key throws before any body is built. Both directions in `hardening.test.ts`,
+   parameterised over two keys (a constant `acme` would pass one): the spec's key present, the other
+   key, a sub-path-less mount and a `/cache` target all absent.
+2. **Ordering, stated at the mount** (`projectMirrorMount`'s docblock). The clone helper's first
+   line is now `[ -d <mirror> ] || { echo AGENTIC_NO_MIRROR; exit 3; }` and `#clone` turns that into
+   `workspace_failed` *"the project has no mirror to clone from (/cache/<key>.git); updateMirror runs
+   before create"* — the fake's sentence (`fake.ts`), so the shared contract suite now asserts the
+   **words** in both implementations, not only the error class. The fake daemon (`testing.ts`) now
+   models the mirror helper's `git clone --mirror` line as creating the sub-path **on the volume that
+   helper mounted there** (sub-paths are per volume now, so a control sub-path cannot satisfy a cache
+   mount); the unit cases that are not about the mirror seed it (`seedSubpath`), and the WP-75 cases
+   start without it. Unit: after `updateMirror`, the run container gets exactly the one-mirror mount;
+   with no mirror and the check modelled, create fails by name with **zero** `ws-<id>` creates; and
+   the other direction — with a clone helper that does not check — the double refuses the run
+   container with the daemon's sub-path message, so the order is load-bearing, not decorative.
+3. Docker e2e, two projects on one volume (`acme`, the run's; `beta`, the same remote under another
+   key). Read off the daemon: `HostConfig.Mounts` has exactly one `repo-cache` entry,
+   `{Target:/cache/acme.git, Subpath:acme.git, ReadOnly}`; `Mounts` destinations are
+   `/cache/acme.git`, `/ctl`, `/work`. Under the run container's recorded `HostConfig`, as uid 1000:
+   `ls -A /cache` = `acme.git` only; `beta`'s `config` and `packed-refs` refused; `count-objects`
+   reports `count: 0`/`in-pack: 0` (nothing local, rule 43) and `git log -1 -p HEAD` decodes the
+   pre-run fixture commit through the alternates, exit 0. The positive (rule 42): the same uid reads
+   `beta`'s `config` and `packed-refs` through a whole-volume mount — the pre-WP-75 shape. A
+   never-mirrored key fails with the provider's words and the daemon was asked for `prep`, `clone`
+   and nothing after.
+4. **Measured first** — on this tree before the export changed, Docker Desktop 4.90.0 / Engine
+   29.7.2, `alpine/git:v2.49.1`, the cache a **plain named volume** (production's shape; the control
+   volume in that fixture is bind-backed, which this does not touch — rule 69): a run-planted,
+   executable hook **fired in the export helper**, all six planted (`pre-commit`,
+   `prepare-commit-msg`, `commit-msg`, `post-commit`, `reference-transaction`, `pre-push`), both
+   under `.git/hooks/` **and** behind a `core.hooksPath` the run wrote into `.git/config` — in a
+   container holding `GIT_PASS` and a route to the git host. The export mounts the one mirror.
+   **Round 1 of this row stopped at `-c core.hooksPath=/dev/null` on commit and push, and that was
+   an overclaim**: the review measured `core.fsmonitor`, a clean filter, `commit.gpgSign` +
+   `gpg.program`, a `pushurl`/`insteadOf` redirect and a repository `credential.helper` still
+   executing, and `post-index-change` firing on the un-overridden `git add`. **Backlog 152 is folded
+   into WP-75** (the orchestrator's ruling). The fix is structural (`exportScript` in
+   `provider.ts`): refuse a `.git` that is a symlink, a gitfile or has `commondir`, by name, before
+   any git command; read only the platform's configuration — `GIT_CONFIG_NOSYSTEM=1`, a
+   `GIT_CONFIG_GLOBAL` the script writes, and a `.git/config` **replaced** with the repository
+   format and `remote.origin.url` read off the platform-written mirror's config; remove `.git/hooks`
+   and wrap **every** git call in `g` (`-c core.hooksPath=/dev/null`); push to the mirror's URL by
+   name, never through a remote. The e2e plants all of it — seven hooks, the fsmonitor, the filter
+   with `* filter=evil`, gpg, pushurl, insteadOf, credential helper — and runs the positive control
+   **first, on a copy of the tree** (the export replaces the config, so a control afterwards would
+   measure the platform's): under plain git every vector writes its marker (seven markers, listed
+   exactly); after the export none exists, the push landed on the fixture's own URL (`ls-remote`),
+   the left `.git/config` names the platform's URL and none of the planted keys, and a pre-run
+   object still decodes (alternates are `objects/info/alternates`, a file). *An attribute naming a
+   filter no configuration defines runs nothing* is measured by that case, not assumed.  The
+   credential-helper vector is shown live by `git credential fill` in the copy — **a command the
+   pre-WP-75 export never ran** (rule 43, review round 2), so that marker proves the helper is
+   live in the tree, not that the old export would have handed it the password; the export's push is
+   `git://`, which consults no helper, so its absence after the export is read off the replaced
+   config rather than off a push that would have asked. A symlinked and a gitfile `.git` are
+   refused by name (two e2e cases). **Residual**: `extensions.refstorage` is not carried over (only
+   `extensions.objectformat`), so a reftable mirror would export wrongly — none is made today. The
+   clone helper keeps the whole volume **read-only** (it *is* the existence check; nothing
+   agent-written exists yet; no network) and the mirror helper the whole volume **read-write** (it
+   creates `<key>.git`); both reasons are at the line.
+5. `hardening.ts`'s WP-74 comment is rewritten; technical/05 §2's *"must mount `/cache` read-only
+   too"* now says the project's own mirror, the ordering and — since round 1 — the export's
+   structural answer, replacing round 0's hooks-only sentence; the export's old *"Hooks off, for the
+   two commands that would run them"* comment is gone with the inline script it sat in.
+6. **Residual, stated.** (a) The git host on a run's egress list remains the run's exfiltration
+   channel for **its own** project (backlogs 137/140) — this row narrows *which* source a run can
+   read, not where it can send it. (b) **No mirror GC exists on this build** — read, not assumed:
+   nothing under `packages/`/`apps/` removes a mirror directory; `gc.auto 0` is set on every update
+   and `remote update --prune` prunes refs. The only removal is the operator's, of the whole volume
+   (operator guide, *"What is deliberately not backed up"*). A future GC racing the clone→create
+   window would surface as the daemon's sub-path refusal on the run container
+   (`projectMirrorMount`'s docblock).
+
+**Assumptions.** A second project in the e2e is the same remote under another key: what separates
+two projects on the volume is the directory, and that is what the mount scopes. `hardening.ts` keeps
+using `CONTAINER_CACHE_MOUNT` for the run container while helpers use the provider's `cacheMount`
+option; nothing sets that option, so they are the same `/cache` (unchanged from before).
+
+**Sentences, grepped** (`repo-cache`, `/cache`, `per-project`, `whole volume`, `every project's
+mirror` over `docs/`, `CLAUDE.md` and the workspace docblocks). **Changed**: `hardening.ts`'s WP-74
+comment at the mount (it stated the defect); the export helper's mount comment in `provider.ts`
+(*"The cache, read-only"*); technical/05 §2's *"must mount `/cache` read-only too"*; the fake daemon's
+docblock in `testing.ts` (it modelled one line of shell, now two); the e2e's *"the three named
+volumes"* assertion (`/cache` → `/cache/acme.git`). **Left, with why**: TD-021:9 — now true as
+written; TD-021's WP-74 amendment (*"skips the clone and the `repo-cache` mount"*) — still true; TD-021
+*"the volume it writes is mounted into run containers and into helpers"* — still true, by sub-path;
+TD-026:17 *"mounted read-only at `/cache` in the run container"* — true to the directory, the mount
+point is now `/cache/<key>.git` (a nit for the orchestrator, who owns `docs/decisions/**`);
+operator guide's *"per-project bare mirrors"* — true; technical/05 §1 — describes the layout, not the
+mount. `docs/research/**` not touched. The concurrent edits to TD-021, TD-028, OPEN-QUESTIONS,
+research/10 and the plan's WP-76 row in this working tree are **not this row's** (they appeared
+during it, from the orchestrator's WP-76 ruling).
+
+**Discovered work** (for the refiner; next free backlog number 152, none fixed here).
+- **152 — folded into WP-75 at review round 1** (see criterion 4 above; the orchestrator edits the
+  heading and the WP-76 row). My round-0 measurement (`core.fsmonitor` and a clean filter ran under
+  the export's own `git status`/`git add`, `alpine/git:v2.49.1`) is now the e2e's positive control.
+  **Its seventh vector, found at review round 2**: a **nested repository**'s own `.git/config` —
+  the reviewer measured the real `exportScript` output running a gitlink's `core.fsmonitor` from
+  `g add -A`, which wrote `GIT_PASS` to a file (`status --ignore-submodules=all` and `commit` did
+  not fire it; `-c diff.ignoreSubmodules=all` did not stop `add`). Now refused by name after the
+  config is replaced and before the first git command that reads the work tree: any `.git` directory or gitfile below the
+  top level (`find . -path ./.git -prune -o -name .git -print`; `find` follows no symlink by
+  default). **Orchestrator's ruling**: a gitlink in the index is *not* refused — with no `.git`
+  behind it there is no configuration to execute, and refusing it would refuse every project with
+  submodules; the e2e asserts both directions (gitlink + nested repo refused, gitlink alone
+  exports and pushes). Measured on a throwaway `alpine/git:v2.49.1` container: a nested
+  repository **with** a commit that was never added is turned into a gitlink by the first
+  `add -A` **without** firing its fsmonitor, and the next walk fires it — so the e2e's untracked
+  case uses two `add`s as its control.
+- **153 (nit) — `hardening.ts` mounts the run container's mirror at `CONTAINER_CACHE_MOUNT` while the
+  helpers use the provider's `cacheMount` option.** Nothing sets the option, so both are `/cache`;
+  the day something does, the run container's alternates name a path its mount is not at. Remove the
+  option or pass it through.
+
+**Verification** (`nice -n 19`; each tier behind a bounded load gate — five readings a minute apart,
+under 12 to proceed; three gates came back NOGO under `mediaanalysisd`/`photoanalysisd` and were
+retried later). **Two runs went ahead without a GO reading, stated rather than hidden**: an early
+workspace-only unit run at a one-minute load of 19.2, and the 12-test `scripts/citations.test.ts`
+at 57.2 after `verify:e2e`. The before-measurement of criterion (4): the two export cases, on this
+tree with the run container already narrowed and the export not yet changed — both red with all six
+`HOOK-*` files. After: the WP-75 describe 4/4; the whole workspace e2e file 59/60 on its first run
+(the one red was this row's own assertion, which had not counted `create`'s teardown helpers —
+corrected to `prep, clone, ctlempty, ctlrm`). `pnpm run -s verify`: **PASS** (7416 passed, 14
+skipped, 396 files). `pnpm run -s verify:e2e`: **PASS** (194 tests, 37 files). `verify:integration`
+not run: no integration file or anything it exercises changed. `scripts/citations.test.ts`: 12/12.
+No `docker/*`, compose file, `.env.example`, `loadServerConfig` or `packages/infrastructure/src/launcher/*`
+changed, so neither `compose-stock-check.mjs` nor `launcher-control-plane-check.mjs` was owed. After
+every Docker tier: no container of this row's left, `docker volume ls | wc -l` = 102.
+
+**Review round 1** (REQUEST_CHANGES: one major, one minor, two nits). (1) The export's structural
+fix above, backlog 152 folded. (2) The fake daemon now records a sub-path — control mkdir and mirror
+clone alike — only when the helper that makes it **starts and exits 0**, never at create;
+`workspace/provider.test.ts` › "records no mirror sub-path when the mirror helper fails" asserts it with the
+positive beside it. (3) `hardening.test.ts`'s unsafe-key list gains `/x` and a NUL (written `\0`).
+(4) The note on `docs/decisions/**` stands. Verification, round 1 (each behind a GO reading under
+12): workspace unit + contract 264/264; the WP-75 e2e describe 7/7 on its first run, every positive
+control listing its markers exactly. `pnpm run -s verify` (21:49, load 7.8): 7417 passed, **one
+failure — this note's own citation** (a bare `provider.test.ts` is ambiguous), fixed to
+`workspace/provider.test.ts` and `scripts/citations.test.ts` re-run 12/12; nothing but this file
+changed after that run. The re-run of `verify` and `verify:e2e` (and the whole workspace e2e file)
+were **not run**: the gate's five readings, a minute apart, read 45.6, 55.9, 81.3, 68.0, 24.6.
+
+
+**Review round 2** (REQUEST_CHANGES: one blocker, one major, two minors). (1) The nested-repository
+refusal and its two e2e cases (a committed gitlink; an untracked nested repository, controlled with
+two `add`s — see the 152 fold above). (2) The ordering test in `workspace/provider.test.ts` now
+asserts each located line exists before comparing it, and covers the nested check's position.
+(3) A `commondir` case joins the e2e's refusal cases. (4) The `credential fill` line is kept, with
+its difference from the old export stated in the test and above. **Not run this round**: the unit
+and contract files, the two canaries, the e2e file, `verify` and `verify:e2e` — the gate's five
+readings, a minute apart, were 146.3, 117.4, 141.2, 152.9 and 150.9 (`mediaanalysisd` at ~240 %).
+One throwaway `alpine/git` container (the untracked-nested measurement) ran at a load of 116 before
+that gate began; it is a measurement, not a tier. Typecheck and biome are clean.
+
+**Orchestrator's ruling after round 2** — the index-gitlink refusal is dropped: only a `.git`
+(directory or gitfile) below the top level is refused, because a gitlink with nothing behind it has
+no configuration to execute and refusing it would refuse every project with submodules. Both
+directions are now e2e cases: the committed gitlink **with** a nested repository is refused by name,
+and a committed gitlink with an empty directory behind it — what a clone leaves for an uninitialised
+submodule — exports and pushes. The unit ordering test asserts the script no longer mentions
+`160000`. The "gitlink check" discovered item is withdrawn (decided, not filed). **Not run**: the
+workspace unit/contract files, the two canaries (`scratchpad/canary.sh`, unused, `provider.ts`
+unmutated), the e2e file and `verify` — the five readings a minute apart were 142.9, 85.9, 30.0,
+29.3 and 80.8. Typecheck and biome are clean.
+
+**Review round 3** (REQUEST_CHANGES: a blocker, measured; a major, read) — both part of backlog
+152's fold. (1) **The 0111 vector**: the export runs as uid 1000, the run's own uid; the reviewer
+planted a gitlink `d/sub` whose repository set `core.fsmonitor`, dirtied it and left `d` at mode
+0111. `find` could not list `d`, printed only on stderr, and `$(…)` swallowed its failure, so the
+nested-repository check passed while `g status` reached `d/sub` through the index and ran the
+fsmonitor — the marker read the password. **Chosen: both layers.** The tree is first normalised with
+`chmod -R u+rwX /work/repo` as the owner (everything under it was made by uid 1000, so this undoes
+what the run took away; best-effort, because a symlink into the read-only mirror answers it with an
+error), so a legitimate tree's walk *completes* rather than being refused; then `find`'s exit status
+**and** its stderr are read, and either refuses as `AGENTIC_UNREADABLE_TREE` with its own message.
+Cost, stated: a file the run left with only a group/other execute bit gains the owner's, which git
+records as executable. The match is case-sensitive, like the ext4 workspace volume inside the VM.
+e2e: the reviewer's plant, positive control plain `git status` **in place** (a copy of an unreadable
+tree is not the tree) firing the marker; the export then refuses as a nested repository (the
+normalised walk completes), no marker, nothing pushed. The unreadable-tree message is asserted in the
+unit tier only — as the owner no directory stays unreadable after the normalisation, so the e2e
+cannot reach it. (2) **Stop ordering**: `export` now stops the run container (the provider's own
+idempotent stop, 20 s grace as `kill`) before the helper exists, so nothing left running can change
+the tree between the checks and the push; `workspace/provider.test.ts` › "stops the run container
+before the export helper is created" reads the order off the fake daemon's requests. Nothing the
+export does needs the run container. The fake provider records no stop on export — its `containerOps`
+seam is asserted only for `destroy`. (3) technical/05 §2 and the docblock say *before the first git
+command that reads the work tree* now. **Not run this round**: see below.
+
+Round-3 verification (`nice -n 19`; the gate's fifth reading was 9.89 after 13.7, 44.6, 40.5 and
+16.6): workspace unit + contract 267/267; the whole `test/e2e/workspace/docker-workspace.e2e.test.ts`
+68/68 (reading 9.39); `pnpm run -s verify` **PASS** (7421 passed, 14 skipped, 396 files; reading
+10.00). The two round-2 canaries (drop `rm -rf …/.git/config`, drop `rm -rf …/.git/hooks`), dropped
+from a copy and restored to md5 `e106cc47…`: both **die** — 1 failed of the named test each. They
+ran on a reading of **78.1**, taken right before and not a GO, stated rather than hidden. Docker
+after: no container of this row's, `docker volume ls | wc -l` = 102.

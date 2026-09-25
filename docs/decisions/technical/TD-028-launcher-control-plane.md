@@ -136,3 +136,111 @@ lines below and which exists precisely to leave this open.
 The scope is written here because this is the document a reader goes to first. It was already stated
 at `apps/launcher/src/control-plane.ts`, in `PROGRESS.md` and in `CLAUDE.md` — three places that are
 all downstream of the decision that makes the promise.
+
+## Amendment (WP-76 ruling, 2026-09-25) — the runner mints the run's git credential and the create request carries it
+
+Recorded by the architect before WP-76 starts, because PROGRESS backlog **133** is a transport
+decision this record did not take: decision 1 lists *"mint and revoke a run credential"* among the
+launcher's verbs, and the launcher cannot mint — it has no binding, no `APP_SECRET_KEY` and no
+database (`apps/launcher/src/index.ts:15-20`), so its source is `unwiredCredentials`, which throws
+`invalid_spec` (terminal). Read at `6972cbc`; nothing here was run.
+
+**A third consequence 133 does not name.** The agent's own push — `git push origin agentic/*`,
+allowed by `DEFAULT_IMPLEMENTATION_ALLOW` (`packages/domain/src/policies/command-policy.ts:277`) —
+asks through the credential helper, `cred.get` reaches the **runner**, and the runner answers only
+through `RunletSpawnOptions.credentials`, which `createLauncherRunWorkspaceProvisioner` does not
+pass (`packages/infrastructure/src/launcher/provisioner.ts`, the `createRunletSpawn` call), so every
+answer is *"runlet has no credential responder; refusing"* (`runlet/spawn-adapter.ts`,
+`answerCredential`). Fixing the launcher alone would move the failure from `startRun` to the push.
+
+**Decision.**
+
+1. **The runner mints** — the process that composes the provisioner (`apps/server/src/workspaces.ts`),
+   which is the `app` image with the database and the secret key (`compose.yml`'s `runner` service).
+   It builds the project's git binding through `packages/integrations/src/bindings/loader.ts` and calls
+   `GitProviderPort.mintCredential` / `revokeCredential` as `MutatingActionRequest`s through
+   `IntegrationActionExecutor`: actions `mint_credential` / `revoke_credential`, keyed by the git
+   binding's `integrations.id`, `mode` the task's own. **No idempotency key** — the executor's
+   docblock already says a minted credential must not carry one, because the stored result is
+   redacted and a replay would answer with `[REDACTED:…]`. `describeResult` records `scope`,
+   `expires_at` and `revoke_id` (`<project>#<token_id>`, `gitlab/credentials.ts`, not secret) and
+   never the value. The mint happens inside `provision`, i.e. in `stage.execute`'s no-transaction
+   phase, and it calls `assertOutsideTransaction` as the pipeline's own provider mutations do
+   (`packages/application/src/pipeline/integrations.ts:279` — the guard is there, not inside the
+   executor), so a mint from inside a transaction is refused rather than reviewed for. No call leaves through
+   CLAUDE.md's binding-less exception: a run credential always has a binding.
+2. **One credential per repo-ful run, its scope fixed by the spec**: `push` when `spec.readOnly` is
+   false, `read` when it is true — so `RunCredentialSource.mint`'s `'read'` gets its producer and
+   backlog 133 (2) closes. Not two tokens for a writing run: `write_repository` is *"pull and push"*
+   (research/10, addendum 2026-09-25), and a second token is a second bot user and a second
+   revocation to lose. A repo-less spec gets none (WP-74's pairing, unchanged).
+3. **The create request carries the material, not a request to mint.** `createRunRequestSchema`'s
+   `credential` becomes `{ host, username, password, scope, expiresAt }`: `null` when `spec.repo` is
+   null; **required** when the spec writes; `null` allowed for a repo-ful read-only spec only under
+   decision 6; and a `push` scope on a read-only spec is **refused** at the schema, on both ends. No
+   `revokeId` crosses — the launcher cannot use one. The launcher's `RunCredentialSource` becomes a
+   pass-through (`mint` returns what the request carried; `revoke` forgets, calling nobody); the
+   broker's three states and `credentialFor` still gate the mirror fetch and the take-over export
+   push. The launcher stores the credential **only** in the broker's map — the idempotent-create map
+   holds the response, never the request — logs no body, and persists nothing.
+4. **The runner answers `cred.get`** from its own copy, with the broker's exact-host comparison
+   (not `endsWith`, not a case fold — `broker.ts`'s four negatives), and answers `null` from the
+   moment `release` begins. A read-only run's helper therefore hands out a `read` token, which GitLab
+   refuses for a push by scope.
+5. **Revocation is the runner's, through the executor, exactly once per credential**: after
+   `endRun` returns on every ending of `release` (so the take-over export pushes first); on a
+   `createRun` that fails for any reason; and the mint is made **once per `provision` call** so a
+   client retry re-sends the same credential. Standing rule 19 is met by `revoke_id` carrying the
+   project it was minted on. A per-call adapter has no memory of an earlier revoke, so a second
+   revoke answers `not_found` (GitLab divergence 6) — hence *once*. **The crash path** (runner dies
+   between mint and revoke) is revocable from the audit row's `revoke_id`; WP-47's lease sweep
+   (`packages/application/src/recovery/run-lease.ts`) is where it belongs — WP-76 builds it or files
+   it by number, and until then the token lives to its expiry.
+6. **A binding that cannot mint is a refusal for a writing run, never a fallback.** No git binding,
+   or `capabilities().credentialMinting` false (GitLab's `mint_credentials` defaults to **false**,
+   `gitlab/config.ts`), fails a writing run **in the runner, before the create**, terminally, naming
+   the binding and the setting. The binding's static credential is never sent instead: it is the
+   personal access token that *mints* (GitLab: *"You must use a personal access token with this
+   endpoint"*), the most powerful secret an instance holds, and sending it to the container with the
+   Docker-socket path is the trade TD-021 refuses; BD-025 §3 admits only *narrowly scoped,
+   run-lifetime* tokens. A **read-only** run proceeds with `credential: null` (anonymous fetch) —
+   today's behaviour, right for a public repository; a private one still fails at the mirror, and the
+   operator guide must say a private repository needs `mint_credentials: true`.
+7. **Shadow mode is unchanged**: the executor answers `would_have` and the shadow result is **no
+   credential** (never a fake value — rule 18), so a shadow run fetches anonymously. Whether a shadow
+   task may mint a read token is **Q98**.
+8. **The value joins the run's redactors**: the run's injected-secret redactor (TD-012 step 1,
+   `apps/server/src/agent.ts`) and `IntegrationCallScope.runScopedSecrets` (Q55) for that run's
+   provider calls, so a transcript row, an artifact or a CI log that echoes it is redacted. The
+   redactor must be able to learn a value minted after it was built; the implementer makes that
+   order hold.
+
+**Alternatives rejected.** A launcher `RunCredentialSource` calling back to the platform, and a
+launcher with its own binding and secret key — both widen the one container with a Docker-socket
+path (133's reasoning, adopted). The static binding credential for the fetch — decision 6. Minting in
+the `app` process — it does not run `stage.execute` (decision 5), so the token would need a second
+crossing. Two tokens per writing run — decision 2. Deploy tokens for `read` (every GitLab tier,
+including GitLab.com Free, but no repository write and no port member today) — noted in Q98.
+
+**Sentences this overturns, to be rewritten by WP-76 in the same change (rule 83).**
+`protocol.ts:130-137` (*"The launcher **mints** through its own `RunCredentialSource`"*) — the
+second clause survives: the scope is still decided platform-side. `broker.ts:5` (*"The launcher
+mints"*) and its `RunCredentialSource` docblock. `apps/launcher/src/index.ts:15-27` and `:45` (which
+cites the answered Q52). TD-021's credentials bullet — amended there by cross-reference.
+
+**Residuals, stated.**
+- **The runner holds a push token for the life of the run**, not one request, because it answers
+  `cred.get`. It adds nothing an attacker with code execution in the runner lacks: that process can
+  decrypt the minting token already.
+- **The launcher holds it from create to end**, which is TD-021's original design; a launcher
+  compromise is already ≈ host root (research/10, threat model).
+- **Lifetime is up to two days, not 24 hours**: `RUN_CREDENTIAL_TTL_SECONDS` is 24 h and GitLab
+  grants to midnight UTC on or after it (`expiryForTtl`). A retried mint whose first response was
+  lost leaves a token with no known `revoke_id`, visible as `agentic-<scope>-<date>` and dying at
+  expiry.
+- **`agentic/*` is not enforced by GitLab** (Q40): the protected default branch is the control.
+- **Code in the container can read the token through the helper** — BD-025 §3 permits it for the
+  run's lifetime; decision 8 keeps it out of what the platform stores, not out of the container.
+- **GitLab.com Free cannot run a writing stage at all** (project access tokens need Premium there).
+- **A launcher restart between create and a take-over export** loses the credential: the export
+  answers `pushed: false` and the tarball is the only copy.

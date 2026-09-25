@@ -128,3 +128,15 @@ the control socket and its skills — the ruling on WP-53's criterion (5): a too
 run in the platform process, because this decision's body puts the SDK in the `runner` role spawning
 `claude` inside the container, which is a stronger objection than the WP-15g amendment's Docker-client
 clause. The workspace such a run exports is refused by name (`invalid_spec`).
+
+## Amendment (WP-76 ruling, 2026-09-25) — the run credential is minted by the runner, not the launcher
+
+The decision body's *"a run-scoped GitLab project access token minted by the launcher"* is
+superseded by **TD-028's WP-76 amendment**: the **runner** mints it through `IntegrationActionExecutor`
+(the launcher has no binding, no secret key and no database, and must not gain them), carries the
+minted value to the launcher on the control-plane create request for the mirror fetch and the export
+push, answers the workspace's `cred.get` itself, and revokes it. What the body says about the token
+is unchanged — Developer, `write_repository`, expires next day (in practice up to two: GitLab grants
+to midnight UTC), revoked at run end — except that a **read-only** run now gets a `read_repository`
+token rather than none, and a binding that cannot mint refuses a writing run rather than falling back
+to its static credential.
