@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **Next: WP-43**, then the M4 table's order. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **Next: WP-44**, then the M4 table's order. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -3792,8 +3792,9 @@ is a test-infrastructure change of a few lines and belongs to the next row that 
 `pipeline-harness.ts`. Nothing blocks. It is recorded on standing rules **45** (second instance) and
 **1**, so a future reader meets it at the rule as well as here.
 
-### 78. **Nothing opens the Socket Mode connection the shipped Slack app manifest selects, so every inbound chat decision — a button click, a thread answer — reaches no door; the transport the composition *can* serve is the one the manifest disables** (TODO — **no work package owns it**; found by WP-32, session 5)
+### 78. **Nothing opens the Socket Mode connection the shipped Slack app manifest selects, so every inbound chat decision — a button click, a thread answer — reaches no door; the transport the composition *can* serve is the one the manifest disables** (**RESOLVED** at `b4c23bc`, WP-43, session 8 — TODO — **no work package owns it**; found by WP-32, session 5)
 > **M4 (architect, session 6): folded into WP-43.**
+> **Refiner (session 8):** WP-43 (commit pending at filing) builds the connection and the approval half; the thread-answer half is backlog **195**.
 
 **What is wrong.** The platform now speaks into a chat channel and cannot hear the answer. Slack has
 two inbound transports and this build ships both halves of neither: the one the shipped manifest
@@ -3887,7 +3888,7 @@ files as *"the finding nobody's work package owned"*, one layer on. It takes the
 **needs measurement** (whether Slack delivers `block_actions` to a request URL while
 `socket_mode_enabled` is true) and `docs/TODO.md` still holds it. Nothing is scheduled by this note.
 
-### 79. **`user_identities` has one reader and no writer anywhere, so every human decision arriving from a provider is dropped as `unmapped_identity` — three rows record it as a consequence and none owns the mapping** (**RESOLVED** at `a29de19`, WP-31 — the third route this entry asked for, as an operator-stated mapping: `POST /api/org/identities` upserts on the primary key `(provider, external_id)` under `org.users.manage` (**admin**) and `GET /api/org/identities` lists them (`apps/server/src/routes/org.ts:196-243`); the two automatic routes stay refused **on purpose** and the endpoint's docblock says so, and `email` is not taken for the same reason. **Deliberately no `Idempotency-Key`**, against this entry's own "done" list, and the reason is stated at the route: the write is an upsert on the natural key, so a repeat writes the same row and a second mechanism would be a second thing to keep true — which satisfies *"performs nothing twice"* by construction. **What remains is below.** Found by WP-15c's reader, recorded as a symptom in WP-29's plan row, WP-31's criterion 5 and Q72, measured again by WP-32, session 5)
+### 79. **`user_identities` has one reader and no writer anywhere, so every human decision arriving from a provider is dropped as `unmapped_identity` — three rows record it as a consequence and none owns the mapping** (**remaining half RESOLVED** at `b4c23bc`, WP-43, session 8 (a screen calls the identity endpoint) — **RESOLVED** at `a29de19`, WP-31 — the third route this entry asked for, as an operator-stated mapping: `POST /api/org/identities` upserts on the primary key `(provider, external_id)` under `org.users.manage` (**admin**) and `GET /api/org/identities` lists them (`apps/server/src/routes/org.ts:196-243`); the two automatic routes stay refused **on purpose** and the endpoint's docblock says so, and `email` is not taken for the same reason. **Deliberately no `Idempotency-Key`**, against this entry's own "done" list, and the reason is stated at the route: the write is an upsert on the natural key, so a repeat writes the same row and a second mechanism would be a second thing to keep true — which satisfies *"performs nothing twice"* by construction. **What remains is below.** Found by WP-15c's reader, recorded as a symptom in WP-29's plan row, WP-31's criterion 5 and Q72, measured again by WP-32, session 5)
 **What is wrong.** The only mapping from a provider account to a platform user is empty on every
 instance that has ever run, and the platform is fail-closed on it. So the inbound half of BD-006's
 human loop is shut on **every** transport at once — including the ticket path, which is fully built
@@ -9956,6 +9957,139 @@ and overlaps/defects an upper bound; the lint probe gets a ticket-key bound (an 
 moves to **major** if the measured request exceeds a second at the assumed volume. Related: **191** (a
 fifth read), **186**, **180**, **114**, **188**.
 
+> **Entries 195–202 (refiner, session 8)** are WP-43's discovered work. Every line number below was read off
+> the **uncommitted** WP-43 working tree (its commit was pending when these were filed) and may shift by the
+> commit; the file and symbol names are the stable half. Nothing was run (rule 66).
+
+### 195. **A Slack thread reply never resolves to its task, and no question is ever answerable from chat — the answer half of product/03 UJ-2 step 4 is still missing after WP-43 closed the approval half** (TODO, **small-to-major** — **live** on every instance with a Slack binding; the product is degraded rather than broken (the SPA and the Jira reply both answer), and the setup guide now says so; **read off the tree**, the cause stated by the implementer; **no work package owns it** — none of the remaining M4 rows is a chat row, and attaching it to one for adjacency is the shape entry **78** was filed against; it wants a **row of its own** (with **202** riding, if the orchestrator agrees); found by WP-43, session 8 — the residual of backlog **78**)
+
+**What is wrong.** Two causes, one symptom. (1) The thread ↔ task map is **adapter memory**: `SlackThreadDirectory`
+(`packages/integrations/src/providers/slack/threads.ts:46`) is per adapter instance, the loader builds a fresh
+adapter per call (Q55), so on the inbound path `taskForThread` (`slack/inbound.ts:307`, `:348`) finds nothing and
+a thread reply is never a `task.question.answered`. (2) `postQuestion` has **no caller** — questions go out as plain
+`postMessage` — so no question button exists either. The implementer, quoted: *"The answer half of product/03
+UJ-2 step 4 in chat is still missing; the approval half is not. Needs a durable thread ↔ task map the normaliser
+can read (preloaded like `resolveUser`, or carried on the posted message as the approval button now does)."*
+
+**What it costs to leave.** product/03:19 — *"PM answers in Jira (reply comment) or Slack thread or UI. The
+pipeline resumes automatically."* — the chat third reaches nothing; a question posted to a channel looks live and
+cannot be answered there (entry **78**'s worst failure mode, now for questions only).
+
+**What "done" looks like.** A reply in a task's thread by a mapped person resumes the task, read back from the
+task's state, over **both** transports in one `it.each` (WP-43's pattern); the map is durable (a table or the
+message's own metadata — the choice and why stated at the module, the approval button's `{a, d, t}` value being
+the precedent), and questions with choices go out through `postQuestion` so the button half exists; the setup
+guide's *"a reply is not matched"* sentence is removed with it (rule 83). **Depends on** WP-43.
+
+### 196. **The Socket Mode WebSocket is dialled outside the executor and its host is never checked against `APP_INTEGRATION_HOSTS` — and because the socket re-signs each envelope with the binding's own signing secret, whatever that host sends passes `inbound.verify` as authentic** (**RESOLVED in part** at `b4c23bc`, WP-43, session 8 (folded by the orchestrator at review: the socket host must be the binding's allow-listed host or a subdomain of it) — TODO, **small** — a security boundary, **latent**: exploiting it needs the response of an **allow-listed** host (`base_url`, default `https://slack.com/api`) to name a hostile `wss://` host, i.e. Slack itself or an operator-declared proxy; the consequence if it does is forged approvals as any mapped person; **read off the tree**; owner **WP-43 (orchestrator to decide at review)**; found by WP-43, session 8)
+
+**Is it a violation of a stated rule? Yes, of two sentences, and an unstated exception to a third.**
+- CLAUDE.md: *"Every outbound call the platform makes **on behalf of a binding** goes through
+  `IntegrationActionExecutor` (shadow mode, idempotency, rate limits, audit) — never directly."* The implementer,
+  quoted: *"The open is a *read* of the executor … The WebSocket itself does not pass the executor."*
+- `packages/application/src/integrations/egress.ts:84-87`: *"A module that opens a socket by itself is outside it —
+  which is exactly why the one such module names its own checklist"* — the registry reader. There are now **two**
+  such modules and the second names no checklist, so that sentence is false (rule 83).
+- CLAUDE.md: *"Where a binding may point is the operator's, not the caller's"*. The `wss://` host is chosen by the
+  provider's response, not by a caller, so this is not that sentence's threat; it is a second hop the allow-list's
+  guarantee silently does not reach — the same shape as the redirect the egress docblock lists as refused below it.
+
+**Evidence.** `connectionsOpenResponseSchema` checks only the scheme — `url: z.string().regex(/^wss:\/\//, …)`
+(`packages/integrations/src/providers/slack/schemas.ts:80-83`); `webSocketConnect` is `new WebSocketImpl(url)`
+(`slack/socket.ts:333-339`); and the envelope is trusted by construction — entry **78** quotes `socket.ts:15-26`:
+*"it wraps each envelope into a `WebhookDelivery` signed with *this binding's own* signing secret … so
+`inbound.verify` is the single place that decides"*. No credential is sent to the socket host (the URL carries
+Slack's single-use ticket), so the exposure is **inbound authority**, not credential leakage.
+
+**What "done" looks like.** Either (a) the socket host is checked against the operator's list with the executor's
+exact-match semantics before the dial, refused as `IntegrationEgressRefusedError` naming the host, and the guide
+names the host to declare; or (b) the Slack socket module carries a **named checklist** like the registry's and
+`egress.ts:84-87` says "two". **Recommendation: (a)**, *if* the answered host is stable — Slack's page shows
+`wss://wss.slack.com/link/?ticket=…` (quoted at `socket.ts:5`); **needs citation**: whether Slack answers other
+hosts (the refiner's unverified recollection is a `wss-primary.slack.com` spelling), which decides whether (a) is
+one declared host or an operator trap. One unit case per branch: an adjacent host (`wss.slack.com.evil.test`) is
+refused and never dialled. **Depends on** WP-43, WP-51.
+
+### 197. **A held Slack account is never re-opened: a rotated app-level token, a changed config, or a broken account an operator fixes needs a restart of the API process** (TODO, **small** — **working as documented** (the setup guide says a rotated token needs a restart), an operator trap rather than a defect; **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-43, session 8)
+
+The supervisor's minute re-list diffs **by integration id only** (`listed = new Set(accounts.map((account) =>
+account.integrationId))`, `packages/application/src/integrations/inbound-connections.ts:289-290`), so an id it
+already holds or has named as broken is never re-opened. The implementer, quoted: *"a fingerprint of `(config,
+secret_ids)` would close it."* **Costs:** a token rotation silently leaves the old socket until it drops, then
+every reconnect fails `unauthorised` and is named and left — no chat decision arrives until someone restarts.
+**Done:** the held entry carries a fingerprint of the account's `config` and `secret_ids` (never the values); a
+changed fingerprint stops and re-opens that account; a unit case changes the secret id and asserts one stop and
+one open. **Depends on** WP-43.
+
+### 198. **A refused inbound delivery — `unmapped_identity`, `decision_refused: not_permitted` — is visible only in SQL and the API process's log, so an operator debugging a dead button has no surface, and the one they need (which Slack account to map) is on no screen** (TODO, **small** — **live** since WP-43 made chat decisions reachable; **read off the tree**; proposed owner **WP-44** (refiner, session 8); found by WP-43, session 8)
+
+`inbox.error` is written with the refusal (`` `decision_refused: ${entry.reason}: ${entry.detail}` ``,
+`packages/application/src/integrations/inbound.ts:174`) and no route reads it; backlog **185** already had to
+propose *"a week of real deliveries counted by `inbox.error like '%toString%'`"* for the same reason. **Costs:**
+WP-43's own e2e walks stranger → `unmapped_identity`; in production that first click is where every installation
+starts, and the Provider identities screen (WP-43) asks for an external id the operator has no way to find.
+**Done:** an admin read of recent refused deliveries per integration (provider, reason, the external id, time —
+all through `UntrustedText`), and the identities screen offers the unmapped external ids seen as the ones to map
+(proposing, never writing — entry **79**'s rule). Census and 401/403 per the read-API pattern. **Depends on**
+WP-43, WP-31. Related: **81** (the outbound mirror, WP-65), **185**.
+
+### 199. **A decision from chat leaves no `human_actions` row, while the same decision through `POST …/approvals/:aid/decide` leaves one — so the task's audit panel cannot say who approved a plan in Slack** (**deferred by the orchestrator at WP-43's review** (a chat decision is attributed through the aggregate's event with the person as actor and through the inbox row; the missing `human_actions` row is audit asymmetry, not a lost record) — **no M4 row owns it; for the M5 architect pass** — TODO, **small** — audit asymmetry between two doors of one aggregate operation; **live** on every chat decision; **read off the tree**; owner **WP-43 (orchestrator to decide at review)**; found by WP-43, session 8)
+
+**Is it a violation of a stated rule? Of technical/08 and the table's own comment — not of CLAUDE.md's letter.**
+- CLAUDE.md's sentence is scoped to the SPA's command surface: *"every write the SPA makes to a task or a run goes
+  through `apps/server/src/routes/commands.ts` … Every accepted command leaves one `human_actions` row and none is
+  left for a refused one."* A chat click is not a write the SPA makes, so the letter does not reach it.
+- technical/08:201 does: *"all human actions recorded in `human_actions` and `config_audit`"*, and technical/08:8
+  *"audit of every human action"*; the table's migration says *"Append-only: every human action on a task is
+  auditable"* (`packages/infrastructure/src/db/migrations/0004_pipeline.sql:208`). A chat approval runs the same
+  `decideApproval` the route runs (`packages/application/src/integrations/inbound-decisions.ts:180`) by a mapped
+  human actor — it is a human action on a task by any reading.
+
+**Evidence.** The implementer, quoted: *"the `inbox` row and the aggregate's event are the record. Audit asymmetry
+between two doors of one command."* The data exists (the `task.approval.decided` event carries the person as
+actor); it is in neither place the product's audit reads — `GET /api/tasks/:task_id/audit` pages `human_actions`
+only (backlog **52**, WP-31).
+
+**What "done" looks like.** An accepted chat decision writes one `human_actions` row in the delivery's transaction
+(`task_id`, the mapped `user_id`, `action` the route's own spelling, `params` naming the provider, integration and
+`delivery_id` — no free text but the redacted reason the route also keeps), and a refused one writes none, exactly
+the route's rule; the WP-43 e2e's approve step asserts the row over both transports. **Or**, if the orchestrator
+rules the inbox row is the audit, technical/08:201 says so and the task audit panel joins it — one of the two, not
+neither. **Depends on** WP-43.
+
+### 200. **"A click can arrive" is read from the binding's configuration, not from whether any process holds the socket, so a deployment with no `api` process posts buttons nothing receives** (TODO, **small** — **latent** on the shipped compose (`app` serves the API), **live** on any worker-only topology; **read off the tree**; proposed owner **WP-72** (refiner, session 8); found by WP-43, session 8)
+
+`clickCanArrive = signingSecret !== null && (!config.socket_mode || appToken !== null)`
+(`packages/integrations/src/providers/slack/provider.ts:296`) becomes `capabilities().buttons`, which the notify
+duty asks (`packages/application/src/notify/duty.ts:248`). The implementer, quoted: *"the worker names the account,
+but still posts. A liveness row the holder renews would let the duty ask the real question."* **Costs:** a dead
+control, the defect WP-32 declined to ship. **Done:** the holder renews a per-account liveness row (bounded TTL);
+the duty posts buttons only when it is fresh and text naming the task page otherwise; WP-72's two-process tier
+asserts both (worker without an API holder → text; with one → buttons). **Depends on** WP-43, WP-72's harness.
+Related: **38**.
+
+### 201. **`socket_mode` on a project binding is accepted by the strict schema and half-honoured: the held connection reads the account's value, while the binding's merged value still decides that binding's `buttons`** (TODO, **nit** — **read off the tree, not measured**; the implementer's *"ignored"* is the connection half; the refiner's addition is the second half; proposed owner **WP-73** (refiner, session 8); found by WP-43, session 8)
+
+Selection reads the raw account config (`(rawConfig as { socket_mode?: unknown }).socket_mode !== false`,
+`packages/integrations/src/providers/slack/index.ts:143`), but the per-binding adapter is built from
+`{ ...asObject(row.integration_config), ...asObject(row.binding_config) }`
+(`packages/infrastructure/src/secrets/postgres-binding-repository.ts:78`), so a binding's `socket_mode` flips
+`clickCanArrive` (`slack/provider.ts:296`) for that project while the transport stays the account's. **Done:** the
+binding write refuses `socket_mode` (a binding-scoped schema without the key, or a named refusal), with a unit case.
+**Depends on** WP-43.
+
+### 202. **The approval message is never updated after a decision or an expiry, so its buttons stay live and a second press is recorded as `decision_refused: already_decided`** (TODO, **small** — **live** from WP-43; harmless to state (the aggregate refuses) but a control that lies; **read off the tree**; proposed owner **WP-65** (refiner, session 8), or the row **195** wants if one is created; found by WP-43, session 8)
+
+`updateMessage` is declared (`packages/application/src/ports/integrations/communication.ts:151`) and implemented
+(`slack/provider.ts:523`) and **has no caller**. technical/06:98 lists `messageUpdate` among the capabilities; the
+implementer cites *"product/08's 'an expired approval loses its buttons'"* — **the refiner could not find that
+sentence in product/08** (it lists `update` as a communication action at product/08:11 and the approval buttons at
+:44), so the requirement is technical/06's port, not a quoted product line. WP-56's expiry (`.decided` with
+`expired`, technical/02:178) leaves the same live buttons. **Done:** a `pipeline.outbound` duty on
+`task.approval.decided` (decided or expired) replaces the message's buttons with the outcome and the decider, keyed
+by the approval, through the executor; a unit case per outcome, read back from the fake's recorded update.
+**Depends on** WP-43, WP-56. Related: **163**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -13531,7 +13665,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | DONE | `5910ecf` | **Folded backlog 51, 64, 65, 113, 129, and at review 178; implemented Q92 per its recommendation.** A rework takes a new branch (`agentic/<ticket>-r<n>`) and the old MR is closed from a `pipeline.outbound` duty — idempotent, through the executor — with a comment naming the new branch; the superseded MR persisted in the rework's transaction (migration **0043**) and re-driven once by a `stranded.ts` row, then marked abandoned at error. One coalesced diff read per `(merge request, head sha)` — never caching an empty diff — takes a gate entry from four provider reads to **three** (**criterion (2) amended by the orchestrator**: the row missed the rebase gate's own read). A warning reaches both tasks' streams and threads once per MR; the peer append bumps each written task's `version` first, **in sorted order**, so a peer writer mid-stage retries rather than fails and two gates cannot deadlock. GitLab diff stats from GraphQL `diffStatsSummary` (`documented-adapted`); the fake's divergence 17. **All five provider HTTP clients refuse redirects** (`redirect: 'error'`), held by a test that finds every provider directory on disk — and **measured on Node 25.1.0 that a followed cross-origin redirect carried GitLab's `private-token` to the second host** before the fix. **Two review rounds and a closing batch**: R1 (major, read) — the peer append on a live stream failed the peer's transaction with an unretried `StreamConflictError`; R2 APPROVE-with-nits — lock order, `recordRebaseCheck` losing its measurement, the settle unasserted at three of five endings (two canaries survived until the tests existed). **The first push was refused by the pre-push hook**: a new integration file's citation, unseen by `verify` because the file was untracked — standing rule **91**; amended into the unpushed commit. **Orchestrator verification**: `PASS: verify` (405 files, 7691 passed), `PASS: verify:integration` (556), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `5910ecf`: `ci` `36236800859` and `image` `36236800844` **completed success**, zero `release` runs. Discovered work: backlog **177**, **179**–**184** | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
 | WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | DONE | `eb7ee6a` | **Folded backlog 59, 90, 182, 185 (at review), and 177 as refused; implemented Q61 (b).** `ticket.updated` (Jira, beside its other events) and `mr.approved` (GitLab's `approval` action, naming the approver — an inference from the documented page, filed for a real-instance check, backlog 188) with the fakes and the shared suites; the snapshot re-read at the next agent stage when older than the latest edit signal (migration **0044**); re-lint not built (awaiting the Jira measurement). `mr.updated` moves the recorded head only for a strictly later provider instant (`tasks.mr_head_at`) — **review measured the first version moving it back**. **The CI gate now judges the live head**: review found the pre-existing gap beneath it (the event path settled the gate from any finished pipeline for the MR, whatever its sha) and the orchestrator folded it in — both paths read the MR's live head from the provider (a `ci_settle` duty for the event path) and settle only on a pipeline of that commit; a red pipeline's failure counts once per commit. **Backlog 185** (since WP-08, measured): Jira's changelog schema read a missing `toString` from `Object.prototype` and rejected whole deliveries — a null-prototype copy and `Object.hasOwn`. **Three review rounds** (R1 major measured: the head moved back; R2 APPROVE-with-nits plus the pre-existing CI-gate gap; R3's change reddened the orchestrator's `verify:e2e` twice, deterministically — a red pipeline parked one loop early, **against BD-008's bound of 3**, because the poll path counted repeat sightings of one pipeline; the orchestrator's hypothesis (two paths double-counting) was **wrong** and the implementer measured the real cause — the e2e's expectation stood). Canaries dead by name; the survivor of round 2 (the fake's instant stamping) is now held by the shared git suite, re-canaried by the orchestrator. **Orchestrator verification on the final tree**: `PASS: verify` (406 files, 7736 passed), `PASS: verify:integration` (559), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `eb7ee6a`: `ci` `36243497973` and `image` `36243497972` **completed success**, zero `release` runs. Discovered work: backlog **186**–**189** | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
 | WP-61 | **The delivery metrics stop being wrong in two directions** | DONE | `8dbebd9` | **Folded backlog 88, 89, 94, 114, 179, 180, 186, 188, and 194 in part; implemented Q87.** Machine accounts declared by an operator only (migration **0045**, the audited org route) and refused by the human-time projector; the day cap **per review window** — the orchestrator's ruling, product/19 amended, WP-41's read-time cross-task cap removed and the consequence stated; approval-touched windows withheld until the real-GitLab check; the defect rate from the link half of WP-34's resolver only, published at ≥ ½ traceable coverage — **a chosen floor, criterion (5)'s "derived" recorded as not met**; lines changed from one diff-stats read per merged MR, first measurement per merge; distinct overlaps; the lint fold on summary/description edits. **One review round** (REQUEST_CHANGES: the floor mislabelled as derived; three of four statistics reads claimed to prune and scanned whole histories — now bounded, the lint read's `EXPLAIN` went from four partitions to one index scan; a redelivered measurement double-counted). The orchestrator amended product/16, /18 and /19 to match and canaried the dedupe (dead by name). **Orchestrator verification**: `PASS: verify` (407 files, 7765 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `8dbebd9`: `ci` `36248633792` and `image` `36248633812` **completed success**, zero `release` runs. Discovered work: backlog **190**–**193** | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
-| WP-43 | **Slack Socket Mode** | TODO | — | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
+| WP-43 | **Slack Socket Mode** | DONE | `b4c23bc` | **Folded backlog 78, 79's remaining half, and 196 in part (by the orchestrator at review).** One Socket Mode connection per Slack integration, held by the process serving `/webhooks/*` (**TD-028 amended by the orchestrator** with the implementer's text, the role wording corrected at review), opened at composition and closed at shutdown; a worker-capable process without the ingress names each account it does not hold. Envelopes are wrapped into deliveries signed with the binding's own secret, so the **WebSocket host is the trust boundary** — refused unless the binding's allow-listed host or a subdomain of it. Chat decisions are decided by the aggregate in the ingress transaction (membership, role, identity mapping) — with that routing off the e2e showed a **member's** click moving a task to `ready_for_merge`; the review established it was **latent on `main`** (nothing posted an approval button), so no hotfix. Approval buttons only when a click can arrive (migration **0046**), the button's task id cross-checked; an identities settings screen. **One review round** (REQUEST_CHANGES: a socket opened while a stop was in flight leaked — measured); 199 deferred; the orchestrator added CLAUDE.md's held-connections bullet and ran the host-check canaries (dead by name). **Orchestrator verification**: `PASS: verify` (410 files, 7814 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (337), `PASS: verify:web-e2e` (43), images rebuilt and `PASS: compose-stock-check`. CI on `b4c23bc`: `ci` `36253785415` and `image` `36253785435` **completed success**, zero `release` runs. Discovered work: backlog **195**, **197**–**202** (195 needs a row of its own — for the M5 pass) | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
 | WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | TODO | — | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
 | WP-46 | **The merge-readiness Checks panel** | TODO | — | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
 | WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | TODO | — | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
@@ -30088,3 +30222,222 @@ verify (rule 91).
 PASS (383); `stats-queries` + `stats-backfill` integration PASS (14); `pnpm run -s verify` PASS
 (7 765 passed, 14 skipped). Docker after: the reaper only, volumes 102. `verify:e2e` not re-run in
 round 2 (the stats e2e's wait now reads the `task.mr.measured` event rather than a counter row).
+
+#### WP-43
+
+**Round 1 (implementer, session 8).** Backlog **78** and **79**'s remaining half. Commit pending.
+
+**What shipped, criterion by criterion.**
+1. **One socket per Slack account that selects Socket Mode, opened at composition and closed at
+   shutdown.** The lifecycle is `@platform/application`'s `integrations/inbound-connections.ts`
+   (`startInboundConnections`); which accounts, and how one opens, is `@platform/integrations`'
+   `bindings/held-connections.ts` over a new optional `ProviderRegistration.inboundConnection`
+   (Slack's: `selected` = `socket_mode !== false` on the **raw account config**, `open` = the
+   adapter's `socket()`); `apps/server/src/inbound-connections.ts` wires them and `runtime.ts`
+   composes it right after the webhook ingress, registering its `stop` at once so a later start-up
+   failure still closes every socket. **Per account, not per binding** (assumption, below). The
+   directory is **re-read every minute**, so an integration the wizard creates on a running
+   instance is held without a restart; a failed start a retry can fix (`IntegrationError.retryable`
+   or a plain transport error) is retried on a 5 s…5 min backoff, a refusal no retry fixes is named
+   and left. Shutdown: `stop` cancels the re-list and every retry, waits for a start in flight,
+   then stops each socket — and `socket.stop` now **awaits the connector's `close`**, which
+   `webSocketConnect` resolves on the `close` event (bounded at 3 s), and wakes a reconnect that is
+   sleeping out its backoff instead of draining it (rules 51/54/85). Asserted in the unit tier
+   (`inbound-connections.test.ts`, `socket.test.ts` § "as a connection a process holds") and in the
+   e2e (`slack-socket.e2e.test.ts` › *"opens through the executor, deduplicates across transports, and closes at shutdown"*: every fake connection closed, no
+   further `apps.connections.open`).
+2. **One assertion through both transports.** `slack-socket.e2e.test.ts` runs one `it.each(['http',
+   'socket'])` body: the click is built from the button the adapter **actually posted** (read off
+   the fake Web API), and only `press` differs — a `POST /webhooks/slack/<id>` signed as Slack signs
+   one, or an `interactive` envelope on the injected socket. Both reach `WebhookIngress.deliver`
+   (the socket's supervisor calls the same method the route does) and the outcome is read back from
+   rows. A second e2e case sends the **same** click over both transports and gets one `inbox` row
+   and one decision (the cross-transport dedup).
+3. **The `ROLE` decision: the process that serves `/webhooks/*` holds the connection** —
+   `ROLE=all`/`api` — **by construction**: the supervisor is handed the process's
+   `WebhookIngress`, which `runtime.ts` composes exactly when `capabilities.api`; a `null` ingress
+   holds nothing. Two `api` replicas hold two connections; Slack keeps up to ten and "each payload
+   may be sent to *any* of the connections" (<https://docs.slack.dev/apis/events-api/using-socket-mode>,
+   retrieved 2026-09-26), a resent envelope may reach the other replica, and `inbox (provider,
+   delivery_id)` — Slack's key is built from the payload (`slackDeliveryKey`), not the connection —
+   is the backstop (asserted across transports in the e2e). Written in `role.ts`, technical/06's
+   Slack bullet (an *As built at WP-43* block) and `inbound-connections.ts`. **TD-028 amendment text
+   for the orchestrator** (I did not touch `docs/decisions/**`): *"WP-43 amendment — held inbound
+   connections. A provider transport the platform holds open (Slack Socket Mode) is composed by the
+   process that serves `/webhooks/*` (`ROLE=api`/`all`), decided by construction: the connection
+   supervisor is handed that process's webhook ingress and a worker-capable process without one
+   holds nothing and names each account it is not holding (a role with neither capability composes
+   no integration stack and names nothing; none exists in this build). N `api` replicas hold N connections (Slack: at most ten per
+   app, each payload to one of them, a redelivery possibly to another); `inbox (provider,
+   delivery_id)`, keyed by payload, is the backstop. There is no dedicated `slack` role."*
+4. **Named by name.** A process with no ingress logs one warning **per account**, once, with the
+   integration id, provider, name and `ROLE`, saying the connection is held by `ROLE=api`/`all`. In
+   the holding process: a broken account (credentials that do not decrypt, a config that fails its
+   schema) is an error naming it; an account that cannot hold one as configured (no app-level token,
+   no signing secret — the latter now refused at `open` by the registration, not at `start` where a
+   plain error would have been retried for ever) is an error naming it; a refused
+   `apps.connections.open` that no retry fixes (`unauthorised`, `forbidden` — which is also what the
+   egress allow-list throws) is an error naming it.
+5. **One configuration an operator can reach: `socket_mode` stays the default and the socket
+   starts.** The manifest is unchanged. The setup guide gained *"Which transport, and which process
+   holds it"* (pick one; the HTTP alternative means turning Socket Mode off on the app and giving it
+   the request URL; `ROLE`; replicas; a rotated app token needs a restart; `APP_INTEGRATION_HOSTS`
+   must name `slack.com`), the config row says which to pick, and the troubleshooting rows were
+   rewritten (below).
+6. **Buttons only once a click can arrive, and a press moves the approval end to end.**
+   `task.approval.requested` joined the notify band as class **`approval`** (contracts enum,
+   migration **0046** widening `notifications_class_known`, `schemas/agentic-config.schema.json`
+   regenerated because `features.digest.urgent` takes the class). The duty reloads the approval and
+   announces nothing for one that is no longer pending (no row, no message); when
+   `capabilities().buttons` it calls the new `communicationWrites.approval` → `postApproval`
+   through the executor (`post_approval`, keyed by the wake-up), otherwise it posts text naming the
+   task page. **`buttons` now means "a click can reach the platform"**: Slack answers it from its own
+   config — Socket Mode needs the app-level token and the signing secret, HTTP the signing secret.
+   The button's value now carries the **task** (`{a, d, t}`, `approvalButtonValue`), because the
+   thread directory is adapter memory and the loader builds a fresh adapter per delivery (Q55): a
+   click resolved through the directory alone was always refused. A new **shared-suite** obligation
+   holds it (`communication-contract-suite.ts`: *"resolves an approval's task on an adapter that
+   remembers nothing"*, with `freshPort`/`emitPostedApproval` in both harnesses). **And the click is
+   decided by the Approval aggregate**, not appended: the ingress hands `task.approval.decided` and
+   `task.question.answered` drafts to a new `InboundDecisionApplier`
+   (`integrations/inbound-decisions.ts`), which re-derives the subject from the platform's rows
+   (the approval must exist, belong to the task the payload names and to the binding's project),
+   looks the decider's role up for the project (`createPostgresDeciderRoles`: higher of org role and
+   membership; disabled or banned → refused, as the session hook does), runs `decideApproval` /
+   `answerQuestion` in the **delivery's transaction** (before the inbox insert; a lost race rolls
+   the decision back with it) and writes a refusal onto the inbox row
+   (`decision_refused: <reason>: <detail>`, redacted, rule 20) instead of throwing. **Measured, not
+   argued**: with the routing disabled (mutation, reverted by md5) the e2e's *member* click — a role
+   that may not approve a plan — moved the task to `ready_for_merge`, and the `approvals` row stayed
+   `pending`. The e2e walks stranger → `unmapped_identity`, mapped member →
+   `decision_refused: not_permitted` (approval pending, task waiting), same person promoted to
+   maintainer → approval `approved` by them, task past the gate, one `task.approval.decided` on the
+   **approval** stream with the person as actor — over each transport.
+7. **Needs measurement, left named; the build takes the answer that does not depend on it.**
+   Slack's page answers it as documented (Socket Mode on ⇒ payloads **only** over the socket), cited
+   in the guide and technical/06; `docs/TODO.md`'s item now says so and stays open for a live click
+   with both configured. Nothing shipped depends on it: the default is the socket.
+8. **A screen calls the identity endpoint.** Settings gained *Provider identities*
+   (`apps/web/src/features/identities.tsx`): the list (`GET /api/org/identities`, provider strings
+   through `UntrustedText`, the user resolved to an email via `/api/org/users`) and a form (`POST`,
+   person with a user or machine with none, no `Idempotency-Key` — the route's own decision). A 403
+   for a non-admin is named, not drawn as an empty list (`retry: false`). `identities.test.tsx`
+   drives both routes through `createApp`; `client-census.test.ts`'s identity case is inverted
+   (`toContain`), so a screen that loses the call fails there.
+
+**Decisions and assumptions.**
+- **One connection per *account* (`integrations` row), not per binding.** The app-level token and
+  the connection are the app's; deliveries are addressed to `/webhooks/slack/<integrationId>`; two
+  projects bound to one Slack app would otherwise open two sockets to the same app. Selection is
+  read off `integrations.config`; a `socket_mode` written into `bindings.config` changes nothing
+  (discovered work 201). An account with **no** bindings is still held: its deliveries are recorded
+  as `not_for_this_project`, which is what an operator needs to see while binding.
+- **Inbound decisions go through the aggregate in the ingress transaction** — a change to WP-15c's
+  ingress. The alternative (a handler converting a provider's `task.approval.decided` into a
+  command) would have run beside `pipeline.approval`, which consumes the same type. Refusals are
+  values on the inbox row; only a database fault throws (the sender redelivers). The decider
+  context's `actor` is the delivery's own (the mapped person).
+- **An approval is a notification class** rather than a message beside the band, so quiet hours
+  and the digest apply (product/18). Its digest line carries no button. Not in the default urgent
+  set; an operator adds `approval` to `features.digest.urgent` to have it immediate.
+- **The open is a *read* of the executor** (`open_socket`, `mutating: false`, no `describeResult`
+  because the `wss://` URL carries a ticket). The WebSocket itself does not pass the executor.
+- **Scope held**: a thread *reply* and a question's answer from Slack are still not resolved
+  (discovered work 195); the guide now says so.
+- **A pre-existing defect fixed because the shutdown path depends on it**: `socket.ts` treated the
+  `close` event of a connection it had itself replaced as a new drop, so every reconnect against a
+  real `WebSocket` scheduled a second one. With a realistic connector and the guard removed the unit
+  file ran out of heap (a reconnect storm); the fakes never fired `close`, which is how it hid. And
+  a **reconnect whose `apps.connections.open` failed ended the loop** (the queue logged it and
+  nothing scheduled another attempt), so one Slack outage during a reconnect left the process
+  holding nothing until a restart; it now retries on the next backoff step (`socket.test.ts`:
+  *"keeps trying when a reconnect cannot reach Slack"*).
+
+**Sentences falsified, changed.** `slack/setup-guide.md`: the `socket_mode` row; *"A question is a
+message with buttons … a reply carries whatever you type"* (questions are text and a reply is not
+matched, backlog 195); *"An approval is Approve / Request changes"* (now says when, and who may);
+*"Map your team"* (now names the screen); troubleshooting *"Buttons do nothing"*, *"Every answer
+is `unmapped_identity`"* (also dropped the `users:read.email` cause: nothing resolves by email),
+*"Nothing arrives at all"* (the cause that held on every instance — no process opened a connection
+— is now first, as "no process that serves the API is running"), and a new row for text-only
+approvals. `technical/02` :137-140 (the buttons were an absent consumer). `technical/06` Slack
+bullet (as-built block; *"a dedicated `slack` process"* left as the original plan, contradicted in
+the block). `operator-guide.md` *"Slack's buttons do nothing until the Socket Mode connection
+exists"*. `user-guide.md` §6 (Slack approvals and the mapping). Docblocks:
+`communication.ts` `resolveIdentity` (*"nothing starts a Socket Mode connection"*),
+`postgres-inbox.ts` (*"there is still no screen"*, *"starts no Socket Mode connection"*, and the
+*"Filed as discovered work"* tail — backlog 79's last bullet), `shipped-registry.ts` (*"nothing in
+this build opens that connection"*), `client-census.test.ts` (*"four paths … which has no screen
+either"*), `inbound.ts` (step 4's exception), `settings.tsx`, `role.ts` (the decision).
+**Left:** `app-manifest.json` (true: Socket Mode on is the choice); technical/06's WP-10 sub-bullet
+*"a binding with no usable signing secret cannot open a socket at all"* (still true, now at `open`);
+backlog 78/79 entries themselves (the orchestrator's to close); `CLAUDE.md` (a *Where to look*
+bullet for held connections and inbound decisions would help — suggested for the orchestrator:
+*"Held inbound connections (WP-43): `packages/application/src/integrations/inbound-connections.ts`
+(lifecycle, `ROLE`), `packages/integrations/src/bindings/held-connections.ts` (which accounts),
+`apps/server/src/inbound-connections.ts`; a provider's human decision is decided by its aggregate in
+the ingress transaction — `integrations/inbound-decisions.ts`."*).
+
+**Discovered work** (next free numbers, for the refiner; none fixed here).
+- **195** — A Slack **thread reply** never resolves to its task and a question is never answered
+  from chat: `SlackThreadDirectory` is per adapter instance and the loader builds one per call
+  (Q55), so `taskForThread`/`latestQuestion` are empty on the inbound path; and `postQuestion` has
+  no caller (questions go out as plain `postMessage`), so no question button exists either. The
+  answer half of product/03 UJ-2 step 4 in chat is still missing; the approval half is not. Needs a
+  durable thread ↔ task map the normaliser can read (preloaded like `resolveUser`, or carried on
+  the posted message as the approval button now does).
+- **196** — *(folded into round 2: fixed)* The Socket Mode **WebSocket host** is not checked against `APP_INTEGRATION_HOSTS`: the
+  executor checks `slack.com` for `apps.connections.open`, and the `wss://` URL Slack answers is
+  dialled as given (`connectionsOpenResponseSchema` checks only the scheme).
+- **197** — A held account is never re-opened: a rotated app-level token, a changed config, or a
+  *broken* account an operator fixes needs a restart of the API process (the supervisor diffs by
+  integration id only). Stated in the guide; a fingerprint of `(config, secret_ids)` would close it.
+- **198** — `inbox.error` has **no screen**: the refusal an operator needs to debug a dead button
+  (`unmapped_identity`, `decision_refused: not_permitted`) is visible only in SQL and in the API
+  process's log. The guide says so.
+- **199** — A decision from chat leaves **no `human_actions` row** (the HTTP decide route writes
+  one); the `inbox` row and the aggregate's event are the record. Audit asymmetry between two doors
+  of one command.
+- **200** — "a click can arrive" is read from the binding's configuration, not from whether any
+  process holds the socket: a deployment with no `api` replica posts buttons that nothing
+  receives (the worker names the account, but still posts). A liveness row the holder renews would
+  let the duty ask the real question.
+- **201** — `socket_mode` in `bindings.config` is accepted by the strict schema and ignored (the
+  connection is the account's); the binding editor should refuse it or the schema split.
+- **202** — The approval message is **not updated** after a decision (`updateMessage` has no
+  caller): its buttons stay live and a second press is recorded as `decision_refused:
+  already_decided`. product/08's "an expired approval loses its buttons" is unbuilt.
+
+**Open questions filed:** none.
+
+**Verification**, each tier after a bounded load reading under 12 (5.00–10.06; readings of 18.44,
+30.34, 24.35, 12.33, 15.81 and 74.77 were waited out, never run through): `pnpm run -s verify`
+PASS (7 810 passed, 14 skipped — final run after the last code edit); `verify:integration` PASS
+(564, 54 files); `verify:e2e` PASS (212, 40 files, including `slack-socket.e2e.test.ts`'s three);
+`verify:ui` PASS (337); `verify:web-e2e` PASS (43, one new: the settings page shows the identities
+and renders a display name's markup as text); `scripts/citations.test.ts` PASS (12). Mutations,
+each reverted and md5-confirmed: the decision routing disabled → the e2e's member click moves the
+task to `ready_for_merge` (fails); the `connection !== self` guard and the stop-signal removed →
+the socket unit file dies in a reconnect storm (fails). Docker after every Docker tier: the reaper
+only, volumes 102. New files were intent-to-add before every verify (rule 91).
+**Not run: `node scripts/compose-stock-check.mjs`** (rule 71 — `docs/operator-guide.md` changed, and
+`runtime.ts` now lists integrations at start-up). No env name, compose file or `loadServerConfig`
+schema changed; the check needs `platform` and `platform-launcher` rebuilt (the 1.1 GB image), and
+the machine's load was spiking to 21–74 from other work while this row finished, so building it was
+the synthetic load the brief forbids. It is owed before the commit, or by `image.yml` on push.
+
+**Round 2 (implementer, session 8) — review round 1: one major, backlog 196 folded, one minor, one nit.**
+1. **A socket opened after `stop` leaked** (measured by the reviewer). `openSocket` now checks
+   `stopping` after `apps.connections.open` resolves and again after `connect` (closing the new
+   socket rather than storing it). `socket.test.ts`: *"leaves no socket open when stopped while a
+   reconnect is asking Slack for its URL"* — with the two checks removed (md5-reverted) it fails.
+2. **Backlog 196, fixed.** `assertSocketHost` (`slack/provider.ts`): the `wss://` host must be the
+   binding's `base_url` host (the one the executor held to `APP_INTEGRATION_HOSTS`) or a subdomain
+   of it — dot-anchored, so `evilslack.com` is refused for `slack.com` — else `forbidden`, naming
+   the host, before connecting. Unit cases both directions (`index.test.ts`), and a contract case
+   through the adapter: a foreign host is refused and never dialled. The recorded fixture's fake
+   host became `wss-fake.slack.example.test` (a subdomain of the replay binding's host; provenance
+   note says why). Stated in technical/06 and in `egress.ts`'s "a host reached some other way".
+3. `runtime.ts` and the TD-028 text above: "worker-capable roles".
+4. The setup guide's `socket_mode` row says a reply arrives but is not matched (backlog 195).
+
