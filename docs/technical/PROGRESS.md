@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **Next: WP-62**, then WP-63 … WP-73 in the table's order — twelve rows remain in M4. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **WP-62 is DONE at `544340e`** (`ci` `36274035697` and `image` `36274035706` **completed success**; WP-45's docs commit `1cc3dff` read `ci` `36269907267` and `image` `36269907305` **completed success**; this docs commit's runs **PENDING**). **Next: WP-63**, then WP-64 … WP-73 — eleven rows remain in M4. **Session pace**: seventeen rows in about 57 h. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -3189,7 +3189,7 @@ Q52's transport half or WP-15g's successor — and the second consumer is now me
 predicted, because a shadow batch that silently started from the default branch would publish a
 similarity figure that measures drift, which is the one number the feature exists for.
 
-### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (**RESOLVED** at `7ebdc93`, WP-44, session 8 for the two stale caveat strings (the rest of the entry stays as it was) — TODO for **(a)** and **(b)** — **no work package owns either**; **(c) RESOLVED** at `621b57f`, WP-34, session 5 — `picksUpNewTickets` and `shadowMode` both read, and `autonomy-readers.test.ts`'s split assertion moved with them to **eight** read / **seven** unread; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
+### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (**(a) and (b) RESOLVED** at `544340e`, WP-62, session 8 — **RESOLVED** at `7ebdc93`, WP-44, session 8 for the two stale caveat strings (the rest of the entry stays as it was) — TODO for **(a)** and **(b)** — **no work package owns either**; **(c) RESOLVED** at `621b57f`, WP-34, session 5 — `picksUpNewTickets` and `shadowMode` both read, and `autonomy-readers.test.ts`'s split assertion moved with them to **eight** read / **seven** unread; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
 > **M4 (architect, session 6): folded into WP-62.**
 
 **What is wrong.** WP-30 materialised the dial and gave five policies a reader; the enumeration it
@@ -10211,7 +10211,7 @@ account's push do not reset; the holder's attributed push does. **Depends on** t
 `docs/TODO.md` beside **188**'s. Owner: none until then — attaching it to an M4 row would schedule work the row
 cannot finish. Related: **167**, **188**, **182**.
 
-### 208. **The feature-card check stops a card claiming *unbuilt* for a feature with a reader, and nothing stops the same claim written into `caveat` — or into an unkeyed `FEATURES_WITHOUT_A_SWITCH.why`, which is where *"Ask the task — not built"* sat** (TODO, **nit** — a **stated residual** of WP-44's check, no current instance; **read off the tree**; proposed owner **WP-62** (refiner, session 8); found by WP-44 as a stated risk, the second site added by the refiner)
+### 208. **The feature-card check stops a card claiming *unbuilt* for a feature with a reader, and nothing stops the same claim written into `caveat` — or into an unkeyed `FEATURES_WITHOUT_A_SWITCH.why`, which is where *"Ask the task — not built"* sat** (**RESOLVED** at `544340e`, WP-62, session 8 — TODO, **nit** — a **stated residual** of WP-44's check, no current instance; **read off the tree**; proposed owner **WP-62** (refiner, session 8); found by WP-44 as a stated risk, the second site added by the refiner)
 
 The implementer: *"a card may carry an `unbuilt` line **exactly when** `FEATURE_READERS` names no reader for its
 key. Its stated limit: a "does nothing" sentence typed into `caveat` instead of `unbuilt` is not caught — no
@@ -10516,6 +10516,93 @@ exists in the ledger. Small, and honest. **Done**, only if wanted: a product dec
 may be superseded (a `shadow.report.updated`, or a second row) — not filed as an OPEN-QUESTIONS entry because
 nothing misleads today; file one when a shadow user asks for it. **Depends on** WP-45 (commit pending).
 Related: **100**.
+
+### 220. **`pipeline.template_overrides.<template>.enabled` and `.stages.<stage>.enabled` parse, are documented with a worked example, and switch nothing — a project that turns a stage off in its configuration still runs it** (TODO, **small** — backlog **58**'s unread-key class; **live** for any project whose stored configuration carries either key (the write is accepted and silently has no effect); **read off the tree, not measured**; the documentation half owned by **WP-73**, the reader itself **unowned** (refiner, session 8); found by WP-62, session 8)
+
+**What is wrong.** `stageOverrideSchema` and `templateOverrideSchema` both declare `enabled: z.boolean().optional()`
+(`packages/contracts/src/config.ts:95-104`, mounted at `:129`), and technical/12's configuration example uses
+it twice — `business_review: { enabled: true }` under `feature` and `chore: stages: { architecture: { enabled:
+false } }` (`docs/technical/12-configuration-and-schemas.md:55-61`). The implementer, quoted: *"the only reader of
+`template_overrides` is `planApprovalGate`, for `plan_approval`/`size_threshold`"* — refiner grep agrees: outside
+tests and docs the one read is `packages/application/src/pipeline/saga.ts:838`. The interpreter already honours a
+disabled stage (`packages/domain/src/pipeline/interpreter.ts:118`, walk-over at `:345-355`), and a task already
+carries a `template_snapshot` taken at intake (`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:268-280`),
+so the missing piece is the step that applies the override to the snapshot, not the interpreter. **Two further
+facts found while filing:** technical/12's `chore` example disables a stage the `chore` template does not have
+(`refinement → implementation`, `packages/domain/src/pipeline/templates.ts:174`), so the example is a no-op even
+once read; and the template-level `enabled` has **no specified meaning** anywhere (refuse a ticket classified as
+that template? fall back to another?) — that half is a question, not a reader.
+
+**Cost to leave.** An operator who writes `business_review: { enabled: false }` gets a business review, with a
+`200` on the write and no signal anywhere; the operating-mode screen's `businessReview` exemption already cites
+this entry as the reason the policy is not overridable (`packages/domain/src/policies/autonomy.ts:416`). **Q99**'s
+*"a project may disable the stage"* is true only after this lands. **Done** — (1) intake applies
+`stages.<stage>.enabled` to the snapshot, asserted by a countable effect (a disabled `business_review` produces no
+`business_review` run, read back from `runs`) and at both values; (2) a disable that would leave a return target
+or a required artifact unreachable is a **named refusal at the write** naming the key path (the interpreter's own
+check at `interpreter.ts:477` is the model) — which stages may be disabled at all (intake? the gates?) is decided
+at the row and stated in technical/12; (3) the template-level `enabled` is either given a meaning in technical/12
+or removed from the schema **with** a forward-only migration for any stored value (backlog 58's lesson: a key
+dropped from a strict schema makes every stored config that carries it a `409`); (4) technical/12's `chore`
+example replaced by one the shipped template can express. **WP-73 owns only the sentences** — technical/12 says
+which of the two keys is read today and the example is corrected (rule 83); the reader has no M4 row and is a
+row of its own when scheduled. **Depends on** WP-62 (the compile step that now takes the dial). Related: **58**,
+**72**, **Q78**, **Q99**.
+
+### 221. **The plan- and budget-approval gates borrow a second pool connection inside the handler's transaction — the fourth handler site of backlog 19, graded: contention, not a deadlock, at every site today** (TODO, **small** — **a re-report of backlog 19** (owned by **WP-73**), filed under its own number only because the WP-62 notes name it; the evidence below is added to 19's and the work is 19's; **pre-existing** (the budget gate since WP-28); **live** at `APP_DISPATCH_MAX_CONCURRENCY > 1` or under pool saturation, harmless in isolation; **read off the tree, not measured** (rule 66); found by WP-62, session 8)
+
+**What is wrong.** `planApprovalGate` (`packages/application/src/pipeline/saga.ts:811`) and `budgetApprovalGate`
+(`saga.ts:992`) call `options.settings.forProject` from `stageCompletedHandler` (`saga.ts:633`, `:642`), i.e. inside
+`context.scope.tx`, and the production port is `pool.query(...)` on the pool itself
+(`apps/server/src/pipeline.ts:611-620`). Backlog 19 named `planApprovalGate`, `schedulerHandler` and
+`statusMappingHandler`; the budget gate is the one it did not. **Refiner census of `settings.forProject` under
+`packages/application/src/pipeline/`**: 15 call sites, **4 inside a handler transaction** — `saga.ts:811`, `:992`,
+`:1509` (`schedulerHandler`), `workpad.ts:340` (`statusMappingHandler`); the other 11 are job-path calls made
+between `unitOfWork.transaction` blocks. Callers outside that directory were not censused.
+
+**The grade, and the reasoning it rests on** (asked for explicitly; read, not measured). A dispatch **holds** two
+connections (`CONNECTIONS_PER_DISPATCH = 2`, `packages/application/src/events/event-bus.ts:151`), the floor counts
+`2N + 1` for them (`apps/server/src/config.ts:657-661`) and `auditPerDispatch` is 0 (`config.ts:653`); the borrow
+makes a dispatch's peak **three**, uncounted — stated at `config.ts:645-652`. A pool-level **deadlock** needs a
+cycle: a handler waiting for a connection while a connection holder waits on the handler. The only such edge is a
+row lock, and **at all four sites the borrow precedes every write in that handler's transaction** — the gates are
+reached with `recordMergeRequest` returning `stored` unchanged for a stage that does not produce
+`ImplementationNotes` (`saga.ts:1054-1056`; the gates fire on `ImplementationPlan`/`RefinedSpec`), the scheduler
+borrows on its first line (`saga.ts:1509`), the status mapping after a plain `select` (`workpad.ts:337-340`;
+`load` has no `for update`, `postgres-pipeline-store.ts:284-291`). So the handler holds no lock another borrower can
+wait on, and backlog 19's *"it contends, it cannot stall"* holds **for these four sites today**. And the wait is
+bounded regardless: `createDatabasePool` sets `connectionTimeoutMillis` (`packages/infrastructure/src/db/client.ts:53-63`;
+`.env.example:249` ships `APP_DB_CONNECTION_TIMEOUT_MS=10000`), so the worst case under saturation is a **10 s stall,
+a thrown borrow, a dispatch retry**, and after `DEFAULT_MAX_DISPATCH_ATTEMPTS = 10` (`event-bus.ts:175`) a
+dead-lettered event and a task escalated to `needs_human` — a hypothesis, labelled one.
+
+**What would make it major.** A handler that **writes the task, then asks the settings port** — the lock-cycle
+shape, which `stage.execute`'s `tasks.save` (it waits on the row lock) would complete. **Nothing catches it**:
+`assertOutsideTransaction` guards the integrations port only (`packages/application/src/events/open-transaction.ts:17-22`),
+no census counts `settings.forProject` in handler bodies, and `requiredPoolConnections` counts holds, not borrows.
+**Done** is backlog 19's (the port takes the caller's `Transaction`, so the borrow disappears rather than being
+counted) **plus** the recurrence guard 19 lacks: `createProjectSettingsPort` calls `assertOutsideTransaction`, or
+its signature makes a transactionless call impossible, with one test that a handler asking it fails. The
+`config.ts:645-652` docblock's *"cannot stall"* sentence narrowed to what it is true of (rule 83). **Needs
+measurement** only if someone wants the saturation number: N concurrent `task.stage.completed` at the gates against
+the shipped pool — not run here (rule 66). **Depends on** nothing unbuilt. Related: **17**, **19**.
+
+### 222. **Maintenance chores carry no dial, so an Observe project that enabled maintenance gets agent merge requests — the one thing product/18 says Observe does not do** (open question, TODO — **Q100**; **working as coded and stated at the line**, the documents silent; **latent**: needs `features.maintenance` on at an Observe or Assist project; **no work package owns it** until the question is answered; found by WP-62, session 8)
+
+**What is wrong.** The scheduler creates each chore with `pipelineDial: null`
+(`packages/application/src/maintenance/scheduler.ts:434-437`) and `mode: 'normal'` (`:426`), on the `chore` template
+(`MAINTENANCE_TEMPLATE_ID`, `:115`). The comment, quoted: *"Maintenance is its own opt-in (`features.maintenance`),
+scheduled by the platform rather than picked up from a ticket, and product/19 §11 sets the dial's pipeline policies
+for picked-up tickets."* **Refiner correction to the report**: the implementer's *"with business review on"* does not
+hold — the `chore` template has no `business_review` stage (`mergeTail({ businessReview: false })`,
+`packages/domain/src/pipeline/templates.ts:178-179`, `:393`). What the missing dial does change: at **Assist** a
+chore runs to a merge request with no scoping stop, and at **Observe** — *"No agent MRs"*
+(`docs/product/18-adoption-and-operating-modes.md:13`) — it does too. Honouring Assist literally is not free either:
+`chore` has no `architecture`, so Q99's fail-closed park would stop **every** maintenance chore before anything runs.
+
+**Cost to leave.** An Observe project's operator who ticks the maintenance card gets real MRs from a level whose
+definition is *"no agent MRs"*. **Done** is the answer to **Q100** (recommendation there) implemented at the
+scheduler and stated on the maintenance feature card. **Depends on** Q100, Q99. Related: **Q99**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -11333,6 +11420,7 @@ of this entry, 110 and 120, whose *ordering* was that flake), entry 11 (the same
 
 ### 19. **`ProjectSettingsPort.forProject` borrows a pool connection *inside* the handler's transaction** (TODO, small — the **residue** of entry 17, not a reopening of it)
 > **M4 (architect, session 6): folded into WP-73.**
+> **Refiner (session 8):** a fourth handler site (`budgetApprovalGate`), a census and a deadlock grading are in backlog **221** — same work, plus a recurrence guard this entry lacks.
 
 **What is wrong.** The settings port reads `projects.config` on a connection it takes from the pool itself
 (`apps/server/src/pipeline.ts:183`, `createProjectSettingsPort` → `pool.query('select config from projects
@@ -14096,7 +14184,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | DONE | `7ebdc93` | **Folded backlog 68, 70, 108, 72's caveats, and the refiner's 164, 167, 168, 172, 190, 198; implemented Q93 and Q85's surface half.** Take-over transcript and tarball **served, not copied** (project-scoped, attachment, `nosniff`, the tarball through the realpath guard, a refusal after page one aborting rather than truncating), a launcher-side 14-day retention; take-over, hand-back and breakdown controls; feature cards compared both ways with the platform's own table (`FEATURE_READERS` — found `history_bootstrap` uncarded too); the three census cases deleted; the take-over timer reset by the holder's commands; `ContextPackRecord.text_search` (migration **0047**); shared human-time predicates; an admin read of refused deliveries and unmapped ids. **One review round** (REQUEST_CHANGES: the download routes were correctly scoped but untested for another project's member — a canary survived all ten tests). The orchestrator amended technical/05's export sentence and product/19's take-over paragraph (the URLs, and *inactivity* as the holder's own commands). **Orchestrator verification**: `PASS: verify` (414 files, 7851 passed), `PASS: verify:integration` (572), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (362), `PASS: verify:web-e2e` (47); `compose-stock-check` 17/17 on rebuilt images in the implementer's shell. CI on `7ebdc93`: `ci` `36260154407` and `image` `36260154412` **completed success**, zero `release` runs. Discovered work: backlog **203**–**208**. The implementer reported the harness refused `sleep 60`, so its load readings were spaced by work, and one run was chained at a load of 46 — recorded | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
 | WP-46 | **The merge-readiness Checks panel** | DONE | `8407605` | **Folded backlog 95's remaining items, the refiner's 158, 159's human half, 160, and at review 211 and 212.** The Checks panel answers **ten of product/10's eleven** — review threads (narrow `tasks.review_threads`, migration **0048**), the business verdict and acceptance criteria from the latest acceptance verdict's own fields — with the tamper check named absent (BD-024's gate) and the eleven held both ways in a test. A stage row closes at **every** ending (re-entry superseded/left, completion, cancel paused or not), with a census pairing each site with the close — review found a take-over-then-hand-back orphan the first invariant's wording denied. A human-comment return carries the reviewers' words to the Developer, redacted, one line per comment, **inside the feedback block and nowhere else** (a canary placing them outside survived until the exactly-once assertion existed); the chat notification carries only the thread count, because a comment's markdown link would otherwise have been posted under the platform's identity (211). **One review round** (REQUEST_CHANGES). The orchestrator amended product/04's comment-return sentence. **Orchestrator verification**: `PASS: verify` (415 files, 7877 passed), `PASS: verify:integration` (575), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (368), `PASS: verify:web-e2e` (47). CI on `8407605`: `ci` `36264648150` and `image` `36264648144` **completed success**, zero `release` runs. Discovered work: backlog **209**, **210**, **213**, and the implementer's **214** (the platform's own conflict-warning thread counts as a human thread) and **215** (an agent return's first line is model text in chat) — the last two listed in its notes for the refiner | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
 | WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | DONE | `0962369` | **Folded backlog 91 and 100; implemented Q83.** All six risk classes proposed (`public_api` offered, `payments` with both requirements); named review checklists (`policies.review_checklists`, `checklist:<name>`, an undefined list refused at write and read) delivered to the Reviewer inside `review_checklist` data blocks with a total cap; `checklists_applied` recorded and **overwritten by the executor**; reviewer prompt **v3** with three eval cases (the eval check exits 1 by design — no model credential); one shadow review task per ticket over the **human** MR, findings stored and posted nowhere, the comparison two sides or nothing and labelled as measured against the agent's own specification (**product/19 §13 amended by the orchestrator**). **One review round** (APPROVE-with-nits; the missing test graded major — a review that escalated left its report unwritten with every test green — added and re-canaried). **Orchestrator verification**: `PASS: verify` (415 files, 7920 passed), `PASS: verify:integration` (575), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (371), `PASS: verify:web-e2e` (47). CI on `0962369`: `ci` `36269315614` and `image` `36269315658` **completed success**, zero `release` runs. Criterion (8) (the review pass's cost) stays unmeasured in `docs/TODO.md`. Discovered work: backlog **216**–**219** | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
-| WP-62 | **The dial's remaining policies get readers** | TODO | — | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
+| WP-62 | **The dial's remaining policies get readers** | DONE | `544340e` | **Folded backlog 72 (a) and (b) and 208; implemented Q78 and Q79.** The dial's value applies where the project document is silent and a document key wins where it speaks (**BD-027 amended by the orchestrator**: overridable where something reads the override; the organisation cap limits the level, not the keys — a clarification, the reviewer found no ceiling in BD-027 or product/19); thirteen policies read, two stated unread and marked; business review and the scope halt reach the pipeline through a dial **frozen on the task** (migration **0049**), none of the **24** `compilePipeline` call sites (a census; the row said fifteen) asking the settings port; Assist parks in `needs_human` after architecture, continued by hand-back. **Review found the plan-approval gate standing aside on Assist on a misread of product/19 §11** (the "—" is Observe's) — a member's hand-back could have taken an unapproved `auth/**` plan into implementation; the gate runs again, and **fixing it exposed an older hole**: hand-back accepted a task waiting for plan approval at every dial position — now 409, with a test that failed before the fix. **One review round** (REQUEST_CHANGES: that gate; a false user-guide sentence about frozen vs live policies; a census regex accepting any receiver; a malformed dial taking down other tasks' list reads). **Orchestrator verification**: `PASS: verify` (418 files, 7957 passed), `PASS: verify:integration` (577), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (376), `PASS: verify:web-e2e` (47). CI on `544340e`: `ci` `36274035697` and `image` `36274035706` **completed success**, zero `release` runs. Discovered work: backlog **220**, **221** (folded into 19), **Q99**, **Q100**; for the M5 pass, the reviewer's founder note — after an Assist hand-back, business review cannot be chosen at all | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
 | WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | TODO | — | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
 | WP-64 | **Readiness stops being frozen at discovery, and the wizard's step 3 exists** | TODO | — | Depends on WP-21, WP-18a/b, WP-17; Q68 is answered. Folds backlog **46** (major), **45** (major). The completeness must move **as a number**: *"the pages were drafted"* and *"the score moved"* are different claims |
 | WP-65 | **The organisation's own channel, the undelivered metric, the maintenance report, and the storage gauge** | TODO | — | Depends on WP-32, WP-30, WP-36, WP-18a. Folds backlog **80** (major), **81**, **107**, and **Q63**'s operator-facing half. Backlog 80 takes answer (c), the account's channel; the migration carries `nulls not distinct` |
@@ -31446,3 +31534,158 @@ verifiably this session's).
    regenerated.
 6. Reviewer prompt v3 (edited in place, unshipped): the workspace is the **default branch**, not the
    merge request — do not run its tests and read the result as the MR's. No test pins the text.
+
+#### WP-62
+
+**What the row closes, criterion by criterion.** Backlog **72** (a) and (b) and **208**; Q78 and Q79
+implemented per their recommendations (Q78 with one stated deviation, below). No new task state, no
+new command.
+
+1. **The three document-backed policies have a resolver, asserted as the countable effect.** The
+   materialised preset is read where the document is silent, and the document wins where it speaks:
+   `iterationLimitsFor` (`packages/application/src/pipeline/settings.ts`, used by all seven
+   task-creating sites) for `humanMrRounds`; `questionTimeoutOf`/`questionDeadlineRule`
+   (`deadline-rules.ts`, now taking `ProjectSettings`, five callers) for `questionTimeout`;
+   `thresholdsFromConfig(config, autonomy)` (`knowledge/librarian.ts`, composed in
+   `apps/server/src/knowledge.ts`, which now selects `autonomy_policies`) for `knowledgeAutoApply`.
+   `saga.test.ts` › *"the dial reaches the pipeline (WP-62)"* drives human review rounds until the
+   task escalates and reads the ceiling off `iterationCounters.human_rounds`: **5** at Autonomous,
+   **3** at Supervised, **2** at Autonomous with `pipeline.limits.human_rounds: 2`.
+   `deadline-rules.test.ts` asserts the deadline instant (dial / document over dial / no dial);
+   `librarian.test.ts` asserts the disposition of a middle-band proposal (`auto_applied` at
+   Autonomous, `queued` at Supervised and with no dial, the document overriding both ways).
+2. **The compile step takes the dial**: `compilePipeline(templateId, template, dial)` — required, never
+   defaulted. `business_review: false` disables the `business_review` stage (the existing `enabled`
+   mechanism); `stop_after_stage` rides on `CompiledPipeline.dial` and `interpret` escalates a
+   **forward** move out of that stage into an agent or gate stage. Both boundaries in
+   `interpreter.dial.test.ts` (dials built from the shipped presets through `materialiseAutonomy` +
+   `pipelineDialOf`) and in `saga.test.ts` (Assist parks after architecture with specs
+   `[refinement, architecture]`; Supervised reaches `ready_for_merge`). A property over every shipped
+   template: at Assist nothing enters an agent/gate stage out of `architecture`.
+3. **The park is `needs_human` with Q79's brief** — *"This project's autonomy dial is set to Assist
+   (scoping-only), so the task stops after "architecture". The artifacts up to and including
+   "architecture" are ready. Hand the task back at "implementation" to continue, or cancel it."* — and
+   the WP-56 lesson is met: `handBackTaskCommand` is driven **on the parked task** and it continues to
+   `ready_for_merge`, running `implementation` and `code_review` and **not** `business_review`
+   (Assist's `businessReview: false`, read off the task's frozen copy — the only way that policy is
+   observable on a shipped preset, as backlog 72 (b)(ii) predicted).
+4. **All call sites, each stating how it resolves the dial.** Measured **24** production sites, not
+   fifteen (WP-28's count was right on its day; the number moved). One answer for every site: the
+   dial is **frozen onto the task at creation** (`tasks.pipeline_dial`, migration **0049**,
+   `StoredTask.pipelineDial`, written by the insert only) and every compile passes the loaded row's
+   copy — so **no** site asks the settings port, the in-transaction ones included.
+   `packages/application/src/pipeline/compile-sites.test.ts` is the census: per-file counts and a
+   `how` sentence per file, an equality both ways, and every call's third argument must be a read of
+   the frozen copy (canary: a planted `pipelineDialFor(settings)` and a two-argument call both fail).
+5. **Readers table**: the five `owner: 'none'` entries are `kind: 'read'` with resolving citations;
+   the split assertion is now **13 read / 2 unread**, the two unread (`reviewOnly`,
+   `suggestedReadinessMin`) are decided and the test refuses `owner: 'none'`.
+6. **The screen marks what sets nothing.** `PolicyTable` renders *"The 15 policies this position
+   holds — 13 in force, 2 that set nothing by themselves"* and a `sets nothing` badge with a reason on
+   exactly those rows; `POLICIES_THAT_SET_NOTHING` is held to `AUTONOMY_POLICY_READERS` both ways and
+   the rendered rows are read back (`operating-mode.test.tsx`). *Sixteen* corrected to *fifteen* in
+   the WP-28 and WP-30 plan rows (three sentences, marked as corrected) and Q95's *"seven have no
+   reader"* qualified.
+7. **Backlog 208**: the residual is stated at the check (`operating-mode.test.tsx`) and at
+   `FeatureCard.caveat` and `FEATURES_WITHOUT_A_SWITCH`; the three unkeyed exemptions now carry
+   `routes`, each resolved against the `/api/…` paths the app's own sources name (git's tree, tests
+   out — the client census's rule; that the paths are *served* is `client-census.test.ts`'s half).
+
+**Decisions and assumptions.**
+- **Resolver, not writer (Q78 deviation).** Q78 recommends the dial *write* the document keys at
+  materialisation. It does not: `PUT …/autonomy` never writes the configuration document (WP-30's
+  decision), and a written key would read as the project's own override and survive a re-apply to a
+  different position. The resolver gives the same single switch. **Proposed BD-027 amendment for the
+  architect** (not written — `docs/decisions/**` is out of scope): *"Amended 2026-09-26 (WP-62, Q78):
+  'overridable' means overridable where something reads the override. A project overrides a preset
+  field only through a configuration key that already spells the same setting —
+  `policies.probation_tasks`, `pipeline.limits.human_rounds`, `pipeline.limits.question_timeout`,
+  `policies.knowledge_apply.auto_apply` — and the key wins over the materialised preset; the preset
+  applies where the document is silent. A preset field with no such key is not a configuration
+  surface (`AUTONOMY_POLICY_OVERRIDE_KEYS`)."*
+- **Frozen at task start — three policies only** (corrected in review round 1). `business_review`,
+  `stop_after_stage` (`tasks.pipeline_dial`) and the human-round ceiling (`tasks.iteration_limits`)
+  are fixed when a task starts; plan approval, probation, the budget threshold, the question timeout
+  and knowledge auto-apply are read when used, so a dial move reaches running tasks for those. Round
+  0's *"a dial moved mid-task changes new tasks only"* in the user guide was false; the guide and a line
+  under the dial control (`DIAL_TIMING_NOTE`) now name both groups.
+- **Only picked-up tickets get a dial.** Intake (`saga.ts`) writes `pipelineDialFor(settings)`;
+  review-only, the linter, shadow, maintenance, discovery and history bootstrap write `null`, each
+  with its reason at the site (a copied `stop_after_stage` would park every one of them at start,
+  since none has an architecture stage).
+- **A template with no enabled stop stage parks before anything runs** (the chore at Assist) —
+  fail-closed; filed as **Q99** with a recommendation.
+- **The plan-approval gate runs before the park** (corrected in review round 1). Round 0 made the gate
+  stand aside at Assist on a misread of product/19 §11 — the "—" in the plan-approval row is
+  Observe's; Assist's is `always` (product/18:14 agrees). As built in round 0 a `member` could hand a
+  parked task into implementation with no maintainer having approved its plan. Now: approval, then
+  park, then hand-back; and `handBackTaskCommand` refuses a task in `waiting_approval` (409
+  `illegal_transition`), which was a pre-existing bypass at every dial position.
+- **A return into the stop stage re-parks** on the next approval — a revised plan is a new scope
+  (stated in Q99).
+- **`tasks.pipeline_dial` that fails its schema throws on load** (`PipelineStoredStateError`) rather
+  than reading as `null`, because `null` is the permissive direction; the read side's hand-back picker
+  offers no stage instead.
+- The unkeyed *Take over / hand back* exemption said *"the retention window is a platform setting"*; it
+  is the constant `TAKEN_OVER_WORKSPACE_KEEP_DAYS = 14`, and now says fixed at fourteen days.
+
+**Sentences falsified.** Changed: the readers-table docblock (*"five are read now"*), the `unread`
+variant's `'none'` docblock (*"the honest answer for most of these"*), `autonomyOverridesFromConfig`'s
+*"one entry today"*, `questionTimeout`/`humanMrRounds`/`knowledgeAutoApply`/`businessReview`/`stopAfterStage`
+`why` strings (deleted with the flip), the PolicyTable summary, the plan's three *sixteen*s, Q95's
+*seven*, technical/12's *"(+ overrides below)"*. Left, with why: backlog 72's own text (historical
+entry; the ledger's status line is the orchestrator's); the WP-62 row's *"fifteen production call
+sites"* (the refiner's row; the census states 24); Q79's *"`compilePipeline` has **15** production call
+sites"* (a dated measurement inside the question, answered below it).
+
+**Mutations (each on a backup copy, md5-confirmed revert).** `iterationLimitsFor` ignoring the preset
+→ *five human rounds* fails; the scope halt disabled → 4 fail (interpreter ×2, saga park and
+hand-back); `business_review` ignored → 3 fail; intake writing `pipelineDial: null` → 4 fail. (Round 0's
+plan-gate-yield mutation is moot: the yield was removed in review round 1.)
+
+**Verification.** `pnpm run -s verify` **PASS** (7956 passed, 14 skipped); `verify:integration`
+**PASS** (576); `verify:e2e` **PASS** twice (212, 212); `verify:ui` **PASS** (375); `verify:web-e2e`
+**PASS** (47); `scripts/citations.test.ts` green over these notes. Each tier after a bounded load
+check (`sleep` is blocked here, so readings were spaced with work, one tier waited four readings to
+fall under 12). After the Docker tiers: no container of this repository's left, `docker volume ls`
+101 (baseline 102). One existing e2e comment corrected (`budget-approval.e2e.test.ts`: at Assist the
+plan gate no longer asks when architecture finishes; the assertion was already scoped to `budget`).
+
+**Review round 1 (REQUEST_CHANGES, two majors, two minors), addressed.**
+1. *[major]* The plan-approval gate no longer stands aside at Assist (the misread is corrected in the
+   saga comment, above, in Q79's implemented note and in `budget-approval.e2e.test.ts`). The hole it
+   exposed was wider than the dial: `handBackTaskCommand` accepted a task in `waiting_approval` at
+   **every** position, so a `member` could hand a pending plan into implementation. It now refuses
+   (`IllegalTransitionError` → 409 `illegal_transition`). `saga.test.ts`: *"asks a maintainer to approve
+   the plan first, then parks after architecture naming the policy"* and *"does not let a hand-back skip
+   the pending plan approval"* (resolved `undefined` before the refusal — measured).
+2. *[major]* User guide Step 4 and `DIAL_TIMING_NOTE` under the dial control say which policies are
+   frozen at task start and which are read live (asserted in `operating-mode.test.tsx`).
+3. *[minor]* `compile-sites.test.ts` accepts only `stored`/`current.pipelineDial`; the residual (a local
+   *named* `stored` that is not the loaded row) is stated at the regex; the reviewer's `live.pipelineDial`
+   shape is a canary case.
+4. *[minor]* A malformed `pipeline_dial` refuses only its task: `listAtStage`/`listWithMergeRequest`
+   skip the row and log it by id (the composed pipeline store now gets the process logger), `load`
+   still throws — `postgres-pipeline-store.integration.test.ts` › *"refuses the one task on load and is
+   left out of a list read"*. `taskPipelineDialSchema`'s docblock says a later field must be
+   `.optional()` or backfilled.
+
+   **Round 1 verification:** `pnpm run -s verify` **PASS** (7957 passed, 14 skipped);
+   `operating-mode.test.tsx` (ui) **PASS** (11). **Not run**: the new case in
+   `postgres-pipeline-store.integration.test.ts`, `budget-approval.e2e.test.ts` (comment-only change) and
+   `scripts/citations.test.ts` over these notes. The bounded load check read 26.2 → 19.5 over its five
+   readings, so they wait for the orchestrator's tiers. One lapse to own: the ui file ran right after a
+   27.6 reading, without a fresh check.
+
+**Discovered work** (for the refiner; next free backlog number **220**, none fixed here).
+- **220** `pipeline.template_overrides.<template>.enabled` and `.stages.<stage>.enabled` are in
+  `stageOverrideSchema`/`templateOverrideSchema` and nothing reads them (grep: the only reader of
+  `template_overrides` is `planApprovalGate`, for `plan_approval`/`size_threshold`) — backlog 58's
+  unread-key class, and the reason `businessReview` is not overridable today.
+- **221** `planApprovalGate` and `budgetApprovalGate` (`saga.ts:811`, `:992`) call
+  `options.settings.forProject` from inside the handler transaction; the production port queries the
+  pool, so each takes a second connection while the handler holds one — likely the *"two sites inside
+  a transaction"* WP-28 named. Pre-existing, unchanged by this row (the dial no longer needs them).
+- **222** Maintenance tasks open merge requests and carry no dial, so an Assist project's scheduled
+  dependency bumps run to a merge request with business review on. Decided here as *the dial shapes
+  picked-up tickets* (stated at the site); whether maintenance should honour Assist is a product call.
