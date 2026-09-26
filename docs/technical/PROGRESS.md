@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **Next: WP-76**, then the M4 table's order. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **Next: WP-77** (a run credential with no confirmed revocation — backlog 155, the crash and failed-revoke paths), then WP-55 and the M4 table's order. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -7336,7 +7336,7 @@ observation with no mechanism cannot be given an acceptance criterion without in
 precedent for recording the number), **28** (the last time an e2e death under CI load had a real
 cause and every test passed), rule **66**, rule **76**, rule **86**, rule **87**.
 
-### 133. **The launcher can authenticate nothing against git, so the one stage that produces a merge request fails terminally before a container exists — and a private repository's mirror fetch has the same gap one call earlier, for *every* stage** (TODO, **major** — one cause, two consequences, the second not in the report; **live** on any instance configured to run agents; **owned by WP-76** (refiner, session 8; after WP-75), and it needs a decision recorded before that row starts; reported by WP-53 as discovered work, established off the tree by the refiner, session 7)
+### 133. **The launcher can authenticate nothing against git, so the one stage that produces a merge request fails terminally before a container exists — and a private repository's mirror fetch has the same gap one call earlier, for *every* stage** (**RESOLVED** at `52495cb`, WP-76, session 8 — TODO, **major** — one cause, two consequences, the second not in the report; **live** on any instance configured to run agents; **owned by WP-76** (refiner, session 8; after WP-75), and it needs a decision recorded before that row starts; reported by WP-53 as discovered work, established off the tree by the refiner, session 7)
 
 **What is wrong.** The launcher process holds no git provider, so `RunCredentialBroker` mints
 nothing. Everything else on that path exists and is tested — the GitLab adapter implements
@@ -7451,6 +7451,21 @@ neighbour but its criteria are about `merge_request` operations, not minting. De
 transport it extends), WP-53 (merged), WP-15a (the binding loader), and the decision above. Related:
 **129** (the egress allow-list and redirects, the other half of what a run may reach), rule **18**,
 rule **83**.
+
+**Resolved by WP-76** (TD-028's WP-76 amendment, shape (3)). The runner mints one credential per run
+with a checkout through `IntegrationActionExecutor` (`runCredentialWrites`,
+`packages/application/src/pipeline/integrations.ts`; composed in `apps/server/src/workspaces.ts`):
+`push` for a writing spec, `read` for a read-only one — consequence (2)'s producer, **measured** in the
+Docker e2e against a `git http-backend` that refuses anonymous access (anonymous mirror refused,
+read-credentialled mirror fetched) — and carries it on `createRunRequestSchema`'s `credential`. The
+launcher holds it (`RunCredentialBroker.hold`, no source, no provider call); the runner answers
+`cred.get` from its own broker and revokes once after `endRun` or on a failed create. A binding that
+cannot mint refuses a writing run by name before the create. **The take-over export's push is
+covered**: `endRun` exports with `broker.credentialFor(runId)` before forgetting it
+(`apps/launcher/src/service.test.ts` › "exports with the held credential, forgets it and destroys, in
+that order", and the e2e's export pushes land under a minted push credential). Its residual is
+TD-028's: a launcher restart between create and take-over loses the held value and the export answers
+`pushed: false`.
 
 ### 134. **Steer and take-over cannot reach a live run on the shipped topology — the report calls it a coin flip and it is a certainty, because the process that serves the API is pinned never to hold a run** (TODO, small-to-major — **live** and user-visible on `docker compose up`; **working as designed** in that every refusal is by name, and the design's cost went from *sometimes* to *always*; **WP-72 owns asserting it, nothing owns fixing it**; reported by WP-53 as discovered work, corrected off the tree by the refiner, session 7)
 
@@ -8396,7 +8411,7 @@ bind-backed control volume on Docker Desktop and not the second: after teardown 
 for, which nothing in the guest can remove (backlog **147**'s measurement, WP-74's notes). Done: one
 sentence there, citing 147. Owner **WP-73**.
 
-### 152. **The export helper runs `git status`, `add`, `commit` and `push` in the agent-written checkout under the agent-written `.git/config`, so every configuration key that names a program runs it — in a container whose environment holds the push password and whose network is unfiltered. WP-75 turned hooks off for two of the four commands and nothing else** (**RESOLVED** at `1b0af26`, WP-75, session 8 — TODO, **major** — **measured** for `core.fsmonitor` and a `clean` filter, **read** for the rest; **latent today, and the trigger is WP-76**: with no credential the helper runs `network: none` with no `GIT_PASS`, and on this build no credential is minted (backlog **133**) — the day WP-76 mints one, a developer run's own code reads the push credential and sends it anywhere; **owned by WP-76** (refiner, session 8), its criterion **(9)**; found by WP-75, session 8, graded by the refiner)
+### 152. **The export helper runs `git status`, `add`, `commit` and `push` in the agent-written checkout under the agent-written `.git/config`, so every configuration key that names a program runs it — in a container whose environment holds the push password and whose network is unfiltered. WP-75 turned hooks off for two of the four commands and nothing else** (**RESOLVED** at `1b0af26`, WP-75, session 8; **its credential half re-run at WP-76** (commit pending): the planted-vector e2e with the export pushing under a **minted** push credential to a server that logs the credential and path of every request — no marker, the planted `pushurl` reached nothing, every authenticated request carried the minted value to `/acme.git/`, the planted helper's password reached nothing — TODO, **major** — **measured** for `core.fsmonitor` and a `clean` filter, **read** for the rest; **latent today, and the trigger is WP-76**: with no credential the helper runs `network: none` with no `GIT_PASS`, and on this build no credential is minted (backlog **133**) — the day WP-76 mints one, a developer run's own code reads the push credential and sends it anywhere; **owned by WP-76** (refiner, session 8), its criterion **(9)**; found by WP-75, session 8, graded by the refiner)
 
 **What is wrong.** One cause: the export trusts the repository configuration of a tree the agent
 wrote. The script (`packages/infrastructure/src/workspace/provider.ts:1392-1418`) runs `git status
@@ -8484,6 +8499,137 @@ path the run container's mount is not at and every pre-run object is unreadable 
 remove the option or pass it into the run body, one or the other. Related, for the orchestrator:
 TD-026:17 said the mirror is mounted *"at `/cache`"*; the working tree already carries its WP-75
 correction (`/cache/<cacheKey>.git`, uncommitted, TD-026:17-18), so nothing is owed there beyond the commit.
+
+### 154. **The run credential's exact-match redaction lives in the memory of the process that minted it, and on the shipped topology that is never the only process taking `pipeline.outbound` jobs — so text quoting the token that another worker stores or posts is redacted by the pattern rules alone, which match GitLab's documented `glpat-` shape and nothing the tree has ever asserted a minted token to be** (TODO, **nit-to-small** — **live on `docker compose up`**, not only on a hand-split deployment (the implementer's *"latent on `ROLE=all`"* is corrected below); in the normal path the string such a job sees is **already revoked**, and the window in which it is live is backlog **155**'s; **owned by WP-72** (refiner, session 8) for the assertion and the decision; found by WP-76, session 8, graded by the refiner)
+
+**What is wrong.** TD-028's WP-76 amendment, decision 8, asks the run's git credential to join the
+run's redactors. WP-76 built that as `createRunScopedSecrets`
+(`packages/application/src/pipeline/run-redaction.ts:135-189`), one per process
+(`apps/server/src/runtime.ts:239`), composed into that process's executor redactor, binding loader,
+transcript and artifact write. Its own docblock states the gap: *"Another **process**: the registry
+is memory. A `pipeline.outbound` job run by a worker that did not mint (a `ROLE`-split deployment)
+does not know the value, so a CI log it reads while the token is live is redacted only by the
+pattern rules"* (`run-redaction.ts:114-118`).
+
+**Evidence** (refiner, read off the tree at the working tree after WP-76 round 1; nothing run).
+- **The shipped compose is already split.** `app` takes `ROLE` from `.env` (`.env.example:28`,
+  `ROLE=all`, a worker) with `APP_LAUNCHER_URL: ''` pinned (`compose.yml:182`), so it composes no
+  provisioner and **never mints**; `runner` (`compose.yml:219-226`, `ROLE: runner`, a worker) is the
+  only process that mints. Both subscribe the same job queues — compose's own comment on `runner`:
+  *"a worker, running the same job queues"* — and pg-boss hands a job to any subscriber (TD-028
+  decision 5). So roughly any `pipeline.outbound` duty, gate read, shadow report, history-bootstrap
+  collect or knowledge apply may run in `app`, whose registry is always empty. Every one of those
+  call sites also passes `noRunScopedSecrets()` as its Q55 scope (e.g. `gates.ts:113`,
+  `review-only.ts:702`, `bootstrap/collect.ts:187`), which is right — they belong to no run — and
+  means the only thing that could redact a run token there is the process-wide registry.
+- **What still redacts it in `app`.** The pattern rule `gitlab-token`
+  (`packages/infrastructure/src/redaction/pattern-redaction.ts:77-78`,
+  `gl(?:pat|dt|oat|rt|soat|ptt|cbt|ft)-[A-Za-z0-9_-]{16,}`) is composed into every binding's
+  platform redactor and the executor's. GitLab is the **only** production provider that mints
+  (`credentialMinting: config.mint_credentials`, `gitlab/provider.ts:287`; the other `true` is the
+  fake). So for a GitLab token of the documented `glpat-` shape the exact-match gap costs nothing.
+  **Not asserted anywhere**: the recorded mint fixture's token is `"FAKE-project-access-…"`
+  (`test/fixtures/http/gitlab/access-tokens.json`, deliberately *"shaped like nothing GitLab issues"*),
+  which the pattern does **not** match. Whether a self-managed instance can configure a token prefix
+  that the pattern would miss is **unverified here** (no GitLab page was read for it).
+- **How the token reaches such text at all.** The platform never writes it: the agent can. A writing
+  run's agent has `Bash` and the credential helper answers it (BD-025 §3's accepted exposure), so a
+  run can commit the value into its branch or print it from code CI later runs; the non-minting
+  process then reads it back as a CI log, an MR diff (`tasks.review_subject`), or a merged MR a
+  history bootstrap mines.
+- **When.** Normal path: after revocation — `release` revokes before the artifact write
+  (`run-redaction.ts:106-112`) and the outbound duties are enqueued after the stage commits. Live
+  only when the revoke did not happen (backlog **155**: a crash, or a revoke that failed and is
+  logged, not retried), for up to 48 h (`RUN_CREDENTIAL_TTL_SECONDS` 24 h at
+  `apps/server/src/workspaces.ts:67`, rounded **up** to the next UTC midnight by `expiryForTtl`,
+  `gitlab/credentials.ts:74-87`). A **restart of the minting process** empties its registry too —
+  the same gap inside one container.
+
+**What it costs to leave.** Today, for GitLab tokens of the documented shape: nothing measurable. A
+revoked, credential-shaped string in a stored row or a posted comment for any token the pattern
+misses — the second minting provider, or a GitLab shape the pattern does not know. Live exposure
+only in the conjunction with 155.
+
+**What "done" looks like.** A **decision first**, and the entry recommends the cheapest honest one:
+(a) **state and pin** — a unit test that a GitLab project access token of the documented shape is
+redacted by `patternRedactor()` with no run-scoped registry (a fixture value that is *not*
+`FAKE-…` needs a gitleaks allow-list entry, BD-002), plus a sentence at `run-redaction.ts:114-118`
+naming the shipped topology rather than *"a `ROLE`-split deployment"*; and a trigger written into
+the port's docblock: the day a second provider sets `credentialMinting`, (b) becomes required.
+(b) **share the registry** — the value sealed in the existing envelope-encrypted `secrets` store
+(every product process holds `APP_SECRET_KEY`) keyed by run id with its `expires_at`, read by each
+process's registry at call time. **Not** a digest: rule 70's third option is for an *identity*; a
+redactor must find an unknown substring, and a digest can only test candidates the caller already
+cut out — which for GitLab is the pattern rule again. **Asserted** in WP-72's two-process tier: a
+value minted in the worker, planted in a CI log the other process reads, absent from what it stores.
+
+**Depends on / owner.** **WP-72** (refiner, session 8) — it is the only tier that starts the two
+workers the shipped compose runs, and this is one more crossing of exactly its kind. Depends on
+WP-76. Related: **155** (the live window), Q55, TD-012, BD-022.
+
+### 155. **A run credential with no confirmed revocation stays live to GitLab's expiry — up to 48 hours — because nothing reads the `revoke_id` WP-76 records for exactly that case: not the lease sweep that detects a dead runner, and nothing after a revoke that failed** (TODO, **small-to-major** — standing rule **19**'s address is carried and never used; **live** on any instance that runs agents with `mint_credentials: true`, triggered by a runner crash *or* a failed revoke call, the second in ordinary operation; one symptom, two causes, one remedy, so one entry; **no remaining M4 row owns it — scheduled as WP-77** (refiner, session 8); found by WP-76, session 8, graded and widened by the refiner)
+
+**What is wrong.** TD-028's WP-76 amendment, decision 5: *"**The crash path** (runner dies between
+mint and revoke) is revocable from the audit row's `revoke_id`; WP-47's lease sweep
+(`packages/application/src/recovery/run-lease.ts`) is where it belongs — WP-76 builds it or files it
+by number, and until then the token lives to its expiry."* WP-76 filed it (its notes: *"`revoke_id`
+and `run_id` are on the mint's audit row; the lease sweep does not use them yet"*). The refiner adds
+the second cause: the revoke on the normal path is `onceRevoker`
+(`packages/infrastructure/src/launcher/provisioner.ts:383-405`), which on failure only logs *"the run
+credential could not be revoked; it is live until it expires"* and is never retried — so a GitLab 5xx
+or a network error at teardown leaves the same state as a crash, with no crash.
+
+**Evidence** (refiner, read off the tree; nothing run).
+- **The address exists.** `mint_credential`'s audit row carries `run_id` in its payload and the
+  task id (`packages/application/src/pipeline/integrations.ts:1484-1497`); `describeResult` records
+  `revoke_id` as `<project>#<token_id>` (`:1509`). A successful revoke writes a `revoke_credential`
+  row with the same `revoke_id` and `run_id` (`:1552-1570`). `integration_actions` has no `run_id`
+  column; it has `(task_id, created_at desc)` (`0007_cost.sql:126-142`), which bounds the read.
+- **Nothing reads it.** `run-lease.ts` ends the row, escalates the task and releases the
+  reservation; its docblock: *"So the sweep ends the **row** and nothing else"* (`run-lease.ts:23`).
+- **The port cannot be called from an address.** `revokeCredential(credential: MintedCredential)`
+  (`packages/application/src/ports/integrations/git-provider.ts:421`) takes the whole credential,
+  `value` included (`:325-336`); a sweep holds only `revoke_id`. GitLab's adapter needs only the
+  address — it parses `revoke_id` when it did not mint the handle (`gitlab/provider.ts:537-554`) —
+  but building a `MintedCredential` with an invented `value` to satisfy the type is standing rule 18's
+  shape. A per-call adapter that did not mint answers GitLab's `404` as `not_found`, by design
+  (standing rule 19, port docblock `git-provider.ts:405-418`).
+- **Lifetime.** 24 h requested (`apps/server/src/workspaces.ts:67`), granted to the next UTC midnight
+  on or after it (`gitlab/credentials.ts:23-28`, `:74-87`) — **24 to 48 h**, as TD-028's amendment's
+  residuals say. The GitLab adapter's own docblock still says the compensating expiry is *"a day at
+  most"* (`gitlab/provider.ts:54`), which was true of a 3600-second request and is not of this one
+  (rule 83, carried here).
+- **Scope of the token.** `push` is `read_repository` + `write_repository`
+  (`gitlab/credentials.ts:60-61`); GitLab does not enforce `branchPatterns`
+  (`credentials.ts:29-35`, Q40) — the protected default branch is the only limit.
+
+**What it costs to leave.** BD-025 §3 accepts a *run-lifetime* token in a container whose agent can
+read it through the helper. This turns run-lifetime into up to 48 h for exactly the runs that ended
+badly, which are the runs most likely to be the ones that misbehaved. Whoever obtained the value
+during the run — the agent can commit it to its own branch on the git host its egress allows — can
+push to every unprotected branch of the project for up to two days, and nothing in the product says
+the token is still live except a log line (`provisioner.ts:401-404`) or, for a crash, nothing at all.
+**Major** where the project's default branch is unprotected (whether the platform refuses a writing
+run on such a project is not checked here); small otherwise.
+
+**What "done" looks like.** WP-77's criteria, summarised: a **revoke-by-address** operation on the
+port (or `revokeCredential` narrowed to what it uses), with no invented value anywhere; a recovery
+row that finds, for a run the lease sweep ended **or** any terminal run, a `mint_credential` row with
+no **successful** `revoke_credential` row for the same `revoke_id`, and revokes it through
+`IntegrationActionExecutor` **outside** the sweep's transaction (a job enqueued after commit, as every
+other provider call from a handler); shadow's `read` mint revoked under the same Q98 (a) carve-out
+the mint used, or the executor answers `would_have` and revokes nothing; a `not_found` recorded as
+**unconfirmed**, never as revoked; bounded to one attempt per `revoke_id` by the audit row it
+writes; and `run-lease.ts:23`'s *"nothing else"* amended, because revoking the token of a process
+that is only partitioned from the database (the docblock's own caveat) cuts that process's export
+push — which is consistent with the row it already ended, and must be said. Asserted at the
+boundary: the fake provider's `credentials[].revocations` goes 0 → 1 for a run whose lease expired
+and for a run whose revoke failed once; stays 1 (not 2) for a run revoked normally; a `not_found`
+leaves an `unconfirmed` row and no claim of revocation.
+
+**Depends on / owner.** **WP-77** (new row, refiner, session 8), after WP-76 merges. Depends on
+WP-47 (the sweep), WP-76 (the rows), TD-028's WP-76 amendment decision 5, standing rules 18 and 19.
+Related: **154** (what a live token in another process's text costs), Q40 (unenforced branch scope).
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -12050,7 +12196,8 @@ file, or the first work package that touches upgrade behaviour.
 | WP-54 | **What a run may do: the project's declared commands, the role tables, and `get_task_context`** | DONE | `3288496` | **Folded backlog 49 (blocker), 39, 40, 83 and 139 (the orchestrator folded 139 into round 1 because WP-54 made it live — the wizard writes `commands.allow`); implemented Q69 answer (ii) and Q97.** Three baselines per role (`read_only`, `verification`, `implementation`), the project narrows only the project-command verbs, a dropped entry reported (a warning per run and `ignored_allow_commands`), a literal a pattern covers granted and a glob only verbatim; `Bash` for investigator, architect and reviewer per product/13; provider skills by binding with a per-skill verb layer; `get_task_context` over the read projections, bounded; discovery on `verification`, so R1/R2/R6 read as product/17 words them. The e2e runs a fixture repository's `npm test` through the production hooks and asserts the file it wrote. **BD-025 and TD-027 amended by the orchestrator** (Q69's reading of §2, the floors as an enumeration not a boundary, the discovery residual, the organisation layer that is not composed), plus product/13, product/19 §3 and R6, CLAUDE.md and the orchestrator prompt's stale `release` fact. **Three review rounds**: R1 REQUEST_CHANGES — the new hazard floors had seven bypasses (getopt abbreviation, a clustered `-E`, a `make` variable assignment, Go's double dash, npm's `--node-options`) and narrow-never-widen was untested at the verdict level (canaries *globs granted by coverage* and *make floors dropped* survived); R2 REQUEST_CHANGES — five more (`npm --scr=`, pnpm `--config.<key>`, Go's external linker) and whole-line floors that denied `make -j4 TEST`, now token-scoped; R3 APPROVE-with-nits, **six canaries dead by name**, nits fixed by the orchestrator as stated residuals. **Rule 66 cost the row most of its wall clock**: the implementer waited six hours for a one-minute load under 12 that never came (20–175, Spotlight and the user's own containers) and left **25 unbounded `until` polling shells** behind, which the orchestrator killed — load checks are now bounded (five readings a minute apart, then report). **Orchestrator verification on the final tree**: `PASS: verify` (396 files, 7391 passed) twice, `PASS: verify:integration` (46 files, 504), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42), each exit 0; **`verify:e2e` FAIL twice with 183/184**, the one failure `test/e2e/workspace/docker-workspace.e2e.test.ts` › "destroy reclaims the control directory even after the agent locks it", reproduced alone on this tree and **alone on a clean worktree of `main` at `c1cc951`**, so pre-existing and filed as backlog **147** (owned by WP-74) rather than attributed to this row; CI's Linux e2e job is the other half of that reading. CI on `3288496`: `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success** — the push was delivered twice, same sha, both pairs green — zero `release` runs. Discovered work: backlog **140**–**147**, Q97 | Depends on WP-53 (same files), WP-17, WP-21, WP-14a, TD-027. Folds backlog **49** (**blocker**), **39**, **40**, **83**; implements **Q69** answer (ii). An e2e must run a fixture repository's test command — a fake that runs nothing is how this survived every row |
 | WP-74 | **A tool-less run gets a container and no checkout** | DONE | `91e0140` | Depends on WP-54 (`TOOLS_BY_ROLE`), WP-53, TD-021, TD-028. Folds backlog **82** (re-scoped from *no workspace* to **no checkout**) and **147** (refiner, session 8). `WorkspaceSpec.repo` and `WorkspaceHandle.cacheKey` nullable end to end; `runNeedsCheckout` on the spec's tools (an unknown tool fails closed, every role's tools classified by a test); a repo-less spec skips `updateMirror` and the clone, asks the broker for nothing (enforced at the create request's boundary), mounts no `repo-cache`, egress narrowed to the model hosts, export refused by name; the container, network, sidecar, control socket and skills kept (the ruling: TD-021's decision body, amended by the orchestrator for its mirror sentences). **Backlog 147 measured, not guessed**: on Docker Desktop for macOS the shim's two Unix sockets survive the bind-backed control directory — `readdir` lists them, `lstat`/`unlink` answer `ENOENT` — so busybox `ls -A` named them on stderr only and step 1 read the directory as empty; the emptiness test now counts what it cannot stat, the token never survives, full reclamation is asserted on production's named-volume shape and, on Linux, on the bind-backed one. **One review round**, APPROVE-with-nits, **six canaries dead by name**; nits fixed by the orchestrator (a Linux-only reclamation assertion — the bind-backed case had been weakened to *the verdict agrees with the volume*, which a regression that leaks *and* reports would pass on CI — the subagent-tools note, technical/04's stale reason, TD-021's amendment, product/13, product/18 and CLAUDE.md). **Orchestrator verification**: `PASS: verify` (396 files, 7409 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (190/190 — the first all-green e2e on this machine this session), each exit 0; the implementer's `launcher-control-plane-check` PASS 18/18. CI on `91e0140`: `ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs — the Linux-only assertion's first run. Discovered work: backlog **148**–**151**; **148** (major: every run with a checkout mounts the whole `repo-cache` volume) and the unowned major **133** are scheduled as **WP-75** and **WP-76** |
 | WP-75 | **A run's `/cache` mount is its own project's mirror, never the whole volume** | DONE | `1b0af26` | **Folded backlog 148 (major) and 152 (major — the orchestrator took it off WP-76 at round 1, because it is the same container's hazard and this row's criterion (4) was its first half).** The run container and the export helper mount one sub-path, `<cacheKey>.git`, at the path the clone's alternates name; the key validated at the mount builder; a missing mirror refused by name at the clone before any run container exists; a two-project Docker e2e reads what the daemon mounted. **The export helper was measured executing what the run wrote** — all six planted hooks, then `core.fsmonitor`, a clean filter, `gpg.program`, a push redirect and a repo `credential.helper` — and now reads only the platform's git: `.git` symlink/gitfile/linked worktree refused, `GIT_CONFIG_NOSYSTEM` + a platform global config, `.git/config` replaced, hooks removed and `core.hooksPath=/dev/null` on every call, any nested `.git` below the top level refused (a gitlink with none behind it still exports — **the orchestrator's ruling**, because the prescribed index-gitlink refusal would have refused every submodule project), an unreadable tree refused, the run container stopped before the helper. **Three review rounds, and each found a way past the one before, two of them blockers measured on the real image with `GIT_PASS` in the marker**: R1 the run's `.git/config` vectors; R2 a nested repository's own fsmonitor in `git add -A`, plus ordering asserts that passed with the line deleted (`findIndex` → −1); R3 a directory at mode 0111 hiding the nested repository from `find` while git walked in through the index, and the run container never stopped before the export. **Canaries run by the orchestrator after R3** (the reviewer's never passed the load gate): config kept, hooks kept, the walk's stderr ignored, the stop dropped, `GIT_CONFIG_NOSYSTEM` dropped — unit; the nested refusal disabled and the config kept — the Docker e2e; **all dead by name**, calibrated with a planted throw, the file md5-restored each time. **Orchestrator verification on the final tree**: `PASS: verify` (396 files, 7421 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (202/202), each exit 0, volumes at baseline. CI on `1b0af26`: `ci` `36200943398` and `image` `36200943454` **completed success**, zero `release` runs. Discovered work: backlog **153** (nit, WP-73). **The load gate cost this row most of a night**: readings from 7 to 226, `mediaanalysisd` at ~280 % | Depends on WP-74 (same mount in `hardening.ts`), WP-53, TD-021; **must land before WP-76**. Folds backlog **148** (major, latent until 133 is fixed). Sub-path mount onto the project's mirror with its existence guaranteed by `updateMirror` → clone → create ordering; two projects' mirrors on one volume in the Docker e2e, read off what the daemon was asked for; the export helper measured for the run-written hook and scoped the same way |
-| WP-76 | **The launcher authenticates to git: the mirror fetch and the push of a private repository** | TODO | — | Depends on **WP-75**, a decision record on the credential's carrier (TD-028 amendment, before the row starts), WP-53, WP-15a, BD-025 §3. Folds backlog **133** (major, live). Run-scoped mint through `IntegrationActionExecutor`, a `read` scope with a producer, nothing in the agent's environment; a credentialed git server in the Docker e2e that refuses anonymous access; `scripts/compose-stock-check.mjs` if compose/env changes (rule 71) |
+| WP-76 | **The launcher authenticates to git: the mirror fetch and the push of a private repository** | DONE | `52495cb` | **Folded backlog 133 (major) and the credential half of 152; implemented Q98 (a), ruled by the orchestrator in TD-028 decision 7.** The runner mints one run-scoped credential per run with a checkout (read for a read-only run, push for a writing one, none without a checkout) through `IntegrationActionExecutor`, no idempotency key, outside any transaction; revokes it exactly once; refuses a writing run whose binding cannot mint and never falls back to the stored token; the create request carries it with five refusals; the launcher holds it for mirror and export only; **the runner answers `cred.get`**, which no process did (the consequence backlog 133 missed, found by the architect writing TD-028's amendment first). One process-wide run-secret registry, built once in the integration stack and censused, feeds the executor, the binding loader, the transcript and the artifact write. **Two review rounds**: R1 — the shadow carve-out ahead of its decision record (ruled and recorded by the orchestrator in TD-028 decision 7, technical/02's invariant and technical/06), two post-mint refusals that did not revoke, the redactor compositions untested; R2 (major, **measured**) — a shadow task handed a `push` token by the provider had its revoke suppressed as `would_have` while the refusal said *revoked*: now every revoke declares the carve-out and only an `ok` outcome counts. **Canaries by the orchestrator after R2**, all dead by name — the revoke's success guard, the revoke's carve-out, the carve-out checked in shadow mode only, an idempotency key admitted, a second registry — **the first survived** until the orchestrator added the test that holds it (an executor answering `would_have` for a revoke must produce *was not revoked … live until*). **Orchestrator verification on the final tree**: `PASS: verify` (399 files, 7488 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (206/206, four cases against a git server that refuses anonymous and wrong-password access), `launcher-control-plane-check` 18/18 and `runlet-launcher-check` 7/7 (with `DOCKER_HOST` pointed at Docker Desktop's socket — both refuse to guess it); `compose-stock-check` PASS in the implementer's shell after rebuilding the images and in CI's `image` run. CI on `52495cb`: `ci` `36208771351` and `image` `36208771353` **completed success**, zero `release` runs. Discovered work: backlog **154** (WP-72) and **155** (its own row, **WP-77**) | Depends on **WP-75**, a decision record on the credential's carrier (TD-028 amendment, before the row starts), WP-53, WP-15a, BD-025 §3. Folds backlog **133** (major, live). Run-scoped mint through `IntegrationActionExecutor`, a `read` scope with a producer, nothing in the agent's environment; a credentialed git server in the Docker e2e that refuses anonymous access; `scripts/compose-stock-check.mjs` if compose/env changes (rule 71) |
+| WP-77 | **A run credential with no confirmed revocation is revoked from its audit row** | TODO | — | Depends on WP-76, WP-47, TD-028's WP-76 amendment decision 5. Folds backlog **155** (small-to-major, live; refiner, session 8). Revoke by address with no invented value (rule 18); a recovery row over `mint_credential` rows with no successful revoke, after commit, through the executor; shadow's carve-out; `not_found` recorded as unconfirmed; 0 → 1 / 1 stays 1 on the fake provider |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | TODO | — | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
 | WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
@@ -26764,3 +26911,163 @@ Round-3 verification (`nice -n 19`; the gate's fifth reading was 9.89 after 13.7
 from a copy and restored to md5 `e106cc47…`: both **die** — 1 failed of the named test each. They
 ran on a reading of **78.1**, taken right before and not a GO, stated rather than hidden. Docker
 after: no container of this row's, `docker volume ls | wc -l` = 102.
+
+#### WP-76
+
+**Round 1 (implementer, session 8).** TD-028's WP-76 amendment implemented as written, with the
+decisions and assumptions below; backlog **133** closed, **152**'s credential half re-run, **Q98**
+implemented as recommended.
+
+*What was built.* **Mint and revoke** are `runCredentialWrites(integrations).mint/revoke`
+(`packages/application/src/pipeline/integrations.ts`), each one `MutatingActionRequest` through the
+executor keyed by the git binding, no idempotency key, `assertOutsideTransaction` at both
+(`run-credentials.test.ts` refuses both inside `withOpenTransaction`). The payload carries `run_id`
+and `task_mode`; `describeResult` is `{scope, expires_at, revoke_id}`, never the value. A value shorter
+than `MIN_SECRET_LENGTH`, blank, or of a scope other than the one asked for is refused. The
+**composition** is `createRunGitCredentialMinter` (`apps/server/src/workspaces.ts`): reads
+`tasks.mode`, mints `read` for any run of a shadow task, registers the value with the process's
+run-scoped secrets *before* returning it, and revokes through a second `integrationsForProject` whose
+scope names that value (Q55). The **provisioner** (`packages/infrastructure/src/launcher/provisioner.ts`)
+takes a required `credentials: RunGitCredentialMinter`, asks `push`/`read` by `spec.readOnly`, refuses a
+writing run the binding cannot mint for (`invalid_spec`, terminal, reason names the binding and
+`mint_credentials: true`) and lets a read-only one fetch anonymously; refuses — after revoking — a `push`
+answer to a `read` question; holds the value in its own `RunCredentialBroker` and passes
+`createRunletSpawn` a `credentials` responder over `broker.answer` (exact host, `{username, password}`
+only — **measured**: a `host` beside them fails the `cred.reply` frame's strict schema and the shim
+drops the control connection, which the first version of this responder did); forgets at the start of
+`release`, revokes once after `endRun` returns, and on a create that fails (or an answer refused after
+the create: that path now ends the workspace it made, which the old test's title claimed and the code
+did not do). The **wire**: `createRunRequestSchema.credential` is `{host, username, password, scope,
+expiresAt}` with the five refusals in its docblock (no repo → none; writer → required; read-only →
+read or none; host ∈ `spec.egress.hosts`; password in no `spec.env` value — criterion (5)'s "new
+carrier"); the response's `credentialMinted` became `credentialScope` (the launcher mints nothing). The
+**launcher** holds (`RunCredentialBroker.hold`), mirrors and exports with `credentialFor`, forgets at
+end and on a failed start; `startLauncher`/`buildLauncher` lost the `credentials` option and
+`apps/launcher/src/index.ts` lost `unwiredCredentials` and its Q52 citation. **Redaction** (decision
+8): `createRunScopedSecrets` (`packages/application/src/pipeline/run-redaction.ts`), one per process
+(`apps/server/src/runtime.ts`), read at call time and held until the token's expiry, composed into the
+executor's redactor, the binding loader's platform redactor, the transcript (`runTranscriptRedactorFor`,
+`apps/server/src/agent.ts`) and the stage executor's artifact redactor (`pipeline.ts`). **Q98 (a)**:
+`MutatingActionRequest.shadowCarveOut` in `action-executor.ts`, admitted only for a `read`-scoped
+`mint_credential`/`revoke_credential` with no idempotency plan, **refused** when declared on anything
+else. **Fake git provider**: records every credential with its revocation count
+(`FakeGitProvider.credentials`) and refuses a `read` mint with branch patterns (divergence 16, which
+also states the one way it is kinder: a second revoke is the port's no-op where GitLab's per-call
+adapter answers `not_found`).
+
+*Decisions and assumptions.*
+- **The launcher's `RunCredentialSource` is deleted, not made a pass-through.** The amendment says
+  "becomes a pass-through (`mint` returns what the request carried; `revoke` forgets, calling nobody)".
+  A `mint` that must return a value the request carried needs a side channel from the request into
+  the source, and a `revoke` that calls nobody is a no-op: the behaviour is exactly a holder, so the
+  broker is one (`hold`/`answer`/`credentialFor`/`scopeOf`/`forget`), used on **both** sides. The
+  four exact-host negatives run on the production path in both processes.
+- **`forget` is not "for ever" across a failed create.** The control plane admits a second create for a
+  run id after a failed first one (TD-028 decision 4, `control-plane.test.ts` › "lets a run be created
+  again after a create that failed"), so a forgotten run may be held again; for a run that started, the
+  answer is `null` for the rest of its life. Stated at the broker.
+- **A shadow task's writing run gets `read`, and the schema allows a `read` credential on a writing
+  spec.** Decision 3 requires a credential for a writing spec and refuses only `push` on a read-only
+  one; decision 7 + Q98 (a) make the shadow writing run's credential `read`, so it clones and cannot
+  push. Without this every shadow implementation run would be refused under decision 6.
+- **The redaction registry is process-wide and holds until expiry, not until revoke** — the artifact
+  is written after the workspace is released. What it cannot reach is filed as backlog **154**.
+- **A minter that throws (the provider failed) is terminal** (`classifyProvisionFailure` defaults a
+  non-`WorkspaceError` to terminal). Not re-classified here: a 401 from a misconfigured binding would
+  otherwise spin; a transient 5xx parks the task with a brief. Named, not changed.
+- **The crash path (standing rule 19)**: `revoke_id` and `run_id` are on the mint's audit row; the
+  lease sweep does not use them yet — filed as backlog **155**.
+
+*Criteria.* (1) cited at `createRunRequestSchema`, `protocol.ts`'s sentence rewritten with the cost
+(the runner holds the token for the life of the run, not one request). (2) counted on the real
+executor's audit log in `run-credentials.test.ts`, `workspaces.test.ts` and the Docker e2e (2 mint + 2
+revoke rows for two runs). (3) the fake provider's `credentials[].revocations` is `1` per credential on
+every ending (`provisioner.test.ts` enumerates four endings plus the failed create and the refused
+answer; e2e counts `[['read',1],['push',1]]`); a revoked token is refused by the server. (4) e2e both
+directions: anonymous mirror refused / read mirror fetched; read credential's push refused 403 by scope
+/ push credential's branch landed and read back from the server's disk. (5) the run container's
+inspected `Env` and the launcher's captured warn/error stream carry no minted value; the create request
+refuses a spec whose `env` contains it; provisioner logs carry the scope only (asserted for the failed
+revoke). (6) `startCredentialedGitServer` (`test/e2e/support/docker-workspace.ts`): `git http-backend`
+behind Basic auth, 401 anonymous, 403 wrong scope, tokens granted/revoked by the fake provider's own
+mint/revoke. **Canary**: a server that grants any password (`granted = password !== null`) — the scope
+test dies (1 failed); a server that grants anonymous — the fixture refuses to start (its readiness
+probe requires a 401). Both reverted, md5-confirmed. (7) index.ts, operator guide §10 and §security
+rewritten; `compose-stock-check` **PASS** (images rebuilt `platform:dev`, `platform-launcher:dev`). (8)
+backlog 133 closed by number, take-over export named covered with its residual. (9) the planted-vector
+e2e re-run under a minted push credential: no marker, planted `pushurl` (to `/evil.git` on the same
+server) reached nothing, every authenticated request carried the minted value to `/acme.git/`, the
+planted helper's password reached nothing.
+
+*Sentences (rule 83).* Changed: `protocol.ts` (the "launcher mints" paragraph), `broker.ts` ("The
+launcher mints"), `apps/launcher/src/index.ts` (the Q52 refusal and its docblock), `service.ts`
+(mint/revoke), `spec.ts` (`runIsReadOnly`: "the broker mints nothing"), `ports/workspace.ts`
+(`readOnly`: "the broker mints nothing and `cred.get` has nothing to answer"),
+`pipeline/integrations.ts` (`noRunScopedSecrets`, `lintComment`, `reviewWrites`: "a review-only run
+has none to hold"), `review-only.ts` (same), `bindings/loader.ts` ("nothing on the pipeline's path
+holds a minted credential yet"), `test/e2e/pipeline/review-only.e2e.test.ts` (same),
+`workspace/spec.test.ts` (the "mints nothing" test is now "at most a read credential", with the push
+refusal asserted), `gitlab/setup-guide.md` ("Leave `mint_credentials` off to use the binding's own
+token for cloning" — false under decision 6), `docs/operator-guide.md` §10 and the security section,
+`docs/technical/05` § Credentials, `docs/TODO.md` (the private-mirror question, now measured), the four
+Docker scripts (`credentialMinted`, the refusing source). Left: `.env.example:551` and
+`apps/launcher/src/config.ts:150` ("not a credential the launcher mints" — about
+`APP_LAUNCHER_TOKEN`, still true); `runlet/token.ts:16`, `workspace/provider.ts:297` (the *run token*
+the launcher mints — true); `docs/research/10` and the GitLab adapter's "You cannot authenticate with a
+project access token" (GitLab's words); `credential-helper.ts`/`shim.ts` `cred.get` docblocks (true);
+`scripts/runlet-launcher-check.mjs:34` ("the run is read-only, so the credential path is not exercised"
+— still true of that script); `docs/decisions/**` untouched (TD-021's cross-reference is the
+architect's).
+
+*Verification* (`nice -n 19`, each tier behind the bounded load gate — readings: verify 20.49→9.60;
+e2e 36.68→15.26→7.69; the rest GO on the first reading, 6.35–8.36). `pnpm run -s verify` **PASS**
+(7470 passed, 14 skipped, 398 files). `verify:integration` **PASS** (504). `verify:e2e` **PASS** (206,
+37 files, the whole Docker workspace file included: 72). `node scripts/launcher-control-plane-check.mjs`
+**PASS (18/18)**. `node scripts/runlet-launcher-check.mjs` **PASS (7/7)**. `node
+scripts/compose-stock-check.mjs` **PASS**. Not run: `verify:ui`/`verify:web-e2e` (neither `apps/web`
+nor `@platform/contracts` changed, rule 80). Docker after: no container of this row's, `docker volume
+ls | wc -l` = 102.
+
+**Review round 1 → fixes (implementer).** The Q98 (a) major is the orchestrator's (TD-028, technical/02
+and /06 amended by them; not touched here). (1) **A refused credential is revoked before the refusal
+leaves**, on the production path: `runCredentialWrites.mint` revokes through the executor (once) and
+then throws for a blank/short value or a scope other than the one asked for, naming whether the
+revocation succeeded or the token is live until its expiry; `createRunGitCredentialMinter` does the
+same when the registry refuses the value. Round 1's note — *"refuses — after revoking — a push answer
+to a read question"* — was true only of `provisioner.ts`'s `mintFor` against a test minter; in
+production the application layer throws first, so that branch is defence in depth, not the path.
+Tests: `run-credentials.test.ts` (each refusal → one `revoked` and one `revoke_credential` row `ok`;
+a failing revoke is named in the refusal) and `workspaces.test.ts` › "revokes, exactly once, a token
+the provider minted wider than asked, and refuses the run" (the fake provider's `revocations: 1`, the
+registry empty). (2) **Decision 8's three compositions are held**: `platformRedactorFor(runSecrets)`
+(`apps/server/src/pipeline.ts`) is the one redactor the executor, the loader's `platformRedactor` and
+the stage executor's `redactor` get; `run-secrets-composition.test.ts` drives the executor end to end
+(a value registered after `composeIntegrationStack` is scrubbed from the error that leaves it) and
+holds the other two call sites by a text census, whose blind spots are in its docblock. Canary:
+dropping `runSecrets.redactor` from `platformRedactorFor` fails 2 of its 5 cases (reverted,
+md5-confirmed). (3) Rule 83: `docs/user-guide.md` (the "launcher has no git provider wired" paragraph)
+and `gitlab/provider.ts` divergence 6 (*"a day at most"* → 24–48 h, GitLab's date expiry) rewritten.
+
+**Review round 2 → fixes (implementer).** (1) **major** — a shadow task handed a `push` token for a
+`read` request: the revoke declared no carve-out, the shadow guard answered `would_have`, and the
+refusal said "it was revoked" (the reviewer's probe: 0 provider revocations). Now **every**
+`revoke_credential` declares the carve-out whatever the scope — revoking only removes access, so
+shadow mode never suppresses it — and `revoke` treats any outcome but `ok` with a `true` result as a
+**failure** ("was not revoked … live until"). The executor's carve-out is renamed
+`SHADOW_RUN_CREDENTIAL_CARVE_OUT = 'run_credential'` and admits exactly two shapes: `mint_credential`
+with payload scope `read`, and `revoke_credential` of any scope, neither with an idempotency plan;
+the declaration is checked **before** the mode (`assertShadowCarveOut`), so a malformed one is refused
+in a normal task too (rule 78). A shadow `push` mint stays `would_have`/no credential. Tests: the
+shadow widened-scope case (one provider revocation, mint `ok` + revoke `ok`, honest message), a
+shadow task's push revoke, the normal-mode refusals; canary (revoke declares the carve-out only for
+`read`) fails 2 cases. The refusal's revoke error is redacted against the minted value itself
+(neither scope nor registry holds it yet). (2) The registry-refusal revoke in
+`createRunGitCredentialMinter` is **deleted**, the line saying why it cannot refuse (the mint already
+refused and revoked anything shorter than `MIN_SECRET_LENGTH`, the registry's only refusal); the
+normal revoke's scope now names the value directly. (3) **One registry, structurally**:
+`composeIntegrationStack` builds `runSecrets` and `platformRedactor`; the executor, the loader
+(`createProjectIntegrationsPort` now takes the `stack`), the stage executor (`stack.platformRedactor`)
+and the minter (`composeRunWorkspaces` takes the `stack`) all read the stack's. A census holds
+`createRunScopedSecrets(` to one site in `apps/server/src`; the loader and artifact hand-overs remain a
+text census — residual stated at the test (no database here). (4) as (1). (5) `provisioner.ts`'s
+widened-scope message now says the revocation failed when it did; technical/05's lifetime is 24–48 h.
