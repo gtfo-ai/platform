@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **Next: WP-61**, then the M4 table's order. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **Next: WP-43**, then the M4 table's order. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -4409,7 +4409,7 @@ that pays for it. Cheapest owner is whoever the gate stops first.
 > *which* files or which ring carry the uncovered branches, which is still **WP-70**'s opening move
 > and `docs/TODO.md`'s open question.
 
-### 88. **A bot that is not this platform opens and extends a human review window, so every reviewer-minutes figure over-counts by however many robots comment on a merge request — and the flag that would fix it cannot be written in the table the bullet proposes, nor on the wire** (TODO — **no work package owns it**; found by WP-29, session 5)
+### 88. **A bot that is not this platform opens and extends a human review window, so every reviewer-minutes figure over-counts by however many robots comment on a merge request — and the flag that would fix it cannot be written in the table the bullet proposes, nor on the wire** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — TODO — **no work package owns it**; found by WP-29, session 5)
 > **M4 (architect, session 6): folded into WP-61.**
 
 **What is wrong.** The human-time projector tells its **own** merge-request comments from a person's
@@ -4470,7 +4470,7 @@ minutes and would otherwise inherit a migration it did not create (entry **87**'
 next opens the identity surface (`apps/server/src/routes/org.ts`, WP-31's) is the **cheapest**, because
 a bot flag is an identity fact and the command, the list and the DTO are all in that file.
 
-### 89. **The eight-hour day cap is applied per entry and product/19 §16 never says per what, so one person can be credited more than a day in a day — decided rather than defective, and the decision is safe only until something sums across tasks** (nit, TODO — the read half is **WP-41**'s; found by WP-29, session 5)
+### 89. **The eight-hour day cap is applied per entry and product/19 §16 never says per what, so one person can be credited more than a day in a day — decided rather than defective, and the decision is safe only until something sums across tasks** (**RESOLVED** at `8dbebd9`, WP-61, session 8 (per review window, the orchestrator's ruling; product/19 amended) — nit, TODO — the read half is **WP-41**'s; found by WP-29, session 5)
 > **M4 (architect, session 6): folded into WP-61.**
 
 **What is wrong — nothing, on this build.** This is a reading of an ambiguous sentence, not a defect,
@@ -4796,7 +4796,7 @@ whoever next opens that file. It is recorded here rather than as entry 95 becaus
 one line would split this entry's evidence in two, which is the thing this backlog's own preamble
 warns about.
 
-### 94. **`ci.pipeline.finished.coverage_pct` now has no reader anywhere, the one shipped adapter writes `null` there on every delivery, and the fake writes a number** (nit, TODO, latent — **no work package owns it**; working as designed after WP-39 and filed so the next reader meets the decision rather than the trap; found by WP-39, session 5)
+### 94. **`ci.pipeline.finished.coverage_pct` now has no reader anywhere, the one shipped adapter writes `null` there on every delivery, and the fake writes a number** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — nit, TODO, latent — **no work package owns it**; working as designed after WP-39 and filed so the next reader meets the decision rather than the trap; found by WP-39, session 5)
 > **M4 (architect, session 6): folded into WP-61.**
 
 **What is wrong.** Nothing today, and that is the entry. The payload field is published by the event
@@ -9642,7 +9642,7 @@ negative, a task that re-adopted the iid, closes nothing (the duty's existing re
 because it is the row that produced the site and a contracts field is cheapest before the event ships;
 if WP-59 merges without it, **no remaining M4 row owns it**. Related: **51**, **161**, **184**.
 
-### 179. **`loc_changed` is computable now and still published absent: the diff-stats read exists, and nothing makes it when a merge request is merged** (TODO, **small** — a stats row, a product/16 metric; **working as documented** (the metric's own `absent` block names the gap); **live** on every instance; proposed owner **WP-61** (refiner, session 8); found by WP-59, session 8)
+### 179. **`loc_changed` is computable now and still published absent: the diff-stats read exists, and nothing makes it when a merge request is merged** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — TODO, **small** — a stats row, a product/16 metric; **working as documented** (the metric's own `absent` block names the gap); **live** on every instance; proposed owner **WP-61** (refiner, session 8); found by WP-59, session 8)
 
 **What is wrong / evidence.** The WP-59 implementer, quoted: *"`loc_changed` can now be computed: the
 diff-stats read exists, and WP-41's metric needs it made once per merged merge request and recorded
@@ -9667,7 +9667,7 @@ merged MR"*); the cost is one GraphQL read per counted merge.
 8), the row that corrects the delivery metrics and already consumes the git provider's merge events.
 Related: **113**.
 
-### 180. **`task.conflict.warned` is appended on every gate entry that re-finds an overlap, replayed thread or not, so `concurrent_task_overlaps` counts re-comparisons — two events per entry per warned pair since WP-59** (TODO, **nit** — the definition says so honestly; the question is whether product/16's *"concurrent-task overlaps"* means comparisons; pre-existing since WP-26 at one per entry, doubled by WP-59; **read off the tree**; proposed owner **WP-61** (refiner, session 8); found by WP-59, session 8)
+### 180. **`task.conflict.warned` is appended on every gate entry that re-finds an overlap, replayed thread or not, so `concurrent_task_overlaps` counts re-comparisons — two events per entry per warned pair since WP-59** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — TODO, **nit** — the definition says so honestly; the question is whether product/16's *"concurrent-task overlaps"* means comparisons; pre-existing since WP-26 at one per entry, doubled by WP-59; **read off the tree**; proposed owner **WP-61** (refiner, session 8); found by WP-59, session 8)
 
 **Evidence.** The implementer, quoted: *"Conflict-warning events are appended on every gate entry,
 replayed thread or not, so `concurrent_task_overlaps` counts re-comparisons (now two events per entry
@@ -9782,7 +9782,7 @@ no added labels rather than a refusal). The fixture's `source` says the omission
 **Depends on / owner.** Nothing. **Owner WP-60 (folded at review)**, per the orchestrator. Related:
 standing rule **38**, backlog **59**.
 
-### 186. **product/18:60's *"edited within 48 h"* is now a fold over two events that both exist, and no row owns it — and an unfiltered fold would count the platform's own status transitions as "improvements"** (TODO, **small** — a product/18 metric; **working as documented** (the metric's `absent` block names the fold); the self-count trap is **read off the tree, not measured**; proposed owner **WP-61** (refiner, session 8); found by WP-60, session 8)
+### 186. **product/18:60's *"edited within 48 h"* is now a fold over two events that both exist, and no row owns it — and an unfiltered fold would count the platform's own status transitions as "improvements"** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — TODO, **small** — a product/18 metric; **working as documented** (the metric's `absent` block names the fold); the self-count trap is **read off the tree, not measured**; proposed owner **WP-61** (refiner, session 8); found by WP-60, session 8)
 
 **Evidence.** The implementer, quoted: *"product/18:60's 'edited within 48 h' is now a fold, not a
 missing event: `ticket.updated` against `task.lint.posted`'s baseline for the same ticket.
@@ -9837,7 +9837,7 @@ the ticket signal when a polled ticket's `updated_at` is newer than a live task'
 **Depends on / owner.** WP-60 (the signal column). Doc half **WP-73**; the poller **unowned**. Related:
 **59**, standing rule **78**, Q61 (b).
 
-### 188. **`mr.approved`'s two GitLab facts are inferences — that the delivery's `user` is the approver, and whether `approved` arrives beside `approval` — and the measurement is filed in `docs/TODO.md`, not taken** (TODO, **nit** as an entry — the risk is WP-61's: a wrong `user` credits the wrong reviewer; **needs measurement on a real GitLab instance**, which this build cannot reach; proposed owner **WP-61** as a precondition (refiner, session 8); found by WP-60, session 8)
+### 188. **`mr.approved`'s two GitLab facts are inferences — that the delivery's `user` is the approver, and whether `approved` arrives beside `approval` — and the measurement is filed in `docs/TODO.md`, not taken** (**RESOLVED** at `8dbebd9`, WP-61, session 8 (approval windows withheld until the real-GitLab check) — TODO, **nit** as an entry — the risk is WP-61's: a wrong `user` credits the wrong reviewer; **needs measurement on a real GitLab instance**, which this build cannot reach; proposed owner **WP-61** as a precondition (refiner, session 8); found by WP-60, session 8)
 
 The implementer, quoted: *"The page does not say, of the approval actions, that `user` is the approver —
 so the identity is an inference from two documented sentences"*, and `approved` is ignored because
@@ -9861,6 +9861,100 @@ on the previous revision (needs citation: whether GitLab's merge-request hook ca
 update), or the handler enqueues a provider read of the current head instead of trusting the payload —
 one read per foreign push; and one saga case delivers two `mr.updated` out of order and asserts the
 newer head survives. Related: **182**, **167**.
+
+### 190. **The task page's `human_time` applies neither of WP-61's exclusions: it sums the review windows an approval touched, which the statistics withhold, and the rows of an account declared a machine after the fact, which the statistics drop — two answers to "how many human minutes did this task take"** (TODO, **small** — the statistics' reasoning (backlog **188**: the approval `user` is an inference) applies unchanged to the second surface; **read off the tree, not measured**; **live** from WP-61 on every task with an approval or a retro-declared bot; proposed owner **WP-44** (refiner, session 8); found by WP-61, session 8)
+
+**Evidence.** The implementer, quoted: *"the task page's `human_time` block (`queries/human-time-summary.ts`,
+read in `pipeline-queries.ts`) applies neither WP-61 exclusion … The same two SQL predicates would do it,
+and the DTO has no field to say how much was withheld."* **Read off the tree:** `findHumanTime`
+(`apps/server/src/queries/pipeline-queries.ts:623-650`) selects every `human_time_entries` row of the task
+with no predicate but `task_id`; the statistics read applies `MACHINE_AUTHORED` and `APPROVAL_TOUCHED`
+(`apps/server/src/queries/stats-queries.ts:142-170`). The WP-61 notes list the file under **Left**.
+
+**What it costs to leave.** A reviewer's minutes on the task page exceed the same task's share of the
+statistics screen, and the task page is the one a person checks the statistics against. The machine half
+is bounded (a bot declared *before* its activity writes no row).
+
+**What "done" looks like.** `findHumanTime` drops `MACHINE_AUTHORED` rows and withholds `APPROVAL_TOUCHED`
+review windows (the two predicates shared with `stats-queries.ts`, not copied), and `humanTimeSummarySchema`
+gains a withheld count and minutes the task page renders as a caveat — never silently lower. One
+integration case: a task with a comment window, an approval-touched window and a retro-declared machine's
+row publishes only the first, with the withheld figure. **Depends on** WP-61. Related: **188**, **88**.
+
+### 191. **First-pass acceptance under-counts since WP-60: an approval opens a review window, so a reviewer who approved without commenting makes a task *not* first-pass although nobody commented** (TODO, **small** — **working as documented** (the metric's caveat says so), a product/16 metric wrong in a known direction; **read off the tree**; **live** on every task approved in GitLab without a comment; proposed owner **WP-73** (refiner, session 8); found by WP-61, session 8)
+
+**Evidence.** The implementer, quoted: *"the fix is to count windows containing a non-marker
+`mr.review.comment` (a join to `events` like `APPROVAL_TOUCHED`)."* The count is `human_review_entries`
+(`apps/server/src/queries/stats-queries.ts:263-265`, every non-machine `review` window); the caveat is
+`apps/server/src/queries/stats-metrics.ts:419`. **Refiner's note:** `mr.review.comment` carries `text`
+(`packages/contracts/src/events.ts:690-699`), so the marker test (`PLATFORM_COMMENT_MARKER_PREFIX`) is
+expressible in SQL; whether the stored `text` is the redacted/bounded body and still starts with the
+marker is **not checked** — the implementer must confirm before relying on it. **Done**: the count is
+windows containing at least one non-marker comment by the window's account; the caveat is removed; one
+integration case (approve-only → first-pass, comment → not). Adds a fifth `events` read (see **194**).
+**Depends on** WP-60, WP-61. Related: **90**, **188**.
+
+### 192. **A bug's merge-request link is read once, at `ticket.created`; a link added later is never seen and counts against the defect-rate coverage — and the statistics read keeps the *first* trace per ticket, so re-tracing alone would not fix it** (TODO, **small** — it directly moves the Q87 coverage floor that decides whether the defect rate is shown at all; **read off the tree, not measured**; how often links are added after filing is **needs measurement** (already `docs/TODO.md:201`); **live** from WP-61; proposed owner **WP-73** (refiner, session 8); found by WP-61, session 8, the read half added by the refiner)
+
+**Evidence.** The implementer, quoted: *"a bug's merge-request link is read once, at `ticket.created`; a link
+added later is never seen, and it counts against the coverage. Re-reading on `ticket.updated` for a traced
+bug with `no_link` would close it at one ticket read per edit."* **Refiner, read off the tree:** the trace
+CTE is `distinct on (project, provider, key) … order by … e.occurred_at, e.position`
+(`apps/server/src/queries/stats-queries.ts:598-609`) — the **earliest** trace wins, so a later `linked`
+trace would be ignored.
+
+**Done.** A `ticket.updated` for a ticket whose latest trace is `no_link` or `unreadable` enqueues the
+`bug_trace` duty again (one read per such edit; `linked` is final), and the read takes the latest trace per
+ticket, with `filed_at` still the ticket's. Unit: an edit re-traces only a `no_link` bug; integration: a
+bug traced `no_link` then `linked` counts as linked once. **Depends on** WP-60 (`ticket.updated`), WP-61.
+Related: **114**, **187** (a polling-only binding gets no `ticket.updated` at all).
+
+### 193. **`task.mr.measured` and `ticket.bug.traced` read their project-stream sequence before the transaction, so a concurrent project-stream append fails the job and pg-boss retries it — provider read included — and a third loss drops the measurement silently** (TODO, **nit** — **read off the tree, not measured**; the race window is milliseconds on the project stream; the consequence is one extra provider read per lost race, and after `retryLimit: 2` (three attempts, `packages/application/src/pipeline/jobs.ts:315-321`) a merge that is **neither** measured nor unmeasured, or a bug in neither side of the coverage; proposed owner **WP-73** (refiner, session 8); found by WP-61, session 8)
+
+The implementer, quoted: *"Bounded by the queue's retry limit; the ingress's in-transaction retry loop would
+avoid the second read."* The site is `appendOnProject`
+(`packages/application/src/pipeline/delivery-measures.ts:187-197`), docblock `:18-20`. The precedent is the
+executor's audit append, which re-reads the sequence on `StreamConflictError` up to four times (WP-15d
+notes). **Done**: the append retries on `StreamConflictError` with the read's result held, and a unit case
+stages one conflict and asserts one provider read. More likely on the two-process topology (**181**'s
+shape). Related: **181**.
+
+### 194. **Four statistics reads scan `events` per type, and three of the four are not bounded by the requested range at all: the docblock's *"a range predicate prunes"* is true only for the approval probe — so their cost grows with the installation's age, and the lint fold's inner probe with the org-wide `ticket.updated` rate** (**RESOLVED** at `8dbebd9`, WP-61, session 8 in part (the overlaps read keeps its full lookback, stated) — TODO, **small** — **latent**: invisible on a young instance, grows without limit because `events` is never purged; every figure below is **a hypothesis from the indexes and an assumed volume, not a measurement**; proposed owner **WP-73** (refiner, session 8), the measurement for whoever takes it; found by WP-61 as a stated risk, graded by the refiner)
+
+**Evidence.** The implementer, quoted: *"Four reads now consult `events` directly (overlaps, the lint fold,
+the defect trace, the approval check), each bounded to one event type by `events_type_occurred_at_idx`."*
+**Refiner, read off the tree:** `events` is range-partitioned monthly on `occurred_at` with
+`events_type_occurred_at_idx (type, occurred_at)` and no index on any payload field
+(`packages/infrastructure/src/db/migrations/0005_events.sql:7-34`); partition maintenance drops only
+`run_messages`, so `events` grows for the life of the instance (`packages/infrastructure/src/db/partitions.ts:59-63`).
+The four predicates (`apps/server/src/queries/stats-queries.ts`):
+- **Overlaps** (`:470-500`): **no `occurred_at` predicate** — every `task.conflict.warned` ever, every
+  partition, the range applied after grouping. Needed for *first warned*, but an upper bound is not.
+- **Lint fold** (`:540-565`): the outer range goes through `dayFilter` (`:179-183`),
+  `(occurred_at at time zone $tz)::date >= $from` — an expression on the column, so **no index range and
+  no partition pruning**; likewise `occurred_at + interval <= asOf`. Every `task.lint.posted` ever is read.
+  The inner `ticket.updated` probe **is** sargable (48 h on the index) but filters project and ticket key
+  from the heap, so each probe reads the whole org's `ticket.updated` for 48 h.
+- **Defect trace** (`:598-610`): no time predicate — every `ticket.bug.traced` ever, sorted for `distinct on`.
+- **Approval probe** (`:161-170`): sargable, per review window, spans of minutes to hours. Cheap.
+- The project filter is a heap filter everywhere, so a per-project view pays the organisation's cost.
+
+**Estimate (hypothesis).** Assume a 10-person team: ~1 000 platform tasks and ~5 000 tickets a year, ~20 %
+bugs, WP-60's `ticket.updated` on every `jira:issue_updated` at 10–50 per ticket. Then per year:
+`task.lint.posted` ~1–3 k, `ticket.bug.traced` ~1 k, `task.conflict.warned` ≤ ~10 k, `ticket.updated`
+50–250 k. The three full-history scans are **tens of thousands of rows after five years** — tens of
+milliseconds, a nit. The **lint probe dominates**: a 90-day range at ~8 lints a day is ~700 probes × 48 h
+of org-wide `ticket.updated` (~275–1 400 rows each) = **~0.2–1 M heap rows with jsonb extraction per
+request** — plausibly hundreds of milliseconds to seconds, on every statistics load. **Needs measurement**:
+`EXPLAIN (ANALYZE, BUFFERS)` of each read on a seeded log at those volumes (not run — rule 66).
+
+**What "done" looks like.** The docblock at `stats-queries.ts:17-25` states which reads are range-bounded
+(rule 83). Sargable bounds where the semantics allow: the lint outer read gets
+`occurred_at >= from_instant - 1 day and occurred_at < until_instant + 1 day` beside the civil-day filter,
+and overlaps/defects an upper bound; the lint probe gets a ticket-key bound (an expression index on
+`(type, payload->'ticket'->>'key')` or a projection) **only if** the measurement says it is needed. Grade
+moves to **major** if the measured request exceeds a second at the assumed volume. Related: **191** (a
+fifth read), **186**, **180**, **114**, **188**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -10090,7 +10184,7 @@ consumer; piece 3 — whoever next touches the GitLab adapter, alongside backlog
 Related: backlog **98** (a GitLab fixture's `diff_refs` provenance over-claim), which is the same
 adapter and a different field.
 
-### 114. **Nothing links a bug ticket to the merge request it escaped from, so product/16's defect-escape rate has no source — and the platform already ships the resolver that could supply one, built for shadow mode and pointed the other way** (TODO, small — **no work package owns it**; the product half is **Q87**; found by WP-41, refined off the tree, session 5)
+### 114. **Nothing links a bug ticket to the merge request it escaped from, so product/16's defect-escape rate has no source — and the platform already ships the resolver that could supply one, built for shadow mode and pointed the other way** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — TODO, small — **no work package owns it**; the product half is **Q87**; found by WP-41, refined off the tree, session 5)
 > **M4 (architect, session 6): folded into WP-61.**
 
 
@@ -13436,7 +13530,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-58 | **Retrieval: the instrument first, then the query** | DONE | `c2f15f3` | **Folded backlog 16, 15, 12 (surviving half), 13, 14 (in part), 61, 170, 175 and — fixed by the orchestrator because this row unmasked it — 176; implemented Q58.** The instrument first, as ruled: a negative corpus under which 7 of 9 queries admitted a wrong page before any fix, then — because its author had read the queries — a **blind corpus** written by a separate agent that saw only the 16 correct pages (prompt quoted in the fixture with the orchestrator's machine paths replaced by placeholders; pages byte-for-byte), measured once and pinned exactly: **7 of 9 queries still rank a blind page inside the pack** — backlog 171's residual, stated rather than tuned. Per-project document frequencies at index time (migration **0042**) and a term dropped only when `df ≥ 2` and `df > N/2 + √N` — **the architect's ruling** (TD-008 amended, Q58 annotated) after the implementer measured the first rule (more than half) dropping a small vault's subject word and ranking a wrong page first (0.412 vs 0.375); invisible characters stripped and counted on both paths; `headPaths` from per-glob path witnesses bounded by the vault's globs (175 fixed before 0042 shipped); `unresolved_paths` health finding; `ticket_lint` → business; the estimator's measured figures and a band property (not an upper bound — 173). **One review round** (APPROVE-with-nits, nine of ten canaries dead, the survivor implied by the formula); the orchestrator added a two-write recount case (calibrated against a store that keeps its first counts), fixed the bare-`**` matcher (176 — masked since WP-16), three stale sentences. **Orchestrator verification**: `PASS: verify` (7639 passed after the `**` fix), `PASS: verify:integration` (550; the knowledge files again after the fix, 66), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `c2f15f3`: `ci` `36230652056` and `image` `36230652049` **completed success**, zero `release` runs. Discovered work: backlog **171**–**176** | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
 | WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | DONE | `5910ecf` | **Folded backlog 51, 64, 65, 113, 129, and at review 178; implemented Q92 per its recommendation.** A rework takes a new branch (`agentic/<ticket>-r<n>`) and the old MR is closed from a `pipeline.outbound` duty — idempotent, through the executor — with a comment naming the new branch; the superseded MR persisted in the rework's transaction (migration **0043**) and re-driven once by a `stranded.ts` row, then marked abandoned at error. One coalesced diff read per `(merge request, head sha)` — never caching an empty diff — takes a gate entry from four provider reads to **three** (**criterion (2) amended by the orchestrator**: the row missed the rebase gate's own read). A warning reaches both tasks' streams and threads once per MR; the peer append bumps each written task's `version` first, **in sorted order**, so a peer writer mid-stage retries rather than fails and two gates cannot deadlock. GitLab diff stats from GraphQL `diffStatsSummary` (`documented-adapted`); the fake's divergence 17. **All five provider HTTP clients refuse redirects** (`redirect: 'error'`), held by a test that finds every provider directory on disk — and **measured on Node 25.1.0 that a followed cross-origin redirect carried GitLab's `private-token` to the second host** before the fix. **Two review rounds and a closing batch**: R1 (major, read) — the peer append on a live stream failed the peer's transaction with an unretried `StreamConflictError`; R2 APPROVE-with-nits — lock order, `recordRebaseCheck` losing its measurement, the settle unasserted at three of five endings (two canaries survived until the tests existed). **The first push was refused by the pre-push hook**: a new integration file's citation, unseen by `verify` because the file was untracked — standing rule **91**; amended into the unpushed commit. **Orchestrator verification**: `PASS: verify` (405 files, 7691 passed), `PASS: verify:integration` (556), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `5910ecf`: `ci` `36236800859` and `image` `36236800844` **completed success**, zero `release` runs. Discovered work: backlog **177**, **179**–**184** | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
 | WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | DONE | `eb7ee6a` | **Folded backlog 59, 90, 182, 185 (at review), and 177 as refused; implemented Q61 (b).** `ticket.updated` (Jira, beside its other events) and `mr.approved` (GitLab's `approval` action, naming the approver — an inference from the documented page, filed for a real-instance check, backlog 188) with the fakes and the shared suites; the snapshot re-read at the next agent stage when older than the latest edit signal (migration **0044**); re-lint not built (awaiting the Jira measurement). `mr.updated` moves the recorded head only for a strictly later provider instant (`tasks.mr_head_at`) — **review measured the first version moving it back**. **The CI gate now judges the live head**: review found the pre-existing gap beneath it (the event path settled the gate from any finished pipeline for the MR, whatever its sha) and the orchestrator folded it in — both paths read the MR's live head from the provider (a `ci_settle` duty for the event path) and settle only on a pipeline of that commit; a red pipeline's failure counts once per commit. **Backlog 185** (since WP-08, measured): Jira's changelog schema read a missing `toString` from `Object.prototype` and rejected whole deliveries — a null-prototype copy and `Object.hasOwn`. **Three review rounds** (R1 major measured: the head moved back; R2 APPROVE-with-nits plus the pre-existing CI-gate gap; R3's change reddened the orchestrator's `verify:e2e` twice, deterministically — a red pipeline parked one loop early, **against BD-008's bound of 3**, because the poll path counted repeat sightings of one pipeline; the orchestrator's hypothesis (two paths double-counting) was **wrong** and the implementer measured the real cause — the e2e's expectation stood). Canaries dead by name; the survivor of round 2 (the fake's instant stamping) is now held by the shared git suite, re-canaried by the orchestrator. **Orchestrator verification on the final tree**: `PASS: verify` (406 files, 7736 passed), `PASS: verify:integration` (559), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `eb7ee6a`: `ci` `36243497973` and `image` `36243497972` **completed success**, zero `release` runs. Discovered work: backlog **186**–**189** | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
-| WP-61 | **The delivery metrics stop being wrong in two directions** | TODO | — | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
+| WP-61 | **The delivery metrics stop being wrong in two directions** | DONE | `8dbebd9` | **Folded backlog 88, 89, 94, 114, 179, 180, 186, 188, and 194 in part; implemented Q87.** Machine accounts declared by an operator only (migration **0045**, the audited org route) and refused by the human-time projector; the day cap **per review window** — the orchestrator's ruling, product/19 amended, WP-41's read-time cross-task cap removed and the consequence stated; approval-touched windows withheld until the real-GitLab check; the defect rate from the link half of WP-34's resolver only, published at ≥ ½ traceable coverage — **a chosen floor, criterion (5)'s "derived" recorded as not met**; lines changed from one diff-stats read per merged MR, first measurement per merge; distinct overlaps; the lint fold on summary/description edits. **One review round** (REQUEST_CHANGES: the floor mislabelled as derived; three of four statistics reads claimed to prune and scanned whole histories — now bounded, the lint read's `EXPLAIN` went from four partitions to one index scan; a redelivered measurement double-counted). The orchestrator amended product/16, /18 and /19 to match and canaried the dedupe (dead by name). **Orchestrator verification**: `PASS: verify` (407 files, 7765 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `8dbebd9`: `ci` `36248633792` and `image` `36248633812` **completed success**, zero `release` runs. Discovered work: backlog **190**–**193** | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
 | WP-43 | **Slack Socket Mode** | TODO | — | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
 | WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | TODO | — | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
 | WP-46 | **The merge-readiness Checks panel** | TODO | — | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
@@ -29790,3 +29884,207 @@ the loop" now pushes three heads, because it used to send one pipeline's event t
 count this closes. **One breach**: that mutation run was chained with its reading (12.15). Then the
 pipeline e2e file PASS (6), `verify:e2e` PASS (209, after 11.73 was waited out; started on 7.64),
 Docker: the reaper only, volumes 102.
+
+#### WP-61
+
+**Round 1 (implementer, session 8).** Backlog **88**, **89**, **94**, **114**, **179**, **180**,
+**186**, **188**; Q87 implemented per its recommendation. Commit pending.
+
+**What shipped, criterion by criterion.**
+1. **A machine account is declared by an operator, never guessed** (backlog 88). `POST
+   /api/org/identities` takes `{provider, external_id, kind: "machine"}` with **no** `user_id`
+   (the request is a union of two strict objects, so a machine *with* a user is a 400, and a body
+   without `kind` still means a person, as WP-31 shipped it). The human-time projector reads
+   `resolveAccount` (person / machine / unmapped) and **refuses** a machine's comment or approval —
+   no window opened, none extended, no zero-minute row, one debug line by name. Nothing reads a
+   `[bot]` suffix or a provider bot flag (a case asserts `renovate[bot]` is still counted). The
+   marker check stays and a case holds it for the day the platform's own bot account is mapped to a
+   person. A bot declared **after** its activity was folded keeps its rows (the `handler_executions`
+   claim makes a replay a no-op for them), so the statistics read drops rows whose
+   `external_author` is a declared machine (`MACHINE_AUTHORED`).
+2. **The shape: `user_identities` with a nullable `user_id` and `kind`** (migration **0045**), not a
+   list in `organizations.settings`. Why: `(provider, external_id)` is already this table's primary
+   key, so "person or machine" is **one row** and cannot be both; the settings list would have been
+   the first reader and first writer of a jsonb column with its own schema, its own command, and a
+   second statement about the same key that every reader would have to reconcile. The cost, paid:
+   one migration (a `kind in ('person','machine')` check and `(kind = 'person') = (user_id is not
+   null)`), two wire schemas (the command and the published row gain `kind`; `user_id` nullable on
+   the row), and the three readers — the inbound directory skips a machine (`user_id is not null`,
+   so it resolves exactly as an unmapped account and nothing it writes is acted on), the projector's
+   lookup (above), and through the directory the ask refusal (`unverified_identity`, docblock
+   updated). `on delete cascade` on `user_id` now reads right: deleting a user leaves the machines.
+3. **The cap is per entry (per task)** — the orchestrator's ruling; product/19 §16 amended by the
+   orchestrator. **Decision to flag:** WP-41 had already built the *other* reading — a second cap at
+   read time per `(identity, day, kind)` in `stats-queries.ts` — so "one of two, never both" meant
+   **removing** it. It is removed; the metric's definition says "capped at 8 h per calendar day
+   **per review window** (per entry)" (round 2; "per task" was imprecise) and a caveat says one
+   person can be credited more than 8 h in a day. The projector is unchanged (stateless, order-independent). The integration case that pinned
+   480 now pins 600 for the same arrangement.
+4. **Defect escape from the link half only** (backlog 114). `ticket.created` wakes a
+   `pipeline.outbound` duty `bug_trace` (`pipeline/delivery-measures.ts`); the job decides "bug" from
+   the project's own `templateByIssueType` → `bug` (no second list; unmapped is not a bug) and, for a
+   bug, reads the ticket once and runs `findMergeRequestByTicketLinks` — the link half extracted from
+   WP-34's resolver, which `findHumanMergeRequest` now calls — and appends **`ticket.bug.traced`**
+   on the project stream for **every** bug: `linked` (with the merge request and the owning task,
+   or `null` for a human's), `no_link`, or `unreadable` (no tracker binding, no git binding).
+   `found_by` is `ticket_link` or `null`; a case asserts the scan's listing is never asked for. The
+   statistics read joins the first trace per ticket to `stats_task_delivery`: an escape is a linked
+   bug whose task was delivered in the 30 days **before** the bug was filed — so a link to the fix,
+   merged after filing, never counts (integration case). Numerator at filing, denominator
+   (deliveries) at merge, as the merge rate does. **No migration**: the link is an event, per the
+   row's "a migration only for the flag".
+5. **Absent below a floor, with the coverage as the reason** (Q87). `DEFECT_COVERAGE_FLOOR = ½` is
+   a **chosen** floor — the product's rule, now in product/16 (orchestrator) — **not a derived one**
+   (corrected at review round 1: "publish while `L ≥ U`" restates the rule, and nothing measured or
+   modelled produces ½). **Deviation from criterion (5)**, which asked for a floor derived in the
+   change (rule 63): not met; what could replace the choice is `docs/TODO.md`'s share-of-linked-bugs
+   measurement. The published rate is the lower bound of `[E, E + U]`. Zero bugs
+   traced is absent too ("none filed" and "none reached the platform", backlog 187, look the same).
+   Published, the caveat reads "k of n bug tickets … (x %) carried a merge-request link the
+   platform could resolve … a lower bound". Unit cases at 40 % (absent), exactly 50 % (published),
+   and no bugs.
+6. **No inference from adjacency**: nothing in the trace reads timing; the only join key is a link a
+   person put on the ticket. The definition says so, and a case holds the wording.
+7. **`coverage_pct`** (backlog 94): the sentence is at the field in `events.ts` — no reader on this
+   build, the shipped adapter writes `null`, the fake a number (divergence 13), `getPipelineStatus`
+   is the read, `tasks.coverage` is what a statistic should use. No mechanism.
+8. **Two measurements, not taken** (rule 66). The bot-inflation item in `docs/TODO.md` now says the
+   declaration exists and the magnitude is still unmeasured. **The brief said the second item was
+   already in `docs/TODO.md`; it was not** (a grep for it found nothing) — added: *"What share of
+   real bug tickets carry a link to a merge request the platform can resolve?"*, which now decides
+   whether the defect rate is ever shown.
+
+**The refiner's addenda.**
+- **179, `loc_changed`**: `mr.merged` for a task's merge request wakes a `merge_measure` duty, one
+  `getMergeRequestDiffStats`, appended as **`task.mr.measured`** (project stream; `diff_stats` `null`
+  when the provider answered none) and **read at request time, first measurement per
+  `cause_event_id`** (round 2 — round 1 folded it into projector counters, which counted a
+  redelivered job's second append twice; the projector is back to its WP-60 state and the event is
+  `unconsumed`). The metric is (added + removed) ÷ measured merges
+  — a ratio now, and an unmeasured merge is in neither side (caveat with the count), never zero
+  lines. **Decided: the platform's own merge requests only** (one read per counted merge; product/16's
+  table is about the platform's work). The proving case is the refiner's, twice: the unit tier with
+  the event `null` and the read a number, **and** the event filled and the read `null` (records
+  unmeasured); the e2e (`stats-api.e2e.test.ts`) sets `setDiffStats` on the fake and publishes the
+  merge with `diff_stats: null`, and expects 40. A merge request reopened and merged twice
+  is two merges (two `mr.merged`).
+- **180, `concurrent_task_overlaps`**: distinct overlaps, **one per unordered pair of tasks at one
+  pair of revisions**, read from the log: the two events one comparison appends share its
+  `cause_event_id`, so grouping on `(cause, lower id, higher id)` recovers both heads and the
+  overlap is distinct `(lower, higher, head_lower, head_higher)`, counted on the day it was first
+  warned. This is the refiner's `(task, other, head sha)` from both sides; a push to either side is
+  a new overlap. The `conflict.warned` counter is still written and no longer published.
+  Integration: three comparisons (two at one pair of heads, one after a push) → 2.
+- **186, `tickets_edited_after_lint`**: a read-time fold, `task.lint.posted` against later
+  `ticket.updated` for the same (project, provider, key) within 48 h, **field filter**
+  `summary`/`description` (the editor filter is not available — `ticket.updated` carries no editor),
+  newer than the linter's baseline when it recorded one, and only over lints whose 48 h have closed
+  at the answer's instant (`asOf`, the same clock as `generated_at`; injected in tests). Integration:
+  in-window description edit counts; 49 h, status-only, and a late delivery older than the baseline
+  do not; a 34 h-old lint is in neither side.
+- **188**: **withheld, not a separate series.** Every review window an `mr.approved` by the window's
+  account in the project landed inside is kept out of `reviewer_minutes_per_delivered_task` and of
+  `human_minutes`' review part, and summed separately into a caveat ("N review windows … M minutes");
+  rows stay stored. The TODO check is named in both metrics' **definitions**. Matched on project +
+  account + time, not on the task's current merge request, so a rework cannot publish a window this
+  exists to withhold (the residual — a window withheld because its reviewer approved some other
+  merge request of the project meanwhile — runs the safe way).
+
+**Tests.** Unit: `delivery-measures.test.ts` › "reads the counts once and records them, although the merge event carried none",
+"traces a bug through its own link to the platform task whose merge request it names" and eight more;
+`human-time/projector.test.ts` › "neither opens a window nor extends one, for a comment or an approval, and writes no zero row";
+`stats-metrics.test.ts` › "is absent, naming the coverage, when fewer than half the bug tickets could be attributed",
+"folds lines changed per merged merge request, and never an unmeasured merge as zero lines";
+`routes/org.test.ts` › "declares an account a machine with no user, audits it, and never asks for a user";
+the `HumanTimeStore` contract suite resolves person, machine and unmapped against both stores.
+Integration (real PostgreSQL): `stats-queries.integration.test.ts` › "counts a conflict overlap once per pair of revisions, however many gate entries re-warn it",
+"folds an edit of the summary or description within 48 h of a lint, and nothing else",
+"traces a bug to a merge delivered before it was filed, never to the fix merged after",
+"applies no second day cap, drops a declared machine’s rows and withholds an approval’s window";
+`identity-queries.integration.test.ts` › "declares a machine as the same row, with no user, and the table refuses the two apart";
+`stats-queries.integration.test.ts` › "counts one merge once however many times it was measured, and an unmeasured merge as neither side". E2E: the stats endpoint asserts `loc_changed` = 40 from
+the fake's read with the event's `diff_stats` null.
+
+**Read-time log scans.** Five reads now consult `events` directly (overlaps, the lint fold, the
+defect trace, the merge measurements, the approval check), each bounded to one event type by
+`events_type_occurred_at_idx` and otherwise as round 2 below states;
+queue wait's absence reason used to say scanning the log is what a projection avoids, and now says
+the fold is possible and unbuilt instead (rule 83).
+
+**Sentences falsified — changed:** `projector.ts` (the marker residual, the refusal list, the
+approval docblock), `stats-metrics.ts` (module rule 3, the three reviewer caveats, first-pass
+acceptance's "approving produces no event on this build" — false since WP-60; the defect, lines,
+lint and overlaps entries; queue wait's reason), `stats-queries.ts` (the cap docblock), `ports.ts`
+(`resolveUser`), `postgres-inbox.ts` ("no writer" section, "an endpoint which no work package
+owns"), `ask.ts`, `consumption.ts` (the product/18:60 half), technical/02 (two rows, `mr.*` and
+`ticket.created` consumers), technical/03 (`user_identities`), technical/08 (the identities
+command), `docs/TODO.md` (items 22, 201, and the new one). The web fixtures that used `loc_changed`
+as their sample *absent* metric now use `queue_wait_minutes`. **Left:** the event field
+`mr.*.diff_stats` and the fake's divergence 17 (still true); `human-time-summary.ts` (the task page
+does not withhold — backlog 190).
+
+**For the orchestrator (product docs are not mine, rule 83):** product/16:17 (defect escape — the
+link-only source, the ½ floor, absent below it), product/16:16 (reviewer minutes withholds approval
+windows until the TODO check), product/16's *concurrent-task overlaps* (distinct pairs at a pair of
+revisions), product/16's LOC line (platform merge requests only), product/18:60 (the field filter),
+and product/19 §16 (already amended in the tree while I worked, not by me).
+
+**Discovered work for the refiner** (next free backlog number 190; none fixed here):
+- **190** — the task page's `human_time` block (`queries/human-time-summary.ts`, read in
+  `pipeline-queries.ts`) applies neither WP-61 exclusion: it still sums review windows an approval
+  touched (backlog 188's concern, on a second surface) and rows of an account declared a machine
+  after the fact. The same two SQL predicates would do it, and the DTO has no field to say how much
+  was withheld.
+- **191** — first-pass acceptance under-counts since WP-60: an approval opens a review window, so a
+  reviewer who approved without commenting makes the task *not* first-pass although nobody
+  commented. The caveat now says so; the fix is to count windows containing a non-marker
+  `mr.review.comment` (a join to `events` like `APPROVAL_TOUCHED`).
+- **192** — a bug's merge-request link is read once, at `ticket.created`; a link added later is
+  never seen, and it counts against the coverage. Re-reading on `ticket.updated` for a traced bug
+  with `no_link` would close it at one ticket read per edit.
+- **193** — `task.mr.measured` and `ticket.bug.traced` are appended with `nextStreamSequence` read
+  before the transaction, so a concurrent project-stream append fails the job and pg-boss retries
+  it — including the provider read. Bounded by the queue's retry limit; the ingress's
+  in-transaction retry loop would avoid the second read.
+
+**Verification (round 1)**, each tier after a bounded reading under 12 (26.27, 15.39 and 12.42 were
+waited out, one minute apart, before the first `verify`; 26.88 and 14.97 before integration and
+e2e): `pnpm run -s verify` PASS (7 767 passed, 14 skipped, final run after the last edit);
+`verify:integration` PASS (563, 54 files); `verify:e2e` PASS **twice** (209, 39 files, each);
+`verify:ui` PASS (332); `verify:web-e2e` PASS (42); `scripts/citations.test.ts` PASS (12). Docker
+after every Docker tier: the reaper only, volumes 102. New files were intent-to-add before every
+verify (rule 91).
+
+**Round 2 (implementer, session 8) — review round 1's two majors, three minors.**
+1. **The floor is chosen, not derived** (item 5 above rewritten; the constant's docblock and the
+   `docs/TODO.md` item say so). Two residuals stated at the constant, **not fixed**: a bug whose
+   `bug_trace` job exhausts its retries emits no event and leaves the denominator silently
+   (recording it needs a dead-letter hook the outbound queue has for no duty), so the coverage is
+   overstated by those bugs; and a bug linking only its later fix counts as `linked`, so the
+   coverage is an upper bound on "bugs whose origin could be seen".
+2. **Sargable bounds** (`eventInstantWindow`: `occurred_at` ≥ `from − 1 day` and < `until + 1 day`,
+   UTC midnights, constants on the column). The lint fold: the window both ways, and the
+   closed-window rule rewritten as `occurred_at <= asOf − 48 h`. The merge measurements: both ways.
+   The defect trace: lower bound only (a trace follows its filing; it may land after the range ends).
+   **Overlaps: an upper bound only, and the line says why** — "first warned" needs the pair's full
+   lookback. **`EXPLAIN (costs off)` of the lint read**, one scratch integration file against a
+   migrated PostgreSQL 18 with partitions `events_2026_09…_12`, removed after (measured): **before**
+   — `GroupAggregate ← Sort ← Append` over **all four** partitions, each a `Bitmap Heap Scan` with
+   `Index Cond: (type = 'task.lint.posted')` and the day and 48 h tests as a `Filter`; **after** — a
+   single `Index Scan using events_2026_09_type_occurred_at_idx` with `Index Cond: type AND
+   occurred_at >= … AND occurred_at < … AND occurred_at <= (asOf − 48 h)`, the civil-day test left
+   as the only `Filter`. The correlated `ticket.updated` probe was already an index scan with
+   `occurred_at` in its condition in both plans; it still lists every partition in the plan (its
+   bounds are parameters of the outer row, so pruning is at run time, not visible in `EXPLAIN`).
+   **Backlog 194 folded** for the lint, trace and merge reads; its overlaps half is closed as
+   *stated* (an upper bound, and the unbounded lookback named at the line), not as bounded.
+3. **Idempotent loc** — above; a second append for one merge counts once (integration case).
+4. **"Per review window (per entry)"** replaces "per task" in the caveat, the definition and the
+   docblocks: one person on one task can pass 8 h in a day across two windows a gap over 2 h apart.
+5. **`api.ts`'s caveats docblock** no longer says an approval without a comment is invisible.
+
+
+**Round 2 verification**, each after a bounded reading under 12 (4.40–5.47): the touched unit files
+PASS (383); `stats-queries` + `stats-backfill` integration PASS (14); `pnpm run -s verify` PASS
+(7 765 passed, 14 skipped). Docker after: the reaper only, volumes 102. `verify:e2e` not re-run in
+round 2 (the stats e2e's wait now reads the `task.mr.measured` event rather than a counter row).
