@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **Next: WP-44**, then the M4 table's order. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **Next: WP-46**, then the M4 table's order. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -2926,7 +2926,7 @@ rather than routing it through a channel it had just found broken, so product/19
 the stage with a note 'continued by human: `<summary>`'"* stays unmet until this is fixed. No
 measurement needed before starting; it is live today on every return.
 
-### 68. **The take-over export writes a tarball nothing serves and no transcript at all, so two documents' *"downloadable from the UI"* has no endpoint — and `compose.yml` already mounts the export volume into a process with no code that reads it** (TODO — **no work package owns it**; found by WP-27, session 5)
+### 68. **The take-over export writes a tarball nothing serves and no transcript at all, so two documents' *"downloadable from the UI"* has no endpoint — and `compose.yml` already mounts the export volume into a process with no code that reads it** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO — **no work package owns it**; found by WP-27, session 5)
 > **M4 (architect, session 6): folded into WP-44.**
 
 **What is wrong.** One cause with three symptoms: the export's **production** half shipped (WP-14's
@@ -3064,7 +3064,7 @@ armed on `task.taken_over`, re-validated on fire (TD-004) and cancelled by `task
 the render is whoever next edits `packages/application/src/pipeline/workpad.ts`; the timeout is a
 piece of product/19 § 19 that WP-27 did not claim, and naming it here is the only record it has.
 
-### 70. **Nothing in the SPA calls take-over or hand-back, so two shipped commands are reachable only by hand — and the client-driven census is blind to them by construction** (TODO, small — **no work package owns it**; found by WP-27, session 5)
+### 70. **Nothing in the SPA calls take-over or hand-back, so two shipped commands are reachable only by hand — and the client-driven census is blind to them by construction** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO, small — **no work package owns it**; found by WP-27, session 5)
 > **M4 (architect, session 6): folded into WP-44.**
 
 **What is wrong.** `POST /api/tasks/:task_id/take-over` and `/hand-back` are served, permissioned and
@@ -3189,7 +3189,7 @@ Q52's transport half or WP-15g's successor — and the second consumer is now me
 predicted, because a shadow batch that silently started from the default branch would publish a
 similarity figure that measures drift, which is the one number the feature exists for.
 
-### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (TODO for **(a)** and **(b)** — **no work package owns either**; **(c) RESOLVED** at `621b57f`, WP-34, session 5 — `picksUpNewTickets` and `shadowMode` both read, and `autonomy-readers.test.ts`'s split assertion moved with them to **eight** read / **seven** unread; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
+### 72. **Seven of the dial's fifteen policies have no reader, and they are three different pieces of work rather than one backlog line** (**RESOLVED** at `7ebdc93`, WP-44, session 8 for the two stale caveat strings (the rest of the entry stays as it was) — TODO for **(a)** and **(b)** — **no work package owns either**; **(c) RESOLVED** at `621b57f`, WP-34, session 5 — `picksUpNewTickets` and `shadowMode` both read, and `autonomy-readers.test.ts`'s split assertion moved with them to **eight** read / **seven** unread; filed by the refiner from WP-30's `AUTONOMY_POLICY_READERS`, session 5)
 > **M4 (architect, session 6): folded into WP-62.**
 
 **What is wrong.** WP-30 materialised the dial and gave five policies a reader; the enumeration it
@@ -5880,7 +5880,7 @@ package owns it.** Related: backlog **81** (the notifications outbox has no read
 **102** (a count that reaches a log line and no reader) — the same shape at two other features, which is
 worth knowing before anybody builds a third one-off reader.
 
-### 108. **WP-40 shipped no `apps/web` change at all, so the epic split is unreachable from the product at both ends — no screen can turn the feature on and no screen can accept its output** (TODO — one cause, two symptoms; **no work package owns it**; found by WP-40, session 5)
+### 108. **WP-40 shipped no `apps/web` change at all, so the epic split is unreachable from the product at both ends — no screen can turn the feature on and no screen can accept its output** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO — one cause, two symptoms; **no work package owns it**; found by WP-40, session 5)
 > **M4 (architect, session 6): folded into WP-44.**
 
 
@@ -9063,7 +9063,7 @@ Rule 83 over any user-guide or technical/02 sentence that repeats the promise.
 WP-73** (refiner, session 8): two strings and two unit cases, the sweep's shape. If WP-56's review
 reopens, that round is cheaper.
 
-### 164. **After a take-over escalates, the workpad still says the task is taken over and the task page says it is not — two projections of one fact, with different event sets and different state guards** (TODO, **small** — **read off the tree, not measured**; **live** from WP-56, on every take-over the inactivity timer escalates; proposed owner **WP-44** (refiner, session 8); found by WP-56, session 8)
+### 164. **After a take-over escalates, the workpad still says the task is taken over and the task page says it is not — two projections of one fact, with different event sets and different state guards** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO, **small** — **read off the tree, not measured**; **live** from WP-56, on every take-over the inactivity timer escalates; proposed owner **WP-44** (refiner, session 8); found by WP-56, session 8)
 
 **What is wrong.** The workpad asks `TaskRepository.takenOver`: the newest of `TAKE_OVER_BOUNDARY_EVENTS`
 — taken over, handed back, resumed, stage entered, completed, cancelled
@@ -9130,7 +9130,7 @@ card (`:116-128`) renders `requested_at` only, while the DTO already carries `de
 suffix, with a ui-tier case for both the present and the null deadline (entry **162**'s rows). Depends
 on WP-56 (commit pending).
 
-### 167. **The take-over inactivity timer counts five working days from the take-over and never resets, so a person pushing to the branch every day without handing back is escalated on day five — product/19 §19 says *inactivity*, the build measures *time held*** (TODO, **small** — a **recorded narrowing**, stated at `expireTakeOver`'s docblock and in the escalation brief, not a silent defect; **live** from WP-56 on every take-over held past five working days; **read off the tree, not measured**; a product half (which signals count) answered below by recommendation; proposed owner **WP-44** (refiner, session 8); found by WP-56 round 2, session 8)
+### 167. **The take-over inactivity timer counts five working days from the take-over and never resets, so a person pushing to the branch every day without handing back is escalated on day five — product/19 §19 says *inactivity*, the build measures *time held*** (**RESOLVED** at `7ebdc93`, WP-44, session 8 (its own "done" deferred the `mr.updated` half — backlog 207) — TODO, **small** — a **recorded narrowing**, stated at `expireTakeOver`'s docblock and in the escalation brief, not a silent defect; **live** from WP-56 on every take-over held past five working days; **read off the tree, not measured**; a product half (which signals count) answered below by recommendation; proposed owner **WP-44** (refiner, session 8); found by WP-56 round 2, session 8)
 
 **What is wrong.** product/19:156: *"Timeouts: a taken-over task escalates to `Needs human` after 5
 working days of inactivity"*. WP-56 computes the due instant as `takeOverDeadline(calendar, takeOver.at)`
@@ -9185,7 +9185,11 @@ it builds the take-over and hand-back controls whose commands are signal (a), an
 **164**, the other *still taken over* definition — one row, one notion of a held task. Related: **69**,
 **164**.
 
-### 168. **The run-detail screen's "Documents" counts a tier-1 entry recorded `validated: false` as included and lists it unmarked beside the admitted ones — a second spelling of *admitted* that disagrees with the stats query and with the screen's own "Used"** (TODO, **small** — **read off the tree, not measured**; **live** since WP-57 (commit pending) for every run whose pack scored a `paths:`-scoped page, which in production is every such page — see **170**; latent before, because the endpoint never answered; proposed owner **WP-44** (refiner, session 8); found by WP-57, session 8)
+**Refiner (session 8, after WP-44):** half (1)(b) — an attributed `mr.updated` or push as activity — is carried
+forward as **207**, so this entry can close at WP-44's commit; the one sentence left is product/19:156, in WP-44's
+*Sentences for the orchestrator*. 207 grades what was built against items (1)–(4).
+
+### 168. **The run-detail screen's "Documents" counts a tier-1 entry recorded `validated: false` as included and lists it unmarked beside the admitted ones — a second spelling of *admitted* that disagrees with the stats query and with the screen's own "Used"** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO, **small** — **read off the tree, not measured**; **live** since WP-57 (commit pending) for every run whose pack scored a `paths:`-scoped page, which in production is every such page — see **170**; latent before, because the endpoint never answered; proposed owner **WP-44** (refiner, session 8); found by WP-57, session 8)
 > **WP-58 (implementer, session 8), rule 83:** *"which in production is every such page"* above is **no longer true** once WP-58 lands and a project's index is rebuilt after migration 0042: the planner now validates against the stored listing of the indexed commit, so only a page whose `paths:` glob resolves to nothing there (the fixture vault's `L-2025-03-02-legacy-importer.md`) is recorded `validated: false` — and that page is now also an `unresolved_paths` health finding. It stays true for a project not re-indexed since 0042. The screen defect itself is unchanged and still WP-44's.
 
 **What is wrong.** `apps/web/src/features/run-detail.tsx:296-311` renders `tier0.length + tier1.length`
@@ -9367,7 +9371,7 @@ vault, now naming the **large** single-subject vault as the residual class — t
 as-built rule's and are re-pinned by WP-58, not by this entry. Related: **15**, **16** (both folded into WP-58),
 **172**, Q58.
 
-### 172. **Q58 (a) is not done: `ContextPackRecord` cannot say that the text step contributed nothing, or why — "every term was uninformative" and "this stage asked for none" are the same row** (TODO, **small** — **read off the tree**; **live** from WP-58 (commit pending), because the floor is the first mechanism that makes the text step *deliberately* return nothing; proposed owner **WP-44** (refiner, session 8) — the architect's WP-58 ruling calls it *"the next knowledge row"*, and no remaining M4 row is a retrieval row; found by WP-58, session 8)
+### 172. **Q58 (a) is not done: `ContextPackRecord` cannot say that the text step contributed nothing, or why — "every term was uninformative" and "this stage asked for none" are the same row** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO, **small** — **read off the tree**; **live** from WP-58 (commit pending), because the floor is the first mechanism that makes the text step *deliberately* return nothing; proposed owner **WP-44** (refiner, session 8) — the architect's WP-58 ruling calls it *"the next knowledge row"*, and no remaining M4 row is a retrieval row; found by WP-58, session 8)
 
 **What is wrong.** WP-58 computes the answer and records it nowhere durable. The application-level
 `ContextPack` carries `searchedTerms`, `uninformativeTerms` and `termFloor`
@@ -9863,7 +9867,7 @@ update), or the handler enqueues a provider read of the current head instead of 
 one read per foreign push; and one saga case delivers two `mr.updated` out of order and asserts the
 newer head survives. Related: **182**, **167**.
 
-### 190. **The task page's `human_time` applies neither of WP-61's exclusions: it sums the review windows an approval touched, which the statistics withhold, and the rows of an account declared a machine after the fact, which the statistics drop — two answers to "how many human minutes did this task take"** (TODO, **small** — the statistics' reasoning (backlog **188**: the approval `user` is an inference) applies unchanged to the second surface; **read off the tree, not measured**; **live** from WP-61 on every task with an approval or a retro-declared bot; proposed owner **WP-44** (refiner, session 8); found by WP-61, session 8)
+### 190. **The task page's `human_time` applies neither of WP-61's exclusions: it sums the review windows an approval touched, which the statistics withhold, and the rows of an account declared a machine after the fact, which the statistics drop — two answers to "how many human minutes did this task take"** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO, **small** — the statistics' reasoning (backlog **188**: the approval `user` is an inference) applies unchanged to the second surface; **read off the tree, not measured**; **live** from WP-61 on every task with an approval or a retro-declared bot; proposed owner **WP-44** (refiner, session 8); found by WP-61, session 8)
 
 **Evidence.** The implementer, quoted: *"the task page's `human_time` block (`queries/human-time-summary.ts`,
 read in `pipeline-queries.ts`) applies neither WP-61 exclusion … The same two SQL predicates would do it,
@@ -10021,7 +10025,7 @@ every reconnect fails `unauthorised` and is named and left — no chat decision 
 changed fingerprint stops and re-opens that account; a unit case changes the secret id and asserts one stop and
 one open. **Depends on** WP-43.
 
-### 198. **A refused inbound delivery — `unmapped_identity`, `decision_refused: not_permitted` — is visible only in SQL and the API process's log, so an operator debugging a dead button has no surface, and the one they need (which Slack account to map) is on no screen** (TODO, **small** — **live** since WP-43 made chat decisions reachable; **read off the tree**; proposed owner **WP-44** (refiner, session 8); found by WP-43, session 8)
+### 198. **A refused inbound delivery — `unmapped_identity`, `decision_refused: not_permitted` — is visible only in SQL and the API process's log, so an operator debugging a dead button has no surface, and the one they need (which Slack account to map) is on no screen** (**RESOLVED** at `7ebdc93`, WP-44, session 8 — TODO, **small** — **live** since WP-43 made chat decisions reachable; **read off the tree**; proposed owner **WP-44** (refiner, session 8); found by WP-43, session 8)
 
 `inbox.error` is written with the refusal (`` `decision_refused: ${entry.reason}: ${entry.detail}` ``,
 `packages/application/src/integrations/inbound.ts:174`) and no route reads it; backlog **185** already had to
@@ -10089,6 +10093,137 @@ sentence in product/08** (it lists `update` as a communication action at product
 `task.approval.decided` (decided or expired) replaces the message's buttons with the outcome and the decider, keyed
 by the approval, through the executor; a unit case per outcome, read back from the fake's recorded update.
 **Depends on** WP-43, WP-56. Related: **163**.
+
+### 203. **`task.taken_over` records no run id, so the take-over panel's two download links are an inference — the newest run *started* by the take-over's instant — and on a take-over with no live run they point at an earlier, finished run the take-over never interrupted** (TODO, **nit-to-small** — **read off the tree, not measured**; **live** from WP-44 (commit pending) on every `no_live_run` take-over; proposed owner **WP-73** (refiner, session 8); found by WP-44, session 8)
+
+**What is wrong.** The event is `branch`, `session_id`, `stage` and nothing else
+(`packages/contracts/src/events.ts:305-310`), while the command that appends it holds the run id in hand —
+`live.runId` (`packages/application/src/pipeline/commands.ts:1427`) — and decides `exported: live !== null`
+(`:1406`). The screen reconstructs it: `interruptedRunOf` (`apps/web/src/features/take-over.tsx:59-75`) picks
+the newest run with `started_at <= at`, and `TakeOverDownloads` (`:113-139`) offers the transcript **and** the
+tarball for it unconditionally. **Evidence**, the implementer's decision (d): *"Which run's files the panel offers:
+the newest run started by the take-over's instant (`interruptedRunOf`) — `task.taken_over` records no run id"*,
+and the discovered-work line: *"Recommend carrying `run_id` (nullable) on the event and on `taken_over`."* The
+refiner's addition (read, not run): when the take-over answered `no_live_run` there **was** no interrupted run, yet
+the inference still names the newest earlier one, so the panel offers its transcript as the take-over's and a
+tarball link that answers `404 export_not_found`; the panel's text (*"The tarball exists only when the take-over
+asked for one"*, `:135`) covers the unrequested case in words, not the wrong-run case.
+
+**Cost to leave.** A person reading a taken-over task may download the transcript of a run that finished before
+they took over and read it as the session they interrupted. No data is wrong; a label is. **Done:** `run_id`
+nullable on `task.taken_over` (null exactly when `exported` is false), carried onto `taken_over` in the task DTO,
+and the panel reads it instead of `interruptedRunOf` — a pre-change event keeps the inference, labelled as one; a
+ui case for `run_id: null` showing no downloads, and one for a take-over whose newest started run is **not** the
+recorded one. `schemas/` regenerated. **Depends on** WP-44 (commit pending). Related: **164**, **68**.
+
+### 204. **`docs/user-guide.md` says at least five shipped features are not built — §4 and §13 (the implementer's), and on their face §11 and §12 too (the refiner's, unconfirmed)** (TODO, **small** — rule **83**, a user-facing document that tells a reader working features do not exist; **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-44, session 8, widened by the refiner)
+
+**Evidence.** The implementer, verbatim: *"`docs/user-guide.md` §4 and §13 still say *Ask the task* is not built
+(WP-31), §13 lists steering, statistics and creating an integration as missing (WP-27, WP-41, WP-30), and §4 says
+the task endpoint publishes four checks (WP-38 made it more) — rule 83, found while editing the take-over
+paragraph and not fixed here."* Confirmed at `docs/user-guide.md:210-211` (*"Ask the task a question … would post
+into a void"* under *What is not on this screen*), `:176-178` (*"publishes **four** — questions, approvals, risk
+classes and cost"*, where WP-38's panel is held to product/10's eleven items and the guide says thirteen), and the
+§13 table `:344-355` (steering, ask, statistics, *"Nine of the thirteen merge-readiness checks"*, creating an
+integration). **Refiner's addition — a hypothesis, needs reading against WP-30 and WP-41's notes before
+editing**: §12 is headed *"Statistics — a stub, and it says so"* (`:333-338`) while `/stats` routes to
+`StatisticsScreen` (`apps/web/src/routes/tree.tsx:94`) and WP-41/WP-61 publish metrics; §11 (`:325-331`) says
+organisation settings are *"named as absent"* after WP-30's settings mirror; and §4's *"Nine of the eleven
+commands"* (`:149`) predates WP-27 and WP-44's controls. **Cost to leave:** the guide is what an evaluating team
+reads first; it undersells the product and contradicts the screen beside it. **Done:** every "not built" claim in
+§4, §11, §12 and §13 re-read against the tree and either deleted or re-stated; §13's table equal to what is
+actually missing. **Depends on** nothing.
+
+### 205. **`PLATFORM_DEFAULT_CONFIG.features` ships no `history_bootstrap` entry, and the feature-card docblock claims a comparison against that table which the test does not make** (TODO, **nit** — **working as designed** in behaviour (every reader treats absent as off); a defaults-table gap plus one false sentence; **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-44, session 8, the docblock half added by the refiner)
+
+The implementer: *"`PLATFORM_DEFAULT_CONFIG.features` ships no `history_bootstrap` entry, so the effective
+configuration shows no default for a key the wizard's step 3b depends on; every reader defaults it off, so this is a
+documentation gap in the defaults table, not a behaviour."* Confirmed: the `features` block of
+`packages/domain/src/config/effective-config.ts:121-177` has nine keys and not this one, and
+`packages/domain/src/config/feature-readers.ts:17` states it. **Refiner's addition:** `FEATURE_CARDS`' docblock
+says the cards are held *"equal to `PLATFORM_DEFAULT_CONFIG.features` in both directions"*
+(`apps/web/src/features/operating-mode.tsx:121-123`), but the test compares with `featuresConfigSchema.shape`
+(`apps/web/src/features/operating-mode.test.tsx:72`, whose comment says the schema is *"one wider than the defaults
+table"*) — a comparison with the defaults table would fail on exactly this key. **Done:** `history_bootstrap:
+{ enabled: false }` in the defaults, after which the docblock becomes true; or the docblock names the schema. One
+line either way. **Depends on** nothing. Related: **108**.
+
+### 206. **The refused-deliveries read serves every `inbox` row with an `error`, including ordinary ignores, capped at the newest 50 — so on a busy binding the refusals an operator opened it for are pushed out by noise** (TODO, **small** — **live** from WP-44 (commit pending) on any Slack binding whose channel carries non-thread messages, and — the refiner's addition, read off the tree — on any GitLab binding receiving push events for non-default branches; the ratio of noise to refusals on a real channel **needs measurement**; proposed owner **WP-73** (refiner, session 8); found by WP-44, session 8)
+
+**Evidence.** The implementer: *"`GET …/refused-deliveries` lists every row with an `inbox.error`, including the
+ordinary *"message is not a reply in a task thread"* ignores a busy Slack channel produces; filtering by reason
+needs the reasons structured on the row (they are one redacted string today)."* Confirmed:
+`listRefusedDeliveries` filters `isNotNull(inbox.error)`, newest first, `.limit(MAX_REFUSED_DELIVERIES)`
+(`apps/server/src/queries/integration-queries.ts:161-175`), and the cap is **50**
+(`packages/contracts/src/api.ts:1158`). The Slack ignore is `ignored('unsupported_event', 'message is not a reply
+in a task thread')` (`packages/integrations/src/providers/slack/inbound.ts:351`). **Refiner's additions:** (1) the
+reason **is** structured where it is produced — `IgnoredDelivery.reason` — and is flattened into one
+`reason: detail` string by `errorTextOf` (`packages/application/src/integrations/inbound.ts:163-181`), so
+structuring it is a write-side change, not a parsing problem; a prefix filter over the redacted, truncated string
+would be the fragile alternative. (2) GitLab's `normalisePush` ignores every push that is not to the default branch
+(`packages/integrations/src/providers/gitlab/inbound.ts:404-406`) — which includes every agent push to
+`agentic/*` — so the same flood exists there whenever push events are subscribed.
+
+**Cost to leave.** Backlog **198**'s surface exists and, on exactly the busy instance that needs it, shows 50
+harmless ignores and not the `unmapped_identity` row that explains the dead button. **Done:** the reason codes
+stored as a column on `inbox` (a migration; a row from before it reads as *unknown reason*), the read filtered to
+refusals (`unmapped_identity`, `decision_refused:*`, `malformed_payload`, verification failures — the exact set a
+decision stated at the query) or offering the filter; an integration case where 60 ignores and one refusal answer
+the refusal. **Depends on** WP-44 (commit pending). Related: **198**.
+
+### 207. **An `mr.updated` by the holder does not reset the take-over inactivity timer — backlog 167 half (1)(b), deferred by 167's own "done", and latent until a normaliser names the pusher** (TODO, **nit** as an entry — **latent**: no producer today; the trigger is a provider attributing a push; **needs measurement on a real GitLab instance**, which this build cannot reach; **no M4 row owns it**, deliberately — see *Depends on*; found by WP-44, session 8, graded by the refiner)
+
+**What was built of 167, and what was not** (read against 167's four "done" items and WP-44's notes, not run).
+**(1)(a) built**: *activity* is the newest `human_actions` row on the task by the user the `task.taken_over` event
+names, after it (`packages/infrastructure/src/pipeline/take-over-activity.ts`, `takeOverLastActivitySql`).
+**(2) built**: that one SQL expression is read by `tasks.takenOver` and the recovery's `heldTasks`, so the timer and
+its recovery row compute one instant. **(3) built**, bar one vacuous negative: Friday take-over, Wednesday holder
+command, not due at the original deadline, escalation the next Wednesday, and the bystander negative — in
+`deadlines.test.ts`, both stores' contract suite and the recovery integration case; the *"`mr.updated` with no
+author does not reset"* negative is not listed among the assertions, and today it cannot fail, because nothing
+reads `mr.updated` at all. **(4) built except product/19**: brief, docblocks, user guide and operator guide
+changed; `docs/product/19-operating-definitions.md:156` still reads *"after 5 working days of inactivity"* unqualified —
+the replacement sentence is in WP-44's *Sentences for the orchestrator*, not yet applied. **(1)(b) not built, and
+167 said it need not be**: *"Until a provider names the pusher, (b) is absent and says so at the line; a push with no
+attribution does not reset the clock."* WP-44 did exactly that (*"`mr.updated` is **absent** and said so at
+`TakeOverRecord.lastActivityAt`"*). **Grade: 207 does not make 167 half-resolved.** 167 is resolved on its own
+terms at WP-44's commit, with one sentence outstanding (product/19:156, the orchestrator's) and one vacuous
+negative; 207 is the trigger-bound remainder 167 anticipated, split out so 167 can close.
+
+**The implementer's line**: *"167 half (b): an `mr.updated` by the holder still does not count, because no shipped
+normaliser names the pusher; it is the second activity signal the moment one does."* **Refiner's additions (read
+off the tree):** GitLab's `mr.updated` carries `actor: {kind: 'integration', …}` with no identity
+(`packages/integrations/src/providers/gitlab/inbound.ts:266-273`, `:470-474`), although the same normaliser
+already reads the delivery's `hook.user` for `mr.approved` (`:185-192`) — so naming the pusher is a normaliser
+change resting on the **same inference** as backlog **188** (whether the merge-request hook's `user` is the person
+whose push caused an `update`). A second candidate is the **push** hook: `pushHookSchema` parses no user field
+(`packages/integrations/src/providers/gitlab/webhook-payloads.ts:132-139`) and `normalisePush` ignores every
+non-default-branch push (`inbound.ts:404-406`), including pushes to the task's own `agentic/*` branch; whether
+GitLab's push payload names the pusher is **not cited** in `test/fixtures/http/gitlab/SOURCES.md` — a hypothesis.
+Either way the platform's own pushes (the minted run token's account) must not count; they are declared machine
+accounts in WP-61's sense.
+
+**Cost to leave.** 167's: a holder who only pushes and issues no command is escalated on day five. Small, and the
+brief and the user guide (`docs/user-guide.md:195-197`) now say so. **Done:** once the measurement below is taken,
+the chosen hook names the pusher (mapped through `resolveUser`, machine accounts excluded), `takeOverLastActivitySql`
+admits it as a second term, and 167's negative is asserted for real: an unattributed `mr.updated` and a machine
+account's push do not reset; the holder's attributed push does. **Depends on** the real-GitLab measurement filed in
+`docs/TODO.md` beside **188**'s. Owner: none until then — attaching it to an M4 row would schedule work the row
+cannot finish. Related: **167**, **188**, **182**.
+
+### 208. **The feature-card check stops a card claiming *unbuilt* for a feature with a reader, and nothing stops the same claim written into `caveat` — or into an unkeyed `FEATURES_WITHOUT_A_SWITCH.why`, which is where *"Ask the task — not built"* sat** (TODO, **nit** — a **stated residual** of WP-44's check, no current instance; **read off the tree**; proposed owner **WP-62** (refiner, session 8); found by WP-44 as a stated risk, the second site added by the refiner)
+
+The implementer: *"a card may carry an `unbuilt` line **exactly when** `FEATURE_READERS` names no reader for its
+key. Its stated limit: a "does nothing" sentence typed into `caveat` instead of `unbuilt` is not caught — no
+source-text guard can tell a limit from a denial."* Confirmed at `apps/web/src/features/operating-mode.test.tsx:106-113`;
+and the check is **vacuous today** — `FeatureCard.unbuilt`'s docblock says *"Every card is built today, so no card
+has one"* (`apps/web/src/features/operating-mode.tsx:147-152`). **Refiner's addition:** the unkeyed entries of
+`FEATURES_WITHOUT_A_SWITCH` (`operating-mode.tsx:255-275`) carry a free-text `why` that no comparison reads at all,
+and that constant is where backlog **72**'s second stale string lived. The limit is stated in WP-44's notes but
+**not** in the test's docblock (`operating-mode.test.tsx:60-68`). **Cost:** a recurrence of 72's defect is
+reviewable, not caught. **Done:** the limit stated at the test and at `FeatureCard.caveat`; each unkeyed exemption
+names the route or control it claims is on, resolved against the client census rather than trusted. **Depends
+on** WP-44 (commit pending). Related: **72**, **108**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -13666,7 +13801,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | DONE | `eb7ee6a` | **Folded backlog 59, 90, 182, 185 (at review), and 177 as refused; implemented Q61 (b).** `ticket.updated` (Jira, beside its other events) and `mr.approved` (GitLab's `approval` action, naming the approver — an inference from the documented page, filed for a real-instance check, backlog 188) with the fakes and the shared suites; the snapshot re-read at the next agent stage when older than the latest edit signal (migration **0044**); re-lint not built (awaiting the Jira measurement). `mr.updated` moves the recorded head only for a strictly later provider instant (`tasks.mr_head_at`) — **review measured the first version moving it back**. **The CI gate now judges the live head**: review found the pre-existing gap beneath it (the event path settled the gate from any finished pipeline for the MR, whatever its sha) and the orchestrator folded it in — both paths read the MR's live head from the provider (a `ci_settle` duty for the event path) and settle only on a pipeline of that commit; a red pipeline's failure counts once per commit. **Backlog 185** (since WP-08, measured): Jira's changelog schema read a missing `toString` from `Object.prototype` and rejected whole deliveries — a null-prototype copy and `Object.hasOwn`. **Three review rounds** (R1 major measured: the head moved back; R2 APPROVE-with-nits plus the pre-existing CI-gate gap; R3's change reddened the orchestrator's `verify:e2e` twice, deterministically — a red pipeline parked one loop early, **against BD-008's bound of 3**, because the poll path counted repeat sightings of one pipeline; the orchestrator's hypothesis (two paths double-counting) was **wrong** and the implementer measured the real cause — the e2e's expectation stood). Canaries dead by name; the survivor of round 2 (the fake's instant stamping) is now held by the shared git suite, re-canaried by the orchestrator. **Orchestrator verification on the final tree**: `PASS: verify` (406 files, 7736 passed), `PASS: verify:integration` (559), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `eb7ee6a`: `ci` `36243497973` and `image` `36243497972` **completed success**, zero `release` runs. Discovered work: backlog **186**–**189** | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
 | WP-61 | **The delivery metrics stop being wrong in two directions** | DONE | `8dbebd9` | **Folded backlog 88, 89, 94, 114, 179, 180, 186, 188, and 194 in part; implemented Q87.** Machine accounts declared by an operator only (migration **0045**, the audited org route) and refused by the human-time projector; the day cap **per review window** — the orchestrator's ruling, product/19 amended, WP-41's read-time cross-task cap removed and the consequence stated; approval-touched windows withheld until the real-GitLab check; the defect rate from the link half of WP-34's resolver only, published at ≥ ½ traceable coverage — **a chosen floor, criterion (5)'s "derived" recorded as not met**; lines changed from one diff-stats read per merged MR, first measurement per merge; distinct overlaps; the lint fold on summary/description edits. **One review round** (REQUEST_CHANGES: the floor mislabelled as derived; three of four statistics reads claimed to prune and scanned whole histories — now bounded, the lint read's `EXPLAIN` went from four partitions to one index scan; a redelivered measurement double-counted). The orchestrator amended product/16, /18 and /19 to match and canaried the dedupe (dead by name). **Orchestrator verification**: `PASS: verify` (407 files, 7765 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `8dbebd9`: `ci` `36248633792` and `image` `36248633812` **completed success**, zero `release` runs. Discovered work: backlog **190**–**193** | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
 | WP-43 | **Slack Socket Mode** | DONE | `b4c23bc` | **Folded backlog 78, 79's remaining half, and 196 in part (by the orchestrator at review).** One Socket Mode connection per Slack integration, held by the process serving `/webhooks/*` (**TD-028 amended by the orchestrator** with the implementer's text, the role wording corrected at review), opened at composition and closed at shutdown; a worker-capable process without the ingress names each account it does not hold. Envelopes are wrapped into deliveries signed with the binding's own secret, so the **WebSocket host is the trust boundary** — refused unless the binding's allow-listed host or a subdomain of it. Chat decisions are decided by the aggregate in the ingress transaction (membership, role, identity mapping) — with that routing off the e2e showed a **member's** click moving a task to `ready_for_merge`; the review established it was **latent on `main`** (nothing posted an approval button), so no hotfix. Approval buttons only when a click can arrive (migration **0046**), the button's task id cross-checked; an identities settings screen. **One review round** (REQUEST_CHANGES: a socket opened while a stop was in flight leaked — measured); 199 deferred; the orchestrator added CLAUDE.md's held-connections bullet and ran the host-check canaries (dead by name). **Orchestrator verification**: `PASS: verify` (410 files, 7814 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (337), `PASS: verify:web-e2e` (43), images rebuilt and `PASS: compose-stock-check`. CI on `b4c23bc`: `ci` `36253785415` and `image` `36253785435` **completed success**, zero `release` runs. Discovered work: backlog **195**, **197**–**202** (195 needs a row of its own — for the M5 pass) | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
-| WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | TODO | — | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
+| WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | DONE | `7ebdc93` | **Folded backlog 68, 70, 108, 72's caveats, and the refiner's 164, 167, 168, 172, 190, 198; implemented Q93 and Q85's surface half.** Take-over transcript and tarball **served, not copied** (project-scoped, attachment, `nosniff`, the tarball through the realpath guard, a refusal after page one aborting rather than truncating), a launcher-side 14-day retention; take-over, hand-back and breakdown controls; feature cards compared both ways with the platform's own table (`FEATURE_READERS` — found `history_bootstrap` uncarded too); the three census cases deleted; the take-over timer reset by the holder's commands; `ContextPackRecord.text_search` (migration **0047**); shared human-time predicates; an admin read of refused deliveries and unmapped ids. **One review round** (REQUEST_CHANGES: the download routes were correctly scoped but untested for another project's member — a canary survived all ten tests). The orchestrator amended technical/05's export sentence and product/19's take-over paragraph (the URLs, and *inactivity* as the holder's own commands). **Orchestrator verification**: `PASS: verify` (414 files, 7851 passed), `PASS: verify:integration` (572), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (362), `PASS: verify:web-e2e` (47); `compose-stock-check` 17/17 on rebuilt images in the implementer's shell. CI on `7ebdc93`: `ci` `36260154407` and `image` `36260154412` **completed success**, zero `release` runs. Discovered work: backlog **203**–**208**. The implementer reported the harness refused `sleep 60`, so its load readings were spaced by work, and one run was chained at a load of 46 — recorded | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
 | WP-46 | **The merge-readiness Checks panel** | TODO | — | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
 | WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | TODO | — | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
 | WP-62 | **The dial's remaining policies get readers** | TODO | — | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
@@ -30441,3 +30576,225 @@ the synthetic load the brief forbids. It is owed before the commit, or by `image
 3. `runtime.ts` and the TD-028 text above: "worker-capable roles".
 4. The setup guide's `socket_mode` row says a reply arrives but is not matched (backlog 195).
 
+
+#### WP-44
+
+**Round 1 (implementer, session 8).** Backlog **68**, **70**, **108**, **72**'s two caveat strings,
+and the refiner's **164**, **167**, **168**, **172**, **190** and **198**; **Q93** implemented per its
+recommendation, **Q85**'s surface half built. Commit pending.
+
+**What shipped, criterion by criterion.**
+1. **The two downloads, served and not copied (Q93).** `apps/server/src/routes/downloads.ts`:
+   `GET /api/runs/:run_id/transcript.jsonl` streams `run_messages` page by page (500 a read) through
+   `listRunMessages` — the `/messages` projection, partial `stream_block` frames dropped, one JSON
+   document per line, `Content-Disposition: attachment`, gated at `transcript.read` like the page;
+   the first page is read before the headers so a refusal is an ordinary error, not a truncated
+   file. `GET /api/runs/:run_id/export.tar` reads `<APP_WORKSPACE_EXPORT_DIR>/<run>.tar` through
+   WP-15j's realpath guard (`resolveBundleRoot`/`resolveBundleFile`, reused, not copied), gated at
+   `task.take_over`, `404 export_not_found` (its own code, so the census never reads it as "no
+   route") and `409 export_directory_not_configured` when the server was not told the mount. **No
+   `blobs` writer.** The server now reads `APP_WORKSPACE_EXPORT_DIR` (`config.ts`, nullable, no
+   default — the mirror root's reasoning), which compose already passed it. **Retention**: the
+   launcher's existing sweep also removes a `<uuid>.tar` older than `TAKEN_OVER_WORKSPACE_KEEP_DAYS`
+   (14) from the export directory (`apps/launcher/src/export-retention.ts`): regular files only
+   (`lstat`, never follows a symlink), only the launcher's own name shape, mtime as the clock, a
+   failed unlink counted and retried on the next pass. Tests: `routes/downloads.test.ts` (JSONL
+   shape, the cursor across three pages, an empty file, 401/403/404 before any read, the tarball,
+   `export_not_found`, a planted symlink refused, the 409, a viewer's 403, and the file name read off
+   the launcher's own source), `export-retention.test.ts` (both sides of the 14-day edge, foreign
+   names kept, a symlink neither followed nor removed, an absent directory), and a
+   `service.test.ts` case on the real sweep.
+2. **Take over and hand back on the task and run screens.** `apps/web/src/features/take-over.tsx`,
+   one component rendered by both screens. Before a take-over: a reason, the tarball checkbox, one
+   button; the answer's four fields rendered as the response said them (`workspaceExportText` keeps
+   `requested` in its tense). While held: branch, session, resume lines, the two downloads, and the
+   hand-back form whose picker is **`taken_over.hand_back_stages`** — a new DTO field the server
+   computes with `compilePipeline` over the task's frozen template (the same computation the route
+   refuses against), so the picker offers nothing that answers `409 stage_not_in_template`; an
+   uncompilable template answers `[]` and the panel says so. `taken_over.held_by` names the holder.
+   Both commands carry the SPA's per-intent key (`useTakeOverCommands`).
+3. **The breakdown panel.** `apps/web/src/features/breakdown-panel.tsx` on an `epic_split` task: the
+   queue as it comes back (criteria, status, a rejected row's reason, the filed ticket as an
+   `ExternalLink`), a checkbox per queued child, one accept and one reject button, per-intent
+   `Idempotency-Key` (`useBreakdownDecision`, the sorted item ids in the intent). **The control is
+   absent for a member and a viewer** through a new `taskBreakdownSchema.can_decide`, which the GET
+   computes with the server's own `can(effectiveRole(org, project), 'task.approve_plan')` —
+   assumption, below.
+4. **The census.** The two hand-written cases in `apps/server/src/routes/client-census.test.ts` —
+   take-over/hand-back and the breakdown pair — are **deleted**; one positive case names the six
+   paths (the four plus the two downloads) as the file's convention asks, and asks each command by
+   its own method with no body. `ADMITTED_GAPS`'s note and technical/08's census paragraph now say
+   `kb/health` is the only uncalled route. (Reading: the row's *"three hand-written cases"* is the
+   three routes families — take-over, hand-back, breakdown — in two `it` blocks; `kb/health`'s case
+   stays because no screen calls it.)
+5. **Feature cards compared with the platform's own tables.** `FEATURE_CARDS` gained
+   `epic_split` (*touches: creates tickets in your tracker*), `spike`, `ask` and — found by the
+   comparison itself — `history_bootstrap`, whose `enabled` switch was reachable from no screen
+   either (the history-bootstrap step says *"turn it on in settings"*). The platform table is new:
+   `FEATURE_READERS` (`packages/domain/src/config/feature-readers.ts`), keyed by
+   `featuresConfigSchema`'s key set and resolved against the tree by `feature-readers.test.ts` (the
+   `autonomy-readers.test.ts` shape, with a calibration case that fails). `operating-mode.test.tsx`
+   asserts cards ∪ keyed exemptions = the schema's keys, no key both, the card default = the shipped
+   `enabled` (absent is off), only the epic split says it creates tickets.
+6. **The two caveat strings are deleted**: the digest card's *"Stored; nothing in this build sends a
+   notification of any kind (WP-32)"* (its caveat now says what it needs — a chat integration bound
+   to the project) and *"Ask the task — not built in this release"* (ask is now a card). The assertion that stops a third is the comparison rather than a pinned sentence: a card
+   may carry an `unbuilt` line **exactly when** `FEATURE_READERS` names no reader for its key. Its
+   stated limit: a "does nothing" sentence typed into `caveat` instead of `unbuilt` is not caught —
+   no source-text guard can tell a limit from a denial.
+7. **`workspaces` is stated unwritten, and why** (technical/03): the retention is the launcher's
+   volume label, the launcher holds no database connection (TD-028), and the export is served, not
+   copied — so `exported_blob_id` and `retention_until` have no writer by decision.
+8. **The two orchestrator sentences** are below under *Sentences for the orchestrator*.
+9. **Tiers.** ui: `take-over.test.tsx` (take-over body/key/four fields, none on a finished task, the
+   escalated take-over with downloads and the picker, hand-back body/key, no stages → no control,
+   the interrupted run, the run screen's Documents/marker/text-step line), `breakdown-panel.test.tsx`
+   (subset accept with one request and a key, no control when `can_decide` is false, markup as
+   text, the template id held to the domain's), `identities.test.tsx`, `task-detail.test.ts`,
+   `untrusted.test.tsx` (`DownloadLink` refuses six hostile paths). web-e2e: four cases in
+   `screens.spec.ts` over new fixtures (`takenOverTaskDetail`, `epicTaskDetail`/`epicBreakdown`, and
+   an unvalidated tier-1 entry plus a `text_search` on `runContextPack`); the fake backend answers
+   the two commands with parseable bodies and serves the breakdown pair.
+
+**The refiner's additions.**
+- **164** — `findTakenOver` reads `TAKE_OVER_BOUNDARY_EVENTS` (imported from the application ring,
+  not restated) with **no state guard**: the workpad's rule, product/19 §19 as tie-breaker (a person
+  still holds an escalated take-over). Asserted on `findTaskDetail` in
+  `test/integration/server/read-api.integration.test.ts`: escalation keeps it, resume withdraws it,
+  hand-back withdraws it.
+- **167** — `TakeOverRecord` gained `holderUserId` (the event's user actor) and `lastActivityAt`:
+  the newest of the take-over and a `human_actions` row **on the task by the holder** after it. One
+  SQL expression (`packages/infrastructure/src/pipeline/take-over-activity.ts`) read by
+  `tasks.takenOver` and by the recovery's `heldTasks`, so the timer (`expireTakeOver`) and its
+  recovery row compute one instant; `takeOverDeadline` now takes the last activity. `mr.updated` is
+  **absent** and said so at `TakeOverRecord.lastActivityAt`: no shipped normaliser names the pusher.
+  Asserted: `deadlines.test.ts` (Friday take-over, holder command Wednesday 11:00, the fire at the
+  original deadline is not due and re-arms at the next Wednesday 11:00, escalation lands there, the
+  brief names the instant; a bystander's command alone escalates on the original day), the store
+  contract (`pipeline-store-suite.ts`, both stores: before-the-take-over and bystander rows do not
+  count), `deadline-recovery-store.integration.test.ts`. The escalation brief and the docblocks say
+  what counts.
+- **168** — `admittedDocuments` = tier 0 + validated tier 1; an unvalidated entry is listed with a
+  *not admitted* marker; the definition says so.
+- **172** — `ContextPackRecord.text_search` (contracts, `schemas/` regenerated): `outcome`
+  (`not_searched` | `no_terms` | `all_uninformative` | `no_match` | `matched`), `kept_terms`,
+  `dropped_terms`, `floor` (`applied` | `no_statistics` | null), `matched_documents`,
+  `omitted_terms`. **The five causes are `(outcome, floor)` pairs**: *no statistics* is a floor state
+  rather than a sixth outcome, because it can accompany a match. *"The stage asked for no text
+  search"* is `not_searched`, and on this build the only way to reach it is a project with no index —
+  no shipped stage opts out, which the contracts docblock states. Built in
+  `knowledge/text-search-record.ts`, written by the assembler, **redacted by both executors** with
+  the run's composed redactor before `run.started` and the insert (a term the redactor would change
+  is left out and counted — never a placeholder); stored in `runs.context_text_search` (migration
+  **0047**, nullable, `runs_context_text_search_needs_a_pack`), served by `/context-pack`, said in
+  words on the run screen. Asserted: the Q58 floor query records `all_uninformative` naming `demo`;
+  a no-keyword query records `no_terms`; `demo drain` records `matched`; the five rows differ; the
+  round trip through `RunRepository.insert` in the integration tier. **171's ruling**: the as-built
+  predicate is `df > N/2 + √N`; IDF weighting (171's open half) would not "drop" a term, so if it
+  lands the record needs a field for weighted terms — named here, not guessed.
+- **190** — `MACHINE_AUTHORED` and `APPROVAL_TOUCHED` moved to
+  `apps/server/src/queries/human-time-predicates.ts` and imported by both `stats-queries.ts` and
+  `findHumanTime` (now one SQL read over `h`/`t`); `humanTimeSummarySchema.withheld {entries,
+  minutes}`; the task page prints a *Not counted* line when it is non-zero. Integration case: a
+  comment window, an approval-touched window and a retro-declared machine's window publish 40 of
+  155 minutes, one entry, `withheld {1, 25}`.
+- **198** — `IgnoredDelivery.identity` (Slack's two `unmapped_identity` branches and the fake set
+  it; the communication contract suite asserts it), `InboxDelivery.unmappedIdentities` redacted by
+  `unmappedIdentitiesOf`, `inbox.unmapped_identities` (0047, nullable, two partial indexes for the two
+  reads). `GET /api/integrations/:id/refused-deliveries` (`integration.read`) and `GET
+  /api/org/identities/candidates` (`org.users.manage`, excludes every mapped or machine account);
+  the integrations screen's per-card *Refused deliveries* disclosure and the identities screen's
+  *Refused accounts nobody has mapped* list, whose button **fills the form and writes nothing**.
+
+**Decisions and assumptions** (each reversible):
+- (a) **Tarball gate `task.take_over`, transcript gate `transcript.read`** — both member. The
+  tarball is what a take-over produced; `task.export` is the JSON export of technical/08 and was
+  left alone.
+- (b) **The retention sweep lives in the launcher**, the writer, on its existing pass — not in the
+  API process, which may not have the variable in a split deployment.
+- (c) **`can_decide` on the breakdown read** rather than the SPA's org role: a project membership can
+  raise the role, and only the server's guard knows the effective one.
+- (d) **Which run's files the panel offers**: the newest run started by the take-over's instant
+  (`interruptedRunOf`) — `task.taken_over` records no run id (discovered work below).
+- (e) **Candidates and refused deliveries** read `inbox`, so they cover webhook and socket deliveries
+  alike; a row from before 0047 contributes no candidate and shows *"received before the platform
+  recorded which account was refused"*.
+- (f) **`history_bootstrap` got a card**, because the comparison against the schema's key set found
+  it switch-less; `PLATFORM_DEFAULT_CONFIG.features` still ships no default for it (below).
+
+**Sentences falsified — changed.** technical/03 (`workspaces`, `inbox`, `runs`/`run_context_pack`),
+technical/04:318 (the downloadable JSONL is the platform's transcript, not the CLI session file),
+technical/07's Q58 (a) sentence, technical/08 (three rows, the census paragraph), the user guide's
+take-over paragraph (and the §13 table row), the operator guide's timer sentence and the `exports`
+volume row, `.env.example`'s `APP_WORKSPACE_EXPORT_DIR` comment, OPEN-QUESTIONS Q93/Q85/Q58, and the
+docblocks of `endpoints.ts`, `task-detail.tsx`, `run-detail.tsx`, `identities.tsx`, `breakdown.ts`,
+`breakdown.test.ts`, `commands.ts` (`takeOverTaskCommand`), `deadlines.ts` (`expireTakeOver` and the
+brief's *"pushes to the branch do not count"*), `recovery/deadline.ts`, `memory-pipeline.ts`
+(divergence 8), `stats-queries.ts`. **Left, and why**: technical/05:11 and product/19 are the
+orchestrator's (below); `compose.yml`'s *"the app (which serves them)"* is now **true**, unchanged.
+
+**Sentences for the orchestrator** (docs I may not edit):
+- **technical/05:11**, replace *"branch pushed + transcript JSONL copied to `blobs` + optional tarball
+  (excluding `.git`, `node_modules`) downloadable from the UI"* with: *"branch pushed + optional
+  tarball (excluding `.git`, `node_modules`) written to the shared export volume; both files are
+  **served, not copied** (Q93, WP-44): the transcript at `GET /api/runs/:run_id/transcript.jsonl`, a
+  JSONL rendering of `run_messages` (redacted at the write, so it lasts exactly as long as the
+  transcript), and the tarball at `GET /api/runs/:run_id/export.tar`, removed after 14 days with the
+  workspace's own retention."*
+- **product/19:156**, *"the transcript download"* → *"the transcript download
+  (`GET /api/runs/<run>/transcript.jsonl`, and the workspace tarball at `…/export.tar` when asked
+  for)"*; and the timeout clause → *"Timeouts: a taken-over task escalates to `Needs human` after 5
+  working days of **inactivity** — no command on the task from the person who took it over (any
+  command they issue restarts the count; another user's does not, and neither does a push to the
+  branch, whose author this build does not yet carry through its normaliser); retention of the exported workspace and its tarball
+  14 days."*
+
+**Discovered work** (for the refiner, from 203):
+- **203** — `task.taken_over` records no run id, so which run's transcript and tarball a take-over
+  produced is inferred on the screen (newest run started by then). Recommend carrying `run_id`
+  (nullable) on the event and on `taken_over`.
+- **204** — `docs/user-guide.md` §4 and §13 still say *Ask the task* is not built (WP-31), §13 lists
+  steering, statistics and creating an integration as missing (WP-27, WP-41, WP-30), and §4 says the
+  task endpoint publishes four checks (WP-38 made it more) — rule 83, found while editing the
+  take-over paragraph and not fixed here.
+- **205** — `PLATFORM_DEFAULT_CONFIG.features` ships no `history_bootstrap` entry, so the effective
+  configuration shows no default for a key the wizard's step 3b depends on; every reader defaults it
+  off, so this is a documentation gap in the defaults table, not a behaviour.
+- **206** — `GET …/refused-deliveries` lists every row with an `inbox.error`, including the ordinary
+  *"message is not a reply in a task thread"* ignores a busy Slack channel produces; filtering by
+  reason needs the reasons structured on the row (they are one redacted string today).
+- **207** — 167 half (b): an `mr.updated` by the holder still does not count. **Corrected at review
+  round 1**: the providers already name who triggered the event — GitLab's merge-request hook
+  carries `user`, GitHub's webhooks carry `sender` — and it is **our normalisers** that drop it, so
+  closing this is a normaliser change (carry the author on `mr.updated`, then add it as the second
+  signal), not a wait for a provider. The same correction applies to the reason stated at
+  `TakeOverRecord.lastActivityAt`, `expireTakeOver`, the escalation brief and both guides, all
+  corrected in the same round, and product/19's proposed sentence above.
+
+**Verification** (this tree, 2026-09-26, every tier after a one-minute-load reading under 12 unless
+stated): `pnpm run -s verify` **PASS** (414 files, 7846 passed, 14 skipped; bundle 189 003 B of
+300 000); `verify:ui` **PASS** (32 files, 362); `verify:web-e2e` **PASS** (47); `verify:integration`
+**PASS** (55 files, 572) — its first run failed two list-projection cases because the 190 fixture put
+a task in the shared project, fixed by giving it a project of its own (the take-over block's rule);
+`verify:e2e` **PASS** (40 files, 212) — its first run failed `run-api.e2e.test.ts`, whose helper nulls
+a run's pack header to fake a pre-0041 row and now also nulls `context_text_search` (the new check
+refuses an outcome with no header); `node scripts/compose-stock-check.mjs` **PASS** (17 of 17) on
+`platform:dev`/`platform-launcher:dev` rebuilt from this tree, because `.env.example` and the operator
+guide changed (rule 71). Docker after each tier: no container of this repository left but Ryuk,
+`docker volume ls | wc -l` = **102**. **Machine-rule breaches, recorded**: the citations run was
+chained onto its own `uptime` in one command and started at a one-minute load of **46** (it is a
+twelve-case file); and the harness refused `sleep 60`, so readings were spaced by work rather than by
+a timed minute — each tier still started on a reading under 12. After the last prose edits to these
+notes (no citation added) the citations re-run was **not** taken: five readings between 19:12 and
+19:13 read 39, 33, 29, 25 and 22, so it is reported as not run; the pass above covers every citation
+these notes make. One docblock (`apps/web/src/api/endpoints.ts`, the stale *ask is absent* bullet)
+was edited after the final `verify`; it is a block comment, `biome check` on the file is clean.
+
+**Review round 1 (implementer, session 8).** (1) `downloads.test.ts`'s fake `projectRole` is keyed
+by project and a member of another project is refused 403 on **both** routes (a `FOREIGN_RUN` in
+`OTHER_PROJECT`); the reviewer's canary — the transcript guard scoped to another uuid — was re-run
+and now fails by name (`refuses a member of another project: the guard is the run’s own project`), then was reverted and md5-confirmed. (2) Both downloads send `X-Content-Type-Options: nosniff`,
+asserted. (3) A refusal on page 2+ is **measured** to abort: Fastify destroys the response when the
+body stream errors, the injector rejects with *"response destroyed before completion"*, asserted with
+the page reads; the handler's comment says so, no residual. (4) 207's reason corrected above.
+(5) The user guide says 14 days from the take-over, handed back or not.
