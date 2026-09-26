@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **Next: WP-60**, then the M4 table's order. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **Next: WP-61**, then the M4 table's order. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -2445,7 +2445,7 @@ did upkeep cost"* by **task** — a maintenance chore's runs are ordinary delive
 (WP-36's criterion 2), so the upkeep/delivery split for chores lives in the platform-issued reference,
 not in `runs.mode`. Whoever takes WP-41 should read that sentence before grouping by this column.
 
-### 59. **Nothing tells the platform that a ticket changed, so three separate promises rest on an event the catalogue does not have — and it is a one-normaliser change, not the two-provider one two documents price it at** (TODO, small — **no work package owns it**; found by WP-25, session 5; the product half is **Q61 (b)**)
+### 59. **Nothing tells the platform that a ticket changed, so three separate promises rest on an event the catalogue does not have — and it is a one-normaliser change, not the two-provider one two documents price it at** (**RESOLVED** at `eb7ee6a`, WP-60, session 8 — TODO, small — **no work package owns it**; found by WP-25, session 5; the product half is **Q61 (b)**)
 > **M4 (architect, session 6): folded into WP-60.**
 
 Placed directly above entry 23 because it is that entry's other half: 23 is *the platform never reads
@@ -4507,7 +4507,7 @@ read-side cap possible *now*, where it was not before, is `human_time_entries.ex
 **Depends on / owner.** **WP-41** for the read half, stated on its row. The documentation amendment has
 no owner and is one line; whoever answers **Q73** is touching the same paragraph.
 
-### 90. **`mr.approved` is in product/08's git-provider contract and absent from technical/02's catalogue, so approving is the one review act the platform cannot see — and the minutes shipped at WP-29 under-count by exactly the reviewers who never comment** (TODO, small — **no work package owns the emission**; **WP-41** is the consumer; found by WP-29, session 5; the ticket-side twin is entry **59**)
+### 90. **`mr.approved` is in product/08's git-provider contract and absent from technical/02's catalogue, so approving is the one review act the platform cannot see — and the minutes shipped at WP-29 under-count by exactly the reviewers who never comment** (**RESOLVED** at `eb7ee6a`, WP-60, session 8 — TODO, small — **no work package owns the emission**; **WP-41** is the consumer; found by WP-29, session 5; the ticket-side twin is entry **59**)
 > **M4 (architect, session 6): folded into WP-60.**
 
 **What is wrong.** Two product-and-technical documents disagree, and the code follows the narrower one.
@@ -9568,7 +9568,7 @@ not the matcher. WP-58's own round would be cheapest, but as with 174 that row s
 commits first, the trigger that makes it urgent is the first vault page written with the spelling.
 Related: **170**, **175**.
 
-### 177. **A paths-only read of a merge request now has a documented surface — GraphQL `MergeRequest.diffStats(path)` — so backlog 64's remedy (b) is buildable; but since WP-59's coalescer it saves bytes, not reads, and in the ordinary case it would *add* a request** (TODO, **nit-to-small** — bandwidth only, no wrong behaviour; the surface is **documented**, its bounds on a large merge request are **not**; carries backlog **64**'s half (b) forward when WP-59 resolves 64 at commit, so 64's evidence is not split; proposed owner **WP-60** (refiner, session 8); found by WP-59, session 8)
+### 177. **A paths-only read of a merge request now has a documented surface — GraphQL `MergeRequest.diffStats(path)` — so backlog 64's remedy (b) is buildable; but since WP-59's coalescer it saves bytes, not reads, and in the ordinary case it would *add* a request** (**RESOLVED** at `eb7ee6a`, WP-60, session 8 as **refused** (GitLab documents `MergeRequest.diffStats` as an uncapped, unpaginated list — cited in `SOURCES.md`) — TODO, **nit-to-small** — bandwidth only, no wrong behaviour; the surface is **documented**, its bounds on a large merge request are **not**; carries backlog **64**'s half (b) forward when WP-59 resolves 64 at commit, so 64's evidence is not split; proposed owner **WP-60** (refiner, session 8); found by WP-59, session 8)
 
 **What is wrong.** The conflict warning and the risk routing still download each merge request's
 patches to keep its file names (`changedPathsOf`, `packages/application/src/pipeline/conflict-warning.ts:188`).
@@ -9692,7 +9692,7 @@ each read once. Cross-process coalescing would need a store and is only bandwidt
 two-process tier counts `get_merge_request_diff` for one gate entry and the figure is stated at the
 docblock; a shared store is **not** proposed unless a rate limit is measured to bind. Related: **64**, **177**.
 
-### 182. **`tasks.mr_ref.head_sha` moves only when a pushing stage reports `ImplementationNotes`, so a human's push to the agent branch — including the product's own take-over — is invisible to every identity keyed on it** (TODO, **small** — pre-existing, WP-59 added a third reader; **read off the tree, not measured**; **live** whenever a person pushes to an `agentic/*` branch, which take-over (WP-27) invites; proposed owner **WP-60** (refiner, session 8); found by WP-59, session 8)
+### 182. **`tasks.mr_ref.head_sha` moves only when a pushing stage reports `ImplementationNotes`, so a human's push to the agent branch — including the product's own take-over — is invisible to every identity keyed on it** (**RESOLVED** at `eb7ee6a`, WP-60, session 8 — TODO, **small** — pre-existing, WP-59 added a third reader; **read off the tree, not measured**; **live** whenever a person pushes to an `agentic/*` branch, which take-over (WP-27) invites; proposed owner **WP-60** (refiner, session 8); found by WP-59, session 8)
 
 **Evidence.** The implementer, quoted: *"`tasks.mr_ref.head_sha` moves only when a pushing stage reports
 `ImplementationNotes`, so a human's push to the agent branch is invisible to every identity keyed on it
@@ -9734,6 +9734,133 @@ settle on `ready_for_merge` and the no-`task.escalated` assertion at the end —
 `mr.closed` from the fake would break. **Done**: the scenario reports a **new** merge request on the
 reworked branch (the production shape), so the close is deterministic; or the case asserts the ending
 it gets. Related: **178**.
+
+### 185. **Jira's changelog item schema declares `toString` as a key, so an item that omits its own `toString` is read through `Object.prototype.toString` and the whole `jira:issue_updated` delivery is refused `malformed_payload` — and it has been so since WP-08, for matches and status changes too, not only for WP-60's edits** (**RESOLVED** at `eb7ee6a`, WP-60, session 8 (folded at review) — TODO, **small** — **measured** by the WP-60 implementer (the failure); **latent in frequency**: whether Jira ever omits the key is **not established**; owner **WP-60 (folded at review)** (orchestrator, session 8); found by WP-60, session 8)
+
+**What is wrong.** `changelogItemSchema` (`packages/integrations/src/providers/jira-cloud/webhook.ts:212-220`)
+has `toString: z.string().nullish()`. zod 4.5.4 reads the key off the input object with ordinary
+property access, so an item with no own `toString` yields the inherited function, fails `string`, and
+`jiraWebhookEnvelopeSchema.safeParse` (`:440-448`) fails the **whole envelope**: `from`/`fromString`/`to`
+are unaffected only because `Object.prototype` has no members by those names. This is standing rule
+**38**'s class (`key in record` walks the prototype) in a second spelling — a schema key named like a
+prototype member.
+
+**Evidence.** The implementer, quoted: *"an item that omits its own `toString` key is parsed with the
+inherited function and the whole delivery becomes `malformed_payload` (`changelog.items.0.toString:
+Invalid input: expected string, received function` — measured while writing the bounds case, through the
+replay harness and the real normaliser). Atlassian's example always carries the key, so it is latent."*
+**Refiner, read off the tree** (no test run, rule 66):
+- **It predates WP-60.** `git log -S changelogItemSchema` and `git log -S "toString: z.string"` over
+  `packages/integrations/src` both answer exactly one commit, `af206c7` (*"feat(integrations): WP-08
+  Jira Cloud provider"*, 2026-09-10), and that version already parsed every `jira:issue_updated` through
+  the same envelope schema. So before WP-60 a delivery with such an item lost its `ticket.matched` (a
+  label-add or status pick-up) and its `ticket.status.changed`; since WP-60 it also loses `ticket.updated`.
+  One item without the key anywhere in `changelog.items` is enough — the array is parsed before any
+  branch looks for `labels` or `status`.
+- **It is the only site.** A `git grep` over every tracked `*.ts` for a zod object key named `toString`,
+  `valueOf`, `constructor`, `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` or `toLocaleString`
+  answers `webhook.ts:219` and nothing else.
+- **What the delivery costs when it happens.** The door records a *verified* delivery as ignored
+  `malformed_payload`, and Jira's retry of the same `X-Atlassian-Webhook-Identifier` is deduplicated by
+  `inbox(provider, delivery_id)` — so the ticket is not started (or not re-read) and nothing retries it.
+- **How many live deliveries it drops: not established.** All three shipped fixtures
+  (`test/fixtures/http/jira-cloud/webhook-issue-updated-{status,labels,summary}.json`) carry `toString`,
+  adapted from Atlassian's one documented example. Whether Jira's changelog ever omits the key (rather
+  than sending `"toString": null`) is **not cited** anywhere in this repository and the refiner fetched
+  nothing. **Needs citation or measurement**: the REST reference's `ChangeDetails` shape (whether
+  `toString` is required), and a week of real deliveries counted by `inbox.error like '%toString%'`.
+
+**What it costs to leave.** Unknown frequency times a silent, unretried loss of a ticket pick-up — the
+worst ending an inbound delivery has. The fix is one line; the cost of the class is that it reads correct.
+
+**What "done" looks like.** The item's `toString` cannot be satisfied by an inherited member — e.g. the
+envelope is read through a null-prototype copy, or the key is checked with `Object.hasOwn` before the
+schema sees it — and a Jira contract case with an item **omitting** `toString` asserts the delivery still
+yields its `ticket.updated` (and a `ticket.matched` for a label item whose `toString` is absent answers
+no added labels rather than a refusal). The fixture's `source` says the omission is `composed`.
+
+**Depends on / owner.** Nothing. **Owner WP-60 (folded at review)**, per the orchestrator. Related:
+standing rule **38**, backlog **59**.
+
+### 186. **product/18:60's *"edited within 48 h"* is now a fold over two events that both exist, and no row owns it — and an unfiltered fold would count the platform's own status transitions as "improvements"** (TODO, **small** — a product/18 metric; **working as documented** (the metric's `absent` block names the fold); the self-count trap is **read off the tree, not measured**; proposed owner **WP-61** (refiner, session 8); found by WP-60, session 8)
+
+**Evidence.** The implementer, quoted: *"product/18:60's 'edited within 48 h' is now a fold, not a
+missing event: `ticket.updated` against `task.lint.posted`'s baseline for the same ticket.
+`stats-metrics.ts`'s absent entry names it; no row owns it."* The entry is
+`apps/server/src/queries/stats-metrics.ts:499-510` (`tickets_edited_after_lint`), owner *"Discovered
+work at WP-60 — a statistics fold over an event that now exists; no work package owns it yet."*; the
+baseline field is `task.lint.posted`'s `ticket_updated_at` (`packages/contracts/src/events.ts:387`).
+
+**A decision the fold must state, not inherit.** WP-60 emits `ticket.updated` on **every**
+`jira:issue_updated`, and `changed_fields` is whatever the changelog names. A rank change, a sprint
+move, a watcher — and the platform's **own** status-mapping transition, which Jira reports as an
+update authored by the binding's account — would all count as *"improved after lint"*. The metric needs
+either a field filter (`summary`/`description`, the same question `docs/TODO.md`'s re-lint frequency
+item asks) or an editor filter (not the binding's own account), stated in its definition.
+
+**What "done" looks like.** The `absent` block is replaced by a query over `events`; one stats case
+proves an edit inside 48 h counts, one at 49 h does not, and one status-only edit by the binding's own
+account does not.
+
+**Depends on / owner.** WP-60 (the event), WP-25 (the baseline), WP-41 (the metric registry). **Proposed
+owner WP-61** (refiner, session 8), which already folds the delivery metrics (**179**, **180**). Related:
+**59**.
+
+### 187. **There is no ticket poller in this build, while the Jira setup guide calls polling *"a first-class path"* and tells an operator with no public URL to skip the webhook — so a binding without one starts no ticket at all; and even the poller technical/06 specifies would never see an edit** (TODO — two causes, one symptom set; **the "no poller" half is read off the tree and already stated in standing rule 78 and backlog-era evidence at WP-15d, but never filed as a finding against the documents**; the edit half is the WP-60 report's; **live** for any binding with no `webhook_secret`; doc half proposed for **WP-73**, **the poller itself: no work package owns it** (refiner, session 8); found by WP-60, session 8, widened by the refiner)
+
+**Evidence.** The implementer, quoted: *"A polling-only Jira binding never receives an edit:
+`matchTickets` polls for matches, not for updates, so Q61 (b)'s freshness holds only for a binding with
+webhooks (stated in Q61's record)."* **Refiner, read off the tree:**
+- **Nothing polls.** The only production caller of `matchTickets` is the history bootstrap
+  (`packages/application/src/bootstrap/collect.ts:472`, through `ticketReads.matches`); `saga.ts:259`
+  says *"there is no poller in this build"*, and standing rule **78** records the same grep from WP-15d.
+- **Four documents say otherwise.** `packages/integrations/src/providers/jira-cloud/setup-guide.md:70-72`
+  (*"Without one, skip to step 5 — polling is a first-class path, not a fallback of last resort"*) and
+  `:92` (*"Both are polled with JQL when there is no webhook"*); technical/06:412 (*"Polling fallback per
+  binding when no public URL"*); `jira-cloud/config.ts:34` (`webhook_secret` *"`null` when this binding
+  has no webhook and is polled"*); and `pipeline/integrations.ts:591` (*"`matchTickets` is the port method
+  intake already uses to find new tickets"* — rule 78's false-mitigation shape again).
+- **The edit half is a second cause.** A poll as specified answers `TicketMatch` for the pick-up rule; it
+  would start new tickets but emit no `ticket.updated`, so `tasks.ticket_signal_at` would never move for
+  that binding.
+
+**What it costs to leave.** An operator who follows the guide without `APP_WEBHOOK_PUBLIC_URL` gets an
+integration whose probe passes and which never starts a task — silently. The edit half is the smaller
+cost: stale ticket text for the rest of each task.
+
+**What "done" looks like.** **Now (WP-73):** the four sentences say a webhook is required on this build
+and that no poller exists (rule 83). **Later (unowned):** a per-binding poll job — Jira's JQL window,
+deduplicated with the webhook path through the same `inbox` key as technical/06 says — which also stamps
+the ticket signal when a polled ticket's `updated_at` is newer than a live task's `ticket_snapshot_at`
+(no `changed_fields`, stated). **Needs an architect allocation**; it is a work package, not a sweep item.
+
+**Depends on / owner.** WP-60 (the signal column). Doc half **WP-73**; the poller **unowned**. Related:
+**59**, standing rule **78**, Q61 (b).
+
+### 188. **`mr.approved`'s two GitLab facts are inferences — that the delivery's `user` is the approver, and whether `approved` arrives beside `approval` — and the measurement is filed in `docs/TODO.md`, not taken** (TODO, **nit** as an entry — the risk is WP-61's: a wrong `user` credits the wrong reviewer; **needs measurement on a real GitLab instance**, which this build cannot reach; proposed owner **WP-61** as a precondition (refiner, session 8); found by WP-60, session 8)
+
+The implementer, quoted: *"The page does not say, of the approval actions, that `user` is the approver —
+so the identity is an inference from two documented sentences"*, and `approved` is ignored because
+*"mapping it too would count the last approver twice if GitLab sends both — whether it does is not
+stated by the page"*. The item is `docs/TODO.md`'s *"Does a real GitLab send `approval` and `approved`
+for the last required approver, and is the delivery's `user` the approver?"* (line 201), with the
+procedure. **Done**: that item checked, the answer recorded in `test/fixtures/http/gitlab/SOURCES.md`
+and the fixture's `source` moved from `composed` to recorded; WP-61 does not publish reviewer minutes
+that include approvals before it is. Related: **90**, **88**.
+
+### 189. **Nothing orders `mr.updated`, so a late delivery for an older push moves `tasks.mr_ref.head_sha` backwards until the next push or pushing stage** (TODO, **nit-to-small** — **a hypothesis: not measured**, the implementer's stated residual; the consequence is bounded (a replayed warning or an extra diff read, never a lost write, per the handler's docblock); **live** from WP-60 on any instance receiving GitLab webhooks; proposed owner **WP-73** (refiner, session 8); found by WP-60, session 8)
+
+The implementer, quoted: *"nothing this build relies on says GitLab delivers in order, so a late
+`mr.updated` for an older push could move the head back until the next push or pushing stage."*
+**Read off the tree:** the handler writes whenever the event's sha differs from the stored one
+(`packages/application/src/pipeline/provider-signals.ts:104-110`) — it has no notion of *older*. **A
+second source of disorder, also unmeasured:** even an in-order provider does not give an in-order stream
+if two deliveries are received concurrently, because *"positions are handed out at insert time and
+commit out of order"* (the dispatcher's own premise, WP-04's implementation notes in this file). **Done**: either the write is a compare-and-set
+on the previous revision (needs citation: whether GitLab's merge-request hook carries `oldrev` on a push
+update), or the handler enqueues a provider read of the current head instead of trusting the payload —
+one read per foreign push; and one saga case delivers two `mr.updated` out of order and asserts the
+newer head survives. Related: **182**, **167**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -13308,7 +13435,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | DONE | `933c58f` | **Folded backlog 31, 37 (the remaining half), 112, and 169 (the orchestrator amended product/19:108).** Migration **0041**: both run-creation paths (stage executor, ask executor) write the planner's pack in the run row's transaction, its budget/total/commit on the run, `reason`/`score` filled from the planner (the contract not relaxed); an empty pack 200, a never-recorded one (every pre-0041 run) a typed 409 with its row count; `kb_index_refusals` replaced with the index in one transaction, the nightly report's `invalid` finding (the Librarian's contract deliberately not widened), `kb/health` 409 for no report; 0041 clears each project's indexed commit so the next index run rebuilds and records refusals; `kb_usage` a join with its denominator named in its definition. **One review round** (REQUEST_CHANGES: the diff had deleted the only HTTP test of the 409; the upgrade window read "nothing refused"); the orchestrator ran the canaries after the fix (409 answered as 200; the re-index removed from 0041 — both dead by name) and corrected two stale CLAUDE.md sentences (the `/context-pack` refusal and `system_prompt`'s writer, the second a WP-52 miss). **Orchestrator verification**: `PASS: verify` (401 files, 7587 passed), `PASS: verify:integration` (538), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `933c58f`: `image` `36225393924` success; `ci` `36225393932` **failed once upstream** — the `e2e-fake-claude` job could not build `platform-egress` because `dl-cdn.alpinelinux.org` answered an IO error on `apk add tinyproxy`, before any test ran — rerun with `--failed` to **completed success**. The first commit attempt was refused by commitlint (header 103 > 100) and nothing was pushed. Discovered work: backlog **168**, **170** | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
 | WP-58 | **Retrieval: the instrument first, then the query** | DONE | `c2f15f3` | **Folded backlog 16, 15, 12 (surviving half), 13, 14 (in part), 61, 170, 175 and — fixed by the orchestrator because this row unmasked it — 176; implemented Q58.** The instrument first, as ruled: a negative corpus under which 7 of 9 queries admitted a wrong page before any fix, then — because its author had read the queries — a **blind corpus** written by a separate agent that saw only the 16 correct pages (prompt quoted in the fixture with the orchestrator's machine paths replaced by placeholders; pages byte-for-byte), measured once and pinned exactly: **7 of 9 queries still rank a blind page inside the pack** — backlog 171's residual, stated rather than tuned. Per-project document frequencies at index time (migration **0042**) and a term dropped only when `df ≥ 2` and `df > N/2 + √N` — **the architect's ruling** (TD-008 amended, Q58 annotated) after the implementer measured the first rule (more than half) dropping a small vault's subject word and ranking a wrong page first (0.412 vs 0.375); invisible characters stripped and counted on both paths; `headPaths` from per-glob path witnesses bounded by the vault's globs (175 fixed before 0042 shipped); `unresolved_paths` health finding; `ticket_lint` → business; the estimator's measured figures and a band property (not an upper bound — 173). **One review round** (APPROVE-with-nits, nine of ten canaries dead, the survivor implied by the formula); the orchestrator added a two-write recount case (calibrated against a store that keeps its first counts), fixed the bare-`**` matcher (176 — masked since WP-16), three stale sentences. **Orchestrator verification**: `PASS: verify` (7639 passed after the `**` fix), `PASS: verify:integration` (550; the knowledge files again after the fix, 66), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `c2f15f3`: `ci` `36230652056` and `image` `36230652049` **completed success**, zero `release` runs. Discovered work: backlog **171**–**176** | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
 | WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | DONE | `5910ecf` | **Folded backlog 51, 64, 65, 113, 129, and at review 178; implemented Q92 per its recommendation.** A rework takes a new branch (`agentic/<ticket>-r<n>`) and the old MR is closed from a `pipeline.outbound` duty — idempotent, through the executor — with a comment naming the new branch; the superseded MR persisted in the rework's transaction (migration **0043**) and re-driven once by a `stranded.ts` row, then marked abandoned at error. One coalesced diff read per `(merge request, head sha)` — never caching an empty diff — takes a gate entry from four provider reads to **three** (**criterion (2) amended by the orchestrator**: the row missed the rebase gate's own read). A warning reaches both tasks' streams and threads once per MR; the peer append bumps each written task's `version` first, **in sorted order**, so a peer writer mid-stage retries rather than fails and two gates cannot deadlock. GitLab diff stats from GraphQL `diffStatsSummary` (`documented-adapted`); the fake's divergence 17. **All five provider HTTP clients refuse redirects** (`redirect: 'error'`), held by a test that finds every provider directory on disk — and **measured on Node 25.1.0 that a followed cross-origin redirect carried GitLab's `private-token` to the second host** before the fix. **Two review rounds and a closing batch**: R1 (major, read) — the peer append on a live stream failed the peer's transaction with an unretried `StreamConflictError`; R2 APPROVE-with-nits — lock order, `recordRebaseCheck` losing its measurement, the settle unasserted at three of five endings (two canaries survived until the tests existed). **The first push was refused by the pre-push hook**: a new integration file's citation, unseen by `verify` because the file was untracked — standing rule **91**; amended into the unpushed commit. **Orchestrator verification**: `PASS: verify` (405 files, 7691 passed), `PASS: verify:integration` (556), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `5910ecf`: `ci` `36236800859` and `image` `36236800844` **completed success**, zero `release` runs. Discovered work: backlog **177**, **179**–**184** | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
-| WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | TODO | — | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
+| WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | DONE | `eb7ee6a` | **Folded backlog 59, 90, 182, 185 (at review), and 177 as refused; implemented Q61 (b).** `ticket.updated` (Jira, beside its other events) and `mr.approved` (GitLab's `approval` action, naming the approver — an inference from the documented page, filed for a real-instance check, backlog 188) with the fakes and the shared suites; the snapshot re-read at the next agent stage when older than the latest edit signal (migration **0044**); re-lint not built (awaiting the Jira measurement). `mr.updated` moves the recorded head only for a strictly later provider instant (`tasks.mr_head_at`) — **review measured the first version moving it back**. **The CI gate now judges the live head**: review found the pre-existing gap beneath it (the event path settled the gate from any finished pipeline for the MR, whatever its sha) and the orchestrator folded it in — both paths read the MR's live head from the provider (a `ci_settle` duty for the event path) and settle only on a pipeline of that commit; a red pipeline's failure counts once per commit. **Backlog 185** (since WP-08, measured): Jira's changelog schema read a missing `toString` from `Object.prototype` and rejected whole deliveries — a null-prototype copy and `Object.hasOwn`. **Three review rounds** (R1 major measured: the head moved back; R2 APPROVE-with-nits plus the pre-existing CI-gate gap; R3's change reddened the orchestrator's `verify:e2e` twice, deterministically — a red pipeline parked one loop early, **against BD-008's bound of 3**, because the poll path counted repeat sightings of one pipeline; the orchestrator's hypothesis (two paths double-counting) was **wrong** and the implementer measured the real cause — the e2e's expectation stood). Canaries dead by name; the survivor of round 2 (the fake's instant stamping) is now held by the shared git suite, re-canaried by the orchestrator. **Orchestrator verification on the final tree**: `PASS: verify` (406 files, 7736 passed), `PASS: verify:integration` (559), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `eb7ee6a`: `ci` `36243497973` and `image` `36243497972` **completed success**, zero `release` runs. Discovered work: backlog **186**–**189** | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
 | WP-61 | **The delivery metrics stop being wrong in two directions** | TODO | — | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
 | WP-43 | **Slack Socket Mode** | TODO | — | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
 | WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | TODO | — | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
@@ -29406,3 +29533,260 @@ not re-run this round (no web change). Docker after: the reaper only, volumes 10
    because a permanently failing close needs an **ending** (the error line and `abandoned`), which a
    bound alone does not give.
 
+
+#### WP-60
+
+**Round 1 (implementer, session 8).** Backlog **59**, **90**, **177** and **182**, and Q61 (b).
+Commit pending.
+
+**What shipped, criterion by criterion.**
+1. **`ticket.updated`** (`packages/contracts/src/events.ts`): the ticket ref, the provider's own
+   `updated_at` (Jira's `issue.fields.updated`), `changed_fields` — the changelog's `field` names,
+   de-duplicated, each cut to 128 characters and the list to 32, with `truncated` declaring a cut —
+   and the editor as the actor's identity. No `task_id`, like `ticket.created`. The Jira normaliser
+   (`providers/jira-cloud/webhook.ts`) emits it on **every** `jira:issue_updated`, **beside** and
+   **after** whatever else the delivery produced (`ticket.matched`, `ticket.status.changed`), never
+   on `jira:issue_created`. The `unsupported_event` branch an edit used to die on is gone because it
+   is unreachable (an update always yields `ticket.updated`, a creation always `ticket.created`).
+   Golden case over Atlassian's documented summary example
+   (`jira-cloud-webhook.contract.test.ts` › "an edit becomes ticket.updated with the ticket, the provider’s instant and the field"),
+   plus the bound/de-dup/`truncated` case.
+2. **`mr.approved`**: the mr ref, `approver` (an `ExternalIdentity`, **required** — an approval
+   delivery with no `user` is `malformed_payload`, never an emission without an actor) and
+   `approved_at`, the provider's instant, nullable. GitLab (`providers/gitlab/inbound.ts`,
+   `APPROVAL_ACTION`) maps the `approval` action only.
+3. **Measured before building** (rule 66), from the page the normaliser already cites,
+   `https://docs.gitlab.com/user/project/integrations/webhook_events/`, retrieved **2026-09-26**:
+   the four actions verbatim — `approval` *"A user adds their approval."*, `approved` *"A merge request
+   is fully approved by all required approvers."*, `unapproval` *"A user removes their approval,
+   either manually or by the system."*, `unapproved` *"A previously approved merge request loses its
+   approved status, either manually or by the system."*; top-level `user` *"User who triggered the
+   event"*; `object_attributes.actioned_at` *"When the action that triggered the webhook occurred"*,
+   *"introduced in GitLab 18.10"*. **The page does not say, of the approval actions, that `user` is
+   the approver** — so the identity is an **inference** from two documented sentences, labelled as
+   one in the normaliser, in `SOURCES.md` ("Pages read for WP-60") and in a new `docs/TODO.md` item
+   asking for a real-instance check. `approved` is ignored because it is a state of the merge
+   request, not a person (and mapping it too would count the last approver twice if GitLab sends
+   both — whether it does is **not** stated by the page); `unapproval`/`unapproved` stay ignored
+   (no catalogue event; the page says both can be *"by the system"*). `approved_at` is `actioned_at`
+   or `null` — never the merge request's `updated_at` — and an unreadable one is `null`, not a throw
+   (rule 20). The delivery the suite drives is the composed `approvalHookBody`
+   (`gitlab-fixtures.ts`), like every GitLab delivery builder.
+4. **`EVENT_CONSUMPTION`**: `ticket.updated` **handled** by `pipeline.ticket.signal`;
+   `mr.approved` **handled** by the human-time projector (priority 230), folded into the approver's
+   review window exactly like a comment and dated by the envelope's `occurred_at`; `mr.updated`
+   **handled** since this row by `pipeline.merge.request.head` (backlog 182, below) — its old
+   "no author" reason is kept in the entry as still true of *activity* consumers.
+5. **The fakes and the shared suites** (rule 23). Task-management: `emitTicketUpdated` applies the
+   edit to the stored ticket before building the delivery (so a re-read sees the new words), and
+   `emitStatusChanged` now yields `ticket.status.changed` **and** `ticket.updated`, as Jira's
+   delivery does; divergence 8 records that `emitTicketMatched` alone does not. Git: `emitApproval`,
+   and `emitMergeRequestEvent({event: 'mr.updated', headSha})` as the human push (refused on any
+   other event); divergence 18 records that the fake always stamps `approved_at`. The suites gain
+   `emitTicketUpdated`/`updatedField` (case: one `ticket.updated`, the ticket, a parsable instant,
+   the field) plus a *beside* case (a status change yields both), and `emitApproval`/
+   `approverExternalId` (case: one `mr.approved`, the iid, the approver, verified through the
+   resolver) — run against the fakes and the Jira and GitLab replay runners.
+6. **Rule 83 in the same change**: technical/02's catalogue gains both rows, the `mr.*` row names
+   the head consumer, the divergence count moves 18 → 17 with the reason, and the human-time
+   paragraph now says one anchor (review start) is missing rather than two; the projector's
+   residual paragraph, `consumption.ts`'s count (38 → 41) and entries, `stats-metrics.ts`'s
+   reviewer caveat and module docblock, `shadow/reviewer-minutes.ts` (historical reads still cannot
+   see an approval), `events.ts`'s `task.lint.posted` docblock, the GitLab and Jira setup guides,
+   technical/03's `tasks` line, Q61's record, and the Jira summary fixture's `note`.
+7. **Re-lint: not built**, as the row allows. The measurement (`docs/TODO.md`, how often a real Jira
+   sends `jira:issue_updated` for a ticket in flight) cannot be taken here — no Jira instance — and
+   the item now says it is cheaper to take: every delivery is a `ticket.updated` row with its
+   `changed_fields`. The metric (*"edited within 48 h"*) is also not built; its absent entry now
+   names the fold rather than the event as the missing half.
+
+**Q61 (b), the consumer that *is* built.** `pipeline.ticket.signal` (`pipeline/provider-signals.ts`)
+stamps the event's receipt time on every live task of `(project, provider, ticket key)` as
+`tasks.ticket_signal_at` (migration **0044**), forward only (`greatest`), no version bump — the ninth
+narrow writer, in the column census. `ensureTicketSnapshot` re-reads at stage start when the snapshot
+is absent **or older than the signal** (`isTicketSnapshotStale`); both writers of
+`ticket_snapshot_at` now stamp the read's **start**, so an edit announced during a read is dated after
+it (**decided**: the alternative hid it for the rest of the task — the intake stamp moved from "after
+the read" to "before", `saga.ts`). A failed re-read keeps the stale snapshot and retries next stage.
+Asserted end to end in `saga.test.ts` › "re-reads the ticket at the next agent stage after the
+provider announces an edit" (two reads, the re-run refinement's prompt carries the new words and not
+the old), and at the edges in `provider-signals.test.ts` and `ticket-snapshot.test.ts`.
+
+**Backlog 182 — `mr.updated` moves the recorded head.** `pipeline.merge.request.head` finds the task
+by the merge request and calls the new narrow `TaskRepository.saveMergeRequestHead`
+(`jsonb_set(mr_ref, '{head_sha}', …)`, `version = version + 1`, guarded by the iid and by a live
+state). **Decided: the one narrow writer that shares a column bumps the token** (rule 79) — a `save`
+over an older snapshot is refused rather than putting the old revision back; the column-ownership
+census gains `CO_OWNED_COLUMNS = { mr_ref: 2 }`, an exact count so a third writer still fails, and a
+stale exception fails too. Saga case: `conflict-warning.test.ts` › "follows a push nobody on the
+platform made, so the next gate entry reads and warns anew" (the head moves, the version bumps, the
+own diff is read once more, a new thread under the new key, the peer's replayed). **Not moved, and
+said so**: `tasks.dependencies.head_sha` names the revision the dependency gate inspected and only a
+Developer completion re-runs it. **Residual, not measured**: nothing this build relies on says GitLab
+delivers in order, so a late `mr.updated` for an older push could move the head back until the next
+push or pushing stage.
+
+**Backlog 177 — refused, per 64's own clause.** The documentation check came first: the GraphQL
+reference (retrieved **2026-09-26**) documents `MergeRequest.diffStats` as a plain `[DiffStats!]`
+list — not a connection, no `first`/`after`, no stated cap — where the same page does state limits
+elsewhere (`Commit.diffStats` *"can only be resolved for 10 commits in any single request"*;
+`MergeRequest.diffs`, *"Introduced in GitLab 19.4. Status: Experiment."*, has size limits, `overflow`
+and pagination, and carries patch text). A paths-only read over it would trade the bounded `…/diffs`
+page for a response the size of the whole file list on exactly the large merge requests it was meant
+to save on, and after WP-59's coalescer it adds a request in the ordinary case. Recorded in
+`SOURCES.md` ("Pages read for WP-60"), `docs/TODO.md` (the paths item closed as refused) and
+`conflict-warning.ts`'s docblock. No port method.
+
+**Sentences falsified — changed:** listed in criterion 6, plus `diff-coalescer.ts`'s *"A commit
+somebody else pushes to the task's branch does not move it"*, `conflict-warning.ts`'s *"filed as
+discovered work under WP-59 rather than built here"*, `SOURCES.md`'s WP-59 paragraph (pointer to the
+refusal), the four Jira contract cases that asserted `unsupported_event` for an edit, the GitLab unit
+case that dropped all four approval actions, the fake's status-change case, and the Jira harness's
+`unhandled` delivery (the documented summary edit → the documented worklog event). **Left, and
+why:** backlog 59/90/177/182's own text (the orchestrator resolves entries at commit); the plan row
+(not the implementer's); `gitlab/inbound.ts`'s *"nothing honest to put here"* for `diff_stats` (still
+true of the webhook); product/08 (the catalogue now matches it, so nothing to amend).
+
+**Discovered work for the refiner** (next free backlog number 185; none fixed here):
+- **Jira's changelog schema reads `toString` off `Object.prototype`.** `changelogItemSchema` declares
+  `toString: z.string().nullish()`; an item that omits its own `toString` key is parsed with the
+  inherited function and the whole delivery becomes `malformed_payload`
+  (*"changelog.items.0.toString: Invalid input: expected string, received function"* — measured while
+  writing the bounds case, through the replay harness and the real normaliser). Atlassian's example
+  always carries the key, so it is latent; `fromString`/`from`/`to` are unaffected only because
+  `Object.prototype` has no such members.
+- **product/18:60's *"edited within 48 h"* is now a fold, not a missing event**: `ticket.updated`
+  against `task.lint.posted`'s baseline for the same ticket. `stats-metrics.ts`'s absent entry names
+  it; no row owns it.
+- **The re-lint on edit** still waits on `docs/TODO.md`'s frequency measurement; the measurement is
+  now a query over `events`.
+- **Is the approval's `user` the approver, and does GitLab send `approved` beside `approval`?** —
+  `docs/TODO.md`, needs a real instance.
+- **A polling-only Jira binding never receives an edit**: `matchTickets` polls for matches, not for
+  updates, so Q61 (b)'s freshness holds only for a binding with webhooks (stated in Q61's record).
+
+**Verification** (every tier after a passing bounded reading; the integration tier's first three
+readings failed — 56.59, 22.95, 13.06 — and it started on the fourth, 7.45): baseline `pnpm run -s
+verify` PASS on `9a5fbbf`; after the change `pnpm run -s verify` PASS (7 726 passed, 14 skipped; one
+earlier run failed on a test-only type error in `ticket-snapshot.test.ts`, fixed);
+`verify:integration` PASS (558, 54 files — the shared pipeline-store suite's two new cases on
+PostgreSQL); `verify:e2e` PASS (209, 39 files); `verify:ui` PASS (332); `verify:web-e2e` PASS (42).
+**Mutations** (on a copy, md5-confirmed revert): `isTicketSnapshotStale` answering `false` for a newer
+signal fails four cases, the saga's end-to-end one among them; the memory store's
+`saveMergeRequestHead` without its version bump fails three, including the conflict-warning saga
+case. New files were marked intent-to-add before the certifying verify (rule 91). Docker after each
+Docker tier: the Testcontainers reaper only (the `speedpuzzlingcz-*` containers are another
+project's), volumes **102** (baseline 102).
+
+**Review round 1 → round 2 (implementer, session 8).** One major, backlog **185** folded, two minors,
+one nit.
+1. **[major] The head moved back.** Confirmed as measured (`c…` then `b…` left `b…`), and it is a
+   regression against `main` because the **CI gate** (`gates.ts`, `pipelineStatus(stored.mr.head_sha)`)
+   reads this head. `mr.updated` now carries the provider's `updated_at` (GitLab's
+   `object_attributes.updated_at`; the fake stamps its clock when the delivery is built; an unreadable
+   one is `null`), migration 0044 gains `tasks.mr_head_at`, and `saveMergeRequestHead(…, {iid,
+   headSha, at})` writes only when `at` is **strictly later** than the stored instant: **an equal
+   instant moves nothing** (the first applied stands), an update with **no** instant moves nothing
+   (logged), and the recorded sha at a later instant advances only `mr_head_at` (no version bump), so
+   a stale delivery after the platform's own announced push is refused too. The PG statement locks
+   and reads the row first, then one `update` whose predicate is `mr_head_at is null or mr_head_at <
+   $4`. Out-of-order cases on **both stores** (`pipeline-store-suite.ts` › "moves the recorded head
+   forward only by the provider’s instant, whatever order deliveries arrive in") and through the bus
+   (`provider-signals.test.ts` › "never moves the head back for a delivery stamped earlier, or for one
+   with no instant"); the memory store without its predicate fails both (mutation, md5-confirmed
+   revert). **Residual, stated in `provider-signals.ts`**: a head a pushing stage recorded through
+   `save` carries no provider instant, so a stale delivery stamped after the last *announced* head can
+   still move it back until the stage's own push is announced — one delivery's latency. Docblocks
+   (`provider-signals.ts`, `diff-coalescer.ts`, the port), technical/02's `mr.*` row, the GitLab setup
+   guide and the user guide's take-over sentence now say the CI gate reads this head and it moves
+   forward only.
+2. **[folded, backlog 185] `toString`.** The Jira normaliser parses the envelope through a
+   **null-prototype deep copy** (`withoutPrototypes`, `webhook.ts`), so an absent key is absent for
+   every schema key at once. Golden: Atlassian's documented label-add plus a changelog item with no
+   `toString`/`fromString`/`from`/`to` still yields `ticket.matched` and `ticket.updated`
+   (`jira-cloud-webhook.contract.test.ts` › "reads a changelog item without its own toString as absent, and keeps the delivery");
+   removing the copy fails it. **The reader's half, found while fixing it**: zod's *output* object is
+   ordinary, so `labelsAddedBy`/`statusChangeOf` reading `item.toString` on an item with no such key
+   got the inherited function again (a status item would have carried a function as `to`); both now
+   read through `toStringOf` (`Object.hasOwn`), held by
+   `jira-cloud-webhook.contract.test.ts` › "reads a status item without its own toString as an empty target, not a function".
+   Other prototype-named keys: **none** in this normaliser's schemas
+   (the refiner's `git grep` answered `toString` alone), and the copy covers any added later. Whether
+   Jira ever omits the key is still not established (185's own open half).
+3. **[minor] Census by shape.** `CO_OWNED_COLUMNS.mr_ref` is now two regexes over the statement's
+   whole literal — `save`'s whole-document assignment under its version predicate, and the head
+   writer's `case when … jsonb_set(mr_ref, '{head_sha}' …)` with its `mr_head_at <` predicate — each
+   required exactly once, in `postgres-pipeline-store.ts`; `mr_head_at` joins that file's owned list.
+4. **[minor]** `approvalHookBody` carries `author_id: 77` beside the approver 78.
+5. **[nit] Clocks.** Not one clock: the webhook process stamps the signal, the stage process the
+   snapshot. `isTicketSnapshotStale` now states the bound — a skew δ can miss an edit announced
+   within δ of a read or cost one extra read, never a re-read every stage and never a miss for ever
+   — and the port, the migration comment and `provider-signals.ts` say "two processes".
+
+**Round 2 verification**, each run after a passing bounded reading (waited out: 34.24 and 15.51 before
+the integration files): `pnpm run -s verify` PASS (7 731 passed, 14 skipped); the pipeline and db
+integration files PASS (156, 14 files — the shared pipeline-store suite's out-of-order case on
+PostgreSQL, and the schema parity for `mr_head_at`); the full `verify:integration`, `verify:e2e`,
+`verify:ui` and `verify:web-e2e` were not re-run this round. Mutations (md5-confirmed reverts): the
+normaliser without its null-prototype copy fails the `toString` golden; the memory store without its
+ordering predicate fails both out-of-order cases. Docker after: the reaper only, volumes 102.
+**One breach, recorded:** the last `scripts/citations.test.ts` run (12 passed) was chained in the same
+shell command as its load reading and started although that reading was **35.02** — WP-58's and
+WP-59's breach repeated. One unit file, under a second; every other run followed a passing reading.
+
+**Review round 2 → round 3 (implementer, session 8).** One folded pre-existing defect, one minor, two
+doc minors, two nits.
+1. **[folded] The CI gate judged a head it had not read.** `ciHandler` (`saga.ts`) settled the gate
+   from **any** `ci.pipeline.finished` for the iid, and the poll path asked the pipeline status of the
+   **recorded** head — so a stale green pipeline passed the gate on the event path, and the
+   reordered-delivery window of round 2's residual could judge `b…` on the poll path. Closed with the
+   reviewer's closure (i): the poll path (`gates.ts`) reads the merge request's **live** head (one
+   `get_merge_request`) and asks the pipeline status of that sha; the handler now only **decides**
+   and enqueues a new `pipeline.outbound` duty, `ci_settle` (`ci-settle.ts`), which reads the live head
+   outside every transaction and settles through `settleGate` only when the pipeline ran on it —
+   otherwise it ignores the event, logged by name. **The convergence rule moved with it**:
+   `ciFailureSignature` is one definition, and the three-identical-failures escalation now lives in the
+   gate settlement both paths share (`jobs.ts` § `ciConvergence`), so the **poll path gains it** (it
+   had none). Tests: `gates.test.ts` › "judges the live head, not the recorded one, so a stale green
+   pipeline does not pass" (the provider is asked for `c…`, never `b…`); `saga.test.ts` › "settles on
+   a finished pipeline only when it ran on the live head, and ignores an older one"; the existing
+   streak case passes through the duty. Mutations (md5-confirmed reverts): the duty without its
+   comparison, and the gate reading the recorded head, fail three cases. **Read count, stated (rule
+   83)**: one more `get_merge_request` per CI-gate evaluation (poll) and one per finished pipeline for
+   a task waiting at a CI gate (event); nothing for a pipeline of a task elsewhere. WP-59's pinned
+   rebase-gate floor (three reads) does not move — a default-branch re-entry does not pass through the
+   CI gate — and the one test whose stateful double counted merge-request reads (`saga.test.ts` ›
+   "records a clean check as clean, and one that took a run as resolved") is now keyed on the
+   resolution run. Census moves: `task-save-sites` 32 → 31 (the handler's streak `save` became a
+   decision `applyDecision` writes), `integrations.test.ts`'s door sites gain `ci-settle.ts`.
+2. **[minor] Shared git suite**: `emitUpdated` + "normalises an update into mr.updated, carrying the
+   provider’s own instant" — run against the fake and GitLab's replay (`updatedHookBody`, composed).
+3. **Docs**: the user guide, the GitLab setup guide and technical/02 (`mr.*` and
+   `ci.pipeline.finished` rows) now say the CI gate reads the live head, which is what bounds the
+   ordering residual; `provider-signals.ts`, `diff-coalescer.ts`, the port, the migration comment and
+   `events.ts` no longer say the gate reads the recorded head.
+4. **Nits**: the census regexes use `\s+`/`\s*` between tokens; the port says GitLab's instants are
+   whole seconds, so two pushes in one second leave the first applied until a later delivery.
+
+**Round 3 verification**, each after a passing bounded reading (3.97–10.56; 12.84 and 13.68 waited
+out before the last `verify`, which started on 7.19): `pnpm run -s verify` PASS (7 735 passed, 14
+skipped); the pipeline and db integration files PASS (156, 14 files); Docker after:
+the reaper only, volumes 102. `verify:e2e`, `verify:ui` and `verify:web-e2e` not re-run (the
+orchestrator runs every tier).
+
+**Round 3 → round 4 (implementer, session 8): the orchestrator's `verify:e2e` red — `ci_fix` 2 where
+BD-008's bound is 3.** Measured, not the hypothesised double count across paths: the red-pipeline e2e
+emits **no** `ci.pipeline.finished` (the fake's `setPipeline` announces nothing) and its head never
+moves, so only the **poll** path settled — four observations of **one** pipeline. Round 3 gave the poll
+path the three-identical-failures rule, which counted **observations**, so the third poll of the same
+pipeline escalated early. The rule now counts **pipelines**: the recorded signature is
+`ci:<status>:<jobs>@<sha>` (`ciFailureSignature`), and `ciConvergence` collapses consecutive entries
+of the same sha before comparing shapes — one pipeline counts once whichever path, or how many polls,
+see it. The e2e's expectation was right and is unchanged. Unit: `saga.test.ts` › "counts one red
+pipeline once, whether its event or the poll settles the gate" (event settles round one, the poll sees
+the same pipeline after; the loop runs to `ci_fix` 3 and the reason is the limit), which fails with the
+collapse removed (md5-confirmed revert); and "stops after three identical failures instead of burning
+the loop" now pushes three heads, because it used to send one pipeline's event three times — the double
+count this closes. **One breach**: that mutation run was chained with its reading (12.15). Then the
+pipeline e2e file PASS (6), `verify:e2e` PASS (209, after 11.73 was waited out; started on 7.64),
+Docker: the reaper only, volumes 102.
