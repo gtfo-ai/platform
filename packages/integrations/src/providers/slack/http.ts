@@ -63,6 +63,14 @@ export interface SlackRequestInit {
   readonly headers: Record<string, string>;
   readonly body?: string;
   readonly signal?: AbortSignal;
+  /**
+   * **Always `'error'`, and the type says so** (WP-59, PROGRESS backlog 129): a `3xx` from the
+   * declared host is refused rather than followed, so the request — credential header and all —
+   * never reaches a host the egress allow-list did not decide. `gitlab/http.ts` carries the whole
+   * argument, including why `'manual'` is the wrong spelling; it is the registry client's
+   * (`packages/infrastructure/src/dependencies/registry-metadata.ts`).
+   */
+  readonly redirect: 'error';
 }
 
 export interface SlackHttpOptions {
@@ -271,6 +279,7 @@ export const createSlackHttp = (options: SlackHttpOptions): SlackHttp => ({
     const init: SlackRequestInit = {
       method: 'POST',
       headers,
+      redirect: 'error',
       body: spec.encoding === 'json' ? JSON.stringify(requestBody) : encodeForm(requestBody),
       ...(options.timeoutMs > 0 ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
     };
@@ -282,7 +291,7 @@ export const createSlackHttp = (options: SlackHttpOptions): SlackHttp => ({
       throw new IntegrationError(
         'unavailable',
         SLACK_PROVIDER_ID,
-        `${spec.method} could not be reached`,
+        `${spec.method} could not be reached, or answered with a redirect this client refuses to follow`,
         { action: spec.action, cause: error },
       );
     }

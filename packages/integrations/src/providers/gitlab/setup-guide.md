@@ -14,7 +14,15 @@ job logs, repository files). GitLab accepts it in the `PRIVATE-TOKEN` header.
 | Personal access token of a bot user | **Yes** | The only kind that can create project access tokens: *"You must use a personal access token with this endpoint. You cannot authenticate with a project access token."* |
 | Project or group access token | No | Everything else works; leave `mint_credentials` off — and no stage that writes can run. |
 
-Scopes: `api` (the platform reads and writes merge requests, discussions and notes).
+Scopes: `api` (the platform reads and writes merge requests, discussions and notes). The same
+token is also sent to GitLab's **GraphQL** endpoint, `/api/graphql`, for one read — a merge
+request's diff stats, which the REST API does not publish — and `api` covers it (GitLab documents
+`read_api` or `api` for GraphQL queries). Since WP-59 the platform also **closes** a merge request
+it opened when a person asks for a task to be reworked, which the same scope allows.
+
+The platform **does not follow redirects** (since WP-59): if `base_url` answers with one — an
+`http://` URL redirected to `https://`, a moved instance — every call fails naming the method and
+the path. Configure the URL the redirect points at.
 The token's user needs at least the **Maintainer** role on the project to create project access
 tokens, and **Developer** for everything else.
 

@@ -103,7 +103,7 @@ describe('starting a history bootstrap', () => {
     expect(jobs[0]?.data).toMatchObject({ kind: 'collect', batch_id: batch?.id });
   });
 
-  it('makes no provider call at all, which is what keeps 253 reads out of an HTTP request', async () => {
+  it('makes no provider call at all, which is what keeps up to 453 reads out of an HTTP request', async () => {
     const harness = world();
     await start(harness);
     // The audit log is what the executor writes for every read and every write. Empty is the

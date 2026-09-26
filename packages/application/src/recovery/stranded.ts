@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Seven sites, six of them here, and the seventh named rather than silently absent
+ * ## Eight sites, seven of them here, and the eighth named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -22,6 +22,7 @@
  * | a run nothing is driving | **109** | the run's row *and its budget reservation*, for ever | **here** — `run_lease`, in `./run-lease.ts` |
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
  * | a deadline's timer (WP-56) | **161** | a question, approval or take-over waits for ever | **here** — `deadline`, in `./deadline.ts`, which also backfills the rows **162** names |
+ * | a rework's close (WP-59) | **178** | a rejected merge request stays open, detached from every task | **here** — `superseded_mr`, in `./superseded-mr.ts` |
  *
  * …plus two rows that are **not** lost wake-ups at all and ride the same pass because each is the
  * other half of one of them: `task_ask_run` (**121**), a question still `pending` whose run is
@@ -120,6 +121,7 @@
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { enqueueAsk } from '../ask/commands.js';
 import { enqueueCuration } from '../knowledge/librarian.js';
+import { enqueueOutbound } from '../pipeline/jobs.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -134,6 +136,11 @@ import {
 } from './run-credential.js';
 import type { RunLeaseSweepOptions } from './run-lease.js';
 import { sweepExpiredRunLeases } from './run-lease.js';
+import {
+  type StrandedSupersededMergeRequest,
+  type SupersededMergeRequestRecoverySite,
+  supersededEndingReason,
+} from './superseded-mr.js';
 
 /** A history bootstrap batch whose `collect` wake-up was lost (backlog 101). */
 export interface StrandedBootstrapBatch {
@@ -328,6 +335,15 @@ export interface StrandedRecoveryOptions {
    * with no pipeline has nothing to give it.
    */
   readonly deadlines?: DeadlineRecoverySite;
+  /**
+   * The superseded-merge-request site (WP-59 review round 1, PROGRESS backlog **178**,
+   * `./superseded-mr.ts`): a rework's close wake-up that was lost or failed.
+   *
+   * **Absent is "a lost close is never recovered"** — the rejected merge request stays open.
+   * Optional for the reason `credentials` is: its wake-up is a `pipeline.outbound` duty, so a
+   * composition with no pipeline has no worker to take it.
+   */
+  readonly supersededMergeRequests?: SupersededMergeRequestRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -469,7 +485,12 @@ export const runStrandedRecovery = async (
   // One transaction, every query: backlog 101's argument is about the pass being *one* pooled
   // connection, and five reads in five transactions would be five borrows for the same answer.
   const credentialSite = options.credentials;
+  const supersededSite = options.supersededMergeRequests;
   const found = await options.unitOfWork.transaction(async (scope) => ({
+    superseded:
+      supersededSite === undefined
+        ? []
+        : await supersededSite.store.strandedSupersededMergeRequests(scope.tx, query),
     bootstraps: await options.store.strandedBootstraps(scope.tx, query),
     asks: await options.store.strandedAsks(scope.tx, query),
     records: await options.store.strandedHistoryRecords(scope.tx, query),
@@ -660,6 +681,65 @@ export const runStrandedRecovery = async (
         ),
     }),
   ];
+
+  if (supersededSite !== undefined) {
+    const store = supersededSite.store;
+    sites.push(
+      await runAttemptOrEndSite<StrandedSupersededMergeRequest>({
+        site: 'superseded_mr',
+        rows: found.superseded,
+        attemptedAt: (row) => row.recoveryAttemptedAt,
+        mark: async (row) =>
+          write(async (tx) =>
+            store.markSupersededAttempt(tx, { taskId: row.taskId, iid: row.iid, at: now }),
+          ),
+        // The duty's own payload, rebuilt from the row (TD-004: it re-validates on fire).
+        wake: async (row) =>
+          enqueueOutbound(options.jobs, {
+            duty: 'close_superseded_mr',
+            project_id: row.projectId,
+            task_id: row.taskId,
+            cause_event_id: row.causeEventId,
+            iid: row.iid,
+            mr_url: row.mrUrl,
+            ...(row.mrProjectPath === null ? {} : { mr_project_path: row.mrProjectPath }),
+            ...(row.newBranch === null ? {} : { new_branch: row.newBranch }),
+          }),
+        end: async (row, attempted) =>
+          write(async (tx) =>
+            store.endSupersededMergeRequest(tx, {
+              taskId: row.taskId,
+              iid: row.iid,
+              reason: supersededEndingReason(attempted),
+              at: now,
+            }),
+          ),
+        logWake: (row) =>
+          logger.warn(
+            {
+              project_id: row.projectId,
+              task_id: row.taskId,
+              iid: row.iid,
+              older_than: olderThan,
+            },
+            'a merge request a rework superseded was never closed, so its close was enqueued again — once, and it is abandoned loudly if that does not take (PROGRESS backlog 178)',
+          ),
+        // **Error**, not warn: this is the one ending in the table a human has to act on — a
+        // rejected merge request is still open on the provider and the platform has stopped trying.
+        logEnd: (row, attempted) =>
+          logger.error(
+            {
+              project_id: row.projectId,
+              task_id: row.taskId,
+              iid: row.iid,
+              mr_url: row.mrUrl,
+              attempted_at: attempted,
+            },
+            'a merge request a rework superseded could not be closed after its one recovery attempt; it is still open on the provider — close it by hand (PROGRESS backlog 178)',
+          ),
+      }),
+    );
+  }
 
   /**
    * The fifth site **ends** rather than re-enqueues, so it has no mark and no attempt (backlog 121).

@@ -487,6 +487,272 @@
         "retrieved": "2026-09-10",
         "kind": "documented"
       }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/21",
+      "status": 200,
+      "body": {
+        "id": 155016021,
+        "iid": 21,
+        "project_id": 15513260,
+        "title": "Draft: rework 21",
+        "description": "Requested by a human.",
+        "state": "opened",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/rework-21",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "2121212121212121212121212121212121212121",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/21",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "2121212121212121212121212121212121212121",
+          "ref": "refs/merge-requests/7/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": 81.5,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "2121212121212121212121212121212121212121",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-26",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a merge request\" example response with the iid, branch, sha and web_url changed to a merge request of its own (WP-59): the close case needs a key no other case answers, because the replay matches on method and path and `PUT …/merge_requests/7` already answers the draft update. First of two answers for this key — the state before the close."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/21",
+      "status": 200,
+      "body": {
+        "id": 155016021,
+        "iid": 21,
+        "project_id": 15513260,
+        "title": "Draft: rework 21",
+        "description": "Requested by a human.",
+        "state": "closed",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/rework-21",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "2121212121212121212121212121212121212121",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/21",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "2121212121212121212121212121212121212121",
+          "ref": "refs/merge-requests/7/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": 81.5,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "2121212121212121212121212121212121212121",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        },
+        "closed_at": "2026-06-01T07:59:00.000Z"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-26",
+        "kind": "documented-adapted",
+        "note": "The same merge request after the close, with `state` changed to `closed` — a value the page's `state` attribute documents. Second answer for this key, which the replay repeats: it is what the adapter's idempotent second close reads, and why that close sends no `PUT`."
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/acme%2Fapi/merge_requests/21",
+      "status": 200,
+      "body": {
+        "id": 155016021,
+        "iid": 21,
+        "project_id": 15513260,
+        "title": "Draft: rework 21",
+        "description": "Requested by a human.",
+        "state": "closed",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": null,
+        "target_branch": "main",
+        "source_branch": "agentic/rework-21",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "2121212121212121212121212121212121212121",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/21",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "2121212121212121212121212121212121212121",
+          "ref": "refs/merge-requests/7/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": 81.5,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "2121212121212121212121212121212121212121",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        },
+        "closed_at": "2026-06-01T07:59:00.000Z"
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-26",
+        "kind": "documented-adapted",
+        "note": "\"Update a merge request\" with the documented `state_event` attribute (\"New state (close/reopen)\") set to `close`. The page's example response is a merged merge request; this one carries `state: closed`, which is what the documented transition produces — the value is the adaptation, the shape is the page's."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests/22",
+      "status": 200,
+      "body": {
+        "id": 155016022,
+        "iid": 22,
+        "project_id": 15513260,
+        "title": "Draft: rework 22",
+        "description": "Requested by a human.",
+        "state": "merged",
+        "imported": false,
+        "created_at": "2026-05-30T07:26:38.402Z",
+        "updated_at": "2026-06-01T03:38:31.354Z",
+        "merged_at": "2026-05-31T12:00:00.000Z",
+        "target_branch": "main",
+        "source_branch": "agentic/rework-22",
+        "author": {
+          "id": 4242,
+          "username": "agentic-bot",
+          "name": "Agentic Bot",
+          "state": "active",
+          "web_url": "https://gitlab.example.test/agentic-bot",
+          "avatar_url": null
+        },
+        "assignees": [],
+        "reviewers": [],
+        "labels": ["agentic"],
+        "draft": true,
+        "work_in_progress": true,
+        "merge_status": "can_be_merged",
+        "detailed_merge_status": "mergeable",
+        "sha": "2222222222222222222222222222222222222222",
+        "merge_commit_sha": null,
+        "squash_commit_sha": null,
+        "user_notes_count": 1,
+        "changes_count": "3",
+        "has_conflicts": false,
+        "blocking_discussions_resolved": true,
+        "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/22",
+        "head_pipeline": {
+          "id": 900,
+          "project_id": 15513260,
+          "sha": "2222222222222222222222222222222222222222",
+          "ref": "refs/merge-requests/7/merge",
+          "status": "failed",
+          "source": "merge_request_event",
+          "coverage": 81.5,
+          "web_url": "https://gitlab.example.test/acme/api/-/pipelines/900"
+        },
+        "diff_refs": {
+          "base_sha": "2222222222222222222222222222222222222222",
+          "head_sha": "2222222222222222222222222222222222222222",
+          "start_sha": "2222222222222222222222222222222222222222"
+        },
+        "user": {
+          "can_merge": true
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-09-26",
+        "kind": "documented-adapted",
+        "note": "\"Retrieve a merge request\" example response with `state: merged` and a `merged_at`, both documented attributes: the merged merge request the close must refuse (WP-59). No `PUT` is recorded for it, so an adapter that tried to close it anyway fails loudly on the missing fixture."
+      }
     }
   ]
 }

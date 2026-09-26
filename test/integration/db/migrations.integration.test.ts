@@ -85,6 +85,9 @@ const EXPECTED_TABLES = [
   // the statistics endpoint publishes is read where it already lives.
   'stats_event_daily',
   'stats_task_delivery',
+  // WP-59 review round 1 (migration 0043): the merge request a rework let go of, until a duty
+  // settles it. After the rework's commit no other row names it (PROGRESS backlog 178).
+  'superseded_merge_requests',
   // WP-31 (migration 0024): the ask-the-task thread product/10:57 asks for. `questions` is a
   // *stage's* request for human input (technical/02:24), the opposite direction, so a human's
   // question to the platform had no home anywhere in this schema.
@@ -239,6 +242,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // every table" invariant above stays true.
       row('stats_event_daily', 'read_write', null),
       row('stats_task_delivery', 'read_write', null),
+      // WP-59 review round 1 (migration 0043): `read_write` because a row is written by the rework,
+      // then settled once by its duty or marked once and ended once by the recovery pass.
+      row('superseded_merge_requests', 'read_write', null),
       // WP-31 (migration 0024): the ask-the-task thread. `read_write` because a row is updated at
       // most three times — the run is attached, the answer is stored, the ticket mirror is stamped.
       row('task_asks', 'read_write', null),

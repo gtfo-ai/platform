@@ -54,6 +54,32 @@ import type { Approval, Question, QueuedTask, Task } from '@platform/domain';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
 
+/**
+ * How a superseded merge request's `close_superseded_mr` duty ended (migration 0043, WP-59 review
+ * round 1) — or `abandoned`, the recovery pass's own ending after one re-enqueue did not take.
+ */
+export type SupersededMergeRequestOutcome =
+  | 'closed'
+  | 'merged'
+  | 'readopted'
+  | 'unbound'
+  | 'shadow'
+  | 'abandoned';
+
+/**
+ * A merge request a rework let go of (`superseded_merge_requests`, PROGRESS backlog 178): written
+ * in the rework's own transaction, because after it commits no other row names the merge request.
+ */
+export interface SupersededMergeRequest {
+  readonly taskId: Id;
+  readonly projectId: Id;
+  readonly mr: MergeRequestRef;
+  readonly newBranch: string | null;
+  /** The rework's `task.stage.returned` — the close wake-up's cause, which a re-enqueue carries. */
+  readonly causeEventId: Id;
+  readonly supersededAt: IsoDateTime;
+}
+
 /** A task as the pipeline holds it: the aggregate plus the row's own columns. */
 export interface StoredTask {
   readonly task: Task;
@@ -375,6 +401,47 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the other narrow writes.
    */
   saveRiskClasses(tx: Transaction, taskId: Id, classes: readonly string[]): Promise<void>;
+  /**
+   * Moves `version` — the token {@link TaskRepository.save} guards with — and writes no column of
+   * the aggregate (WP-59 review round 1); the SQL adapter also sets the bookkeeping `updated_at`, as
+   * every writer of the row does.
+   *
+   * For a writer that appends to a task's stream **from outside** the task's own transactions: the
+   * conflict warning's half on the peer of a pair. That append makes any in-flight
+   * load-then-append on the same stream lose the stream-sequence race, and `StreamConflictError` is
+   * retried by nobody — so the appender bumps the token **first, in the same transaction**, and
+   * every owner whose snapshot predates it meets {@link TaskConcurrentModificationError} at its
+   * `save` instead, which the bus and `retryOnTaskConflict` already retry. First, because the
+   * statement takes the row lock: a peer transaction that has already saved is waited out, and the
+   * appender's re-load after it reads the committed sequence.
+   *
+   * @throws when the task does not exist.
+   */
+  readonly bumpVersion: (tx: Transaction, taskId: Id) => Promise<void>;
+  /**
+   * Records the merge request a rework let go of — in the rework's own transaction (WP-59 review
+   * round 1, PROGRESS backlog 178). Not a column of `tasks`: a row of its own table, so it is no new
+   * writer of the task row and survives the task adopting the next merge request. A second
+   * supersession of the same `(task, iid)` rewrites the row, unsettled again.
+   */
+  readonly recordSupersededMergeRequest: (
+    tx: Transaction,
+    record: SupersededMergeRequest,
+  ) => Promise<void>;
+  /**
+   * The `close_superseded_mr` duty's mark: the row reached an ending, and which. A row already
+   * settled is left as it is — the first ending is the one that happened.
+   */
+  readonly settleSupersededMergeRequest: (
+    tx: Transaction,
+    input: {
+      readonly taskId: Id;
+      readonly iid: number;
+      readonly outcome: SupersededMergeRequestOutcome;
+      readonly at: IsoDateTime;
+      readonly detail?: string;
+    },
+  ) => Promise<void>;
   /**
    * Writes **only** `coverage` — the fifth narrow writer, and the fourth for the same reason
    * (WP-39, migration 0027).

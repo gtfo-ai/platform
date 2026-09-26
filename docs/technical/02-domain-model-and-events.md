@@ -176,7 +176,7 @@ no author — the backlog entry that says why nothing will (TD-005's amendment r
 | `task.review.observed` | Review-only (WP-24) | task, mr, head sha reviewed and now, threads posted/resolved/accepted/dismissed/unresolved | stats (230) |
 | `task.lint.posted` | Ticket readiness linter (WP-25) | task, ticket, score, missing elements, questions posted, the ticket's `updated_at` | stats (230) |
 | `task.rebase.checked` | Rebase gate (WP-26) | task, mr, conflicts, attempt, outcome (`clean`/`resolved`/`conflicted`/`exhausted`) | stats (230) |
-| `task.conflict.warned` | Rebase gate (WP-26) | task, mr, the other task and its ticket key, overlapping paths, how many, whether the comparison was cut | stats (230) |
+| `task.conflict.warned` | Rebase gate (WP-26); since WP-59 appended on **both** tasks' streams when the gate finds an overlap (PROGRESS backlog 65) | task, mr, the other task and its ticket key, overlapping paths, how many, whether the comparison was cut | stats (230) |
 | `run.created` | Runner | run, task, stage, role, mode, attempt, run key | UI (220) |
 | `run.started` | Runner | run, model, effort, prompt version, context pack | UI (220) |
 | `run.finished` / `run.failed` | Runner | run, status, usage, cost, exit reason | Cost ledger (10), stage executor (20), UI |

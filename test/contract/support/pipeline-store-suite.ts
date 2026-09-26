@@ -297,6 +297,36 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       /**
+       * WP-59 review round 1: `bumpVersion` moves the token and nothing else, so a `save` over a
+       * snapshot taken before it refuses with the error every owner retries — which is how an
+       * out-of-band append on a live stream (the conflict warning's peer half) stops being a
+       * `StreamConflictError` nobody retries.
+       */
+      it('bumps the version alone, so a save over an older snapshot refuses and a fresh one lands', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const before = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+        await store.tasks.bumpVersion(tx, stored.task.id);
+
+        const after = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+        expect(after.version).toBe(before.version + 1);
+        expect(after.task.state).toBe(before.task.state);
+        expect(after.costActualUsd).toBe(before.costActualUsd);
+        await expect(
+          store.tasks.save(tx, { ...before, task: { ...before.task, state: 'active' } }),
+        ).rejects.toMatchObject({ concurrencyConflict: true });
+        const saved = await store.tasks.save(tx, {
+          ...after,
+          task: { ...after.task, state: 'active' },
+        });
+        expect(saved.version).toBe(after.version + 1);
+      });
+
+      it('refuses to bump the version of a task that does not exist', async () => {
+        await expect(store.tasks.bumpVersion(tx, nextId())).rejects.toThrow();
+      });
+
+      /**
        * WP-39's write, and the two properties that are this one's rather than the others' (rule 23:
        * a new port obligation lands in the shared suite in the same change, or it is a
        * provider-local promise).

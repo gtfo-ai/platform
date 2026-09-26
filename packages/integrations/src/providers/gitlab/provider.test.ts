@@ -614,6 +614,98 @@ describe('merge request writes', () => {
   });
 });
 
+describe('closing a merge request (WP-59, backlog 51)', () => {
+  it('reads, then closes with state_event, and a second close sends no write', async () => {
+    const { port, calls } = build({
+      [`GET /projects/${P}/merge_requests/7`]: [
+        { status: 200, body: mrBody() },
+        { status: 200, body: mrBody({ state: 'closed' }) },
+      ],
+      [`PUT /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody({ state: 'closed' }) },
+    });
+    expect((await port.closeMergeRequest(mrRef())).state).toBe('closed');
+    expect((await port.closeMergeRequest(mrRef())).state).toBe('closed');
+    const writes = calls.filter((call) => call.method === 'PUT');
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? '{}')).toEqual({ state_event: 'close' });
+  });
+
+  it('refuses a merged merge request without writing, and a close that raced a merge', async () => {
+    const merged = build({
+      [`GET /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody({ state: 'merged' }) },
+    });
+    await expect(merged.port.closeMergeRequest(mrRef())).rejects.toMatchObject({
+      code: 'conflict',
+    });
+    expect(merged.calls.map((call) => call.method)).toEqual(['GET']);
+
+    // Merged between the read and the write: GitLab reports the state it has, and the adapter
+    // reads the answer rather than assuming its own request decided it.
+    const raced = build({
+      [`GET /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody() },
+      [`PUT /projects/${P}/merge_requests/7`]: { status: 200, body: mrBody({ state: 'merged' }) },
+    });
+    await expect(raced.port.closeMergeRequest(mrRef())).rejects.toMatchObject({
+      code: 'conflict',
+    });
+  });
+});
+
+describe('diff stats through GraphQL (WP-59, backlog 113)', () => {
+  const answer = (mergeRequest: unknown): Scripted => ({
+    status: 200,
+    body: { data: { project: mergeRequest === undefined ? null : { mergeRequest } } },
+  });
+
+  it('maps diffStatsSummary onto the port’s names and sends the path and iid as variables', async () => {
+    const { port, calls } = build({
+      'POST /api/graphql': answer({
+        diffStatsSummary: { additions: 40, deletions: 2, fileCount: 3, changes: 42 },
+      }),
+    });
+    expect(await port.getMergeRequestDiffStats(mrRef())).toEqual({
+      files_changed: 3,
+      insertions: 40,
+      deletions: 2,
+    });
+    const sent = JSON.parse(calls[0]?.body ?? '{}') as { query: string; variables: unknown };
+    expect(sent.variables).toEqual({ project: PROJECT, iid: '7' });
+    // Platform text only: the project path is a variable, never part of the document.
+    expect(sent.query).not.toContain(PROJECT);
+  });
+
+  it('answers null when GitLab has not computed the summary, never three zeroes', async () => {
+    const { port } = build({ 'POST /api/graphql': answer({ diffStatsSummary: null }) });
+    expect(await port.getMergeRequestDiffStats(mrRef())).toBeNull();
+  });
+
+  it('is not_found when the project or the merge request answers null', async () => {
+    const noProject = build({ 'POST /api/graphql': answer(undefined) });
+    await expect(noProject.port.getMergeRequestDiffStats(mrRef())).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    const noMergeRequest = build({ 'POST /api/graphql': answer(null) });
+    await expect(noMergeRequest.port.getMergeRequestDiffStats(mrRef())).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
+  it('turns a GraphQL error list into invalid_response without quoting it', async () => {
+    const { port } = build({
+      'POST /api/graphql': {
+        status: 200,
+        body: { errors: [{ message: 'Invalid token FAKE-quoted-provider-text' }] },
+      },
+    });
+    const outcome = await port.getMergeRequestDiffStats(mrRef()).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ code: 'invalid_response' });
+    expect((outcome as Error).message).not.toContain('FAKE-quoted-provider-text');
+  });
+});
+
 describe('CI', () => {
   const pipeline = {
     id: 900,

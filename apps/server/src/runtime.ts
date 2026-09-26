@@ -527,8 +527,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
          *
          * Beside the discovery recorder and for the same reason — an `artifact.created` handler
          * that enqueues, and a job that does the I/O. It needs the pipeline's own loader, because
-         * the collection's 253 reads have to go through the one `IntegrationActionExecutor` this
-         * process composed. One more pooled connection: `POOL_RESERVATIONS.bootstrap`.
+         * the collection's reads — up to 453 at N = 200 since WP-59 added the diff stats — have to go
+         * through the one `IntegrationActionExecutor` this process composed. One more pooled
+         * connection: `POOL_RESERVATIONS.bootstrap`.
          */
         const historyBootstrap = composeHistoryBootstrap({
           pool: database.pool,

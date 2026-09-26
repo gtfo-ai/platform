@@ -106,9 +106,9 @@ const TaskCard = ({
         backlog 63). Two residuals are in the tooltip rather than in a comment only this file's
         reader sees, because both are visible on the screen:
 
-         - the warning is **not symmetric** (backlog 65) — it is appended on the stream of the task
-           whose rebase gate ran, so on a pair only one card carries a badge, and the *absence* of
-           one says nothing about the other task;
+         - the warning is appended on **both** tasks of a pair since WP-59 (backlog 65), but only
+           when a rebase gate compares them — so the *absence* of a badge means "not compared yet",
+           not "clear";
          - `truncated` means the comparison did not read every file (backlog 64), so a count of
            zero under it is "nothing found in what was compared".
 
@@ -122,7 +122,7 @@ const TaskCard = ({
                 task.conflict.truncated
                   ? ', and the comparison did not read every file of both merge requests, so there may be more'
                   : ''
-              }. The comparison runs when a task enters the rebase gate and is not symmetric: the other task is warned only if its own gate ran after this one had a merge request.`}
+              }. The comparison runs when either task enters the rebase gate, and both tasks are warned when it finds an overlap; a task with no badge has not been compared yet.`}
             >
               {'touches '}
               <UntrustedText value={task.conflict.other_ticket_key} />

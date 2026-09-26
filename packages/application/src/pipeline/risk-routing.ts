@@ -15,23 +15,28 @@
  * it stands each time the merge request is about to be looked at by a human. A trigger on
  * `mr.opened` would classify the first push and never the fifth.
  *
- * It is a **second duty rather than a branch inside `conflict_warn`**, and the cost of that is
- * stated rather than hidden: this duty reads the merge request's changed paths again, so a gate
- * entry now makes one more `get_merge_request_diff` than it did. The alternative was one duty doing
- * two unrelated things whose early returns are not the same — `conflict_warn` gives up when the
- * project has no peer task, which is exactly the ordinary case in which a task still needs its
- * classes and its reviewers. Sharing the read would have meant the commonest task on the commonest
- * project silently getting neither.
+ * It is a **second duty rather than a branch inside `conflict_warn`**. The alternative was one duty
+ * doing two unrelated things whose early returns are not the same — `conflict_warn` gives up when
+ * the project has no peer task, which is exactly the ordinary case in which a task still needs its
+ * classes and its reviewers. The cost that decision had — this duty read the merge request's
+ * changed paths **again**, one more `get_merge_request_diff` per gate entry — is gone since WP-59:
+ * the two duties, and the dependency gate before them, share one provider read per `(merge
+ * request, head sha)` (`diff-coalescer.ts`, PROGRESS backlog 64), so keeping the duties apart no
+ * longer costs a request.
  *
  * ## What one gate entry costs a provider
  *
  * Bounded, and in this order: the merge request's **changed files**, the project's **default
- * branch**, that branch's **`CODEOWNERS`** — three reads, made on every gate entry, because they
- * are what "is there anything to route" is answered *from* — then one `resolve_user_id` per routed
+ * branch**, that branch's **`CODEOWNERS`** — three reads asked on every gate entry, because they
+ * are what "is there anything to route" is answered *from*, of which the first is answered from
+ * the coalescer when the same revision was read inside its window (WP-59) — then one `resolve_user_id` per routed
  * handle up to {@link MAX_ROUTED_REVIEWERS}, and finally `set_reviewers`, which re-reads the merge
  * request because the union with whoever is already assigned is computed where the call is made
  * (standing rule 44). A project with no classes, no `CODEOWNERS` and no configured reviewers
- * therefore pays **three reads and no provider write**: nothing is looked up and nobody is assigned.
+ * therefore pays **two or three reads and no provider write** — three when the diff is not already
+ * held — and nothing is looked up and nobody is assigned. With the rebase gate's own mergeability
+ * read, one gate entry on such a project with no peer is **three** provider reads, where it was
+ * four before WP-59 (`conflict-warning.test.ts` pins the count).
  * It does write one **row** since WP-38 — `tasks.required_reviewers`, on every path including that
  * one, because *"the routing ran and found nobody"* is what the Checks panel has to be able to say.
  *
@@ -63,6 +68,7 @@ import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { MAX_CONFLICT_FILES } from './conflict-warning.js';
+import { coalescedMergeRequestDiff } from './diff-coalescer.js';
 import {
   gitReads,
   integrationsForProject,
@@ -210,7 +216,14 @@ export const runRiskRouting = async (
     redactor === null ? value : redactor.redactText(value).value;
   const context = { projectId: stored.task.projectId, taskId: stored.task.id };
 
-  const files = await reads.mergeRequestDiff(stored.mr, MAX_CONFLICT_FILES, context);
+  // WP-59, backlog 64: coalesced with the conflict warning's read of the same revision at the same
+  // gate entry, and with the dependency gate's when the Developer stage completed at it.
+  const files = await coalescedMergeRequestDiff(
+    { port: options.integrations, integrations, now: options.clock.now() },
+    stored.mr,
+    MAX_CONFLICT_FILES,
+    context,
+  );
   if (files === null) {
     // No git binding: nothing to classify and nobody to assign. A project whose integration was
     // removed keeps running (standing rule 20).

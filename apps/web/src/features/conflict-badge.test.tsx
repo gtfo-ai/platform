@@ -8,8 +8,10 @@
  * real application against a fake API.
  *
  * Both directions are asserted (standing rule 42): a task with a warning carries the badge, and a
- * task without one carries **nothing** — because the comparison is not symmetric (backlog 65) and a
- * badge drawn on both cards would be the platform claiming a comparison it never made.
+ * task without one carries **nothing** — a badge drawn on a card whose task carries no warning
+ * would be the platform claiming a comparison it never made. (Since WP-59 the server appends the
+ * warning on both tasks of a pair, backlog 65, so a real pair renders two badges; this fixture's
+ * second card is a task no gate has compared.)
  */
 import type { TaskRecord } from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
@@ -138,8 +140,8 @@ describe('the conflict badge on the board', () => {
     expect(text).toContain('touches');
     expect(text).toContain('ACME-12');
     expect(text).toContain('3 files');
-    // One badge, not two: the pair was compared once, and the card that was not warned says
-    // nothing rather than "no conflicts" (backlog 65).
+    // One badge, not two: only one card of this fixture carries a warning, and the card that does
+    // not says nothing rather than "no conflicts".
     expect(text.match(/touches/g) ?? []).toHaveLength(1);
   });
 

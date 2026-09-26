@@ -41,8 +41,11 @@ describe('Drizzle schema', () => {
     // plus `kb_index_refusals` — the documents the parser refused at the last index run, which were
     // in no table and therefore in no health report (migration 0041, WP-57, PROGRESS backlog 37),
     // plus `kb_term_statistics` — Q58's per-project document frequencies, counted at index time
-    // so a query term every page contains can be dropped (migration 0042, WP-58).
-    expect(tables.length).toBe(62);
+    // so a query term every page contains can be dropped (migration 0042, WP-58), plus
+    // `superseded_merge_requests` — the merge request a rework let go of, which after the rework's
+    // commit no other row names, and which the recovery pass has to be able to find if the close's
+    // wake-up is lost (migration 0043, WP-59 review round 1, PROGRESS backlog 178).
+    expect(tables.length).toBe(63);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

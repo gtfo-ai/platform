@@ -63,6 +63,9 @@ JIRA_API_TOKEN=            # or JIRA_API_TOKEN_FILE=/run/secrets/jira_api_token
 JIRA_WEBHOOK_SECRET=       # or JIRA_WEBHOOK_SECRET_FILE=/run/secrets/jira_webhook_secret
 ```
 
+The platform **does not follow redirects** (since WP-59): a `site_url` that answers with one fails
+every call as `did not complete`. Use the site URL itself, `https://<site>.atlassian.net`.
+
 ## 4. Register the webhook (optional but better)
 
 Only if this instance has a public URL (`APP_WEBHOOK_PUBLIC_URL`). Without one, skip to step 5 —

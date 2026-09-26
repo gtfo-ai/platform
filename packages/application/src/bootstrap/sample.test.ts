@@ -67,7 +67,9 @@ const mergeRequest = (overrides: Partial<MergedMergeRequest> = {}): MergedMergeR
     },
     merged_at: '2026-05-29T09:12:00.000Z',
     title: 'Sum the invoice footer',
-    diff_stats: { files_changed: 3, additions: 40, deletions: 2 },
+    // `insertions`, the field `diffStatsSchema` names — this fixture said `additions` behind the
+    // cast below until WP-59, a shape the strict schema would have refused (PROGRESS backlog 113).
+    diff_stats: { files_changed: 3, insertions: 40, deletions: 2 },
     discussion_count: 2,
     ...overrides,
   }) as MergedMergeRequest;

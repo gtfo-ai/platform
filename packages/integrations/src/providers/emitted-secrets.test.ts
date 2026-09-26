@@ -334,6 +334,15 @@ const gitlabScript = (): Script => ({
   [`POST /projects/${P}/merge_requests`]: { status: 201, body: gitlabMr() },
   [`PUT /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
   [`GET /projects/${P}/merge_requests/7`]: { body: gitlabMr() },
+  'POST /api/graphql': {
+    body: {
+      data: {
+        project: {
+          mergeRequest: { diffStatsSummary: { additions: 4, deletions: 1, fileCount: 1 } },
+        },
+      },
+    },
+  },
   [`GET /projects/${P}/merge_requests`]: {
     body: [gitlabMr({ merged_at: NOW, state: 'merged' })],
   },
@@ -463,6 +472,8 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   open_merge_request: 'openMergeRequest',
   update_merge_request: 'updateMergeRequest',
   get_merge_request: 'getMergeRequest',
+  close_merge_request: 'closeMergeRequest',
+  get_merge_request_diff_stats: 'getMergeRequestDiffStats',
   list_discussions: 'listDiscussions',
   reply_to_discussion: 'replyToDiscussion',
   resolve_discussion: 'resolveDiscussion',
@@ -551,6 +562,11 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       description: `still ${GITLAB_TOKEN}`,
     });
     emitted.get_merge_request = await port.getMergeRequest(ref);
+    // WP-59: the close re-reads the merge request and answers the provider's object, planted like
+    // every other merge request here; the diff-stats read answers three integers from GraphQL, which
+    // can carry no credential — driven so the census holds, not because it has a plant to find.
+    emitted.close_merge_request = await port.closeMergeRequest(ref);
+    emitted.get_merge_request_diff_stats = await port.getMergeRequestDiffStats(ref);
     emitted.list_discussions = await port.listDiscussions(ref);
     emitted.reply_to_discussion = await port.replyToDiscussion(
       ref,

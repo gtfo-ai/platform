@@ -86,6 +86,13 @@ export const recordRebaseCheck = async (
 ): Promise<void> => {
   const outcome = rebaseOutcomeFor(input);
   await options.unitOfWork.transaction(async (scope) => {
+    // WP-59 review round 2: the token first, which takes the row lock, so a conflict warning
+    // appending on this stream from another task's gate serialises with this append rather than
+    // racing it. This runs after the gate settled and enqueued the next stage, so a
+    // `StreamConflictError` here was never retried into a measurement — the retry found the task
+    // past the gate and the row was lost. A concurrent `save` over an older snapshot now refuses
+    // and is retried by its owner (`TaskRepository.bumpVersion`).
+    await options.store.tasks.bumpVersion(scope.tx, input.taskId);
     const current = await options.store.tasks.load(scope.tx, input.taskId);
     if (current === null) {
       return;

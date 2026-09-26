@@ -27,7 +27,7 @@
  * The place that answers "a transaction is open" is `events/open-transaction.ts`, which has the
  * measurement and the honest list of what the mechanism cannot see.
  */
-import type { Id, JsonObject, TaskMode } from '@platform/contracts';
+import type { DiffStats, Id, JsonObject, TaskMode } from '@platform/contracts';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import {
   type IdempotencyPlan,
@@ -367,6 +367,30 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
   },
 
   /**
+   * A merge request's size — files, inserted and deleted lines — or `null` when the provider has
+   * not computed it (WP-59, PROGRESS backlog 113). A **read**, so it happens in every mode. Its
+   * one caller is the history bootstrap, for a mined merge request whose listing carried no
+   * `diff_stats` — which on the one shipped adapter is every one of them (GitLab divergence 1).
+   */
+  mergeRequestDiffStats: async (
+    ref: MergeRequestRefInput,
+    context: CallContext,
+  ): Promise<DiffStats | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'get_merge_request_diff_stats',
+      { project: git.project, iid: ref.iid },
+      context,
+      async () => git.port.getMergeRequestDiffStats(addressed(git, ref)),
+    );
+  },
+
+  /**
    * Merge requests a human already merged — WP-34's shadow comparison, and `listMergedMergeRequests`'
    * first caller since it was built at WP-09.
    *
@@ -419,6 +443,16 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
     );
   },
 
+  /**
+   * The latest pipeline for a revision — **never coalesced**, and deliberately not on the key the
+   * diff read shares (`diff-coalescer.ts`, WP-59). A merge request's files at a fixed head sha are
+   * stable; a pipeline's status at a fixed head sha is **not**: it moves from `running` to a
+   * terminal state, and a re-run on the same revision reports a different outcome and a different
+   * coverage — which is why the coverage duty refuses to cache the head (`coverage.ts`). Keyed by
+   * sha, a second asker would be answered the CI gate's `running` after the pipeline had failed. A
+   * coalesce here would have to be bounded in *time*, and nobody has decided that window (PROGRESS
+   * backlog 64).
+   */
   pipelineStatus: async (headSha: string, context: CallContext): Promise<PipelineStatus | null> => {
     const git = integrations.git;
     if (git === null) {
@@ -1120,6 +1154,37 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
  */
 export const reviewWrites = (integrations: PipelineIntegrations) => ({
   /**
+   * Closes a merge request without merging it — product/04:86's *"the old MR is closed"*, for the
+   * one caller that has a merge request to close: a reworked task (WP-59, PROGRESS backlog 51).
+   *
+   * A **mutation**, so a shadow task records `would_have` and closes nothing, with a platform-owned
+   * `IdempotencyPlan`: it runs from an at-least-once job, and a retry after the provider already
+   * answered replays. The port's own close is idempotent too (an already-closed merge request
+   * succeeds), which is what covers a retry whose idempotency record was never written.
+   */
+  close: async (
+    input: { readonly ref: MergeRequestRefInput; readonly idempotencyKey: string },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MergeRequest | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      git.ref,
+      'close_merge_request',
+      { project: git.project, iid: input.ref.iid },
+      context,
+      async () => git.port.closeMergeRequest(addressed(git, input.ref)),
+      // A shadow task makes no call; `null` is described as no result rather than read as one.
+      () => null as unknown as MergeRequest,
+      (result) => (result === null ? null : { iid: result.ref.iid, state: result.state }),
+      replayable<MergeRequest>(input.idempotencyKey),
+    );
+  },
+
+  /**
    * Sets the merge request's reviewers — product/08:10's `set_reviewers`, which no caller had
    * until WP-37.
    *
@@ -1244,7 +1309,11 @@ export const reviewWrites = (integrations: PipelineIntegrations) => ({
           markdown,
         }),
       () => null as unknown as Discussion,
-      (result) => ({ discussion_id: result.id }),
+      // `null` is the shadow result above, and the executor describes a `would_have` row too: a
+      // `result.id` read here threw inside the describe and failed the job for every shadow caller.
+      // Reached at WP-59 by a shadow **peer** of a conflict warning; the same shape WP-37 round 2
+      // fixed in `reviewers` above.
+      (result) => (result === null ? null : { discussion_id: result.id }),
       replayable<Discussion>(input.idempotencyKey),
     );
   },

@@ -7,7 +7,7 @@
  * ## Where this runs, and why it is a job rather than a command
  *
  * A job, on `bootstrap.history`, because the read volume is not something to do inside an HTTP
- * request: **253 provider reads at N = 200** (`batch.ts` has the arithmetic), each of them through
+ * request: **up to 453 provider reads at N = 200** (`batch.ts` has the arithmetic), each of them through
  * `IntegrationActionExecutor` and therefore each of them taking the account's rate-limit budget.
  * Everything here happens **outside every transaction** — `integrationsForProject` and the executor
  * refuse to run inside one (WP-15d) — and the single write transaction at the end is the only
@@ -16,7 +16,9 @@
  * ## The three inputs, and what each costs
  *
  *  - **merged merge requests**: one `listMergedMergeRequests`, then one `listDiscussions` **per**
- *    merge request, because `MergedMergeRequest` carries a discussion *count* and not the comments.
+ *    merge request, because `MergedMergeRequest` carries a discussion *count* and not the comments —
+ *    and, since WP-59, one `getMergeRequestDiffStats` per merge request whose listing carried no
+ *    `diff_stats`, which on GitLab is all of them ({@link withDiffStats}).
  *    That fan-out is the port's shape rather than this caller's choice, and PROGRESS backlog 64
  *    records that GitLab publishes no `include=discussions` on the list endpoint.
  *  - **closed tickets**: one `matchTickets` on the project's **own** definition of closed —
@@ -62,7 +64,7 @@ import {
 } from '../pipeline/store.js';
 import { applyDecision } from '../pipeline/transitions.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
-import { IntegrationUnsupportedError } from '../ports/integrations/common.js';
+import { IntegrationError, IntegrationUnsupportedError } from '../ports/integrations/common.js';
 import type { Discussion, MergedMergeRequest } from '../ports/integrations/git-provider.js';
 import type { Ticket, TicketMatchRule } from '../ports/integrations/task-management.js';
 import type { Logger } from '../ports/logger.js';
@@ -152,6 +154,40 @@ const chunked = <T>(items: readonly T[], size: number): readonly (readonly T[])[
  * Exported separately from the job handler so a test can drive it and read the report — the shape
  * `recordDiscoveryFindings` uses.
  */
+/**
+ * A mined merge request with its **diff stats**, read when the listing did not carry them — WP-59,
+ * PROGRESS backlog 113, product/19 §18's *"with discussions and diff stats"*.
+ *
+ * The one shipped adapter's listing never carries them (GitLab divergence 1), so on GitLab this is
+ * **one more provider read per merge request** — GraphQL's `diffStatsSummary` — and the bootstrap's
+ * read volume at N = 200 is up to **453**, where it was 253 (`batch.ts` has the arithmetic). A
+ * listing that does carry them costs nothing here.
+ *
+ * **A read the bootstrap can do without** (standing rule 20): a provider that does not implement
+ * it, refuses it or answers something unparseable leaves the merge request sizeless rather than
+ * failing a collection that has everything else in hand, and the batch's detail says how many.
+ * A **retryable** failure is re-thrown, so the job retries rather than mining a sample that lost
+ * its sizes to a blip.
+ */
+const withDiffStats = async (
+  reads: ReturnType<typeof gitReads>,
+  mr: MergedMergeRequest,
+  context: { readonly projectId: Id; readonly taskId: null },
+): Promise<MergedMergeRequest> => {
+  if (mr.diff_stats != null) {
+    return mr;
+  }
+  try {
+    const stats = await reads.mergeRequestDiffStats(mr.ref, context);
+    return stats === null ? mr : { ...mr, diff_stats: stats };
+  } catch (error) {
+    if (error instanceof IntegrationError && !error.retryable) {
+      return mr;
+    }
+    throw error;
+  }
+};
+
 export const collectHistory = async (
   options: HistoryCollectOptions,
   input: { readonly batchId: Id; readonly projectId: Id },
@@ -201,10 +237,17 @@ export const collectHistory = async (
   }
 
   const withDiscussions: { mr: MergedMergeRequest; discussions: readonly Discussion[] }[] = [];
+  let sizeless = 0;
+  let statsReads = 0;
   for (const mr of merged) {
     // `1 + N`: the fan-out backlog 64 records, made once per merge request and bounded by N.
     const discussions = await reads.discussions(mr.ref, context);
-    withDiscussions.push({ mr, discussions });
+    statsReads += mr.diff_stats == null ? 1 : 0;
+    const sized = await withDiffStats(reads, mr, context);
+    if (sized.diff_stats == null) {
+      sizeless += 1;
+    }
+    withDiscussions.push({ mr: sized, discussions });
   }
 
   const groups = chunked(withDiscussions, batch.batchSize);
@@ -225,6 +268,15 @@ export const collectHistory = async (
     } else {
       throw error;
     }
+  }
+
+  if (sizeless > 0) {
+    // product/19 §18's *"with discussions and diff stats"*, and what the sample lost of it — said,
+    // because a merge request with no size reads to the model as a merge request of no size
+    // (PROGRESS backlog 113).
+    const lost = `the git provider published no diff stats for ${sizeless} of ${merged.length} merge request(s), so their size is missing from the sample`;
+    logger.info({ project_id: projectId, batch_id: batchId, sizeless }, lost);
+    missing = missing === null ? lost : `${missing}; ${lost}`;
   }
 
   const closed = await closedTickets({
@@ -357,7 +409,8 @@ export const collectHistory = async (
       merge_requests: withDiscussions.length,
       tickets: outcome.ticketsUsed,
       commits: outcome.commitsUsed,
-      provider_reads: 1 + withDiscussions.length + 1 + (closed.reads > 0 ? closed.reads + 1 : 0),
+      provider_reads:
+        1 + withDiscussions.length + statsReads + 1 + (closed.reads > 0 ? closed.reads + 1 : 0),
       redactions: outcome.redactions,
       missing,
     },

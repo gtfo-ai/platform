@@ -154,7 +154,15 @@ export interface PipelineOutboundData {
      * Enqueued by the recovery pass rather than by a handler — `recovery/run-credential.ts` — and
      * re-validated on fire against the audit rows, because that pass may enqueue one address twice.
      */
-    | 'revoke_run_credential';
+    | 'revoke_run_credential'
+    /**
+     * WP-59, PROGRESS backlog 51 (Q92): comment on and close the merge request a `rework` let go
+     * of. Enqueued by the rework **command** after its commit rather than by a handler, and the
+     * one duty whose subject no row holds any more — the command cleared `tasks.mr_ref` so the
+     * close's own `mr.closed` webhook finds no task — so its merge request rides the payload
+     * (`iid`, `mr_url`, `mr_project_path`) with the branch the work moved to (`new_branch`).
+     */
+    | 'close_superseded_mr';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -211,9 +219,16 @@ export interface PipelineOutboundData {
    * *next* stage by then — the saga moved it on in the same transaction that completed this one.
    */
   readonly stage?: string;
-  /** The three `review_only_*` duties: which merge request, and where it lives. */
+  /**
+   * The three `review_only_*` duties and `close_superseded_mr` (WP-59): which merge request, and
+   * where it lives.
+   */
   readonly iid?: number;
   readonly mr_url?: string;
+  /** `close_superseded_mr` only: the repository path the ref recorded, when it recorded one. */
+  readonly mr_project_path?: string;
+  /** `close_superseded_mr` only: the branch the reworked task continues on, named in the comment. */
+  readonly new_branch?: string;
   /**
    * `notify` (WP-32): what class of thing happened, and the event's own words about it.
    *

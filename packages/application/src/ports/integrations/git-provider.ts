@@ -14,6 +14,7 @@
 import {
   ciStatusSchema,
   coveragePctSchema,
+  type DiffStats,
   diffStatsSchema,
   isoDateTimeSchema,
   mergeRequestRefSchema,
@@ -460,6 +461,50 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
   openMergeRequest(draft: MergeRequestDraft): Promise<MergeRequest>;
   updateMergeRequest(ref: MergeRequestRefInput, update: MergeRequestUpdate): Promise<MergeRequest>;
   getMergeRequest(ref: MergeRequestRefInput): Promise<MergeRequest>;
+
+  /**
+   * Closes a merge request without merging it — product/04:86's *"the old MR is closed"* (WP-59,
+   * PROGRESS backlog 51).
+   *
+   * An operation of its own rather than a `state` field on {@link MergeRequestUpdate}, because the
+   * two have different failure modes and a caller must be able to tell them apart: an update of an
+   * already-closed merge request is an ordinary write, while a close of an already-**merged** one
+   * is a refusal — a merged change cannot be un-merged by closing it, and answering "closed" would
+   * tell the rework duty that the rejected work is off the table when it is on the default branch.
+   *
+   * **Idempotent, and the obligation is the adapter's**: closing a merge request that is already
+   * closed succeeds and answers it as it stands, making no second change. The rework duty runs
+   * from an at-least-once job, and a retry after the provider already closed it must not fail.
+   *
+   * **It is a mutation** (technical/06): every call goes through `IntegrationActionExecutor`, so a
+   * shadow-mode caller never reaches it. Declared as a property rather than a method (standing rule
+   * 157), so `tsc` checks an implementation's parameter contravariantly.
+   *
+   * @throws {IntegrationError} `conflict` when the merge request is merged; `not_found` when it
+   * does not exist.
+   */
+  readonly closeMergeRequest: (ref: MergeRequestRefInput) => Promise<MergeRequest>;
+
+  /**
+   * How big a merge request's change is — files, inserted lines, deleted lines — or `null` when
+   * the provider has not computed it yet (WP-59, PROGRESS backlog 113).
+   *
+   * A read of its own because the one shipped adapter publishes **no** diff stats on the three
+   * surfaces {@link MergeRequest.diff_stats} rides (GitLab divergence 1: REST publishes a file
+   * count as a string and no line counts). GitLab answers this from GraphQL's
+   * `MergeRequest.diffStatsSummary` — `additions`, `deletions`, `fileCount` — which is the only
+   * documented surface that carries all three; the deprecated `…/changes` endpoint carries
+   * patches and a `changes_count` string, not counts. The page and retrieval date are in
+   * `test/fixtures/http/gitlab/SOURCES.md`.
+   *
+   * `null` is a first-class answer rather than a zero: a provider that computes stats
+   * asynchronously has none for a merge request it has just been told about, and three zeroes
+   * would read as an empty change. It is a **read**, so it happens in every mode; a property for
+   * rule 157's reason.
+   *
+   * @throws {IntegrationError} `not_found` when the merge request does not exist.
+   */
+  readonly getMergeRequestDiffStats: (ref: MergeRequestRefInput) => Promise<DiffStats | null>;
 
   listDiscussions(ref: MergeRequestRefInput): Promise<readonly Discussion[]>;
   replyToDiscussion(

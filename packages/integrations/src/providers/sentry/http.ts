@@ -68,6 +68,20 @@ export interface SentryRequestInit {
   readonly headers: Record<string, string>;
   readonly body?: string;
   readonly signal?: AbortSignal;
+  /**
+   * **Always `'error'`, and the type says so** (WP-59, PROGRESS backlog 129): a `3xx` from the
+   * declared host is refused rather than followed, so the request — credential header and all —
+   * never reaches a host the egress allow-list did not decide. `gitlab/http.ts` carries the whole
+   * argument, including why `'manual'` is the wrong spelling; it is the registry client's
+   * (`packages/infrastructure/src/dependencies/registry-metadata.ts`).
+   *
+   * **A same-host redirect is refused too, and that is decided here rather than rediscovered**:
+   * Sentry 301-redirects a path without its trailing slash to the same path with one
+   * (`client.ts`), and every path this client builds already carries the slash, so the refusal
+   * costs nothing today — a path that lost it would fail loudly instead of being silently
+   * redirected, which is the answer the replay transport's keys needed anyway.
+   */
+  readonly redirect: 'error';
 }
 
 export interface SentryHttpOptions {
@@ -216,6 +230,7 @@ export const createSentryHttp = (options: SentryHttpOptions): SentryHttp => {
     const init: SentryRequestInit = {
       method: spec.method,
       headers,
+      redirect: 'error',
       ...(body === undefined ? {} : { body }),
       ...(options.timeoutMs > 0 ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
     };
@@ -227,7 +242,7 @@ export const createSentryHttp = (options: SentryHttpOptions): SentryHttp => {
       throw new IntegrationError(
         'unavailable',
         SENTRY_PROVIDER_ID,
-        `${spec.method} ${spec.path} could not be reached`,
+        `${spec.method} ${spec.path} could not be reached, or answered with a redirect this client refuses to follow`,
         { action: spec.action, cause: error },
       );
     }

@@ -137,6 +137,25 @@
  *     (WP-77): it finds the credential by the `revokeId` it wrote and reads nothing else of the
  *     handle, so a caller holding only an audit row's `revoke_id` reaches it exactly as GitLab's
  *     per-call adapter reaches a token — and a handle it never wrote is `not_found`, as there.
+ * 17. **Kinder — a merge request carries `diff_stats`, and GitLab's never does.** `openMergeRequest`
+ *     fills `{files_changed: 1, insertions: 10, deletions: 2}`, and the value is served on the three
+ *     surfaces the port has for it: `getMergeRequest`, `normalise`'s `mr.*` payload and
+ *     `listMergedMergeRequests`. The only real adapter this build ships publishes `null` on **all
+ *     three** (GitLab divergence 1, `gitlab/provider.ts`), because GitLab's REST merge request
+ *     publishes `changes_count` — a file count, and the string `"1000+"` above a thousand — and no
+ *     insertion or deletion counts, and its Merge Request Hook has none either
+ *     (`gitlab/inbound.ts`). It is left kinder rather than narrowed to GitLab's shape for divergence
+ *     13's reason: the field is the **port's**, and a fake that emptied it would make a provider that
+ *     does publish stats untestable here. The consequence is stated where it bites, and it has bitten
+ *     once already: WP-41 published `loc_changed` **absent** rather than summing this field, because
+ *     it would have been non-zero in every tier and zero on every instance; and WP-35's history
+ *     bootstrap read `files_changed` off it and sent every mined GitLab merge request to the prompt
+ *     with no size (PROGRESS backlog 113). Since WP-59 the number has a read of its own —
+ *     `getMergeRequestDiffStats`, which GitLab answers from GraphQL's `diffStatsSummary` — and that
+ *     is the read to use; this fake answers it from the same stored value, so the two agree here.
+ *     **Anything else that reaches for `diff_stats` on a merge request or a delivery owes itself the
+ *     same check.** Asserted positively by `fake.test.ts` ("publishes diff stats on the three
+ *     surfaces GitLab answers null on (divergence 17)").
  */
 import {
   type CodeownersRules,
@@ -392,6 +411,17 @@ export interface FakeGitProvider extends GitProviderPort {
    * computing, and WP-26's rebase gate has to treat that as "unknown, ask again" rather than as
    * "not mergeable". Without this control the fake could only ever say `true`.
    */
+  /**
+   * Sets what the three `diff_stats` surfaces and `getMergeRequestDiffStats` answer for a merge
+   * request (divergence 17) — `null` is the state GitLab's REST surfaces are always in, and the
+   * state a provider that computes stats asynchronously is in for a merge request it has just
+   * opened.
+   */
+  setDiffStats(input: {
+    readonly project: string;
+    readonly iid: number;
+    readonly stats: DiffStats | null;
+  }): void;
   setMergeability(input: {
     readonly project?: string;
     readonly iid: number;
@@ -1137,6 +1167,29 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return toMergeRequest(requireMr('get_merge_request', mrRef));
     },
 
+    closeMergeRequest: async (mrRef) => {
+      core.enter('close_merge_request');
+      const mr = requireMr('close_merge_request', mrRef);
+      if (mr.state === 'merged') {
+        // The port's refusal, with the port's code: a merged change is not taken back by closing it.
+        throw conflict(
+          PROVIDER,
+          'close_merge_request',
+          `merge request ${mr.project}!${mr.iid} is merged and cannot be closed`,
+        );
+      }
+      // Idempotent: an already-closed merge request is answered as it stands.
+      mr.state = 'closed';
+      return toMergeRequest(mr);
+    },
+
+    getMergeRequestDiffStats: async (mrRef) => {
+      core.enter('get_merge_request_diff_stats');
+      // Divergence 17: the same stored value the three `diff_stats` surfaces serve.
+      const stats = requireMr('get_merge_request_diff_stats', mrRef).diff_stats;
+      return stats === null ? null : { ...stats };
+    },
+
     listDiscussions: async (mrRef) => {
       core.enter('list_discussions');
       const mr = requireMr('list_discussions', mrRef);
@@ -1398,6 +1451,14 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         deleted_file: file.deletedFile ?? false,
         omitted: file.omitted ?? false,
       }));
+    },
+
+    setDiffStats: (input) => {
+      const mr = findMr(input.project, input.iid);
+      if (mr === undefined) {
+        throw notFound(PROVIDER, 'seed', `merge request ${input.project}!${input.iid}`);
+      }
+      mr.diff_stats = input.stats === null ? null : { ...input.stats };
     },
 
     setMergeability: (input) => {

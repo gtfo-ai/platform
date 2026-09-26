@@ -154,6 +154,7 @@ export * from './recovery/deadline.js';
 export * from './recovery/run-credential.js';
 export * from './recovery/run-lease.js';
 export * from './recovery/stranded.js';
+export * from './recovery/superseded-mr.js';
 export * from './scheduling/working-calendar.js';
 export * from './scheduling/zoned-time.js';
 // Scheduling (WP-05)

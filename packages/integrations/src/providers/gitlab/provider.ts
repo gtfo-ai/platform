@@ -20,12 +20,18 @@
  * The fake's register has a dual for a real adapter: *the adapter must not be kinder than the
  * provider*. Where replay cannot reproduce a behaviour, it is written down here.
  *
- *  1. **`diff_stats` is always `null`.** GitLab's REST merge request publishes `changes_count` — a
- *     *file* count, and the string `"1000+"` above a thousand — and no insertion/deletion counts.
- *     Filling two of `diffStatsSchema`'s three fields with zeroes would put invented numbers into
- *     `mr.opened` payloads and into WP-39's coverage/diff deltas. GraphQL's `diffStatsSummary` has
- *     them; adding a GraphQL call is out of this work package's scope and is recorded as
- *     discovered work.
+ *  1. **`diff_stats` is always `null` on the three REST surfaces** — `getMergeRequest`,
+ *     `listMergedMergeRequests` and the `mr.*` webhook payload. GitLab's REST merge request
+ *     publishes `changes_count` — a *file* count, and the string `"1000+"` above a thousand — and no
+ *     insertion/deletion counts. Filling two of `diffStatsSchema`'s three fields with zeroes would
+ *     put invented numbers into `mr.opened` payloads and into WP-39's coverage/diff deltas. The
+ *     number has a read of its own since **WP-59**: `getMergeRequestDiffStats`, one GraphQL request
+ *     for `MergeRequest.diffStatsSummary` (the only documented surface carrying all three counts —
+ *     the deprecated `…/changes` endpoint carries patches and the same `changes_count` string). The
+ *     three surfaces above deliberately stay `null` rather than each making that request: it is a
+ *     second call per merge request read, and the fake's divergence 17 is the warning to any
+ *     caller that reads the field instead. This sentence used to say the GraphQL call *"is recorded
+ *     as discovered work"*, and it never was (PROGRESS backlog 113).
  *  2. **`mintCredential` grants whole days, not seconds.** See `credentials.ts`: GitLab's
  *     `expires_at` is a date and the token dies at midnight UTC on it, so `expiresAt` reports the
  *     instant GitLab enforces and never `now + ttlSeconds`.
@@ -646,6 +652,79 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
     getMergeRequest: async (mrRef) => {
       const project = projectOf(mrRef, 'get_merge_request');
       return toMergeRequest(project, await client.mergeRequest(project, mrRef.iid));
+    },
+
+    /**
+     * WP-59 — read, then `state_event=close` only when there is something to close.
+     *
+     * The read is what makes the port's idempotency a property of this adapter rather than of
+     * GitLab's undocumented answer to closing a closed merge request: the page documents
+     * `state_event` as *"New state (close/reopen)"* and says nothing about a transition that does
+     * not apply. So an already-closed merge request is answered from the read without a write, and
+     * a merged one is refused before anything is sent. The one race the read leaves — merged
+     * between the read and the write — is caught on the answer: GitLab reports the state it has,
+     * and a `merged` answer is the same refusal.
+     */
+    closeMergeRequest: async (mrRef) => {
+      const project = projectOf(mrRef, 'close_merge_request');
+      const refuseMerged = (): never => {
+        throw new IntegrationError(
+          'conflict',
+          GITLAB_PROVIDER_ID,
+          `merge request ${project}!${mrRef.iid} is merged and cannot be closed`,
+          { action: 'close_merge_request' },
+        );
+      };
+      const current = await client.mergeRequest(project, mrRef.iid);
+      const state = mapMergeRequestState(current.state);
+      if (state === 'merged') {
+        return refuseMerged();
+      }
+      if (state === 'closed') {
+        return toMergeRequest(project, current);
+      }
+      const closed = await client.closeMergeRequest(project, mrRef.iid);
+      if (mapMergeRequestState(closed.state) === 'merged') {
+        return refuseMerged();
+      }
+      return toMergeRequest(project, closed);
+    },
+
+    /**
+     * WP-59 — GraphQL's `MergeRequest.diffStatsSummary`, mapped onto the port's names: `fileCount`
+     * is `files_changed`, `additions` is `insertions`, `deletions` stays. A merge request GitLab
+     * does not show this token — `project` or `mergeRequest` answering `null`, which is how GraphQL
+     * says "not found" — is `not_found`; a GraphQL `errors` list is `invalid_response` with the
+     * count and never the messages, which are provider text (BD-022).
+     */
+    getMergeRequestDiffStats: async (mrRef) => {
+      const project = projectOf(mrRef, 'get_merge_request_diff_stats');
+      const answer = await client.mergeRequestDiffStatsSummary(project, mrRef.iid);
+      if (answer.errors != null && answer.errors.length > 0) {
+        throw new IntegrationError(
+          'invalid_response',
+          GITLAB_PROVIDER_ID,
+          `the GraphQL diff stats query for ${project}!${mrRef.iid} answered ${answer.errors.length} error(s)`,
+          { action: 'get_merge_request_diff_stats' },
+        );
+      }
+      const mergeRequest = answer.data?.project?.mergeRequest;
+      if (mergeRequest == null) {
+        throw new IntegrationError(
+          'not_found',
+          GITLAB_PROVIDER_ID,
+          `merge request ${project}!${mrRef.iid} does not exist, or this token cannot see it`,
+          { action: 'get_merge_request_diff_stats' },
+        );
+      }
+      const summary = mergeRequest.diffStatsSummary;
+      return summary == null
+        ? null
+        : {
+            files_changed: summary.fileCount,
+            insertions: summary.additions,
+            deletions: summary.deletions,
+          };
     },
 
     listDiscussions: async (mrRef) => {

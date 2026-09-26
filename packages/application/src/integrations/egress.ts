@@ -72,9 +72,15 @@
  *  - **DNS.** A declared host that resolves to `169.254.169.254` is allowed. This is an allow-list
  *    over names, not over addresses, and an SSRF guard over addresses is a different mechanism
  *    (it would have to run at connect time, inside the HTTP client, and re-run on every redirect).
- *  - **Redirects.** The adapters pass the base URL to `fetch`; a 302 to another host is followed by
- *    whatever the adapter's client does. The registry client next door sets `redirect: 'error'`;
- *    no provider adapter does, and that is recorded as discovered work rather than fixed here.
+ *  - **Redirects — refused below this guard, not by it.** This module decides the first request
+ *    and never sees a second one: the response is consumed inside the adapter's HTTP client. Since
+ *    WP-59 (PROGRESS backlog 129) all five provider clients send `redirect: 'error'`, the spelling
+ *    the registry client next door already used, so a `3xx` — to another host or to the same one —
+ *    fails the call instead of being followed with the credential on it; each client's request
+ *    init type makes the option required, and
+ *    `packages/integrations/src/providers/redirect-refusal.test.ts` holds every provider directory
+ *    to it with an injected `fetch` that answers `302`. Until then a redirect was followed with whatever headers the runtime kept —
+ *    measured on Node's `fetch` at WP-59, GitLab's `private-token` among them.
  *  - **A host reached some other way.** The guard is on the executor's request and on the write, so
  *    it covers what a *binding* dials. A module that opens a socket by itself is outside it — which
  *    is exactly why the one such module names its own checklist (see

@@ -123,7 +123,7 @@ window. It never mutates. Common failures:
 | `auth_mode is "bearer" but no bearer token is configured` | The secret is missing, empty or whitespace. Nothing was sent. |
 | `… answered 401` / `403` | The gateway rejected the credential, or a multi-tenant Loki was queried without `tenant_id`. |
 | `… answered 404` | `base_url` points at something that is not Loki, or already carries `/loki/api/v1`. |
-| `… could not be reached` | DNS, TLS or the egress policy (TD-021). |
+| `… could not be reached, or answered with a redirect …` | DNS, TLS or the egress policy (TD-021) — or the Loki URL answers with a redirect, which the platform refuses to follow with the credential on the request (since WP-59). Configure the URL the redirect points at, if that host is one you mean to trust. |
 
 The `detail` line is run through the secret redactor before it is stored, so a probe can be shown
 in the settings screen without leaking what was sent.

@@ -12,13 +12,14 @@
  * operator asked for and what they were shown, then a `bootstrap.history` job. It makes **no
  * provider call at all**, which is the difference between this command and `startShadowBatch`, and
  * the reason is arithmetic rather than taste: a shadow batch reads one merge-request listing and one
- * ticket per key, at most 26 requests; a bootstrap at the default N reads **1 + 200 + 1 + 1 + 5 per
- * chunk** — the listing, one discussion fetch per merge request (`MergedMergeRequest` carries a
- * *count* and not the comments, so *"with their review comments"* is a fan-out the port cannot
- * avoid), the commit list, the closed-ticket match and one `readTicket` per ticket kept. That is
- * **253 provider reads at N = 200**, stated here because PROGRESS backlog 64 asks for the number to
- * be in the change, and it is not something to do inside an HTTP request that a browser is waiting
- * on.
+ * ticket per key, at most 26 requests; a bootstrap at the default N reads **1 + 200 + 200 + 1 + 1 +
+ * 5 per chunk** — the listing, one discussion fetch per merge request (`MergedMergeRequest` carries
+ * a *count* and not the comments, so *"with their review comments"* is a fan-out the port cannot
+ * avoid), one diff-stats read per merge request whose listing carried none (WP-59; on GitLab that is
+ * every one, GitLab divergence 1), the commit list, the closed-ticket match and one `readTicket` per
+ * ticket kept. That is **up to 453 provider reads at N = 200** — 253 against a provider whose
+ * listing carries the stats — stated here because PROGRESS backlog 64 asks for the number to be in
+ * the change, and it is not something to do inside an HTTP request that a browser is waiting on.
  *
  * The **volume is bounded and the bound is the rate limiter's**: every one of those reads goes
  * through `IntegrationActionExecutor`, which takes the account's rate-limit budget and delays rather

@@ -135,6 +135,15 @@ export const gitlabReplayContext = (
       omittedPath: 'assets/logo.bin',
       fileCount: 3,
     },
+    // WP-59: `merge-requests.json` records merge request 21 open and then closed (with the `PUT`
+    // that closes it) and merge request 22 merged, with no `PUT` — so a close attempted on it fails
+    // on the missing fixture as well as on the adapter's refusal.
+    close: { openIid: 21, mergedIid: 22 },
+    // WP-59: `graphql.json` records one `diffStatsSummary` answer, for merge request 7.
+    diffStats: {
+      iid: MR_IID,
+      expected: { files_changed: 3, insertions: 42, deletions: 7 },
+    },
     pipelineSha: SHA_MR7,
     failingJobName: FAILING_JOB,
     // Provider-shaped: GitLab's log handle is the numeric job id, not the fake's `log:<id>`.

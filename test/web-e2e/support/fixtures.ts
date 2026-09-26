@@ -283,8 +283,8 @@ export const bugTask = taskRecordSchema.parse({
   dependencies: null,
   required_reviewers: null,
   // …and the same both-ways rule for WP-41's field: this task was never compared, so its card
-  // carries no badge — which on a warned *pair* is also what the task compared first sees, because
-  // the comparison is not symmetric (PROGRESS backlog 65).
+  // carries no badge. Since WP-59 a warned *pair* carries one on both cards (PROGRESS backlog 65),
+  // so a card with none is a task no gate has compared against an overlapping one.
   conflict: null,
 });
 

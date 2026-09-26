@@ -40,7 +40,12 @@ import { expect } from 'vitest';
 
 export interface ReplayInteraction {
   readonly method: string;
-  /** Path below `/api/v4`, with the query string as the adapter will build it. */
+  /**
+   * Path below `/api/v4`, with the query string as the adapter will build it — or `/api/graphql`
+   * itself for the one GraphQL request (WP-59), which is not below `/api/v4` and is keyed whole.
+   * A GraphQL request is keyed on method and path like every other, so **one** answer serves every
+   * query sent there; the corpus holds one query, and a second would need the body in the key.
+   */
   readonly path: string;
   readonly status: number;
   readonly headers?: Readonly<Record<string, string>>;

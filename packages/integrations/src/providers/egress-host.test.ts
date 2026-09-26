@@ -35,9 +35,14 @@
  *
  * That the adapter's HTTP client only ever requests the host it published. A client that built a
  * second URL from a provider response — a pagination link, a `Location` header, a redirect — would
- * reach a host this ref never named and the executor would never see it. No test in this repository
- * covers that; the fixtures are replayed, so a real redirect has never been exercised. It is
- * recorded as discovered work under WP-51 rather than claimed here.
+ * reach a host this ref never named and the executor would never see it, and **this census cannot
+ * see that**: it reads the ref, not the requests. One of the three is now held elsewhere —
+ * **redirects**, which every client refuses with `redirect: 'error'` since WP-59 and which
+ * `redirect-refusal.test.ts` drives per provider directory with an injected `fetch` answering
+ * `302` (PROGRESS backlog 129). The other two are not held by any test: GitLab's pagination puts a
+ * page *number* back into a URL rebuilt from its own base and Jira's pages on a token, so neither
+ * dials a URL a provider handed it today — a reading of the two clients, not an assertion, and it
+ * stays true only until a client starts following a link.
  */
 
 import { readdirSync } from 'node:fs';

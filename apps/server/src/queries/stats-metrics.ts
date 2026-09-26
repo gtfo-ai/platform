@@ -470,7 +470,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   concurrent_task_overlaps: {
     label: 'Concurrent-task overlaps',
     definition:
-      'Conflict warnings posted — one per ordered pair, so a pair where both tasks were compared counts twice and a pair where only one was counts once (product/16, PROGRESS backlog 65).',
+      'Conflict warnings appended — one per ordered pair per comparison, and since WP-59 a comparison that finds an overlap appends both orders at once, so every warned pair counts twice per gate entry that compared it (product/16, PROGRESS backlog 65).',
     unit: 'count',
     aggregation: 'sum',
   },
@@ -550,9 +550,9 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     aggregation: 'sum',
     absent: {
       reason:
-        'The one git provider this build ships publishes no insertion/deletion counts: every `mr.*` event GitLab produces carries `diff_stats: null` (its REST merge request has `changes_count`, a string like “5+”). The **fake** git provider does fill the field, which is exactly why this metric is named absent rather than computed — a number that is measured in every test and null in production is worse than one that is missing in both.',
+        'The one git provider this build ships publishes no insertion/deletion counts on its merge request events: every `mr.*` event GitLab produces carries `diff_stats: null` (its REST merge request has `changes_count`, a string like “5+”). Since WP-59 the counts have a read of their own (GraphQL’s `diffStatsSummary`), which only the history bootstrap calls; nothing reads it when a merge request is merged. The **fake** git provider does fill the event field, which is exactly why this metric is named absent rather than computed — a number that is measured in every test and null in production is worse than one that is missing in both.',
       owner:
-        'Unowned — filed as discovered work by WP-41. It needs a provider read per merge request, not a query.',
+        'Unowned — filed as discovered work by WP-41. It needs the WP-59 diff-stats read made once per merged merge request and recorded, not a query.',
     },
   },
   defect_escape: {

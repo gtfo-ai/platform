@@ -457,7 +457,31 @@ export const ticketBreakdownItems = pgTable('ticket_breakdown_items', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * The merge requests a rework let go of, until a duty settles them (migration 0043, WP-59 review
+ * round 1, PROGRESS backlog 178). The migration's header carries the argument; this is the typed
+ * mirror the parity test holds to it.
+ */
+export const supersededMergeRequests = pgTable(
+  'superseded_merge_requests',
+  {
+    taskId: uuid('task_id').notNull(),
+    iid: integer('iid').notNull(),
+    projectId: uuid('project_id').notNull(),
+    mrRef: jsonb('mr_ref').$type<MergeRequestRef>().notNull(),
+    newBranch: text('new_branch'),
+    causeEventId: uuid('cause_event_id').notNull(),
+    supersededAt: timestamp('superseded_at', { withTimezone: true }).notNull(),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    outcome: text('outcome'),
+    detail: text('detail'),
+    recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
+  },
+  (table) => [primaryKey({ columns: [table.taskId, table.iid] })],
+);
+
 export type Task = typeof tasks.$inferSelect;
+export type SupersededMergeRequestRow = typeof supersededMergeRequests.$inferSelect;
 export type TaskStage = typeof taskStages.$inferSelect;
 export type Run = typeof runs.$inferSelect;
 export type Artifact = typeof artifacts.$inferSelect;

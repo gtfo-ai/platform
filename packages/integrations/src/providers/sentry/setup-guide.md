@@ -38,6 +38,11 @@ never merges issues and never changes project settings.
 | `auth_token` | yes | Secret. The token from step 1. |
 | `request_timeout_ms` | no (30 000) | Per-request timeout. |
 
+The platform **does not follow redirects** (since WP-59), not even Sentry's own: its API
+301-redirects a path without a trailing slash, and every path the platform builds carries one, so
+nothing is lost. A `base_url` that answers with a redirect fails every call naming the method and
+the path — configure the URL it points at.
+
 ### Caps — what the platform will and will not hand an agent
 
 A Sentry event is attacker-influenced text that ends up in an agent's context (BD-022), and three

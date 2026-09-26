@@ -5,7 +5,7 @@
  * Four properties are load-bearing and each is asserted by a test rather than promised here.
  *
  *  1. **No error this module *builds* carries a credential.** The token travels in a
- *     `PRIVATE-TOKEN` header, and every `IntegrationError` constructed here holds the method, the
+ *     `PRIVATE-TOKEN` header (an `Authorization: Bearer` one on the GraphQL endpoint, WP-59), and every `IntegrationError` constructed here holds the method, the
  *     path and the status — never the request headers, the request body or the response body.
  *     WP-07's reviewer showed that an axios- or undici-shaped error carries
  *     `config.headers.Authorization` as an own enumerable property, which pino then serialises;
@@ -95,6 +95,23 @@ export interface GitLabRequestInit {
   readonly headers: Record<string, string>;
   readonly body?: string;
   readonly signal?: AbortSignal;
+  /**
+   * **Always `'error'`, and the type says so** (WP-59, PROGRESS backlog 129). The egress allow-list
+   * (`assertEgressAllowed`, WP-51) is asked once per action, about the URL this client builds out
+   * of the binding's validated `base_url`; what `fetch` does with a `3xx` is below that decision.
+   * With the default `follow` a redirect sends the request — `PRIVATE-TOKEN` header and all — to a
+   * host no list ever saw, and the audit row records the host that was authorised. `'error'` makes
+   * the transport reject instead, which surfaces here as an `unavailable` error naming the method
+   * and the path: a refused egress should fail loudly. `'manual'` was the other option and is
+   * the wrong one — it hands this client a `3xx` to interpret, which is a branch per caller. The
+   * spelling and the reason are the registry client's
+   * (`packages/infrastructure/src/dependencies/registry-metadata.ts`).
+   *
+   * **A same-host redirect is refused too**, deliberately: nothing GitLab documents for the
+   * endpoints here answers with one, and a redirect the platform did not ask for is not one it
+   * should follow with a credential on it.
+   */
+  readonly redirect: 'error';
 }
 
 export interface GitLabHttpOptions {
@@ -116,8 +133,21 @@ export interface GitLabHttpOptions {
 
 export interface GitLabRequestSpec {
   readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  /** Path below `/api/v4`, already URL-encoded where it embeds a project path. */
+  /**
+   * Path below `/api/v4`, already URL-encoded where it embeds a project path — or, for
+   * `api: 'graphql'`, the empty string: the GraphQL endpoint is the one path `/api/graphql`.
+   */
   readonly path: string;
+  /**
+   * Which API (WP-59). `v4` is REST and authenticates with `PRIVATE-TOKEN`, as every endpoint here
+   * has since WP-09. `graphql` is `POST /api/graphql`, and it authenticates with
+   * `Authorization: Bearer <token>` — the header its own page documents
+   * (<https://docs.gitlab.com/api/graphql/> § "Header authentication", retrieved 2026-09-26) —
+   * rather than assuming the REST header is honoured there too.
+   *
+   * @default 'v4'
+   */
+  readonly api?: 'v4' | 'graphql';
   readonly query?: Readonly<Record<string, string | number | boolean | undefined>>;
   readonly json?: unknown;
   /** The port method this call serves, recorded on any error (`get_merge_request`, …). */
@@ -217,7 +247,8 @@ const buildUrl = (baseUrl: string, spec: GitLabRequestSpec): string => {
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
     .join('&');
-  return `${baseUrl}/api/v4${spec.path}${query === '' ? '' : `?${query}`}`;
+  const root = spec.api === 'graphql' ? '/api/graphql' : '/api/v4';
+  return `${baseUrl}${root}${spec.path}${query === '' ? '' : `?${query}`}`;
 };
 
 export interface GitLabHttp {
@@ -265,10 +296,10 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     spec: GitLabRequestSpec,
     accept: string,
   ): Promise<{ response: Response; text: string } | null> => {
-    const headers: Record<string, string> = {
-      accept,
-      'private-token': options.token,
-    };
+    const headers: Record<string, string> =
+      spec.api === 'graphql'
+        ? { accept, authorization: `Bearer ${options.token}` }
+        : { accept, 'private-token': options.token };
     let body: string | undefined;
     if (spec.json !== undefined) {
       // Property 4, outbound half: the document the platform *publishes* — an MR title and
@@ -280,6 +311,8 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     const init: GitLabRequestInit = {
       method: spec.method,
       headers,
+      // Backlog 129: never follow a redirect with the token on the request. See the field.
+      redirect: 'error',
       ...(body === undefined ? {} : { body }),
       ...(options.timeoutMs > 0 ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
     };
@@ -294,7 +327,9 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
       throw new IntegrationError(
         'unavailable',
         GITLAB_PROVIDER_ID,
-        `${spec.method} ${spec.path} could not be reached`,
+        // "or redirected": with `redirect: 'error'` a `3xx` rejects here too, and undici's
+        // rejection does not say which of the two it was in a way this module could rely on.
+        `${spec.method} ${spec.path} could not be reached, or answered with a redirect this client refuses to follow`,
         { action: spec.action, cause: error },
       );
     }

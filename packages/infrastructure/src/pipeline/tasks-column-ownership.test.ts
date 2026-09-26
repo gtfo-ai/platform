@@ -50,8 +50,14 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * disagree about a millisecond and about nothing else, and giving it an owner would mean a narrow
  * write could not touch it — which is worse, because then a narrow write would leave the row
  * looking untouched.
+ *
+ * `version` is the other, added deliberately at WP-59 review round 1: `save` owns it as the token it
+ * guards with, and `bumpVersion` moves it **and nothing else**, for an appender that writes a task's
+ * stream from outside the task's transactions (the conflict warning's peer half). It writes no
+ * column of the aggregate, so it cannot clobber one; its whole effect is to make an in-flight
+ * `save` over a stale snapshot refuse and retry — which is the property the token exists for.
  */
-const SHARED_COLUMNS: ReadonlySet<string> = new Set(['updated_at']);
+const SHARED_COLUMNS: ReadonlySet<string> = new Set(['updated_at', 'version']);
 
 /** The owner of every `tasks` column that any statement in this repository writes. */
 const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
@@ -97,7 +103,6 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'mr_ref',
     'stage_attempts',
     'iteration_counters',
-    'version',
     'completed_at',
   ],
 };

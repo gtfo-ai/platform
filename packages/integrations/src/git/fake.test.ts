@@ -357,6 +357,81 @@ describe('FakeGitProvider CI and CODEOWNERS', () => {
     // *kindness* rather than a disagreement: both sources say the same number here.
     expect((await port.getPipelineStatus(PROJECT, mr.head_sha))?.coverage_pct).toBe(81.5);
   });
+
+  it('publishes diff stats on the three surfaces GitLab answers null on (divergence 17)', async () => {
+    /**
+     * The register's other kind claim, asserted rather than warned about (standing rule 12). GitLab
+     * answers `diff_stats: null` on `getMergeRequest`, on every `mr.*` delivery and on
+     * `listMergedMergeRequests` (GitLab divergence 1); this fake fills all three. So a feature that
+     * read the field off any of them would be green here and blank in production — which is why
+     * the port grew `getMergeRequestDiffStats` (WP-59), and why this case also shows that read
+     * agreeing with the surfaces here, the same shape divergence 13's case has.
+     */
+    const port = build();
+    const mr = await port.openMergeRequest({
+      project: PROJECT,
+      branch: 'agentic/task-17',
+      target: 'main',
+      title: 'Draft',
+      description: '',
+      draft: true,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    const stats = { files_changed: 1, insertions: 10, deletions: 2 };
+
+    // Surface 1: the merge request read.
+    expect((await port.getMergeRequest(mr.ref)).diff_stats).toEqual(stats);
+
+    // Surface 2: the delivery, and surface 3: the merged listing.
+    const delivered = await port.inbound.normalise(
+      port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: mr.ref.iid }),
+      context,
+    );
+    const payload = delivered.events[0]?.payload as { diff_stats?: unknown } | undefined;
+    expect(delivered.events[0]?.type).toBe('mr.merged');
+    expect(payload?.diff_stats).toEqual(stats);
+    const merged = await port.listMergedMergeRequests(PROJECT, '2000-01-01T00:00:00.000Z', 10);
+    expect(merged.map((entry) => entry.diff_stats)).toEqual([stats]);
+
+    // …and the read the platform should use agrees, so the divergence is a kindness here.
+    expect(await port.getMergeRequestDiffStats(mr.ref)).toEqual(stats);
+    // `null` is reachable too, and it is the state every GitLab surface but the new read is in.
+    port.setDiffStats({ project: PROJECT, iid: mr.ref.iid, stats: null });
+    expect(await port.getMergeRequestDiffStats(mr.ref)).toBeNull();
+    expect((await port.getMergeRequest(mr.ref)).diff_stats ?? null).toBeNull();
+  });
+});
+
+describe('FakeGitProvider closing a merge request (WP-59)', () => {
+  const draft = {
+    project: PROJECT,
+    branch: 'agentic/task-59',
+    target: 'main',
+    title: 'Draft',
+    description: '',
+    draft: true,
+    labels: [],
+    reviewers: [],
+    remove_source_branch: true,
+  };
+
+  it('closes an open merge request, and a second close changes nothing', async () => {
+    const port = build();
+    const mr = await port.openMergeRequest(draft);
+    expect((await port.closeMergeRequest(mr.ref)).state).toBe('closed');
+    expect((await port.closeMergeRequest(mr.ref)).state).toBe('closed');
+    expect((await port.getMergeRequest(mr.ref)).state).toBe('closed');
+  });
+
+  it('refuses to close a merged merge request with conflict, and leaves it merged', async () => {
+    const port = build();
+    const mr = await port.openMergeRequest(draft);
+    port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: mr.ref.iid });
+    await expect(port.closeMergeRequest(mr.ref)).rejects.toMatchObject({ code: 'conflict' });
+    expect((await port.getMergeRequest(mr.ref)).state).toBe('merged');
+  });
 });
 
 describe('FakeGitProvider discussions', () => {

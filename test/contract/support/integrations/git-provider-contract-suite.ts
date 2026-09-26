@@ -112,6 +112,31 @@ export interface GitProviderContractContext {
     /** How many files the harness arranged, so the `limit` case can ask for fewer. */
     readonly fileCount: number;
   };
+  /**
+   * Two merge requests for `closeMergeRequest` (WP-59, PROGRESS backlog 51): one **open**, which
+   * the suite closes twice, and one already **merged**, which it must refuse to close.
+   *
+   * Their own iids rather than {@link GitProviderContractContext.mergeRequestIid}: a replay harness
+   * keys a response on method and path, so closing the merge request other cases update would make
+   * the draft case and the close case answer each other's fixtures.
+   */
+  readonly close: {
+    readonly openIid: number;
+    readonly mergedIid: number;
+  };
+  /**
+   * A merge request whose diff stats this harness publishes, and what they are (WP-59, backlog
+   * 113). Named numbers rather than "some stats came back", because an adapter that mapped
+   * `additions` onto `deletions` passes a presence check.
+   */
+  readonly diffStats: {
+    readonly iid: number;
+    readonly expected: {
+      readonly files_changed: number;
+      readonly insertions: number;
+      readonly deletions: number;
+    };
+  };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -437,6 +462,44 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         await expectIntegrationError(
           () => port.getMergeRequest(mrRef(context.missingMergeRequestIid)),
           'not_found',
+        );
+      });
+
+      /**
+       * product/04:86's *"the old MR is closed"* (WP-59, backlog 51) — the port had no way to say
+       * it until now, so no adapter, fake or suite in this tree could close anything.
+       *
+       * **Idempotent**, and asserted by calling it twice: the rework duty runs from an
+       * at-least-once job, so a retry after the provider already closed the merge request must
+       * succeed rather than fail the job. And the refusal is asserted beside it (standing rule 42):
+       * an adapter that answered "closed" for a **merged** merge request would tell the rework duty
+       * the rejected change is gone while it sits on the default branch.
+       */
+      it('closes a merge request, succeeds when it is already closed, and refuses a merged one', async () => {
+        const first = await port.closeMergeRequest(mrRef(context.close.openIid));
+        expect(first.state).toBe('closed');
+        expect(first.ref.iid).toBe(context.close.openIid);
+        const again = await port.closeMergeRequest(mrRef(context.close.openIid));
+        expect(again.state).toBe('closed');
+
+        await expectIntegrationError(
+          () => port.closeMergeRequest(mrRef(context.close.mergedIid)),
+          'conflict',
+        );
+        await expectIntegrationError(
+          () => port.closeMergeRequest(mrRef(context.missingMergeRequestIid)),
+          'not_found',
+        );
+      });
+
+      /**
+       * The diff-stats read (WP-59, backlog 113): the one number the shipped adapter's three
+       * `diff_stats` surfaces never carry. Asserted field by field, so an adapter that swapped
+       * insertions and deletions — GitLab calls them `additions` and `deletions` — fails here.
+       */
+      it('reads a merge request’s diff stats', async () => {
+        expect(await port.getMergeRequestDiffStats(mrRef(context.diffStats.iid))).toEqual(
+          context.diffStats.expected,
         );
       });
     });

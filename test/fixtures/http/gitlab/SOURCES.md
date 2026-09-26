@@ -21,7 +21,7 @@ empty `interactions` list is a failure rather than a pass.
 |---|---|
 | `documented` | GitLab's own published example or attribute table, with values replaced by obviously fake ones (BD-002) and members the adapter never reads removed. Nothing about the shape is ours. |
 | `inferred` | The documentation does **not** state this — most often the status code of an error case the endpoint's page does not publish. The fixture is a reasoned guess, the `note` says what was assumed and what the adapter does about it, and it is never allowed to masquerade as `documented`. |
-| `documented-adapted` | The *shape* is GitLab's published attribute table or example and this corpus changed the **values or the number of entries**, with the change stated in the `note`. `merge-request-diffs.json` is the only file using it (WP-24): the page's example is one `README` entry, and the fixture carries three files of this repository's own so that a `limit` of 1 has something to cut and a `too_large` file exists at all. |
+| `documented-adapted` | The *shape* is GitLab's published attribute table or example and this corpus changed the **values or the number of entries**, with the change stated in the `note`. It was introduced for `merge-request-diffs.json` (WP-24): the page's example is one `README` entry, and the fixture carries three files of this repository's own so that a `limit` of 1 has something to cut and a `too_large` file exists at all. It is no longer the only user — `codeowners.json`, `users.json`, `merge-requests.json` and `graphql.json` (WP-59) carry it too, each with its `note`. |
 | `composed`, `invented` | Available in the shared vocabulary; **no file here uses them**. Adding an `invented` fixture should be argued for in review rather than done quietly. |
 
 ## The `source` blocks are checked, and here is exactly how far
@@ -118,6 +118,40 @@ carrying its own date.
   header; cited by `http.ts` and behind every path in these files.
 - `https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/` — the rate-limit
   response headers the HTTP client reads on a `429`.
+
+- `https://docs.gitlab.com/api/graphql/reference/` (retrieved **2026-09-26**, WP-59) — the GraphQL
+  schema reference: `Query.project(fullPath: ID!)`, `Project.mergeRequest(iid: String!)`, the
+  nullable `MergeRequest.diffStatsSummary` and the `DiffStatsSummary` type (`additions`, `changes`,
+  `deletions`, `fileCount`, all `Int!`, described as *"Aggregated summary of changes"*). It is the
+  **only** documented GitLab surface that carries insertion and deletion counts for a merge request
+  (PROGRESS backlog 113), and `graphql.json` is its one answer — labelled `documented-adapted`,
+  because the page publishes the types and no example response, so the envelope and the nesting
+  are GraphQL's and the query's while the numbers are this corpus's. Read from the page's source,
+  `doc/api/graphql/reference/_index.md` in the `gitlab-org/gitlab` repository, whose rendered form is
+  the URL above.
+- `https://docs.gitlab.com/api/graphql/` (retrieved **2026-09-26**, WP-59) — the GraphQL endpoint
+  (*"located at `/api/graphql`"*), § "Header authentication" (*"`Authorization: Bearer <token>`"*),
+  which is the header `http.ts` sends there rather than REST's `PRIVATE-TOKEN`, and the example
+  error body `{"errors":[{"message":"Invalid token"}]}` the adapter's error branch is written to.
+- `https://docs.gitlab.com/api/merge_requests/` § "Update a merge request" (re-read **2026-09-26**,
+  WP-59) — the `state_event` attribute, *"New state (close/reopen)"*, which is how the adapter closes
+  a merge request. The page says nothing about closing one that is already closed, which is why the
+  adapter reads first and answers a closed merge request without a write; the four interactions for
+  merge requests 21 and 22 in `merge-requests.json` are `documented-adapted` and say what changed.
+
+## Pages read for WP-59 that produced no fixture
+
+- `https://docs.gitlab.com/api/merge_requests/` § "Retrieve merge request changes" (retrieved
+  **2026-09-26**) — `GET …/merge_requests/:iid/changes`, *"deprecated in GitLab 15.7 and is scheduled
+  for removal in API v5"*. Its example carries `changes` (per-file patches), `overflow` and the same
+  `changes_count` string the merge request object has — **no insertion or deletion counts**, so it
+  answers neither backlog 113's question nor backlog 64's paths question any better than `…/diffs`.
+- The same GraphQL reference, `MergeRequest.diffStats(path: String)` — *"Details about which files
+  were changed in the merge request"*, returning `[DiffStats!]` of `path`, `additions` and
+  `deletions`. That is a **paths-without-patches** answer, which is what backlog 64's paths-only
+  port method needed and `…/diffs` cannot give (`docs/TODO.md`'s question). It is recorded here and
+  not built: WP-59's criterion is the coalesced read, and the port method is filed as discovered
+  work under WP-59 in `PROGRESS.md`.
 
 ## What is deliberately **not** in a fixture
 

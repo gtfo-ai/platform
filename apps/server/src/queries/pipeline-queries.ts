@@ -770,10 +770,10 @@ const toTaskRecord = (
   // is made when nothing resolved.
   required_reviewers: row.requiredReviewers,
   // WP-41, backlog 63: **not** a column — the latest `task.conflict.warned` off the task's own
-  // stream (`conflictsFor`). `null` is "no warning has been appended for this task", which on a
-  // pair of overlapping tasks is also what the one compared *first* sees: the comparison is not
-  // symmetric (backlog 65), and the badge's tooltip says so rather than letting a reader infer
-  // that the other task is clear.
+  // stream (`conflictsFor`). `null` is "no warning has been appended for this task". Since WP-59
+  // (backlog 65) the gate that finds an overlap appends on **both** streams, so a warned pair
+  // carries a badge on both cards; `null` still does not mean "clear", only "no gate has compared
+  // this task against an overlapping one yet", and the badge's tooltip says so.
   conflict,
   cost_actual_usd: usd(row.costActual),
   // WP-47, backlog **75**: **not** a column. `tasks.cost_estimated` was `not null default 0` from

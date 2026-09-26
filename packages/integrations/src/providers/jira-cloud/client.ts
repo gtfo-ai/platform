@@ -240,6 +240,14 @@ export const createJiraClient = (options: JiraClientOptions): JiraClient => {
     baseUrl: `${options.siteUrl.replace(/\/+$/, '')}/rest/api/3/`,
     retry: 0,
     throwHttpErrors: false,
+    // WP-59, PROGRESS backlog 129: a `3xx` is refused, never followed with the credential on the
+    // request — `gitlab/http.ts`'s `redirect` field carries the argument, and the spelling is the
+    // registry client's. ky hands it to the `Request` it builds, so an injected `fetch` sees it on
+    // `Request.redirect`; a refused redirect surfaces below as `did not complete (…)`. On Node's
+    // `fetch` a cross-origin hop strips `Authorization` (measured, WP-59), so for this client the
+    // credential was not what followed — the request, its response and the audit row's claim
+    // about which host answered were.
+    redirect: 'error',
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     headers: { authorization, accept: 'application/json' },
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),

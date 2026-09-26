@@ -57,6 +57,7 @@ import type { PipelineOutboundData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
+import { runSupersededMergeRequestClose } from './superseded-mr.js';
 import { runTicketLintCheck, runTicketLintPost } from './ticket-lint.js';
 import { runStatusTransition, runWorkpadRender } from './workpad.js';
 
@@ -142,6 +143,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'revoke_run_credential':
         await runRunCredentialRevocation(options, data);
+        return;
+      case 'close_superseded_mr':
+        await runSupersededMergeRequestClose(options, data);
         return;
       default:
         logger.warn(

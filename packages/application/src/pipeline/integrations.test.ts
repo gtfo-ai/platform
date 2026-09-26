@@ -107,6 +107,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // which are one wake-up and share every read.
   'risk-routing.ts': 1,
   'saga.ts': 1,
+  // WP-59's `close_superseded_mr` duty: one resolution for the comment and the close of the merge
+  // request a rework let go of.
+  'superseded-mr.ts': 1,
   // WP-25's two duties: the check before it creates the lint task, the post before it comments.
   'ticket-lint.ts': 2,
   'ticket-snapshot.ts': 1,

@@ -93,6 +93,11 @@ runGitProviderContract({
       hasConflicts: null,
     });
 
+    // WP-59: one merge request to close and one already merged, which a close must refuse.
+    const toClose = await openOn('agentic/to-close');
+    const merged = await openOn('agentic/merged');
+    port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: merged.ref.iid });
+
     // WP-37: the one handle this fake resolves. Everything else answers `null` (divergence 11).
     port.seedUser('@dana-reviewer', '4242');
 
@@ -163,6 +168,12 @@ runGitProviderContract({
         path: 'src/billing/totals.ts',
         omittedPath: 'assets/logo.bin',
         fileCount: 3,
+      },
+      close: { openIid: toClose.ref.iid, mergedIid: merged.ref.iid },
+      // Divergence 17: every merge request this fake opens carries the same stats.
+      diffStats: {
+        iid: existing.ref.iid,
+        expected: { files_changed: 1, insertions: 10, deletions: 2 },
       },
       pipelineSha: existing.head_sha,
       failingJobName: FAILING_JOB,

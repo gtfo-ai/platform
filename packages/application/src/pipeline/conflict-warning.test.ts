@@ -20,6 +20,7 @@ import {
 import { conflictWarningIdempotencyKey, conflictWarningMarker } from './conflict-warning.js';
 import type { StoredTask } from './store.js';
 import { INITIAL_TASK_VERSION } from './store.js';
+import { retryOnTaskConflict } from './task-conflict.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const PEER_TASK = '00000000-0000-4000-8000-0000000000c9' as Id;
@@ -220,7 +221,11 @@ const startHarness = (options: {
 };
 
 /** A peer task, inserted as a row: the feature under test is the *comparison*, not its creation. */
-const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<void> => {
+const insertPeer = async (
+  harness: PipelineHarness,
+  ticketKey: string,
+  mode: 'normal' | 'shadow' = 'normal',
+): Promise<void> => {
   await harness.memory.transaction(async (scope) => {
     const stored: StoredTask = {
       task: {
@@ -232,7 +237,7 @@ const insertPeer = async (harness: PipelineHarness, ticketKey: string): Promise<
           url: `https://jira.example.test/browse/${ticketKey}`,
         },
         template: 'feature',
-        mode: 'normal',
+        mode,
         state: 'active',
         currentStage: 'implementation',
         stageAttempts: {},
@@ -297,19 +302,26 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
     await insertPeer(started.harness, 'ACME-9');
     await started.harness.publish([ticketMatched()]);
 
-    expect(started.posted).toHaveLength(1);
-    const thread = started.posted[0];
-    // On **this** task's merge request, not the peer's: the warning is for the branch that is about
-    // to be made ready, and the peer's own gate will tell it in its turn.
-    expect(thread?.iid).toBe(IID);
+    // **Both** merge requests of the pair (WP-59, backlog 65): until then only this task's was
+    // told, and the peer — whose developer may be the one about to push the conflicting change —
+    // heard nothing because its own gate had already run.
+    expect(started.posted.map((thread) => thread.iid).sort()).toEqual([IID, PEER_IID]);
+    const thread = started.posted.find((entry) => entry.iid === IID);
     expect(thread?.markdown).toContain('ACME-9');
     expect(thread?.markdown).toContain('src/totals.ts');
     // The files that are *not* shared are not named — a warning that listed the whole diff would be
     // a warning nobody reads.
     expect(thread?.markdown).not.toContain('src/vat.ts');
     expect(thread?.markdown).not.toContain('src/footer.ts');
+    // The peer's thread names **this** task, carries the peer's own marker, and the same paths.
+    const peerThread = started.posted.find((entry) => entry.iid === PEER_IID);
+    expect(peerThread?.markdown).toContain(TICKET.key);
+    expect(peerThread?.markdown).toContain(conflictWarningMarker(PEER_TASK));
+    expect(peerThread?.markdown).toContain('src/totals.ts');
+    expect(peerThread?.markdown).not.toContain('src/vat.ts');
 
-    expect(warnings(started.harness)).toEqual([
+    const self = warnings(started.harness).filter((entry) => entry.task_id !== PEER_TASK);
+    expect(self).toEqual([
       expect.objectContaining({
         project_id: PROJECT,
         other_task_id: PEER_TASK,
@@ -319,6 +331,147 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
         truncated: false,
       }),
     ]);
+    // …and the mirror on the peer's own stream, at no extra provider read (the read count is the
+    // next case's), so the board badge is on both cards.
+    const peerEvents = started.harness
+      .events()
+      .filter((entry) => entry.type === 'task.conflict.warned' && entry.stream_id === PEER_TASK);
+    expect(peerEvents).toHaveLength(1);
+    expect(peerEvents[0]?.payload).toEqual(
+      expect.objectContaining({
+        task_id: PEER_TASK,
+        other_task_id: self[0]?.task_id,
+        other_ticket_key: TICKET.key,
+        paths: ['src/totals.ts'],
+        path_count: 1,
+        mr: expect.objectContaining({ iid: PEER_IID }),
+      }),
+    );
+  });
+
+  it('makes a peer writer that loaded before the warning retry at its save, and complete', async () => {
+    /**
+     * WP-59 review round 1. The peer's half of a warning lands on a **live** stream, and the peer's
+     * own writer — a stage executor's closing write, a handler, a human command — loads, decides,
+     * saves and appends. Interleaved here exactly where it hurts: the peer's writer has loaded, then
+     * the other task's gate warns it, then the writer saves and appends at the sequence it loaded.
+     * Without the version bump the save succeeds and the append meets the stream guard's
+     * `StreamConflictError`, which nobody retries; with it, the save refuses with
+     * `TaskConcurrentModificationError`, `retryOnTaskConflict` runs the unit again, and it
+     * completes on the fresh sequence.
+     */
+    const started = startHarness({ ownPaths: ['src/totals.ts'], peerPaths: ['src/totals.ts'] });
+    await insertPeer(started.harness, 'ACME-9');
+    let attempts = 0;
+    await retryOnTaskConflict({ taskId: PEER_TASK, what: 'the peer’s own write' }, async () =>
+      started.harness.memory.transaction(async (scope) => {
+        attempts += 1;
+        const peer = (await started.harness.store.tasks.load(scope.tx, PEER_TASK)) as StoredTask;
+        if (attempts === 1) {
+          // The other task's rebase gate runs now and warns this peer, on its stream.
+          await started.harness.publish([ticketMatched()]);
+        }
+        const saved = await started.harness.store.tasks.save(scope.tx, {
+          ...peer,
+          priorityRank: 1,
+        });
+        await scope.events.append([
+          domainEventSchemasByType['task.escalated'].parse({
+            id: '00000000-0000-4000-9000-0000000000e1',
+            stream_type: 'task',
+            stream_id: PEER_TASK,
+            stream_seq: peer.task.sequence,
+            correlation_id: PEER_TASK,
+            cause_event_id: null,
+            actor: { kind: 'system', component: 'test' },
+            occurred_at: '2026-06-01T10:00:00.000Z',
+            type: 'task.escalated',
+            payload: {
+              project_id: PROJECT,
+              task_id: PEER_TASK,
+              reason: 'the peer’s own decision',
+              blocker_brief: 'written by the peer’s own writer',
+            },
+          }) as DomainEvent,
+        ]);
+        return saved;
+      }),
+    );
+
+    expect(attempts).toBe(2);
+    const peerStream = started.harness
+      .events()
+      .filter((event) => event.stream_type === 'task' && event.stream_id === PEER_TASK);
+    // The warning and then the peer's own event, one after the other: neither was lost.
+    expect(peerStream.map((event) => event.type)).toEqual([
+      'task.conflict.warned',
+      'task.escalated',
+    ]);
+    expect(peerStream.map((event) => event.stream_seq)).toEqual([1, 2]);
+    // And the peer's save committed: one bump by the warning, one by the retried save.
+    const peerRow = started.harness.store.snapshot().find((entry) => entry.task.id === PEER_TASK);
+    expect(peerRow?.version).toBe(INITIAL_TASK_VERSION + 2);
+  });
+
+  it('bumps every stream it appends to in sorted id order, before loading any of them', async () => {
+    // Review round 2: two gates warning each other at once must lock the two rows in one global
+    // order, or PostgreSQL answers one of them `40P01`. The calls are recorded as a trace of bumps
+    // and loads; the warning's own run of bumps is the one that contains the peer's (nothing else
+    // bumps the peer here), and it must be sorted and come before the loads that follow it.
+    const started = startHarness({ ownPaths: ['src/totals.ts'], peerPaths: ['src/totals.ts'] });
+    await insertPeer(started.harness, 'ACME-9');
+    const tasks = started.harness.store.tasks as unknown as {
+      bumpVersion: (tx: unknown, id: Id) => Promise<void>;
+      load: (tx: unknown, id: Id) => Promise<StoredTask | null>;
+    };
+    const bump = tasks.bumpVersion;
+    const load = tasks.load;
+    const trace: string[] = [];
+    tasks.bumpVersion = async (tx, id) => {
+      trace.push(`bump:${id}`);
+      return bump(tx, id);
+    };
+    tasks.load = async (tx, id) => {
+      trace.push(`load:${id}`);
+      return load(tx, id);
+    };
+    await started.harness.publish([ticketMatched()]);
+    const own = started.harness.store
+      .snapshot()
+      .find((entry) => entry.task.ticket.key === TICKET.key)?.task.id as Id;
+
+    const at = trace.indexOf(`bump:${PEER_TASK}`);
+    expect(at).toBeGreaterThanOrEqual(0);
+    let first = at;
+    while (first > 0 && trace[first - 1]?.startsWith('bump:')) {
+      first -= 1;
+    }
+    let last = at;
+    while (trace[last + 1]?.startsWith('bump:')) {
+      last += 1;
+    }
+    const run = trace.slice(first, last + 1).map((entry) => entry.slice('bump:'.length));
+    expect(run).toEqual([own, PEER_TASK].sort());
+    // …and only then the loads the appends read their sequences from.
+    expect(trace[last + 1]).toMatch(/^load:/);
+  });
+
+  it('warns a shadow peer’s stream and records its thread as would_have, posting nothing there', async () => {
+    const started = startHarness({ ownPaths: ['src/totals.ts'], peerPaths: ['src/totals.ts'] });
+    await insertPeer(started.harness, 'ACME-9', 'shadow');
+    await started.harness.publish([ticketMatched()]);
+
+    // Only this task's merge request got a real thread: the peer's mode governs the peer's write.
+    expect(started.posted.map((thread) => thread.iid)).toEqual([IID]);
+    const peerWrites = started.harness.audit
+      .entriesFor('create_discussion')
+      .filter((entry) => entry.taskId === PEER_TASK);
+    expect(peerWrites.map((entry) => entry.status)).toEqual(['would_have']);
+    expect(
+      started.harness
+        .events()
+        .filter((entry) => entry.type === 'task.conflict.warned' && entry.stream_id === PEER_TASK),
+    ).toHaveLength(1);
   });
 
   it('says nothing when the two branches touch different files', async () => {
@@ -335,15 +488,15 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
      * …and it looked: the negative is a comparison that happened, not a duty that never ran
      * (standing rule 4 — every assertion above is satisfied by a duty that did nothing).
      *
-     * **Four reads since WP-38, three of them of this task's own merge request.** The rebase gate
-     * enqueues two duties that each read this diff — the warning and WP-37's classification — and
-     * WP-38's dependency gate reads it a third time, *earlier in the walk*, when the Developer
-     * stage completes. They are counted sorted because the duties are separate jobs and their order
-     * on the queue is the queue's, not this test's (the property WP-15d states for every outbound
-     * duty). The growth is PROGRESS backlog **64**'s: four reads of one diff per task, none of them
-     * shared, and this is the count that entry is about.
+     * **Two reads since WP-59, one per merge request.** Three duties want this task's diff — WP-38's
+     * dependency gate when the Developer stage completes, and at the rebase gate the warning and
+     * WP-37's classification — and until WP-59 each asked the provider, which was `[IID, IID, IID,
+     * PEER_IID]` here (PROGRESS backlog **64**). They now share one read per `(merge request, head
+     * sha)` (`diff-coalescer.ts`): this harness reaches the gate at the revision the Developer
+     * stage reported, inside the window, so the first asker's answer serves the other two. Counted
+     * sorted because the duties are separate jobs and their order on the queue is the queue's.
      */
-    expect([...started.diffReads].sort()).toEqual([IID, IID, IID, PEER_IID]);
+    expect([...started.diffReads].sort()).toEqual([IID, PEER_IID]);
   });
 
   it('reads no diff at all when the project has no other task with a merge request', async () => {
@@ -361,11 +514,54 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
      * stage's completion reads them for the dependency policy. That is precisely why each is a duty
      * of its own rather than a branch inside this one (`risk-routing.ts` carries the argument).
      *
-     * In **walk order**, which this assertion keeps rather than sorting: the dependency gate fires
-     * on `task.stage.completed` for the implementation stage, several transitions before the rebase
-     * gate this duty is woken by.
+     * **One read since WP-59**, where it was `[IID, IID]`: the dependency gate reads the diff when
+     * the implementation stage completes, several transitions before the rebase gate, and the
+     * classification at the gate asks for the same revision inside the coalescing window
+     * (`diff-coalescer.ts`), so it is answered from that read. A gate reached later than the window
+     * reads again — the residual the coalescer's docblock states.
      */
-    expect(started.diffReads).toEqual([IID, IID]);
+    expect(started.diffReads).toEqual([IID]);
+  });
+
+  it('pays three provider reads for one gate entry on a project with no peer, and no diff read', async () => {
+    /**
+     * The per-gate-entry floor, pinned as a **count** (WP-59, backlog 64). The re-entry a
+     * `default_branch.moved` causes is a gate entry and nothing else, so the audit rows it adds are
+     * exactly what one entry costs: the rebase gate's own mergeability read (`get_merge_request`),
+     * and the classification's default branch and `CODEOWNERS`. Its diff read is answered by the
+     * coalescer — the revision has not moved — which is the one read WP-59 removed from this floor:
+     * it was **four**, measured by running this case with the coalescer bypassed (WP-59's notes).
+     */
+    const started = startHarness({ ownPaths: ['src/totals.ts'] });
+    await started.harness.publish([ticketMatched()]);
+    started.harness.audit.reset();
+
+    await started.harness.publish([
+      domainEventSchemasByType['default_branch.moved'].parse({
+        id: '00000000-0000-4000-9000-000000000003',
+        stream_type: 'project',
+        stream_id: PROJECT,
+        stream_seq: 2,
+        correlation_id: null,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'test' },
+        occurred_at: '2026-06-01T10:00:00.000Z',
+        type: 'default_branch.moved',
+        payload: { project_id: PROJECT, branch: 'main', new_head: 'd'.repeat(40) },
+      }) as DomainEvent,
+    ]);
+
+    const task = started.harness.store
+      .snapshot()
+      .find((entry) => entry.task.ticket.key === TICKET.key);
+    // The gate really was entered again — otherwise a count of zero reads would pass too.
+    expect(task?.task.stageAttempts.rebase_gate).toBe(2);
+    const reads = started.harness.audit.entries
+      .filter((entry) => entry.integrationId === '00000000-0000-4000-8000-00000000a001')
+      .map((entry) => entry.action)
+      .sort();
+    expect(reads).toEqual(['get_default_branch_head', 'get_merge_request', 'read_codeowners']);
+    expect(started.diffReads).toEqual([IID]);
   });
 
   it('keeps a credential out of the thread and out of the stored event', async () => {
@@ -376,9 +572,13 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
     await insertPeer(started.harness, 'ACME-9');
     await started.harness.publish([ticketMatched()]);
 
-    expect(started.posted).toHaveLength(1);
-    expect(started.posted[0]?.markdown).not.toContain(PLANTED);
-    expect(started.posted[0]?.markdown).toContain(PLACEHOLDER);
+    // Both threads of the pair, and both events: the peer's half is a second sink of each kind.
+    expect(started.posted).toHaveLength(2);
+    for (const thread of started.posted) {
+      expect(thread.markdown).not.toContain(PLANTED);
+      expect(thread.markdown).toContain(PLACEHOLDER);
+    }
+    expect(warnings(started.harness)).toHaveLength(2);
     const stored = JSON.stringify(warnings(started.harness));
     expect(stored).not.toContain(PLANTED);
     expect(stored).toContain(PLACEHOLDER);
@@ -394,11 +594,13 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
     await insertPeer(started.harness, key);
     await started.harness.publish([ticketMatched()]);
 
-    expect(started.posted).toHaveLength(1);
-    expect(started.posted[0]?.markdown).not.toContain(PLANTED);
+    expect(started.posted).toHaveLength(2);
+    for (const thread of started.posted) {
+      expect(thread.markdown).not.toContain(PLANTED);
+    }
     const stored = JSON.stringify(warnings(started.harness));
     expect(stored).not.toContain(PLANTED);
-    expect(warnings(started.harness)).toEqual([
+    expect(warnings(started.harness).filter((entry) => entry.task_id !== PEER_TASK)).toEqual([
       expect.objectContaining({ other_ticket_key: `ACME-${PLACEHOLDER}` }),
     ]);
   });
@@ -407,7 +609,8 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
     const started = startHarness({ ownPaths: ['src/totals.ts'], peerPaths: ['src/totals.ts'] });
     await insertPeer(started.harness, 'ACME-9');
     await started.harness.publish([ticketMatched()]);
-    expect(started.posted).toHaveLength(1);
+    // One per merge request of the pair (WP-59).
+    expect(started.posted).toHaveLength(2);
 
     // The default branch moves, so the gate is re-armed and the duty runs again (WP-26's criterion
     // 1). The head sha has not moved, so the idempotency key is the same one.
@@ -431,8 +634,19 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
       .snapshot()
       .find((entry) => entry.task.ticket.key === TICKET.key);
     expect(task?.task.stageAttempts.rebase_gate).toBe(2);
-    // One thread, and the replay is the executor's: the key is read back out of the store it wrote.
-    expect(started.posted).toHaveLength(1);
+    // One thread per merge request, and the replay is the executor's: both keys are read back out
+    // of the store it wrote — the peer's is the peer's own identity, which is also what the peer's
+    // own gate would compute for this pair.
+    expect(started.posted).toHaveLength(2);
+    expect(
+      [...started.harness.idempotency.keys()].some((key) =>
+        key.includes(
+          encodeURIComponent(
+            conflictWarningIdempotencyKey(PEER_TASK, 'c'.repeat(40), task?.task.id as Id),
+          ),
+        ),
+      ),
+    ).toBe(true);
     expect(
       [...started.harness.idempotency.keys()].some((key) => key.includes('conflict_warning')),
     ).toBe(true);

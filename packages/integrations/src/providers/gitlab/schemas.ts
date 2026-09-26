@@ -19,6 +19,7 @@
  *  - protected branches: <https://docs.gitlab.com/api/protected_branches/>
  *  - project access tokens: <https://docs.gitlab.com/api/project_access_tokens/>
  *  - version:        <https://docs.gitlab.com/api/version/>
+ *  - GraphQL (WP-59, retrieved 2026-09-26): <https://docs.gitlab.com/api/graphql/reference/>
  *  - webhook events: <https://docs.gitlab.com/user/project/integrations/webhook_events/>
  */
 import * as z from 'zod';
@@ -182,6 +183,41 @@ export const gitlabMergeRequestDiffSchema = z.object({
   deleted_file: z.boolean().nullish(),
   collapsed: z.boolean().nullish(),
   too_large: z.boolean().nullish(),
+});
+
+/**
+ * The answer to the one GraphQL query this adapter sends (WP-59, PROGRESS backlog 113):
+ * `project(fullPath:) { mergeRequest(iid:) { diffStatsSummary { additions deletions fileCount } } }`.
+ *
+ * Field names and types from <https://docs.gitlab.com/api/graphql/reference/> — `DiffStatsSummary`
+ * is `additions: Int!`, `changes: Int!`, `deletions: Int!`, `fileCount: Int!`, and
+ * `MergeRequest.diffStatsSummary` is **nullable** — retrieved 2026-09-26. `project` and
+ * `mergeRequest` are nullable too, and a GraphQL server answers `null` for an object the caller
+ * cannot see rather than an HTTP 404, so both are `nullish` here and the adapter maps `null` onto
+ * `not_found`. `errors` is GraphQL's own error list, which the page shows as
+ * `{"errors":[{"message":"Invalid token"}]}`; its messages are provider text and are never quoted.
+ */
+export const gitlabDiffStatsSummaryResponseSchema = z.object({
+  data: z
+    .object({
+      project: z
+        .object({
+          mergeRequest: z
+            .object({
+              diffStatsSummary: z
+                .object({
+                  additions: z.int().nonnegative(),
+                  deletions: z.int().nonnegative(),
+                  fileCount: z.int().nonnegative(),
+                })
+                .nullish(),
+            })
+            .nullish(),
+        })
+        .nullish(),
+    })
+    .nullish(),
+  errors: z.array(z.object({ message: z.string().nullish() })).nullish(),
 });
 
 /**

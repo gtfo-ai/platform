@@ -104,7 +104,8 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { MAX_CONFLICT_FILES } from './conflict-warning.js';
 import { questionDeadlineRule } from './deadline-rules.js';
-import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import { coalescedMergeRequestDiff } from './diff-coalescer.js';
+import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { RebaseJobOptions } from './rebase.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -245,9 +246,16 @@ export const runDependencyGate = async (
   const redactor = integrations.git?.redactor ?? null;
   const redact = (value: string): string =>
     redactor === null ? value : redactor.redactText(value).value;
-  const reads = gitReads(integrations);
   const context = { projectId: stored.task.projectId, taskId: stored.task.id };
-  const files = await reads.mergeRequestDiff(stored.mr, MAX_CONFLICT_FILES, context);
+  // WP-59, backlog 64: coalesced per `(merge request, head sha)`. This is the read on a clock of its
+  // own — the Developer stage's completion — so it shares an answer with the rebase gate's two
+  // duties only when the gate is reached at the same revision inside the window.
+  const files = await coalescedMergeRequestDiff(
+    { port: options.integrations, integrations, now: options.clock.now() },
+    stored.mr,
+    MAX_CONFLICT_FILES,
+    context,
+  );
   if (files === null) {
     // A project whose git integration was removed keeps running (standing rule 20). Nothing is
     // recorded: a gate that wrote "no dependencies added" here would be reporting a fact it could

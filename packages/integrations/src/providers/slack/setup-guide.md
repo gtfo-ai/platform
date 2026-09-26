@@ -108,4 +108,5 @@ four (BD-002, BD-025).
 | Buttons do nothing | Interactivity is off, or the app was installed from an older manifest. Re-apply the manifest and reinstall. |
 | Every answer is `unmapped_identity` | The Slack account is not mapped to a platform user, or `users:read.email` is missing. |
 | Nothing arrives at all | The app-level token is missing or lacks `connections:write`, or `socket_mode` is off and no public URL is configured. |
+| Every call fails with `… could not be reached, or answered with a redirect …` | Slack's API answered with a redirect, which the platform refuses to follow with the bot token on the request (since WP-59) — or the network path is down. |
 | Deliveries rejected as unverified | The signing secret is unset or wrong. It is not optional in Socket Mode. |

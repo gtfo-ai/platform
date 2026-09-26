@@ -1,12 +1,15 @@
 /**
- * The typed GitLab endpoints this platform uses — nineteen of them, which is the whole point of a
- * thin client (TD-024: "covering only the endpoints the type contracts need").
+ * The typed GitLab endpoints this platform uses — twenty-six methods, counted at WP-59, which
+ * added the two last (one of them GraphQL); the "nineteen" this line said had gone stale five
+ * methods earlier. A small number is the whole point of a thin client (TD-024: "covering only the
+ * endpoints the type contracts need").
  *
  * Each method does exactly two things: build one documented request, and parse the answer through
  * `parseProviderData` so an unexpected shape is an `invalid_response` at the ring edge rather than
  * an `undefined` in the pipeline (BD-022). No method retries, sleeps or looks at a clock.
  *
- * Endpoint documentation, all retrieved 2026-09-10, is cited at each method.
+ * Endpoint documentation, retrieved 2026-09-10 unless a method names a later date, is cited at
+ * each method.
  */
 import { parseProviderData } from '@platform/application';
 import * as z from 'zod';
@@ -15,6 +18,7 @@ import {
   gitlabAccessTokenSchema,
   gitlabBranchSchema,
   gitlabCommitSchema,
+  gitlabDiffStatsSummaryResponseSchema,
   gitlabDiscussionSchema,
   gitlabJobSchema,
   gitlabMergeRequestDiffSchema,
@@ -125,8 +129,28 @@ export interface GitLabClient {
     iid: number,
     body: UpdateMergeRequestBody,
   ): Promise<z.output<typeof gitlabMergeRequestSchema>>;
+  /**
+   * § "Update a merge request" with `state_event=close` — the attribute the page documents as
+   * *"New state (close/reopen)"* (retrieved 2026-09-26). A method of its own rather than a field on
+   * {@link UpdateMergeRequestBody}, so the audit action is `close_merge_request` and nothing that
+   * updates a title can close a merge request by accident.
+   */
+  closeMergeRequest(
+    project: string,
+    iid: number,
+  ): Promise<z.output<typeof gitlabMergeRequestSchema>>;
   /** § "Retrieve a merge request". */
   mergeRequest(project: string, iid: number): Promise<z.output<typeof gitlabMergeRequestSchema>>;
+  /**
+   * <https://docs.gitlab.com/api/graphql/reference/> — `MergeRequest.diffStatsSummary`, the one
+   * documented surface that carries insertion and deletion counts (WP-59, retrieved 2026-09-26).
+   * The whole GraphQL document is platform text; the two variables are the project path and the
+   * iid, sent as GraphQL variables rather than interpolated into the query.
+   */
+  mergeRequestDiffStatsSummary(
+    project: string,
+    iid: number,
+  ): Promise<z.output<typeof gitlabDiffStatsSummaryResponseSchema>>;
   /** § "List project merge requests". */
   listMergeRequests(
     project: string,
@@ -211,6 +235,14 @@ export interface GitLabClient {
    */
   revokeProjectAccessToken(project: string, tokenId: number): Promise<boolean>;
 }
+
+/**
+ * The one GraphQL document this client sends. Platform text end to end: the project path and the
+ * iid travel as variables, never interpolated, so a project path somebody configured cannot change
+ * the query (BD-022).
+ */
+export const DIFF_STATS_SUMMARY_QUERY =
+  'query($project: ID!, $iid: String!) { project(fullPath: $project) { mergeRequest(iid: $iid) { diffStatsSummary { additions deletions fileCount } } } }';
 
 export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
   const mrPath = (project: string, iid: number): string =>
@@ -319,6 +351,35 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           path: mrPath(project, iid),
           json: body,
           action: 'update_merge_request',
+        }),
+      ),
+
+    closeMergeRequest: async (project, iid) =>
+      required(
+        gitlabMergeRequestSchema,
+        'close_merge_request',
+        http.request({
+          method: 'PUT',
+          path: mrPath(project, iid),
+          json: { state_event: 'close' },
+          action: 'close_merge_request',
+        }),
+      ),
+
+    mergeRequestDiffStatsSummary: async (project, iid) =>
+      required(
+        gitlabDiffStatsSummaryResponseSchema,
+        'get_merge_request_diff_stats',
+        http.request({
+          method: 'POST',
+          api: 'graphql',
+          path: '',
+          json: {
+            query: DIFF_STATS_SUMMARY_QUERY,
+            // `iid` is `String!` on `Project.mergeRequest`, so it is sent as one.
+            variables: { project, iid: String(iid) },
+          },
+          action: 'get_merge_request_diff_stats',
         }),
       ),
 

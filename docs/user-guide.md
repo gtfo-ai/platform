@@ -157,7 +157,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run |
 | **Return to stage** | maintainer | sends the task back to an earlier stage; a reason is required. Costs an iteration of the loop |
-| **Rework** | maintainer | restarts the work with new instructions, which are required |
+| **Rework** | maintainer | restarts the work with new instructions, which are required. The task moves to a **new branch** (`agentic/<ticket>-r2`, then a higher number on each later rework — the numbers can skip, because a plain return counts too) and the merge request you rejected is **closed** on the git provider with a comment naming the new branch; a new merge request is opened from the new branch when the work gets there again |
 | **Answer a question** | member | answers a question the agent asked; the task continues |
 | **Decide an approval** | maintainer | approves or rejects a plan (and, where configured, a budget) |
 | **Feedback** | member | 👍/👎 plus text, on the task |

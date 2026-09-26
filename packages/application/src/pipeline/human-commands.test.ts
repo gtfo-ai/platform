@@ -24,7 +24,11 @@
 import type { Id, Slug } from '@platform/contracts';
 import { IllegalTransitionError, InvariantViolationError } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { IntegrationError } from '../ports/integrations/common.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
+import { type Logger, silentLogger } from '../ports/logger.js';
 import type { RunStop, RunTakeOverExport, SteerMessage } from '../ports/runner.js';
+import { runStrandedRecovery, STRANDED_ENDING_AFTER_MS } from '../recovery/stranded.js';
 import {
   createPipelineHarness,
   type PipelineHarness,
@@ -215,7 +219,9 @@ const harnessWith = (options: Parameters<typeof createPipelineHarness>[0] = {}) 
       }),
       ...options.git,
     },
-    ...options,
+    // Everything but `git`, which is merged over the defaults above rather than replacing them
+    // (WP-59: the first cases here to pass `git` need the merge request read as well).
+    ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== 'git')),
   });
 
 let stream = 0;
@@ -566,6 +572,409 @@ describe('rework', () => {
     expect((returned?.payload as unknown as { reason: string } | undefined)?.reason).toBe(
       'take the other approach',
     );
+  });
+
+  /**
+   * product/04:86's second half and Q92 (WP-59, PROGRESS backlog 51): *"the old MR is closed, a
+   * fresh branch is created"*. Countable effects on both sides of the commit: in the command's
+   * transaction the task lets go of merge request 7 and takes `agentic/ACME-1-r2`; after it, one
+   * `close_superseded_mr` wake-up, whose duty comments on 7 naming the new branch and closes it —
+   * through the executor, so each is an audit row — and the next Developer run checks out the new
+   * branch. A retry of the same wake-up closes nothing twice.
+   */
+  it('lets go of the merge request, takes a new branch, and closes the old one from a duty', async () => {
+    const closed: number[] = [];
+    const comments: { iid: number; markdown: string }[] = [];
+    const harness = await walked({
+      git: {
+        closeMergeRequest: async (ref) => {
+          closed.push(ref.iid);
+          return { ref, state: 'closed' } as never;
+        },
+        createDiscussion: async (ref, note) => {
+          comments.push({ iid: ref.iid, markdown: note.markdown });
+          return { id: `d-${comments.length}`, resolvable: true, resolved: false, notes: [] };
+        },
+      },
+    });
+    const before = taskOf(harness);
+    expect(before.mr?.iid).toBe(7);
+
+    // The Developer run after the rework reports the merge request it opened from the new branch.
+    harness.script(
+      'implementation',
+      ok({
+        ...NOTES,
+        mr: {
+          url: 'https://git.example.test/acme/api/-/merge_requests/8',
+          iid: 8,
+          head_sha: 'c'.repeat(40),
+          branch: 'agentic/ACME-1-r2',
+        },
+      }),
+    );
+    await reworkStageCommand(harness.humanCommands, {
+      taskId: before.task.id,
+      userId: USER,
+      stage: 'architecture' as Slug,
+      instructions: 'take the other approach',
+    });
+
+    // In the command's transaction: no merge request, a new branch.
+    const reworked = taskOf(harness);
+    expect(reworked.mr).toBeNull();
+    expect(reworked.branch).toBe('agentic/ACME-1-r2');
+    // After it: one wake-up for the close, carrying the merge request no row holds any more.
+    const wakeUps = harness.jobs.enqueued.filter(
+      (request) => (request.data as { duty?: string }).duty === 'close_superseded_mr',
+    );
+    expect(wakeUps).toHaveLength(1);
+    expect(wakeUps[0]?.data).toMatchObject({
+      task_id: before.task.id,
+      iid: 7,
+      new_branch: 'agentic/ACME-1-r2',
+    });
+    // Nothing reached the provider from the command itself.
+    expect(closed).toEqual([]);
+
+    await harness.drain();
+
+    expect(closed).toEqual([7]);
+    const note = comments.find((entry) => entry.iid === 7);
+    expect(note?.markdown).toContain('agentic/ACME-1-r2');
+    expect(note?.markdown).toContain(`<!-- agentic:superseded:${before.task.id} -->`);
+    expect(harness.audit.entriesFor('close_merge_request').map((entry) => entry.status)).toEqual([
+      'ok',
+    ]);
+    // The next Developer-bound run checks out the new branch rather than the rejected one.
+    expect(harness.specs.map((spec) => spec.checkoutRef)).toContain('agentic/ACME-1-r2');
+    // …and the task adopted the new merge request, so the old one's `mr.closed` finds no task.
+    expect(taskOf(harness).mr?.iid).toBe(8);
+
+    // A retry of the same wake-up — at-least-once — replays both writes and closes nothing again.
+    const handler = harness.jobs.handlers.get(JOB_QUEUES.pipelineOutbound);
+    await handler?.({
+      id: 'retry',
+      queue: JOB_QUEUES.pipelineOutbound,
+      data: wakeUps[0]?.data as never,
+      signal: new AbortController().signal,
+    });
+    expect(closed).toEqual([7]);
+    expect(harness.audit.entriesFor('close_merge_request').map((entry) => entry.status)).toEqual([
+      'ok',
+      'replayed',
+    ]);
+  });
+
+  describe('the lost close wake-up (PROGRESS backlog 178)', () => {
+    const EMPTY_STRANDED = {
+      strandedBootstraps: async () => [],
+      markBootstrapAttempt: async () => {},
+      endBootstrap: async () => {},
+      strandedAsks: async () => [],
+      markAskAttempt: async () => {},
+      endAsk: async () => {},
+      strandedHistoryRecords: async () => [],
+      markHistoryRecordAttempt: async () => {},
+      endHistoryRecord: async () => {},
+      strandedCurations: async () => [],
+      markCurationAttempt: async () => {},
+      endCuration: async () => {},
+      asksWithEndedRun: async () => [],
+    };
+    const GRACE_MS = 60_000;
+    const pass = (harness: PipelineHarness, logger?: Logger) =>
+      runStrandedRecovery({
+        store: EMPTY_STRANDED,
+        unitOfWork: harness.memory,
+        jobs: harness.jobs,
+        clock: harness.clock,
+        graceMs: GRACE_MS,
+        supersededMergeRequests: { store: harness.store.supersededRecovery },
+        ...(logger === undefined ? {} : { logger }),
+      });
+    const superseded = (report: Awaited<ReturnType<typeof pass>>) =>
+      report.find((site) => site.site === 'superseded_mr');
+    const withClose = () => {
+      const closed: number[] = [];
+      return {
+        closed,
+        git: {
+          closeMergeRequest: async (ref: { iid: number }) => {
+            closed.push(ref.iid);
+            return { ref, state: 'closed' } as never;
+          },
+          createDiscussion: async () =>
+            ({ id: 'd-1', resolvable: true, resolved: false, notes: [] }) as never,
+        },
+      };
+    };
+
+    it('recovers a close whose wake-up was dropped, once, and settles it', async () => {
+      const provider = withClose();
+      const harness = await walked({ git: provider.git });
+      const taskId = taskOf(harness).task.id;
+      // The next Developer run opens its merge request from the new branch, as it would.
+      harness.script(
+        'implementation',
+        ok({
+          ...NOTES,
+          mr: {
+            url: 'https://git.example.test/acme/api/-/merge_requests/8',
+            iid: 8,
+            head_sha: 'c'.repeat(40),
+            branch: 'agentic/ACME-1-r2',
+          },
+        }),
+      );
+      await reworkStageCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        stage: 'architecture' as Slug,
+        instructions: 'take the other approach',
+      });
+      // The process "died" between the commit and the enqueue: the wake-up is gone.
+      harness.jobs.take(JOB_QUEUES.pipelineOutbound);
+      await harness.drain();
+      expect(provider.closed).toEqual([]);
+      expect(harness.store.supersededRows()).toEqual([
+        expect.objectContaining({ taskId, settledAt: null, newBranch: 'agentic/ACME-1-r2' }),
+      ]);
+
+      // Inside the grace nothing is touched: the duty may still be on its way.
+      expect(superseded(await pass(harness))?.found).toBe(0);
+      harness.clock.advance(GRACE_MS + 1);
+      expect(superseded(await pass(harness))).toMatchObject({ found: 1, reEnqueued: 1 });
+      await harness.drain();
+
+      expect(provider.closed).toEqual([7]);
+      expect(harness.store.supersededRows()).toEqual([
+        expect.objectContaining({ taskId, outcome: 'closed' }),
+      ]);
+      // Settled, so a later pass finds nothing and the provider is not asked again.
+      harness.clock.advance(STRANDED_ENDING_AFTER_MS + GRACE_MS);
+      expect(superseded(await pass(harness))?.found).toBe(0);
+      await harness.drain();
+      expect(provider.closed).toEqual([7]);
+    });
+
+    it('never touches a merge request the duty closed on its own wake-up', async () => {
+      const provider = withClose();
+      const harness = await walked({ git: provider.git });
+      await reworkStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'architecture' as Slug,
+        instructions: 'take the other approach',
+      });
+      await harness.drain();
+      expect(provider.closed).toEqual([7]);
+      harness.clock.advance(STRANDED_ENDING_AFTER_MS + GRACE_MS);
+      expect(superseded(await pass(harness))).toMatchObject({ found: 0, reEnqueued: 0, ended: 0 });
+      await harness.drain();
+      expect(provider.closed).toEqual([7]);
+    });
+
+    it('abandons a close that keeps failing after its one re-enqueue, and says so at error', async () => {
+      const harness = await walked({
+        git: {
+          closeMergeRequest: async () => {
+            throw new IntegrationError('forbidden', 'fake-git', 'this token may not close');
+          },
+          createDiscussion: async () =>
+            ({ id: 'd-1', resolvable: true, resolved: false, notes: [] }) as never,
+        },
+      });
+      const taskId = taskOf(harness).task.id;
+      await reworkStageCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        stage: 'architecture' as Slug,
+        instructions: 'again',
+      });
+      const errors: string[] = [];
+      const logger = {
+        ...silentLogger,
+        error: (_fields: unknown, message: string) => {
+          errors.push(message);
+        },
+      } as Logger;
+      const runOutbound = async () => {
+        const handler = harness.jobs.handlers.get(JOB_QUEUES.pipelineOutbound);
+        for (const request of harness.jobs.take(JOB_QUEUES.pipelineOutbound)) {
+          await handler?.({
+            id: 'job',
+            queue: JOB_QUEUES.pipelineOutbound,
+            data: request.data as never,
+            signal: new AbortController().signal,
+          }).catch(() => undefined);
+        }
+      };
+      await runOutbound();
+      harness.clock.advance(GRACE_MS + 1);
+      expect(superseded(await pass(harness, logger))).toMatchObject({ found: 1, reEnqueued: 1 });
+      await runOutbound();
+      expect(harness.store.supersededRows()[0]?.settledAt).toBeNull();
+      // A whole ending window later the one attempt has not taken: abandoned, loudly, once.
+      harness.clock.advance(STRANDED_ENDING_AFTER_MS + 1);
+      expect(superseded(await pass(harness, logger))).toMatchObject({ found: 1, ended: 1 });
+      expect(harness.store.supersededRows()).toEqual([
+        expect.objectContaining({ taskId, outcome: 'abandoned' }),
+      ]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('close it by hand');
+      expect(superseded(await pass(harness, logger))?.found).toBe(0);
+    });
+  });
+
+  it('ends the duty without a retry when the merge request was merged before it could be closed', async () => {
+    const harness = await walked({
+      git: {
+        closeMergeRequest: async () => {
+          throw new IntegrationError('conflict', 'fake-git', 'merged, cannot be closed');
+        },
+        createDiscussion: async () => ({ id: 'd-1', resolvable: true, resolved: false, notes: [] }),
+      },
+    });
+    await reworkStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'architecture' as Slug,
+      instructions: 'again',
+    });
+    const [wakeUp] = harness.jobs.enqueued.filter(
+      (request) => (request.data as { duty?: string }).duty === 'close_superseded_mr',
+    );
+    const handler = harness.jobs.handlers.get(JOB_QUEUES.pipelineOutbound);
+    // Resolves rather than throwing: nothing a retry does can un-merge it (standing rule 20).
+    await expect(
+      handler?.({
+        id: 'merged',
+        queue: JOB_QUEUES.pipelineOutbound,
+        data: wakeUp?.data as never,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBeUndefined();
+    // The attempt is audited as the failure it was; the comment naming the new branch was posted.
+    expect(harness.audit.entriesFor('close_merge_request').map((entry) => entry.status)).toEqual([
+      'failed',
+    ]);
+    expect(harness.audit.entriesFor('create_discussion').map((entry) => entry.status)).toContain(
+      'ok',
+    );
+    // Settled `merged`, so the recovery pass never abandons it with a false "close it by hand".
+    expect(harness.store.supersededRows().map((row) => row.outcome)).toEqual(['merged']);
+  });
+
+  /**
+   * Review round 2: the settle at every ending, asserted per ending — a missing one leaves the row
+   * unsettled and the recovery pass later abandons it with an error that is false. `closed` and
+   * `readopted` are asserted above and `merged` in the case before this one.
+   */
+  describe('settles the rework’s row at the endings that close nothing', () => {
+    const reworkThenRunDuty = async (
+      harness: PipelineHarness,
+      before?: (taskId: Id) => Promise<void>,
+    ) => {
+      const taskId = taskOf(harness).task.id;
+      await reworkStageCommand(harness.humanCommands, {
+        taskId,
+        userId: USER,
+        stage: 'architecture' as Slug,
+        instructions: 'again',
+      });
+      await before?.(taskId);
+      const handler = harness.jobs.handlers.get(JOB_QUEUES.pipelineOutbound);
+      for (const request of harness.jobs.take(JOB_QUEUES.pipelineOutbound)) {
+        await handler?.({
+          id: 'job',
+          queue: JOB_QUEUES.pipelineOutbound,
+          data: request.data as never,
+          signal: new AbortController().signal,
+        });
+      }
+    };
+
+    it('settles `unbound` when the project has no git binding any more', async () => {
+      const closed: number[] = [];
+      const harness = await walked({
+        git: {
+          closeMergeRequest: async (ref) => {
+            closed.push(ref.iid);
+            return { ref, state: 'closed' } as never;
+          },
+        },
+      });
+      await reworkThenRunDuty(harness, async () => {
+        // The binding is removed between the rework and its duty.
+        (harness.integrations as { git: unknown }).git = null;
+      });
+      expect(closed).toEqual([]);
+      expect(harness.store.supersededRows().map((row) => row.outcome)).toEqual(['unbound']);
+    });
+
+    it('settles `shadow` for a shadow task, whose close is recorded would_have', async () => {
+      const closed: number[] = [];
+      const harness = await walked({
+        git: {
+          closeMergeRequest: async (ref) => {
+            closed.push(ref.iid);
+            return { ref, state: 'closed' } as never;
+          },
+          createDiscussion: async () =>
+            ({ id: 'd-1', resolvable: true, resolved: false, notes: [] }) as never,
+        },
+      });
+      await reworkThenRunDuty(harness, async (taskId) => {
+        await harness.memory.transaction(async (scope) => {
+          const stored = (await harness.store.tasks.load(scope.tx, taskId)) as StoredTask;
+          await harness.store.tasks.save(scope.tx, {
+            ...stored,
+            task: { ...stored.task, mode: 'shadow' },
+          });
+        });
+      });
+      expect(closed).toEqual([]);
+      expect(harness.audit.entriesFor('close_merge_request').map((entry) => entry.status)).toEqual([
+        'would_have',
+      ]);
+      expect(harness.store.supersededRows().map((row) => row.outcome)).toEqual(['shadow']);
+    });
+  });
+
+  it('leaves the merge request open when the task has adopted it again by the time the duty fires', async () => {
+    const closed: number[] = [];
+    const harness = await walked({
+      git: {
+        closeMergeRequest: async (ref) => {
+          closed.push(ref.iid);
+          return { ref, state: 'closed' } as never;
+        },
+      },
+    });
+    const before = taskOf(harness);
+    await reworkStageCommand(harness.humanCommands, {
+      taskId: before.task.id,
+      userId: USER,
+      stage: 'architecture' as Slug,
+      instructions: 'try again on the same merge request',
+    });
+    // Seeded between the commit and the duty: the task is on merge request 7 again when the wake-up
+    // fires. Not an ordinary state — the next Developer run pushes a new branch — but the one the
+    // duty's re-validation exists for, because closing it then would be closing live work.
+    const reworked = taskOf(harness);
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.tasks.save(scope.tx, { ...reworked, mr: before.mr });
+    });
+    await harness.drain();
+
+    expect(taskOf(harness).mr?.iid).toBe(7);
+    expect(closed).toEqual([]);
+    expect(harness.audit.entriesFor('close_merge_request')).toEqual([]);
+    // …and the rework's row is settled with that reason, so the recovery pass leaves it alone.
+    expect(harness.store.supersededRows()).toEqual([
+      expect.objectContaining({ outcome: 'readopted' }),
+    ]);
   });
 
   it('refuses when the human loop is spent, exactly as a return does', async () => {

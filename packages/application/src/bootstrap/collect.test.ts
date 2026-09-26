@@ -15,8 +15,12 @@ import { describe, expect, it } from 'vitest';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
-import { IntegrationUnsupportedError } from '../ports/integrations/common.js';
-import type { Discussion, MergedMergeRequest } from '../ports/integrations/git-provider.js';
+import { IntegrationError, IntegrationUnsupportedError } from '../ports/integrations/common.js';
+import type {
+  Discussion,
+  GitProviderPort,
+  MergedMergeRequest,
+} from '../ports/integrations/git-provider.js';
 import type { Ticket, TicketMatch } from '../ports/integrations/task-management.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { collectHistory } from './collect.js';
@@ -82,6 +86,8 @@ interface WorldOptions {
   readonly statusMapping?: Readonly<Record<string, string>> | undefined;
   /** Scripts the mining stage, so a chunk's run actually happens and its prompt can be read. */
   readonly runsMining?: boolean;
+  /** Extra git behaviour over the defaults below (WP-59: the diff-stats read). */
+  readonly git?: Partial<GitProviderPort>;
 }
 
 const world = (options: WorldOptions = {}) => {
@@ -124,6 +130,7 @@ const world = (options: WorldOptions = {}) => {
           url: null,
         }));
       },
+      ...options.git,
     },
     taskManagement: {
       matchTickets: async () =>
@@ -256,6 +263,46 @@ describe('collecting a project’s merged history', () => {
     expect(actions.filter((action) => action === 'list_commits')).toHaveLength(1);
     expect(actions.filter((action) => action === 'match_tickets')).toHaveLength(1);
     expect(actions.filter((action) => action === 'read_ticket')).toHaveLength(1);
+    // WP-59: one diff-stats read per merge request whose listing carried none — every one of these
+    // three, as on GitLab (backlog 113).
+    expect(actions.filter((action) => action === 'get_merge_request_diff_stats')).toHaveLength(3);
+  });
+
+  it('fills a mined merge request’s size from the diff-stats read, and says how many it lost', async () => {
+    // Merge request 1 answers stats, the others answer "not computed": the sample carries the one
+    // size it was given and the batch says, by count, what it did not get (backlog 113).
+    const harness = world({
+      merged: 3,
+      git: {
+        getMergeRequestDiffStats: async (ref) =>
+          ref.iid === 1 ? { files_changed: 4, insertions: 30, deletions: 5 } : null,
+      },
+    });
+    const batchId = await seedBatch(harness, { mergeRequests: 3, batchSize: 20 });
+    const report = await collect(harness, batchId);
+
+    const [task] = await tasksOf(harness);
+    const sizes = Object.fromEntries(
+      (task?.historySample?.merge_requests ?? []).map((mr) => [mr.ref, mr.files_changed]),
+    );
+    expect(sizes).toEqual({ '!1': 4, '!2': null, '!3': null });
+    expect(report.reason).toContain('published no diff stats for 2 of 3 merge request(s)');
+  });
+
+  it('mines without sizes rather than failing when the provider refuses the diff-stats read', async () => {
+    const harness = world({
+      merged: 2,
+      git: {
+        getMergeRequestDiffStats: async () => {
+          throw new IntegrationError('forbidden', 'fake-git', 'no GraphQL here');
+        },
+      },
+    });
+    const batchId = await seedBatch(harness, { mergeRequests: 2, batchSize: 20 });
+    const report = await collect(harness, batchId);
+    expect(report.status).toBe('collected');
+    expect(harness.bootstrap.batches[0]?.status).toBe('mining');
+    expect(report.reason).toContain('published no diff stats for 2 of 2');
   });
 
   it('marks a batch empty when nothing was merged in the window, and creates no task', async () => {

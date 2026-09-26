@@ -1,0 +1,29 @@
+{
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/graphql",
+      "status": 200,
+      "body": {
+        "data": {
+          "project": {
+            "mergeRequest": {
+              "diffStatsSummary": {
+                "additions": 42,
+                "deletions": 7,
+                "fileCount": 3,
+                "changes": 49
+              }
+            }
+          }
+        }
+      },
+      "source": {
+        "url": "https://docs.gitlab.com/api/graphql/reference/",
+        "retrieved": "2026-09-26",
+        "kind": "documented-adapted",
+        "note": "The page documents `Query.project(fullPath: ID!)`, `Project.mergeRequest(iid: String!)`, the nullable `MergeRequest.diffStatsSummary` and `DiffStatsSummary` as `additions`, `changes`, `deletions`, `fileCount`, all `Int!`, and publishes no example response for this query. The envelope is GraphQL's own `{\"data\": …}`, the nesting is the query's, and the four numbers are this corpus's: three files, as `merge-request-diffs.json` records for merge request 7, and `changes` as the sum of the other two, which the page does not define. What is not the page's is the numbers, so this is adapted rather than documented; it is not recorded from an instance (WP-59)."
+      }
+    }
+  ]
+}

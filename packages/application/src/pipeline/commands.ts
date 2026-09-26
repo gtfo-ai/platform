@@ -61,7 +61,7 @@ import type { Logger } from '../ports/logger.js';
 import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { enqueueStage } from './jobs.js';
+import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { LiveRun, LiveRuns } from './live-runs.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type { PipelineStore, StoredRun, StoredTask } from './store.js';
@@ -543,7 +543,20 @@ const applyHumanDecision = async (
   stored: StoredTask,
   context: CommandContext,
   decision: PipelineDecision,
-): Promise<StageExecutionJob | null> => {
+): Promise<StageExecutionJob | null> =>
+  (await applyHumanDecisionRecorded(deps, scope, stored, context, decision)).work;
+
+/** {@link applyHumanDecision}, answering the events it appended as well — the rework's cause id. */
+const applyHumanDecisionRecorded = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  stored: StoredTask,
+  context: CommandContext,
+  decision: PipelineDecision,
+): Promise<{
+  readonly work: StageExecutionJob | null;
+  readonly events: readonly { readonly id: string }[];
+}> => {
   const applied = await applyDecision({
     store: deps.store,
     pipeline: compilePipeline(stored.task.template, stored.template),
@@ -560,7 +573,7 @@ const applyHumanDecision = async (
   if (applied.events.length > 0) {
     await scope.events.append(applied.events);
   }
-  return applied.work;
+  return { work: applied.work, events: applied.events };
 };
 
 /** The stage the task is at, or a refusal naming the fact that it is at none. */
@@ -784,11 +797,29 @@ export const returnToStageCommand = async (
  * `human_rounds` survives the reset — otherwise a person could loop for ever by construction — and
  * this command spends one of them, which is what bounds it.
  *
- * **What it does not do**, because it is outbound and this row owns no provider call: product/04
- * also says the old merge request is closed and a fresh branch created. Neither happens here. The
- * task keeps the merge request it has, and the shape that would close it is the `pipeline.outbound`
- * duty of WP-15d rather than anything in this transaction. It is in `PROGRESS.md` under discovered
- * work rather than half-done here.
+ * **The other half of that sentence** — *"the old MR is closed, a fresh branch is created"* —
+ * since WP-59 (PROGRESS backlog 51, **Q92** answered per its recommendation: a new branch per
+ * rework, the old merge request closed, its closing comment naming the new branch):
+ *
+ *  - **in this transaction**, the task lets go of the merge request and takes a **new branch**:
+ *    `tasks.mr_ref` becomes `null` and `tasks.branch` becomes {@link reworkBranchName}. Letting go
+ *    is what makes the close safe — the provider's `mr.closed` webhook for that merge request then
+ *    finds no task (`findByMergeRequest`), where it would otherwise escalate this task to
+ *    `needs_human` as product/04 S7's *"MR close/decline"*; and the next Developer run checks out a
+ *    branch that does not exist yet, which the workspace creates from the default branch
+ *    (`git checkout "$B" || git checkout -b "$B"`), so nothing is patched on top of the rejected
+ *    work;
+ *  - **after the commit**, a `close_superseded_mr` `pipeline.outbound` duty comments on the old
+ *    merge request naming the new branch and closes it (`superseded-mr.ts`) — never from here,
+ *    because nothing reaches a provider from a transaction (WP-15d).
+ *
+ * A task with no merge request enqueues no duty; one with neither a merge request nor a branch keeps
+ * `branch: null`, which is already "fresh". The enqueue is **after** the commit and outside it, so a
+ * process that dies between the two loses the wake-up — `afterCommit`'s at-most-once residual.
+ * **It is recovered, not merely stated** (WP-59 review round 1, PROGRESS backlog 178): the same
+ * transaction writes a `superseded_merge_requests` row naming the merge request it let go of, the
+ * duty settles that row at every ending it reaches, and the recovery pass re-drives one that is
+ * still unsettled after a pass interval — once, then ends it loudly (`recovery/superseded-mr.ts`).
  */
 export const reworkStageCommand = async (
   deps: HumanCommandDependencies,
@@ -799,21 +830,25 @@ export const reworkStageCommand = async (
     readonly instructions: string;
   },
 ): Promise<void> => {
-  requireJobs(deps);
-  return writeTask(
+  const jobs = requireJobs(deps);
+  const superseded = await writeTask(
     deps,
     { ...input, what: 'reworking a stage' },
     async (scope, stored, context) => {
       const from = currentStageOrThrow(stored, 'rework');
       assertLoopHasRoom(stored);
+      const fresh = stored.mr === null && stored.branch === null ? null : reworkBranchName(stored);
       const reset: StoredTask = {
         ...stored,
+        // WP-59 (Q92): let go of the rejected merge request and take a new branch — see above.
+        branch: fresh,
+        mr: null,
         task: {
           ...stored.task,
           iterationCounters: resetAgentIterations(stored.task.iterationCounters),
         },
       };
-      const work = await applyHumanDecision(deps, scope, reset, context, {
+      const applied = await applyHumanDecisionRecorded(deps, scope, reset, context, {
         kind: 'return',
         from,
         to: input.stage,
@@ -821,9 +856,70 @@ export const reworkStageCommand = async (
         reason: deps.redactor.redactText(input.instructions).value,
         escalationBrief: returnBrief(stored, input.stage),
       });
-      return { result: undefined, work: work === null ? null : { job: work } };
+      const cause = applied.events[0]?.id;
+      if (stored.mr !== null && cause !== undefined) {
+        // PROGRESS backlog 178: the name of the merge request this commit lets go of, in this
+        // commit — so a close wake-up lost after it can be found and re-driven by the recovery pass.
+        await deps.store.tasks.recordSupersededMergeRequest(scope.tx, {
+          taskId: stored.task.id,
+          projectId: stored.task.projectId,
+          mr: stored.mr,
+          newBranch: fresh,
+          causeEventId: cause as Id,
+          supersededAt: context.clock.now() as IsoDateTime,
+        });
+      }
+      const close: PipelineOutboundData | null =
+        stored.mr === null || cause === undefined
+          ? null
+          : {
+              duty: 'close_superseded_mr',
+              project_id: stored.task.projectId,
+              task_id: stored.task.id,
+              cause_event_id: cause,
+              iid: stored.mr.iid,
+              mr_url: stored.mr.url,
+              ...(stored.mr.project_path == null
+                ? {}
+                : { mr_project_path: stored.mr.project_path }),
+              ...(fresh === null ? {} : { new_branch: fresh }),
+            };
+      return {
+        result: close,
+        work: applied.work === null ? null : { job: applied.work },
+      };
     },
   );
+  if (superseded !== null) {
+    await enqueueOutbound(jobs, superseded);
+  }
+};
+
+/**
+ * The branch a reworked task continues on — Q92's *"a new branch per rework"* (WP-59).
+ *
+ * `taskBranchName` of the ticket key with `-r<n>` appended, where `n` is derived from
+ * `human_rounds` — which a rework spends and never resets — so two reworks can never name one
+ * branch: the first rework on a task no human has returned makes `…-r2`, because the rejected work
+ * was the first. **The numbers skip, and that is chosen** (WP-59 review round 1): a plain
+ * return-to-stage spends `human_rounds` too, so a task returned once and then reworked goes to
+ * `…-r3`. Counting reworks alone would need a count the aggregate does not keep, and deriving it
+ * from the current branch's suffix would reuse `-r2` when the agent had reported a branch of its
+ * own in between — a collision with the branch of a closed merge request, which is the patching
+ * this exists to prevent. Unique beats consecutive. A ticket key with no character a branch may carry has no `agentic/` branch at all
+ * (`taskBranchName` refuses it), and the task then continues on `null`, the default branch, which
+ * is as fresh as a branch gets.
+ */
+export const reworkBranchName = (stored: StoredTask): string | null => {
+  const attempt = (stored.task.iterationCounters[HUMAN_RETURN_LOOP] ?? 0) + 2;
+  try {
+    return `${taskBranchName(stored.task.ticket.key)}-r${attempt}`;
+  } catch (error) {
+    if (error instanceof InvariantViolationError) {
+      return null;
+    }
+    throw error;
+  }
 };
 
 /**

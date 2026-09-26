@@ -55,10 +55,13 @@ import type {
   StoredBreakdownItem,
   StoredRun,
   StoredTask,
+  SupersededMergeRequest,
+  SupersededMergeRequestOutcome,
   TaskRepository,
 } from '../pipeline/store.js';
 import { TAKE_OVER_BOUNDARY_EVENTS, TaskConcurrentModificationError } from '../pipeline/store.js';
 import type { DeadlineRecoveryStore, HeldTask, WaitingAggregate } from '../recovery/deadline.js';
+import type { SupersededMergeRequestRecoveryStore } from '../recovery/superseded-mr.js';
 
 export class PipelineStoreError extends Error {
   override readonly name = 'PipelineStoreError';
@@ -119,6 +122,13 @@ export interface MemoryPipelineStore extends PipelineStore {
   readonly chargedRuns: Set<Id>;
   /** The deadline recovery's store over these rows (WP-56 round 2, `recovery/deadline.ts`). */
   readonly deadlineRecovery: DeadlineRecoveryStore;
+  /**
+   * The superseded-merge-request recovery's store over this store's rows (WP-59 review round 1,
+   * `recovery/superseded-mr.ts`) — the twin of `postgres-superseded-mr-store.ts`'s query.
+   */
+  readonly supersededRecovery: SupersededMergeRequestRecoveryStore;
+  /** Every `superseded_merge_requests` row, for a test that asserts what the duty settled. */
+  supersededRows(): readonly MemorySupersededRow[];
   /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
   leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
 }
@@ -143,10 +153,21 @@ export interface MemoryPipelineStoreOptions {
   readonly taskEvents?: (taskId: Id) => readonly DomainEvent[];
 }
 
+/** One `superseded_merge_requests` row, as the memory store keeps it. */
+export interface MemorySupersededRow extends SupersededMergeRequest {
+  readonly settledAt: IsoDateTime | null;
+  readonly outcome: SupersededMergeRequestOutcome | null;
+  readonly detail: string | null;
+  readonly recoveryAttemptedAt: IsoDateTime | null;
+}
+
 export const createMemoryPipelineStore = (
   options: MemoryPipelineStoreOptions = {},
 ): MemoryPipelineStore => {
   const tasks = new Map<Id, StoredTask>();
+  /** `superseded_merge_requests`, keyed `(task_id, iid)` like its primary key (migration 0043). */
+  const superseded = new Map<string, MemorySupersededRow>();
+  const supersededKey = (taskId: Id, iid: number): string => `${taskId}#${iid}`;
   const stages: StageRow[] = [];
   const artifacts: StoredArtifact[] = [];
   const runs = new Map<Id, StoredRun>();
@@ -277,6 +298,38 @@ export const createMemoryPipelineStore = (
       // strict, a `CommentRef` passes the port's `WorkpadRef` parameter structurally, and a fake
       // that accepted what PostgreSQL's reader refuses would be kinder than production (rule 1).
       tasks.set(taskId, clone({ ...current, workpad: workpadRefSchema.parse(workpad) }));
+    },
+    recordSupersededMergeRequest: async (_tx, record) => {
+      // The SQL's `on conflict (task_id, iid) do update`: the latest supersession, unsettled again.
+      superseded.set(supersededKey(record.taskId, record.mr.iid), {
+        ...clone(record),
+        settledAt: null,
+        outcome: null,
+        detail: null,
+        recoveryAttemptedAt: null,
+      });
+    },
+    settleSupersededMergeRequest: async (_tx, input) => {
+      const key = supersededKey(input.taskId, input.iid);
+      const row = superseded.get(key);
+      // `where settled_at is null`: the first ending is the one that happened.
+      if (row === undefined || row.settledAt !== null) {
+        return;
+      }
+      superseded.set(key, {
+        ...row,
+        settledAt: input.at,
+        outcome: input.outcome,
+        detail: input.detail ?? null,
+      });
+    },
+    bumpVersion: async (_tx, taskId) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Only the token, like the SQL `update tasks set version = version + 1` (WP-59 round 1).
+      tasks.set(taskId, clone({ ...current, version: current.version + 1 }));
     },
     saveRiskClasses: async (_tx, taskId, classes) => {
       const current = tasks.get(taskId);
@@ -808,8 +861,53 @@ export const createMemoryPipelineStore = (
     },
   };
 
+  const supersededRecovery: SupersededMergeRequestRecoveryStore = {
+    strandedSupersededMergeRequests: async (_tx, query) =>
+      [...superseded.values()]
+        .filter(
+          (row) =>
+            row.settledAt === null &&
+            (row.recoveryAttemptedAt === null
+              ? row.supersededAt < query.olderThan
+              : row.recoveryAttemptedAt < query.endingBefore),
+        )
+        .sort((left, right) => left.supersededAt.localeCompare(right.supersededAt))
+        .slice(0, query.limit)
+        .map((row) => ({
+          taskId: row.taskId,
+          projectId: row.projectId,
+          iid: row.mr.iid,
+          mrUrl: row.mr.url,
+          mrProjectPath: row.mr.project_path ?? null,
+          newBranch: row.newBranch,
+          causeEventId: row.causeEventId,
+          recoveryAttemptedAt: row.recoveryAttemptedAt,
+        })),
+    markSupersededAttempt: async (_tx, input) => {
+      const key = supersededKey(input.taskId, input.iid);
+      const row = superseded.get(key);
+      if (row !== undefined && row.settledAt === null) {
+        superseded.set(key, { ...row, recoveryAttemptedAt: input.at });
+      }
+    },
+    endSupersededMergeRequest: async (_tx, input) => {
+      const key = supersededKey(input.taskId, input.iid);
+      const row = superseded.get(key);
+      if (row !== undefined && row.settledAt === null) {
+        superseded.set(key, {
+          ...row,
+          settledAt: input.at,
+          outcome: 'abandoned',
+          detail: input.reason,
+        });
+      }
+    },
+  };
+
   return {
     deadlineRecovery,
+    supersededRecovery,
+    supersededRows: () => [...superseded.values()].map((row) => clone(row)),
     tasks: taskRepository,
     artifacts: artifactRepository,
     runs: runRepository,

@@ -368,10 +368,21 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
       return events.some((event) => event.type === 'task.conflict.warned');
     });
 
-    const warned = (await pipeline.events())
-      .filter((event) => event.type === 'task.conflict.warned')
-      .map((event) => event.payload as Record<string, unknown>);
-    // Exactly one: the overlapping peer, and not the one that shares nothing (standing rule 42).
+    const all = (await pipeline.events()).filter((event) => event.type === 'task.conflict.warned');
+    // By ticket key rather than `pipeline.task()`: the two peers are rows of the same project.
+    const [task] = await pipeline.query<{ id: string }>(
+      "select id from tasks where ticket_key = 'ACME-1'",
+    );
+    if (task === undefined) {
+      throw new Error('the task under test is not in the table');
+    }
+    // `task_id` is the stream the event was appended on (this harness's `events()` reads no
+    // `stream_id` column).
+    const warned = all
+      .map((event) => event.payload as Record<string, unknown>)
+      .filter((payload) => payload.task_id === task.id);
+    // Exactly one on this task's stream: the overlapping peer, and not the one that shares nothing
+    // (standing rule 42).
     expect(warned).toHaveLength(1);
     expect(warned[0]).toMatchObject({
       other_task_id: overlapping,
@@ -380,6 +391,21 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
       path_count: 1,
       truncated: false,
     });
+    // …and, since WP-59 (backlog 65), its mirror on the overlapping peer's own stream — and none on
+    // the peer that shares nothing. Two events in all.
+    expect(all).toHaveLength(2);
+    expect(
+      all
+        .map((event) => event.payload as Record<string, unknown>)
+        .filter((payload) => payload.task_id === overlapping),
+    ).toEqual([
+      expect.objectContaining({
+        task_id: overlapping,
+        other_task_id: task.id,
+        other_ticket_key: 'ACME-1',
+        paths: ['src/totals.ts'],
+      }),
+    ]);
 
     // …and the human-visible half: one thread on this task's own merge request, naming the other
     // ticket and the shared file and nothing else.
@@ -396,20 +422,45 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
     expect(warnings[0]).toContain('src/totals.ts');
     expect(warnings[0]).not.toContain('ACME-99');
     expect(warnings[0]).not.toContain('src/footer.ts');
+    // The peer's merge request gets the other half of the pair (WP-59): one thread naming ACME-1.
+    const peerRef = await pipeline.query<{ mr_ref: { iid: number; url: string } }>(
+      'select mr_ref from tasks where id = $1',
+      [overlapping],
+    );
+    const peerThreads = await pipeline.git.listDiscussions({
+      provider: 'fake-git',
+      project_path: GIT_PROJECT,
+      iid: peerRef[0]?.mr_ref.iid as number,
+      url: peerRef[0]?.mr_ref.url as string,
+    });
+    const peerWarnings = peerThreads
+      .flatMap((thread) => thread.notes.map((note) => note.body))
+      .filter((body) => body.includes('agentic:conflict-warning'));
+    expect(peerWarnings).toHaveLength(1);
+    expect(peerWarnings[0]).toContain('ACME-1');
 
     /**
      * The read is audited like every other provider call, and it is bounded: this task's diff plus
      * one per peer, never one per task in the project.
      *
-     * **Four since WP-38, three of them of this task's own merge request** (rule 83, and the count
-     * PROGRESS backlog 64 is about): the dependency gate reads the diff when the Developer stage
-     * completes, and the rebase gate's two duties — this warning and WP-37's classification — each
-     * read it again. The fourth is the peer's, which is the one this test is actually about.
+     * **One of this task's own merge request since WP-59** (rule 83, and the count PROGRESS
+     * backlog 64 is about): the dependency gate, this warning and WP-37's classification all ask
+     * for the same revision inside the coalescer's window, so one read serves them
+     * (`diff-coalescer.ts`). The other two are the **two** peers', one each — the overlapping one
+     * and the one that shares nothing, which has to be read to be found clear. The total was four
+     * before WP-59, and the docblock that stood here decomposed it as three of this task's own and
+     * one peer's; with two peers that cannot have been right, and the own-diff assertion below is
+     * what now pins the decomposition rather than a sentence.
      */
     const diffReads = (await pipeline.auditRows()).filter(
       (row) => row.action === 'get_merge_request_diff',
     );
-    expect(diffReads).toHaveLength(4);
+    expect(
+      diffReads.filter((row) => row.payload.iid === pipeline.world.mr.iid),
+      'one read of this task’s own diff',
+    ).toHaveLength(1);
+    // Four before WP-59 (this assertion read `toHaveLength(4)`); three now.
+    expect(diffReads).toHaveLength(3);
 
     /**
      * **And the board's half** — product/04 S6b's *"the board warns when two active tasks touch
@@ -442,11 +493,18 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
       truncated: false,
       warned_at: expect.any(String),
     });
-    // Both directions (rule 42): the peer that shares nothing carries no badge, and neither does
-    // the task that was compared *against* — the comparison is not symmetric (backlog 65) and the
-    // board must not imply otherwise.
+    // Both directions (rule 42): the peer that shares nothing carries no badge — and since WP-59
+    // (backlog 65) the task that was compared *against* carries one naming this task, because the
+    // pair is warned as a pair.
     expect(
-      page.body.items.filter((item) => item.conflict !== null).map((item) => item.ticket.key),
-    ).toEqual(['ACME-1']);
+      page.body.items
+        .filter((item) => item.conflict !== null)
+        .map((item) => item.ticket.key)
+        .sort(),
+    ).toEqual(['ACME-1', 'ACME-98']);
+    expect(page.body.items.find((item) => item.ticket.key === 'ACME-98')?.conflict).toMatchObject({
+      other_ticket_key: 'ACME-1',
+      path_count: 1,
+    });
   }, 180_000);
 });

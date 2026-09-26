@@ -381,10 +381,11 @@ export const taskRebaseCheckedEvent = defineEvent('task.rebase.checked', {
  * Two active tasks touch the same files — product/04 S6b's *"The board warns when two active tasks
  * touch the same files"* and product/16's *"concurrent-task overlaps"* (WP-26, BD-030).
  *
- * One event per **ordered pair**: it is appended on the stream of the task whose rebase gate ran,
- * and `other_task_id` names the task it was compared against. The pair is not symmetric, because
- * the comparison is not: the other task's own gate may have run before this task had a merge
- * request at all, in which case it was told nothing.
+ * One event per **ordered pair**, and since WP-59 **both orders at once** (PROGRESS backlog 65): the
+ * gate that finds the overlap appends one on its own task's stream and one on the other task's,
+ * each naming the other in `other_task_id`, so a warned pair is warned on both streams whichever
+ * gate ran first. It is still appended **at a gate entry**, so a pair whose overlap no gate has
+ * compared yet has neither; and a re-entry that compares again appends again.
  *
  * `paths` is **provider text** (BD-022) — the file paths of somebody's repository — so it is
  * bounded and redacted before it is stored, and `path_count` is the number of overlapping paths

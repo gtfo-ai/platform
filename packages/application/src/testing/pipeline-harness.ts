@@ -443,6 +443,11 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
          * against the real fake (standing rule 82).
          */
         getMergeRequestDiff: async () => [],
+        /**
+         * WP-59's diff-stats read, defaulted to *"not computed"* — the honest empty answer, which
+         * leaves a mined merge request sizeless rather than inventing one.
+         */
+        getMergeRequestDiffStats: async () => null,
         readCodeowners: async () => null,
         resolveUserId: async () => null,
         /**

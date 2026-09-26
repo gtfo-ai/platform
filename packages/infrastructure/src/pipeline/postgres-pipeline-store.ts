@@ -405,6 +405,59 @@ export const createPostgresPipelineStore = (
      * array is replaced rather than merged, because the rebase gate is re-entered whenever the
      * default branch moves and a class the merge request no longer touches has to leave the row.
      */
+    /**
+     * `superseded_merge_requests` (migration 0043, WP-59 review round 1, PROGRESS backlog 178):
+     * written in the rework's own transaction. Not an `update tasks`, so it is no writer of the task
+     * row; a second supersession of one `(task, iid)` is the latest one, unsettled again.
+     */
+    recordSupersededMergeRequest: async (tx, record) => {
+      await sqlOf(tx).query(
+        `insert into superseded_merge_requests
+           (task_id, iid, project_id, mr_ref, new_branch, cause_event_id, superseded_at)
+         values ($1, $2, $3, $4::jsonb, $5, $6, $7)
+         on conflict (task_id, iid) do update
+           set project_id = excluded.project_id, mr_ref = excluded.mr_ref,
+               new_branch = excluded.new_branch, cause_event_id = excluded.cause_event_id,
+               superseded_at = excluded.superseded_at, settled_at = null, outcome = null,
+               detail = null, recovery_attempted_at = null`,
+        [
+          record.taskId,
+          record.mr.iid,
+          record.projectId,
+          JSON.stringify(record.mr),
+          record.newBranch,
+          record.causeEventId,
+          record.supersededAt,
+        ],
+      );
+    },
+
+    /** The duty's mark — the first ending is the one that happened (`settled_at is null`). */
+    settleSupersededMergeRequest: async (tx, input) => {
+      await sqlOf(tx).query(
+        `update superseded_merge_requests
+            set settled_at = $3, outcome = $4, detail = $5
+          where task_id = $1 and iid = $2 and settled_at is null`,
+        [input.taskId, input.iid, input.at, input.outcome, input.detail ?? null],
+      );
+    },
+
+    /**
+     * `version`, and the bookkeeping `updated_at` every writer of this row sets (the census's other
+     * shared column) — no column of the aggregate (WP-59 review round 1; "`version` alone" was not
+     * true of the statement). `TaskRepository.bumpVersion` carries why an
+     * out-of-band appender moves the token, and why before it re-reads the stream.
+     */
+    bumpVersion: async (tx, taskId) => {
+      const result = await sqlOf(tx).query(
+        'update tasks set version = version + 1, updated_at = now() where id = $1',
+        [taskId],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
     saveRiskClasses: async (tx, taskId, classes) => {
       const result = await sqlOf(tx).query(
         'update tasks set risk_classes = $2::text[], updated_at = now() where id = $1',

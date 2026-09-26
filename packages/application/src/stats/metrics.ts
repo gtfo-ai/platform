@@ -33,7 +33,7 @@ export const STATS_COUNTERS = {
   rebaseResolved: 'rebase.resolved',
   rebaseConflicted: 'rebase.conflicted',
   rebaseExhausted: 'rebase.exhausted',
-  /** `task.conflict.warned`, one per warned ordered pair; `total` sums the overlapping paths. */
+  /** `task.conflict.warned`, one per warned ordered pair — both orders per comparison since WP-59; `total` sums the overlapping paths. */
   conflictWarned: 'conflict.warned',
   /** `task.review.observed` — product/18:59's *"findings accepted vs dismissed"*. */
   reviewObserved: 'review_only.observed',

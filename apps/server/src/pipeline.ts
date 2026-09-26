@@ -1166,6 +1166,14 @@ export const composePipeline = async (
        * first one, counted from the pass rather than from when it was asked.
        * `packages/application/src/recovery/deadline.ts` carries both choices.
        */
+      /**
+       * WP-59 review round 1, backlog **178**: a merge request a rework let go of whose close
+       * wake-up was lost or failed. Re-driven once through the `close_superseded_mr` duty, then
+       * abandoned with an error line; `packages/application/src/recovery/superseded-mr.ts`.
+       */
+      supersededMergeRequests: {
+        store: recoveryAdapters.createPostgresSupersededMergeRequestStore(),
+      },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,
@@ -1186,7 +1194,7 @@ export const composePipeline = async (
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), and a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), and a merge request a rework superseded whose close was lost stays open (178)',
     );
   }
 

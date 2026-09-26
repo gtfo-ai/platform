@@ -7,3 +7,5 @@ export * from './postgres-expired-run-store.js';
 /** The run-credential recovery's two reads — PROGRESS backlog 155 (WP-77). */
 export * from './postgres-run-credential-store.js';
 export * from './postgres-stranded-store.js';
+/** The superseded-merge-request recovery's read and two writes — PROGRESS backlog 178 (WP-59). */
+export * from './postgres-superseded-mr-store.js';

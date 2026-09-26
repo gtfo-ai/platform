@@ -17,6 +17,7 @@ import {
   type SecretRedactor,
 } from '@platform/application';
 import { describe, expect, it } from 'vitest';
+import { createRedirectingFetch } from '../../support/redirecting-fetch.js';
 import { createGitLabHttp, encodeProjectId, type GitLabFetch, parseRetryAfterMs } from './http.js';
 
 const TOKEN = 'FAKE-binding-api-token-DO-NOT-USE';
@@ -135,6 +136,58 @@ describe('createGitLabHttp — requests', () => {
     const response = await http.request({ method: 'DELETE', path: '/x', action: 'probe' });
     expect(response?.status).toBe(204);
     expect(response?.body).toBeNull();
+  });
+});
+
+describe('createGitLabHttp — a redirect is refused, never followed (backlog 129)', () => {
+  /**
+   * WP-59. The egress allow-list decides the first request; a `3xx` from that host to one nobody
+   * declared was followed with `PRIVATE-TOKEN` on it, which on Node's `fetch` is a header the
+   * standard does **not** strip on a cross-origin hop (measured, WP-59). The double rejects exactly
+   * when the request asked for `redirect: 'error'`, so this case fails for a client that did not.
+   */
+  it('raises on a 302 to an undeclared host and sends nothing there', async () => {
+    const double = createRedirectingFetch();
+    const http = createGitLabHttp({
+      baseUrl: 'https://gitlab.example.test',
+      token: TOKEN,
+      fetchImpl: double.fetchImpl,
+      timeoutMs: 0,
+      maxPages: 3,
+      redactor: noSecretsRedactor(),
+    });
+    const outcome = await http
+      .request({ method: 'GET', path: '/projects/acme%2Fapi', action: 'get_project' })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(outcome).toBeInstanceOf(IntegrationError);
+    expect((outcome as IntegrationError).code).toBe('unavailable');
+    expect(double.asked.map((entry) => entry.redirect)).toEqual(['error']);
+    expect(double.followed).toEqual([]);
+  });
+
+  it('asks the GraphQL endpoint with the bearer header its page documents, and refuses a redirect there too', async () => {
+    const double = createRedirectingFetch();
+    const { http, calls } = httpWith(() => json(200, { data: null }));
+    await http.request({ method: 'POST', api: 'graphql', path: '', json: {}, action: 'probe' });
+    expect(calls[0]?.url).toBe('https://gitlab.example.test/api/graphql');
+    expect(calls[0]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(calls[0]?.headers['private-token']).toBeUndefined();
+
+    const redirected = createGitLabHttp({
+      baseUrl: 'https://gitlab.example.test',
+      token: TOKEN,
+      fetchImpl: double.fetchImpl,
+      timeoutMs: 0,
+      maxPages: 3,
+      redactor: noSecretsRedactor(),
+    });
+    await expect(
+      redirected.request({ method: 'POST', api: 'graphql', path: '', json: {}, action: 'probe' }),
+    ).rejects.toBeInstanceOf(IntegrationError);
+    expect(double.followed).toEqual([]);
   });
 });
 
